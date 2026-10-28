@@ -37,6 +37,7 @@ fn package() -> sdk::Package {
 
 fn evaluation(package: &sdk::Package, mode: &str, amount: u64) -> sdk::Result<sdk::Evaluation> {
     Ok(sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: "evaluate".into(),
         inputs: Vec::new(),
         checkpoint: None,

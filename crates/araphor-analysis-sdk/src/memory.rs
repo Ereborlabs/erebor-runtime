@@ -41,6 +41,14 @@ impl wire::Evaluation {
         for input in &self.inputs {
             bytes = bytes.saturating_add(input.allocated_bytes());
         }
+        bytes = bytes.saturating_add(
+            self.previous_outputs
+                .capacity()
+                .saturating_mul(size_of::<wire::Dataset>()),
+        );
+        for data in &self.previous_outputs {
+            bytes = bytes.saturating_add(data.allocated_bytes());
+        }
         if let Some(parameters) = &self.parameters {
             bytes = bytes.saturating_add(parameters.capacity());
         }

@@ -102,6 +102,7 @@ impl Fixture {
         );
         model.parameters = Self::schema("increment");
         model.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: false,
             version: 2,
             datasets: vec![sdk::Port::new("state", Self::schema("total"))],
         });

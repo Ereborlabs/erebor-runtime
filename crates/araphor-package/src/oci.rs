@@ -167,6 +167,11 @@ impl PackageOci {
                 .checkpoint
                 .as_ref()
                 .map(|checkpoint| Self::checkpoint(checkpoint, layers)),
+            previous_outputs: fixture
+                .previous_outputs
+                .iter()
+                .map(|data| Self::dataset(data, layers))
+                .collect(),
             expected: sdk::wire::Output {
                 datasets: fixture
                     .expected
@@ -252,6 +257,9 @@ impl PackageOci {
                 }
                 if let Some(checkpoint) = &mut fixture.checkpoint {
                     Self::fill_checkpoint(checkpoint, &mut layers)?;
+                }
+                for data in &mut fixture.previous_outputs {
+                    Self::fill_dataset(data, &mut layers)?;
                 }
                 for data in &mut fixture.expected.datasets {
                     Self::fill_dataset(data, &mut layers)?;

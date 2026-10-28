@@ -425,7 +425,8 @@ impl AnalysisStore {
             if let Some(reference) = returned.retained {
                 if !attempt.retains(spec, returned.call, reference)
                     || input.attempt.3.get(&returned.call).is_none_or(|prior| {
-                        prior.retained.is_none()
+                        !prior.reusable
+                            || prior.retained.is_none()
                             || prior.result != reference.result_id
                             || prior.revision != reference.commit_revision
                     })
@@ -472,7 +473,7 @@ impl AnalysisStore {
                 .3
                 .get(&returned.call)
                 .map(|prior| {
-                    prior.checkpoint(
+                    prior.state(
                         checked.model(),
                         &evaluation.inputs,
                         evaluation.parameters.as_ref(),
@@ -480,9 +481,9 @@ impl AnalysisStore {
                     )
                 })
                 .transpose()?
-                .flatten();
+                .unwrap_or_default();
             let same =
-                match (&expected, &evaluation.checkpoint) {
+                match (&expected.0, &evaluation.checkpoint) {
                     (None, None) => true,
                     (Some(expected), Some(actual)) => {
                         expected.version == actual.version
@@ -495,7 +496,14 @@ impl AnalysisStore {
                     }
                     _ => false,
                 };
-            if !same {
+            if !same
+                || expected.1.len() != evaluation.previous_outputs.len()
+                || !expected
+                    .1
+                    .iter()
+                    .zip(&evaluation.previous_outputs)
+                    .all(|(left, right)| left.name == right.name && left.batches == right.batches)
+            {
                 return Err(Code::Conflict.error("managed captured checkpoint"));
             }
             if returned.retained.is_some() {

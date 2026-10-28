@@ -30,6 +30,7 @@ impl Denials {
         );
         let mut count = Model::new("count", vec![input], vec![counts.clone()]);
         count.checkpoint = Some(CheckpointSpec {
+            resume_input_changes: false,
             version: 1,
             datasets: vec![Port::new(
                 "state",

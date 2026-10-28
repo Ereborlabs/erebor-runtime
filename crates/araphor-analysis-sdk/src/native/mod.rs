@@ -115,6 +115,8 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
             export_name: Bytes::new(evaluation.export.as_bytes()),
             inputs: self.exchange.inputs.as_ptr(),
             input_count: self.exchange.inputs.len() as u64,
+            previous_outputs: self.exchange.previous_outputs.as_ptr(),
+            previous_output_count: self.exchange.previous_outputs.len() as u64,
             parameters: self.exchange.parameters,
             context: Context {
                 id: Bytes::new(context.id.as_bytes()),

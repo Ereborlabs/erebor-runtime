@@ -8,6 +8,7 @@ use super::*;
 fn input(package: &sdk::Package, id: &str) -> sdk::Evaluation {
     let model = &package.exports[2];
     sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: model.name.clone(),
         inputs: model
             .inputs

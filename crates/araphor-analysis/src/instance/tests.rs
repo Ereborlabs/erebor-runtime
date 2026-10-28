@@ -397,6 +397,7 @@ pub(super) fn bundle(target: &str) -> TestResult<PackageBundleV1> {
         vec![output],
     );
     model.checkpoint = Some(sdk::CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: vec![sdk::Port::new("state", schema.clone())],
     });

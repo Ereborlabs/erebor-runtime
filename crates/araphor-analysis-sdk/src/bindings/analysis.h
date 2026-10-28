@@ -100,6 +100,8 @@ typedef struct {
     araphor_analysis_bytes_v1 export_name;
     const araphor_analysis_input_v1 *inputs;
     uint64_t input_count;
+    const araphor_analysis_dataset_v1 *previous_outputs;
+    uint64_t previous_output_count;
     struct ArrowArrayStream *parameters;
     araphor_analysis_context_v1 context;
     const araphor_analysis_checkpoint_v1 *checkpoint;

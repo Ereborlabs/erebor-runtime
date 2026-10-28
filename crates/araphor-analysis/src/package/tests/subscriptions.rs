@@ -363,6 +363,7 @@ async fn subscription_rejects_reachable_state() -> TestResult {
         let artifact = &mut bundle.artifacts[0];
         let schema = artifact.descriptor.exports[0].outputs[0].schema.clone();
         let spec = sdk::CheckpointSpec {
+            resume_input_changes: false,
             version: 1,
             datasets: vec![sdk::Port::new("state", schema)],
         };

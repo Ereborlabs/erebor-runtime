@@ -467,6 +467,7 @@ async fn raw_rpc_keeps_auxiliaries() -> TestResult {
         false,
     )]);
     model.checkpoint = Some(sdk::CheckpointSpec {
+        resume_input_changes: false,
         version: 7,
         datasets: vec![sdk::Port::new("state", scalar)],
     });

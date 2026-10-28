@@ -1127,7 +1127,7 @@ impl AnalysisStore {
         Self::decode_managed_record(&descriptor, record, packet)
     }
 
-    fn decode_managed_record(
+    pub(super) fn decode_managed_record(
         descriptor: &sdk::Package,
         record: &Record,
         packet: &sdk::wire::Output,

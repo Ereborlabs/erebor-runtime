@@ -20,6 +20,7 @@ impl Guest for Detector {
         let schema = Schema::new(vec![Field::new("count", DataType::UInt64, false)]);
         package.exports[0].parameters = schema.clone();
         package.exports[0].checkpoint = Some(CheckpointSpec {
+            resume_input_changes: false,
             version: 3,
             datasets: vec![Port::new("state", schema)],
         });
@@ -375,6 +376,12 @@ fn rust_layout_matches_header() -> TestResult {
     offset!(Context, "araphor_analysis_context_v1", time_utc_ns);
     offset!(Context, "araphor_analysis_context_v1", seed);
     offset!(Context, "araphor_analysis_context_v1", has_seed);
+    offset!(Request, "araphor_analysis_request_v1", previous_outputs);
+    offset!(
+        Request,
+        "araphor_analysis_request_v1",
+        previous_output_count
+    );
     offset!(Request, "araphor_analysis_request_v1", context);
     offset!(Request, "araphor_analysis_request_v1", checkpoint);
     offset!(Request, "araphor_analysis_request_v1", cancelled);
@@ -454,5 +461,98 @@ fn producer_error_is_uncapped() -> TestResult {
     .err()
     .ok_or("copy capacity ignored")?;
     assert_eq!(error.code(), ErrorCode::Limit);
+    Ok(())
+}
+
+struct ContinuingCount;
+
+impl Guest for ContinuingCount {
+    fn package() -> Package {
+        let mut package = crate::tests::files_count::FilesCount::package();
+        package.exports[0].checkpoint = Some(CheckpointSpec {
+            version: 1,
+            resume_input_changes: true,
+            datasets: vec![Port::new("state", Schema::empty())],
+        });
+        package
+    }
+
+    fn compute(input: &crate::CheckedEvaluation<'_>) -> Result<Output> {
+        let mut output = crate::tests::files_count::FilesCount::evaluate(input.evaluation())?;
+        if input.evaluation().checkpoint.is_some() {
+            output.datasets = input.evaluation().previous_outputs.clone();
+        }
+        output.checkpoint = Some(crate::Checkpoint {
+            version: 1,
+            datasets: vec![crate::Dataset {
+                name: "state".into(),
+                batches: Vec::new(),
+            }],
+        });
+        Ok(output)
+    }
+}
+
+#[test]
+fn native_prior_outputs_survive() -> TestResult {
+    let package = ContinuingCount::package();
+    let mut value = crate::tests::files_count::FilesCount::fixture()?.evaluation;
+    let prior = crate::Dataset {
+        name: package.exports[0].outputs[0].name.clone(),
+        batches: vec![RecordBatch::try_new(
+            Arc::new(package.exports[0].outputs[0].schema.clone()),
+            vec![
+                Arc::new(crate::arrow_array::StringArray::from(vec!["prior.1"])),
+                Arc::new(UInt64Array::from(vec![12345])),
+            ],
+        )?],
+    };
+    value.previous_outputs = vec![prior.clone()];
+    value.checkpoint = Some(crate::Checkpoint {
+        version: 1,
+        datasets: vec![crate::Dataset {
+            name: "state".into(),
+            batches: Vec::new(),
+        }],
+    });
+    let checked = package.check_evaluation(&value)?;
+    let api = Api::for_guest::<ContinuingCount>();
+    let result = unsafe { Invocation::new(&checked, || false)?.call(&api, None)? };
+    assert_eq!(result.datasets[0].name, prior.name);
+    assert_eq!(result.datasets[0].batches, prior.batches);
+    let error = unsafe { Invocation::new(&checked, || false)?.call(&api, Some(1)) }
+        .err()
+        .ok_or("prior output copy limit ignored")?;
+    assert_eq!(error.code(), ErrorCode::Limit);
+    let evaluate = api.evaluate.ok_or("evaluate")?;
+    let release = api.release.ok_or("release")?;
+    for invalid in 0..3 {
+        let mut invocation = Invocation::new(&checked, || false)?;
+        let mut request = invocation.request();
+        match invalid {
+            0 => request.previous_outputs = std::ptr::null(),
+            1 => request.previous_output_count = u64::MAX,
+            _ => {
+                request.previous_outputs = (request.previous_outputs as usize + 1) as *const Dataset
+            }
+        }
+        let mut response = Response::default();
+        assert_ne!(unsafe { evaluate(&request, &mut response) }, 0);
+        unsafe {
+            release(&mut response);
+        }
+        assert!(response.private_data.is_null());
+    }
+    drop(value);
+    drop(prior);
+    assert_eq!(
+        result.datasets[0].batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("prior value")?
+            .value(0),
+        12345
+    );
     Ok(())
 }

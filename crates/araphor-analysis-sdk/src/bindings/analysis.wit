@@ -50,6 +50,7 @@ interface types {
     record evaluation {
         export-name: string,
         inputs: list<input>,
+        previous-outputs: list<dataset>,
         parameters: option<list<u8>>,
         context: evaluation-context,
         checkpoint: option<checkpoint>,

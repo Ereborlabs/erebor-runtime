@@ -124,6 +124,7 @@ impl Fixture {
 
     fn evaluation(model: &sdk::Model) -> sdk::Evaluation {
         sdk::Evaluation {
+            previous_outputs: Vec::new(),
             export: model.name.clone(),
             inputs: Vec::new(),
             parameters: None,
@@ -147,6 +148,7 @@ impl Fixture {
         let checked = descriptor.check_evaluation(evaluation)?;
         let wire = checked.encode()?;
         let saved = PackageFixtureV1 {
+            previous_outputs: wire.previous_outputs,
             name: evaluation.context.id.clone(),
             export: evaluation.export.clone(),
             time_utc_ns: evaluation.context.time_utc_ns,

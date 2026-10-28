@@ -8,6 +8,7 @@ fn evaluation(model: &sdk::Model, values: Vec<Vec<u64>>) -> sdk::Result<sdk::Eva
         )
     };
     Ok(sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: model.name.clone(),
         inputs: vec![sdk::Input {
             data: sdk::Dataset {
@@ -117,6 +118,7 @@ fn echo_keeps_context_rows_revision_and_coverage() -> Result<(), Box<dyn std::er
         host_packet: "{\"omissions\":{\"EVIDENCE_OUTSIDE_WINDOW_OR_UNDATED\":1}}".into(),
     };
     let evaluation = sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: "echo-inputs".into(),
         inputs: vec![sdk::Input {
             data: Rows::encode(&port, std::slice::from_ref(&row))?,
@@ -152,5 +154,44 @@ fn echo_keeps_context_rows_revision_and_coverage() -> Result<(), Box<dyn std::er
         serde_json::from_str(metadata.column(2).as_string::<i32>().value(0))?;
     assert_eq!(revision, evaluation.inputs[0].revision);
     assert_eq!(coverage, evaluation.inputs[0].coverage);
+    Ok(())
+}
+
+#[test]
+fn continuation_uses_previous_outputs() -> Result<(), Box<dyn std::error::Error>> {
+    let package = RuntimeFixture::package();
+    let model = package
+        .exports
+        .iter()
+        .find(|model| model.name == "continue-input")
+        .ok_or("continuation model")?;
+    let mut request = evaluation(model, vec![vec![2, 3]])?;
+    let first = run(&package, &request)?;
+    request.checkpoint = first.checkpoint;
+    request.previous_outputs = first.datasets;
+    request.inputs[0].revision.id = "2".into();
+    request.inputs[0].data.batches = evaluation(model, vec![vec![7]])?
+        .inputs
+        .remove(0)
+        .data
+        .batches;
+    let next = run(&package, &request)?;
+    assert_eq!(RuntimeFixture::sum(&next.datasets[0])?, 12);
+    assert_eq!(
+        RuntimeFixture::sum(&next.checkpoint.as_ref().ok_or("checkpoint")?.datasets[0])?,
+        12
+    );
+    request.previous_outputs[0].batches = evaluation(model, vec![vec![99]])?
+        .inputs
+        .remove(0)
+        .data
+        .batches;
+    assert_eq!(
+        run(&package, &request)
+            .err()
+            .ok_or("changed prior accepted")?
+            .code(),
+        sdk::ErrorCode::Invalid
+    );
     Ok(())
 }

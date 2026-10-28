@@ -1,6 +1,84 @@
 use super::*;
 
 #[tokio::test]
+async fn fixtures_use_previous_outputs() -> TestResult {
+    let mut model = sdk::Model::new(
+        "evaluate",
+        vec![sdk::Port::new("input", Fixture::schema())],
+        vec![sdk::Port::new("data", Fixture::schema())],
+    );
+    model.checkpoint = Some(sdk::CheckpointSpec {
+        resume_input_changes: true,
+        version: 1,
+        datasets: vec![sdk::Port::new("state", Fixture::schema())],
+    });
+    let mut evaluation = Fixture::evaluation(&model);
+    evaluation.inputs.push(sdk::Input {
+        data: Fixture::data("input", &[3])?,
+        revision: sdk::Revision {
+            owner: "saved-source".into(),
+            id: "current".into(),
+            window: None,
+        },
+        coverage: sdk::Coverage {
+            state: sdk::CoverageState::Complete,
+            limits: Vec::new(),
+        },
+    });
+    evaluation.checkpoint = Some(sdk::Checkpoint {
+        version: 1,
+        datasets: vec![Fixture::data("state", &[100])?],
+    });
+    let expected = sdk::Output {
+        datasets: vec![Fixture::data("data", &[5])?],
+        checkpoint: Some(sdk::Checkpoint {
+            version: 1,
+            datasets: vec![Fixture::data("state", &[5])?],
+        }),
+        ..Default::default()
+    };
+    let mut bundle = Fixture::bundle(
+        "sql",
+        model,
+        SqlModelV1 {
+            outputs: BTreeMap::from([(
+                "data".into(),
+                "SELECT CAST((SELECT SUM(value) FROM input) + \
+                    (SELECT SUM(value) FROM previous_data) AS BIGINT UNSIGNED) AS value"
+                    .into(),
+            )]),
+            checkpoint: BTreeMap::from([("state".into(), "SELECT value FROM output_data".into())]),
+            ..Default::default()
+        },
+    )?;
+    for (name, value) in [("matching", 2), ("different", 4)] {
+        evaluation.context.id = name.into();
+        evaluation.previous_outputs = vec![Fixture::data("data", &[value])?];
+        Fixture::save(&mut bundle, &evaluation, &expected, None)?;
+        let saved = bundle.artifacts[0].fixtures.last().ok_or("saved fixture")?;
+        let data = saved.previous_outputs[0].decode(&Fixture::schema())?;
+        assert_eq!(data.batches, evaluation.previous_outputs[0].batches);
+    }
+    let fixture = Fixture::new(&bundle)?;
+    let before = fixture.owner.query.store().meta()?;
+    assert_eq!(
+        fixture.run(&bundle).await?,
+        vec![
+            FixtureResult {
+                fixture: "matching".into(),
+                passed: true,
+            },
+            FixtureResult {
+                fixture: "different".into(),
+                passed: false,
+            },
+        ]
+    );
+    assert_eq!(fixture.owner.query.store().meta()?, before);
+    Ok(())
+}
+
+#[tokio::test]
 async fn fixtures_compare_complete_return() -> TestResult {
     let mut model = sdk::Model::new(
         "evaluate",
@@ -16,6 +94,7 @@ async fn fixtures_compare_complete_return() -> TestResult {
         false,
     )]);
     model.checkpoint = Some(sdk::CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: vec![sdk::Port::new("state", Fixture::schema())],
     });

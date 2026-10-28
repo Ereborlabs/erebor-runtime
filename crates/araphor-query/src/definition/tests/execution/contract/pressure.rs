@@ -11,6 +11,7 @@ fn evaluation(
 ) -> TestResult<sdk::Evaluation> {
     let model = &image.artifacts[0].descriptor.exports[0];
     Ok(sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: model.name.clone(),
         inputs: vec![sdk::Input {
             data: sdk::Dataset {

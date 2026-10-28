@@ -44,6 +44,7 @@ fn fixture(
     expected: &sdk::Output,
 ) -> TestResult<(PackageFixtureV1, sdk::Package, sdk::Evaluation)> {
     let saved = PackageFixtureV1 {
+        previous_outputs: Vec::new(),
         name: "expected".into(),
         export: model.name.clone(),
         time_utc_ns: 123,
@@ -54,6 +55,7 @@ fn fixture(
         expected: sdk::wire::Output::encode_model(expected, &model)?,
     };
     let evaluation = sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: model.name.clone(),
         inputs: vec![sdk::Input {
             data: dataset("source", vec![1.0, 2.0])?,
@@ -116,6 +118,7 @@ fn fixture_batches_and_tolerance() -> TestResult {
 fn fixture_references_and_state() -> TestResult {
     let mut model = model(vec![sdk::Port::new("rows", schema())]);
     model.checkpoint = Some(sdk::CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: vec![sdk::Port::new("state", schema())],
     });

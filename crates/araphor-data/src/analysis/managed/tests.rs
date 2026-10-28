@@ -65,6 +65,15 @@ impl Fixture {
         extra: bool,
         selection: AnalysisSelectionV1,
     ) -> TestResult<Self> {
+        Self::admit_model(store, extra, selection, false)
+    }
+
+    fn admit_model(
+        store: &AnalysisStore,
+        extra: bool,
+        selection: AnalysisSelectionV1,
+        continuation: bool,
+    ) -> TestResult<Self> {
         let scalar = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]);
         let mut rows = sdk::Port::new("rows", scalar.clone());
         rows.evidence_required = true;
@@ -84,6 +93,7 @@ impl Fixture {
             false,
         )]);
         model.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: continuation,
             version: 1,
             datasets: vec![sdk::Port::new("state", scalar.clone())],
         });
@@ -229,16 +239,17 @@ impl Fixture {
                 },
             });
         }
-        let checkpoint = captured
+        let (checkpoint, previous_outputs) = captured
             .and_then(|capture| capture.prior(call))
-            .map(|prior| prior.checkpoint(&self.model, &inputs, Some(&parameters), request.rebuild))
+            .map(|prior| prior.state(&self.model, &inputs, Some(&parameters), request.rebuild))
             .transpose()?
-            .flatten();
+            .unwrap_or_default();
         Ok(sdk::Evaluation {
             export: "count".into(),
             inputs,
             parameters: Some(parameters),
             checkpoint,
+            previous_outputs,
             context: sdk::EvaluationContext {
                 id: request.id.clone(),
                 time_utc_ns: request.time_utc_ns as i64,
@@ -651,12 +662,13 @@ fn managed_calls_commit_atomically() -> TestResult {
         );
         assert_eq!(
             prior
-                .checkpoint(
+                .state(
                     &fixture.model,
                     &second_evaluations[(call - 10) as usize].inputs,
                     second_evaluations[(call - 10) as usize].parameters.as_ref(),
                     false,
                 )?
+                .0
                 .ok_or("eligible current checkpoint absent")?
                 .datasets[0]
                 .batches,
@@ -846,12 +858,13 @@ fn managed_capture_keeps_guards() -> TestResult {
     let evaluation = fixture.evaluation(&input, 10, Some(&captured))?;
     let prior = captured.prior(10).ok_or("prior absent")?;
     assert!(prior
-        .checkpoint(
+        .state(
             &fixture.model,
             &evaluation.inputs,
             evaluation.parameters.as_ref(),
             false
         )?
+        .0
         .is_some());
     let mut version = prior.clone();
     version
@@ -878,45 +891,50 @@ fn managed_capture_keeps_guards() -> TestResult {
     )?];
     for incompatible in [version, dataset, schema] {
         assert!(incompatible
-            .checkpoint(
+            .state(
                 &fixture.model,
                 &evaluation.inputs,
                 evaluation.parameters.as_ref(),
                 false
             )?
+            .0
             .is_none());
     }
     let mut changed = evaluation.inputs.clone();
     changed[0].revision.id.push_str("-changed");
     assert!(prior
-        .checkpoint(
+        .state(
             &fixture.model,
             &changed,
             evaluation.parameters.as_ref(),
             false
         )?
+        .0
         .is_none());
     let mut changed = evaluation.inputs.clone();
     changed[0].coverage.state = sdk::CoverageState::Gapped;
     assert!(prior
-        .checkpoint(
+        .state(
             &fixture.model,
             &changed,
             evaluation.parameters.as_ref(),
             false
         )?
+        .0
         .is_none());
     let parameters = Fixture::batch(&fixture.model.parameters, 99)?;
     assert!(prior
-        .checkpoint(&fixture.model, &evaluation.inputs, Some(&parameters), false)?
+        .state(&fixture.model, &evaluation.inputs, Some(&parameters), false)?
+        .0
         .is_none());
     assert!(prior
-        .checkpoint(
+        .state(
             &fixture.model,
             &evaluation.inputs,
             evaluation.parameters.as_ref(),
             true
         )?
+        .0
         .is_none());
     let mut changed = input.clone();
     changed.seed = Some(9);

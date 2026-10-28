@@ -314,6 +314,7 @@ impl Recorded {
             )?,
         ];
         let output = Discovery::evaluate(&sdk::Evaluation {
+            previous_outputs: Vec::new(),
             export: "atoms".into(),
             inputs: datasets
                 .into_iter()

@@ -26,6 +26,7 @@ fn native_row(value: Snapshot) -> TestResult<NativeSnapshot> {
 
 fn evaluation(datasets: Vec<sdk::Dataset>) -> sdk::Evaluation {
     sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: "merge".into(),
         inputs: datasets
             .into_iter()

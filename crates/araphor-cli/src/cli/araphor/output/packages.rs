@@ -296,6 +296,7 @@ mod tests {
             ],
         );
         model.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: false,
             version: 7,
             datasets: vec![sdk::Port::new("state", schema.clone())],
         });
@@ -320,6 +321,7 @@ mod tests {
             araphor_data::decode_parameters(&details, Some(&serde_json::json!({"detail":text})))?
                 .ok_or("details batch")?;
         let evaluation = sdk::Evaluation {
+            previous_outputs: Vec::new(),
             export: "read".into(),
             inputs: vec![sdk::Input {
                 data: sdk::Dataset {

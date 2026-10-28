@@ -22,6 +22,7 @@ fn oci_package_identity() -> TestResult {
         }),
     }];
     package.artifacts[0].fixtures.push(PackageFixtureV1 {
+        previous_outputs: Vec::new(),
         name: "raw-ipc".into(),
         export: "count".into(),
         time_utc_ns: 0,

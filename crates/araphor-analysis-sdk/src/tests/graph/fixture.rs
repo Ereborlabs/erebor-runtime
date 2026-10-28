@@ -112,6 +112,7 @@ impl SelectedGraph {
             implementation: "selected-rust.1".into(),
             revision: "bounded-graph.1".into(),
             evaluation: Evaluation {
+                previous_outputs: Vec::new(),
                 export: "select".into(),
                 inputs: inputs
                     .into_iter()

@@ -364,6 +364,7 @@ async fn guest_drop_keeps_worker_lease() -> TestResult {
     let descriptor = &bundle.artifacts[0].descriptor;
     let model = &descriptor.exports[0];
     let evaluation = sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: "evaluate".into(),
         inputs: Vec::new(),
         checkpoint: None,

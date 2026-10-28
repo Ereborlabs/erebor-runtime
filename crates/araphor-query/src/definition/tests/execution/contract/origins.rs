@@ -331,6 +331,7 @@ async fn retained_origins(elided: bool) -> TestResult {
     ));
     for model in &mut image.artifacts[0].descriptor.exports {
         model.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: false,
             version: 1,
             datasets: vec![sdk::Port::new("state", Fixture::schema("value"))],
         });

@@ -377,6 +377,7 @@ pub struct ManagedPrior {
     pub parameters: Option<sdk::Dataset>,
     pub checkpoint: Option<sdk::Checkpoint>,
     pub retained: Option<std::sync::Arc<RetainedCall>>,
+    pub reusable: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -405,15 +406,19 @@ impl RetainedCall {
 }
 
 impl ManagedPrior {
-    pub fn checkpoint(
+    pub fn state(
         &self,
         model: &sdk::Model,
         inputs: &[sdk::Input],
         parameters: Option<&sdk::RecordBatch>,
         rebuild: bool,
-    ) -> Result<Option<sdk::Checkpoint>> {
-        if rebuild || !self.context.matches(inputs) {
-            return Ok(None);
+    ) -> Result<(Option<sdk::Checkpoint>, Vec<sdk::Dataset>)> {
+        let continuation = model
+            .checkpoint
+            .as_ref()
+            .is_some_and(|spec| spec.resume_input_changes);
+        if rebuild || (!continuation && !self.context.matches(inputs)) {
+            return Ok((None, Vec::new()));
         }
         if self
             .parameters
@@ -427,16 +432,16 @@ impl ManagedPrior {
             .as_ref()
             .and_then(|data| data.batches.first());
         if saved != parameters {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
         if saved.is_some_and(|batch| batch.schema().as_ref() != &model.parameters) {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
         let Some(checkpoint) = &self.checkpoint else {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         };
         let Some(spec) = &model.checkpoint else {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         };
         if checkpoint.version != spec.version
             || checkpoint.datasets.len() != spec.datasets.len()
@@ -451,9 +456,40 @@ impl ManagedPrior {
                     })
             })
         {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
-        Ok(Some(checkpoint.clone()))
+        let previous = if continuation {
+            let retained = self
+                .retained
+                .as_ref()
+                .ok_or_else(|| Code::Invalid.error("managed prior outputs"))?;
+            let datasets = &retained.output.datasets;
+            if datasets.len() != model.outputs.len()
+                || datasets
+                    .iter()
+                    .map(|data| &data.name)
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != datasets.len()
+                || datasets.iter().any(|data| {
+                    model
+                        .outputs
+                        .iter()
+                        .find(|port| port.name == data.name)
+                        .is_none_or(|port| {
+                            data.batches
+                                .iter()
+                                .any(|batch| batch.schema().as_ref() != &port.schema)
+                        })
+                })
+            {
+                return Err(Code::Invalid.error("managed prior outputs"));
+            }
+            datasets.clone()
+        } else {
+            Vec::new()
+        };
+        Ok((Some(checkpoint.clone()), previous))
     }
 }
 
@@ -550,6 +586,7 @@ impl ManagedCapture {
                         .inputs
                         .iter()
                         .map(|input| &input.data)
+                        .chain(retained.evaluation.previous_outputs.iter())
                         .chain(retained.output.datasets.iter())
                         .chain(
                             retained

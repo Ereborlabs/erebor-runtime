@@ -148,6 +148,7 @@ fn artifact_fixture_layers() -> TestResult {
         arrow_ipc: vec![value; size],
     };
     artifact.fixtures.push(PackageFixtureV1 {
+        previous_outputs: vec![dataset("rows", 206, 31)],
         name: "raw-layers".into(),
         export: "count".into(),
         time_utc_ns: 1,
@@ -197,6 +198,7 @@ fn artifact_fixture_layers() -> TestResult {
         [
             vec![201; 64 * 1024],
             vec![202; 17],
+            vec![206; 31],
             vec![203; 19],
             vec![204; 23],
             vec![205; 29]
@@ -216,6 +218,7 @@ fn artifact_fixture_layers() -> TestResult {
         .arrow_ipc
         .is_empty());
     assert!(fixture.expected.datasets[0].arrow_ipc.is_empty());
+    assert!(fixture.previous_outputs[0].arrow_ipc.is_empty());
     assert!(fixture.expected.reasons[0].details.is_empty());
     assert!(
         fixture.expected.checkpoint.as_ref().ok_or("next")?.datasets[0]

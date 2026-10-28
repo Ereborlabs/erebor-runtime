@@ -30,6 +30,7 @@ pub struct Evaluation {
     pub parameters: Option<Vec<u8>>,
     pub context: EvaluationContext,
     pub checkpoint: Option<Checkpoint>,
+    pub previous_outputs: Vec<Dataset>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

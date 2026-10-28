@@ -64,6 +64,12 @@ impl Decoder {
                 },
             });
         }
+        let mut previous_outputs = decoder.vector(request.previous_output_count)?;
+        for data in
+            unsafe { decoder.slice(request.previous_outputs, request.previous_output_count)? }
+        {
+            previous_outputs.push(unsafe { decoder.dataset(data, &model.outputs)? });
+        }
         let parameters = if request.parameters.is_null() {
             None
         } else {
@@ -71,6 +77,7 @@ impl Decoder {
         };
         let evaluation = Evaluation {
             export,
+            previous_outputs,
             inputs,
             parameters,
             context: crate::EvaluationContext {

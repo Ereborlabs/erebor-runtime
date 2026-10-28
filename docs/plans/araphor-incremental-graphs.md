@@ -37,8 +37,8 @@ Native SQL parser
 | `araphor-analysis/src/graph/feed.rs` | Drives Graph programs from query subscription streams. | Keep the reactive owner. Carry the selected optional window. |
 | `araphor-analysis-builtins/src/graph/contract.rs` | Reads a label-only checkpoint, then discards it and evaluates the selected records. | Restore declared state and update affected contributions. |
 | `araphor-analysis/src/graph` | `from_input`, `apply_output`, and `finish` derive resolved subjects, edges, proof, provenance, findings, and branches from candidate selections. | Move pure semantic derivation into the shared builtin Graph module. Keep authorization and publication in Analysis. |
-| `araphor-data/src/analysis/managed/model.rs` and `araphor-data/src/package/model.rs` | Prior checkpoint selection requires matching input revisions and coverage. | Add an explicit policy for builtin state that continues across input changes. Keep exact-input behavior for other packages. |
-| `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior.retained` can hold the exact captured call and resolved output. | Supply that retained output as declared continuation state. Keep current-input admission unchanged. |
+| `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior::state` applies the declared continuation policy. Ordinary packages still require matching input revisions and coverage. | Enable continuation in each builtin only when its update algorithm is complete. |
+| `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior.retained` supplies the exact saved output through `Evaluation.previous_outputs`. | Use those rows in the builtin update algorithm. Keep current-input admission unchanged. |
 | `araphor-data/src/analysis/progress/graph.rs` | Uses the existing managed transaction for result, state, references, and progress. | Keep this single atomic commit owner. |
 
 The compact storage changes are implemented. They remove repeated manifests,
@@ -176,7 +176,39 @@ and compact runs fail the existing deadline. The first memory comparison is
 invalid because executable hashing contaminated the runner's high-water mark;
 the corrected interpretation is in the [review guide](../guides/araphor-graph-commit-review.md#first-matched-backlog-measurement).
 
-Incremental state, resolved builtin ownership, incremental algorithms, and
-final measurements remain open. The independent Sol 6.1 reviewer approved this
+Resolved builtin ownership, incremental algorithms, and final measurements
+remain open. The independent Sol 6.1 reviewer approved this
 concrete plan on 2026-10-28. Each deliverable still needs a review of its code
 and test results. The compact storage result does not complete this plan.
+
+### State handoff implementation
+
+`CheckpointSpec.resume_input_changes` is false by default. A package that sets
+it receives its exact saved output beside its checkpoint. Query execution,
+Data commit validation, and replay use the same `ManagedPrior::state` method.
+Replay reads one prior result. It does not read a chain of older evaluations.
+The existing attempt stores the prior reference; no second state table or
+copy of the saved Arrow output is added.
+
+SQL uses the existing relation slots for `previous_<output>`. Wasm and native
+execution use the existing evaluation transport. Package fixtures store prior
+datasets in OCI layers. Only current input datasets can supply evidence links.
+The current grant, image, call, parameters, rebuild, and schema checks remain.
+The separate `reusable` flag preserves the stricter Graph result-reuse checks.
+Failed work can resume the last successful state but cannot reuse its result
+as a successful new evaluation.
+
+SDK validation and transport checks pass in 76 cases. Focused Data checks pass
+for continuation, exact prior values, failure, rollback, replay, reopen, and
+ordinary checkpoint behavior. Query checks pass for SQL and Wasm continuation,
+state admission, evidence separation, replay, cancellation, and memory limits.
+OCI fixture, qualification, and Graph reuse checks pass. Source-built native
+continuation, failure cleanup, and fixture qualification checks pass. Scoped
+formatting, patch whitespace, and affected-crate Clippy with warnings denied
+pass. These are relevant checks, not full workspace or physical qualification.
+Verification records are in
+`/tmp/araphor-package-qualification-active/compact-graph/continuation`.
+
+**State handoff result: Done.** Builtin Graph declarations still keep
+continuation disabled.
+This state transport does not implement incremental Graph derivation.

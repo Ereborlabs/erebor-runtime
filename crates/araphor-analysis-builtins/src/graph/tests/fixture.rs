@@ -46,6 +46,7 @@ pub(super) fn fixture(
         implementation: "shared-rust".into(),
         revision: "graph-v1".into(),
         evaluation: sdk::Evaluation {
+            previous_outputs: Vec::new(),
             export: "detect".into(),
             inputs: datasets
                 .into_iter()

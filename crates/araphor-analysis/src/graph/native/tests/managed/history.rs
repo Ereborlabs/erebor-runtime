@@ -150,3 +150,71 @@ async fn empty_gate_keeps_history() -> TestResult {
     stream.cancel_and_join(&fixture.control).await?;
     outcome
 }
+
+#[tokio::test]
+async fn failed_graph_disables_reuse() -> TestResult {
+    let fixture = Fixture::target(Target::Wasm)?;
+    let (grant, definition) = fixture.graph_definition().await?;
+    let job = fixture
+        .managed_graph(&grant, &definition, "failed-reuse", "SELECT * FROM events")
+        .await?;
+    let job = fixture.running_graph(job).await?;
+    let mut stream = job.subscribe(
+        Arc::new(AnalysisReadControl::default()),
+        u64::MAX,
+        job.admitted().lifecycle,
+    )?;
+    let first = next_receipt(&mut stream).await;
+    stream.cancel_and_join(&fixture.control).await?;
+    let first = first?;
+    let store = fixture.query.store();
+    let resume =
+        store.managed_resume(fixture.source.tenant_id, "failed-reuse", &fixture.control)?;
+    let requests = araphor_data::AnalysisTableRequests::new();
+    let now = request("capture-reuse")?.time_utc_ns;
+    let capture = |instance: araphor_data::ManagedInstance| {
+        store.read_managed_tables(
+            &grant.selection,
+            &araphor_data::ManagedRead {
+                instance,
+                expected: None,
+                completed: Some(resume.completed),
+                rebuild: false,
+                follow: false,
+            },
+            araphor_data::AnalysisTableRead {
+                requests: &requests,
+                event_ranges: None,
+                inputs: None,
+                mode: araphor_data::AnalysisReadModeV1::Complete,
+                now,
+            },
+            araphor_data::AnalysisExtractLimits::default(),
+            &fixture.control,
+        )
+    };
+    let before = capture(resume.instance.clone())?;
+    assert_eq!(first.results.len(), 3);
+    for call in first.results.keys() {
+        let prior = before.state.prior(*call).ok_or("saved Graph call")?;
+        assert!(prior.reusable);
+        assert!(prior.retained.is_some());
+    }
+    drop(before);
+    let failed = store.fail_managed(&resume, Code::Limit, || Ok(()))?;
+    let captured = capture(failed.clone())?;
+    for (call, reference) in &first.results {
+        let prior = captured
+            .state
+            .prior(*call)
+            .ok_or("failed Graph saved call")?;
+        assert_eq!(
+            (&prior.result, prior.revision),
+            (&reference.result_id, reference.commit_revision)
+        );
+        assert!(!prior.reusable);
+        assert!(prior.retained.is_none());
+    }
+    store.stop_managed(&failed, || Ok(()))?;
+    Ok(())
+}

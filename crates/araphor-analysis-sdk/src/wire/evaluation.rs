@@ -39,6 +39,11 @@ impl crate::CheckedEvaluation<'_> {
             })
             .transpose()?;
         Ok(Evaluation {
+            previous_outputs: evaluation
+                .previous_outputs
+                .iter()
+                .map(|data| Dataset::encode(data, Codec::schema(&model.outputs, &data.name)?))
+                .collect::<Result<_>>()?,
             export_name: evaluation.export.clone(),
             inputs,
             parameters,
@@ -77,6 +82,11 @@ impl Evaluation {
             })
             .collect::<Result<_>>()?;
         let evaluation = crate::Evaluation {
+            previous_outputs: self
+                .previous_outputs
+                .iter()
+                .map(|data| codec.decode(data, &model.outputs))
+                .collect::<Result<_>>()?,
             export: self.export_name.clone(),
             inputs,
             parameters: self

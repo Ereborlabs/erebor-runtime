@@ -825,6 +825,7 @@ impl Packages {
             inputs: Vec::new(),
             parameters: None,
             prior: Vec::new(),
+            previous: Vec::new(),
             outputs: Vec::new(),
             evidence: program.evidence.is_some(),
             reasons: Vec::new(),
@@ -874,6 +875,16 @@ impl Packages {
                     &port.schema,
                     true,
                 )?);
+            }
+            if checkpoint.resume_input_changes {
+                for port in &model.outputs {
+                    bindings.previous.push(relation(
+                        &mut tables,
+                        format!("previous_{}", port.name),
+                        &port.schema,
+                        true,
+                    )?);
+                }
             }
         }
         let outputs = self.datasets(provider, &tables, &model.outputs, &program.outputs)?;

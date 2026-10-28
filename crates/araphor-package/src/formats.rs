@@ -32,6 +32,8 @@ pub struct PackageFixtureV1 {
     pub inputs: Vec<sdk::wire::Input>,
     pub parameters: Option<serde_json::Value>,
     pub checkpoint: Option<sdk::wire::Checkpoint>,
+    #[serde(default)]
+    pub previous_outputs: Vec<sdk::wire::Dataset>,
     pub expected: sdk::wire::Output,
 }
 

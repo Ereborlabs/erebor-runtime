@@ -96,29 +96,30 @@ impl AnalysisStore {
                             .saturating_mul(2),
                     )?;
                     output.charge(payload)?;
-                    let mut state = Self::managed_prior_from(
+                    let (mut state, continuation) = Self::managed_prior_from(
                         reader, &instance, *call, &id, revision, output, control,
                     )?;
                     // The decoded state owns its buffers; the IPC payload has been released.
                     output.input_bytes -= payload;
-                    if reuse
+                    state.reusable = reuse
                         && matches!(&instance.spec.destination,
                             ManagedDestination::Graph { calls, .. } if calls.contains(call))
                         && matches!(
                             instance.spec.manifest.calls[call].target.as_str(),
                             "wasm" | "native"
-                        )
-                    {
+                        );
+                    if state.reusable || continuation {
                         let payload: u64 = reader.query_row(
                             "SELECT COALESCE(SUM(octet_length(ipc)), 0) FROM managed_arrow WHERE result_id = ?",
                             params![id], |row| row.get(0),
                         ).context(AnalysisDatabaseSnafu { operation: "bound retained Graph call" })?;
                         let before = output.input_bytes;
                         output.charge(usize::try_from(payload).unwrap_or(usize::MAX))?;
-                        let saved = Self::saved_evaluation_from(reader, &instance, &id, control)?;
+                        let saved = Self::saved_inputs_from(reader, &instance, &id, control)?;
                         output.charge(saved.decoding_bytes(control)?)?;
                         let mut evaluation = saved.decode(control)?;
                         evaluation.checkpoint = None;
+                        evaluation.previous_outputs.clear();
                         let (record, packet, saved) =
                             Self::managed_record_from(reader, instance.spec.tenant, &id)?;
                         if saved != revision {
@@ -212,7 +213,7 @@ impl AnalysisStore {
         revision: u64,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
-    ) -> Result<ManagedPrior> {
+    ) -> Result<(ManagedPrior, bool)> {
         let tenant = instance.spec.tenant;
         let declaration = instance
             .spec
@@ -290,14 +291,22 @@ impl AnalysisStore {
                 Ok(decoded)
             })
             .transpose()?;
-        Ok(ManagedPrior {
-            revision,
-            result: id.into(),
-            context: record.context,
-            parameters,
-            checkpoint,
-            retained: None,
-        })
+        let continuation = model
+            .checkpoint
+            .as_ref()
+            .is_some_and(|spec| spec.resume_input_changes);
+        Ok((
+            ManagedPrior {
+                revision,
+                result: id.into(),
+                context: record.context,
+                parameters,
+                checkpoint,
+                retained: None,
+                reusable: false,
+            },
+            continuation,
+        ))
     }
 }
 

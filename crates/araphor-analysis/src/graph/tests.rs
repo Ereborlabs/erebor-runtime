@@ -41,6 +41,7 @@ impl Graph<'_> {
             .collect::<sdk::Result<Vec<_>>>()
             .context(AnalysisContractSnafu)?;
         Ok(sdk::Evaluation {
+            previous_outputs: Vec::new(),
             export: model.name.clone(),
             inputs,
             parameters: None,

@@ -42,6 +42,7 @@ pub struct Invocation {
     pub time_utc_ns: Option<i64>,
     pub inputs: BTreeMap<u64, Vec<sdk::Input>>,
     pub checkpoints: BTreeMap<u64, sdk::Checkpoint>,
+    pub previous_outputs: BTreeMap<u64, Vec<sdk::Dataset>>,
 }
 
 impl Default for Invocation {
@@ -52,6 +53,7 @@ impl Default for Invocation {
             time_utc_ns: None,
             inputs: BTreeMap::new(),
             checkpoints: BTreeMap::new(),
+            previous_outputs: BTreeMap::new(),
         }
     }
 }
@@ -746,7 +748,7 @@ impl PackageExec {
                 .await?;
             Some(Self::parameters(batches)?)
         };
-        let checkpoint = match snapshot.managed() {
+        let (checkpoint, previous_outputs) = match snapshot.managed() {
             Some(managed) => {
                 let declaration = managed
                     .instance()
@@ -772,13 +774,21 @@ impl PackageExec {
                 managed
                     .prior(self.call.id)
                     .map(|prior| {
-                        prior.checkpoint(model, &inputs, parameters.as_ref(), managed.rebuild())
+                        prior.state(model, &inputs, parameters.as_ref(), managed.rebuild())
                     })
                     .transpose()
                     .map_err(external)?
-                    .flatten()
+                    .unwrap_or_default()
             }
-            None => owner.invocation.checkpoints.get(&self.call.id).cloned(),
+            None => (
+                owner.invocation.checkpoints.get(&self.call.id).cloned(),
+                owner
+                    .invocation
+                    .previous_outputs
+                    .get(&self.call.id)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
         };
         let mut evaluation = sdk::Evaluation {
             export: self.call.export.clone(),
@@ -794,6 +804,7 @@ impl PackageExec {
                 seed: owner.invocation.seed,
             },
             checkpoint,
+            previous_outputs,
         };
         let configured = context
             .session_config()
@@ -808,6 +819,7 @@ impl PackageExec {
             .checkpoint
             .iter()
             .flat_map(|checkpoint| &checkpoint.datasets)
+            .chain(&evaluation.previous_outputs)
             .flat_map(|data| &data.batches)
         {
             owner.memory.retain_input(batch, &input)?;
@@ -817,6 +829,7 @@ impl PackageExec {
             .managed()
             .filter(|_| self.call.sql.is_none())
             .and_then(|managed| managed.prior(self.call.id))
+            .filter(|prior| prior.reusable)
             .filter(|prior| {
                 prior
                     .retained
@@ -997,6 +1010,12 @@ fn input_metadata(evaluation: &sdk::Evaluation) -> usize {
             .iter()
             .flat_map(|input| &input.data.batches)
             .chain(evaluation.parameters.iter())
+            .chain(
+                evaluation
+                    .previous_outputs
+                    .iter()
+                    .flat_map(|data| &data.batches),
+            )
             .chain(
                 evaluation
                     .checkpoint

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use araphor_analysis_sdk as sdk;
 use araphor_data::{AnalysisReadControl, AnalysisTableRequests, PackageErrorCodeV1};
 use araphor_discovery_definition::{Definition, ResolvedDefinition};
 use datafusion::arrow::array::RecordBatch;
@@ -673,6 +674,7 @@ impl PreparedDefinition {
             }
             if !invocation.inputs.is_empty()
                 || !invocation.checkpoints.is_empty()
+                || !invocation.previous_outputs.is_empty()
                 || invocation.time_utc_ns.is_some()
             {
                 return Err(PackageErrorCodeV1::Invalid
@@ -698,7 +700,12 @@ impl PreparedDefinition {
             .copied()
             .collect::<BTreeSet<_>>();
         let mut inputs = invocation.inputs.keys().copied().collect::<BTreeSet<_>>();
-        if !checkpoints.is_empty() || !inputs.is_empty() {
+        let mut previous = invocation
+            .previous_outputs
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if !checkpoints.is_empty() || !inputs.is_empty() || !previous.is_empty() {
             self.plan
                 .apply_with_subqueries(|plan| {
                     if let LogicalPlan::Extension(extension) = plan {
@@ -727,6 +734,33 @@ impl PreparedDefinition {
                                     ),
                                 ));
                             }
+                            if previous.remove(&call.id()) {
+                                let model = call
+                                    .descriptor()
+                                    .exports
+                                    .iter()
+                                    .find(|model| model.name == call.export())
+                                    .filter(|model| {
+                                        model
+                                            .checkpoint
+                                            .as_ref()
+                                            .is_some_and(|spec| spec.resume_input_changes)
+                                    })
+                                    .filter(|_| invocation.checkpoints.contains_key(&call.id()))
+                                    .ok_or_else(|| {
+                                        datafusion::common::DataFusionError::External(Box::new(
+                                            PackageErrorCodeV1::Invalid
+                                                .error("invocation previous output export"),
+                                        ))
+                                    })?;
+                                sdk::Dataset::validate_all(
+                                    &invocation.previous_outputs[&call.id()],
+                                    &model.outputs,
+                                )
+                                .map_err(|error| {
+                                    datafusion::common::DataFusionError::External(Box::new(error))
+                                })?;
+                            }
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
@@ -740,6 +774,11 @@ impl PreparedDefinition {
             if !inputs.is_empty() {
                 return Err(PackageErrorCodeV1::Invalid
                     .error("invocation input call")
+                    .into());
+            }
+            if !previous.is_empty() {
+                return Err(PackageErrorCodeV1::Invalid
+                    .error("invocation previous output call")
                     .into());
             }
         }

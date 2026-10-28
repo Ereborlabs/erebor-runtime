@@ -11,6 +11,7 @@ fn retained_output_preserves_contract() -> TestResult {
     let mut package = FilesCount::package();
     let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);
     package.exports[0].checkpoint = Some(CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: vec![Port::new("state", schema.clone())],
     });

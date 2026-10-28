@@ -56,6 +56,7 @@ impl SensitiveAccess {
             implementation: "portable-rust.1".into(),
             revision: "sensitive-access.1".into(),
             evaluation: Evaluation {
+                previous_outputs: Vec::new(),
                 export: "access.detect".into(),
                 inputs,
                 parameters: None,

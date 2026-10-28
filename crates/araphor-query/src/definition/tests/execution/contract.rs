@@ -125,6 +125,7 @@ async fn admitted_order(fixture: Fixture) -> TestResult {
     let port = |name| sdk::Port::new(name, Fixture::schema("value"));
     let mut model = sdk::Model::new("count", Vec::new(), vec![port("ZRows"), port("ARows")]);
     model.checkpoint = Some(sdk::CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: vec![port("ZState"), port("AState")],
     });

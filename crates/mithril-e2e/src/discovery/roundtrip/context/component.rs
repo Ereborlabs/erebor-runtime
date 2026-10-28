@@ -91,6 +91,7 @@ impl ContextComponent {
 
     pub(super) fn evaluate(&self, input: &sdk::Input) -> Result<sdk::Input, Box<dyn Error>> {
         let evaluation = sdk::Evaluation {
+            previous_outputs: Vec::new(),
             export: "echo-inputs".into(),
             inputs: vec![input.clone()],
             parameters: None,

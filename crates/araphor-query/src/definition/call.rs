@@ -45,6 +45,7 @@ pub(crate) struct SqlCall {
     pub(crate) inputs: Vec<usize>,
     pub(crate) parameters: Option<usize>,
     pub(crate) prior: Vec<usize>,
+    pub(crate) previous: Vec<usize>,
     pub(crate) outputs: Vec<usize>,
     pub(crate) evidence: bool,
     pub(crate) reasons: Vec<(String, String)>,

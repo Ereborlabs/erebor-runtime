@@ -137,6 +137,7 @@ pub(super) fn invocation(id: &str) -> Invocation {
         seed: Some(7),
         time_utc_ns: None,
         checkpoints: BTreeMap::new(),
+        previous_outputs: BTreeMap::new(),
         inputs: BTreeMap::new(),
     }
 }
@@ -1179,8 +1180,9 @@ pub(super) fn component(target: &str, export: &str) -> TestResult<PackageBundleV
         },
         vec![sdk::Port::new("data", Fixture::schema("value"))],
     );
-    if export == "accumulate" {
+    if matches!(export, "accumulate" | "continue-input") {
         model.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: export == "continue-input",
             version: 1,
             datasets: vec![sdk::Port::new("state", Fixture::schema("value"))],
         });
@@ -1196,10 +1198,16 @@ pub(super) fn component(target: &str, export: &str) -> TestResult<PackageBundleV
             program: SqlModelV1 {
                 outputs: BTreeMap::from([(
                     "data".into(),
-                    "SELECT CAST(COALESCE((SELECT SUM(value) FROM input), 0) + \
+                    if export == "continue-input" {
+                        "SELECT CAST(COALESCE((SELECT SUM(value) FROM input), 0) + \
+                            COALESCE((SELECT SUM(value) FROM previous_data), 0) \
+                            AS BIGINT UNSIGNED) AS value"
+                    } else {
+                        "SELECT CAST(COALESCE((SELECT SUM(value) FROM input), 0) + \
                         COALESCE((SELECT SUM(value) FROM prior_state), 0) \
                         AS BIGINT UNSIGNED) AS value"
-                        .into(),
+                    }
+                    .into(),
                 )]),
                 checkpoint: BTreeMap::from([(
                     "state".into(),
@@ -1501,6 +1509,7 @@ async fn combined_input_respects_limit() -> TestResult {
     Ok(())
 }
 
+mod continuation;
 mod contract;
 mod descriptors;
 mod reusing;
@@ -1561,6 +1570,7 @@ async fn native_caps_keep_targets() -> TestResult {
         .err()
         .ok_or("capped Native preparation succeeded")?;
     let evaluation = sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: "accumulate".into(),
         inputs: Vec::new(),
         parameters: None,

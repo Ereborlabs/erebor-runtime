@@ -1,6 +1,7 @@
 mod arrays;
 mod boundaries;
 mod codec;
+mod continuation;
 mod detection;
 mod graph;
 mod semantics;

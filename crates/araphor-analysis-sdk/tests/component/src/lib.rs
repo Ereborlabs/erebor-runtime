@@ -71,7 +71,7 @@ impl RuntimeFixture {
         }
         let package = Self::package();
         let evaluation = input.decode(&package)?;
-        if evaluation.export == "accumulate" {
+        if matches!(evaluation.export.as_str(), "accumulate" | "continue-input") {
             return Self::accumulate(&package, &evaluation);
         }
         let parameters = evaluation
@@ -329,6 +329,21 @@ impl RuntimeFixture {
             .map(|checkpoint| Self::sum(&checkpoint.datasets[0]))
             .transpose()?
             .unwrap_or_default();
+        let prior = if evaluation.export == "continue-input" && evaluation.checkpoint.is_some() {
+            let previous = evaluation.previous_outputs.first().ok_or_else(|| {
+                sdk::Error::contract(sdk::ErrorCode::Incomplete, "previous output")
+            })?;
+            let previous = Self::sum(previous)?;
+            if previous != prior {
+                return Err(sdk::Error::contract(
+                    sdk::ErrorCode::Invalid,
+                    "previous output state",
+                ));
+            }
+            previous
+        } else {
+            prior
+        };
         let total = prior
             .checked_add(Self::sum(&evaluation.input("input")?.data)?)
             .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "checkpoint sum"))?;
@@ -396,10 +411,22 @@ impl RuntimeFixture {
         accumulate.name = "accumulate".into();
         accumulate.parameters = sdk::Schema::empty();
         accumulate.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: false,
             version: 1,
             datasets: vec![sdk::Port::new("state", model.outputs[0].schema.clone())],
         });
-        sdk::Package::new("runtime-fixture", "1", vec![model, count, accumulate])
+        let mut continuation = accumulate.clone();
+        continuation.name = "continue-input".into();
+        continuation.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: true,
+            version: 1,
+            datasets: vec![sdk::Port::new("state", model.outputs[0].schema.clone())],
+        });
+        sdk::Package::new(
+            "runtime-fixture",
+            "1",
+            vec![model, count, accumulate, continuation],
+        )
     }
 }
 

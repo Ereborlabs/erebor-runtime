@@ -8,6 +8,7 @@ pub(super) struct Exchange {
     windows: Vec<Box<abi::Window>>,
     coverage: Vec<Box<[abi::Bytes]>>,
     pub(super) inputs: Vec<abi::Input>,
+    pub(super) previous_outputs: Vec<abi::Dataset>,
     pub(super) datasets: Vec<abi::Dataset>,
     pub(super) evidence: Vec<abi::Evidence>,
     pub(super) reasons: Vec<abi::Reason>,
@@ -23,6 +24,7 @@ impl Exchange {
             windows: Vec::new(),
             coverage: Vec::new(),
             inputs: Vec::new(),
+            previous_outputs: Vec::new(),
             datasets: Vec::new(),
             evidence: Vec::new(),
             reasons: Vec::new(),
@@ -74,6 +76,10 @@ impl Exchange {
                 },
                 coverage,
             });
+        }
+        for data in &value.previous_outputs {
+            let data = frame.dataset(data, &model.outputs)?;
+            frame.previous_outputs.push(data);
         }
         if let Some(batch) = &value.parameters {
             frame.parameters = frame.streams.add(vec![batch.clone()], &model.parameters);

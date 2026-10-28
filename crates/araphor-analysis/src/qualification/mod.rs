@@ -183,6 +183,19 @@ impl Qualification {
                 .transpose()
                 .context(araphor_data::AnalysisContractSnafu)?;
             let context = fixture.evaluation_context();
+            let previous = fixture
+                .previous_outputs
+                .iter()
+                .map(|data| {
+                    let port = model
+                        .outputs
+                        .iter()
+                        .find(|port| port.name == data.name)
+                        .ok_or_else(|| Code::Invalid.error("fixture previous output"))?;
+                    data.decode(&port.schema)
+                        .context(araphor_data::AnalysisContractSnafu)
+                })
+                .collect::<araphor_data::Result<Vec<_>>>()?;
             let invocation = Invocation {
                 id: context.id,
                 seed: context.seed,
@@ -191,6 +204,11 @@ impl Qualification {
                     .into_iter()
                     .map(|checkpoint| (id, checkpoint))
                     .collect(),
+                previous_outputs: if previous.is_empty() {
+                    BTreeMap::new()
+                } else {
+                    BTreeMap::from([(id, previous)])
+                },
                 inputs: if inputs.is_empty() {
                     BTreeMap::new()
                 } else {

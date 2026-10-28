@@ -62,6 +62,7 @@ pub struct Evaluation {
     pub parameters: Option<RecordBatch>,
     pub context: EvaluationContext,
     pub checkpoint: Option<Checkpoint>,
+    pub previous_outputs: Vec<Dataset>,
 }
 
 impl Evaluation {
@@ -69,6 +70,7 @@ impl Evaluation {
         self.inputs
             .iter()
             .flat_map(|input| &input.data.batches)
+            .chain(self.previous_outputs.iter().flat_map(|data| &data.batches))
             .chain(self.parameters.iter())
             .chain(
                 self.checkpoint.iter().flat_map(|checkpoint| {
@@ -99,6 +101,7 @@ impl Evaluation {
                     &input.coverage,
                 ));
         }
+        bytes = bytes.saturating_add(Dataset::allocation(&self.previous_outputs));
         if let Some(parameters) = &self.parameters {
             bytes = bytes.saturating_add(Dataset::batch_allocation(parameters));
         }

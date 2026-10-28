@@ -113,6 +113,7 @@ fn wire_validates_evidence() -> TestResult {
         vec![crate::Model::new("run", Vec::new(), vec![port])],
     );
     let evaluation = crate::Evaluation {
+        previous_outputs: Vec::new(),
         export: "run".into(),
         inputs: Vec::new(),
         parameters: None,
@@ -164,6 +165,7 @@ fn allocation_counts_input_state() -> TestResult {
     let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);
     let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(UInt64Array::from(vec![1]))])?;
     let mut evaluation = crate::Evaluation {
+        previous_outputs: Vec::new(),
         export: "run".into(),
         inputs: Vec::new(),
         parameters: None,
@@ -260,6 +262,7 @@ fn generated_types_preserve_context() -> TestResult {
         seed: Some(42),
     };
     let wire = super::Evaluation {
+        previous_outputs: Vec::new(),
         export_name: "run".into(),
         inputs: Vec::new(),
         parameters: None,
@@ -282,11 +285,13 @@ fn output_budget_includes_checkpoint() -> TestResult {
         vec![crate::Port::new("data", schema.clone())],
     );
     model.checkpoint = Some(crate::CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: vec![crate::Port::new("state", schema)],
     });
     let package = crate::Package::new("fixture", "1", vec![model]);
     let evaluation = crate::Evaluation {
+        previous_outputs: Vec::new(),
         export: "stateful".into(),
         inputs: Vec::new(),
         parameters: None,

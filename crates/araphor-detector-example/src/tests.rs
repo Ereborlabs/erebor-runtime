@@ -32,6 +32,7 @@ fn threshold_retains_evidence_and_state() -> TestResult {
         Rows::encode(&model.inputs[2].port, &[Manifest { window_ns: 100 }])?,
     ];
     let mut evaluation = sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: "detect".into(),
         inputs: inputs
             .into_iter()

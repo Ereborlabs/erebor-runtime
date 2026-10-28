@@ -177,6 +177,11 @@ impl Fixture {
             seed: evaluation.context.seed,
             time_utc_ns: Some(evaluation.context.time_utc_ns),
             inputs: BTreeMap::from([(call.id(), evaluation.inputs.clone())]),
+            previous_outputs: if evaluation.previous_outputs.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(call.id(), evaluation.previous_outputs.clone())])
+            },
             checkpoints: evaluation
                 .checkpoint
                 .clone()
@@ -211,11 +216,11 @@ impl Fixture {
             assert_eq!(stored.coverage, input.coverage);
         }
         let checked = self.package.check_evaluation(evaluation)?.encode()?;
-        assert_eq!(
-            self.package.check_evaluation(saved)?.encode()?.checkpoint,
-            checked.checkpoint
-        );
+        let stored = self.package.check_evaluation(saved)?.encode()?;
+        assert_eq!(stored.checkpoint, checked.checkpoint);
+        assert_eq!(stored.previous_outputs, checked.previous_outputs);
         let fixture = PackageFixtureV1 {
+            previous_outputs: checked.previous_outputs,
             name: "graph-native-return".into(),
             export: evaluation.export.clone(),
             time_utc_ns: evaluation.context.time_utc_ns,

@@ -38,6 +38,7 @@ impl BurstDetector {
             ]),
         }];
         model.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: false,
             version: 1,
             datasets: vec![Rows::port::<State>("state", "graph.state.v1")],
         });

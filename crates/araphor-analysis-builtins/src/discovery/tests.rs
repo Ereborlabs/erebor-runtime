@@ -101,6 +101,7 @@ fn fixture() -> sdk::Result<sdk::Fixture> {
         implementation: "trusted-builtins-rust".into(),
         revision: "recorded-derivation-v1".into(),
         evaluation: sdk::Evaluation {
+            previous_outputs: Vec::new(),
             export: "atoms".into(),
             inputs: datasets
                 .into_iter()

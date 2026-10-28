@@ -142,6 +142,11 @@ impl Session {
                         .into_iter()
                         .map(|checkpoint| (id, checkpoint))
                         .collect(),
+                    previous_outputs: if evaluation.previous_outputs.is_empty() {
+                        BTreeMap::new()
+                    } else {
+                        BTreeMap::from([(id, evaluation.previous_outputs)])
+                    },
                 },
             )
             .await

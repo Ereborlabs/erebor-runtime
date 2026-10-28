@@ -409,3 +409,61 @@ records the executable hash, source hash, time, memory, and failed result.
 records the read-only inspection and equal file hashes before and after it.
 `rss-accounting-check.json` records the empty-process control. The
 `rss-diagnostic` directory retains the separate workload samples and raw result.
+
+## Saved package output for continuation
+
+Read [SDK model](../../crates/araphor-analysis-sdk/src/model.rs),
+[evaluation validation](../../crates/araphor-analysis-sdk/src/validation.rs),
+[managed state](../../crates/araphor-data/src/analysis/managed/model.rs),
+[capture](../../crates/araphor-data/src/analysis/managed/capture.rs),
+[physical execution](../../crates/araphor-query/src/definition/physical.rs),
+[commit validation](../../crates/araphor-data/src/analysis/managed/commit.rs),
+and [replay](../../crates/araphor-data/src/analysis/managed/replay.rs) in that order.
+
+A package can set `CheckpointSpec.resume_input_changes`. Its default is false.
+The shared `ManagedPrior::state` method selects both checkpoint and prior
+output. It preserves call identity, parameter, schema, and rebuild checks.
+Without the declaration, changed input revisions or coverage discard state.
+With the declaration, the package receives the saved output datasets through
+`Evaluation.previous_outputs`. Their names and schemas come from the existing
+output contract. Initial execution and rebuild have no prior output.
+
+Query binds these values in the existing physical package call. SQL uses
+`previous_<output>` relation slots. Native and Wasm calls use the existing SDK
+transport. The native request and C header include prior dataset pointers and
+their count; the WIT request includes the same prior datasets. The contract
+version is unchanged during development. Arrow memory and encoding reservations
+include the new fields. Saved output cannot supply an evidence link.
+
+Data verifies the exact checkpoint and prior Arrow values at commit. The
+existing attempt holds the prior result reference. It does not store the
+previous Arrow bytes a second time. Replay restores the direct predecessor's
+output and uses the same state selector. It does not follow earlier state
+references. Package qualification stores these datasets through the existing
+OCI dataset layers and sends them through the normal physical invocation.
+
+`ManagedPrior.reusable` is separate from state continuation. It retains the
+existing successful Graph capture conditions. Query requires this flag before
+it applies `RetainedCall::matches`. A failed Graph does not return a saved
+result as a new success. A continuation package can still receive the last
+successful output to compute its next result.
+
+Read the [SDK continuation tests](../../crates/araphor-analysis-sdk/src/tests/continuation.rs),
+[Data replay tests](../../crates/araphor-data/src/analysis/managed/tests/replay.rs),
+[Query continuation tests](../../crates/araphor-query/src/definition/tests/execution/continuation.rs),
+[qualification tests](../../crates/araphor-analysis/src/qualification/tests/sql.rs),
+and [Graph history tests](../../crates/araphor-analysis/src/graph/native/tests/managed/history.rs).
+They check exact state, schema, evidence separation, failure, rollback, replay,
+reopen, and actual saved-result reuse. The builtin Graph algorithms still
+rebuild their contribution. Enabling their continuation declaration requires
+the separate incremental implementation.
+
+The 76 SDK tests and 26 focused Data, Query, Package, Analysis, and installed
+native checks pass. The focused total includes the corrected finite-attempt
+test and excludes its earlier invalid fixture setup. Native artifacts come
+from the existing `ComponentBuilder::workspace_native` path. The three installed
+native checks cover continuation, failure cleanup, and fixture qualification.
+Scoped formatting and patch whitespace pass. Clippy passes for affected crates
+and tests with warnings denied. The records and source hashes are in
+`/tmp/araphor-package-qualification-active/compact-graph/continuation`.
+No full workspace or physical qualification was run for this state change.

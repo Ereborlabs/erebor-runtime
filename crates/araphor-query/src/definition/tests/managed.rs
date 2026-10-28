@@ -149,9 +149,9 @@ async fn managed_capture_rejects_state() -> TestResult {
         .prepare_definition(&Fixture::sql("SELECT 1 AS value"))
         .await?;
     let instance = fixture.managed(&definition, selection)?;
-    for checkpoints in [false, true] {
+    for state in ["inputs", "checkpoint", "previous"] {
         let mut invocation = Invocation::default();
-        if checkpoints {
+        if state == "checkpoint" {
             invocation.checkpoints.insert(
                 0,
                 sdk::Checkpoint {
@@ -159,6 +159,8 @@ async fn managed_capture_rejects_state() -> TestResult {
                     datasets: Vec::new(),
                 },
             );
+        } else if state == "previous" {
+            invocation.previous_outputs.insert(0, Vec::new());
         } else {
             invocation.inputs.insert(0, Vec::new());
         }

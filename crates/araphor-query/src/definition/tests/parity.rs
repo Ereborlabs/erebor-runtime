@@ -382,6 +382,7 @@ async fn prepared_guest_keeps_identity() -> TestResult {
     )?);
     let model = &bundle.bundle().artifacts[0].descriptor.exports[0];
     let evaluation = sdk::Evaluation {
+        previous_outputs: Vec::new(),
         export: model.name.clone(),
         inputs: Vec::new(),
         parameters: araphor_data::decode_parameters(

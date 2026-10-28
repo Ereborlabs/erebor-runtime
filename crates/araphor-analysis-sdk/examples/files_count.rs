@@ -107,6 +107,7 @@ impl FilesCount {
             implementation: "portable-rust.1".into(),
             revision: "three-events.1".into(),
             evaluation: Evaluation {
+                previous_outputs: Vec::new(),
                 export: "files.count".into(),
                 inputs: vec![Input {
                     data: Dataset {

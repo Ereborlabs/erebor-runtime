@@ -23,6 +23,7 @@ fn model_wire_keeps_contract() -> TestResult {
         ],
     );
     model.checkpoint = Some(crate::CheckpointSpec {
+        resume_input_changes: false,
         version: 7,
         datasets: model.outputs.clone(),
     });
@@ -52,6 +53,7 @@ fn model_wire_keeps_contract() -> TestResult {
     assert_eq!(decoded.checkpoint.ok_or("checkpoint")?.datasets.len(), 2);
     let package = crate::Package::new("codec", "1", vec![model.clone()]);
     let evaluation = crate::Evaluation {
+        previous_outputs: Vec::new(),
         export: model.name.clone(),
         inputs: Vec::new(),
         parameters: None,

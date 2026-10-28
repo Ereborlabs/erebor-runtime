@@ -42,6 +42,7 @@ fn fixtures() -> TestResult<PackageBundleV1> {
         ..Default::default()
     };
     let equal = araphor_data::PackageFixtureV1 {
+        previous_outputs: Vec::new(),
         name: "equal".into(),
         export: model.name.clone(),
         time_utc_ns: 0,

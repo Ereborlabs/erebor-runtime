@@ -69,6 +69,21 @@ impl PackageExec {
                 source.bind_port(*slot, schema, batches, None)?;
             }
         }
+        for (port, slot) in model.outputs.iter().zip(&sql.previous) {
+            if !sql.used.contains(slot) {
+                continue;
+            }
+            let schema = Arc::new(port.schema.clone());
+            let batches = evaluation
+                .previous_outputs
+                .iter()
+                .find(|data| data.name == port.name)
+                .map_or_else(
+                    || vec![sdk::RecordBatch::new_empty(Arc::clone(&schema))],
+                    |data| data.batches.clone(),
+                );
+            source.bind_port(*slot, schema, batches, None)?;
+        }
         let mut child = model.inputs.len() + usize::from(evaluation.parameters.is_some());
         let mut datasets = Vec::with_capacity(model.outputs.len());
         for port in &model.outputs {

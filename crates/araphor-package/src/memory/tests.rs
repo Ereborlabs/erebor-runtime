@@ -53,6 +53,7 @@ fn bundle_capacity_is_charged() -> TestResult {
 #[test]
 fn fixture_capacity_is_charged() -> TestResult {
     let mut fixture = PackageFixtureV1 {
+        previous_outputs: Vec::new(),
         name: "retained".into(),
         export: "evaluate".into(),
         time_utc_ns: 0,

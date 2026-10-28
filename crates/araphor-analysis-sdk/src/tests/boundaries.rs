@@ -142,6 +142,7 @@ fn output_evidence_is_exact() -> TestResult {
 fn checkpoint_version_and_schema() -> TestResult {
     let mut package = FilesCount::package();
     package.exports[0].checkpoint = Some(CheckpointSpec {
+        resume_input_changes: false,
         version: 2,
         datasets: vec![Port::new("state", Schema::empty())],
     });

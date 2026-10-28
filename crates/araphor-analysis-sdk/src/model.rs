@@ -150,6 +150,8 @@ pub enum OutputKind {
 #[serde(deny_unknown_fields)]
 pub struct CheckpointSpec {
     pub version: u32,
+    #[serde(default)]
+    pub resume_input_changes: bool,
     pub datasets: Vec<Port>,
 }
 

@@ -12,6 +12,7 @@ async fn model_state_provenance() -> TestResult {
         result.evidence_required = true;
         let mut model = sdk::Model::new("count", vec![input], vec![result]);
         model.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: false,
             version: 1,
             datasets: vec![sdk::Port::new("state", Fixture::schema("count"))],
         });
@@ -501,6 +502,7 @@ async fn model_clock_children() -> TestResult {
             source: sdk::InputSource::Query("SELECT CAST(7 AS BIGINT UNSIGNED) AS value".into()),
         }];
         model.checkpoint = Some(sdk::CheckpointSpec {
+            resume_input_changes: false,
             version: 1,
             datasets: vec![sdk::Port::new("state", Fixture::schema("value"))],
         });

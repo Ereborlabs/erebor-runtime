@@ -74,6 +74,7 @@ fn package_reserves_are_charged() -> TestResult {
 fn model_reserves_are_charged() -> TestResult {
     let mut model = Model::new("run", Vec::new(), Vec::new());
     model.checkpoint = Some(CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: Vec::new(),
     });
@@ -126,6 +127,7 @@ fn schemas_include_nested_metadata() -> TestResult {
         vec![Port::new("output", Schema::empty())],
     );
     model.checkpoint = Some(CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: vec![Port::new("state", Schema::empty())],
     });
@@ -174,6 +176,10 @@ fn schemas_include_nested_metadata() -> TestResult {
 #[test]
 fn wire_reserves_are_charged() -> TestResult {
     let mut evaluation = wire::Evaluation {
+        previous_outputs: vec![wire::Dataset {
+            name: "previous".into(),
+            arrow_ipc: Vec::new(),
+        }],
         export_name: "run".into(),
         inputs: vec![wire::Input {
             data: wire::Dataset {
@@ -205,6 +211,8 @@ fn wire_reserves_are_charged() -> TestResult {
         }),
     };
     let initial = evaluation.allocated_bytes();
+    evaluation.previous_outputs.reserve_exact(3);
+    evaluation.previous_outputs[0].arrow_ipc.reserve_exact(512);
     evaluation.inputs.reserve_exact(4);
     evaluation.inputs[0].data.arrow_ipc.reserve_exact(4096);
     evaluation
@@ -219,8 +227,9 @@ fn wire_reserves_are_charged() -> TestResult {
     checkpoint.datasets[0].arrow_ipc.reserve_exact(1024);
     assert!(
         evaluation.allocated_bytes()
-            >= initial + 7296 + 4 * size_of::<wire::Input>() + 4 * size_of::<wire::Dataset>()
+            >= initial + 7808 + 4 * size_of::<wire::Input>() + 7 * size_of::<wire::Dataset>()
     );
+    assert!(evaluation.previous_outputs[0].arrow_ipc.is_empty());
     assert!(evaluation.inputs[0].data.arrow_ipc.is_empty());
     assert!(evaluation
         .parameters
@@ -243,6 +252,7 @@ fn wire_retains_input_metadata() -> TestResult {
         )],
     );
     let mut evaluation = Evaluation {
+        previous_outputs: Vec::new(),
         export: "run".into(),
         inputs: vec![Input {
             data: crate::Dataset {
@@ -363,5 +373,35 @@ fn dataset_metadata_keeps_headers() -> TestResult {
     input.coverage.limits.reserve_exact(64);
     assert!(input.metadata_bytes() >= before + 4096 + 64 * size_of::<String>());
     assert_eq!(input.data.metadata_bytes(), data_metadata);
+    Ok(())
+}
+
+#[test]
+fn prior_buffers_are_charged() -> TestResult {
+    let mut evaluation = crate::tests::files_count::FilesCount::fixture()?.evaluation;
+    let before = evaluation.allocated_bytes();
+    let scratch = evaluation.encoding_scratch_bytes()?;
+    let output = crate::tests::files_count::FilesCount::evaluate(&evaluation)?;
+    evaluation.previous_outputs = output.datasets;
+    let state_bytes = evaluation
+        .previous_outputs
+        .iter()
+        .flat_map(|data| &data.batches)
+        .map(RecordBatch::get_array_memory_size)
+        .sum::<usize>();
+    assert!(state_bytes > 0);
+    assert!(evaluation.allocated_bytes() >= before + state_bytes);
+    let state_scratch = evaluation
+        .previous_outputs
+        .iter()
+        .flat_map(|data| &data.batches)
+        .try_fold(0usize, |bytes, batch| {
+            wire::Dataset::encoding_scratch(batch).map(|next| bytes + next)
+        })?;
+    assert!(state_scratch > 0);
+    assert_eq!(
+        evaluation.encoding_scratch_bytes()?,
+        scratch + state_scratch
+    );
     Ok(())
 }

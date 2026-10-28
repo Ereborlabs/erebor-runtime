@@ -71,6 +71,7 @@ fn image_roundtrip_keeps_contract() -> TestResult {
     details.evidence_required = true;
     model.outputs.push(details.clone());
     model.checkpoint = Some(sdk::CheckpointSpec {
+        resume_input_changes: false,
         version: 7,
         datasets: vec![sdk::Port::new("state", source.schema)],
     });
@@ -113,6 +114,7 @@ fn image_roundtrip_keeps_contract() -> TestResult {
     };
     artifact.fixtures = (0..65)
         .map(|index| PackageFixtureV1 {
+            previous_outputs: Vec::new(),
             name: format!("fixture-{index}"),
             export: "count".into(),
             time_utc_ns: 123,

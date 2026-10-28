@@ -65,7 +65,7 @@ macro_rules! component_conversions {
         $crate::__component_record!($crate::wire::Checkpoint, component_types::Checkpoint;
             [version]; []; []; [datasets]);
         $crate::__component_record!($crate::wire::Evaluation, component_types::Evaluation;
-            [export_name, parameters]; [context]; [checkpoint]; [inputs]);
+            [export_name, parameters]; [context]; [checkpoint]; [inputs, previous_outputs]);
         $crate::__component_record!($crate::RowRef, component_types::RowRef;
             [dataset, row]; []; []; []);
         $crate::__component_record!($crate::EvidenceLink, component_types::EvidenceLink;

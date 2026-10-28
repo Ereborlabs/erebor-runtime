@@ -140,7 +140,18 @@ impl Model {
                 Package::text(reason)?;
             }
         }
-        self.checkpoint(evaluation.checkpoint.as_ref(), false)
+        self.checkpoint(evaluation.checkpoint.as_ref(), false)?;
+        if self
+            .checkpoint
+            .as_ref()
+            .is_some_and(|spec| spec.resume_input_changes)
+            && evaluation.checkpoint.is_some()
+        {
+            Self::datasets(self.outputs.iter(), evaluation.previous_outputs.iter())?;
+        } else if !evaluation.previous_outputs.is_empty() {
+            return Err(Error::contract(ErrorCode::Invalid, "previous outputs"));
+        }
+        Ok(())
     }
 
     pub(crate) fn output(&self, evaluation: &Evaluation, output: &Output) -> Result<()> {

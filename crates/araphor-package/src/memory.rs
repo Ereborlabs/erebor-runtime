@@ -106,6 +106,7 @@ impl PackageFixtureV1 {
             self.checkpoint
                 .as_ref()
                 .map_or(0, |checkpoint| checkpoint.allocated_bytes()),
+            vector(&self.previous_outputs, |data| Ok(data.allocated_bytes()))?,
             self.expected.allocated_bytes(),
         ])
     }

@@ -119,6 +119,7 @@ async fn fixed_input_retains_call() -> Result<(), Box<dyn std::error::Error + Se
     }];
     model.parameters = schema.clone();
     model.checkpoint = Some(sdk::CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: vec![sdk::Port::new("clock", schema)],
     });

@@ -102,6 +102,8 @@ pub struct Request {
     pub export_name: Bytes,
     pub inputs: *const Input,
     pub input_count: u64,
+    pub previous_outputs: *const Dataset,
+    pub previous_output_count: u64,
     pub parameters: *mut FFI_ArrowArrayStream,
     pub context: Context,
     pub checkpoint: *const Checkpoint,

@@ -81,6 +81,7 @@ async fn accumulate(target: &str) -> TestResult {
         vec![sdk::Port::new("data", Fixture::schema())],
     );
     model.checkpoint = Some(sdk::CheckpointSpec {
+        resume_input_changes: false,
         version: 1,
         datasets: vec![sdk::Port::new("state", Fixture::schema())],
     });
