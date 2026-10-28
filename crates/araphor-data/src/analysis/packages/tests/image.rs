@@ -96,28 +96,8 @@ fn package_image_retains_closure() -> TestResult {
     let installed = store.install_package_image([1; 16], &image, || Ok(()))?;
     assert_eq!(installed, store.meta()?.commit_revision);
     let saved = store.meta()?;
-    let charge = store.read_snapshot(|reader| AnalysisStore::logical_usage(reader, [1; 16]))?;
     let records = store.package_revisions([1; 16])?;
     assert_eq!(records.len(), 2);
-    let revision_bytes = records.iter().try_fold(0usize, |bytes, record| {
-        Ok::<_, serde_json::Error>(
-            bytes
-                + 256
-                + record.package_id.len()
-                + record.revision.len()
-                + record.descriptor.len()
-                + record.artifact.len()
-                + serde_json::to_vec(&record.dependencies)?.len(),
-        )
-    })?;
-    assert_eq!(
-        charge.1,
-        (revision_bytes
-            + 256
-            + image.bundle().root.package_id.len()
-            + image.bundle().root.revision.len()
-            + digest.len()) as u64
-    );
     let mut checked = false;
     assert_eq!(
         store.install_package_image([1; 16], &image, || {
@@ -128,10 +108,7 @@ fn package_image_retains_closure() -> TestResult {
     );
     assert!(checked);
     assert_eq!(store.meta()?, saved);
-    assert_eq!(
-        store.read_snapshot(|reader| AnalysisStore::logical_usage(reader, [1; 16]))?,
-        charge
-    );
+    assert_eq!(store.package_revisions([1; 16])?, records);
     assert_no_execution(&store)?;
     assert!(!notices.has_changed()?);
     let retained = inspect(&store, None)?;

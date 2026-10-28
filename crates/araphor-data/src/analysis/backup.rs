@@ -116,7 +116,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "record unrecoverable source range",
                 })?;
-            self.check_logical(&transaction, identity.tenant_id, true)?;
+            self.check_revision_limits(&transaction, identity.tenant_id)?;
             Self::record_revision(&transaction, revision, &["recovery_gaps"])?;
             #[cfg(test)]
             self.crash_at("recovery.before");

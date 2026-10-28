@@ -212,10 +212,7 @@ impl GraphPublication {
             witnesses,
             context_refs: Vec::new(),
         };
-        let prepared = araphor_data::analysis::CanonicalGraph::bounded(
-            snapshot,
-            owner.session.engine().limits().output_bytes,
-        )?;
+        let prepared = araphor_data::analysis::CanonicalGraph::new(snapshot)?;
         Ok(GraphConversion {
             packet: araphor_data::analysis::GraphCommit {
                 request: commit,

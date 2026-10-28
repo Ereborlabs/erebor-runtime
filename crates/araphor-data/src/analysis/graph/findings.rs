@@ -1,4 +1,4 @@
-use duckdb::{params, OptionalExt as _, Row};
+use duckdb::{params, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::super::graph_rows::GraphHeader;
@@ -9,21 +9,50 @@ use crate::{
 };
 
 mod batches;
-mod preflight;
 mod selection;
 
-use preflight::{FindingHeaders, FindingKey, FindingSelection};
-
-const MAX_READ_BYTES: usize = 32 * 1024 * 1024;
+struct FindingKey {
+    result: String,
+    finding: String,
+}
 
 impl AnalysisStore {
+    fn selected_finding_keys(
+        &self,
+        snapshot: &duckdb::Connection,
+        values: &[&dyn duckdb::ToSql],
+    ) -> Result<Vec<FindingKey>> {
+        let mut statement =
+            snapshot
+                .prepare_cached(Self::finding_selection())
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare selected native finding keys",
+                })?;
+        let mut rows = statement.query(values).context(AnalysisDatabaseSnafu {
+            operation: "select native finding keys",
+        })?;
+        let mut keys = Vec::new();
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "read selected native finding keys",
+        })? {
+            keys.push(FindingKey {
+                result: row.get(0).context(AnalysisDatabaseSnafu {
+                    operation: "decode selected graph reference",
+                })?,
+                finding: row.get(1).context(AnalysisDatabaseSnafu {
+                    operation: "decode selected native finding key",
+                })?,
+            });
+        }
+        Ok(keys)
+    }
+
     pub fn graph_findings(
         &self,
         tenant: [u8; 16],
         after: Option<&str>,
         exact: Option<&str>,
         limit: usize,
-        bytes: usize,
     ) -> Result<Vec<(String, FindingV1)>> {
         if limit == 0 {
             return GraphInvalidSnafu {
@@ -46,8 +75,7 @@ impl AnalysisStore {
                     limit.min(i64::MAX as usize) as i64
                 ],
             )?;
-            let selection = self.preflight_findings(snapshot, tenant, keys)?;
-            self.collect_findings(snapshot, selection, tenant, bytes)
+            self.collect_findings(snapshot, keys, tenant)
         })
     }
 
@@ -87,20 +115,10 @@ impl AnalysisStore {
                 key.result == reference.result_id,
                 "current finding reference",
             )?;
-            let mut selection = self.preflight_findings(snapshot, tenant, keys)?;
-            let revision = self
-                .cached_finding_header(
-                    snapshot,
-                    &mut selection.headers,
-                    tenant,
-                    &selection.keys[0],
-                )?
-                .snapshot
-                .input_manifest
-                .clone();
-            self.collect_findings(snapshot, selection, tenant, usize::MAX)?
-                .pop()
-                .map(|(_, finding)| (finding, revision))
+            let header = GraphRows::read_header(snapshot, tenant, &key.result)?
+                .ok_or_else(|| self.state_error("the current graph header is absent"))?;
+            GraphRows::read_finding(snapshot, &key.result, &key.finding, &header, None)?
+                .map(|finding| (finding, header.snapshot.input_manifest))
                 .ok_or_else(|| {
                     NotificationSnafu {
                         code: NotificationErrorCodeV1::Denied,
@@ -109,49 +127,6 @@ impl AnalysisStore {
                     .build()
                 })
         })
-    }
-
-    fn finding_header(
-        &self,
-        reader: &duckdb::Connection,
-        row: &Row<'_>,
-        tenant: [u8; 16],
-    ) -> Result<GraphHeader> {
-        let body = row.get_ref(1).context(AnalysisDatabaseSnafu {
-            operation: "read selected graph header",
-        })?;
-        let body = body.as_blob().map_err(|_| {
-            GraphInvalidSnafu {
-                field: "graph header bytes",
-            }
-            .build()
-        })?;
-        let mut header = GraphHeader::decode(body)?;
-        let stream = row.get_ref(2).context(AnalysisDatabaseSnafu {
-            operation: "read selected graph stream",
-        })?;
-        let stream = stream.as_blob().map_err(|_| {
-            GraphInvalidSnafu {
-                field: "graph header index",
-            }
-            .build()
-        })?;
-        let method: u64 = row.get(3).context(AnalysisDatabaseSnafu {
-            operation: "read selected graph method",
-        })?;
-        let first: u64 = row.get(4).context(AnalysisDatabaseSnafu {
-            operation: "read selected graph first cursor",
-        })?;
-        header.check_index(tenant, stream, method, first)?;
-        let id: String = row.get(0).context(AnalysisDatabaseSnafu {
-            operation: "read selected graph result ID",
-        })?;
-        let (evidence, positions) =
-            crate::analysis::graph_rows::GraphRows::load_inputs(reader, &id, &header, None)?;
-        header.snapshot.input_manifest.evidence = evidence;
-        header.snapshot.input_positions = positions;
-        header.snapshot.validate()?;
-        Ok(header)
     }
 
     pub fn graph_finding(

@@ -330,7 +330,6 @@ impl Projection {
                 && head.coverage == latest
                 && manifest == &graph.revision;
         }
-        frames.try_grow(Self::graph_metadata(&graph)?)?;
         let mut retained = positions
             .capacity()
             .checked_mul(size_of::<(DiscoveryRecordIdV1, StorePositionV1)>())
@@ -448,15 +447,6 @@ impl Projection {
         frames: &datafusion::execution::memory_pool::MemoryReservation,
     ) -> Result<Vec<sdk::Input>> {
         let before_projection = memory.size();
-        if self.limits.input_bytes != usize::MAX || self.limits.input_capacity.is_some() {
-            let bound = Self::native_bound(graph, frames.size(), &self.ports)?;
-            if bound > self.limits.input_bytes {
-                return Err(Self::external(
-                    araphor_data::PackageErrorCodeV1::Limit.error("graph input bytes"),
-                ));
-            }
-            memory.try_grow(bound)?;
-        }
         let values = graph.projection().map_err(Self::external)?;
         let mut inputs = Vec::with_capacity(3);
         let mut input_metadata = 0usize;
@@ -487,142 +477,6 @@ impl Projection {
                 .ok_or_else(|| Self::invalid("graph input metadata overflow"))?,
         )?;
         Ok(inputs)
-    }
-
-    fn native_bound(graph: &Graph<'_>, owned: usize, ports: &[sdk::Port]) -> Result<usize> {
-        let mut bytes = owned
-            .checked_mul(4)
-            .ok_or_else(|| Self::invalid("graph native allocation overflow"))?;
-        for (port, rows) in ports
-            .iter()
-            .zip([graph.observations.len(), graph.facts.len(), 1])
-        {
-            let buffers = rows
-                .checked_add(1)
-                .and_then(|rows| rows.checked_mul(32))
-                .and_then(|bytes| bytes.checked_add(512))
-                .ok_or_else(|| Self::invalid("graph native allocation overflow"))?;
-            for field in port.schema.flattened_fields() {
-                bytes = bytes
-                    .checked_add(buffers)
-                    .and_then(|bytes| bytes.checked_add(field.size()))
-                    .ok_or_else(|| Self::invalid("graph native allocation overflow"))?;
-            }
-        }
-        Ok(bytes)
-    }
-
-    pub(super) fn graph_metadata(graph: &Graph<'_>) -> Result<usize> {
-        let input = &graph.input;
-        let mut bytes = 0usize;
-        let mut add = |size| {
-            bytes = bytes
-                .checked_add(size)
-                .ok_or_else(|| Self::invalid("graph metadata overflow"))?;
-            Ok::<_, DataFusionError>(())
-        };
-        for (capacity, width) in [
-            (input.records.capacity(), size_of::<DiscoveryRecordV1>()),
-            (
-                input.coverage.capacity(),
-                size_of::<araphor_data::DiscoveryCoverageV1>(),
-            ),
-            (
-                input.coverage_keys.capacity(),
-                size_of::<GraphCoverageKeyV1>(),
-            ),
-            (
-                input.facts.capacity(),
-                size_of::<AnalysisContextVersionV1>(),
-            ),
-            (input.missing_ranges.capacity(), size_of::<(u64, u64)>()),
-            (
-                graph.facts.capacity(),
-                size_of::<araphor_data::GraphFactV1>(),
-            ),
-            (
-                graph.revision.evidence.capacity(),
-                size_of::<DiscoveryRecordIdV1>(),
-            ),
-            (
-                graph.revision.coverage.capacity(),
-                size_of::<GraphCoverageKeyV1>(),
-            ),
-            (
-                graph.revision.context.capacity(),
-                size_of::<AnalysisContextKeyV1>(),
-            ),
-            (
-                graph.revision.missing_ranges.capacity(),
-                size_of::<(u64, u64)>(),
-            ),
-        ] {
-            add(capacity
-                .checked_mul(width)
-                .ok_or_else(|| Self::invalid("graph metadata overflow"))?)?;
-        }
-        add(input.source.node_id.capacity())?;
-        for id in input
-            .records
-            .iter()
-            .map(|record| &record.id)
-            .chain(&graph.revision.evidence)
-        {
-            add(id.stream.node_id.capacity())?;
-        }
-        for range in &input.coverage {
-            add(range.stream.node_id.capacity())?;
-            add(range
-                .gap_reasons
-                .capacity()
-                .checked_mul(size_of::<String>())
-                .ok_or_else(|| Self::invalid("graph metadata overflow"))?)?;
-            for reason in &range.gap_reasons {
-                add(reason.capacity())?;
-            }
-        }
-        for range in input.coverage_keys.iter().chain(&graph.revision.coverage) {
-            add(range.source.node_id.capacity())?;
-            add(range
-                .gap_reasons
-                .capacity()
-                .checked_mul(size_of::<String>())
-                .ok_or_else(|| Self::invalid("graph metadata overflow"))?)?;
-            for reason in &range.gap_reasons {
-                add(reason.capacity())?;
-            }
-        }
-        for key in input
-            .facts
-            .iter()
-            .map(|fact| &fact.key)
-            .chain(&graph.revision.context)
-        {
-            add(key.owner_id.capacity())?;
-            add(key.entity_key.capacity())?;
-            add(key.lifetime_key.capacity())?;
-        }
-        for fact in &input.facts {
-            add(fact.body.capacity())?;
-        }
-        add(graph
-            .observations
-            .capacity()
-            .checked_mul(size_of::<araphor_analysis_builtins::graph::Observation>())
-            .ok_or_else(|| Self::invalid("graph metadata overflow"))?)?;
-        for value in &graph.observations {
-            for bytes in [
-                value.id.stream.node_id.capacity(),
-                value.coverage_interval_id.capacity(),
-                value.effect.process_lineage_id.capacity(),
-                value.effect.authority_domain_id.capacity(),
-                value.effect.execution_set_id.capacity(),
-                value.effect.exact_object_id.capacity(),
-            ] {
-                add(bytes)?;
-            }
-        }
-        Ok(bytes)
     }
 
     pub(super) fn records(

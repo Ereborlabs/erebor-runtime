@@ -366,7 +366,6 @@ impl DataSink for Publication {
                         operation: ManagedGraphOperation::Expire,
                         ..
                     } => crate::graph::GraphConversion::expiry(
-                        &owner.session,
                         &task,
                         &captured,
                         &selected.batches,

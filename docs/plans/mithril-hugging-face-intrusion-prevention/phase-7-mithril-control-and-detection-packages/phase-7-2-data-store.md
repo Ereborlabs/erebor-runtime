@@ -408,6 +408,12 @@ between the two cleanup operations.
 
 ## Storage choice qualification
 
+Current source note: `data_quota_recovery`, `data-store-quota`,
+`analysis_store_global_memory`, and `analysis_store_thread_memory` were removed
+with the synthetic logical byte quota. Do not run these commands as current
+qualification. The dated results below apply only to the source that produced
+them. Physical disk and memory limits remain separate checks.
+
 Correctness, recovery, protected retention, and bounded historical extraction
 are implementation gates. Default-capacity and throughput measurements are
 separate qualification. Prove a capacity before advertising it; a smaller case

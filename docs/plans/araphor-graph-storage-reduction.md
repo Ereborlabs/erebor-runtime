@@ -16,11 +16,50 @@ defines a graph over existing node and edge tables. It does not replace those
 tables with a durable Graph store. No query extension or second database is
 required for this storage change.
 
+## Existing graph designs checked
+
+[DuckPGQ](https://duckdb.org/docs/current/guides/sql_features/graph_queries)
+defines a property graph over existing vertex and edge tables. The bundled
+DuckDB build does not include DuckPGQ, and the current Data owner disables
+extension autoload. DuckDB permits explicit extension loading; this build has
+not tested it. Keep the native tables as the durable owner. Test extension
+compatibility before replacing traversal SQL with SQL/PGQ. DuckPGQ's
+[view test](https://github.com/cwida/duckpgq-extension/blob/main/test/sql/create_pg/create_pg_on_view.test)
+rejects property graphs whose vertex or edge source is a view. Our historical
+Graph selects version membership through views. Do not copy each selected
+version into new physical tables merely to use SQL/PGQ. DuckPGQ's
+[path query guide](https://duckpgq.org/documentation/sql_pgq/) documents
+`ANY SHORTEST` path selection. Our Graph walk returns the bounded set of
+reachable subjects and relationships for an exact result. A replacement must
+prove the same results and proof scope. DuckDB already provides the
+[`USING KEY` recursive CTE](https://duckdb.org/docs/1.5/sql/query_syntax/with)
+used by the current walk.
+
+[GraphAr](https://graphar.apache.org/docs/specification/format/) uses internal
+vertex IDs within each vertex type and separates edge adjacency from edge
+properties in files such as Parquet. Use our own stable IDs across Graph
+versions and Arrow batches at the query boundary. GraphAr files do not provide
+this store's per-result atomic commit and historical membership.
+
+[Kùzu](https://github.com/kuzudb/kuzu/issues/1474) stores adjacency in a
+dedicated graph engine. Adding that engine would require a second durable
+transaction owner. Keep one DuckDB transaction for Graph values and version
+membership. Convert stable IDs to result-local ordinals only when reading the
+public Graph contract. Traverse the stable IDs after selecting the requested
+version, so a traversal does not rebuild every historical ordinal map.
+
+[TerminusDB](https://terminusdb.com/docs/graphs-explanation/) records Graph
+changes as additions and deletions in immutable layers. Its version model
+confirms that a result should reference changed Graph facts, not rewrite every
+fact. A chain of result deltas would make an old or recent result read earlier
+layers. Our interval membership lets Data select one result revision directly.
+
 **Status: Not done. The user approved the direction and implementation.**
 
-Native evidence identities and historical input membership are implemented.
-The shared subject, relationship, finding, and branch rows remain open. The
-90% target has not been measured on the changed store.
+Native evidence identities, historical input membership, shared subject
+values, and historical subject membership are implemented. Shared
+relationships, findings, and branches remain open. The 90% target has not
+been measured on the changed store.
 
 ## Intended end state
 
@@ -187,5 +226,6 @@ reviewed deliverable. The independent Sol 6.1 reviewer checks the owner,
 data flow, deletion, source diff, and proof before each commit.
 
 **Result: Not done.** Native evidence and input-position rows replace repeated
-header lists. Focused Graph row tests pass. Shared Graph values, package
-contribution membership, and the measured target remain open.
+header lists. Subject values now have stable IDs and historical membership.
+Focused Graph row, finding, and extraction tests pass. Shared relationships,
+findings, package contribution membership, and the measured target remain open.

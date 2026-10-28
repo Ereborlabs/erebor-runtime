@@ -371,7 +371,7 @@ impl Fixture {
         expected_health.state = araphor_data::ProcessorStateV1::ProcessingFailed;
         expected_health.incomplete = true;
         assert_eq!(store.processor_health(&scope)?, Some(expected_health));
-        let current_usage = store.retained_usage(self.source.tenant_id)?;
+        let current_usage = store.retained_counts(self.source.tenant_id)?;
         assert_eq!(
             (current_usage.1, current_usage.2, current_usage.3),
             (usage.1, usage.2, usage.3)
@@ -1256,7 +1256,7 @@ async fn final_cancel_rolls_back() -> TestResult {
     let before_usage = fixture
         .query
         .store()
-        .retained_usage(fixture.source.tenant_id)?;
+        .retained_counts(fixture.source.tenant_id)?;
     let before = fixture.query.store().meta()?;
     let control = Arc::new(AnalysisReadControl::default());
     let cancel = Arc::clone(&control);
@@ -1360,7 +1360,7 @@ async fn final_cancel_rolls_back() -> TestResult {
     let usage = fixture
         .query
         .store()
-        .retained_usage(fixture.source.tenant_id)?;
+        .retained_counts(fixture.source.tenant_id)?;
     assert_eq!(
         (usage.1, usage.2, usage.3),
         (before_usage.1, before_usage.2, before_usage.3)
@@ -1407,7 +1407,7 @@ async fn duplicate_records_are_rejected() -> TestResult {
     };
     assert!(store.processor_result(&scope)?.is_none());
     let before_health = store.processor_health(&scope)?;
-    let before_usage = store.retained_usage(fixture.source.tenant_id)?;
+    let before_usage = store.retained_counts(fixture.source.tenant_id)?;
     let before = store.meta()?;
     let input = managed::request("invalid")?;
     assert!(owner.run(input.clone(), &fixture.control).await.is_err());
@@ -1593,7 +1593,7 @@ async fn requires_all_returns() -> TestResult {
     };
     assert!(store.processor_result(&scope)?.is_none());
     let before_health = store.processor_health(&scope)?;
-    let before_usage = store.retained_usage(fixture.source.tenant_id)?;
+    let before_usage = store.retained_counts(fixture.source.tenant_id)?;
     let before = store.meta()?;
     let input = managed::request("invalid")?;
     assert_eq!(
@@ -1945,7 +1945,7 @@ async fn rejects_changed_coverage_fields() -> TestResult {
     };
     assert!(store.processor_result(&scope)?.is_none());
     let before_health = store.processor_health(&scope)?;
-    let before_usage = store.retained_usage(fixture.source.tenant_id)?;
+    let before_usage = store.retained_counts(fixture.source.tenant_id)?;
     let before = store.meta()?;
     let input = managed::request("invalid")?;
     assert!(owner.run(input.clone(), &fixture.control).await.is_err());
@@ -2088,7 +2088,7 @@ async fn extra_origin_changes_metadata() -> TestResult {
     };
     assert!(store.processor_result(&scope)?.is_none());
     let before_health = store.processor_health(&scope)?;
-    let before_usage = store.retained_usage(fixture.source.tenant_id)?;
+    let before_usage = store.retained_counts(fixture.source.tenant_id)?;
     let before = store.meta()?;
     let input = managed::request("invalid")?;
     let error = owner
@@ -2159,7 +2159,7 @@ async fn cancel_joins_projection_capacity() -> TestResult {
     let before_usage = fixture
         .query
         .store()
-        .retained_usage(fixture.source.tenant_id)?;
+        .retained_counts(fixture.source.tenant_id)?;
     let before = fixture.query.store().meta()?;
     let (entry, observed) = std::sync::mpsc::channel();
     let (release, waiting) = std::sync::mpsc::channel();
@@ -2376,7 +2376,7 @@ async fn cancel_joins_projection_capacity() -> TestResult {
     let usage = fixture
         .query
         .store()
-        .retained_usage(fixture.source.tenant_id)?;
+        .retained_counts(fixture.source.tenant_id)?;
     assert_eq!(
         (usage.1, usage.2, usage.3),
         (before_usage.1, before_usage.2, before_usage.3)
@@ -2461,7 +2461,7 @@ async fn rejects_missing_frozen_coverage() -> TestResult {
         &owner.admitted().spec.id,
         &fixture.control,
     )?;
-    let before_usage = store.retained_usage(fixture.source.tenant_id)?;
+    let before_usage = store.retained_counts(fixture.source.tenant_id)?;
     let before = fixture.query.store().meta()?;
     let calls = fixture.facts.calls.load(Ordering::SeqCst);
     let error = owner
@@ -2531,7 +2531,7 @@ async fn rejects_missing_frozen_coverage() -> TestResult {
         )?
         .is_none());
     assert_eq!(
-        store.retained_usage(fixture.source.tenant_id)?,
+        store.retained_counts(fixture.source.tenant_id)?,
         before_usage
     );
     Ok(())

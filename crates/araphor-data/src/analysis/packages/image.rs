@@ -64,7 +64,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert package image",
             })?;
-        self.check_logical(&transaction, tenant, false)?;
+        self.check_revision_limits(&transaction, tenant)?;
         Self::record_revision(
             &transaction,
             revision,
@@ -134,7 +134,7 @@ impl AnalysisStore {
             params![revision, tenant.as_slice(), image.package_id, image.revision, expected.digest],
         ).context(AnalysisDatabaseSnafu { operation: "uninstall exact image" })?;
         self.collect_package_rows(&transaction, tenant, &image.package_id, &image.revision)?;
-        self.check_logical(&transaction, tenant, false)?;
+        self.check_revision_limits(&transaction, tenant)?;
         Self::record_revision(
             &transaction,
             revision,

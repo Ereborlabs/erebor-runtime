@@ -45,7 +45,7 @@ fn control_notification_approved_concern_stays_unconfirmed_and_requires_human_re
         Some(200)
     );
     assert!(store
-        .graph_findings([1; 16], None, None, usize::MAX, usize::MAX)?
+        .graph_findings([1; 16], None, None, usize::MAX)?
         .is_empty());
     let sink = Sink::default();
     assert_eq!(deliver(&router, &sink, 101)?, 1);

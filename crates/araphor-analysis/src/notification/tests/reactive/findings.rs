@@ -2,7 +2,7 @@ use super::*;
 
 fn revise_finding(store: &AnalysisStore, result_id: &str, next: FindingV1, now: u64) -> TestResult {
     let (prior, _) = store
-        .graph_findings(next.tenant_id, None, Some(&next.finding_id), 1, usize::MAX)?
+        .graph_findings(next.tenant_id, None, Some(&next.finding_id), 1)?
         .pop()
         .ok_or("current finding absent")?;
     let mut snapshot = store
@@ -48,7 +48,7 @@ fn revise_finding(store: &AnalysisStore, result_id: &str, next: FindingV1, now: 
         Some(snapshot)
     );
     let (head, actual) = store
-        .graph_findings(next.tenant_id, None, Some(&next.finding_id), 1, usize::MAX)?
+        .graph_findings(next.tenant_id, None, Some(&next.finding_id), 1)?
         .pop()
         .ok_or("revised finding absent")?;
     assert_eq!(head, result_id);

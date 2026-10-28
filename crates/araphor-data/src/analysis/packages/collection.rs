@@ -69,7 +69,7 @@ impl AnalysisStore {
             return Ok(());
         }
         for tenant in tenants {
-            self.check_logical(&transaction, tenant, false)?;
+            self.check_revision_limits(&transaction, tenant)?;
         }
         let revision = self.package_next(&transaction)?;
         Self::record_revision(
@@ -93,7 +93,7 @@ impl AnalysisStore {
         if !self.collect_package_rows(&transaction, tenant, package, version)? {
             return Ok(());
         }
-        self.check_logical(&transaction, tenant, false)?;
+        self.check_revision_limits(&transaction, tenant)?;
         let revision = self.package_next(&transaction)?;
         Self::record_revision(
             &transaction,

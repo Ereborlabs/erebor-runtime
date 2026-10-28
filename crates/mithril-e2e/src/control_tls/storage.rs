@@ -61,7 +61,7 @@ async fn storage_failure_keeps_evidence() -> TestResult<()> {
             store.root().join("analysis"),
             Default::default(),
             araphor_data::StorageLimitsV1 {
-                tenant_max_bytes: capacity,
+                source_entries: capacity.map(|_| 0),
                 ..Default::default()
             },
         )?);

@@ -1,9 +1,8 @@
 # Araphor Graph Commit Review
 
-The [compact Graph section](#compact-graph-storage-and-native-query-rows) and
-[incremental builtin section](#incremental-builtin-contributions) describe
-the current working changes. Earlier sections retain their historical source
-state and verification records.
+The [shared Graph section](#shared-graph-values-and-storage-controls) gives
+the current source reading route. The compact Graph and incremental builtin
+sections retain their earlier source states and verification records.
 
 This guide covers the approved typed graph handoff and buffered row appends.
 The retained source head is `cffde410`. Its final Rust procedure passes.
@@ -635,3 +634,65 @@ the executable hash is `c12b5ec392a7323a956e08ed10f6516eaca86229af1d2b6f3d7f0361
 `notification-run-comparison.json` records the bounded log comparison.
 Implementation and measurement are complete. Backlog deadline qualification
 and the overall performance goal remain Not done.
+
+## Shared Graph values and storage controls
+
+This section covers the Graph and Data changes after `e10ae42`. Earlier
+byte-charge and bounded-header routes in this guide describe historical code.
+The [storage plan](../plans/araphor-graph-storage-reduction.md) records the
+remaining edge, finding, branch, and package contribution work.
+
+### Intended end state
+
+Data stores each Graph value once and records its membership at each result
+revision. A historical result returns its original subjects, edges, findings,
+proof, and source cut. The four matching result cuts use at most 1,099,095
+logical Graph bytes. This target is not yet met or measured on this source.
+
+### Implementation review flow
+
+[GraphPublication::convert_graph](../../crates/araphor-analysis/src/graph/native/commit.rs) A subscription supplies a captured Graph cut
+  -> [CanonicalGraph::new](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data validates the typed snapshot
+  -> [AnalysisStore::commit_managed_graph](../../crates/araphor-data/src/analysis/progress/graph.rs) Data binds the Graph to the captured call
+  -> [GraphRows::insert_inputs](../../crates/araphor-data/src/analysis/graph_rows/evidence.rs) Data stores evidence identities and revision membership
+  -> [GraphRows::insert_subjects](../../crates/araphor-data/src/analysis/graph_rows/subjects.rs) Data stores subject values and revision membership
+  -> Partial [GraphRows::insert](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data still stores complete edge and finding rows per result
+  -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the Graph, output, state, and progress in one transaction
+
+[AnalysisStore::graph_result](../../crates/araphor-data/src/analysis/graph.rs) A caller selects one historical Graph result ID
+  -> [GraphRows::read_header](../../crates/araphor-data/src/analysis/graph_rows/read.rs) Data checks the result and native row shape
+  -> [GraphRows::read](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data selects evidence and subjects by valid membership
+
+[AnalysisStore::traverse_graphs](../../crates/araphor-data/src/analysis/extraction/graph/traversal.rs) A traversal request selects Graph result IDs
+  -> [GraphWalk::query](../../crates/araphor-data/src/analysis/graph/traversal/sql.rs) Data builds SQL confined to those result IDs
+  -> [GraphWalk::run](../../crates/araphor-data/src/analysis/graph/traversal/read.rs) Data executes the SQL and checks selected rows
+
+[StorageLimitsV1](../../crates/araphor-data/src/analysis/capacity.rs) An operator supplies optional storage controls
+  -> [AnalysisStore::open_native](../../crates/araphor-data/src/analysis/connection.rs) Data applies native DuckDB memory and temporary storage controls
+  -> [AnalysisStore::check_revision_limits](../../crates/araphor-data/src/analysis/quota.rs) Data checks actual retained revision counts
+  -> [AnalysisStore::check_witnesses](../../crates/araphor-data/src/analysis/quota.rs) Data checks actual witness payload bytes
+
+[AnalysisStore::open_with_limits](../../crates/araphor-data/src/analysis/mod.rs) Data starts with configured storage controls
+  -> [AnalysisStore::recover_managed_startup](../../crates/araphor-data/src/analysis/managed/terminal.rs) Data reads interrupted attempts without an intake capacity check
+
+[AnalysisStore::recover_managed_startup](../../crates/araphor-data/src/analysis/managed/terminal.rs) An interrupted managed attempt with a frontier requires cancellation
+  -> [AnalysisStore::require_capacity](../../crates/araphor-data/src/analysis/capacity.rs) Data checks maintenance capacity before the first settlement write
+  -> [AnalysisStore::recover_managed_startup](../../crates/araphor-data/src/analysis/managed/terminal.rs) Data commits cancellations and publishes the revision
+
+The Graph header holds metadata and row counts. It has no synthetic native
+row-byte field. The store has no logical or tenant byte charge that excludes
+Graph rows. Data keeps its real filesystem reserve and DuckDB resource checks.
+This change adds no Graph engine, polling loop, Application Binary Interface
+(ABI), or Berkeley Packet Filter (BPF) path.
+
+Read [native Graph row tests](../../crates/araphor-data/src/analysis/graph_rows/tests.rs)
+for historical membership, malformed rows, and rollback. Read
+[retention tests](../../crates/araphor-data/src/analysis/retention.rs) for
+revision and raw evidence retention. Read
+[Data quota tests](../../crates/araphor-data/src/analysis/quota.rs) for actual
+counts and witness bytes. Read
+[startup recovery tests](../../crates/araphor-data/src/analysis/managed/tests/terminal.rs)
+for a failed maintenance reserve, unchanged durable state, and one later
+settlement. The scoped verification record for this source is the focused test
+and Clippy result reported with its commit. The full Graph
+storage target and matched backlog measurement remain open.

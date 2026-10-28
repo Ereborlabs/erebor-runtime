@@ -1231,7 +1231,6 @@ fn native_manifest_budget() -> TestResult {
         graph.last_cursor = count as u64 + 3;
         graph.input_manifest.validate(selection.tenant_id)?;
         let id = format!("graph:manifest-{count}");
-        let bound = graph.input_manifest.arrow_bytes()?;
         assert!(capture.graph_manifest(
             &graph,
             &id,
@@ -1249,7 +1248,6 @@ fn native_manifest_budget() -> TestResult {
             .last()
             .ok_or("native manifest")?;
         assert_eq!(manifest_value(batch)?, graph.input_manifest);
-        assert!(batch.get_array_memory_size() <= bound);
         let rows = capture.tables["graph_manifest"].total_rows;
         assert!(capture.graph_manifest(
             &graph,
@@ -1266,29 +1264,30 @@ fn native_manifest_budget() -> TestResult {
         assert_eq!(capture.tables["graph_manifest"].total_rows, rows);
     }
     let id = "graph:manifest-over-budget";
-    output.limits.input_bytes = output.input_bytes
-        + id.len()
-        + size_of::<String>()
-        + graph.input_manifest.arrow_bytes()? / 2;
+    output.limits.input_bytes = output.input_bytes + id.len() + size_of::<String>() + 1;
     let rows = capture.tables["graph_manifest"].total_rows;
-    assert!(matches!(
-        capture.graph_manifest(
-            &graph,
-            id,
-            1,
-            ContextSensitivityV1::Tenant,
-            &graph.scope.identity.key(),
-            0,
-            0,
-            &[],
-            (0, 0),
-            &mut output.sink(&control)
+    let rejected = capture.graph_manifest(
+        &graph,
+        id,
+        1,
+        ContextSensitivityV1::Tenant,
+        &graph.scope.identity.key(),
+        0,
+        0,
+        &[],
+        (0, 0),
+        &mut output.sink(&control),
+    );
+    assert!(
+        matches!(
+            &rejected,
+            Err(crate::Error::AnalysisInputTooLarge {
+                resource: "selected input bytes",
+                ..
+            })
         ),
-        Err(crate::Error::AnalysisInputTooLarge {
-            resource: "native source Arrow allocation",
-            ..
-        })
-    ));
+        "{rejected:?}"
+    );
     assert_eq!(capture.tables["graph_manifest"].total_rows, rows);
     assert!(!capture.graph_manifests.contains(id));
     drop(capture);
@@ -1721,7 +1720,7 @@ fn graph_snapshot_deadline() -> TestResult {
         ])),
     )]);
     fixture.store.writer()?.get_mut()?.execute(
-        "UPDATE graph_subjects SET authority = '{'::BLOB WHERE ordinal = 0",
+        "UPDATE graph_subject_values SET authority_rank = 255 WHERE subject_id = 1",
         [],
     )?;
     let page = fixture.store.read_tables(

@@ -257,13 +257,7 @@ pub(crate) fn commit_finding_at(
 fn route(router: &NotificationRouter, now: u64) -> Result<usize> {
     let Some((result_id, finding)) = router
         .store
-        .graph_findings(
-            [1; 16],
-            None,
-            Some("finding:exact-process-key"),
-            1,
-            usize::MAX,
-        )?
+        .graph_findings([1; 16], None, Some("finding:exact-process-key"), 1)?
         .pop()
     else {
         return Ok(0);

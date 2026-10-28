@@ -13,24 +13,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn usage_reads_retained_rows() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn witness_refs_match_storage() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let mut guard = store.writer.lock().map_err(|_| "writer lock poisoned")?;
         let writer = guard.as_mut().ok_or("writer closed")?;
-        assert_eq!(AnalysisStore::logical_usage(writer, [1; 16])?, (0, 0, 0, 0));
-        for tenant in [1u8, 2] {
-            writer.execute(
-                "INSERT INTO traces VALUES (?, ?, ?, ?, '[]', ?, 1, 2, false, 1, false, false)",
-                params![
-                    [tenant; 16].as_slice(),
-                    [3u8; 16].as_slice(),
-                    [1u8, 2, 3].as_slice(),
-                    [0u8; 32].as_slice(),
-                    [1u8, 2].as_slice()
-                ],
-            )?;
-        }
         for tenant in [1u8, 5, 6] {
             writer.execute(
                 "INSERT INTO context_versions VALUES (?, 'p', ?, ?, 1, 1, NULL, 'Tenant', ?, 1)",
@@ -54,37 +41,23 @@ mod tests {
                 ],
             )?;
         }
-        assert_eq!(
-            AnalysisStore::diagnostic_usage(writer, [1; 16])?,
-            (526, 263)
-        );
-        assert_eq!(
-            AnalysisStore::logical_usage(writer, [1; 16])?,
-            (2105, 1054, 3, 1)
-        );
-        assert_eq!(
-            AnalysisStore::witness_base(writer, [1; 16], 1)?.context_bytes,
-            262
-        );
-        assert_eq!(
-            AnalysisStore::witness_base(writer, [5; 16], 1)?.context_bytes,
-            262
-        );
+        for tenant in [1u8, 5] {
+            assert_eq!(
+                AnalysisStore::witness_base(writer, [tenant; 16], 1)?.context_bytes,
+                6
+            );
+        }
         writer.execute(
             "DELETE FROM context_refs WHERE tenant_id = ?",
             params![[1u8; 16].as_slice()],
         )?;
-        assert_eq!(
-            AnalysisStore::logical_usage(writer, [1; 16])?,
-            (1576, 525, 3, 1)
-        );
         assert_eq!(
             AnalysisStore::witness_base(writer, [1; 16], 1)?.context_bytes,
             0
         );
         assert_eq!(
             AnalysisStore::witness_base(writer, [5; 16], 1)?.context_bytes,
-            262
+            6
         );
         Ok(())
     }

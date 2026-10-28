@@ -419,7 +419,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "register processor",
             })?;
-        self.check_logical(&transaction, scope.identity.tenant_id, false)?;
+        self.check_revision_limits(&transaction, scope.identity.tenant_id)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
         #[cfg(test)]
         self.crash_at("register.before");
@@ -527,7 +527,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "advance optional resume floor",
             })?;
-        self.check_logical(&transaction, scope.identity.tenant_id, true)?;
+        self.check_revision_limits(&transaction, scope.identity.tenant_id)?;
         Self::record_revision(
             &transaction,
             revision,
@@ -589,7 +589,7 @@ impl AnalysisStore {
         check: impl FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
         let graph = serde_json::from_slice(&input.body).context(crate::GraphEncodingSnafu)?;
-        let prepared = super::graph_rows::CanonicalGraph::bounded(graph, usize::MAX)?;
+        let prepared = super::graph_rows::CanonicalGraph::new(graph)?;
         let mut input = input.clone();
         input.body.clear();
         self.commit_graph_snapshot(input, prepared, &[], &[], &[], advance, check)
@@ -717,11 +717,7 @@ impl AnalysisStore {
             return Ok(write.receipt);
         }
         if !write.relations.is_empty() {
-            self.check_logical(
-                &transaction,
-                input.scope.identity.tenant_id,
-                profile.is_none(),
-            )?;
+            self.check_revision_limits(&transaction, input.scope.identity.tenant_id)?;
             self.check_witnesses(
                 &transaction,
                 input.scope.identity.tenant_id,

@@ -9,7 +9,6 @@ enum Case {
     DataStoreStartup,
     DataStoreLoad,
     DataStoreTenants,
-    DataStoreQuota,
     DataStoreRollout,
     DataStoreInspect,
     QueryFollow,
@@ -97,11 +96,6 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Case::DataStoreTenants => {
             mithril_e2e::DataStoreQualification::new(cli.output_directory)
                 .tenant_load(usize::from(cli.tenants.unwrap_or(2)))
-                .await
-        }
-        Case::DataStoreQuota => {
-            mithril_e2e::DataStoreQualification::new(cli.output_directory)
-                .quota()
                 .await
         }
         Case::DataStoreRollout => {

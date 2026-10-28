@@ -979,6 +979,10 @@ current release images. Its exact retained-data checks, evidence replay,
 policy availability, partition, API recovery, relist, and cleanup passed.
 This storage result does not qualify the failed kernel-cache behavior.
 
+Current source note: the ignored `analysis_store_global_memory` test and its
+synthetic logical byte quota were removed. The command and result below describe
+the earlier source only. Do not use them to qualify the current store.
+
 The ignored release test
 [analysis_store_global_memory](../../../../crates/araphor-data/src/analysis/capacity.rs)
 accepts `ARAPHOR_GLOBAL_BYTES` as an unsigned byte count. An unset input uses

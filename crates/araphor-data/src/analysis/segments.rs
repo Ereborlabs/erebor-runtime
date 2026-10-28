@@ -248,14 +248,6 @@ mod tests {
              INSERT INTO expired_ranges
              SELECT segment_id, stream_key, tenant_id, 1, 1, 1 FROM segments",
         )?;
-        let charge: u64 = writer.query_row(
-            &format!(
-                "SELECT logical_bytes FROM ({})",
-                AnalysisStore::usage_projection()
-            ),
-            [],
-            |row| row.get(0),
-        )?;
         assert!(matches!(
             AnalysisStore::remove_segments(writer, &store.root, &raw, &BTreeSet::from([1, 2])),
             Err(crate::Error::AnalysisState { reason, .. })
@@ -264,17 +256,6 @@ mod tests {
         for (file, bytes) in files.iter().zip(original) {
             assert_eq!(fs::read(file)?, bytes);
         }
-        assert_eq!(
-            writer.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0)
-            )?,
-            charge
-        );
         assert_eq!(
             writer.query_row("SELECT COUNT(*) FROM segments", [], |row| row
                 .get::<_, u64>(0))?,

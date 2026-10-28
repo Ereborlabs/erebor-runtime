@@ -269,10 +269,18 @@ fn graph_window_replacement() -> TestResult {
 fn graph_window_metadata() -> TestResult {
     let fixture = WindowFixture::new()?;
     let store = &fixture.store;
+    assert!(fixture.first.graph.subjects.iter().any(|subject| !fixture
+        .second
+        .graph
+        .subjects
+        .contains(subject)));
     store.fault_write(
-        "UPDATE graph_subjects SET subject_kind = repeat('X', length(subject_kind))
-         WHERE result_id = ?",
-        &[&fixture.first_request.result_id],
+        "UPDATE graph_subject_values SET subject_kind = 255 WHERE subject_id IN (
+             SELECT subject_id FROM graph_subject_membership
+                 WHERE lineage_id = (SELECT lineage_id FROM graph_versions WHERE result_id = ?)
+             EXCEPT SELECT subject_id FROM graph_subject_membership
+                 WHERE lineage_id = (SELECT lineage_id FROM graph_versions WHERE result_id = ?))",
+        &[&fixture.first_request.result_id, &fixture.request.result_id],
     )?;
     assert_eq!(fixture.bounds(None)?, [(1, 1), (2, 2)]);
     let selected = fixture.windows(2, 2)?;

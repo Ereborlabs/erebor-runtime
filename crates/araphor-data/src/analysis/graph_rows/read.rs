@@ -4,7 +4,7 @@ use snafu::ResultExt as _;
 use super::{GraphHeader, GraphRows};
 use crate::{AnalysisDatabaseSnafu, AnalysisReadControl, GraphInvalidSnafu, Result};
 
-type HeaderRow = (Option<Vec<u8>>, Option<Vec<u8>>, u64, u64, u64, u64);
+type HeaderRow = (Vec<u8>, Option<Vec<u8>>, u64, u64, u64, u64);
 
 impl GraphRows {
     pub(in crate::analysis) fn read_header(
@@ -23,13 +23,12 @@ impl GraphRows {
     ) -> Result<Option<GraphHeader>> {
         let stored: Option<HeaderRow> = writer
             .query_row(
-                "SELECT CASE WHEN octet_length(body) <= ? THEN body ELSE NULL END,
+                "SELECT body,
                 CASE WHEN octet_length(stream_key) <= ? THEN stream_key ELSE NULL END,
                 method_version, first_cursor, facts_revision, coverage_revision FROM analysis_results
             WHERE tenant_id = ? AND result_id = ? AND processor_id = ?
                 AND stream_key IS NOT NULL",
                 params![
-                    GraphHeader::MAX_BYTES as u64,
                     crate::EvidenceIntakeIdentityV1::MAX_KEY_BYTES as u64,
                     tenant.as_slice(),
                     result_id,
@@ -44,12 +43,6 @@ impl GraphRows {
         let Some((bytes, stream, method, first, facts, coverage)) = stored else {
             return Ok(None);
         };
-        let bytes = bytes.ok_or_else(|| {
-            GraphInvalidSnafu {
-                field: "graph header bytes",
-            }
-            .build()
-        })?;
         let mut header = GraphHeader::decode(&bytes)?;
         header.notice = (facts, coverage);
         let stream = stream.ok_or_else(|| {
@@ -63,43 +56,30 @@ impl GraphRows {
         header.snapshot.input_manifest.evidence = evidence;
         header.snapshot.input_positions = positions;
         header.snapshot.validate()?;
-        Self::check_bytes(writer, result_id, &header)?;
+        Self::check_shape(writer, result_id, &header)?;
         Ok(Some(header))
     }
 
-    pub(in crate::analysis) fn check_bytes(
+    pub(in crate::analysis) fn check_shape(
         writer: &Connection,
         result_id: &str,
         header: &GraphHeader,
     ) -> Result<()> {
-        let (bytes, subjects, edges, findings) = Self::stored_shape(writer, result_id)?;
-        header.check_shape(result_id, bytes, subjects, edges, findings)
+        let (subjects, edges, findings) = Self::stored_shape(writer, result_id)?;
+        header.check_shape(subjects, edges, findings)
     }
 
-    #[cfg(test)]
-    pub(super) fn stored_bytes(writer: &Connection, result_id: &str) -> Result<u64> {
-        Self::stored_shape(writer, result_id).map(|shape| shape.0)
-    }
-
-    fn stored_shape(writer: &Connection, result_id: &str) -> Result<(u64, u64, u64, u64)> {
-        let query = format!(
-            "WITH analysis_results AS (
-            SELECT result_id, tenant_id FROM main.analysis_results WHERE result_id = ?
-            ) SELECT coalesce(sum(bytes), 0)::UBIGINT,
-                (SELECT count(*) FROM graph_subjects WHERE result_id = ?),
-                (SELECT count(*) FROM graph_relationships WHERE result_id = ?),
-                (SELECT count(*) FROM graph_findings WHERE result_id = ?)
-            FROM ({})",
-            Self::CHARGES
-        );
+    pub(super) fn stored_shape(writer: &Connection, result_id: &str) -> Result<(u64, u64, u64)> {
         writer
             .query_row(
-                &query,
-                params![result_id, result_id, result_id, result_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                "SELECT (SELECT count(*)::UBIGINT FROM graph_subjects WHERE result_id = ?),
+                    (SELECT count(*)::UBIGINT FROM graph_relationships WHERE result_id = ?),
+                    (SELECT count(*)::UBIGINT FROM graph_findings WHERE result_id = ?)",
+                params![result_id, result_id, result_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .context(AnalysisDatabaseSnafu {
-                operation: "check native graph bytes",
+                operation: "check native graph row counts",
             })
     }
 }

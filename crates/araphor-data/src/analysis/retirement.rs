@@ -106,7 +106,7 @@ impl AnalysisStore {
             params![input.change_id, input.reason, accepted, revision,
                 scope.processor_id, scope.method_version, tenant, key.as_slice()],
         ).context(AnalysisDatabaseSnafu { operation: "retire required processor" })?;
-        self.check_logical(&transaction, scope.identity.tenant_id, true)?;
+        self.check_revision_limits(&transaction, scope.identity.tenant_id)?;
         let relations: &[&str] = if consumed < accepted {
             &["processor_progress", "processor_gaps"]
         } else {
@@ -178,24 +178,10 @@ mod tests {
             raw_max_age_ns: Some(1),
             raw_max_bytes: Some(100),
         };
-        let mut store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let mut input = request();
         input.scope.identity.node_id = "n".repeat(128);
-        let key_bytes = input.scope.identity.key().len() as u64;
-        assert_eq!(key_bytes, 195);
         store.register_processor(&input.scope, ProcessorClassV1::Required, 1)?;
-        let progress_bytes = 256 + input.scope.processor_id.len() as u64 + key_bytes;
-        assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            progress_bytes
-        );
         store.accept_validated_batch(
             input.scope.identity.clone(),
             ValidatedEvidenceBatchV1 {
@@ -219,14 +205,6 @@ mod tests {
         };
         let result_receipt = store.commit_result(&result)?;
         let before = store.meta()?;
-        let before_bytes = store.writer()?.get()?.query_row(
-            &format!(
-                "SELECT logical_bytes FROM ({})",
-                AnalysisStore::usage_projection()
-            ),
-            [],
-            |row| row.get::<_, u64>(0),
-        )?;
         let revisions = store.subscribe_revision();
         assert_eq!(
             EvidenceRetentionOwner::new(&store)
@@ -243,10 +221,6 @@ mod tests {
         changed = input.clone();
         changed.scope.identity.tenant_id = [9; 16];
         assert!(store.retire_required(&changed).is_err());
-        let storage = store.storage;
-        store.storage.tenant_max_bytes = Some(1);
-        assert!(store.retire_required(&input).is_err());
-        store.storage = storage;
         assert_eq!(store.meta()?, before);
         assert!(!revisions.has_changed()?);
         assert!(store.processor_retirement(&input.scope)?.is_none());
@@ -257,21 +231,6 @@ mod tests {
             0
         );
         let revision = store.retire_required(&input)?;
-        let retired_bytes = before_bytes
-            + input.change_id.len() as u64
-            + input.reason.len() as u64
-            + progress_bytes;
-        assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            retired_bytes
-        );
         AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
         let health = store
             .processor_health(&input.scope)?
@@ -312,27 +271,8 @@ mod tests {
             },
         )?;
         let before = store.meta()?;
-        let latest_bytes = store.writer()?.get()?.query_row(
-            &format!(
-                "SELECT logical_bytes FROM ({})",
-                AnalysisStore::usage_projection()
-            ),
-            [],
-            |row| row.get::<_, u64>(0),
-        )?;
         assert_eq!(store.retire_required(&input)?, revision);
         assert_eq!(store.meta()?, before);
-        assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            latest_bytes
-        );
         changed = input.clone();
         changed.reason = "Different change".into();
         assert!(store.retire_required(&changed).is_err());
@@ -348,17 +288,6 @@ mod tests {
             Some((input.clone(), revision))
         );
         assert_eq!(reopened.retire_required(&input)?, revision);
-        assert_eq!(
-            reopened.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            latest_bytes
-        );
         AnalysisStore::validate_state(reopened.writer()?.get()?, &root)?;
         let mut replacement = input.scope.clone();
         replacement.method_version = 2;
@@ -366,14 +295,11 @@ mod tests {
         assert!(reopened.processor_retirement(&replacement)?.is_none());
         assert_eq!(
             reopened.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
+                "SELECT count(*) FROM processor_progress",
                 [],
-                |row| row.get::<_, u64>(0),
+                |row| row.get::<_, u64>(0)
             )?,
-            latest_bytes + progress_bytes
+            2
         );
         Ok(())
     }

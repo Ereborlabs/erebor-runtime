@@ -115,7 +115,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert immutable managed attempt",
             })?;
-        self.check_logical(&transaction, spec.tenant, false)?;
+        self.check_revision_limits(&transaction, spec.tenant)?;
         Self::record_revision(&transaction, revision, &["managed_attempts"])?;
         check()?;
         self.commit_metadata(transaction, "commit managed attempt")?;
@@ -170,7 +170,7 @@ impl AnalysisStore {
         relations.sort_unstable();
         relations.dedup();
         let tenant = input.attempt.1.spec.tenant;
-        self.check_logical(&transaction, tenant, false)?;
+        self.check_revision_limits(&transaction, tenant)?;
         self.check_witnesses(&transaction, tenant, input.now_utc_ns)?;
         Self::record_revision(&transaction, revision, &relations)?;
         #[cfg(any(test, feature = "test-fixtures"))]

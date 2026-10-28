@@ -41,23 +41,6 @@ impl AnalysisStore {
             PRIMARY KEY (result_id, role, slot)
         );";
 
-    pub(in crate::analysis) const MANAGED_CHARGES: &'static str = "
-        SELECT tenant_id, 256 + octet_length(encode(instance_id)) + octet_length(spec) + octet_length(scope)
-            AS bytes FROM managed_versions
-        UNION ALL SELECT tenant_id, 256 + octet_length(encode(instance_id))
-            + octet_length(authority)
-            + COALESCE(octet_length(failure), 0) AS bytes
-            FROM managed_instances
-        UNION ALL SELECT tenant_id, 256 + octet_length(encode(instance_id))
-            + COALESCE(octet_length(encode(result_id)), 0) FROM managed_calls
-        UNION ALL SELECT tenant_id, 256 + octet_length(encode(instance_id))
-            + octet_length(encode(attempt_id)) + octet_length(contract) FROM managed_attempts
-        UNION ALL SELECT tenant_id, 256 + octet_length(encode(result_id))
-            + octet_length(encode(dependency_id)) FROM managed_edges
-        UNION ALL SELECT r.tenant_id, 256 + octet_length(encode(a.result_id))
-            + octet_length(encode(a.role)) + octet_length(a.ipc)
-            FROM managed_arrow a JOIN analysis_results r USING (result_id)";
-
     pub(in crate::analysis) fn validate_managed(reader: &Connection, root: &Path) -> Result<()> {
         let meta = Self::read_meta_from(reader, &root.join("analysis.duckdb"))?;
         let mut progress = std::collections::BTreeMap::new();

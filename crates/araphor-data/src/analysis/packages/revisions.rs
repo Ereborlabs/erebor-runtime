@@ -44,7 +44,7 @@ impl AnalysisStore {
             check()?;
             return Ok(());
         }
-        self.check_logical(&transaction, tenant, false)?;
+        self.check_revision_limits(&transaction, tenant)?;
         Self::record_revision(&transaction, revision, &["package_revisions"])?;
         check()?;
         self.commit_metadata(transaction, "commit package installation")?;

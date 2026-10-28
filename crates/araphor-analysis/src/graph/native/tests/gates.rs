@@ -28,18 +28,17 @@ fn native_projection_requires_admission() -> TestResult {
     for mode in 0..3 {
         let graph = Graph::new(&input)?;
         assert!(graph.projection.get().is_none());
-        let owned = super::super::Projection::graph_metadata(&graph)?;
         let limits = araphor_query::execution::Limits {
             input_bytes: if mode == 0 { 1 } else { usize::MAX },
             input_capacity: match mode {
                 0 => None,
-                1 => Some(owned.checked_mul(2).ok_or("test admission overflow")?),
-                _ => Some(64 * 1024 * 1024),
+                1 => Some(1),
+                _ => Some(usize::MAX),
             },
             ..Default::default()
         };
         let memory = araphor_query::memory::Memory::new(limits.input_capacity, None);
-        let frames = memory.reserve_input(owned)?;
+        let frames = memory.reserve_input(0)?;
         let retained = memory.reserve_input(0)?;
         let projection = super::super::Projection {
             tenant: input.source.tenant_id,
@@ -87,10 +86,11 @@ fn native_projection_requires_admission() -> TestResult {
                     "{result:?}"
                 );
             }
-            assert!(graph.projection.get().is_none());
+            assert!(graph.projection.get().is_some());
             drop(result);
             drop(retained);
             drop(frames);
+            drop(graph);
             assert_eq!(memory.input_reserved(), 0);
         } else {
             let inputs = result?;
@@ -835,7 +835,7 @@ async fn graph_malformed_report_rejected() -> TestResult {
         &owner.admitted().spec.id,
         &fixture.control,
     )?;
-    let before_usage = store.retained_usage(fixture.source.tenant_id)?;
+    let before_usage = store.retained_counts(fixture.source.tenant_id)?;
     let before = fixture.query.store().meta()?;
     let calls = fixture.facts.calls.load(Ordering::SeqCst);
     let failure = owner
@@ -908,7 +908,7 @@ async fn graph_malformed_report_rejected() -> TestResult {
         )?
         .is_none());
     assert_eq!(
-        store.retained_usage(fixture.source.tenant_id)?,
+        store.retained_counts(fixture.source.tenant_id)?,
         before_usage
     );
     assert_eq!(
@@ -1223,7 +1223,7 @@ async fn graph_canonical_fields_rejected() -> TestResult {
         };
         assert!(store.processor_result(&scope)?.is_none());
         let before_health = store.processor_health(&scope)?;
-        let before_usage = store.retained_usage(fixture.source.tenant_id)?;
+        let before_usage = store.retained_counts(fixture.source.tenant_id)?;
         let before = store.meta()?;
         let input = managed::request("invalid")?;
         let failure = owner

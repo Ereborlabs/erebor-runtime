@@ -1,7 +1,7 @@
 use duckdb::types::Value;
 use snafu::ResultExt as _;
 
-use super::read::{GraphWalk, WalkRows};
+use super::read::GraphWalk;
 use crate::analysis::graph_rows::GraphRows;
 use crate::{GraphEncodingSnafu, GraphTraversalDirectionV1, Result};
 
@@ -10,7 +10,7 @@ impl GraphWalk<'_> {
         let requested = std::iter::repeat_n("(?)", self.result_ids.len())
             .collect::<Vec<_>>()
             .join(", ");
-        let seeds = std::iter::repeat_n("(?, ?, ?, ?, ?)", self.request.seeds.len())
+        let seeds = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?, ?)", self.request.seeds.len())
             .collect::<Vec<_>>()
             .join(", ");
         let mut values = self
@@ -23,7 +23,7 @@ impl GraphWalk<'_> {
             values.push(Value::Blob(
                 serde_json::to_vec(seed).context(GraphEncodingSnafu)?,
             ));
-            values.extend(GraphRows::subject_fields(seed)?);
+            values.extend(GraphRows::subject_fields(seed));
         }
         values.push(Value::Boolean(self.binding_scope));
         let filter = if self.request.edge_types.is_empty() {
@@ -62,23 +62,24 @@ impl GraphWalk<'_> {
             Value::BigInt(self.request.max_hops as i64),
             edge_limit,
             Value::BigInt(self.request.max_hops as i64),
-            Value::BigInt(std::mem::size_of::<WalkRows>() as i64),
-            Value::BigInt(std::mem::size_of::<(crate::GraphSubjectKeyV1, u32)>() as i64),
-            Value::BigInt(std::mem::size_of::<(String, u32)>() as i64),
             Value::UBigInt(self.request.max_subjects as u64),
             Value::UBigInt(self.request.max_relationships as u64),
-            Value::BigInt(self.input_bytes.min(i64::MAX as usize) as i64),
         ]);
         let subject_permission = GraphRows::subject_permission(self.binding_scope);
         let query = format!(
             "WITH RECURSIVE requested(result_id) AS (VALUES {requested}),
-             seeds(subject_id, tenant_id, subject_kind, authority, identity) AS (VALUES {seeds}),
+             seeds(subject_id, tenant_id, authority_rank, authority_text, authority_boot,
+                 authority_epoch, subject_kind, identity) AS (VALUES {seeds}),
              eligible_edges AS NOT MATERIALIZED (
                  SELECT e.result_id, e.ordinal,
-                     struct_pack(tenant_id := source.tenant_id, subject_kind := source.subject_kind,
-                         authority := source.authority, identity := source.identity) AS from_subject_id,
-                     struct_pack(tenant_id := target.tenant_id, subject_kind := target.subject_kind,
-                         authority := target.authority, identity := target.identity) AS to_subject_id,
+                     struct_pack(tenant_id := source.tenant_id, authority_rank := source.authority_rank,
+                         authority_text := source.authority_text, authority_boot := source.authority_boot,
+                         authority_epoch := source.authority_epoch, subject_kind := source.subject_kind,
+                         identity := source.identity) AS from_subject_id,
+                     struct_pack(tenant_id := target.tenant_id, authority_rank := target.authority_rank,
+                         authority_text := target.authority_text, authority_boot := target.authority_boot,
+                         authority_epoch := target.authority_epoch, subject_kind := target.subject_kind,
+                         identity := target.identity) AS to_subject_id,
                      e.edge_type
                  FROM graph_relationships e JOIN requested USING (result_id)
                  LEFT JOIN graph_subjects source ON source.result_id = e.result_id
@@ -92,13 +93,18 @@ impl GraphWalk<'_> {
              ), links AS ({links}),
              reach(subject_id, depth) USING KEY (subject_id) AS (
                  SELECT DISTINCT struct_pack(tenant_id := seed.tenant_id,
-                     subject_kind := seed.subject_kind, authority := seed.authority,
-                     identity := seed.identity), 0::UINTEGER
+                     authority_rank := seed.authority_rank, authority_text := seed.authority_text,
+                     authority_boot := seed.authority_boot, authority_epoch := seed.authority_epoch,
+                     subject_kind := seed.subject_kind, identity := seed.identity), 0::UINTEGER
                  FROM seeds seed WHERE EXISTS (
                      SELECT 1 FROM graph_subjects subject JOIN requested USING (result_id)
                      WHERE subject.tenant_id = seed.tenant_id
+                         AND subject.authority_rank = seed.authority_rank
+                         AND subject.authority_text = seed.authority_text
+                         AND subject.authority_boot = seed.authority_boot
+                         AND subject.authority_epoch = seed.authority_epoch
                          AND subject.subject_kind = seed.subject_kind
-                         AND subject.authority = seed.authority AND subject.identity = seed.identity
+                         AND subject.identity = seed.identity
                          AND ({subject_permission})
                  )
                  UNION ALL (
@@ -125,29 +131,26 @@ impl GraphWalk<'_> {
                          JOIN links link ON link.source = boundary.subject_id
                          WHERE boundary.depth = ? AND NOT EXISTS (
                              SELECT 1 FROM reach visited WHERE visited.subject_id = link.target
-                         )) AS hop_boundary,
-                     ? + 2 * (coalesce((SELECT sum(octet_length(subject_id.tenant_id)
-                             + octet_length(encode(subject_id.subject_kind))
-                             + octet_length(subject_id.authority)
-                             + octet_length(subject_id.identity)) FROM reach), 0)
-                         + (SELECT count(*) FROM reach) * ?
-                         + coalesce((SELECT sum(octet_length(encode(result_id))) FROM edge_keys), 0)
-                         + (SELECT count(*) FROM edge_keys) * ?) AS bytes
+                         )) AS hop_boundary
              ), bounded AS (
-                 SELECT *, subject_count <= ? AND edge_count <= ? AND bytes <= ? AS included
+                 SELECT *, subject_count <= ? AND edge_count <= ? AS included
                  FROM summary
              ), output AS (
-                 SELECT 0::UTINYINT AS kind, NULL::STRUCT(tenant_id BLOB, subject_kind VARCHAR,
-                         authority BLOB, identity BLOB) AS subject_id,
+                 SELECT 0::UTINYINT AS kind, NULL::STRUCT(tenant_id BLOB,
+                         authority_rank UTINYINT, authority_text VARCHAR,
+                         authority_boot BLOB, authority_epoch UBIGINT,
+                         subject_kind UTINYINT, identity BLOB) AS subject_id,
                      NULL::UINTEGER AS depth, NULL::VARCHAR AS result_id, NULL::UINTEGER AS ordinal,
-                     subject_count, edge_count, hop_boundary, bytes FROM bounded
+                     subject_count, edge_count, hop_boundary FROM bounded
                  UNION ALL SELECT 1, CASE WHEN included THEN subject_id END, depth, NULL, NULL,
-                     subject_count, edge_count, hop_boundary, bytes FROM reach CROSS JOIN bounded
+                     subject_count, edge_count, hop_boundary FROM reach CROSS JOIN bounded
                  UNION ALL SELECT 2, NULL, NULL, CASE WHEN included THEN result_id END, ordinal,
-                     subject_count, edge_count, hop_boundary, bytes FROM edge_keys CROSS JOIN bounded
-             ) SELECT kind, subject_id.tenant_id, subject_id.subject_kind,
-                 subject_id.authority, subject_id.identity, depth, result_id, ordinal,
-                 subject_count, edge_count, hop_boundary, bytes
+                     subject_count, edge_count, hop_boundary FROM edge_keys CROSS JOIN bounded
+             ) SELECT kind, subject_id.tenant_id, subject_id.authority_rank,
+                 subject_id.authority_text, subject_id.authority_boot,
+                 subject_id.authority_epoch, subject_id.subject_kind,
+                 subject_id.identity, depth, result_id, ordinal,
+                 subject_count, edge_count, hop_boundary
              FROM output ORDER BY kind, depth, subject_id, result_id, ordinal"
         );
         Ok((query, values))

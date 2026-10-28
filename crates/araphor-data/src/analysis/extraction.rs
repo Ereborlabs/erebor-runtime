@@ -1917,7 +1917,7 @@ impl AnalysisStore {
                     .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
                 let subjects = read.projected("graph_subjects").is_some();
                 let edges = read.projected("relationships").is_some();
-                let header = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control, complete_graph)?;
+                let header = self.graph_input(snapshot, selection.tenant_id, id, control, complete_graph)?;
                 let mut graph = header.snapshot;
                 if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
                 if !selection.permits_graph(&graph) { continue; }
@@ -1970,7 +1970,7 @@ impl AnalysisStore {
                             if let Some((source_key, graph_revision)) = metadata {
                                 let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
                                 let header = self.graph_input(snapshot, selection.tenant_id,
-                                    &reference.result_id, &mut output, control, complete_graph)?;
+                                    &reference.result_id, control, complete_graph)?;
                                 let graph = &header.snapshot;
                                 if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
                                 if !selection.permits_graph(graph) { continue; }
@@ -2615,7 +2615,6 @@ mod tests {
                 reader,
                 exact.tenant_id,
                 resolved.graphs(),
-                usize::MAX,
                 &control,
                 |id, _, _, _| {
                     read.push(id.to_owned());

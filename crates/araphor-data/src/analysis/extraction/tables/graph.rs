@@ -158,8 +158,8 @@ impl Capture<'_> {
                 });
             }
         }
-        budget.charge(crate::EvidenceIntakeIdentityV1::MAX_KEY_BYTES)?;
         let source_key = graph.scope.identity.key();
+        budget.charge(source_key.len())?;
         for finding in &graph.findings {
             let row = self
                 .tables
@@ -179,7 +179,7 @@ impl Capture<'_> {
             if self.read.projected("findings").is_some() {
                 let key = (finding.tenant_id, finding.finding_id.clone());
                 if !self.latest.contains_key(&key) {
-                    budget.charge(finding.finding_id.len() + 128)?;
+                    budget.charge(size_of::<([u8; 16], String)>() + key.1.capacity())?;
                 }
                 if self
                     .latest
@@ -438,36 +438,6 @@ impl Capture<'_> {
             GraphCauseV1::Superseded => "superseded",
         };
         budget.check()?;
-        if budget.output.limits.input_bytes != usize::MAX {
-            let mut bytes = 0_usize;
-            for field in schema.fields() {
-                let payload = match field.name().as_str() {
-                    "tenant_id" => 16,
-                    "source_key" => source_key.len(),
-                    "graph_result_id" => result_id.len(),
-                    "graph_sensitivity" => <&str>::from(sensitivity).len(),
-                    "relationship_key" => key.as_ref().map_or(0, Vec::len),
-                    "proof_quality" => proof.as_ref().map_or(0, Vec::len),
-                    "required_coverage_interval_ids" => coverage.as_ref().map_or(0, Vec::len),
-                    "evidence" => evidence
-                        .map_or(0, |values| values.len())
-                        .checked_mul(size_of::<u32>())
-                        .ok_or_else(overflow)?,
-                    "edge_type" => kind.len(),
-                    "package_id" => edge.key.package_id.len(),
-                    "cause" => cause.len(),
-                    _ => 8,
-                };
-                bytes = bytes
-                    .checked_add(payload.checked_mul(2).ok_or_else(overflow)?)
-                    .and_then(|bytes| bytes.checked_add(field.size()))
-                    .and_then(|bytes| bytes.checked_add(512))
-                    .ok_or_else(overflow)?;
-            }
-            if bytes > budget.remaining_bytes() {
-                return Err(overflow());
-            }
-        }
         let row = RelationshipRow {
             tenant_id: serde_bytes::Bytes::new(&graph.scope.identity.tenant_id),
             source_key: serde_bytes::Bytes::new(source_key),
@@ -668,35 +638,6 @@ impl Capture<'_> {
                 .ok_or_else(overflow)?,
         )?;
         budget.check()?;
-        if budget.output.limits.input_bytes != usize::MAX {
-            let mut bytes = 0_usize;
-            for field in schema.fields() {
-                let payload = match field.name().as_str() {
-                    "graph_revision" => revision
-                        .map(crate::GraphRevisionV1::arrow_bytes)
-                        .transpose()?
-                        .unwrap_or(0),
-                    "snapshot" => snapshot.as_ref().map_or(0, Vec::len),
-                    "context_refs" => contexts.as_ref().map_or(0, Vec::len),
-                    "tenant_id" => 16,
-                    "source_key" => source_key.len(),
-                    "graph_result_id" => result_id.len(),
-                    "previous_result_id" => {
-                        graph.previous_result_id.as_ref().map_or(0, String::len)
-                    }
-                    "graph_sensitivity" => <&str>::from(sensitivity).len(),
-                    _ => 8,
-                };
-                bytes = bytes
-                    .checked_add(payload.checked_mul(2).ok_or_else(overflow)?)
-                    .and_then(|bytes| bytes.checked_add(field.size()))
-                    .and_then(|bytes| bytes.checked_add(512))
-                    .ok_or_else(overflow)?;
-            }
-            if bytes > budget.remaining_bytes() {
-                return Err(overflow());
-            }
-        }
         let row = ManifestRow {
             tenant_id: serde_bytes::Bytes::new(&graph.scope.identity.tenant_id),
             source_key: serde_bytes::Bytes::new(source_key),

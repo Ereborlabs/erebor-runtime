@@ -16,8 +16,6 @@ pub struct StorageLimitsV1 {
     pub disk_max_bytes: Option<u64>,
     pub policy_reserve_bytes: Option<u64>,
     pub write_reserve_bytes: Option<u64>,
-    pub logical_max_bytes: Option<u64>,
-    pub tenant_max_bytes: Option<u64>,
     pub witness_max_bytes: Option<u64>,
     pub context_max_bytes: Option<u64>,
     pub notification_routes: Option<usize>,
@@ -46,10 +44,6 @@ impl StorageLimitsV1 {
                         && reserve.checked_add(limit).is_some()
                 })
             })
-            && self
-                .tenant_max_bytes
-                .zip(self.logical_max_bytes)
-                .is_none_or(|(tenant, total)| tenant <= total)
     }
 
     fn bound(limit: Option<u64>, value: u64, resource: &'static str) -> Result<()> {
@@ -218,39 +212,6 @@ impl StorageLimitsV1 {
         Ok(())
     }
 
-    pub(super) fn check_logical(&self, total: u64, tenant: u64, maintenance: bool) -> Result<()> {
-        let allowance = |limit| {
-            if maintenance {
-                limit
-            } else {
-                limit - limit / 4
-            }
-        };
-        Self::bound(
-            self.tenant_max_bytes.map(allowance),
-            tenant,
-            "tenant logical bytes",
-        )?;
-        Self::bound(
-            self.logical_max_bytes.map(allowance),
-            total,
-            "global logical bytes",
-        )
-    }
-
-    pub(super) fn check_diagnostics(&self, total: u64, tenant: u64) -> Result<()> {
-        Self::bound(
-            self.tenant_max_bytes.map(|limit| limit / 8),
-            tenant,
-            "diagnostic logical bytes",
-        )?;
-        Self::bound(
-            self.logical_max_bytes.map(|limit| limit / 8),
-            total,
-            "diagnostic logical bytes",
-        )
-    }
-
     pub(super) fn check_revisions(&self, total: u64, tenant: u64) -> Result<()> {
         Self::bound(self.tenant_revisions, tenant, "tenant retained revisions")?;
         Self::bound(self.retained_revisions, total, "global retained revisions")
@@ -279,8 +240,6 @@ impl StorageLimitsV1 {
             disk_max_bytes: Some(8 * 1024 * 1024 * 1024),
             policy_reserve_bytes: Some(256 * 1024 * 1024),
             write_reserve_bytes: Some(256 * 1024 * 1024),
-            logical_max_bytes: Some(8 * 1024 * 1024 * 1024),
-            tenant_max_bytes: Some(2 * 1024 * 1024 * 1024),
             witness_max_bytes: Some(512 * 1024 * 1024),
             context_max_bytes: None,
             notification_routes: None,
@@ -326,8 +285,6 @@ mod tests {
         limits.check_entries(usize::MAX, usize::MAX)?;
         limits.check_sources(usize::MAX, usize::MAX, false)?;
         limits.check_sources(usize::MAX, usize::MAX, true)?;
-        limits.check_logical(u64::MAX, u64::MAX, false)?;
-        limits.check_diagnostics(u64::MAX, u64::MAX)?;
         limits.check_revisions(u64::MAX, u64::MAX)?;
         limits.check_witness(u64::MAX)?;
         limits.check_context(u64::MAX)?;
@@ -354,7 +311,7 @@ mod tests {
             )
             .is_err());
         let limits: StorageLimitsV1 = serde_json::from_str(
-            r#"{"reader_admissions":2,"native_memory_bytes":16777216,"native_temp_bytes":33554432,"tenant_max_bytes":8,"source_entries":1,"tenant_revisions":1,"notification_routes":32,"notification_states":256}"#,
+            r#"{"reader_admissions":2,"native_memory_bytes":16777216,"native_temp_bytes":33554432,"source_entries":1,"tenant_revisions":1,"notification_routes":32,"notification_states":256}"#,
         )?;
         assert!(limits.valid());
         assert_eq!(limits.reader_admissions, Some(2));
@@ -379,12 +336,6 @@ mod tests {
         .valid());
         assert_eq!(limits.native_memory_bytes, Some(16 * 1024 * 1024));
         assert_eq!(limits.native_temp_bytes, Some(32 * 1024 * 1024));
-        limits.check_logical(100, 6, false)?;
-        assert!(limits.check_logical(100, 7, false).is_err());
-        limits.check_logical(100, 8, true)?;
-        assert!(limits.check_logical(100, 9, true).is_err());
-        limits.check_diagnostics(100, 1)?;
-        assert!(limits.check_diagnostics(100, 2).is_err());
         limits.check_sources(1, 1, false)?;
         assert!(limits.check_sources(2, 1, false).is_err());
         limits.check_revisions(100, 1)?;
@@ -976,241 +927,6 @@ mod tests {
             })?,
             0
         );
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "release-only isolated process RSS qualification on Linux"]
-    fn analysis_store_thread_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        check_thread_memory(1, StorageLimitsV1::fixture())
-    }
-
-    #[test]
-    #[ignore = "release-only configured global quota RSS qualification on Linux"]
-    fn analysis_store_global_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let mut limits = StorageLimitsV1::fixture();
-        if let Some(bytes) = std::env::var_os("ARAPHOR_GLOBAL_BYTES") {
-            limits.logical_max_bytes = Some(
-                bytes
-                    .to_str()
-                    .ok_or("the global test quota is not UTF-8")?
-                    .parse()?,
-            );
-            limits.tenant_max_bytes = Some(
-                limits
-                    .tenant_max_bytes
-                    .ok_or("configured tenant limit")?
-                    .min(limits.logical_max_bytes.ok_or("configured logical limit")?),
-            );
-        }
-        check_thread_memory(5, limits)
-    }
-
-    fn check_thread_memory(
-        tenants: u8,
-        limits: StorageLimitsV1,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use std::{sync::mpsc, thread};
-
-        if cfg!(debug_assertions) {
-            return Err("run this test alone with --release --ignored --exact".into());
-        }
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("analysis");
-        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
-        println!(
-            "MEMORY_QUOTA tenants={tenants} logical_bytes={} tenant_bytes={}",
-            store
-                .storage
-                .logical_max_bytes
-                .ok_or("configured logical limit")?,
-            store
-                .storage
-                .tenant_max_bytes
-                .ok_or("configured tenant limit")?
-        );
-        store.writer()?.get()?.execute_batch(
-            "SET logging_storage = 'stdout';
-             SET logging_level = 'debug';
-             SET logging_mode = 'ENABLE_SELECTED';
-             SET enabled_log_types = 'Checkpoint';
-             SET enable_logging = true;",
-        )?;
-        let identities: Vec<_> = (1..=tenants)
-            .map(|tenant| EvidenceIntakeIdentityV1 {
-                tenant_id: [tenant; 16],
-                node_id: format!("node-{tenant}"),
-                ..crate::analysis::tests::identity()
-            })
-            .collect();
-        let expected_limit = if tenants == 1 {
-            "tenant logical bytes"
-        } else {
-            "global logical bytes"
-        };
-        let native = |store: &AnalysisStore| -> std::result::Result<
-            Vec<(String, u64)>,
-            Box<dyn std::error::Error>,
-        > {
-            let reader = store.reader()?;
-            let mut query = reader.get()?.prepare(
-                "SELECT tag, memory_usage_bytes FROM duckdb_memory() WHERE memory_usage_bytes > 0 ORDER BY tag",
-            )?;
-            let values = query
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)))?
-                .collect::<duckdb::Result<Vec<_>>>()?;
-            Ok(values)
-        };
-        let memory =
-            |store: &AnalysisStore| -> std::result::Result<(), Box<dyn std::error::Error>> {
-                let status = fs::read_to_string("/proc/self/status")?;
-                let peak: u64 = status
-                    .lines()
-                    .find(|line| line.starts_with("VmHWM:"))
-                    .and_then(|line| line.split_whitespace().nth(1))
-                    .ok_or("the process memory peak is absent")?
-                    .parse()?;
-                if peak > 512 * 1024 {
-                    let native = native(store)?;
-                    let cursors = identities
-                        .iter()
-                        .map(|identity| {
-                            store.source_receipt(identity).map(|receipt| {
-                                receipt.map_or(0, |receipt| receipt.contiguous_cursor)
-                            })
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    return Err(format!("process peak {peak} KiB exceeds 512 MiB at cursors {cursors:?}; native bytes: {native:?}").into());
-                }
-                Ok(())
-            };
-        let cursors = thread::scope(
-            |scope| -> std::result::Result<Vec<u64>, Box<dyn std::error::Error>> {
-                let workers: Vec<_> =
-                    (0..4)
-                        .map(|_| {
-                            let (send, requests) =
-                                mpsc::sync_channel::<(usize, ValidatedEvidenceBatchV1)>(1);
-                            let (reply, receive) = mpsc::sync_channel(1);
-                            let store = &store;
-                            let identities = &identities;
-                            scope.spawn(move || {
-                                for (tenant, batch) in requests {
-                                    if reply
-                                        .send(store.accept_validated_batch(
-                                            identities[tenant].clone(),
-                                            batch,
-                                        ))
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
-                                }
-                            });
-                            (send, receive)
-                        })
-                        .collect();
-                let mut cursors = vec![0_u64; identities.len()];
-                let mut sample = None;
-                let limit = if tenants == 1 {
-                    store
-                        .storage
-                        .tenant_max_bytes
-                        .ok_or("configured tenant limit")?
-                } else {
-                    store
-                        .storage
-                        .logical_max_bytes
-                        .ok_or("configured logical limit")?
-                };
-                let allowance = limit - limit / 4;
-                let frame_bytes = 128 * 1024;
-                let batch_limit = allowance
-                    .checked_div(frame_bytes as u64)
-                    .and_then(|count| count.checked_add(2))
-                    .ok_or("the quota batch bound overflows")?;
-                for group in 0..batch_limit {
-                    if group % 64 == 0 {
-                        sample = Some((group, native(&store)?, store.storage_usage()?));
-                    }
-                    let tenant = group as usize % identities.len();
-                    let accepted = cursors[tenant];
-                    let mut frames = vec![0_u8; frame_bytes];
-                    for index in 0..1024 {
-                        let cursor = accepted + index as u64 + 1;
-                        frames[index * 128..index * 128 + 8].copy_from_slice(&cursor.to_be_bytes());
-                    }
-                    let batch = ValidatedEvidenceBatchV1 {
-                        cpu_id: 0,
-                        first_cursor: accepted + 1,
-                        last_cursor: accepted + 1024,
-                        intake_utc_ns: 1_800_000_000_000_000_000,
-                        framed_records: frames.into(),
-                        frame_ends: (1..=1024).map(|index| index * 128).collect(),
-                    };
-                    let (send, receive) = &workers[group as usize % workers.len()];
-                    let prior = store.meta()?;
-                    send.send((tenant, batch))?;
-                    match receive.recv()? {
-                        Ok(outcome) => assert_eq!(outcome, EvidenceStoreOutcomeV1::Accepted),
-                        Err(crate::Error::StorageCapacity { resource, .. })
-                            if resource == expected_limit =>
-                        {
-                            assert_eq!(store.meta()?, prior);
-                            assert_eq!(
-                                store
-                                    .source_receipt(&identities[tenant])?
-                                    .ok_or("receipt absent")?
-                                    .contiguous_cursor,
-                                accepted
-                            );
-                            memory(&store)?;
-                            return Ok(cursors);
-                        }
-                        Err(error) => {
-                            return Err(format!(
-                                "batch {group} failed; prior successful cursors {cursors:?}; last sample (batch, native bytes, storage) {sample:?}: {error:?}"
-                            ).into());
-                        }
-                    }
-                    cursors[tenant] += 1024;
-                    assert_eq!(
-                        store
-                            .source_receipt(&identities[tenant])?
-                            .ok_or("receipt absent")?
-                            .contiguous_cursor,
-                        cursors[tenant]
-                    );
-                    memory(&store)?;
-                }
-                Err(format!("the configured {expected_limit} limit was not reached").into())
-            },
-        )?;
-        println!("MEMORY_CURSORS {cursors:?}");
-        let receipts = identities
-            .iter()
-            .map(|identity| store.source_receipt(identity))
-            .collect::<Result<Vec<_>>>()?;
-        for (receipt, cursor) in receipts.iter().zip(&cursors) {
-            assert!(*cursor > 0);
-            assert_eq!(
-                receipt.as_ref().ok_or("receipt absent")?.contiguous_cursor,
-                *cursor
-            );
-        }
-        store.checkpoint()?;
-        memory(&store)?;
-        drop(store);
-        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
-        for ((identity, receipt), cursor) in identities.iter().zip(receipts).zip(cursors) {
-            assert_eq!(store.source_receipt(identity)?, receipt);
-            let last = store.read_page(identity, cursor)?;
-            let mut expected = vec![0_u8; 128];
-            expected[..8].copy_from_slice(&cursor.to_be_bytes());
-            assert_eq!(last.records.len(), 1);
-            assert_eq!(last.records[0].framed_record, expected);
-        }
-        memory(&store)?;
         Ok(())
     }
 }

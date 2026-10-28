@@ -99,7 +99,7 @@ async fn immutable_facts_precede_guests() -> TestResult {
         let before_usage = fixture
             .query
             .store()
-            .retained_usage(fixture.source.tenant_id)?;
+            .retained_counts(fixture.source.tenant_id)?;
         let before = fixture.query.store().meta()?;
         let input = managed::request("changed")?;
         assert!(input.time_utc_ns < original.witness_deadline_utc_ns);
@@ -277,7 +277,7 @@ async fn immutable_facts_precede_guests() -> TestResult {
         let usage = fixture
             .query
             .store()
-            .retained_usage(fixture.source.tenant_id)?;
+            .retained_counts(fixture.source.tenant_id)?;
         assert_eq!(
             (usage.1, usage.2, usage.3),
             (before_usage.1, before_usage.2, before_usage.3)
@@ -681,30 +681,17 @@ async fn source_keeps_credential_join() -> TestResult {
     assert!(store
         .graph_finding([99; 16], &id, &finding.finding_id)?
         .is_none());
-    let current =
-        store.graph_findings(fixture.source.tenant_id, None, None, usize::MAX, usize::MAX)?;
+    let current = store.graph_findings(fixture.source.tenant_id, None, None, usize::MAX)?;
     let mut after = None;
     for receipt in current {
         assert_eq!(
-            store.graph_findings(
-                fixture.source.tenant_id,
-                after.as_deref(),
-                None,
-                1,
-                usize::MAX
-            )?,
+            store.graph_findings(fixture.source.tenant_id, after.as_deref(), None, 1)?,
             std::slice::from_ref(&receipt)
         );
         after = Some(receipt.1.finding_id);
     }
     assert!(store
-        .graph_findings(
-            fixture.source.tenant_id,
-            after.as_deref(),
-            None,
-            1,
-            usize::MAX
-        )?
+        .graph_findings(fixture.source.tenant_id, after.as_deref(), None, 1)?
         .is_empty());
     Ok(())
 }

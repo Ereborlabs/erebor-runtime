@@ -92,7 +92,7 @@ impl AnalysisStore {
                 return crate::AnalysisConflictSnafu.fail();
             }
         }
-        self.check_logical(&transaction, spec.tenant, false)?;
+        self.check_revision_limits(&transaction, spec.tenant)?;
         Self::record_revision(
             &transaction,
             revision,
@@ -141,7 +141,7 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn recover_managed_startup(&self) -> Result<()> {
-        let mut writer = self.writer()?;
+        let mut writer = self.writer_access()?;
         let transaction = writer
             .get_mut()?
             .transaction()
@@ -186,6 +186,9 @@ impl AnalysisStore {
             if attempt.request.frontier.is_none() {
                 continue;
             }
+            if final_revision.is_none() {
+                self.require_capacity(true)?;
+            }
             let revision = self.package_next(&transaction)?;
             Self::managed_terminal_rows(
                 &transaction,
@@ -202,7 +205,7 @@ impl AnalysisStore {
             return Ok(());
         };
         for tenant in tenants {
-            self.check_logical(&transaction, tenant, false)?;
+            self.check_revision_limits(&transaction, tenant)?;
         }
         self.commit_metadata(transaction, "commit interrupted managed settlement")?;
         self.revision.send_replace(revision);

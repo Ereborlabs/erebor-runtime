@@ -20,17 +20,14 @@ impl AnalysisStore {
         for (id, version) in ids.iter().zip(&versions) {
             output.reference_result(id, version.revision, AnalysisReferenceOriginV1::Graph)?;
         }
-        self.traversal_work(snapshot, &ids, output, control)?;
         let mut walk = GraphWalk::new(
             snapshot,
             control,
             request,
             &ids,
-            output.limits.input_bytes.saturating_sub(output.input_bytes),
             !selection.binding_ids.is_empty(),
         )
         .run()?;
-        output.charge(walk.bytes)?;
         walk.subjects.sort_by(|left, right| left.0.cmp(&right.0));
         let keys = walk
             .subjects
@@ -43,14 +40,8 @@ impl AnalysisStore {
             edges.entry(id).or_default().push(ordinal);
         }
         let mut subjects = 0usize;
-        for (id, version) in ids.iter().zip(&versions) {
+        for (id, version) in ids.iter().zip(versions) {
             control.check()?;
-            self.traversal_memory(output, version.buffer)?;
-            output.charge(
-                keys.len().checked_mul(size_of::<u32>()).ok_or_else(|| {
-                    self.state_error("the traversal subject allocation overflows")
-                })?,
-            )?;
             let selected = GraphRows::selected_subjects(
                 snapshot,
                 id,
@@ -61,8 +52,7 @@ impl AnalysisStore {
             if selected.is_empty() && !edges.contains_key(id) && !capture.graph_headers() {
                 continue;
             }
-            let header =
-                self.traversal_header(snapshot, selection, id, version, output, control)?;
+            let header = version.header;
             let mut graph = header.snapshot;
             let (selected, subject_ids): (Vec<_>, Vec<_>) = selected.into_iter().unzip();
             if subject_ids.windows(2).any(|pair| pair[0] >= pair[1])
@@ -105,19 +95,6 @@ impl AnalysisStore {
                 }
             }
             graph.validate()?;
-            let remaining = output
-                .limits
-                .scan_bytes
-                .saturating_sub(output.scanned_bytes);
-            let mut budget = crate::discovery::InputByteLimit(remaining);
-            serde_json::to_writer(&mut budget, &(&graph.graph.subjects, &graph.graph.edges))
-                .map_err(|_| {
-                    AnalysisInputTooLargeSnafu {
-                        resource: "graph selected payload bytes",
-                    }
-                    .build()
-                })?;
-            output.scan(remaining - budget.0)?;
             capture.graph(
                 id,
                 &graph,

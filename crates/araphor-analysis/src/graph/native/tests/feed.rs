@@ -1217,7 +1217,6 @@ async fn failed_feed_recovers_source() -> TestResult {
             None,
             Some(&finding.finding_id),
             usize::MAX,
-            usize::MAX,
         )?;
         let (revised, _) = current.into_iter().next().ok_or("Revised Graph finding")?;
         assert_ne!(revised, original.result_id);

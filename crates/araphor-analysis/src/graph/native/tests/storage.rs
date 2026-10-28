@@ -78,8 +78,8 @@ async fn graph_refs_use_header() -> TestResult {
         .is_empty());
     let before = store.meta()?;
     store.fault_write(
-        "UPDATE graph_subjects SET subject_kind = repeat('X', length(subject_kind)) WHERE result_id = ?",
-        &[&id],
+        "UPDATE graph_subject_values SET subject_kind = 255 WHERE tenant_id = ?",
+        &[&tenant.as_slice()],
     )?;
     assert!(store.graph_result(tenant, &id).is_err());
     assert_eq!(
@@ -209,7 +209,7 @@ async fn graph_package_commit_refs() -> TestResult {
     let commit = |request| {
         store.commit_graph_snapshot(
             request,
-            CanonicalGraph::bounded(snapshot.clone(), usize::MAX)?,
+            CanonicalGraph::new(snapshot.clone())?,
             &[],
             &pins,
             &[],
@@ -333,7 +333,7 @@ async fn graph_package_commit_refs() -> TestResult {
     replacement.body.clear();
     store.commit_graph_snapshot(
         replacement.clone(),
-        CanonicalGraph::bounded(empty.clone(), usize::MAX)?,
+        CanonicalGraph::new(empty.clone())?,
         &[],
         &pins,
         &[],
@@ -341,7 +341,7 @@ async fn graph_package_commit_refs() -> TestResult {
         || fixture.authority.check(&grant, PackageActionV1::Run),
     )?;
     assert!(store
-        .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?
+        .graph_findings(tenant, None, None, usize::MAX)?
         .is_empty());
     assert!(store
         .graph_finding(tenant, &replacement.result_id, &finding.finding_id)?
@@ -396,7 +396,7 @@ async fn graph_package_commit_refs() -> TestResult {
     check(&AnalysisStore::open(&target)?)?;
     for (index, fault) in [
         "DELETE FROM graph_findings",
-        "UPDATE graph_subjects SET ordinal = ordinal + 10",
+        "UPDATE graph_subject_values SET subject_kind = 255",
         "UPDATE graph_findings SET result_id = 'orphan' WHERE result_id = 'graph:storage-committed'",
         "UPDATE graph_findings SET tenant_id = 'foreign'::BLOB",
         "DROP TABLE graph_relationships",

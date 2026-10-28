@@ -76,7 +76,7 @@ impl AnalysisStore {
                     operation: "insert managed call",
                 })?;
         }
-        self.check_logical(&transaction, spec.tenant, false)?;
+        self.check_revision_limits(&transaction, spec.tenant)?;
         Self::record_revision(
             &transaction,
             revision,

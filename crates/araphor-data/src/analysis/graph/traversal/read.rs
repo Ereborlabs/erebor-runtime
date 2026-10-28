@@ -11,7 +11,6 @@ pub(in crate::analysis) struct GraphWalk<'a> {
     pub(super) control: &'a AnalysisReadControl,
     pub(super) request: &'a GraphTraversalV1,
     pub(super) result_ids: &'a [String],
-    pub(super) input_bytes: usize,
     pub(super) binding_scope: bool,
 }
 
@@ -19,7 +18,6 @@ pub(in crate::analysis) struct WalkRows {
     pub(in crate::analysis) subjects: Vec<(GraphSubjectKeyV1, u32)>,
     pub(in crate::analysis) edges: Vec<(String, u32)>,
     pub(in crate::analysis) hop_boundary: bool,
-    pub(in crate::analysis) bytes: usize,
 }
 
 impl<'a> GraphWalk<'a> {
@@ -28,7 +26,6 @@ impl<'a> GraphWalk<'a> {
         control: &'a AnalysisReadControl,
         request: &'a GraphTraversalV1,
         result_ids: &'a [String],
-        input_bytes: usize,
         binding_scope: bool,
     ) -> Self {
         Self {
@@ -36,7 +33,6 @@ impl<'a> GraphWalk<'a> {
             control,
             request,
             result_ids,
-            input_bytes,
             binding_scope,
         }
     }
@@ -48,7 +44,6 @@ impl<'a> GraphWalk<'a> {
                 subjects: Vec::new(),
                 edges: Vec::new(),
                 hop_boundary: false,
-                bytes: 0,
             });
         }
         let (query, values) = self.query()?;
@@ -99,14 +94,11 @@ impl<'a> GraphWalk<'a> {
             }
             .fail();
         }
-        let count: u64 = summary.get(8).context(AnalysisDatabaseSnafu {
+        let count: u64 = summary.get(11).context(AnalysisDatabaseSnafu {
             operation: "decode traversal subject count",
         })?;
-        let edges: u64 = summary.get(9).context(AnalysisDatabaseSnafu {
+        let edges: u64 = summary.get(12).context(AnalysisDatabaseSnafu {
             operation: "decode traversal edge count",
-        })?;
-        let bytes: u64 = summary.get(11).context(AnalysisDatabaseSnafu {
-            operation: "decode traversal byte count",
         })?;
         if count > self.request.max_subjects as u64 {
             return AnalysisInputTooLargeSnafu {
@@ -120,19 +112,12 @@ impl<'a> GraphWalk<'a> {
             }
             .fail();
         }
-        if bytes > self.input_bytes as u64 {
-            return AnalysisInputTooLargeSnafu {
-                resource: "graph traversal input bytes",
-            }
-            .fail();
-        }
         let mut output = WalkRows {
             subjects: Vec::new(),
             edges: Vec::new(),
-            hop_boundary: summary.get(10).context(AnalysisDatabaseSnafu {
+            hop_boundary: summary.get(13).context(AnalysisDatabaseSnafu {
                 operation: "decode traversal hop boundary",
             })?,
-            bytes: bytes as usize,
         };
         output
             .subjects
@@ -147,7 +132,7 @@ impl<'a> GraphWalk<'a> {
 
     fn allocation(_: std::collections::TryReserveError) -> crate::Error {
         AnalysisInputTooLargeSnafu {
-            resource: "graph traversal input bytes",
+            resource: "graph traversal rows",
         }
         .build()
     }
@@ -160,7 +145,7 @@ impl WalkRows {
         })? {
             1 => {
                 let subject = crate::analysis::graph_rows::GraphRows::decode_subject(row)?;
-                let depth = row.get(5).context(AnalysisDatabaseSnafu {
+                let depth = row.get(8).context(AnalysisDatabaseSnafu {
                     operation: "decode traversal depth",
                 })?;
                 if depth > max_hops {
@@ -172,10 +157,10 @@ impl WalkRows {
                 self.subjects.push((subject, depth));
             }
             2 => self.edges.push((
-                row.get(6).context(AnalysisDatabaseSnafu {
+                row.get(9).context(AnalysisDatabaseSnafu {
                     operation: "decode traversal result identity",
                 })?,
-                row.get(7).context(AnalysisDatabaseSnafu {
+                row.get(10).context(AnalysisDatabaseSnafu {
                     operation: "decode traversal edge ordinal",
                 })?,
             )),

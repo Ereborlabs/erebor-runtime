@@ -500,6 +500,35 @@ fn startup_keeps_committed_state() -> TestResult {
         let rows: (u64, u64) = store.read_snapshot(|reader| reader.query_row("SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_arrow)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read startup output fence" }))?;
         let before = store.meta()?;
         drop(store);
+        assert!(matches!(
+            AnalysisStore::open_with_limits(
+                &root,
+                Default::default(),
+                crate::StorageLimitsV1 {
+                    policy_reserve_bytes: Some(u64::MAX / 4),
+                    ..Default::default()
+                }
+            ),
+            Err(crate::Error::StorageCapacity {
+                resource: "filesystem reserve",
+                ..
+            })
+        ));
+        let reader = AnalysisStore::open_native(
+            &root.join("analysis.duckdb"),
+            Default::default(),
+            duckdb::AccessMode::ReadOnly,
+        )?;
+        let (revision, completed, contract): (u64, u64, Vec<u8>) = reader.query_row(
+            "SELECT (SELECT commit_revision FROM store_meta), completed, contract
+             FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ?",
+            params![[1_u8; 16].as_slice(), "counter", &interrupted.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(revision, before.commit_revision);
+        assert_eq!(completed, 0);
+        assert_eq!(contract, serde_json::to_vec(&pending.0)?);
+        drop(reader);
         let store = AnalysisStore::open(&root)?;
         let mut expected = before.clone();
         expected.commit_revision += 1;
@@ -882,106 +911,6 @@ fn startup_filters_generations() -> TestResult {
 }
 
 #[test]
-fn startup_quota_is_atomic() -> TestResult {
-    for limited in [0, 1, 2] {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("store");
-        let store = AnalysisStore::open(&root)?;
-        let fixture = Fixture::admit(&store)?;
-        let image = store
-            .package_image(
-                [1; 16],
-                "managed-fixture",
-                Some("r1"),
-                &AnalysisReadControl::default(),
-            )?
-            .ok_or("shared fixture image")?;
-        store.install_package_image([2; 16], &image, || Ok(()))?;
-        let mut spec = fixture.instance.spec.clone();
-        spec.tenant = [2; 16];
-        store.admit_definition([2; 16], &spec.definition, || Ok(()))?;
-        let mut grant = fixture.instance.grant.clone();
-        grant.selection.tenant_id = [2; 16];
-        let peer = store.admit_managed(&spec, &grant, || Ok(()))?;
-        for (index, instance) in [&fixture.instance, &peer].into_iter().enumerate() {
-            let capture = version::capture(&store, instance, instance, false)?;
-            let id = if index + 1 == limited {
-                "q".repeat(1024)
-            } else {
-                format!("tenant-{index}")
-            };
-            store.register_managed_attempt(&capture, &native_request(&id), || Ok(()))?;
-        }
-        let before = store.meta()?;
-        let contracts = store.read_snapshot(terminal_rows)?;
-        let changed: u64 = store.read_snapshot(|reader| reader.query_row("SELECT last_changed_revision FROM relation_revisions WHERE relation_name = 'managed_attempts'", [], |row| row.get(0)).context(crate::AnalysisDatabaseSnafu { operation: "read startup relation fence" }))?;
-        let usage = store.read_snapshot(|reader| {
-            AnalysisStore::logical_usage(reader, if limited == 2 { [2; 16] } else { [1; 16] })
-        })?;
-        let cap = if limited == 0 { usage.0 } else { usage.1 } + 1;
-        let limits = crate::StorageLimitsV1 {
-            logical_max_bytes: (limited == 0).then_some(cap),
-            tenant_max_bytes: (limited != 0).then_some(cap),
-            ..Default::default()
-        };
-        drop(store);
-        let error = AnalysisStore::open_with_limits(&root, Default::default(), limits)
-            .err()
-            .ok_or("startup bypassed logical quota")?;
-        assert!(
-            matches!(error, crate::Error::StorageCapacity { resource, .. } if resource == if limited == 0 { "global logical bytes" } else { "tenant logical bytes" })
-        );
-        let reader = AnalysisStore::open_native(
-            &root.join("analysis.duckdb"),
-            Default::default(),
-            duckdb::AccessMode::ReadOnly,
-        )?;
-        assert_eq!(
-            AnalysisStore::read_meta_from(&reader, &root.join("analysis.duckdb"))?,
-            before
-        );
-        assert_eq!(terminal_rows(&reader)?, contracts);
-        assert_eq!(reader.query_row("SELECT last_changed_revision FROM relation_revisions WHERE relation_name = 'managed_attempts'", [], |row| row.get::<_, u64>(0))?, changed);
-        assert_eq!(
-            AnalysisStore::logical_usage(&reader, if limited == 2 { [2; 16] } else { [1; 16] })?,
-            usage
-        );
-        drop(reader);
-        let store = AnalysisStore::open(&root)?;
-        assert_eq!(store.meta()?.commit_revision, before.commit_revision + 2);
-        assert_eq!(fixture.current(&store)?, fixture.instance);
-        assert_eq!(
-            store.managed_instance([2; 16], "counter", &AnalysisReadControl::default())?,
-            Some(peer)
-        );
-        let after = store.read_snapshot(|reader| {
-            AnalysisStore::logical_usage(reader, if limited == 2 { [2; 16] } else { [1; 16] })
-        })?;
-        assert!(if limited == 0 {
-            after.0 > cap
-        } else {
-            after.1 > cap
-        });
-        if limited != 0 {
-            let other = store.read_snapshot(|reader| {
-                AnalysisStore::logical_usage(reader, if limited == 2 { [1; 16] } else { [2; 16] })
-            })?;
-            assert!(other.1 <= cap);
-        }
-        for (_, _, _, bytes, completed) in store.read_snapshot(terminal_rows)? {
-            let attempt: model::Attempt = serde_json::from_slice(&bytes)?;
-            assert_eq!(
-                attempt.terminal.ok_or("quota retry cancellation")?.exit,
-                ManagedExit::Cancelled
-            );
-            assert!(completed > before.commit_revision);
-        }
-        store.verify_state()?;
-    }
-    Ok(())
-}
-
-#[test]
 fn startup_restores_native_intent() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("source");
@@ -1015,8 +944,6 @@ fn startup_restores_native_intent() -> TestResult {
         .collect::<crate::Result<Vec<_>>>()?;
     let contracts = store.read_snapshot(terminal_rows)?;
     let before = store.meta()?;
-    let changed: u64 = store.read_snapshot(|reader| reader.query_row("SELECT last_changed_revision FROM relation_revisions WHERE relation_name = 'managed_attempts'", [], |row| row.get(0)).context(crate::AnalysisDatabaseSnafu { operation: "read restore terminal fence" }))?;
-    let usage = store.read_snapshot(|reader| AnalysisStore::logical_usage(reader, [1; 16]))?;
     let backup = root.join("backups/native-pending");
     let manifest = store.backup(&backup)?;
     assert_eq!(manifest.commit_revision, before.commit_revision);
@@ -1030,48 +957,10 @@ fn startup_restores_native_intent() -> TestResult {
         .has_changed()
         .is_ok());
 
-    let limited = directory.path().join("limited");
-    let error = AnalysisStore::restore_with_limits(
-        &backup,
-        &limited,
-        crate::StorageLimitsV1 {
-            logical_max_bytes: Some(usage.0 + 1),
-            ..Default::default()
-        },
-    )
-    .err()
-    .ok_or("restored settlement bypassed quota")?;
-    assert!(matches!(
-        error,
-        crate::Error::StorageCapacity {
-            resource: "global logical bytes",
-            ..
-        }
-    ));
-    assert!(limited.join("restore.pending").is_file());
-    assert!(matches!(
-        AnalysisStore::open(&limited),
-        Err(crate::Error::AnalysisState { .. })
-    ));
-    let reader = AnalysisStore::open_native(
-        &limited.join("analysis.duckdb"),
-        Default::default(),
-        duckdb::AccessMode::ReadOnly,
-    )?;
-    let failed = AnalysisStore::read_meta_from(&reader, &limited.join("analysis.duckdb"))?;
-    let mut epoch = before.clone();
-    epoch.recovery_epoch += 1;
-    assert_eq!(failed, epoch);
-    assert_eq!(terminal_rows(&reader)?, contracts);
-    assert_eq!(reader.query_row("SELECT last_changed_revision FROM relation_revisions WHERE relation_name = 'managed_attempts'", [], |row| row.get::<_, u64>(0))?, changed);
-    assert_eq!(AnalysisStore::logical_usage(&reader, [1; 16])?, usage);
-    drop(reader);
-    assert_eq!(store.meta()?, before);
-    assert_eq!(store.read_snapshot(terminal_rows)?, contracts);
-
     let target = directory.path().join("restored");
     let restored = AnalysisStore::restore(&backup, &target)?;
-    let mut expected = epoch;
+    let mut expected = before.clone();
+    expected.recovery_epoch += 1;
     expected.commit_revision += 1;
     assert_eq!(restored.meta()?, expected);
     assert!(!target.join("restore.pending").exists());

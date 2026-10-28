@@ -313,7 +313,7 @@ fn managed_cut(
         "history": history,
         "outputs": outputs,
         "graph": graph_cut(store, source)?,
-        "retained": store.retained_usage(source.tenant_id)?,
+        "retained": store.retained_counts(source.tenant_id)?,
         "witnesses": store.witness_usage(source.tenant_id, now)?,
     }))
 }
@@ -573,7 +573,7 @@ async fn managed_graph_crashes() -> TestResult {
         let usage = fixture
             .query
             .store()
-            .retained_usage(fixture.source.tenant_id)?;
+            .retained_counts(fixture.source.tenant_id)?;
         let input = request("crash")?;
         let root = fixture._directory.path().join("data");
         std::fs::write(
@@ -680,7 +680,7 @@ async fn managed_graph_crashes() -> TestResult {
                 managed_cut(&store, &source, ID, Some(&input.id), input.time_utc_ns)?,
                 expected
             );
-            assert_eq!(store.retained_usage(source.tenant_id)?.3, usage.3);
+            assert_eq!(store.retained_counts(source.tenant_id)?.3, usage.3);
             assert!(store.graph_snapshot(&source)?.is_none());
             let scope = araphor_data::ProcessorScopeV1 {
                 processor_id: araphor_data::GRAPH_PROCESSOR.into(),
@@ -776,7 +776,7 @@ async fn managed_graph_crashes() -> TestResult {
                     .sum::<u64>()
             );
             assert!(witness_usage.context_bytes > 0);
-            assert_eq!(store.retained_usage(source.tenant_id)?.3, usage.3 + 5);
+            assert_eq!(store.retained_counts(source.tenant_id)?.3, usage.3 + 5);
         }
         store.verify_state()?;
         let _graph = store.lease_graph(vec![AnalysisSelectionV1::tenant(source.tenant_id)])?;

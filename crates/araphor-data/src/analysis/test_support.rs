@@ -47,13 +47,20 @@ impl AnalysisStore {
         })
     }
 
-    pub fn retained_usage(&self, tenant: [u8; 16]) -> Result<(u64, u64, u64, u64)> {
+    pub fn retained_counts(&self, tenant: [u8; 16]) -> Result<(u64, u64, u64, u64)> {
         self.read_snapshot(|reader| {
-            reader.query_row(
-                &format!("SELECT logical_bytes, coverage_count, context_count, result_count FROM ({}) WHERE tenant_id = ?", AnalysisStore::usage_projection()),
-                params![tenant.as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            ).context(AnalysisDatabaseSnafu { operation: "read tenant usage fixture" })
+            reader
+                .query_row(
+                    "SELECT c + x + r, c, x, r FROM (
+                    SELECT (SELECT count(*)::UBIGINT FROM coverage WHERE tenant_id = ?) c,
+                        (SELECT count(*)::UBIGINT FROM context_versions WHERE tenant_id = ?) x,
+                        (SELECT count(*)::UBIGINT FROM analysis_results WHERE tenant_id = ?) r)",
+                    params![tenant.as_slice(), tenant.as_slice(), tenant.as_slice()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read tenant retained counts fixture",
+                })
         })
     }
 }

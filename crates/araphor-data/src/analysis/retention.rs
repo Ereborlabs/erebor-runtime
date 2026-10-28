@@ -57,8 +57,6 @@ impl<'a> EvidenceRetentionOwner<'a> {
     pub fn enabled(&self) -> bool {
         self.store.retention.raw_max_age_ns.is_some()
             || self.store.retention.raw_max_bytes.is_some()
-            || self.store.storage.logical_max_bytes.is_some()
-            || self.store.storage.tenant_max_bytes.is_some()
     }
 
     pub fn step(&self, now_utc_ns: u64) -> Result<RetentionStepV1> {
@@ -136,13 +134,6 @@ impl<'a> EvidenceRetentionOwner<'a> {
     }
 
     fn selection(&self) -> String {
-        let logical = if self.store.storage.logical_max_bytes.is_some()
-            || self.store.storage.tenant_max_bytes.is_some()
-        {
-            AnalysisStore::usage_projection()
-        } else {
-            "SELECT NULL::BLOB AS tenant_id, 0::UBIGINT AS logical_bytes WHERE FALSE".to_owned()
-        };
         #[cfg(any(test, feature = "test-fixtures"))]
         let (source, scope) = (
             ", ?::BLOB AS source_key",
@@ -155,7 +146,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             source = source,
             scope = scope
         );
-        format!("WITH logical AS ({logical}), {rules}")
+        format!("WITH {rules}")
     }
 
     fn run_batch(
@@ -194,19 +185,11 @@ impl<'a> EvidenceRetentionOwner<'a> {
         let key = target.as_ref().map(|(source, _)| source.key());
         #[cfg(any(test, feature = "test-fixtures"))]
         let binding = key.as_deref();
-        let threshold = |limit: u64| {
-            let allowance = limit - limit / 4;
-            allowance - allowance / 10
-        };
-        let global = self.store.storage.logical_max_bytes.map(threshold);
-        let tenant = self.store.storage.tenant_max_bytes.map(threshold);
         let selection = enabled.then(|| self.selection());
         let values = params![
             now,
             self.store.retention.raw_max_age_ns,
-            self.store.retention.raw_max_bytes,
-            global,
-            tenant
+            self.store.retention.raw_max_bytes
         ];
         #[cfg(any(test, feature = "test-fixtures"))]
         let scoped = [values, params![binding]].concat();
@@ -371,7 +354,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             }
             let (more, deadline): (bool, Option<u64>) = writer.query_row(&format!("{selection}
                 SELECT EXISTS(SELECT 1 FROM selected), CAST(MIN(due) FILTER (WHERE due > now_ns AND due <= 18446744073709551615) AS UBIGINT)
-                FROM (SELECT now_ns, CASE WHEN over_bytes OR pressure THEN pin_until::HUGEINT
+                FROM (SELECT now_ns, CASE WHEN over_bytes THEN pin_until::HUGEINT
                     WHEN age_ns IS NOT NULL THEN GREATEST(last_intake_utc_ns::HUGEINT + age_ns, pin_until::HUGEINT)
                     ELSE NULL END AS due FROM base)"), values, |row| Ok((row.get(0)?, row.get(1)?)))
                 .context(AnalysisDatabaseSnafu { operation: "read retention continuation" })?;

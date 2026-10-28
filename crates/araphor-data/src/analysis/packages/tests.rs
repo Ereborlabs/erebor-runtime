@@ -44,42 +44,6 @@ fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {
 }
 
 #[test]
-fn packages_charge_stored_bytes() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let root = directory.path().join("store");
-    let store = AnalysisStore::open(&root)?;
-    let revision = package("bytes", "v1")?;
-    let expected = (256
-        + revision.package_id.len()
-        + revision.revision.len()
-        + revision.descriptor.len()
-        + revision.artifact.len()
-        + serde_json::to_vec(&revision.dependencies)?.len()) as u64;
-    for _ in 0..2 {
-        store.install_package(std::slice::from_ref(&revision), || Ok(()))?;
-        assert_eq!(
-            store.read_snapshot(
-                |reader| AnalysisStore::logical_usage(reader, [1; 16]).map(|usage| usage.1)
-            )?,
-            expected
-        );
-    }
-    drop(store);
-    let store = AnalysisStore::open(&root)?;
-    assert_eq!(
-        store.read_snapshot(
-            |reader| AnalysisStore::logical_usage(reader, [1; 16]).map(|usage| usage.1)
-        )?,
-        expected
-    );
-    assert_eq!(
-        store.package_revision([1; 16], "bytes", "v1")?,
-        Some(revision)
-    );
-    Ok(())
-}
-
-#[test]
 fn packages_unused_artifacts_release() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;

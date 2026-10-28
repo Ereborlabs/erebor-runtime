@@ -75,7 +75,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "retain managed candidate version",
                 })?;
-            self.check_logical(&transaction, spec.tenant, false)?;
+            self.check_revision_limits(&transaction, spec.tenant)?;
             Self::record_revision(&transaction, revision, &["managed_versions"])?;
             check()?;
             self.commit_metadata(transaction, "commit managed candidate version")?;

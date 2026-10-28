@@ -26,15 +26,6 @@ impl AnalysisStore {
             PRIMARY KEY (tenant_id, name, revision)
         );";
 
-    pub(in crate::analysis) const PACKAGE_CHARGES: &'static str = "
-        SELECT tenant_id, 256 + octet_length(encode(package_id)) + octet_length(encode(revision))
-            + octet_length(descriptor) + octet_length(artifact) + octet_length(encode(dependencies)) AS bytes
-            FROM package_revisions
-        UNION ALL SELECT tenant_id, 256 + octet_length(encode(package_id)) + octet_length(encode(revision))
-            + octet_length(encode(digest)) FROM package_images
-        UNION ALL SELECT tenant_id, 256 + octet_length(encode(name)) + octet_length(encode(revision))
-            + octet_length(definition) FROM discovery_definitions";
-
     pub(in crate::analysis) fn validate_packages(writer: &Connection, root: &Path) -> Result<()> {
         let revision_query = "SELECT 1 FROM package_revisions WHERE octet_length(tenant_id) <> 16
                 OR length(package_id) = 0 OR length(revision) = 0

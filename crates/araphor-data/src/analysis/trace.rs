@@ -297,7 +297,7 @@ impl AnalysisStore {
                 operation: "insert immutable trace intent",
             })?;
         self.reserve_trace(&transaction, intent)?;
-        self.check_logical(&transaction, intent.tenant_id, false)?;
+        self.check_revision_limits(&transaction, intent.tenant_id)?;
         Self::record_revision(&transaction, revision, &["traces"])?;
         self.commit_metadata(transaction, "commit trace intent")?;
         self.revision.send_replace(revision);
@@ -818,68 +818,6 @@ mod tests {
         let store = AnalysisStore::open(&root)?;
         store.accept_trace(&intent(4)?)?;
         assert!(store.trace_intent([1; 16], [3; 16])?.is_some());
-        assert!(store.trace_intent([1; 16], [4; 16])?.is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn observability_intent_quota() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("data");
-        let limits = super::super::StorageLimitsV1 {
-            logical_max_bytes: Some(256 * 1024),
-            tenant_max_bytes: Some(256 * 1024),
-            ..Default::default()
-        };
-        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
-        let input = intent(3)?;
-        store.accept_trace(&input)?;
-        assert!(matches!(
-            store.accept_trace(&intent(4)?),
-            Err(crate::Error::StorageCapacity {
-                resource: "diagnostic logical bytes",
-                ..
-            })
-        ));
-        assert!(store.trace_intent([1; 16], [4; 16])?.is_none());
-        store.accept_validated_batch(
-            crate::analysis::tests::identity(),
-            crate::ValidatedEvidenceBatchV1 {
-                cpu_id: 0,
-                first_cursor: 1,
-                last_cursor: 1,
-                intake_utc_ns: 100,
-                framed_records: vec![1, 2, 3].into(),
-                frame_ends: vec![3],
-            },
-        )?;
-        let identity = &input.bindings[0].identity;
-        store.append_trace(
-            identity,
-            &crate::TraceBatchV1 {
-                execution_id: identity.execution_id,
-                frames: Vec::new(),
-                terminal: Some(crate::TraceTerminalV1 {
-                    execution_id: identity.execution_id,
-                    reason: crate::TraceTerminalReasonV1::Completed,
-                    last_sequence: 0,
-                    output_bytes: 0,
-                    output_incomplete: false,
-                    kernel_lost_events: None,
-                    ready_at_unix_ns: None,
-                    exit_code: Some(0),
-                    forced_kill: false,
-                    cleanup: crate::TraceCleanupV1::Unknown,
-                }),
-            },
-            100,
-        )?;
-        store.accept_trace(&intent(4)?)?;
-        drop(store);
-        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
-        assert!(store
-            .trace_receipt(identity)?
-            .is_some_and(|receipt| receipt.terminal.is_some()));
         assert!(store.trace_intent([1; 16], [4; 16])?.is_some());
         Ok(())
     }

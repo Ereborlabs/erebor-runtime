@@ -599,10 +599,7 @@ async fn managed_expiry_without_head() -> TestResult {
             witnesses: witnesses.clone(),
             context_refs: Vec::new(),
         },
-        araphor_data::analysis::CanonicalGraph::bounded(
-            snapshot.clone(),
-            fixture.query.limits().output_bytes,
-        )?,
+        araphor_data::analysis::CanonicalGraph::new(snapshot.clone())?,
         &contexts,
         &[],
         &sources,

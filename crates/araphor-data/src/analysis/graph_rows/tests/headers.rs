@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn native_header_batch_bounds() -> TestResult {
+fn native_header_batch_integrity() -> TestResult {
     let fixture = CommitFixture::new()?;
     let receipt = fixture
         .store
@@ -23,7 +23,6 @@ fn native_header_batch_bounds() -> TestResult {
             reader,
             tenant,
             &ids,
-            usize::MAX,
             &AnalysisReadControl::default(),
             |id, header, revision, bytes| {
                 calls += 1;
@@ -45,7 +44,6 @@ fn native_header_batch_bounds() -> TestResult {
                 assert_eq!(saved.subject_count, header.subject_count);
                 assert_eq!(saved.edge_count, header.edge_count);
                 assert_eq!(saved.finding_count, header.finding_count);
-                assert_eq!(saved.row_bytes, header.row_bytes);
                 assert!(header.snapshot.graph.subjects.is_empty());
                 assert!(header.snapshot.graph.edges.is_empty());
                 assert!(header.snapshot.findings.is_empty());
@@ -54,14 +52,13 @@ fn native_header_batch_bounds() -> TestResult {
         )
     })?;
     assert_eq!(calls, 1);
-    let rejected = |ids: &[String], bytes| {
+    let rejected = |ids: &[String]| {
         let mut calls = 0;
         let result = fixture.store.read_snapshot(|reader| {
             GraphRows::visit_headers(
                 reader,
                 tenant,
                 ids,
-                bytes,
                 &AnalysisReadControl::default(),
                 |_, _, _, _| {
                     calls += 1;
@@ -73,25 +70,14 @@ fn native_header_batch_bounds() -> TestResult {
         result
     };
     assert!(matches!(
-        rejected(&[ids[0].clone(), "graph:absent".into()], usize::MAX),
+        rejected(&[ids[0].clone(), "graph:absent".into()]),
         Err(crate::Error::AnalysisReadDenied { .. })
     ));
-    assert!(matches!(
-        rejected(&ids, 1),
-        Err(crate::Error::AnalysisInputTooLarge { .. })
-    ));
-    let maximum = GraphRows::row_bytes(&fixture.snapshot)?
-        + (fixture.snapshot.graph.subjects.len()
-            + fixture.snapshot.graph.edges.len()
-            + fixture.snapshot.findings.len())
-            * (256 + ids[0].len());
     let mutations = [
         "UPDATE analysis_results SET body = 'invalid'::BLOB WHERE result_id = ?".to_owned(),
-        format!(
-            "UPDATE graph_subjects SET identity = repeat('x'::BLOB, {})
-            WHERE result_id = ? AND ordinal = 0",
-            maximum + 1
-        ),
+        "DELETE FROM graph_subject_membership WHERE lineage_id =
+            (SELECT lineage_id FROM graph_versions WHERE result_id = ?)"
+            .to_owned(),
     ];
     let mut writer = fixture.store.writer_access()?;
     for mutation in mutations {
@@ -102,7 +88,6 @@ fn native_header_batch_bounds() -> TestResult {
             &transaction,
             tenant,
             &ids,
-            usize::MAX,
             &AnalysisReadControl::default(),
             |_, _, _, _| {
                 calls += 1;

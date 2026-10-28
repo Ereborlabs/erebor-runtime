@@ -93,18 +93,14 @@ impl AnalysisStore {
             check()?;
             return Ok(references);
         };
-        if self.storage.logical_max_bytes.is_some()
-            || self.storage.tenant_max_bytes.is_some()
-            || self.storage.retained_revisions.is_some()
-            || self.storage.tenant_revisions.is_some()
-        {
+        if self.storage.retained_revisions.is_some() || self.storage.tenant_revisions.is_some() {
             let tenants = references
                 .iter()
                 .filter(|reference| reference.commit_revision == revision)
                 .map(|reference| reference.key.tenant_id)
                 .collect::<std::collections::BTreeSet<_>>();
             for tenant in tenants {
-                self.check_logical(&transaction, tenant, false)?;
+                self.check_revision_limits(&transaction, tenant)?;
             }
         }
         Self::record_revision(&transaction, revision, &["context_versions"])?;

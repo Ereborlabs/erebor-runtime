@@ -1399,7 +1399,7 @@ async fn data_retirement_startup() -> Result<()> {
 
 #[tokio::test]
 async fn data_capacity_retry() -> Result<()> {
-    for (logical, seeded) in [(false, false), (true, false), (false, true)] {
+    for seeded in [false, true] {
         let tls = MtlsFixture::new(false)?;
         let case = DataStoreQualification::new(tls.path().join("result"));
         let observations = EffectObservationStore::durable(
@@ -1431,11 +1431,7 @@ async fn data_capacity_retry() -> Result<()> {
             drop(reopen_control_store(&tls.path().join("control-store")).await?);
         }
         let mut config = tls.configuration()?;
-        if logical {
-            config.data_storage.tenant_max_bytes = Some(1);
-        } else {
-            config.data_storage.policy_reserve_bytes = Some(u64::MAX / 4);
-        }
+        config.data_storage.policy_reserve_bytes = Some(u64::MAX / 4);
         if seeded {
             config.data_retention.raw_max_age_ns = Some(24 * HOUR);
         }

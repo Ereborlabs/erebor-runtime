@@ -18,7 +18,6 @@ mod headers;
 mod read;
 mod relationships;
 mod schema;
-mod sizing;
 mod subjects;
 #[cfg(test)]
 pub(in crate::analysis) mod tests;
@@ -32,25 +31,8 @@ pub struct CanonicalGraph {
 }
 
 impl CanonicalGraph {
-    #[cfg(test)]
     pub fn new(snapshot: GraphSnapshotV1) -> Result<Self> {
-        Self::bounded(snapshot, usize::MAX)
-    }
-
-    pub fn bounded(snapshot: GraphSnapshotV1, limit: usize) -> Result<Self> {
         snapshot.validate()?;
-        if limit != usize::MAX {
-            let mut remaining = crate::discovery::InputByteLimit(limit);
-            if let Err(source) = serde_json::to_writer(&mut remaining, &snapshot) {
-                if source.is_io() {
-                    return GraphInvalidSnafu {
-                        field: "graph output bytes",
-                    }
-                    .fail();
-                }
-                return Err(source).context(GraphEncodingSnafu);
-            }
-        }
         Ok(Self { snapshot })
     }
 
@@ -74,21 +56,8 @@ impl GraphRows {
         writer: &Connection,
         result_id: &str,
     ) -> Result<()> {
-        Self::insert_inputs(snapshot, writer, result_id)?;
-        {
-            let mut appender =
-                writer
-                    .appender("graph_subjects")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "prepare native graph subjects",
-                    })?;
-            for (ordinal, subject) in snapshot.graph.subjects.iter().enumerate() {
-                Self::insert_subject(&mut appender, result_id, ordinal, subject)?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush native graph subjects",
-            })?;
-        }
+        let (lineage, revision) = Self::insert_inputs(snapshot, writer, result_id)?;
+        Self::insert_subjects(writer, &snapshot.graph.subjects, lineage, revision)?;
         {
             let mut appender =
                 writer
@@ -132,7 +101,6 @@ impl GraphRows {
         header: &GraphHeader,
         control: Option<&AnalysisReadControl>,
     ) -> Result<GraphSnapshotV1> {
-        Self::check_bytes(writer, result_id, header)?;
         let mut snapshot = header.snapshot.clone();
         if snapshot.input_manifest.evidence.len() != header.evidence_count
             || snapshot.input_positions.len() != header.position_count
@@ -150,7 +118,7 @@ impl GraphRows {
             || snapshot.findings.len() != header.finding_count
         {
             return GraphInvalidSnafu {
-                field: "graph row counts or bytes",
+                field: "graph row counts",
             }
             .fail();
         }

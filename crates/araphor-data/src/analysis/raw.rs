@@ -565,9 +565,7 @@ impl AnalysisStore {
             .lock()
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
         self.require_retention()?;
-        let logical =
-            self.storage.logical_max_bytes.is_some() || self.storage.tenant_max_bytes.is_some();
-        if logical || self.storage.witness_max_bytes.is_some() {
+        if self.storage.witness_max_bytes.is_some() {
             self.project_raw(
                 writer
                     .connection
@@ -713,21 +711,6 @@ impl AnalysisStore {
         let terminal_only = matches!(&commit.kind, Some(RawKind::Diagnostic(progress))
             if progress.terminal && commit.spans.len() == 1
                 && progress.last_sequence.checked_add(1) == Some(commit.spans[0].first));
-        let mut charge = added;
-        if logical || terminal_only {
-            let json = identity.json(&self.root)?;
-            if created {
-                charge += 256 + key.len() as u64 + json.len() as u64;
-            }
-            if !raw.sources.contains_key(&key) {
-                if let RawIdentity::Evidence(source) = &identity {
-                    charge += 512
-                        + key.len() as u64
-                        + source.epoch_key().len() as u64
-                        + json.len() as u64;
-                }
-            }
-        }
         let diagnostic = matches!(identity, RawIdentity::Diagnostic(_));
         let terminal =
             matches!(&commit.kind, Some(RawKind::Diagnostic(progress)) if progress.terminal);
@@ -736,10 +719,10 @@ impl AnalysisStore {
         } else {
             0
         };
-        if terminal {
-            charge += batch.terminal_bytes as u64;
-        }
-        let prepaid = terminal_only && charge <= released_reserve;
+        let prepaid = terminal_only
+            && added
+                .checked_add(batch.terminal_bytes as u64)
+                .is_some_and(|bytes| bytes <= released_reserve);
         let initial = diagnostic && !raw.segments.values().any(|segment| segment.source == key);
         let released_slots = if terminal {
             if initial {
@@ -760,22 +743,6 @@ impl AnalysisStore {
             .trace_reserve
             .checked_sub(released_reserve)
             .ok_or_else(|| self.state_error("the diagnostic byte reserve underflows"))?;
-        let projected = |bytes: u64| {
-            bytes
-                .checked_add(charge)
-                .and_then(|bytes| bytes.checked_sub(released_reserve))
-                .ok_or_else(|| self.state_error("the projected logical bytes overflow"))
-        };
-        if logical {
-            let (total, scoped, _, _) = Self::logical_usage(writer.get()?, tenant)?;
-            self.storage
-                .check_logical(projected(total)?, projected(scoped)?, prepaid)?;
-            if diagnostic {
-                let (total, scoped) = Self::diagnostic_usage(writer.get()?, tenant)?;
-                self.storage
-                    .check_diagnostics(projected(total)?, projected(scoped)?)?;
-            }
-        }
         let required = raw.budget.required.contains_key(&key);
         if required {
             if self.retention.raw_max_age_ns.is_some_and(|limit| {
@@ -2261,23 +2228,11 @@ pub(super) mod tests {
 
     #[test]
     fn observability_empty_recovery() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use super::super::quota::{TRACE_CHARGES, TRACE_RESERVE};
-
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("data");
         let mut intent = trace_intent()?;
         intent.bindings[0].identity.node_id = "n".repeat(128);
         let identity = &intent.bindings[0].identity;
-        let key_bytes = RawIdentity::Diagnostic(identity.clone()).key().len() as u64;
-        let json_bytes = serde_json::to_vec(identity)?.len() as u64;
-        assert_eq!(key_bytes, 33);
-        let reserve_bytes = 512
-            + intent.source.bytes.len() as u64
-            + serde_json::to_vec(&intent.bindings)?.len() as u64
-            + intent.authority.len() as u64
-            + key_bytes
-            + json_bytes
-            + TRACE_RESERVE;
         let store = AnalysisStore::open(&root)?;
         let batch = crate::TraceBatchV1 {
             execution_id: identity.execution_id,
@@ -2287,32 +2242,8 @@ pub(super) mod tests {
         assert!(store.append_trace(identity, &batch, 100).is_err());
         let state = store.accept_trace(&intent)?;
         assert_eq!(store.accept_trace(&intent)?, state);
-        assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            reserve_bytes
-        );
+        assert!(store.trace_receipt(identity)?.is_some());
         let receipt = store.append_trace(identity, &batch, 200)?;
-        let file_bytes =
-            std::fs::metadata(super::super::segments::SegmentRange::path(&root, 1))?.len();
-        let terminal_bytes =
-            serde_json::to_vec(batch.terminal.as_ref().ok_or("terminal absent")?)?.len() as u64;
-        let total = reserve_bytes + file_bytes + 256 + key_bytes + json_bytes + terminal_bytes
-            - TRACE_RESERVE;
-        assert_eq!(
-            AnalysisStore::logical_usage(store.writer()?.get()?, identity.tenant_id)?.0,
-            total
-        );
-        assert_eq!(
-            AnalysisStore::diagnostic_usage(store.writer()?.get()?, identity.tenant_id)?.0,
-            total
-        );
         assert_eq!(
             store
                 .raw
@@ -2331,42 +2262,12 @@ pub(super) mod tests {
         assert_eq!(store.append_trace(identity, &batch, 201)?, receipt);
         {
             let writer = store.writer()?;
-            assert_eq!(
-                writer.get()?.query_row(
-                    &format!(
-                        "SELECT logical_bytes FROM ({})",
-                        AnalysisStore::usage_projection()
-                    ),
-                    [],
-                    |row| { row.get::<_, u64>(0) }
-                )?,
-                total
-            );
-            assert_eq!(
-                writer.get()?.query_row(
-                    &format!("SELECT SUM(bytes)::UBIGINT FROM ({TRACE_CHARGES})"),
-                    [],
-                    |row| row.get::<_, u64>(0),
-                )?,
-                total
-            );
             AnalysisStore::validate_state(writer.get()?, &root)?;
         }
         drop(store);
         let store = AnalysisStore::open(&root)?;
         assert_eq!(store.append_trace(identity, &batch, 202)?, receipt);
         assert_eq!(store.trace_receipt(identity)?, Some(receipt));
-        assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            total
-        );
         AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
         Ok(())
     }

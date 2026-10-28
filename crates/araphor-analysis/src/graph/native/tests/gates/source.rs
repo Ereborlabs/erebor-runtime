@@ -373,7 +373,7 @@ async fn frozen_keys_preserve_source() -> TestResult {
                 .collect(),
             context_refs: references,
         },
-        araphor_data::analysis::CanonicalGraph::bounded(frozen.clone(), usize::MAX)?,
+        araphor_data::analysis::CanonicalGraph::new(frozen.clone())?,
         &[],
         &[],
         &[],

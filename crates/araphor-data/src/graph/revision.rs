@@ -1,14 +1,11 @@
-use std::{
-    mem::size_of,
-    sync::{Arc, LazyLock},
-};
+use std::sync::{Arc, LazyLock};
 
 use araphor_analysis_sdk as sdk;
 use serde_arrow::schema::{SchemaLike as _, TracingOptions};
 
 use crate::{
     AnalysisContextKeyV1, DiscoveryCoverageStateV1, DiscoveryRecordIdV1, EvidenceIntakeIdentityV1,
-    GraphCoverageKeyV1, GraphInvalidSnafu, GraphRevisionV1, Result,
+    GraphCoverageKeyV1, GraphRevisionV1,
 };
 
 impl GraphRevisionV1 {
@@ -70,56 +67,5 @@ impl GraphRevisionV1 {
             }],
             missing_ranges: vec![(1, 1)],
         }
-    }
-
-    pub fn arrow_bytes(&self) -> Result<usize> {
-        let error = || {
-            GraphInvalidSnafu {
-                field: "graph Arrow allocation",
-            }
-            .build()
-        };
-        let mut bytes = size_of::<Self>();
-        let mut add = |count: usize, width: usize| -> Result<()> {
-            bytes = count
-                .checked_mul(width)
-                .and_then(|added| bytes.checked_add(added))
-                .ok_or_else(error)?;
-            Ok(())
-        };
-        add(self.evidence.capacity(), size_of::<DiscoveryRecordIdV1>())?;
-        add(self.coverage.capacity(), size_of::<GraphCoverageKeyV1>())?;
-        add(self.context.capacity(), size_of::<AnalysisContextKeyV1>())?;
-        add(self.missing_ranges.capacity(), size_of::<(u64, u64)>())?;
-        for record in &self.evidence {
-            add(record.stream.node_id.capacity(), 1)?;
-        }
-        for key in &self.coverage {
-            add(key.source.node_id.capacity(), 1)?;
-            add(key.gap_reasons.capacity(), size_of::<String>())?;
-            for reason in &key.gap_reasons {
-                add(reason.capacity(), 1)?;
-            }
-        }
-        for key in &self.context {
-            add(key.owner_id.capacity(), 1)?;
-            add(key.entity_key.capacity(), 1)?;
-            add(key.lifetime_key.capacity(), 1)?;
-        }
-        let overhead =
-            Self::arrow_schema()
-                .flattened_fields()
-                .iter()
-                .try_fold(0_usize, |bytes, field| {
-                    bytes
-                        .checked_add(field.size())
-                        .and_then(|bytes| bytes.checked_add(512))
-                        .ok_or_else(error)
-                })?;
-        // Allow native capacity growth, offsets, and validity in addition to owned values.
-        bytes
-            .checked_mul(4)
-            .and_then(|bytes| bytes.checked_add(overhead))
-            .ok_or_else(error)
     }
 }

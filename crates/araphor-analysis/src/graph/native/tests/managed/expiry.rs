@@ -109,10 +109,7 @@ async fn expiry_allows_new_input() -> TestResult {
             witnesses: witnesses.clone(),
             context_refs: Vec::new(),
         },
-        araphor_data::analysis::CanonicalGraph::bounded(
-            retained.clone(),
-            donor.query.limits().output_bytes,
-        )?,
+        araphor_data::analysis::CanonicalGraph::new(retained.clone())?,
         &contexts,
         &[],
         &sources,
@@ -267,10 +264,7 @@ async fn expiry_allows_new_input() -> TestResult {
             witnesses: Vec::new(),
             context_refs: Vec::new(),
         },
-        araphor_data::analysis::CanonicalGraph::bounded(
-            generated,
-            fixture.query.limits().output_bytes,
-        )?,
+        araphor_data::analysis::CanonicalGraph::new(generated)?,
         &[],
         &references,
         &sources,

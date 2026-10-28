@@ -16,15 +16,6 @@ impl AnalysisStore {
         Self::validate_contexts(writer, root)?;
         Self::validate_traces(writer, root)?;
         Self::validate_trace_receipts(writer, root)?;
-        let graph_limit = super::graph_rows::GraphHeader::MAX_BYTES;
-        let oversized: bool = writer.query_row(
-            "SELECT EXISTS(SELECT 1 FROM analysis_results
-            WHERE processor_id = 'graph-findings' AND stream_key IS NOT NULL AND octet_length(body) > ?)",
-            params![graph_limit as u64], |row| row.get(0),
-        ).context(AnalysisDatabaseSnafu { operation: "validate graph header size" })?;
-        if oversized {
-            return Self::reject_path(root, "the stored graph header size is invalid");
-        }
         let checks = [
             ("invalid source key", "SELECT 1 FROM source_receipts WHERE octet_length(stream_key) NOT BETWEEN 68 AND 195"),
             ("invalid segment identity or state", "SELECT 1 FROM segments e
@@ -214,6 +205,30 @@ impl AnalysisStore {
                     OR (p.valid_to IS NOT NULL AND closed.result_id IS NULL)
                     OR p.commit_revision = 0
                     OR (p.valid_to IS NOT NULL AND p.valid_to <= p.valid_from))",
+            "SELECT EXISTS(SELECT 1 FROM graph_subject_values s
+                WHERE octet_length(s.tenant_id) <> 16 OR octet_length(s.identity) = 0
+                    OR s.authority_rank > 3 OR s.subject_kind > 9
+                    OR s.authority_text = ''
+                    OR (s.authority_rank = 0 AND
+                        (octet_length(s.authority_boot) <> 16 OR s.authority_epoch = 0))
+                    OR (s.authority_rank <> 0 AND
+                        (octet_length(s.authority_boot) <> 0 OR s.authority_epoch <> 0)))",
+            "SELECT EXISTS(SELECT 1 FROM graph_subject_membership m
+                LEFT JOIN graph_subject_values s USING (subject_id)
+                LEFT JOIN graph_versions origin
+                    ON origin.lineage_id = m.lineage_id
+                    AND origin.commit_revision = m.lineage_id
+                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
+                LEFT JOIN graph_versions opened
+                    ON opened.lineage_id = m.lineage_id
+                    AND opened.commit_revision = m.valid_from
+                LEFT JOIN graph_versions closed
+                    ON closed.lineage_id = m.lineage_id
+                    AND closed.commit_revision = m.valid_to
+                WHERE s.subject_id IS NULL OR origin.result_id IS NULL
+                    OR r.tenant_id <> s.tenant_id OR opened.result_id IS NULL
+                    OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
+                    OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from))",
         ] {
             let invalid: bool =
                 writer
@@ -778,46 +793,33 @@ mod tests {
                 ..crate::analysis::tests::identity()
             },
         };
-        let key_bytes = scope.identity.key().len() as u64;
-        assert_eq!(key_bytes, 195);
-        let progress_bytes = 256 + scope.processor_id.len() as u64 + key_bytes;
         let store = AnalysisStore::open(&root)?;
         store.register_processor(&scope, super::super::ProcessorClassV1::Required, 1)?;
         assert_eq!(
             store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
+                "SELECT count(*) FROM processor_progress",
                 [],
-                |row| row.get::<_, u64>(0),
+                |row| row.get::<_, u64>(0)
             )?,
-            progress_bytes
-        );
-        store.record_recovery_floor(&scope.identity, 3)?;
-        let total = progress_bytes + 256 + key_bytes;
-        assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            total
+            1
         );
         store.record_recovery_floor(&scope.identity, 3)?;
         assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            total
+            store
+                .writer()?
+                .get()?
+                .query_row("SELECT count(*) FROM recovery_gaps", [], |row| row
+                    .get::<_, u64>(0))?,
+            1
+        );
+        store.record_recovery_floor(&scope.identity, 3)?;
+        assert_eq!(
+            store
+                .writer()?
+                .get()?
+                .query_row("SELECT count(*) FROM recovery_gaps", [], |row| row
+                    .get::<_, u64>(0))?,
+            1
         );
         assert!(store.source_receipt(&scope.identity)?.is_none());
         AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
@@ -825,15 +827,11 @@ mod tests {
         let store = AnalysisStore::open(&root)?;
         let mut writer = store.writer()?;
         assert_eq!(
-            writer.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| { row.get::<_, u64>(0) }
-            )?,
-            total
+            writer
+                .get()?
+                .query_row("SELECT count(*) FROM recovery_gaps", [], |row| row
+                    .get::<_, u64>(0))?,
+            1
         );
         AnalysisStore::validate_state(writer.get()?, &root)?;
         AnalysisStore::validate_sources(writer.get()?, &root)?;

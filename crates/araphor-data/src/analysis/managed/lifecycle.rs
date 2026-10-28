@@ -69,7 +69,7 @@ impl AnalysisStore {
         if changed != 1 {
             return crate::AnalysisConflictSnafu.fail();
         }
-        self.check_logical(&transaction, expected.spec.tenant, false)?;
+        self.check_revision_limits(&transaction, expected.spec.tenant)?;
         Self::record_revision(&transaction, revision, &["managed_instances"])?;
         check()?;
         self.commit_metadata(transaction, "commit managed renewal")?;
@@ -247,7 +247,7 @@ impl AnalysisStore {
         if changed != 1 {
             return crate::AnalysisConflictSnafu.fail();
         }
-        self.check_logical(&transaction, tenant, false)?;
+        self.check_revision_limits(&transaction, tenant)?;
         Self::record_revision(&transaction, revision, &["managed_instances"])?;
         check()?;
         self.commit_metadata(transaction, "commit managed lifecycle")?;

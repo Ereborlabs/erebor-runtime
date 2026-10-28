@@ -1,4 +1,4 @@
-use datafusion::arrow::array::{BinaryArray, UInt64Array};
+use datafusion::arrow::array::UInt64Array;
 use datafusion::execution::TaskContext;
 
 use super::{AnalysisReadControl, AnalysisResultCommitV1, ExecutionReceipt, GraphConversion};
@@ -7,7 +7,6 @@ use araphor_analysis_sdk as sdk;
 
 impl GraphConversion {
     pub(crate) fn expiry(
-        session: &araphor_query::execution::Session,
         context: &TaskContext,
         receipt: &ExecutionReceipt,
         batches: &[sdk::RecordBatch],
@@ -23,19 +22,11 @@ impl GraphConversion {
                 .get_extension::<araphor_query::sources::SourceSnapshot>()
                 .ok_or_else(|| Projection::invalid("graph expiry source"))?;
             let now = source.time_utc_ns();
-            let memory = session.memory().reserve_input(0)?;
             let mut candidate = None;
             let mut complete = true;
             for batch in batches {
                 for row in 0..batch.num_rows() {
                     control.check().map_err(Projection::external)?;
-                    let bytes = Projection::column::<BinaryArray>(batch, "snapshot")?
-                        .value(row)
-                        .len()
-                        .checked_mul(2)
-                        .ok_or_else(|| Projection::invalid("graph expiry decoded bytes"))?;
-                    let decoded = memory.new_empty();
-                    decoded.try_grow(bytes)?;
                     let previous: araphor_data::GraphSnapshotV1 =
                         Projection::json(batch, "snapshot", row)?;
                     let (_, floor, _) =
@@ -50,13 +41,13 @@ impl GraphConversion {
                         complete = false;
                         break;
                     }
-                    candidate = Some((batch.clone(), row, previous, decoded));
+                    candidate = Some((batch.clone(), row, previous));
                 }
                 if !complete {
                     break;
                 }
             }
-            let Some((batch, row, previous, memory)) = candidate else {
+            let Some((batch, row, previous)) = candidate else {
                 return Ok(None);
             };
             let previous_id =
@@ -84,12 +75,6 @@ impl GraphConversion {
                 Projection::progress(&[batch.slice(row, 1)], &previous.scope.identity)?;
             let coverage =
                 Projection::column::<UInt64Array>(&batch, "coverage_revision")?.value(row);
-            let bytes = Projection::column::<BinaryArray>(&batch, "snapshot")?
-                .value(row)
-                .len()
-                .checked_mul(3)
-                .ok_or_else(|| Projection::invalid("graph expiry output bytes"))?;
-            memory.try_grow(bytes)?;
             let snapshot = Graph::expire(&previous, previous_id, previous.context_notice_revision)
                 .map_err(Projection::external)?;
             let deadline = snapshot.witness_deadline_utc_ns;
@@ -105,11 +90,8 @@ impl GraphConversion {
                 witnesses: Vec::new(),
                 context_refs: Vec::new(),
             };
-            let graph = araphor_data::analysis::CanonicalGraph::bounded(
-                snapshot,
-                session.engine().limits().output_bytes,
-            )
-            .map_err(Projection::external)?;
+            let graph = araphor_data::analysis::CanonicalGraph::new(snapshot)
+                .map_err(Projection::external)?;
             let sources = receipt
                 .snapshot()
                 .selection
@@ -125,7 +107,7 @@ impl GraphConversion {
                 },
                 completed: complete,
                 deadline,
-                _memory: Some(memory),
+                _memory: None,
             }))
         };
         convert().map_err(|source| araphor_query::Error::Sql { source })

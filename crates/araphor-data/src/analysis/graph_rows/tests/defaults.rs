@@ -2,7 +2,6 @@ use super::*;
 use crate::{
     AnalysisExtractLimits, AnalysisExtractionV1, AnalysisInputTables, AnalysisReadModeV1,
     AnalysisSelectionV1, AnalysisStore, AnalysisTableRead, GraphTraversalV1, ProcessorClassV1,
-    StorageLimitsV1,
 };
 
 #[test]
@@ -89,7 +88,7 @@ fn native_row_defaults() -> TestResult {
     assert_eq!(
         fixture
             .store
-            .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?
+            .graph_findings(tenant, None, None, usize::MAX)?
             .len(),
         fixture.snapshot.findings.len()
     );
@@ -109,7 +108,6 @@ fn native_row_defaults() -> TestResult {
         &control,
         &request,
         &request.result_ids,
-        usize::MAX,
         false,
     )
     .run()?;
@@ -123,7 +121,6 @@ fn native_row_defaults() -> TestResult {
             &control,
             &bounded,
             &bounded.result_ids,
-            usize::MAX,
             false
         )
         .run(),
@@ -140,7 +137,6 @@ fn native_row_defaults() -> TestResult {
             &control,
             &bounded,
             &bounded.result_ids,
-            usize::MAX,
             false
         )
         .run(),
@@ -158,7 +154,6 @@ fn native_row_defaults() -> TestResult {
         &control,
         &bounded,
         &bounded.result_ids,
-        usize::MAX,
         false
     )
     .run()
@@ -214,56 +209,6 @@ fn native_metadata_defaults() -> TestResult {
         reopened.graph_result(tenant, &fixture.request.result_id)?,
         Some(fixture.snapshot)
     );
-    Ok(())
-}
-
-#[test]
-fn configured_graph_rollback() -> TestResult {
-    let mut fixture = CommitFixture::limits(StorageLimitsV1 {
-        logical_max_bytes: Some(256 * 1024),
-        ..Default::default()
-    })?;
-    fixture.snapshot.packages[0].coverage_predicate = "x".repeat(256 * 1024);
-    fixture.request.body = serde_json::to_vec(&fixture.snapshot)?;
-    let before = fixture.store.meta()?;
-    let changes = fixture.store.subscribe_revision();
-    assert!(matches!(
-        fixture
-            .store
-            .commit_graph(&fixture.request, true, || Ok(())),
-        Err(crate::Error::StorageCapacity { .. })
-    ));
-    assert_eq!(fixture.store.meta()?, before);
-    assert!(!changes.has_changed()?);
-    assert!(fixture
-        .store
-        .graph_snapshot(&fixture.snapshot.scope.identity)?
-        .is_none());
-    assert_eq!(
-        fixture
-            .store
-            .processor_health(&fixture.request.scope)?
-            .ok_or("progress")?
-            .consumed_cursor,
-        0
-    );
-    let reader = fixture.store.writer_access()?;
-    for table in [
-        "analysis_results",
-        "graph_subjects",
-        "graph_relationships",
-        "graph_findings",
-        "evidence_refs",
-        "context_refs",
-    ] {
-        let count: u64 =
-            reader
-                .get()?
-                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
-                    row.get(0)
-                })?;
-        assert_eq!(count, 0, "{table}");
-    }
     Ok(())
 }
 
@@ -475,32 +420,74 @@ fn native_witness_defaults() -> TestResult {
     Ok(())
 }
 
-#[cfg(target_pointer_width = "64")]
 #[test]
-fn native_ordinal_format() -> TestResult {
+fn native_subject_order() -> TestResult {
     let fixture = CommitFixture::new()?;
     let reader = Connection::open_in_memory()?;
     reader.execute_batch(GraphRows::SCHEMA)?;
-    let mut appender = reader.appender("graph_subjects")?;
-    assert!(matches!(
-        GraphRows::insert_subject(
-            &mut appender,
-            "format",
-            u32::MAX as usize + 1,
-            &fixture.snapshot.graph.subjects[0]
-        ),
-        Err(crate::Error::GraphInvalid {
-            field: "graph row ordinal",
-            ..
-        })
-    ));
-    appender.flush()?;
-    drop(appender);
+    reader.execute("INSERT INTO graph_versions VALUES ('first', 1, 1)", [])?;
+    let base = fixture.snapshot.graph.subjects[0].clone();
+    let mut process = base.clone();
+    process.kind = crate::GraphSubjectKindV1::Process;
+    let mut provider = base.clone();
+    provider.authority = crate::GraphSubjectAuthorityV1::Provider {
+        authority_id: "provider".into(),
+    };
+    let mut kubernetes = base.clone();
+    kubernetes.authority = crate::GraphSubjectAuthorityV1::Kubernetes {
+        cluster_id: "cluster".into(),
+    };
+    let mut external = base.clone();
+    external.authority = crate::GraphSubjectAuthorityV1::External {
+        authority_id: "external".into(),
+    };
+    let mut subjects = vec![external, process, kubernetes, provider, base.clone()];
+    subjects.sort();
+    GraphRows::insert_subjects(&reader, &subjects, 1, 1)?;
     assert_eq!(
-        reader.query_row("SELECT count(*) FROM graph_subjects", [], |row| row
-            .get::<_, u64>(0))?,
-        0
+        GraphRows::read_subjects(&reader, "first", subjects.len(), None)?,
+        subjects
     );
+    reader.execute("INSERT INTO graph_versions VALUES ('second', 1, 2)", [])?;
+    let mut earlier = base;
+    if let crate::GraphSubjectAuthorityV1::Native { node_id, .. } = &mut earlier.authority {
+        *node_id = "0".into();
+    }
+    subjects.push(earlier);
+    subjects.sort();
+    GraphRows::insert_subjects(&reader, &subjects, 1, 2)?;
+    assert_eq!(
+        GraphRows::read_subjects(&reader, "second", subjects.len(), None)?,
+        subjects
+    );
+    assert_eq!(
+        GraphRows::read_subjects(&reader, "first", subjects.len() - 1, None)?,
+        subjects[1..]
+    );
+    reader.execute("INSERT INTO graph_versions VALUES ('third', 1, 3)", [])?;
+    GraphRows::insert_subjects(&reader, &subjects[1..], 1, 3)?;
+    reader.execute("INSERT INTO graph_versions VALUES ('fourth', 1, 4)", [])?;
+    GraphRows::insert_subjects(&reader, &subjects, 1, 4)?;
+    assert_eq!(
+        GraphRows::read_subjects(&reader, "third", subjects.len() - 1, None)?,
+        subjects[1..]
+    );
+    assert_eq!(
+        GraphRows::read_subjects(&reader, "fourth", subjects.len(), None)?,
+        subjects
+    );
+    let values: u64 = reader.query_row(
+        "SELECT count(*)::UBIGINT FROM graph_subject_values",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(values, subjects.len() as u64);
+    let memberships: u64 = reader.query_row(
+        "SELECT count(*)::UBIGINT FROM graph_subject_membership",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(memberships, subjects.len() as u64 + 1);
     Ok(())
 }
 

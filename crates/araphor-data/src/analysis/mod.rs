@@ -860,7 +860,7 @@ impl AnalysisStore {
         if bound {
             relations.push("source_bindings");
         }
-        self.check_logical(&transaction, identity.tenant_id, false)?;
+        self.check_revision_limits(&transaction, identity.tenant_id)?;
         Self::record_revision(&transaction, revision, &relations)?;
         #[cfg(test)]
         self.crash_at("coverage.before");
@@ -1529,28 +1529,17 @@ pub(crate) mod tests {
         let store = AnalysisStore::open(&root)?;
         let mut identity = identity();
         identity.node_id = "n".repeat(128);
-        let key_bytes = identity.key().len() as u64;
-        let epoch_bytes = identity.epoch_key().len() as u64;
-        assert_eq!((key_bytes, epoch_bytes), (195, 170));
         assert_eq!(store.source_status(&identity)?, None);
         let accepted = coverage(&identity, 1, b"coverage-1");
-        let first_bytes = 768
-            + accepted.encoded_report.len() as u64
-            + serde_json::to_vec(&identity)?.len() as u64
-            + 2 * key_bytes
-            + epoch_bytes;
         assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
         assert_eq!(store.meta()?.commit_revision, 1);
         assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            first_bytes
+            store
+                .writer()?
+                .get()?
+                .query_row("SELECT count(*) FROM coverage", [], |row| row
+                    .get::<_, u64>(0))?,
+            1
         );
         let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
         assert_eq!(receipt.contiguous_cursor, 0);
@@ -1562,15 +1551,12 @@ pub(crate) mod tests {
         assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
         assert_eq!(store.meta()?.commit_revision, 1);
         assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            first_bytes
+            store
+                .writer()?
+                .get()?
+                .query_row("SELECT count(*) FROM coverage", [], |row| row
+                    .get::<_, u64>(0))?,
+            1
         );
 
         let conflicting = coverage(&identity, 1, b"changed");
@@ -1578,22 +1564,18 @@ pub(crate) mod tests {
         assert_eq!(store.meta()?.commit_revision, 1);
 
         let newer = coverage(&identity, 3, b"coverage-3");
-        let last_bytes = first_bytes + 256 + newer.encoded_report.len() as u64 + key_bytes;
         assert_eq!(store.accept_validated_coverage(newer)?, 3);
         assert_eq!(store.meta()?.commit_revision, 2);
         let stale = coverage(&identity, 2, b"coverage-2");
         assert!(store.accept_validated_coverage(stale).is_err());
         assert_eq!(store.meta()?.commit_revision, 2);
         assert_eq!(
-            store.writer()?.get()?.query_row(
-                &format!(
-                    "SELECT logical_bytes FROM ({})",
-                    AnalysisStore::usage_projection()
-                ),
-                [],
-                |row| row.get::<_, u64>(0),
-            )?,
-            last_bytes
+            store
+                .writer()?
+                .get()?
+                .query_row("SELECT count(*) FROM coverage", [], |row| row
+                    .get::<_, u64>(0))?,
+            2
         );
         AnalysisStore::validate_state(store.writer()?.get()?, &root)?;
         drop(store);
@@ -1611,15 +1593,9 @@ pub(crate) mod tests {
             let writer_guard = reopened.writer()?;
             let writer = writer_guard.get()?;
             assert_eq!(
-                writer.query_row(
-                    &format!(
-                        "SELECT logical_bytes FROM ({})",
-                        AnalysisStore::usage_projection()
-                    ),
-                    [],
-                    |row| { row.get::<_, u64>(0) }
-                )?,
-                last_bytes
+                writer.query_row("SELECT count(*) FROM coverage", [], |row| row
+                    .get::<_, u64>(0))?,
+                2
             );
             AnalysisStore::validate_state(writer, &root)?;
             let changed: u64 = writer.query_row(

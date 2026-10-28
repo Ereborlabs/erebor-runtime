@@ -484,37 +484,6 @@ fn context_batch_history() -> TestResult {
 }
 
 #[test]
-fn context_batch_tenant_quota() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open_with_limits(
-        directory.path().join("analysis"),
-        Default::default(),
-        crate::StorageLimitsV1 {
-            tenant_max_bytes: Some(346),
-            ..Default::default()
-        },
-    )?;
-    let first = context_value(1, 1);
-    let mut existing = first.clone();
-    existing.key.tenant_id = [2; 16];
-    store.commit_context(&existing)?;
-    let mut second = existing.clone();
-    second.key.owner_revision = 2;
-    let changes = store.subscribe_revision();
-    let before = store.meta()?;
-    assert!(matches!(
-        store.commit_contexts(&[first.clone(), second.clone()]),
-        Err(crate::Error::StorageCapacity { .. })
-    ));
-    assert!(store.context_version(&first.key)?.is_none());
-    assert!(store.context_version(&second.key)?.is_none());
-    assert_eq!(store.context_version(&existing.key)?, Some(existing));
-    assert_eq!(store.meta()?, before);
-    assert!(!changes.has_changed()?);
-    Ok(())
-}
-
-#[test]
 fn context_body_quota() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("analysis");

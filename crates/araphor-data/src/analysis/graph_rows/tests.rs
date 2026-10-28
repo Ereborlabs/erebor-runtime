@@ -59,7 +59,6 @@ fn native_rows_integrity() -> TestResult {
         ],
     )?;
     GraphRows::insert(graph, &writer, "version")?;
-    let inserted_bytes = GraphRows::stored_bytes(&writer, "version")? as i64;
     let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, "version")?
         .ok_or("missing header")?;
     let cancelled = AnalysisReadControl::default();
@@ -69,19 +68,10 @@ fn native_rows_integrity() -> TestResult {
         Err(crate::Error::AnalysisReadCancelled { .. })
     ));
     assert_eq!(GraphRows::read(&writer, "version", &header)?, *graph);
-    assert_eq!(header.row_bytes, GraphRows::row_bytes(graph)?);
-    assert!(header.allocation_bytes()? >= header.row_bytes);
     assert_eq!(
         serde_json::to_vec(&GraphRows::read(&writer, "version", &header)?)?,
         serde_json::to_vec(graph)?
     );
-    let charged: i64 = writer.query_row(
-        &format!("SELECT sum(bytes)::BIGINT FROM ({})", GraphRows::CHARGES),
-        [],
-        |row| row.get(0),
-    )?;
-    assert_eq!(charged, inserted_bytes);
-    assert_eq!(GraphRows::stored_bytes(&writer, "absent")?, 0);
     {
         let transaction = writer.transaction()?;
         let other = "versión";
@@ -235,42 +225,22 @@ fn native_rows_integrity() -> TestResult {
                 row.get(0)
             })?;
         assert_eq!(evidence_rows, 2);
-        let other_bytes = GraphRows::stored_bytes(&transaction, other)? as i64;
-        let removed_bytes = GraphRows::stored_bytes(&transaction, "removed")? as i64;
-        let reentered_bytes = GraphRows::stored_bytes(&transaction, "reentered")? as i64;
-        let window_bytes = GraphRows::stored_bytes(&transaction, "new-window")? as i64;
-        let count =
-            (graph.graph.subjects.len() + graph.graph.edges.len() + graph.findings.len()) as i64;
-        assert_eq!(
-            other_bytes,
-            inserted_bytes + (other.len() as i64 - "version".len() as i64) * count
-        );
-        assert_eq!(
-            GraphRows::stored_bytes(&transaction, "version")?,
-            inserted_bytes as u64
-        );
-        assert_eq!(
-            GraphRows::stored_bytes(&transaction, other)?,
-            other_bytes as u64
-        );
-        let total: i64 = transaction.query_row(
-            &format!("SELECT sum(bytes)::BIGINT FROM ({})", GraphRows::CHARGES),
+        let subject_rows: u64 = transaction.query_row(
+            "SELECT count(*)::UBIGINT FROM graph_subject_values",
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(
-            total,
-            inserted_bytes + other_bytes + removed_bytes + reentered_bytes + window_bytes
-        );
+        assert_eq!(subject_rows, graph.graph.subjects.len() as u64);
         transaction.rollback()?;
     }
-    let retained: (u64, u64) = writer.query_row(
+    let retained: (u64, u64, u64) = writer.query_row(
         "SELECT (SELECT count(*)::UBIGINT FROM graph_versions),
-                (SELECT count(*)::UBIGINT FROM graph_evidence)",
+                (SELECT count(*)::UBIGINT FROM graph_evidence),
+                (SELECT count(*)::UBIGINT FROM graph_subject_values)",
         [],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    assert_eq!(retained, (1, 1));
+    assert_eq!(retained, (1, 1, graph.graph.subjects.len() as u64));
     assert!(GraphRows::read_header(&writer, [9; 16], "version")?.is_none());
     assert_eq!(
         GraphRows::read_finding(
@@ -283,13 +253,12 @@ fn native_rows_integrity() -> TestResult {
         Some(graph.findings[0].clone())
     );
     for mutation in [
-        "DELETE FROM graph_subjects WHERE ordinal = 0",
+        "DELETE FROM graph_subject_membership WHERE subject_id = 1",
         "UPDATE graph_relationships SET first_boottime_ns = last_boottime_ns + 1",
         "UPDATE graph_findings SET severity = 'INVALID'",
         "UPDATE graph_findings SET ordinal = ordinal + 1",
-        "UPDATE graph_subjects SET identity = repeat('x', 16777217)::BLOB WHERE ordinal = 0",
-        "UPDATE graph_subjects SET tenant_id = 'short'::BLOB WHERE ordinal = 0",
-        "UPDATE graph_subjects SET authority = '{'::BLOB WHERE ordinal = 0",
+        "UPDATE graph_subject_values SET tenant_id = 'short'::BLOB WHERE subject_id = 1",
+        "UPDATE graph_subject_values SET authority_rank = 255 WHERE subject_id = 1",
         "UPDATE graph_relationships SET from_subject_id = 4294967295 WHERE ordinal = 0",
         "UPDATE graph_relationships SET evidence = [4294967295]::UINTEGER[] WHERE ordinal = 0",
         "UPDATE graph_relationships SET evidence = [NULL]::UINTEGER[] WHERE ordinal = 0",
@@ -515,9 +484,7 @@ fn native_finding_tenant() -> TestResult {
     transaction.commit()?;
     drop(writer);
     assert!(matches!(
-        fixture
-            .store
-            .graph_findings(tenant, None, None, usize::MAX, usize::MAX),
+        fixture.store.graph_findings(tenant, None, None, usize::MAX),
         Err(crate::Error::GraphInvalid {
             field: "graph finding tenant",
             ..
@@ -527,11 +494,19 @@ fn native_finding_tenant() -> TestResult {
 }
 
 #[test]
-fn native_selected_byte_bounds() -> TestResult {
+fn native_selected_corruption() -> TestResult {
     let fixture = CommitFixture::new()?;
     fixture
         .store
         .commit_graph(&fixture.request, true, || Ok(()))?;
+    let tenant = fixture.snapshot.scope.identity.tenant_id;
+    assert_eq!(
+        fixture
+            .store
+            .graph_findings(tenant, None, None, usize::MAX)?
+            .len(),
+        fixture.snapshot.findings.len()
+    );
     let original: Vec<u8> = {
         let mut writer = fixture.store.writer_access()?;
         writer.get_mut()?.query_row(
@@ -540,32 +515,14 @@ fn native_selected_byte_bounds() -> TestResult {
             |row| row.get(0),
         )?
     };
-    for length in [
-        fixture.request.body.len() * 2,
-        fixture.request.body.len() * 3,
-    ] {
-        fixture.store.fault_write(
-            "UPDATE graph_findings SET effects = repeat('x'::BLOB, ?) WHERE result_id = ?",
-            params![length as i64, &fixture.request.result_id],
-        )?;
-        let selected = fixture.store.graph_findings(
-            fixture.snapshot.scope.identity.tenant_id,
-            None,
-            None,
-            usize::MAX,
-            usize::MAX,
-        );
-        assert!(
-            matches!(
-                &selected,
-                Err(crate::Error::GraphInvalid {
-                    field: "graph storage byte bound",
-                    ..
-                })
-            ),
-            "{length}: {selected:?}"
-        );
-    }
+    fixture.store.fault_write(
+        "UPDATE graph_findings SET effects = 'invalid'::BLOB WHERE result_id = ?",
+        params![&fixture.request.result_id],
+    )?;
+    assert!(matches!(
+        fixture.store.graph_findings(tenant, None, None, usize::MAX),
+        Err(crate::Error::GraphEncoding { .. })
+    ));
     fixture.store.fault_write(
         "UPDATE graph_findings SET effects = ? WHERE result_id = ?",
         params![original, &fixture.request.result_id],
@@ -596,7 +553,6 @@ fn native_selected_byte_bounds() -> TestResult {
             None,
             None,
             usize::MAX,
-            usize::MAX,
         ),
         Err(crate::Error::GraphInvalid {
             field: "graph header index",
@@ -617,7 +573,6 @@ fn native_selected_byte_bounds() -> TestResult {
                 fixture.snapshot.scope.identity.tenant_id,
                 None,
                 None,
-                usize::MAX,
                 usize::MAX
             )?
             .len(),

@@ -62,7 +62,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert definition",
             })?;
-        self.check_logical(&transaction, tenant, false)?;
+        self.check_revision_limits(&transaction, tenant)?;
         Self::record_revision(&transaction, committed, &["discovery_definitions"])?;
         check()?;
         self.commit_metadata(transaction, "commit definition admission")?;

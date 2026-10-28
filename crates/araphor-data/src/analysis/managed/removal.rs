@@ -41,7 +41,7 @@ impl AnalysisStore {
             "UPDATE managed_calls SET state_revision = 0, result_id = NULL WHERE tenant_id = ? AND instance_id = ?",
             params![current.spec.tenant.as_slice(), current.spec.id],
         ).context(AnalysisDatabaseSnafu { operation: "clear removed managed heads" })?;
-        self.check_logical(&transaction, current.spec.tenant, false)?;
+        self.check_revision_limits(&transaction, current.spec.tenant)?;
         Self::record_revision(
             &transaction,
             revision,
@@ -127,7 +127,7 @@ impl AnalysisStore {
                     operation: "insert recreated call head",
                 })?;
         }
-        self.check_logical(&transaction, spec.tenant, false)?;
+        self.check_revision_limits(&transaction, spec.tenant)?;
         Self::record_revision(
             &transaction,
             revision,

@@ -6,40 +6,6 @@ use super::GraphRows;
 use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, Result};
 
 impl GraphRows {
-    pub(in crate::analysis) const SHARED_CHARGES: &str = "SELECT s.tenant_id,
-        256 + octet_length(e.stream_key) + 20 AS bytes
-        FROM graph_evidence e JOIN source_receipts s USING (stream_key)
-        UNION ALL SELECT s.tenant_id, 256 + 32
-        FROM graph_evidence_membership m JOIN graph_evidence e USING (evidence_id)
-        JOIN source_receipts s USING (stream_key)
-        UNION ALL SELECT s.tenant_id, 256 + 40
-        FROM graph_input_positions p JOIN graph_evidence e USING (evidence_id)
-        JOIN source_receipts s USING (stream_key)
-        UNION ALL SELECT r.tenant_id, 256 + octet_length(encode(v.result_id)) + 16
-        FROM graph_versions v JOIN analysis_results r USING (result_id)";
-
-    pub(in crate::analysis) const CHARGES: &str = "SELECT r.tenant_id, r.result_id,
-        256 + octet_length(encode(s.result_id)) + octet_length(s.tenant_id)
-        + octet_length(encode(s.subject_kind)) + octet_length(s.authority)
-        + octet_length(s.identity) AS bytes
-        FROM graph_subjects s JOIN analysis_results r USING (result_id)
-        UNION ALL SELECT r.tenant_id, r.result_id,
-        256 + octet_length(encode(e.result_id)) + octet_length(encode(e.edge_type))
-        + octet_length(encode(e.package_id)) + octet_length(encode(e.cause))
-        + 4 * array_length(e.evidence)
-        + coalesce(list_sum(list_transform(e.required_coverage_interval_ids, value -> greatest(16, coalesce(octet_length(value), 0)))), 0)
-        FROM graph_relationships e JOIN analysis_results r USING (result_id)
-        UNION ALL SELECT r.tenant_id, r.result_id,
-        256 + octet_length(encode(f.result_id)) + octet_length(f.tenant_id)
-        + octet_length(encode(f.finding_id)) + octet_length(encode(f.package_id))
-        + octet_length(f.subject_id) + octet_length(encode(f.state))
-        + octet_length(f.evidence) + octet_length(f.required_coverage_interval_ids)
-        + octet_length(f.policy_provenance) + octet_length(f.effects)
-        + octet_length(encode(f.reason)) + octet_length(encode(f.severity))
-        + octet_length(encode(f.sensitivity))
-        + coalesce(octet_length(encode(f.required_action)), 0) + octet_length(f.limits)
-        FROM graph_findings f JOIN analysis_results r USING (result_id)";
-
     pub(in crate::analysis) const SCHEMA: &str = "CREATE TABLE graph_versions (
         result_id VARCHAR PRIMARY KEY, lineage_id UBIGINT NOT NULL,
         commit_revision UBIGINT NOT NULL,
@@ -57,11 +23,31 @@ impl GraphRows {
         rank UINTEGER NOT NULL, commit_revision UBIGINT NOT NULL,
         ordinal UINTEGER NOT NULL, valid_from UBIGINT NOT NULL, valid_to UBIGINT,
         PRIMARY KEY (lineage_id, rank, valid_from));
-    CREATE TABLE graph_subjects (
-        result_id VARCHAR NOT NULL, ordinal UINTEGER NOT NULL,
-        tenant_id BLOB NOT NULL, subject_kind VARCHAR NOT NULL,
-        authority BLOB NOT NULL, identity BLOB NOT NULL,
-        PRIMARY KEY (result_id, ordinal));
+    CREATE TABLE graph_subject_values (
+        subject_id UBIGINT PRIMARY KEY,
+        tenant_id BLOB NOT NULL, authority_rank UTINYINT NOT NULL,
+        authority_text VARCHAR NOT NULL, authority_boot BLOB NOT NULL,
+        authority_epoch UBIGINT NOT NULL, subject_kind UTINYINT NOT NULL,
+        identity BLOB NOT NULL,
+        UNIQUE (tenant_id, authority_rank, authority_text, authority_boot,
+            authority_epoch, subject_kind, identity));
+    CREATE TABLE graph_subject_membership (
+        lineage_id UBIGINT NOT NULL, subject_id UBIGINT NOT NULL,
+        valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (lineage_id, subject_id, valid_from));
+    CREATE VIEW graph_subjects AS
+        SELECT v.result_id,
+            (row_number() OVER (PARTITION BY v.result_id
+                ORDER BY s.tenant_id, s.authority_rank, s.authority_text,
+                    s.authority_boot, s.authority_epoch, s.subject_kind,
+                    s.identity) - 1)::UINTEGER AS ordinal,
+            s.tenant_id, s.authority_rank, s.authority_text,
+            s.authority_boot, s.authority_epoch, s.subject_kind, s.identity
+        FROM graph_versions v
+        JOIN graph_subject_membership m ON m.lineage_id = v.lineage_id
+            AND m.valid_from <= v.commit_revision
+            AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
+        JOIN graph_subject_values s USING (subject_id);
     CREATE TABLE graph_relationships (
         result_id VARCHAR NOT NULL, ordinal UINTEGER NOT NULL,
         from_subject_id UINTEGER NOT NULL, to_subject_id UINTEGER NOT NULL,
@@ -125,6 +111,7 @@ impl GraphRows {
             WHERE table_schema = 'main'
                 AND table_name IN ('graph_versions', 'graph_evidence',
                     'graph_evidence_membership', 'graph_input_positions',
+                    'graph_subject_values', 'graph_subject_membership',
                     'graph_subjects', 'graph_relationships', 'graph_findings')
             UNION ALL
             SELECT table_name, to_json(struct_pack(
@@ -134,7 +121,15 @@ impl GraphRows {
             WHERE schema_name = 'main'
                 AND table_name IN ('graph_versions', 'graph_evidence',
                     'graph_evidence_membership', 'graph_input_positions',
+                    'graph_subject_values', 'graph_subject_membership',
                     'graph_subjects', 'graph_relationships', 'graph_findings')
+            UNION ALL
+            -- DuckDB quotes this cast until the database is reopened.
+            SELECT view_name,
+                replace(sql, 'AS ' || chr(34) || 'UINTEGER' || chr(34)
+                    || ') AS ordinal', 'AS UINTEGER) AS ordinal')
+            FROM duckdb_views()
+            WHERE schema_name = 'main' AND view_name = 'graph_subjects'
             ORDER BY 1, 2",
             )
             .context(AnalysisDatabaseSnafu {

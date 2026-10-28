@@ -243,42 +243,13 @@ impl AnalysisStore {
         snapshot: &Connection,
         tenant: [u8; 16],
         result_id: &str,
-        output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
         complete: bool,
     ) -> Result<GraphHeader> {
         control.check()?;
-        let length: u64 = snapshot
-            .query_row(
-                "SELECT octet_length(body) FROM analysis_results
-             WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?
-                AND stream_key IS NOT NULL",
-                params![
-                    tenant.as_slice(),
-                    crate::GRAPH_PROCESSOR,
-                    crate::GRAPH_SCHEMA_VERSION,
-                    result_id
-                ],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read graph header length",
-            })?;
-        let length = usize::try_from(length)
-            .map_err(|_| self.state_error("the graph header length is invalid"))?;
-        output.scan(length)?;
-        output.charge(length.saturating_mul(2))?;
         let mut header =
             GraphRows::read_header_control(snapshot, tenant, result_id, Some(control))?
                 .ok_or_else(|| self.state_error("the selected graph header is absent"))?;
-        output.charge(
-            header
-                .metadata_allocation_bytes
-                .saturating_sub(length.saturating_mul(2)),
-        )?;
-        GraphRows::check_bytes(snapshot, result_id, &header)?;
-        output.scan(header.row_bytes)?;
-        output.charge(header.allocation_bytes()?)?;
         if complete {
             header.snapshot = GraphRows::read_control(snapshot, result_id, &header, Some(control))?;
         } else {

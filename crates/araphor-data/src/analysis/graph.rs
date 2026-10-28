@@ -96,7 +96,7 @@ impl AnalysisStore {
             "INSERT INTO processor_progress VALUES (?, ?, ?, ?, 'required', ?, ?, 0, 0, ?, ?, false, '', '', 0, 0, '')",
             params![GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, identity.tenant_id.as_slice(), key.as_slice(), floor, floor, start, floor],
         ).context(AnalysisDatabaseSnafu { operation: "register required graph processor" })?;
-        self.check_logical(&transaction, identity.tenant_id, false)?;
+        self.check_revision_limits(&transaction, identity.tenant_id)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
         check()?;
         self.commit_metadata(transaction, "commit required graph registration")?;
