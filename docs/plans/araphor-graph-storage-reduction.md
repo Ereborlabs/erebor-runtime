@@ -105,6 +105,12 @@ The installed OCI package artifacts total 14,852,608 logical bytes in the
 latest run. A 90% reduction of the entire database file is a separate goal.
 Graph-only changes cannot prove that result.
 
+The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
+of saved managed Arrow payloads. The earlier compact run used 59,518,976
+and 6,302,800 bytes, respectively. The integrated case failed after 124.42
+seconds. It has one more Graph result and other source differences, so these
+figures do not isolate the cause of the growth or prove throughput.
+
 ## Execution flow
 
 A subscription selects a changed authorized input cut
@@ -246,8 +252,26 @@ header lists. Subject and finding values now have stable IDs and historical
 membership. Shared relationships, branches, package contribution membership,
 and the measured target remain open.
 
-The finding value slice is **Done**. Focused Graph, Data, Query, and Analysis
-tests pass on this source. The [review guide](../guides/araphor-graph-commit-review.md)
-lists the commands and results. The package backup/reopen case took 434.21
-seconds. The matched 1,592-event storage and time measurement has not run on
-this source.
+Immutable finding-value sharing is **Done** as a storage encoding. Focused
+Graph, Data, Query, and Analysis tests pass on this source. The
+[review guide](../guides/araphor-graph-commit-review.md) lists the commands and
+results. The package backup/reopen case took 434.21 seconds.
+
+Incremental Graph production and storage are **Not done**. The builtin
+detectors restore and emit complete package outputs. Managed calls save those
+complete Arrow outputs. Graph assembly creates a complete snapshot. The
+finding writer then scans the current findings, active membership, and prior
+values to infer changes. This work grows with retained state and history.
+The matched 1,592-event storage and time target is still open.
+
+The required path takes changes from the query subscription, selects affected
+prior package rows by stable keys, and makes each detector emit only added,
+changed, and removed contributions. Data applies those operations to indexed
+membership and saves the package state in the same transaction. An unchanged
+call writes no Graph values. A retry checks its base call and ordered
+operations without reading a complete old Graph. Restart reads the committed
+package contribution directly. Exact replay reproduces the original ordered
+update. Query reads current and historical Graph
+rows through the existing DataFusion table provider. Remove the complete
+managed Graph output, snapshot comparison, and finding-history scan only after
+these paths pass the focused tests and the unchanged workload.
