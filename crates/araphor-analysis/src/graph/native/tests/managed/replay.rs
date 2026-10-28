@@ -116,6 +116,7 @@ async fn graph_replay_survives_removal() -> TestResult {
         assert_eq!(actual.inputs.len(), 3);
         assert_eq!(actual.parameters, expected.parameters);
         assert_eq!(actual.checkpoint, expected.checkpoint);
+        assert_eq!(actual.previous_outputs, expected.previous_outputs);
         assert_eq!(actual.context, expected.context);
         assert_eq!(actual.context.id, input.id);
         assert_eq!(actual.context.time_utc_ns, input.time_utc_ns as i64);

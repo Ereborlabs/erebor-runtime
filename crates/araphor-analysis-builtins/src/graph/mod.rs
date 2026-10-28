@@ -6,6 +6,7 @@ mod credential;
 mod edges;
 mod finding;
 mod finish;
+mod incremental;
 mod kubernetes;
 mod model;
 mod native;
@@ -19,6 +20,7 @@ pub use model::*;
 pub const GRAPH_WINDOW_NS: u64 = 300_000_000_000;
 pub const GRAPH_WITNESS_TTL_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
+use incremental::Progress;
 use GraphContextActionV1 as ContextClass;
 use GraphFactValueV1 as FactValue;
 use GraphReadPathV1 as ReadPath;
@@ -42,6 +44,9 @@ struct Computation {
     edges: BTreeMap<GraphEdgeKeyV1, Relationship>,
     findings: BTreeMap<String, Finding>,
     state: State,
+    progress: Vec<Progress>,
+    #[cfg(test)]
+    work: usize,
 }
 
 impl Computation {
@@ -60,6 +65,10 @@ impl Computation {
                 return Err(Self::invalid("graph record identity"));
             }
         }
+        let progress = records
+            .iter()
+            .map(|record| Progress::new(record, manifest.window_ns))
+            .collect::<sdk::Result<_>>()?;
         let mut computation = Self {
             fact_rows: vec![Vec::new(); records.len()],
             records,
@@ -71,6 +80,9 @@ impl Computation {
             subject_indices: BTreeMap::new(),
             edges: BTreeMap::new(),
             findings: BTreeMap::new(),
+            progress,
+            #[cfg(test)]
+            work: 0,
             state: State {
                 value: match detector {
                     Detector::Kubernetes => "KUBERNETES_PROOF_MISSING",
@@ -81,15 +93,14 @@ impl Computation {
         };
         for (index, fact) in computation.facts.iter().enumerate() {
             computation.record(fact.record)?;
-            computation.fact_rows[fact.record as usize].push(index);
+            let rows = &mut computation.fact_rows[fact.record as usize];
             computation.fact_ids.push(
-                computation.facts[..index]
-                    .iter()
-                    .position(|previous| {
-                        previous.record == fact.record && previous.value == fact.value
-                    })
+                rows.iter()
+                    .copied()
+                    .find(|&previous| computation.facts[previous].value == fact.value)
                     .unwrap_or(index),
             );
+            rows.push(index);
         }
         Ok(computation)
     }

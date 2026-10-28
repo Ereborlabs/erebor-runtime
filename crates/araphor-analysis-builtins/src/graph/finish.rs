@@ -87,7 +87,23 @@ impl Computation {
             })
             .collect();
         edges.sort_by(|left, right| left.edge.key.cmp(&right.edge.key));
-        let findings: Vec<_> = self.findings.into_values().collect();
+        let sensitivity = if self
+            .facts
+            .iter()
+            .any(|fact| fact.sensitivity == ContextSensitivityV1::HostRestricted)
+        {
+            ContextSensitivityV1::HostRestricted
+        } else {
+            ContextSensitivityV1::Tenant
+        };
+        let findings: Vec<_> = self
+            .findings
+            .into_values()
+            .map(|mut finding| {
+                finding.sensitivity = sensitivity;
+                finding
+            })
+            .collect();
         let mut branches: Vec<_> = findings
             .iter()
             .map(|finding| {
@@ -177,7 +193,10 @@ impl Computation {
             .ok_or_else(|| Self::invalid("graph checkpoint descriptor"))?;
         output.checkpoint = Some(sdk::Checkpoint {
             version: 1,
-            datasets: vec![crate::Rows::encode(&checkpoint.datasets[0], &[self.state])?],
+            datasets: vec![
+                crate::Rows::encode(&checkpoint.datasets[0], &[self.state])?,
+                Progress::encode(&self.progress)?,
+            ],
         });
         Ok(output)
     }

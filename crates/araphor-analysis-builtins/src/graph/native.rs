@@ -143,6 +143,19 @@ impl Manifest {
     }
 }
 
+impl Progress {
+    pub(super) fn port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<Self>("progress", &PORT)
+    }
+    pub(super) fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        encode(Self::port(), rows, Clone::clone)
+    }
+    pub(super) fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        decode::<Self, Self>(Self::port(), data, Ok)
+    }
+}
+
 impl Metadata {
     pub fn port() -> sdk::Port {
         static PORT: OnceLock<sdk::Port> = OnceLock::new();

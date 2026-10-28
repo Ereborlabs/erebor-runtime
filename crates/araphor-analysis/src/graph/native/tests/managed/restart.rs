@@ -3,7 +3,7 @@ use futures_util::StreamExt as _;
 
 #[tokio::test]
 async fn graph_restart_keeps_frontier() -> TestResult {
-    let fixture = Fixture::target(Target::Sql)?;
+    let fixture = Fixture::target(Target::Wasm)?;
     let publication = fixture.prepare("").await?;
     let grant = publication.grant.clone();
     let definition = publication.prepared.resolved().clone();
@@ -237,7 +237,7 @@ fn retained_calls(
             "frozen": store.frozen_result(&reference.result_id)?,
             "evaluation": (
                 input.export_name, input.inputs, input.parameters,
-                input.context, input.checkpoint,
+                input.context, input.checkpoint, input.previous_outputs,
             ),
             "context": result.context,
             "output": output,

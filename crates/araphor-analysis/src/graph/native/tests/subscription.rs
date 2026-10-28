@@ -1,3 +1,4 @@
+use araphor_analysis_builtins::graph as algorithm;
 use futures_util::StreamExt as _;
 
 use super::*;
@@ -30,6 +31,15 @@ async fn drains_captured_backlog() -> TestResult {
     )?;
     let checked: TestResult = async {
         let mut previous = None;
+        let mut previous_calls = std::collections::BTreeMap::<
+            u64,
+            (
+                Vec<algorithm::Observation>,
+                Vec<algorithm::Fact>,
+                araphor_analysis_sdk::Revision,
+                araphor_analysis_sdk::Output,
+            ),
+        >::new();
         for consumed in 1..=3 {
             let receipt = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
                 .await?
@@ -84,6 +94,99 @@ async fn drains_captured_backlog() -> TestResult {
             assert_eq!(captured.accepted, 3);
             assert_eq!(captured.consumed, consumed - 1);
             assert!(captured.source.upgrade().is_none());
+            assert_eq!(receipt.results.len(), 3);
+            for (&call, reference) in &receipt.results {
+                let evaluation = fixture.query.store().managed_evaluation(
+                    job.admitted(),
+                    &reference.result_id,
+                    &fixture.control,
+                )?;
+                let records_input = evaluation.input("records")?;
+                let records = algorithm::Observation::decode(&records_input.data)?;
+                let facts = algorithm::Fact::decode(&evaluation.input("facts")?.data)?;
+                assert_eq!(records.len(), consumed as usize);
+                if let Some((old_records, old_facts, revision, output)) = previous_calls.get(&call)
+                {
+                    assert_eq!(&records[..old_records.len()], old_records);
+                    assert_eq!(&facts[..old_facts.len()], old_facts);
+                    assert_ne!(&records_input.revision, revision);
+                    assert_eq!(evaluation.previous_outputs.len(), 5);
+                    assert_eq!(evaluation.previous_outputs.len(), output.datasets.len());
+                    for (actual, expected) in
+                        evaluation.previous_outputs.iter().zip(&output.datasets)
+                    {
+                        assert_eq!(actual.name, expected.name);
+                        assert_eq!(actual.batches, expected.batches);
+                    }
+                    let checkpoint = evaluation.checkpoint.as_ref().ok_or("prior checkpoint")?;
+                    let saved_checkpoint = output.checkpoint.as_ref().ok_or("saved checkpoint")?;
+                    assert_eq!(checkpoint.version, saved_checkpoint.version);
+                    assert_eq!(checkpoint.datasets.len(), saved_checkpoint.datasets.len());
+                    for (actual, expected) in
+                        checkpoint.datasets.iter().zip(&saved_checkpoint.datasets)
+                    {
+                        assert_eq!(actual.name, expected.name);
+                        assert_eq!(actual.batches, expected.batches);
+                    }
+                    let metadata = evaluation
+                        .previous_outputs
+                        .iter()
+                        .find(|data| data.name == "metadata")
+                        .ok_or("prior metadata")?;
+                    assert_eq!(
+                        algorithm::Metadata::decode(metadata)?[0].record_ids,
+                        old_records
+                            .iter()
+                            .map(|record| record.id.clone())
+                            .collect::<Vec<_>>()
+                    );
+                    let progress = checkpoint
+                        .datasets
+                        .iter()
+                        .find(|data| data.name == "progress")
+                        .ok_or("prior progress")?;
+                    assert_eq!(
+                        progress
+                            .batches
+                            .iter()
+                            .map(|batch| batch.num_rows())
+                            .sum::<usize>(),
+                        consumed as usize - 1
+                    );
+                } else {
+                    assert_eq!(consumed, 1);
+                    assert!(evaluation.previous_outputs.is_empty());
+                    assert!(evaluation.checkpoint.is_none());
+                }
+                let result = fixture.query.store().managed_result(
+                    job.admitted(),
+                    &reference.result_id,
+                    u64::try_from(evaluation.context.time_utc_ns)?,
+                    &fixture.control,
+                )?;
+                let metadata = result
+                    .output
+                    .datasets
+                    .iter()
+                    .find(|data| data.name == "metadata")
+                    .ok_or("current metadata")?;
+                assert_eq!(
+                    algorithm::Metadata::decode(metadata)?[0].record_ids,
+                    records
+                        .iter()
+                        .map(|record| record.id.clone())
+                        .collect::<Vec<_>>()
+                );
+                previous_calls.insert(
+                    call,
+                    (
+                        records,
+                        facts,
+                        records_input.revision.clone(),
+                        result.output,
+                    ),
+                );
+            }
             previous = Some(id);
         }
         assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);

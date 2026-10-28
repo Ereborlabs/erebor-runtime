@@ -3,15 +3,21 @@ use std::collections::BTreeSet;
 use super::*;
 
 impl Computation {
-    pub(super) fn process(&mut self) -> sdk::Result<()> {
-        for row in 0..self.records.len() {
-            self.process_record(row as u32)?;
+    pub(super) fn process(&mut self, affected: &[bool]) -> sdk::Result<()> {
+        for (row, affected) in affected.iter().copied().enumerate() {
+            if affected {
+                let state = self.process_record(row as u32)?;
+                self.progress[row].state = state;
+            }
         }
         for index in 0..self.facts.len() {
             let FactValue::Context { classification, .. } = self.facts[index].value else {
                 continue;
             };
             let row = self.facts[index].record;
+            if !affected[row as usize] {
+                continue;
+            }
             self.context_finding(
                 row,
                 Some(index as u32),
@@ -25,10 +31,20 @@ impl Computation {
                 vec!["CONTEXT_ANCHOR_HAS_NO_PHYSICAL_ACTION_PROOF".into()],
             )?;
         }
+        self.state.value = self
+            .progress
+            .iter()
+            .rev()
+            .find_map(|progress| progress.state.clone())
+            .unwrap_or_else(|| "WAITING".into());
         Ok(())
     }
 
-    fn process_record(&mut self, row: u32) -> sdk::Result<()> {
+    fn process_record(&mut self, row: u32) -> sdk::Result<Option<String>> {
+        #[cfg(test)]
+        {
+            self.work += 1;
+        }
         let record = self.record(row)?.clone();
         self.subject(row, None)?;
         let cause = if record.exact_identity() {
@@ -126,14 +142,13 @@ impl Computation {
                 Physical::PacketDropped | Physical::TerminationQueued
             );
         if deviations.len() > 1 || self.policy_conflict(row)? {
-            self.state.value = "CONTRADICTED".into();
             self.finding(row, "CONTRADICTION", false, vec![row], limits)?;
+            return Ok(Some("CONTRADICTED".into()));
         } else if !record.exact_identity()
             || enforced
             || deviations.contains(&true)
             || baseline_unproved
         {
-            self.state.value = "NATIVE_EFFECT".into();
             let reason = if !record.exact_identity() {
                 "LINEAGE_COVERAGE_GAP"
             } else if enforced {
@@ -148,7 +163,8 @@ impl Computation {
                 vec![row],
                 limits,
             )?;
+            return Ok(Some("NATIVE_EFFECT".into()));
         }
-        Ok(())
+        Ok(None)
     }
 }

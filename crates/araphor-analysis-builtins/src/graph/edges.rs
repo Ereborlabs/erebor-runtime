@@ -8,6 +8,11 @@ impl Computation {
         context: Option<u32>,
     ) -> sdk::Result<u32> {
         if let Some(index) = self.subject_indices.get(&key) {
+            let subject = &mut self.subjects[*index as usize];
+            if (record, context) < (subject.record, subject.context) {
+                subject.record = record;
+                subject.context = context;
+            }
             return Ok(*index);
         }
         let index =
@@ -210,7 +215,7 @@ impl Computation {
                 Cause::Contradicted => GraphCauseV1::Contradicted,
             },
         };
-        let edge = GraphEdgeV1 {
+        let mut edge = GraphEdgeV1 {
             key: key.clone(),
             proof_quality: proof,
             required_coverage_interval_ids: vec![coverage],
@@ -224,6 +229,11 @@ impl Computation {
                 }
                 previous.edge.proof_quality.operation_result_authority =
                     OperationResultAuthorityV1::Unknown;
+                edge.proof_quality.operation_result_authority = OperationResultAuthorityV1::Unknown;
+            }
+            if previous.edge == edge && (row, fact_index) < (previous.record, previous.fact) {
+                previous.record = row;
+                previous.fact = fact_index;
             }
         } else {
             self.edges.insert(

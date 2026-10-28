@@ -5,49 +5,67 @@ use super::*;
 mod join;
 
 impl Computation {
-    pub(super) fn credentials(&mut self) -> sdk::Result<()> {
-        for row in 0..self.records.len() {
-            let record = self.record(row as u32)?.clone();
-            let credentials: Vec<_> = self
-                .facts(row as u32)
-                .filter_map(|(_, fact)| match &fact.value {
-                    FactValue::Credential { object_id, .. }
-                        if record.effect.exact_object_id == *object_id =>
-                    {
-                        Some(fact.clone())
-                    }
-                    _ => None,
-                })
-                .collect();
-            if Self::credential_conflict(self.policy_conflict(row as u32)?, &credentials) {
-                self.state.value = "CONTRADICTED".into();
-                self.subject(row as u32, None)?;
-                self.finding(
-                    row as u32,
-                    "CONTRADICTION",
-                    false,
-                    vec![row as u32],
-                    vec!["CREDENTIAL_FACTS_CONTRADICTED".into()],
-                )?;
-                continue;
-            }
-            for credential in credentials {
-                if matches!(
-                    &credential.value,
-                    FactValue::Credential {
-                        expected_access: true,
-                        ..
-                    }
-                ) || !matches!(
-                    record.operation(),
-                    Operation::OpenRead | Operation::Read | Operation::MmapRead
-                ) {
-                    continue;
-                }
-                self.credential(row as u32, &record, &credential)?;
+    pub(super) fn credentials(&mut self, affected: &[bool]) -> sdk::Result<()> {
+        for (row, affected) in affected.iter().copied().enumerate() {
+            if affected {
+                let state = self.credential_record(row as u32)?;
+                self.progress[row].state = state;
             }
         }
+        self.state.value = self
+            .progress
+            .iter()
+            .rev()
+            .find_map(|progress| progress.state.clone())
+            .unwrap_or_else(|| "WAITING".into());
         Ok(())
+    }
+
+    fn credential_record(&mut self, row: u32) -> sdk::Result<Option<String>> {
+        #[cfg(test)]
+        {
+            self.work += 1;
+        }
+        let record = self.record(row)?.clone();
+        let credentials: Vec<_> = self
+            .facts(row)
+            .filter_map(|(_, fact)| match &fact.value {
+                FactValue::Credential { object_id, .. }
+                    if record.effect.exact_object_id == *object_id =>
+                {
+                    Some(fact.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        if Self::credential_conflict(self.policy_conflict(row)?, &credentials) {
+            self.subject(row, None)?;
+            self.finding(
+                row,
+                "CONTRADICTION",
+                false,
+                vec![row],
+                vec!["CREDENTIAL_FACTS_CONTRADICTED".into()],
+            )?;
+            return Ok(Some("CONTRADICTED".into()));
+        }
+        let mut state = None;
+        for credential in credentials {
+            if matches!(
+                &credential.value,
+                FactValue::Credential {
+                    expected_access: true,
+                    ..
+                }
+            ) || !matches!(
+                record.operation(),
+                Operation::OpenRead | Operation::Read | Operation::MmapRead
+            ) {
+                continue;
+            }
+            state = Some(self.credential(row, &record, &credential)?);
+        }
+        Ok(state)
     }
 
     fn credential_conflict(policy_conflict: bool, credentials: &[Fact]) -> bool {
@@ -77,7 +95,12 @@ impl Computation {
         conflict
     }
 
-    fn credential(&mut self, row: u32, record: &Observation, credential: &Fact) -> sdk::Result<()> {
+    fn credential(
+        &mut self,
+        row: u32,
+        record: &Observation,
+        credential: &Fact,
+    ) -> sdk::Result<String> {
         let FactValue::Credential {
             object_id,
             completion,
@@ -90,7 +113,6 @@ impl Computation {
                 "graph Credential input",
             ));
         };
-        self.state.value = "CREDENTIAL_OBSERVED".into();
         self.subject(row, None)?;
         let reviewed = self.reviewed(credential)?;
         let bytes = record.admitted()
@@ -128,7 +150,7 @@ impl Computation {
         } else {
             "CONTEXTUAL_CREDENTIAL_PIVOT"
         };
-        self.state.value = if contradicted {
+        let state = if contradicted {
             "CONTRADICTED"
         } else if direct {
             "DIRECT_PIVOT"
@@ -178,7 +200,7 @@ impl Computation {
             evidence,
             limits,
         )?;
-        Ok(())
+        Ok(state)
     }
 
     fn authority_conflict(&self, matched: &[(usize, bool)]) -> bool {

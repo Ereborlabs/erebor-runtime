@@ -94,7 +94,14 @@ impl<'a> Graph<'a> {
             .map(|input| &input.port)
             .eq(expected.inputs.iter().map(|input| &input.port))
             && model.outputs == expected.outputs
-            && model.checkpoint == expected.checkpoint
+            && model.checkpoint.as_ref().is_some_and(|checkpoint| {
+                checkpoint.version == 1
+                    && checkpoint.datasets.first()
+                        == expected
+                            .checkpoint
+                            .as_ref()
+                            .and_then(|spec| spec.datasets.first())
+            })
     }
 
     pub fn apply(mut self, call: &PackageCall, result: &CallResult) -> Result<Self> {

@@ -1,14 +1,22 @@
 use super::*;
 
 impl Computation {
-    pub(super) fn kubernetes(&mut self) -> sdk::Result<()> {
+    pub(super) fn kubernetes(&mut self, affected: &[bool]) -> sdk::Result<()> {
         for index in 0..self.facts.len() {
-            let fact = self.facts[index].clone();
-            let FactValue::Kubernetes(stage) = fact.value else {
+            let record = self.facts[index].record;
+            if !affected[record as usize] {
+                continue;
+            }
+            let FactValue::Kubernetes(stage) = &self.facts[index].value else {
                 continue;
             };
-            self.record(fact.record)?;
-            self.subject(fact.record, None)?;
+            let stage = stage.clone();
+            self.record(record)?;
+            #[cfg(test)]
+            {
+                self.work += 1;
+            }
+            self.subject(record, None)?;
             let qualified = stage.proof_quality.kubernetes_qualified();
             let mut missing = Vec::new();
             for (proved, name) in [
@@ -36,41 +44,53 @@ impl Computation {
                     missing.push(name.into());
                 }
             }
-            self.state.value = if !qualified {
-                "KUBERNETES_PROOF_MISSING"
-            } else if stage.full_container_id.is_some() && stage.remote_admission_id.is_some() {
-                "REMOTE_ADMISSION"
-            } else if stage.node_id.is_some() {
-                "KUBERNETES_SCHEDULED"
-            } else if stage.object_uid.is_some() && stage.resource_version.is_some() {
-                "KUBERNETES_OBJECT"
-            } else if stage.audit_id.is_some() {
-                "KUBERNETES_AUDIT"
-            } else if stage.carried_request_id.is_some() {
-                "KUBERNETES_REQUEST"
-            } else {
-                "KUBERNETES_PROOF_MISSING"
-            }
-            .into();
             if stage.object_uid.is_some() {
                 self.edge(
-                    fact.record,
+                    record,
                     Some(index as u32),
                     EdgeKind::Kubernetes,
                     Cause::Contextual,
-                    vec![fact.record],
+                    vec![record],
                 )?;
             }
             missing.push("CROSS_NODE_CAUSALITY_UNQUALIFIED".into());
             missing.sort();
             self.finding(
-                fact.record,
+                record,
                 "KUBERNETES_PROOF_MISSING",
                 false,
-                vec![fact.record],
+                vec![record],
                 missing,
             )?;
         }
+        self.state.value = self
+            .facts
+            .iter()
+            .rev()
+            .find_map(|fact| match &fact.value {
+                FactValue::Kubernetes(stage) => Some(Self::kubernetes_state(stage)),
+                _ => None,
+            })
+            .unwrap_or("KUBERNETES_PROOF_MISSING")
+            .into();
         Ok(())
+    }
+
+    fn kubernetes_state(stage: &KubernetesStageProofV1) -> &'static str {
+        if !stage.proof_quality.kubernetes_qualified() {
+            "KUBERNETES_PROOF_MISSING"
+        } else if stage.full_container_id.is_some() && stage.remote_admission_id.is_some() {
+            "REMOTE_ADMISSION"
+        } else if stage.node_id.is_some() {
+            "KUBERNETES_SCHEDULED"
+        } else if stage.object_uid.is_some() && stage.resource_version.is_some() {
+            "KUBERNETES_OBJECT"
+        } else if stage.audit_id.is_some() {
+            "KUBERNETES_AUDIT"
+        } else if stage.carried_request_id.is_some() {
+            "KUBERNETES_REQUEST"
+        } else {
+            "KUBERNETES_PROOF_MISSING"
+        }
     }
 }

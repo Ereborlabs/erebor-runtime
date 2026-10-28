@@ -213,7 +213,29 @@ async fn failed_graph_disables_reuse() -> TestResult {
             (&reference.result_id, reference.commit_revision)
         );
         assert!(!prior.reusable);
-        assert!(prior.retained.is_none());
+        let retained = prior.retained.as_ref().ok_or("continued Graph call")?;
+        let declaration = &failed.spec.manifest.calls[call];
+        let descriptor = Detector::from_id(&declaration.package.package_id)?.descriptor();
+        let model = descriptor
+            .exports
+            .iter()
+            .find(|model| model.name == retained.evaluation.export)
+            .ok_or("retained Graph model")?;
+        let mut evaluation = retained.evaluation.clone();
+        let (checkpoint, previous_outputs) = prior.state(
+            model,
+            &evaluation.inputs,
+            evaluation.parameters.as_ref(),
+            false,
+        )?;
+        assert!(checkpoint.is_some());
+        assert_eq!(previous_outputs.len(), 5);
+        evaluation.checkpoint = checkpoint;
+        evaluation.previous_outputs = previous_outputs;
+        let actual = descriptor.check_evaluation(&evaluation)?.encode()?;
+        let expected = sdk::wire::Output::encode_model(&retained.output, model)?;
+        assert_eq!(actual.checkpoint, expected.checkpoint);
+        assert_eq!(actual.previous_outputs, expected.datasets);
     }
     store.stop_managed(&failed, || Ok(()))?;
     Ok(())

@@ -35,7 +35,7 @@ Native SQL parser
 | Owner | Current behavior | Required change |
 |---|---|---|
 | `araphor-analysis/src/graph/feed.rs` | Drives Graph programs from query subscription streams. | Keep the reactive owner. Carry the selected optional window. |
-| `araphor-analysis-builtins/src/graph/contract.rs` | Uses the shared Computation to emit resolved native contributions. The builtin still evaluates the complete selected cut. | Restore State dataset 0 and native Progress dataset 1 for the approved addition path. |
+| `araphor-analysis-builtins/src/graph/contract.rs` | Uses the same Computation to derive new and affected contributions through State dataset 0 and native Progress dataset 1. | Complete integrated proof and matched measurement. |
 | `araphor-analysis/src/graph` | Qualifies captured inputs, validates resolved contributions, and structurally merges their values. | Keep independent authorization, proof validation, expiry, and atomic publication. No second semantic builder remains. |
 | `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior::state` applies the declared continuation policy. Ordinary packages still require matching input revisions and coverage. | Enable continuation in each builtin only when its update algorithm is complete. |
 | `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior.retained` supplies the exact saved output through `Evaluation.previous_outputs`. | Use those rows in the builtin update algorithm. Keep current-input admission unchanged. |
@@ -236,3 +236,14 @@ Process derives new records and new Context facts in the existing phase order. K
 Reduce saved and new record-state assignments in current order, including repeated equal assignments and suppressed candidates. Use the shared finalizer for current package watermarks, reasons, evidence links, branches, and sensitivity. Preserve the complete-result semantics.
 Use a complete rebuild for record removal or window exit; changed old qualified observations, proof, context, or ordered facts; changed correlation window or old record order; and valid but unusable algorithm state. Invalid envelopes and schemas still fail admission. This initial slice does not claim incremental removal.
 Prove complete/continued equality and actual derivation counts with ordinary existing-owner tests before enabling builtin continuation. Full input decode, digesting, matching, and output serialization can still scan the cut. These counts establish no timing or memory result.
+
+
+### Incremental builtin implementation result
+
+The three builtins now declare resume_input_changes=true and use State dataset 0 plus private native Progress dataset 1. The existing Computation owns complete and incremental work; the native reactive DataFusion path remains.
+Stable record-ID maps and exact per-record fact zippers admit normal additions without a prefix assumption. Broad time-window updates re-evaluate affected credential seeds. State reduction, current sensitivity, and minimum compatible valid paired anchors preserve complete-result parity. Removal, changed old proof/facts/order/window, or unusable valid progress uses a full rebuild. No incremental-removal claim is made.
+Analysis keeps generic State/version support, SDK authority for extra checkpoint ports, current-input evidence checks, and atomic publication. The [source route](../guides/araphor-graph-commit-review.md#incremental-builtin-contributions) links implementation and ordinary tests.
+The focused-v2 record passes 25 builtin Graph cases plus host/example groups. Four SQL/Wasm adapter/pressure cases and two fresh source-built native cases pass. Mechanical source cleanup keeps the reviewed runtime evidence identities. Final v4 Clippy, formatting, and whitespace pass.
+All six final owner cases pass in graph-owners.json: enhanced Wasm subscription, failure/reuse separation, unchanged-notice reuse, atomic conversion failure, retained replay, and committed-state Wasm restart. Final source: source-final-rust-v4.json, SHA-256 d893f2a052dd24b9ba043846e80635b2e6d272ecb03062f0308b9a5eb49eed51; Analysis ELF 750d627311c15539f28a92d5b584abcf6fdbf7c7052151631f683deb4077f9df.
+**Incremental implementation result: Done.** Integration and matched measurement remain open; the overall plan remains Not done.
+The records are in compact-graph/incremental-root. Full input/output scans can remain. Derivation-count proof is not an elapsed-time, storage, or process-memory result.

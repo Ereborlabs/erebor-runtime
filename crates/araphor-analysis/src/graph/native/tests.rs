@@ -472,22 +472,12 @@ impl Fixture {
         use datafusion::sql::sqlparser::ast::{Ident, Value};
         let mut program = araphor_package::SqlModelV1::default();
         for port in model.outputs.iter().filter(|port| port.name != "metadata") {
-            let fields = port
-                .schema
-                .fields()
-                .iter()
-                .map(|field| {
-                    format!(
-                        "arrow_cast(NULL, {}) AS {}",
-                        Value::SingleQuotedString(field.data_type().to_string()),
-                        Ident::with_quote('"', field.name()),
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            program
-                .outputs
-                .insert(port.name.clone(), format!("SELECT {fields} WHERE FALSE"));
+            let empty = sdk::RecordBatch::new_empty(Arc::new(port.schema.clone()));
+            program.outputs.insert(
+                port.name.clone(),
+                crate::graph::tests::execution::Fixture::rows(&[empty])
+                    .map_err(|error| error.to_string())?,
+            );
         }
         let metadata = algorithm::Metadata::encode(&[algorithm::Metadata {
             record_ids: Vec::new(),
@@ -543,6 +533,16 @@ impl Fixture {
             "state".into(),
             r#"SELECT CAST('{"value":"WAITING"}' AS BYTEA) AS value"#.into(),
         );
+        if let Some(checkpoint) = &model.checkpoint {
+            for port in checkpoint.datasets.iter().skip(1) {
+                let empty = sdk::RecordBatch::new_empty(Arc::new(port.schema.clone()));
+                program.checkpoint.insert(
+                    port.name.clone(),
+                    crate::graph::tests::execution::Fixture::rows(&[empty])
+                        .map_err(|error| error.to_string())?,
+                );
+            }
+        }
         Ok(program)
     }
 

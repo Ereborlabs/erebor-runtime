@@ -104,7 +104,7 @@ impl Computation {
         Ok(qualified)
     }
 
-    fn bounded(&self, record: &Observation, later: &Observation) -> bool {
+    pub(in crate::graph) fn bounded(&self, record: &Observation, later: &Observation) -> bool {
         later.observed_boottime_ns >= record.observed_boottime_ns
             && later.observed_boottime_ns - record.observed_boottime_ns <= self.manifest.window_ns
     }

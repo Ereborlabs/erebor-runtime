@@ -104,13 +104,6 @@ async fn result_requires_exact_image() -> TestResult {
     }
     let expected = algorithm::Detector::Process.evaluate(&evaluation)?;
     let checkpoint = model.checkpoint.as_ref().ok_or("checkpoint declaration")?;
-    let state = &checkpoint.datasets[0];
-    let data = Rows::encode(
-        state,
-        &[algorithm::State {
-            value: "WAITING".into(),
-        }],
-    )?;
     let mut returns = Vec::new();
     for revision in ["1", "2"] {
         let mut descriptor = package.clone();
@@ -132,6 +125,12 @@ async fn result_requires_exact_image() -> TestResult {
             );
         }
         *metadata = algorithm::Metadata::encode(&rows)?;
+        let prior_checkpoint = returned.checkpoint.clone().ok_or("complete checkpoint")?;
+        let prior_outputs = if checkpoint.resume_input_changes {
+            returned.datasets.clone()
+        } else {
+            Vec::new()
+        };
         let sql = super::execution::Fixture::sql(&returned)?;
         let bundle = PackageBundleV1 {
             schema_version: 1,
@@ -180,13 +179,12 @@ async fn result_requires_exact_image() -> TestResult {
         })?;
         let call = call.ok_or("package call")?;
         let invocation = Invocation {
-            checkpoints: BTreeMap::from([(
-                call.id(),
-                sdk::Checkpoint {
-                    version: checkpoint.version,
-                    datasets: vec![data.clone()],
-                },
-            )]),
+            checkpoints: BTreeMap::from([(call.id(), prior_checkpoint)]),
+            previous_outputs: if prior_outputs.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(call.id(), prior_outputs)])
+            },
             ..Default::default()
         };
         let output = session.execute_definition(&prepared, invocation).await?;

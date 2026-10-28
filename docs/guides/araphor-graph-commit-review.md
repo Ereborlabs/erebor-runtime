@@ -1,6 +1,7 @@
 # Araphor Graph Commit Review
 
-The [compact Graph section](#compact-graph-storage-and-native-query-rows) describes
+The [compact Graph section](#compact-graph-storage-and-native-query-rows) and
+[incremental builtin section](#incremental-builtin-contributions) describe
 the current working changes. Earlier sections retain their historical source
 state and verification records.
 
@@ -502,3 +503,33 @@ Records in compact-graph/builtin-ownership retain each executed source and binar
 Scoped formatting, patch whitespace, and Clippy for the seven affected crates and their tests pass with warnings denied. Runtime evidence precedes the reviewed borrow/import-only cleanup; final Clippy covers that cleanup.
 Source, artifact, environment, and verification records are in `/tmp/araphor-package-qualification-active/compact-graph/builtin-ownership`.
 Builtin ownership has passing relevant runtime checks. Incremental derivation, incident completion, current physical proof, and complete qualification remain Not done. No execution-time gain is claimed.
+
+
+## Incremental builtin contributions
+
+Qualified additions reuse unchanged contributions. The result remains equal to complete evaluation of the same authorized cut.
+[Native subscriptions](../../crates/araphor-query/src/stream/physical/runtime.rs) keep the existing DataFusion parser, planner, optimizer, and execution path.
+  -> [ManagedPrior::state](../../crates/araphor-data/src/analysis/managed/model.rs) supplies the captured checkpoint and exact saved outputs.
+  -> [Computation::resume](../../crates/araphor-analysis-builtins/src/graph/incremental.rs) maps stable record IDs and zips exact ordered per-record facts before reuse.
+  -> [Computation::update](../../crates/araphor-analysis-builtins/src/graph/incremental.rs) derives new records and affected credential seeds through the existing detector algorithms.
+  -> [Computation::output](../../crates/araphor-analysis-builtins/src/graph/finish.rs) emits the complete current contribution, reasons, evidence, package state, and watermarks.
+  -> [Graph validation](../../crates/araphor-analysis/src/graph/resolved.rs) keeps the existing independent authority checks and atomic publication route.
+
+```mermaid
+sequenceDiagram
+    Data-->>Query: Captured checkpoint and saved output
+    Query->>Builtin: Current input and retained state
+    Builtin-->>Analysis: Complete resolved contribution
+    Analysis->>Data: Existing atomic commit
+```
+State remains checkpoint dataset 0. Private native Progress is dataset 1; each row stores the qualified Observation/window digest and optional state assignment. It does not repeat stable IDs, facts, or a full Graph.
+Old IDs must remain once and in relative order. Their facts must retain exact key, sensitivity, value, order, and multiplicity. New CPU-0 rows can precede retained CPU-1 rows. Normal additions that meet these conditions use the reuse path.
+New network, Channel, or AuthorityUse inputs mark old credential seeds by the broad correlation time window. The existing matcher keeps all exact authority predicates. Repeated and suppressed state assignments retain their current-order meaning.
+The shared [edge owner](../../crates/araphor-analysis-builtins/src/graph/edges.rs) chooses the minimum compatible valid paired anchor for equal subject/edge values. Finalization refreshes every finding's sensitivity from current facts. It preserves identities and proof rules.
+Removal/window exit, changed old qualified input or facts, changed old order/window, or valid unusable progress selects a complete rebuild. Invalid SDK envelopes still fail. This implementation makes no incremental-removal claim.
+The [host](../../crates/araphor-analysis/src/graph/mod.rs) requires version 1 and State dataset 0. SDK validation owns additional ports and resume policy. State payload lookup is name-keyed; custom State-only packages remain valid. The host does not parse Progress.
+[Incremental tests](../../crates/araphor-analysis-builtins/src/graph/tests/incremental.rs) and [state tests](../../crates/araphor-analysis-builtins/src/graph/tests/incremental/state.rs) compare complete/continued output and actual derivation counts. Input decode, digesting, matching, and full output encoding can still scan the cut; these counts establish no timing or memory gain.
+The source-bound focused-v2 record passes 25 builtin Graph cases plus host and example checks. Four SQL/Wasm adapter/pressure cases and two source-built native adapter/pressure cases pass. Their records keep the executed v2 artifacts.
+Final seven-crate Clippy passes in clippy-v4.json with unchanged source; scoped formatting and whitespace pass. Earlier failed checks remain separate. All six final Graph owner cases pass: enhanced actual-Wasm subscription, failed-result reuse separation, unchanged-notice reuse, atomic conversion failure, retained replay, and committed-state Wasm restart.
+The final source record is source-final-rust-v4.json (SHA-256 d893f2a052dd24b9ba043846e80635b2e6d272ecb03062f0308b9a5eb49eed51). The six owner cases use Analysis ELF 750d627311c15539f28a92d5b584abcf6fdbf7c7052151631f683deb4077f9df. Records are in compact-graph/incremental-root.
+Two Data continuation/atomic-input cases and mixed_port_deadlines also pass on their recorded v2 executables. Incremental implementation checks are complete. Matched integration measurement and the overall plan remain Not done. No elapsed-time or storage gain is claimed.

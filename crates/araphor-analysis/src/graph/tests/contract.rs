@@ -133,6 +133,22 @@ fn descriptor_preserves_owners() -> TestResult {
             assert_eq!(reason.details, details);
         }
         assert_eq!(model.checkpoint.as_ref().ok_or("checkpoint")?.version, 1);
+        assert_eq!(
+            model
+                .checkpoint
+                .as_ref()
+                .ok_or("checkpoint")?
+                .datasets
+                .len(),
+            2
+        );
+        assert!(
+            model
+                .checkpoint
+                .as_ref()
+                .ok_or("checkpoint")?
+                .resume_input_changes
+        );
         let inspected = package.inspect()?;
         assert!(!inspected.contains("GraphSnapshotV1"));
     }
@@ -147,7 +163,7 @@ fn descriptor_preserves_owners() -> TestResult {
 fn support_requires_exact_ports() -> TestResult {
     let package = algorithm::Detector::Process.descriptor();
     let model = &package.exports[0];
-    for change in 0..7 {
+    for change in 0..8 {
         let mut altered = model.clone();
         match change {
             0 => altered.inputs.swap(0, 1),
@@ -159,9 +175,33 @@ fn support_requires_exact_ports() -> TestResult {
             6 => {
                 altered.checkpoint.as_mut().ok_or("checkpoint")?.datasets[0].name = "other".into();
             }
+            7 => {
+                altered.checkpoint.as_mut().ok_or("checkpoint")?.datasets[0].schema =
+                    sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Utf8, false)]);
+            }
             _ => return Err("contract mutation".into()),
         }
         assert!(!Graph::supports(&altered), "accepted mutation {change}");
     }
+    Ok(())
+}
+
+#[test]
+fn support_keeps_generic_state() -> TestResult {
+    let mut package = algorithm::Detector::Process.descriptor();
+    let checkpoint = package.exports[0].checkpoint.as_mut().ok_or("checkpoint")?;
+    checkpoint.datasets.truncate(1);
+    checkpoint.resume_input_changes = false;
+    let state = checkpoint.datasets[0].clone();
+    package.validate()?;
+    assert!(Graph::supports(&package.exports[0]));
+    package.exports[0]
+        .checkpoint
+        .as_mut()
+        .ok_or("checkpoint")?
+        .datasets
+        .push(state);
+    assert!(Graph::supports(&package.exports[0]));
+    assert!(package.validate().is_err());
     Ok(())
 }

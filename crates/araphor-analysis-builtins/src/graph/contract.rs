@@ -161,9 +161,12 @@ impl Detector {
             })
             .collect();
         model.checkpoint = Some(sdk::CheckpointSpec {
-            resume_input_changes: false,
+            resume_input_changes: true,
             version: 1,
-            datasets: vec![Rows::port::<State>("state", "graph.state.v1")],
+            datasets: vec![
+                Rows::port::<State>("state", "graph.state.v1"),
+                Progress::port(),
+            ],
         });
         sdk::Package::new(self.id(), "1", vec![model])
     }
@@ -188,8 +191,13 @@ impl Detector {
             let declaration = model.checkpoint.as_ref().ok_or_else(|| {
                 sdk::Error::contract(sdk::ErrorCode::Invalid, "graph checkpoint declaration")
             })?;
-            let states: Vec<State> =
-                Rows::decode(&declaration.datasets[0], &checkpoint.datasets[0])?;
+            let state = &declaration.datasets[0];
+            let data = checkpoint
+                .datasets
+                .iter()
+                .find(|data| data.name == state.name)
+                .ok_or_else(|| Computation::invalid("graph checkpoint state"))?;
+            let states: Vec<State> = Rows::decode(state, data)?;
             if states.len() != 1 {
                 return Err(sdk::Error::contract(
                     sdk::ErrorCode::Invalid,
@@ -207,11 +215,7 @@ impl Detector {
             ));
         }
         let mut computation = Computation::new(records, facts, manifests.remove(0), self)?;
-        match self {
-            Self::Process => computation.process()?,
-            Self::Credentials => computation.credentials()?,
-            Self::Kubernetes => computation.kubernetes()?,
-        }
+        computation.update(evaluation)?;
         computation.output(package)
     }
 

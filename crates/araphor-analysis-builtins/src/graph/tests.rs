@@ -3,6 +3,7 @@ use crate::Rows;
 use erebor_interceptor_abi::{EffectPhysicalResultV1, KernelEffectFamilyV1};
 
 mod fixture;
+mod incremental;
 use fixture::*;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -79,6 +80,7 @@ fn process_replay_checkpoint() -> TestResult {
     assert_eq!(first[0].evidence, [identity(0)]);
     fixture.evaluation.inputs.reverse();
     fixture.evaluation.checkpoint = output.checkpoint;
+    fixture.evaluation.previous_outputs = output.datasets;
     let (replay, _) = findings(detector, &fixture)?;
     assert_eq!(serde_json::to_value(first)?, serde_json::to_value(replay)?);
     Ok(())
@@ -172,8 +174,7 @@ fn kubernetes_retains_missing_proof() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn credential_exact_and_missing() -> TestResult {
+fn credential_fixture() -> sdk::Result<sdk::Fixture> {
     let detector = Detector::Credentials;
     let mut read = record();
     read.effect.decision = EffectPhysicalResultV1::UnknownAfterPreEffect as u32;
@@ -255,7 +256,14 @@ fn credential_exact_and_missing() -> TestResult {
             }),
         ),
     ];
-    let mut complete = fixture(detector, &[read, channel, remote], &facts)?;
+    fixture(detector, &[read, channel, remote], &facts)
+}
+
+#[test]
+fn credential_exact_and_missing() -> TestResult {
+    let detector = Detector::Credentials;
+    let mut complete = credential_fixture()?;
+    let facts = Fact::decode(&complete.evaluation.inputs[1].data)?;
     let batch = complete.evaluation.inputs[0].data.batches.remove(0);
     complete.evaluation.inputs[0].data.batches = vec![batch.slice(0, 1), batch.slice(1, 2)];
     let (rows, output) = findings(detector, &complete)?;
@@ -344,7 +352,7 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
         assert_ne!(computation.facts[2].key, computation.facts[4].key);
         assert_eq!(matched, [(3, network), (2, network), (5, network)]);
         assert_eq!(joined_evidence, evidence[..prefix]);
-        computation.credentials()?;
+        computation.update(&fixture.evaluation)?;
         assert_eq!(computation.findings.len(), 1);
         assert_eq!(computation.edges.len(), 3);
         assert_eq!(
@@ -415,7 +423,9 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
             )?;
             assert!(matched.contains(&(2, false)));
             assert!(matched.contains(&(4, true)));
-            computation.credentials()?;
+            let mut current = fixture.evaluation.clone();
+            current.inputs[1].data = Fact::encode(&computation.facts)?;
+            computation.update(&current)?;
             let finding = computation
                 .findings
                 .values()

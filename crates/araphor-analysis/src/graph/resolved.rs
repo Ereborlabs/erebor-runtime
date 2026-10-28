@@ -97,9 +97,19 @@ impl Graph<'_> {
             }
             .build()
         })?;
+        let state = &declaration.datasets[0];
+        let data = checkpoint
+            .datasets
+            .iter()
+            .find(|data| data.name == state.name)
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph checkpoint state",
+                }
+                .build()
+            })?;
         let states: Vec<algorithm::State> =
-            Rows::decode(&declaration.datasets[0], &checkpoint.datasets[0])
-                .context(AnalysisContractSnafu)?;
+            Rows::decode(state, data).context(AnalysisContractSnafu)?;
         Self::require(states.len() == 1, "graph checkpoint rows")?;
         let state: GraphPackageStateV1 =
             serde_json::from_value(serde_json::Value::String(states[0].value.clone()))

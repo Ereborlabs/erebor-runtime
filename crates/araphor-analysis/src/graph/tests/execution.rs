@@ -93,6 +93,7 @@ async fn parity(target: Target) -> TestResult {
                 assert_eq!(serde_json::to_value(native)?, serde_json::to_value(wasm)?);
             }
             evaluation.checkpoint = result.output().checkpoint.clone();
+            evaluation.previous_outputs = result.output().datasets.clone();
             evaluation.inputs.reverse();
             drop(actual);
             drop(call);
@@ -187,6 +188,7 @@ async fn large(target: Target) -> TestResult {
     fixture.released()?;
     let mut prior = evaluation.clone();
     prior.checkpoint = expected.checkpoint;
+    prior.previous_outputs = expected.datasets;
     package.check_evaluation(&prior)?;
     Ok(())
 }
@@ -219,6 +221,7 @@ async fn pressure(target: Target) -> TestResult {
     let result = actual.calls.get(&call.id()).ok_or("retained call")?;
     fixture.compare(&evaluation, &expected, result)?;
     evaluation.checkpoint = result.output().checkpoint.clone();
+    evaluation.previous_outputs = result.output().datasets.clone();
     assert!(evaluation.checkpoint.is_some());
     assert!(fixture.engine.memory().reserve_output(OUTPUT).is_err());
     let detached = package

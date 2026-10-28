@@ -96,6 +96,12 @@ fn candidate_reason_matches_contract() -> TestResult {
     output.datasets.reverse();
     output.reasons.reverse();
     output.evidence.reverse();
+    output
+        .checkpoint
+        .as_mut()
+        .ok_or("checkpoint")?
+        .datasets
+        .reverse();
     let package = algorithm::Detector::Credentials.descriptor();
     package.validate_output(&evaluation, &output)?;
     assert!(!output.reasons.is_empty());
@@ -444,6 +450,17 @@ fn declared_reason(package_id: &str, reason: &str) -> TestResult {
         code: code.clone(),
         details: schema.clone(),
     }];
+    let checkpoint = model.checkpoint.as_mut().ok_or("declared checkpoint")?;
+    checkpoint.resume_input_changes = false;
+    checkpoint.datasets.truncate(1);
+    let state = checkpoint.datasets[0].name.clone();
+    output
+        .checkpoint
+        .as_mut()
+        .ok_or("declared output checkpoint")?
+        .datasets
+        .retain(|data| data.name == state);
+    assert!(Graph::supports(model));
     let port = &model.outputs[2];
     let data = output
         .datasets
