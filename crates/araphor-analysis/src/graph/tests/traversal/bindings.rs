@@ -9,17 +9,21 @@ async fn traversal_binding_membership() -> TestResult {
         .findings
         .iter()
         .all(|finding| finding.subject_id != seed));
-    assert!(first.graph.edges.iter().any(
-        |edge| (edge.key.from == seed || edge.key.to == seed) && !edge.key.evidence.is_empty()
-    ));
+    assert!(first
+        .graph
+        .edges
+        .iter()
+        .any(|edge| (first.graph.subjects[edge.key.from as usize] == seed
+            || first.graph.subjects[edge.key.to as usize] == seed)
+            && !edge.key.evidence.is_empty()));
     let mut other = GraphSnapshotV1::try_from(fixture.requests[1].body.as_slice())?;
     assert!(other
         .graph
         .edges
         .iter()
-        .all(|edge| edge.key.from != seed && edge.key.to != seed));
-    other.graph.subjects.push(seed.clone());
-    other.graph.subjects.sort();
+        .all(|edge| other.graph.subjects[edge.key.from as usize] != seed
+            && other.graph.subjects[edge.key.to as usize] != seed));
+    TraversalFixture::add_subject(&mut other, seed.clone());
     fixture.replace(1, other, "graph:traversal:isolated")?;
     let mut request = TraversalFixture::request(0);
     request.seeds = vec![seed.clone()];

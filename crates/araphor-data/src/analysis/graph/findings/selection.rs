@@ -46,6 +46,15 @@ impl AnalysisStore {
              ), charges AS (
                 SELECT result_id, coalesce(sum(bytes), 0)::UBIGINT AS stored_bytes
                 FROM ({}) GROUP BY result_id
+             ), subject_counts AS (
+                SELECT result_id, count(*)::UBIGINT AS subjects
+                FROM graph_subjects JOIN requested USING (result_id) GROUP BY result_id
+             ), edge_counts AS (
+                SELECT result_id, count(*)::UBIGINT AS edges
+                FROM graph_relationships JOIN requested USING (result_id) GROUP BY result_id
+             ), finding_counts AS (
+                SELECT result_id, count(*)::UBIGINT AS findings
+                FROM graph_findings JOIN requested USING (result_id) GROUP BY result_id
              ), headers AS (
                 SELECT coalesce(sum(coalesce(octet_length(metadata.body), 0)
                     + octet_length(metadata.stream_key)
@@ -59,9 +68,15 @@ impl AnalysisStore {
                     THEN metadata.stream_key END AS graph_stream,
                 metadata.method_version, metadata.first_cursor,
                 coalesce(charges.stored_bytes, 0)::UBIGINT, headers.included,
-                octet_length(metadata.body)::UBIGINT
+                octet_length(metadata.body)::UBIGINT,
+                coalesce(subject_counts.subjects, 0)::UBIGINT,
+                coalesce(edge_counts.edges, 0)::UBIGINT,
+                coalesce(finding_counts.findings, 0)::UBIGINT
              FROM main.analysis_results metadata JOIN requested USING (result_id)
-             LEFT JOIN charges USING (result_id) CROSS JOIN headers
+             LEFT JOIN charges USING (result_id)
+             LEFT JOIN subject_counts USING (result_id)
+             LEFT JOIN edge_counts USING (result_id)
+             LEFT JOIN finding_counts USING (result_id) CROSS JOIN headers
              ORDER BY metadata.result_id",
             GraphRows::CHARGES
         )

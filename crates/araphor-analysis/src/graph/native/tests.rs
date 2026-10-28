@@ -368,6 +368,8 @@ impl Fixture {
         assert!(store.processor_result(&scope)?.is_none());
         let mut expected_health = before_health;
         expected_health.read_revision = revision;
+        expected_health.state = araphor_data::ProcessorStateV1::ProcessingFailed;
+        expected_health.incomplete = true;
         assert_eq!(store.processor_health(&scope)?, Some(expected_health));
         let current_usage = store.retained_usage(self.source.tenant_id)?;
         assert_eq!(

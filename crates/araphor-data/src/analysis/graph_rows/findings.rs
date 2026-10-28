@@ -60,7 +60,6 @@ impl GraphRows {
                     .build()
                 })?,
             finding_id: Self::column(row, 2)?,
-            revision: header.snapshot.input_manifest.clone(),
             package_id: Self::column(row, 3)?,
             package_version: Self::column(row, 4)?,
             subject_id: Self::json_column(row, 5)?,
@@ -93,7 +92,7 @@ impl GraphRows {
             }
             .fail();
         }
-        finding.validate()?;
+        finding.validate_in(&header.snapshot.input_manifest)?;
         Ok(finding)
     }
     pub(in crate::analysis) fn read_findings(
@@ -107,6 +106,7 @@ impl GraphRows {
             "graph_findings",
             COLUMNS,
             result_id,
+            header.finding_count,
             control,
             |row| Self::finding(row, header),
         )

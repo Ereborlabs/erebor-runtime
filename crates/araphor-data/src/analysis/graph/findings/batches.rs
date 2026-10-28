@@ -159,7 +159,7 @@ impl AnalysisStore {
         Ok(true)
     }
 
-    fn cached_finding_header<'a>(
+    pub(super) fn cached_finding_header<'a>(
         &self,
         snapshot: &Connection,
         headers: &'a mut FindingHeaders,
@@ -169,7 +169,7 @@ impl AnalysisStore {
         if headers.get(&key.result).is_none() {
             let header = GraphRows::read_header(snapshot, tenant, &key.result)?
                 .ok_or_else(|| self.state_error("the current graph header is absent"))?;
-            headers.insert(key.result.clone(), header);
+            headers.insert(key.result.clone(), header)?;
         }
         headers
             .get(&key.result)

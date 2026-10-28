@@ -4,6 +4,7 @@ impl NotificationRouter {
     pub(super) fn schedule(
         &self,
         finding: &FindingV1,
+        revision: &GraphRevisionV1,
         result_id: &str,
         routes: &[ApprovedNotificationRouteV1],
         now: u64,
@@ -30,7 +31,7 @@ impl NotificationRouter {
         if matching.is_empty() {
             let mut count = 0;
             for state in &mut states {
-                if self.update_finding(state, finding, result_id)? {
+                if self.update_finding(state, finding, revision, result_id)? {
                     self.save(state)?;
                     count += 1;
                 }
@@ -52,7 +53,7 @@ impl NotificationRouter {
                     .is_some_and(|reference| reference.route_id == route.policy.route_id)
             }) {
                 let state = &mut states[index];
-                let mut changed = self.update_finding(state, finding, result_id)?;
+                let mut changed = self.update_finding(state, finding, revision, result_id)?;
                 changed |= Self::update_route(state, &route.policy, routes);
                 if changed {
                     self.save(state)?;
@@ -66,7 +67,7 @@ impl NotificationRouter {
                 |index| states.remove(index),
             );
             if pending.is_some() {
-                self.update_finding(&mut state, finding, result_id)?;
+                self.update_finding(&mut state, finding, revision, result_id)?;
                 state.finding_revision = state.revision.checked_add(1).ok_or_else(|| {
                     NotificationSnafu {
                         code: NotificationErrorCodeV1::Limit,
@@ -102,6 +103,7 @@ impl NotificationRouter {
         &self,
         state: &mut NotificationObligationV1,
         finding: &FindingV1,
+        revision: &GraphRevisionV1,
         result_id: &str,
     ) -> Result<bool> {
         let changed_finding = match &state.finding {
@@ -113,7 +115,7 @@ impl NotificationRouter {
                     &reference.result_id,
                     &reference.finding_id,
                 )?
-                .is_none_or(|prior| prior.revision != finding.revision),
+                .is_none_or(|(_, prior)| &prior != revision),
             None => true,
         };
         let source = NotificationPriorityV1::from(finding.severity);

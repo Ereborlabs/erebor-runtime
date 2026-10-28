@@ -10,7 +10,7 @@ fn final_header_bounds() -> TestResult {
     snapshot.input_positions.clear();
     let body = serde_json::to_vec(&snapshot)?;
     let prepared = CanonicalGraph::bounded(snapshot.clone(), body.len())?;
-    assert_eq!(prepared.body(), body);
+    assert_eq!(prepared.snapshot(), &snapshot);
     let before = fixture.store.meta()?;
     snapshot.previous_result_id = Some(format!("graph:{}", "x".repeat(128)));
     snapshot.context_notice_revision = u64::MAX;
@@ -26,8 +26,8 @@ fn final_header_bounds() -> TestResult {
     assert_eq!(fixture.store.meta()?, before);
     let final_body = serde_json::to_vec(&snapshot)?;
     assert!(final_body.len() > body.len());
-    let prepared = CanonicalGraph::bounded(snapshot, final_body.len())?;
-    assert_eq!(prepared.body(), final_body);
+    let prepared = CanonicalGraph::bounded(snapshot.clone(), final_body.len())?;
+    assert_eq!(prepared.into_snapshot(), snapshot);
     Ok(())
 }
 

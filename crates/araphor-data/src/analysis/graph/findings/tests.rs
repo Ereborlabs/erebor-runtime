@@ -7,11 +7,22 @@ fn native_header_read_budget() -> std::result::Result<(), Box<dyn std::error::Er
     let encoded_header = GraphRows::encode(&fixture.snapshot)?;
     let mut headers = FindingHeaders::default();
     for id in ["first", "second"] {
-        let mut header = GraphHeader::decode(&encoded_header)?;
-        header.snapshot_bytes = MAX_READ_BYTES / 4 + 1;
-        headers.insert(id.into(), header);
+        let header = GraphHeader::decode(&encoded_header)?;
+        headers.insert(id.into(), header)?;
     }
     assert!(headers.get("first").is_some());
+    assert!(headers.get("second").is_some());
+    let mut snapshot = fixture.snapshot.clone();
+    snapshot.packages[0].coverage_predicate = "x".repeat(MAX_READ_BYTES / 3);
+    let encoded_header = GraphRows::encode(&snapshot)?;
+    let mut headers = FindingHeaders::default();
+    for id in ["first", "second"] {
+        let header = GraphHeader::decode(&encoded_header)?;
+        assert!(header.row_bytes < MAX_READ_BYTES / 4);
+        assert!(header.metadata_allocation_bytes > MAX_READ_BYTES / 2);
+        headers.insert(id.into(), header)?;
+    }
+    assert!(headers.get("first").is_none());
     assert!(headers.get("second").is_some());
     Ok(())
 }
@@ -493,12 +504,14 @@ fn graph_reads_keep_history() -> std::result::Result<(), Box<dyn std::error::Err
         fixture
             .store
             .graph_finding(tenant, &fixture.request.result_id, &finding.finding_id)?,
-        Some(finding.clone())
+        Some((finding.clone(), fixture.snapshot.input_manifest.clone()))
     );
     assert_eq!(
-        fixture
-            .store
-            .graph_revision_finding(tenant, &finding.finding_id, &finding.revision)?,
+        fixture.store.graph_revision_finding(
+            tenant,
+            &finding.finding_id,
+            &fixture.snapshot.input_manifest
+        )?,
         Some(finding.clone())
     );
     assert_eq!(
@@ -531,9 +544,11 @@ fn graph_reads_keep_history() -> std::result::Result<(), Box<dyn std::error::Err
         .graph_findings(foreign, None, None, usize::MAX, usize::MAX)?
         .is_empty());
     assert!(matches!(
-        fixture
-            .store
-            .graph_revision_finding(foreign, &finding.finding_id, &finding.revision),
+        fixture.store.graph_revision_finding(
+            foreign,
+            &finding.finding_id,
+            &fixture.snapshot.input_manifest
+        ),
         Err(crate::Error::GraphInvalid {
             field: "revision manifest",
             ..
@@ -560,7 +575,7 @@ fn graph_reads_keep_history() -> std::result::Result<(), Box<dyn std::error::Err
     assert!(fixture.store.graph_source(tenant, &unknown)?.is_none());
     assert!(fixture
         .store
-        .graph_revision_finding(tenant, &unknown, &finding.revision)?
+        .graph_revision_finding(tenant, &unknown, &fixture.snapshot.input_manifest)?
         .is_none());
     Ok(())
 }
@@ -623,7 +638,7 @@ fn notification_finding_checks_current() -> std::result::Result<(), Box<dyn std:
     };
     assert_eq!(
         fixture.store.notification_finding(tenant, &original)?,
-        finding
+        (finding.clone(), fixture.snapshot.input_manifest.clone())
     );
     assert!(matches!(
         fixture.store.notification_finding([0; 16], &original),
@@ -706,7 +721,7 @@ fn notification_finding_checks_current() -> std::result::Result<(), Box<dyn std:
     };
     assert_eq!(
         fixture.store.notification_finding(tenant, &current)?,
-        updated
+        (updated, fixture.snapshot.input_manifest.clone())
     );
     assert!(matches!(
         fixture.store.notification_finding(tenant, &original),
@@ -720,7 +735,7 @@ fn notification_finding_checks_current() -> std::result::Result<(), Box<dyn std:
         fixture
             .store
             .graph_finding(tenant, &original.result_id, &original.finding_id)?,
-        Some(finding.clone())
+        Some((finding.clone(), fixture.snapshot.input_manifest.clone()))
     );
 
     let header: Vec<u8> = {
@@ -790,7 +805,7 @@ fn notification_finding_checks_current() -> std::result::Result<(), Box<dyn std:
         fixture
             .store
             .graph_finding(tenant, &original.result_id, &original.finding_id)?,
-        Some(finding)
+        Some((finding, fixture.snapshot.input_manifest.clone()))
     );
     Ok(())
 }

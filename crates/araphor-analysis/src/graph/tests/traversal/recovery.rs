@@ -4,7 +4,12 @@ use super::*;
 async fn traversal_replacement_history() -> TestResult {
     let fixture = TraversalFixture::new(false)?;
     let original = &fixture.requests[0];
-    let mut snapshot = GraphSnapshotV1::try_from(original.body.as_slice())?;
+    let expected_graph = GraphSnapshotV1::try_from(original.body.as_slice())?;
+    let expected_header = fixture
+        .store
+        .read_result(source().tenant_id, &original.result_id)?;
+    assert!(expected_header.is_some());
+    let mut snapshot = expected_graph.clone();
     snapshot.graph.edges.clear();
     fixture.replace(0, snapshot, "graph:traversal:replacement")?;
     let current = fixture
@@ -40,8 +45,14 @@ async fn traversal_replacement_history() -> TestResult {
     assert_eq!(
         fixture
             .store
+            .graph_result(source().tenant_id, &original.result_id)?,
+        Some(expected_graph)
+    );
+    assert_eq!(
+        fixture
+            .store
             .read_result(source().tenant_id, &original.result_id)?,
-        Some(original.body.clone())
+        expected_header
     );
     let mut denied = TraversalFixture::request(8);
     denied.result_ids = vec![original.result_id.clone()];

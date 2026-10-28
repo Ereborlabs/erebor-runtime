@@ -1,15 +1,15 @@
 use super::*;
 
 fn revise_finding(store: &AnalysisStore, result_id: &str, next: FindingV1, now: u64) -> TestResult {
-    let (prior, current) = store
+    let (prior, _) = store
         .graph_findings(next.tenant_id, None, Some(&next.finding_id), 1, usize::MAX)?
         .pop()
         .ok_or("current finding absent")?;
-    assert_eq!(current.revision, next.revision);
     let mut snapshot = store
         .graph_result(next.tenant_id, &prior)?
         .ok_or("current graph absent")?;
     assert_eq!(snapshot.findings.len(), 1);
+    assert_eq!(snapshot.input_manifest, manifest(1));
     assert!(snapshot.input_manifest.context.is_empty());
     let cursor = store
         .processor_health(&snapshot.scope)?
@@ -90,7 +90,7 @@ async fn native_action_changes() -> TestResult {
         let original = router.obligations(&human, 100)?.remove(0);
         let mut changed = initial.clone();
         changed.required_action = None;
-        assert_eq!(changed.revision, initial.revision);
+        assert_eq!(changed.evidence, initial.evidence);
         revise_finding(&store, "graph:action-none", changed, 150)?;
         let update = capture(&engine, NotificationRouter::SQL, 150).await?;
         let result = router.consume(&update, &sink)?;

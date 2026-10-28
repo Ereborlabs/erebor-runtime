@@ -279,14 +279,45 @@ impl TraversalFixture {
         edges
     }
 
+    pub(super) fn add_subject(snapshot: &mut GraphSnapshotV1, subject: GraphSubjectKeyV1) -> u32 {
+        let index = match snapshot.graph.subjects.binary_search(&subject) {
+            Ok(index) => return index as u32,
+            Err(index) => index as u32,
+        };
+        snapshot.graph.subjects.insert(index as usize, subject);
+        for edge in &mut snapshot.graph.edges {
+            if edge.key.from >= index {
+                edge.key.from += 1;
+            }
+            if edge.key.to >= index {
+                edge.key.to += 1;
+            }
+        }
+        index
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "Fixture endpoints must exist in the declared subject dictionary."
+    )]
     fn edge(snapshot: &GraphSnapshotV1, from: u64, to: u64) -> GraphEdgeV1 {
         GraphEdgeV1 {
             key: GraphEdgeKeyV1 {
-                from: Self::subject(from),
-                to: Self::subject(to),
+                from: snapshot
+                    .graph
+                    .subjects
+                    .binary_search(&Self::subject(from))
+                    .expect("fixture source subject") as u32,
+                to: snapshot
+                    .graph
+                    .subjects
+                    .binary_search(&Self::subject(to))
+                    .expect("fixture target subject") as u32,
                 edge_type: GraphEdgeTypeV1::NativeParent,
                 package_id: "HF-PROC-001".into(),
-                evidence: snapshot.input_manifest.evidence.clone(),
+                evidence: (0..snapshot.input_manifest.evidence.len())
+                    .map(|index| index as u32)
+                    .collect(),
                 cause: GraphCauseV1::Direct,
             },
             proof_quality: ProofQualityV1::kernel_decision(TemporalCoverageV1::Complete),

@@ -185,7 +185,7 @@ async fn native_notification_eligibility() -> TestResult {
         assert_eq!(calls[0].key, key);
         assert_eq!(
             calls[0].finding.as_ref().ok_or("finding absent")?.revision,
-            finding(1, FindingSeverityV1::High).revision
+            manifest(1)
         );
     }
     assert_eq!(router.state(key)?.deadline_utc_ns, Some(200));
@@ -464,7 +464,7 @@ async fn native_notification_progress() -> TestResult {
             assert_eq!(delivery.deadline_utc_ns, 200);
             assert_eq!(
                 delivery.finding.as_ref().map(|value| &value.revision),
-                Some(&finding(1, FindingSeverityV1::High).revision)
+                Some(&manifest(1))
             );
             effects.set(effects.get() + 1);
             Ok(NotificationSinkResultV1::Accepted {

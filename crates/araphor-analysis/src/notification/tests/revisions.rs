@@ -29,7 +29,7 @@ fn control_notification_stronger_revision_delivers_without_deadline_reset() -> T
     let calls = sink.calls.lock().map_err(|_| "sink lock")?;
     assert_eq!(
         calls[1].finding.as_ref().ok_or("finding absent")?.revision,
-        finding(2, FindingSeverityV1::Critical).revision
+        manifest(2)
     );
     assert_ne!(
         calls[0].finding.as_ref().ok_or("finding absent")?.revision,

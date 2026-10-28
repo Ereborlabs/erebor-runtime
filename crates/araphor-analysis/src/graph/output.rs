@@ -220,6 +220,25 @@ impl Graph<'_> {
             .collect()
     }
 
+    pub(super) fn evidence_indices(&self, rows: &[u64]) -> Result<Vec<u32>> {
+        rows.iter()
+            .map(|row| {
+                let record = self.selected_record(*row)?;
+                self.revision
+                    .evidence
+                    .binary_search(&record.id)
+                    .ok()
+                    .and_then(|index| u32::try_from(index).ok())
+                    .ok_or_else(|| {
+                        GraphInvalidSnafu {
+                            field: "graph output evidence",
+                        }
+                        .build()
+                    })
+            })
+            .collect()
+    }
+
     fn selected_subject(&mut self, row: u64, context: Option<u64>) -> Result<GraphSubjectKeyV1> {
         let record = self.selected_record(row)?.clone();
         if let Some(index) = context {
@@ -227,7 +246,7 @@ impl Graph<'_> {
             if fact.record_id == record.id {
                 if let GraphFactValueV1::Context { subject, .. } = &fact.value {
                     let subject = subject.clone();
-                    self.subjects.insert(subject.clone());
+                    self.subject_index(subject.clone())?;
                     return Ok(subject);
                 }
             }
@@ -237,6 +256,8 @@ impl Graph<'_> {
             .fail();
         }
         let wire = record.decode()?;
-        Ok(self.task(&record, &wire))
+        let subject = self.task(&record, &wire);
+        self.subject_index(subject.clone())?;
+        Ok(subject)
     }
 }

@@ -221,8 +221,7 @@ impl AnalysisStore {
                 }
                 .build()
             })?;
-            let rebuilt = GraphRows::read(writer, &id, &header)?;
-            header.body(&rebuilt)?;
+            GraphRows::read(writer, &id, &header)?;
             after = id;
         }
         Ok(())

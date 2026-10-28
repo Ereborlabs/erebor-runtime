@@ -23,7 +23,6 @@ impl Graph<'_> {
     }
 
     fn expire_graph(snapshot: &mut GraphSnapshotV1) {
-        snapshot.graph.revision = snapshot.input_manifest.clone();
         for edge in &mut snapshot.graph.edges {
             edge.proof_quality.temporal_coverage = TemporalCoverageV1::Unknown;
             edge.key.cause = GraphCauseV1::Superseded;
@@ -46,7 +45,6 @@ impl Graph<'_> {
 
     fn expire_findings(snapshot: &mut GraphSnapshotV1) {
         for finding in &mut snapshot.findings {
-            finding.revision = snapshot.input_manifest.clone();
             finding.state = FindingStateV1::CoverageInsufficient;
             finding.limits.push("RETAINED_INPUT_EXPIRED".into());
             finding

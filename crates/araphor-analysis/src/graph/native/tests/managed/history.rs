@@ -42,19 +42,53 @@ async fn empty_gate_keeps_history() -> TestResult {
             .managed_instance(fixture.source.tenant_id, "empty-history", &fixture.control)?
             .ok_or("initial Graph instance")?;
         let now = request("inspect-history")?.time_utc_ns;
+        let requests = araphor_data::AnalysisTableRequests::new();
+        let capture = |current| {
+            data.read_managed_tables(
+                &grant.selection,
+                &araphor_data::ManagedRead {
+                    instance: current,
+                    expected: None,
+                    completed: None,
+                    rebuild: false,
+                    follow: false,
+                },
+                araphor_data::AnalysisTableRead {
+                    requests: &requests,
+                    event_ranges: None,
+                    inputs: None,
+                    mode: araphor_data::AnalysisReadModeV1::Complete,
+                    now,
+                },
+                araphor_data::AnalysisExtractLimits::default(),
+                &fixture.control,
+            )
+        };
+        let captured_revision = araphor_query::follow::Cursor::decode(
+            &first.frontier.as_ref().ok_or("initial Graph frontier")?.cursor,
+        )?
+        .read_revision();
+        assert!(captured_revision < first.commit_revision);
+        let captured = capture(current.clone())?;
         let mut saved = BTreeMap::new();
         for (call, reference) in &first.results {
+            let prior = captured.state.prior(*call).ok_or("initial call head")?;
+            assert_eq!(
+                (&prior.result, prior.revision),
+                (&reference.result_id, reference.commit_revision)
+            );
             let araphor_data::ManagedOutput::Call { result, .. } =
                 data.managed_output(&current, &reference.result_id, now, &fixture.control)?
             else {
                 return Err("initial Graph call".into());
             };
-            assert!(result.current);
+            assert!(!result.current);
             saved.insert(
                 *call,
                 (result.context, result.output, result.commit_revision),
             );
         }
+        drop(captured);
         let fourth = record(
             4,
             &wire(
@@ -84,26 +118,7 @@ async fn empty_gate_keeps_history() -> TestResult {
             .managed_instance(fixture.source.tenant_id, "empty-history", &fixture.control)?
             .ok_or("empty Graph instance")?;
         assert_eq!(current.progress, empty.commit_revision);
-        let requests = araphor_data::AnalysisTableRequests::new();
-        let captured = data.read_managed_tables(
-            &grant.selection,
-            &araphor_data::ManagedRead {
-                instance: current.clone(),
-                expected: None,
-                completed: None,
-                rebuild: false,
-                follow: false,
-            },
-            araphor_data::AnalysisTableRead {
-                requests: &requests,
-                event_ranges: None,
-                inputs: None,
-                mode: araphor_data::AnalysisReadModeV1::Complete,
-                now,
-            },
-            araphor_data::AnalysisExtractLimits::default(),
-            &fixture.control,
-        )?;
+        let captured = capture(current.clone())?;
         for (call, reference) in &first.results {
             let prior = captured.state.prior(*call).ok_or("retained call head")?;
             assert_eq!(

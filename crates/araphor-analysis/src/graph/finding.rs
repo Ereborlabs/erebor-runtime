@@ -90,7 +90,6 @@ impl Graph<'_> {
         let finding = FindingV1 {
             tenant_id: self.input.source.tenant_id,
             finding_id: finding_id.clone(),
-            revision: self.revision.clone(),
             package_id: package.into(),
             package_version: 1,
             subject_id: subject,
@@ -135,7 +134,7 @@ impl Graph<'_> {
             limits,
             reason,
         };
-        finding.validate()?;
+        finding.validate_in(&self.revision)?;
         if let Some(previous) = self.findings.get(&finding_id) {
             if previous.reason == FindingReasonV1::Contradiction
                 || (previous.state == FindingStateV1::Confirmed

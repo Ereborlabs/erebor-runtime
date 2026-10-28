@@ -105,44 +105,6 @@
         "required_coverage_interval_ids": [
           [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
         ],
-        "revision": {
-          "context": [],
-          "coverage": [
-            {
-              "cpu_id": 0,
-              "gap_reasons": [
-                "GAP"
-              ],
-              "interval_id": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-              "interval_revision": 1,
-              "report_revision": 1,
-              "source": {
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node",
-                "source_epoch": 1,
-                "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-              },
-              "state": "GAPPED"
-            }
-          ],
-          "evidence": [
-            {
-              "cpu_id": 0,
-              "durable_cursor": 1,
-              "stream": {
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node",
-                "source_epoch": 1,
-                "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-              }
-            }
-          ],
-          "missing_ranges": []
-        },
         "sensitivity": "Tenant",
         "severity": "Critical",
         "state": "COVERAGE_INSUFFICIENT",
@@ -206,43 +168,10 @@
           "key": {
             "cause": "DIRECT",
             "edge_type": "TASK_IN_PROCESS",
-            "evidence": [
-              {
-                "cpu_id": 0,
-                "durable_cursor": 1,
-                "stream": {
-                  "label_epoch": 1,
-                  "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                  "node_id": "node",
-                  "source_epoch": 1,
-                  "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                  "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-                }
-              }
-            ],
-            "from": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [0, 0, 0, 0, 0, 0, 0, 9],
-              "kind": "TASK",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
+            "evidence": [0],
+            "from": 0,
             "package_id": "HF-PROC-001",
-            "to": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-              "kind": "PROCESS",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
+            "to": 1
           },
           "last_boottime_ns": 1000,
           "proof_quality": {
@@ -262,43 +191,10 @@
           "key": {
             "cause": "DIRECT",
             "edge_type": "TASK_IN_EXECUTION_SET",
-            "evidence": [
-              {
-                "cpu_id": 0,
-                "durable_cursor": 1,
-                "stream": {
-                  "label_epoch": 1,
-                  "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                  "node_id": "node",
-                  "source_epoch": 1,
-                  "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                  "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-                }
-              }
-            ],
-            "from": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [0, 0, 0, 0, 0, 0, 0, 9],
-              "kind": "TASK",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
+            "evidence": [0],
+            "from": 0,
             "package_id": "HF-PROC-001",
-            "to": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
-              "kind": "EXECUTION_SET",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
+            "to": 2
           },
           "last_boottime_ns": 1000,
           "proof_quality": {
@@ -318,43 +214,10 @@
           "key": {
             "cause": "DIRECT",
             "edge_type": "NATIVE_EFFECT",
-            "evidence": [
-              {
-                "cpu_id": 0,
-                "durable_cursor": 1,
-                "stream": {
-                  "label_epoch": 1,
-                  "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                  "node_id": "node",
-                  "source_epoch": 1,
-                  "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                  "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-                }
-              }
-            ],
-            "from": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [0, 0, 0, 0, 0, 0, 0, 9],
-              "kind": "TASK",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
+            "evidence": [0],
+            "from": 0,
             "package_id": "HF-PROC-001",
-            "to": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 0, 0, 0, 0, 0, 0, 0, 1],
-              "kind": "ARTIFACT",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
+            "to": 3
           },
           "last_boottime_ns": 1000,
           "proof_quality": {
@@ -371,44 +234,6 @@
         }
       ],
       "facts": [],
-      "revision": {
-        "context": [],
-        "coverage": [
-          {
-            "cpu_id": 0,
-            "gap_reasons": [
-              "GAP"
-            ],
-            "interval_id": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-            "interval_revision": 1,
-            "report_revision": 1,
-            "source": {
-              "label_epoch": 1,
-              "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-              "node_id": "node",
-              "source_epoch": 1,
-              "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
-            "state": "GAPPED"
-          }
-        ],
-        "evidence": [
-          {
-            "cpu_id": 0,
-            "durable_cursor": 1,
-            "stream": {
-              "label_epoch": 1,
-              "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-              "node_id": "node",
-              "source_epoch": 1,
-              "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
-          }
-        ],
-        "missing_ranges": []
-      },
       "subjects": [
         {
           "authority": {
@@ -700,42 +525,6 @@
         "required_coverage_interval_ids": [
           [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
         ],
-        "revision": {
-          "context": [],
-          "coverage": [
-            {
-              "cpu_id": 0,
-              "gap_reasons": [],
-              "interval_id": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-              "interval_revision": 1,
-              "report_revision": 1,
-              "source": {
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node",
-                "source_epoch": 1,
-                "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-              },
-              "state": "HEALTHY"
-            }
-          ],
-          "evidence": [
-            {
-              "cpu_id": 0,
-              "durable_cursor": 1,
-              "stream": {
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node",
-                "source_epoch": 1,
-                "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-              }
-            }
-          ],
-          "missing_ranges": []
-        },
         "sensitivity": "Tenant",
         "severity": "High",
         "state": "COVERAGE_INSUFFICIENT",
@@ -794,41 +583,10 @@
           "key": {
             "cause": "CONTEXTUAL",
             "edge_type": "TASK_IN_EXECUTION_SET",
-            "evidence": [
-              {
-                "cpu_id": 0,
-                "durable_cursor": 1,
-                "stream": {
-                  "label_epoch": 1,
-                  "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                  "node_id": "node",
-                  "source_epoch": 1,
-                  "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                  "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-                }
-              }
-            ],
-            "from": {
-              "authority": {
-                "authority": "EXTERNAL",
-                "authority_id": "unresolved-native-observation"
-              },
-              "identity": [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 4, 110, 111, 100, 101, 0, 0, 0, 0, 0, 0, 0, 1],
-              "kind": "EXTERNAL",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
+            "evidence": [0],
+            "from": 2,
             "package_id": "HF-PROC-001",
-            "to": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
-              "kind": "EXECUTION_SET",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
+            "to": 0
           },
           "last_boottime_ns": 1000,
           "proof_quality": {
@@ -848,41 +606,10 @@
           "key": {
             "cause": "CONTEXTUAL",
             "edge_type": "NATIVE_EFFECT",
-            "evidence": [
-              {
-                "cpu_id": 0,
-                "durable_cursor": 1,
-                "stream": {
-                  "label_epoch": 1,
-                  "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                  "node_id": "node",
-                  "source_epoch": 1,
-                  "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                  "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-                }
-              }
-            ],
-            "from": {
-              "authority": {
-                "authority": "EXTERNAL",
-                "authority_id": "unresolved-native-observation"
-              },
-              "identity": [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 4, 110, 111, 100, 101, 0, 0, 0, 0, 0, 0, 0, 1],
-              "kind": "EXTERNAL",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
+            "evidence": [0],
+            "from": 2,
             "package_id": "HF-PROC-001",
-            "to": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 0, 0, 0, 0, 0, 0, 0, 1],
-              "kind": "ARTIFACT",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
+            "to": 1
           },
           "last_boottime_ns": 1000,
           "proof_quality": {
@@ -899,42 +626,6 @@
         }
       ],
       "facts": [],
-      "revision": {
-        "context": [],
-        "coverage": [
-          {
-            "cpu_id": 0,
-            "gap_reasons": [],
-            "interval_id": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-            "interval_revision": 1,
-            "report_revision": 1,
-            "source": {
-              "label_epoch": 1,
-              "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-              "node_id": "node",
-              "source_epoch": 1,
-              "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
-            "state": "HEALTHY"
-          }
-        ],
-        "evidence": [
-          {
-            "cpu_id": 0,
-            "durable_cursor": 1,
-            "stream": {
-              "label_epoch": 1,
-              "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-              "node_id": "node",
-              "source_epoch": 1,
-              "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
-          }
-        ],
-        "missing_ranges": []
-      },
       "subjects": [
         {
           "authority": {
@@ -1211,42 +902,6 @@
         "required_coverage_interval_ids": [
           [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
         ],
-        "revision": {
-          "context": [],
-          "coverage": [
-            {
-              "cpu_id": 0,
-              "gap_reasons": [],
-              "interval_id": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-              "interval_revision": 1,
-              "report_revision": 1,
-              "source": {
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node",
-                "source_epoch": 1,
-                "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-              },
-              "state": "HEALTHY"
-            }
-          ],
-          "evidence": [
-            {
-              "cpu_id": 0,
-              "durable_cursor": 1,
-              "stream": {
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node",
-                "source_epoch": 1,
-                "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-              }
-            }
-          ],
-          "missing_ranges": []
-        },
         "sensitivity": "Tenant",
         "severity": "Critical",
         "state": "CONFIRMED",
@@ -1309,43 +964,10 @@
           "key": {
             "cause": "DIRECT",
             "edge_type": "TASK_IN_PROCESS",
-            "evidence": [
-              {
-                "cpu_id": 0,
-                "durable_cursor": 1,
-                "stream": {
-                  "label_epoch": 1,
-                  "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                  "node_id": "node",
-                  "source_epoch": 1,
-                  "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                  "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-                }
-              }
-            ],
-            "from": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [0, 0, 0, 0, 0, 0, 0, 9],
-              "kind": "TASK",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
+            "evidence": [0],
+            "from": 0,
             "package_id": "HF-PROC-001",
-            "to": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
-              "kind": "PROCESS",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
+            "to": 1
           },
           "last_boottime_ns": 1000,
           "proof_quality": {
@@ -1365,43 +987,10 @@
           "key": {
             "cause": "DIRECT",
             "edge_type": "TASK_IN_EXECUTION_SET",
-            "evidence": [
-              {
-                "cpu_id": 0,
-                "durable_cursor": 1,
-                "stream": {
-                  "label_epoch": 1,
-                  "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                  "node_id": "node",
-                  "source_epoch": 1,
-                  "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                  "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-                }
-              }
-            ],
-            "from": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [0, 0, 0, 0, 0, 0, 0, 9],
-              "kind": "TASK",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
+            "evidence": [0],
+            "from": 0,
             "package_id": "HF-PROC-001",
-            "to": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
-              "kind": "EXECUTION_SET",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
+            "to": 2
           },
           "last_boottime_ns": 1000,
           "proof_quality": {
@@ -1421,43 +1010,10 @@
           "key": {
             "cause": "DIRECT",
             "edge_type": "NATIVE_EFFECT",
-            "evidence": [
-              {
-                "cpu_id": 0,
-                "durable_cursor": 1,
-                "stream": {
-                  "label_epoch": 1,
-                  "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                  "node_id": "node",
-                  "source_epoch": 1,
-                  "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-                  "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-                }
-              }
-            ],
-            "from": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [0, 0, 0, 0, 0, 0, 0, 9],
-              "kind": "TASK",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
+            "evidence": [0],
+            "from": 0,
             "package_id": "HF-PROC-001",
-            "to": {
-              "authority": {
-                "authority": "NATIVE",
-                "label_epoch": 1,
-                "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                "node_id": "node"
-              },
-              "identity": [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 0, 0, 0, 0, 0, 0, 0, 1],
-              "kind": "ARTIFACT",
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
+            "to": 3
           },
           "last_boottime_ns": 1000,
           "proof_quality": {
@@ -1474,42 +1030,6 @@
         }
       ],
       "facts": [],
-      "revision": {
-        "context": [],
-        "coverage": [
-          {
-            "cpu_id": 0,
-            "gap_reasons": [],
-            "interval_id": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-            "interval_revision": 1,
-            "report_revision": 1,
-            "source": {
-              "label_epoch": 1,
-              "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-              "node_id": "node",
-              "source_epoch": 1,
-              "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            },
-            "state": "HEALTHY"
-          }
-        ],
-        "evidence": [
-          {
-            "cpu_id": 0,
-            "durable_cursor": 1,
-            "stream": {
-              "label_epoch": 1,
-              "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-              "node_id": "node",
-              "source_epoch": 1,
-              "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-              "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-            }
-          }
-        ],
-        "missing_ranges": []
-      },
       "subjects": [
         {
           "authority": {

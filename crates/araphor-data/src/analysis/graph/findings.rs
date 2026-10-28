@@ -55,7 +55,7 @@ impl AnalysisStore {
         &self,
         tenant: [u8; 16],
         reference: &NotificationFindingRefV1,
-    ) -> Result<FindingV1> {
+    ) -> Result<(FindingV1, GraphRevisionV1)> {
         NotificationErrorCodeV1::Invalid.require(
             tenant != [0; 16]
                 && NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
@@ -87,10 +87,20 @@ impl AnalysisStore {
                 key.result == reference.result_id,
                 "current finding reference",
             )?;
-            let selection = self.preflight_findings(snapshot, tenant, keys)?;
+            let mut selection = self.preflight_findings(snapshot, tenant, keys)?;
+            let revision = self
+                .cached_finding_header(
+                    snapshot,
+                    &mut selection.headers,
+                    tenant,
+                    &selection.keys[0],
+                )?
+                .snapshot
+                .input_manifest
+                .clone();
             self.collect_findings(snapshot, selection, tenant, usize::MAX)?
                 .pop()
-                .map(|(_, finding)| finding)
+                .map(|(_, finding)| (finding, revision))
                 .ok_or_else(|| {
                     NotificationSnafu {
                         code: NotificationErrorCodeV1::Denied,
@@ -136,7 +146,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         result_id: &str,
         finding_id: &str,
-    ) -> Result<Option<FindingV1>> {
+    ) -> Result<Option<(FindingV1, GraphRevisionV1)>> {
         self.check_graph_read(
             tenant,
             &[Some(result_id), Some(finding_id)],
@@ -147,6 +157,7 @@ impl AnalysisStore {
                 return Ok(None);
             };
             GraphRows::read_finding(snapshot, result_id, finding_id, &header, None)
+                .map(|finding| finding.map(|finding| (finding, header.snapshot.input_manifest)))
         })
     }
 

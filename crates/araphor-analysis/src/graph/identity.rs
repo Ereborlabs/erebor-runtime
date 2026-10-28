@@ -6,9 +6,7 @@ impl Graph<'_> {
         kind: GraphSubjectKindV1,
         identity: Vec<u8>,
     ) -> GraphSubjectKeyV1 {
-        let key = GraphSubjectKeyV1::native(&self.input.source, kind, identity);
-        self.subjects.insert(key.clone());
-        key
+        GraphSubjectKeyV1::native(&self.input.source, kind, identity)
     }
 
     pub(super) fn task(
@@ -22,7 +20,7 @@ impl Graph<'_> {
                 wire.task_cookie.to_be_bytes().to_vec(),
             )
         } else {
-            let key = GraphSubjectKeyV1 {
+            GraphSubjectKeyV1 {
                 tenant_id: record.id.stream.tenant_id,
                 authority: GraphSubjectAuthorityV1::External {
                     authority_id: "unresolved-native-observation".into(),
@@ -35,10 +33,18 @@ impl Graph<'_> {
                     .into_iter()
                     .chain(record.id.durable_cursor.to_be_bytes())
                     .collect(),
-            };
-            self.subjects.insert(key.clone());
-            key
+            }
         }
+    }
+
+    pub(super) fn subject_index(&mut self, subject: GraphSubjectKeyV1) -> Result<u32> {
+        let next = u32::try_from(self.subjects.len()).map_err(|_| {
+            GraphInvalidSnafu {
+                field: "graph subject count",
+            }
+            .build()
+        })?;
+        Ok(*self.subjects.entry(subject).or_insert(next))
     }
 
     pub(super) fn edge(

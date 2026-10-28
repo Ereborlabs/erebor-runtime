@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use araphor_query::datafusion::arrow::array::{Array, BinaryArray, RecordBatch, UInt32Array};
+use araphor_query::datafusion::arrow::array::{
+    Array, BinaryArray, RecordBatch, StringArray, UInt32Array,
+};
 use araphor_query::datafusion::common::ScalarValue;
 use araphor_query::execution::Read;
 use araphor_query::sources::ArrowSnapshot;
@@ -24,7 +26,7 @@ mod metadata;
 mod recovery;
 use fixtures::TraversalFixture;
 
-const SUBJECT_SQL: &str = "SELECT DISTINCT subject_id, traversal_depth FROM graph_subjects";
+const SUBJECT_SQL: &str = "SELECT DISTINCT tenant_id, subject_kind, authority, identity, traversal_depth FROM graph_subjects";
 
 impl TraversalFixture {
     fn request(max_hops: u32) -> GraphTraversalV1 {
@@ -94,20 +96,42 @@ impl TraversalFixture {
     fn depths(batches: &[RecordBatch]) -> TestResult<BTreeMap<GraphSubjectKeyV1, u64>> {
         let mut depths = BTreeMap::new();
         for batch in batches {
-            let subjects = batch
+            let tenants = batch
                 .column(0)
                 .as_any()
                 .downcast_ref::<BinaryArray>()
-                .ok_or("the traversal subject array is invalid")?;
-            let values = batch
+                .ok_or("the traversal tenant array is invalid")?;
+            let kinds = batch
                 .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or("the traversal kind array is invalid")?;
+            let authorities = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or("the traversal authority array is invalid")?;
+            let identities = batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or("the traversal identity array is invalid")?;
+            let values = batch
+                .column(4)
                 .as_any()
                 .downcast_ref::<UInt32Array>()
                 .ok_or("the traversal depth array is invalid")?;
             for row in 0..batch.num_rows() {
-                assert!(!subjects.is_null(row) && !values.is_null(row));
+                assert!(batch.columns().iter().all(|column| !column.is_null(row)));
                 depths.insert(
-                    serde_json::from_slice(subjects.value(row))?,
+                    GraphSubjectKeyV1 {
+                        tenant_id: tenants.value(row).try_into()?,
+                        kind: serde_json::from_value(serde_json::Value::String(
+                            kinds.value(row).to_ascii_uppercase(),
+                        ))?,
+                        authority: serde_json::from_slice(authorities.value(row))?,
+                        identity: identities.value(row).to_vec(),
+                    },
                     u64::from(values.value(row)),
                 );
             }

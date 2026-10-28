@@ -8,12 +8,14 @@ async fn traversal_fanout_caps() -> TestResult {
         .graph
         .edges
         .iter()
-        .find(|edge| edge.key.from == TraversalFixture::subject(0))
+        .find(|edge| {
+            snapshot.graph.subjects[edge.key.from as usize] == TraversalFixture::subject(0)
+        })
         .ok_or("fanout edge")?
         .clone();
     for index in 100..160 {
         let subject = TraversalFixture::subject(index);
-        snapshot.graph.subjects.push(subject.clone());
+        let subject = TraversalFixture::add_subject(&mut snapshot, subject);
         let mut edge = template.clone();
         edge.key.to = subject;
         snapshot.graph.edges.push(edge);

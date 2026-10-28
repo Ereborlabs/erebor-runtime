@@ -28,7 +28,7 @@ fn physical_results_keep_stages() -> TestResult {
     for finding in &snapshot.findings {
         let effect = finding.effects.first().ok_or("effect")?;
         assert_eq!(finding.reason, FindingReasonV1::UnexpectedEffect);
-        assert_eq!(snapshot.input_manifest, finding.revision);
+        finding.validate_in(&snapshot.input_manifest)?;
         match effect.source_decision {
             1 => {
                 assert_eq!(effect.physical_result, GraphPhysicalResultV1::Prevented);

@@ -31,7 +31,7 @@ impl AnalysisStore {
             header_bytes,
             control,
             |id, mut header, revision, bytes| {
-                let buffer = header.snapshot_bytes.saturating_mul(2);
+                let buffer = header.allocation_bytes()?;
                 self.traversal_memory(output, header_bytes.saturating_add(buffer))?;
                 output.scan(bytes.len())?;
                 let sensitivity =
@@ -103,7 +103,7 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
     ) -> Result<crate::ContextSensitivityV1> {
         control.check()?;
-        self.traversal_memory(output, header.snapshot_bytes.saturating_mul(2))?;
+        self.traversal_memory(output, header.allocation_bytes()?)?;
         if !selection
             .sources
             .as_slice()
@@ -125,7 +125,7 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
     ) -> Result<()> {
         if !selection.binding_ids.is_empty() {
-            output.scan(header.snapshot_bytes)?;
+            output.scan(header.row_bytes)?;
             header.snapshot.findings =
                 GraphRows::read_findings(snapshot, id, header, Some(control))?;
             if header.snapshot.findings.len() != header.finding_count {
@@ -169,9 +169,14 @@ impl AnalysisStore {
             .join(", ");
         let query = format!(
             "WITH selected(result_id) AS (VALUES {values})
-             SELECT coalesce(sum(octet_length(from_subject_id) + octet_length(to_subject_id)
-                + octet_length(encode(edge_type)) + 32), 0)::UBIGINT
-             FROM graph_relationships JOIN selected USING (result_id)"
+             SELECT (
+                 (SELECT coalesce(sum(octet_length(tenant_id)
+                     + octet_length(encode(subject_kind)) + octet_length(authority)
+                     + octet_length(identity)), 0)
+                  FROM graph_subjects JOIN selected USING (result_id))
+                 + (SELECT coalesce(sum(8 + octet_length(encode(edge_type)) + 32), 0)
+                    FROM graph_relationships JOIN selected USING (result_id))
+             )::UBIGINT"
         );
         let values = ids
             .iter()

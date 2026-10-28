@@ -15,6 +15,26 @@ WITH current_findings AS (
         CASE sensitivity WHEN 'public' THEN 0 WHEN 'tenant' THEN 1
             WHEN 'host_restricted' THEN 2 END AS sensitivity_rank
     FROM notifications
+), revision_pairs AS (
+    SELECT DISTINCT finding.tenant_id,
+        finding.graph_result_id AS current_result_id, state.finding_result_id AS prior_result_id
+    FROM current_findings finding JOIN current_states state
+        ON state.tenant_id = finding.tenant_id AND state.finding_id = finding.finding_id
+    WHERE state.finding_available
+), same_revisions AS (
+    SELECT pair.*
+    FROM revision_pairs pair JOIN graph_manifest current_manifest
+        ON current_manifest.tenant_id = pair.tenant_id
+            AND current_manifest.graph_result_id = pair.current_result_id
+    JOIN graph_manifest prior_manifest
+        ON prior_manifest.tenant_id = pair.tenant_id
+            AND prior_manifest.graph_result_id = pair.prior_result_id
+    WHERE current_manifest.graph_revision = prior_manifest.graph_revision
+), matching_states AS (
+    SELECT state.*, revision.current_result_id
+    FROM current_states state JOIN same_revisions revision
+        ON revision.tenant_id = state.tenant_id
+            AND revision.prior_result_id = state.finding_result_id
 ), current_routes AS (
     SELECT * FROM notification_routes
     QUALIFY DENSE_RANK() OVER (
@@ -24,7 +44,7 @@ WITH current_findings AS (
     SELECT * FROM current_routes
     WHERE grant_current
 ), matching_routes AS (
-    SELECT finding.tenant_id, finding.finding_id, finding.finding_revision,
+    SELECT finding.tenant_id, finding.finding_id,
         finding.required_action, finding.priority_rank, finding.sensitivity_rank,
         finding.graph_result_id AS result_id, route.route_id, route.route_revision,
         escalation.route_id AS escalation_route_id,
@@ -37,10 +57,10 @@ WITH current_findings AS (
             AND escalation.route_id = route.escalation_route_id
 ), missing_routes AS (
     SELECT candidate.finding_id, candidate.result_id
-    FROM matching_routes candidate LEFT ANTI JOIN current_states state
+    FROM matching_routes candidate LEFT ANTI JOIN matching_states state
         ON state.tenant_id = candidate.tenant_id
             AND state.finding_id = candidate.finding_id
-            AND state.finding_revision = candidate.finding_revision
+            AND state.current_result_id = candidate.result_id
             AND (state.required_action IS NOT DISTINCT FROM candidate.required_action)
             AND state.priority_rank >= candidate.priority_rank
             AND state.sensitivity_rank >= candidate.sensitivity_rank
@@ -54,10 +74,10 @@ WITH current_findings AS (
         ON route.tenant_id = finding.tenant_id AND route.finding_id = finding.finding_id
 ), missing_findings AS (
     SELECT finding.finding_id, finding.graph_result_id AS result_id
-    FROM unmatched_findings finding LEFT ANTI JOIN current_states state
+    FROM unmatched_findings finding LEFT ANTI JOIN matching_states state
         ON state.tenant_id = finding.tenant_id
             AND state.finding_id = finding.finding_id
-            AND state.finding_revision = finding.finding_revision
+            AND state.current_result_id = finding.graph_result_id
             AND (state.required_action IS NOT DISTINCT FROM finding.required_action)
             AND state.priority_rank >= finding.priority_rank
             AND state.sensitivity_rank >= finding.sensitivity_rank

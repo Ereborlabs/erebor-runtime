@@ -1,10 +1,9 @@
-use crate::GraphValidate as _;
 use duckdb::{params_from_iter, Connection, Row};
 use snafu::ResultExt as _;
 
 use crate::{
-    AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, AnalysisReadControl, GraphEncodingSnafu,
-    GraphInvalidSnafu, GraphSubjectKeyV1, GraphTraversalV1, Result,
+    AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, AnalysisReadControl, GraphInvalidSnafu,
+    GraphSubjectKeyV1, GraphTraversalV1, Result,
 };
 
 pub(in crate::analysis) struct GraphWalk<'a> {
@@ -100,13 +99,13 @@ impl<'a> GraphWalk<'a> {
             }
             .fail();
         }
-        let count: u64 = summary.get(5).context(AnalysisDatabaseSnafu {
+        let count: u64 = summary.get(8).context(AnalysisDatabaseSnafu {
             operation: "decode traversal subject count",
         })?;
-        let edges: u64 = summary.get(6).context(AnalysisDatabaseSnafu {
+        let edges: u64 = summary.get(9).context(AnalysisDatabaseSnafu {
             operation: "decode traversal edge count",
         })?;
-        let bytes: u64 = summary.get(8).context(AnalysisDatabaseSnafu {
+        let bytes: u64 = summary.get(11).context(AnalysisDatabaseSnafu {
             operation: "decode traversal byte count",
         })?;
         if count > self.request.max_subjects as u64 {
@@ -130,7 +129,7 @@ impl<'a> GraphWalk<'a> {
         let mut output = WalkRows {
             subjects: Vec::new(),
             edges: Vec::new(),
-            hop_boundary: summary.get(7).context(AnalysisDatabaseSnafu {
+            hop_boundary: summary.get(10).context(AnalysisDatabaseSnafu {
                 operation: "decode traversal hop boundary",
             })?,
             bytes: bytes as usize,
@@ -160,13 +159,8 @@ impl WalkRows {
             operation: "decode traversal row kind",
         })? {
             1 => {
-                let bytes: Vec<u8> = row.get(1).context(AnalysisDatabaseSnafu {
-                    operation: "decode traversal subject key",
-                })?;
-                let subject: GraphSubjectKeyV1 =
-                    serde_json::from_slice(&bytes).context(GraphEncodingSnafu)?;
-                subject.validate()?;
-                let depth = row.get(2).context(AnalysisDatabaseSnafu {
+                let subject = crate::analysis::graph_rows::GraphRows::decode_subject(row)?;
+                let depth = row.get(5).context(AnalysisDatabaseSnafu {
                     operation: "decode traversal depth",
                 })?;
                 if depth > max_hops {
@@ -178,10 +172,10 @@ impl WalkRows {
                 self.subjects.push((subject, depth));
             }
             2 => self.edges.push((
-                row.get(3).context(AnalysisDatabaseSnafu {
+                row.get(6).context(AnalysisDatabaseSnafu {
                     operation: "decode traversal result identity",
                 })?,
-                row.get(4).context(AnalysisDatabaseSnafu {
+                row.get(7).context(AnalysisDatabaseSnafu {
                     operation: "decode traversal edge ordinal",
                 })?,
             )),
@@ -189,7 +183,7 @@ impl WalkRows {
                 return GraphInvalidSnafu {
                     field: "graph traversal row kind",
                 }
-                .fail()
+                .fail();
             }
         }
         Ok(())

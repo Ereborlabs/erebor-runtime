@@ -12,11 +12,10 @@ impl GraphRows {
         + octet_length(s.identity) AS bytes
         FROM graph_subjects s JOIN analysis_results r USING (result_id)
         UNION ALL SELECT r.tenant_id, r.result_id,
-        256 + octet_length(encode(e.result_id)) + octet_length(e.from_subject_id)
-        + octet_length(e.to_subject_id) + octet_length(encode(e.edge_type))
+        256 + octet_length(encode(e.result_id)) + octet_length(encode(e.edge_type))
         + octet_length(encode(e.package_id)) + octet_length(encode(e.cause))
-        + octet_length(e.evidence) + octet_length(e.proof_quality)
-        + octet_length(e.required_coverage_interval_ids)
+        + 4 * array_length(e.evidence)
+        + coalesce(list_sum(list_transform(e.required_coverage_interval_ids, value -> greatest(16, coalesce(octet_length(value), 0)))), 0)
         FROM graph_relationships e JOIN analysis_results r USING (result_id)
         UNION ALL SELECT r.tenant_id, r.result_id,
         256 + octet_length(encode(f.result_id)) + octet_length(f.tenant_id)
@@ -36,10 +35,13 @@ impl GraphRows {
         PRIMARY KEY (result_id, ordinal));
     CREATE TABLE graph_relationships (
         result_id VARCHAR NOT NULL, ordinal UINTEGER NOT NULL,
-        from_subject_id BLOB NOT NULL, to_subject_id BLOB NOT NULL,
+        from_subject_id UINTEGER NOT NULL, to_subject_id UINTEGER NOT NULL,
         edge_type VARCHAR NOT NULL, package_id VARCHAR NOT NULL,
-        cause VARCHAR NOT NULL, evidence BLOB NOT NULL, proof_quality BLOB NOT NULL,
-        required_coverage_interval_ids BLOB NOT NULL,
+        cause VARCHAR NOT NULL, evidence UINTEGER[] NOT NULL,
+        proof_quality STRUCT(source_authority UTINYINT, local_subject_binding UTINYINT,
+            remote_subject_binding UTINYINT, operation_result_authority UTINYINT,
+            temporal_coverage UTINYINT, integrity UTINYINT) NOT NULL,
+        required_coverage_interval_ids BLOB[] NOT NULL,
         first_boottime_ns UBIGINT NOT NULL, last_boottime_ns UBIGINT NOT NULL,
         PRIMARY KEY (result_id, ordinal));
     CREATE TABLE graph_findings (

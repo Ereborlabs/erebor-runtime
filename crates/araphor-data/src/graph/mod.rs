@@ -2,6 +2,7 @@ mod contract;
 mod input;
 mod model;
 mod proof;
+mod revision;
 mod traversal;
 
 pub use model::*;

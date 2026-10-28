@@ -33,7 +33,7 @@ impl GraphRows {
         Ok(())
     }
 
-    fn decode_subject(row: &Row<'_>) -> Result<GraphSubjectKeyV1> {
+    pub(in crate::analysis) fn decode_subject(row: &Row<'_>) -> Result<GraphSubjectKeyV1> {
         let subject = GraphSubjectKeyV1 {
             tenant_id: Self::borrowed(row, 1, |value| value.as_blob())?
                 .try_into()
@@ -59,8 +59,8 @@ impl GraphRows {
             WHERE finding.result_id = subject.result_id AND finding.subject_id = seed.subject_id
          ) OR EXISTS (
             SELECT 1 FROM graph_relationships edge
-            WHERE edge.result_id = subject.result_id AND edge.evidence <> '[]'::BLOB
-                AND (edge.from_subject_id = seed.subject_id OR edge.to_subject_id = seed.subject_id)
+            WHERE edge.result_id = subject.result_id AND array_length(edge.evidence) > 0
+                AND (edge.from_subject_id = subject.ordinal OR edge.to_subject_id = subject.ordinal)
          )"
     }
 
@@ -79,7 +79,7 @@ impl GraphRows {
         keys: &[GraphSubjectKeyV1],
         control: &AnalysisReadControl,
         binding_scope: bool,
-    ) -> Result<Vec<GraphSubjectKeyV1>> {
+    ) -> Result<Vec<(GraphSubjectKeyV1, u32)>> {
         let mut selected = Vec::new();
         for keys in keys.chunks(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS) {
             control.check()?;
@@ -119,13 +119,16 @@ impl GraphRows {
                 operation: "advance selected graph subjects",
             })? {
                 control.check()?;
-                selected.push(Self::column_operation(
-                    Self::decode_subject(row),
-                    "decode selected graph subject columns",
-                )?);
+                selected.push((
+                    Self::column_operation(
+                        Self::decode_subject(row),
+                        "decode selected graph subject columns",
+                    )?,
+                    Self::column(row, 0)?,
+                ));
             }
         }
-        selected.sort();
+        selected.sort_by(|left, right| left.0.cmp(&right.0));
         control.check()?;
         Ok(selected)
     }
@@ -133,6 +136,7 @@ impl GraphRows {
     pub(in crate::analysis) fn read_subjects(
         writer: &Connection,
         result_id: &str,
+        expected_count: usize,
         control: Option<&AnalysisReadControl>,
     ) -> Result<Vec<GraphSubjectKeyV1>> {
         Self::load(
@@ -140,6 +144,7 @@ impl GraphRows {
             "graph_subjects",
             COLUMNS,
             result_id,
+            expected_count,
             control,
             Self::decode_subject,
         )

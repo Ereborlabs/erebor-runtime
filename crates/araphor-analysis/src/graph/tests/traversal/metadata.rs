@@ -126,19 +126,6 @@ impl TraversalFixture {
         );
         Ok(output)
     }
-
-    fn metadata_replace(
-        &self,
-        window: usize,
-        mut snapshot: GraphSnapshotV1,
-        id: &str,
-    ) -> TestResult {
-        snapshot.graph.revision.clone_from(&snapshot.input_manifest);
-        for finding in &mut snapshot.findings {
-            finding.revision.clone_from(&snapshot.input_manifest);
-        }
-        self.replace(window, snapshot, id)
-    }
 }
 
 fn input_data<'a>(output: &'a DefinitionOutput, name: &str) -> TestResult<&'a sdk::Input> {
@@ -306,7 +293,7 @@ async fn graph_metadata_roundtrip() -> TestResult {
         .column_by_name("subject_id")
         .ok_or("the subject column is absent")?
         .to_data()
-        .buffers()[1]
+        .buffers()[0]
         .clone();
     drop(baseline);
     assert!(engine.memory().input_reserved() > 0);
@@ -315,7 +302,7 @@ async fn graph_metadata_roundtrip() -> TestResult {
 
     let mut unknown = original.clone();
     unknown.input_manifest.coverage.clear();
-    fixture.metadata_replace(0, unknown, "graph:metadata:unknown")?;
+    fixture.replace(0, unknown, "graph:metadata:unknown")?;
     let output = fixture.metadata(&engine, selection.clone()).await?;
     expect_metadata(&output, sdk::CoverageState::Unknown, &[])?;
     let previous = input_data(&output, "graph_subjects")?.revision.clone();
@@ -329,8 +316,8 @@ async fn graph_metadata_roundtrip() -> TestResult {
     ];
     let mut unknown = GraphSnapshotV1::try_from(fixture.requests[1].body.as_slice())?;
     unknown.input_manifest.coverage.clear();
-    fixture.metadata_replace(1, unknown, "graph:metadata:other-unknown")?;
-    fixture.metadata_replace(0, gapped, "graph:metadata:gapped")?;
+    fixture.replace(1, unknown, "graph:metadata:other-unknown")?;
+    fixture.replace(0, gapped, "graph:metadata:gapped")?;
     let output = fixture.metadata(&engine, selection.clone()).await?;
     expect_metadata(
         &output,
@@ -346,7 +333,7 @@ async fn graph_metadata_roundtrip() -> TestResult {
         .input_manifest
         .missing_ranges
         .clone_from(&missing.missing_ranges);
-    fixture.metadata_replace(0, missing, "graph:metadata:missing")?;
+    fixture.replace(0, missing, "graph:metadata:missing")?;
     let output = fixture.metadata(&engine, selection.clone()).await?;
     expect_metadata(&output, sdk::CoverageState::Gapped, &["GRAPH_INPUT_GAPS"])?;
     drop(output);
@@ -367,9 +354,9 @@ async fn graph_metadata_roundtrip() -> TestResult {
             .hop_boundary
     );
     drop(output);
-    fixture.metadata_replace(0, original, "graph:metadata:healthy")?;
+    fixture.replace(0, original, "graph:metadata:healthy")?;
     let restored = GraphSnapshotV1::try_from(fixture.requests[1].body.as_slice())?;
-    fixture.metadata_replace(1, restored, "graph:metadata:other-healthy")?;
+    fixture.replace(1, restored, "graph:metadata:other-healthy")?;
     let output = fixture.metadata(&engine, boundary).await?;
     expect_metadata(
         &output,
@@ -453,7 +440,7 @@ async fn graph_metadata_empty_scope() -> TestResult {
     snapshot.graph.subjects.clear();
     snapshot.graph.edges.clear();
     snapshot.findings.clear();
-    fixture.metadata_replace(0, snapshot, "graph:metadata:empty")?;
+    fixture.replace(0, snapshot, "graph:metadata:empty")?;
     selection.select_graphs(
         Selection::Exact(vec!["graph:metadata:empty".into()]),
         Some(TraversalFixture::request(8)),

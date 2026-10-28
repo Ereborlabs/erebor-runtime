@@ -390,3 +390,48 @@ and its passing exact retry on unchanged source and binaries. The failure cause
 is unresolved. Native proof covers Linux x86_64 GNU with glibc 2.39 only.
 Ordinary functional durations establish no causal speed improvement. The Data
 CI target below ten minutes remains unproven.
+
+
+## Incremental builtin Graph updates
+
+**User requirement recorded on 2026-10-28. Design direction: Approved. Implementation: Not done.**
+
+A query subscription selects input data and an optional time window.
+The subscription can have no time window.
+The subscription calls the Graph builder as a builtin analysis package.
+The Graph package owns the decision to rebuild its result or update its retained state.
+The subscription does not make that decision for the package.
+
+The builtin Graph packages must use incremental updates for new events.
+For example, if the Graph already contains the contribution of 940 events and
+10 events arrive, ordinary processing must handle the 10 additions. It must not
+evaluate all 950 events again only because new data arrived.
+The package must retain the existing nodes, edges, evidence links, and findings.
+It must update affected results when an event leaves a window or relevant
+policy or context changes. Restart must use retained package state.
+
+Execution must use the existing path:
+
+Query subscription receives a relevant change
+  -> the native SQL pipeline selects the data and optional window
+  -> physical execution calls the builtin Graph package with its saved state
+  -> the package produces the required Graph and state changes
+  -> Data commits the result, state, evidence references, and progress atomically
+  -> existing subscriptions receive the committed change
+
+Use the existing DataFusion pipeline, package execution, state contracts, and
+Data transaction owner. Do not add a second executor, scheduler, state store,
+or polling loop. Do not implement a facility that DataFusion or an existing
+crate already supplies.
+
+Compact Graph storage and incremental processing are separate requirements.
+Removing repeated Graph values does not prove incremental execution.
+The implementation plan must explain additions, window removals, changes to
+policy or context, retry, and restart before incremental code changes start.
+The independent change reviewer must review the plan and each implementation
+change. Measure time and Graph sizes in the existing problematic backlog test.
+Keep its workload, assertions, and deadlines unchanged. Report any regression
+or remaining failure with the measured improvements.
+
+The [incremental Graph implementation plan](araphor-incremental-graphs.md) records
+the owner changes, retained-input contract, deliverables, and verification.

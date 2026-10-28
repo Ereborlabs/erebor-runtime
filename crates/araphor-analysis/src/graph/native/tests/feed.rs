@@ -1219,9 +1219,10 @@ async fn failed_feed_recovers_source() -> TestResult {
             usize::MAX,
             usize::MAX,
         )?;
-        let (revised, finding) = current.into_iter().next().ok_or("Revised Graph finding")?;
+        let (revised, _) = current.into_iter().next().ok_or("Revised Graph finding")?;
         assert_ne!(revised, original.result_id);
-        assert!(!finding.revision.context.is_empty());
+        assert!(!query.store().graph_result(source.tenant_id, &revised)?
+            .ok_or("Revised Graph result")?.input_manifest.context.is_empty());
         assert_eq!(
             query
                 .store()

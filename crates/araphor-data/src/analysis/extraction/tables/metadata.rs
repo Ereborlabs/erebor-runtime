@@ -43,7 +43,6 @@ impl Capture<'_> {
             ("graph_branches", extraction.graph_enabled),
             ("correlation_packages", extraction.graph_enabled),
             ("policy_observations", extraction.graph_enabled),
-            ("graph_manifest", extraction.graph_enabled),
             ("graph_state", extraction.graph_enabled),
             ("notifications", extraction.notification_enabled),
         ] {
@@ -180,7 +179,7 @@ impl Capture<'_> {
             owner => Utf8(false):Some(metadata.get("araphor.owner").map_or("araphor-data.AnalysisStore",String::as_str)),
             readiness => Utf8(false):Some(match relation {
                 "behaviors"=>if enabled.0 {"enabled"} else {"disabled"},
-                "relationships"|"graph_subjects"|"graph_branches"|"correlation_packages"|"policy_observations"|"graph_manifest"=>if enabled.1 {"enabled"} else {"disabled"},
+                "relationships"|"graph_subjects"|"graph_branches"|"correlation_packages"|"policy_observations"=>if enabled.1 {"enabled"} else {"disabled"},
                 "notifications"=>if enabled.2 {"enabled"} else {"disabled"},
                 _=>"available",
             }),

@@ -474,7 +474,7 @@ async fn managed_expiry_without_head() -> TestResult {
         .store()
         .read_result(donor.source.tenant_id, &id)?
         .ok_or("Native Graph seed body")?;
-    assert_eq!(body, serde_json::to_vec(&snapshot)?);
+    assert_eq!(body, head.body);
     let (mut witnesses, references) = donor
         .query
         .store()
@@ -497,13 +497,11 @@ async fn managed_expiry_without_head() -> TestResult {
     let mut restored = snapshot.clone();
     restored.witness_deadline_utc_ns = original_snapshot.witness_deadline_utc_ns;
     assert_eq!(restored, original_snapshot);
-    assert_eq!(serde_json::to_vec(&restored)?, body);
     let mut restored = witnesses.clone();
     for (restored, original) in restored.iter_mut().zip(&original_witnesses) {
         restored.expires_utc_ns = original.expires_utc_ns;
     }
     assert_eq!(restored, original_witnesses);
-    let body = serde_json::to_vec(&snapshot)?;
     let contexts = references
         .iter()
         .map(|reference| {
@@ -588,10 +586,9 @@ async fn managed_expiry_without_head() -> TestResult {
         store.graph_result(fixture.source.tenant_id, &id)?,
         Some(snapshot.clone())
     );
-    assert_eq!(
-        store.read_result(fixture.source.tenant_id, &id)?,
-        Some(body.clone())
-    );
+    let body = store
+        .read_result(fixture.source.tenant_id, &id)?
+        .ok_or("Retained Graph header")?;
     let references = references
         .iter()
         .map(|reference| AnalysisContextRefV1 {
@@ -754,13 +751,6 @@ async fn managed_expiry_without_head() -> TestResult {
             .store()
             .graph_result(fixture.source.tenant_id, expired_id)?,
         Some(expected.clone())
-    );
-    assert_eq!(
-        fixture
-            .query
-            .store()
-            .read_result(fixture.source.tenant_id, expired_id)?,
-        Some(serde_json::to_vec(&expected)?)
     );
     assert_eq!(
         fixture

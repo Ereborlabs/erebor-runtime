@@ -118,11 +118,11 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
     );
     for fixture in [&byte, &typed] {
         assert_eq!(
-            fixture.store.read_result(
+            fixture.store.graph_result(
                 fixture.request.scope.identity.tenant_id,
                 &fixture.request.result_id
             )?,
-            Some(fixture.request.body.clone())
+            Some(fixture.snapshot.clone())
         );
         assert_eq!(
             fixture

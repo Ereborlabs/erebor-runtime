@@ -744,7 +744,7 @@ async fn managed_graph_crashes() -> TestResult {
             assert_eq!(graph.packages.len(), 3);
             assert_eq!(
                 store.read_result(source.tenant_id, &head.result_id)?,
-                Some(serde_json::to_vec(&graph)?)
+                Some(head.body.clone())
             );
             let (witnesses, contexts) =
                 store.package_evidence(source.tenant_id, std::slice::from_ref(&head.result_id))?;

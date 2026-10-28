@@ -35,11 +35,8 @@ fn proposed(
         .input_manifest
         .context
         .push(context.key.clone());
-    fixture.snapshot.graph.revision = fixture.snapshot.input_manifest.clone();
+
     fixture.snapshot.graph.facts.push(fact);
-    for finding in &mut fixture.snapshot.findings {
-        finding.revision = fixture.snapshot.input_manifest.clone();
-    }
     let descriptor = sdk::Package::new(
         "graph-image",
         "r1",

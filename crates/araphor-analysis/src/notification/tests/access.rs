@@ -27,7 +27,8 @@ fn control_notification_full_window_keeps_exact_revision_in_immutable_graph_resu
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     let finding = finding(256, FindingSeverityV1::High);
-    assert!(serde_json::to_vec(&finding.revision)?.len() > 32 * 1024);
+    let revision = manifest(256);
+    assert!(serde_json::to_vec(&revision)?.len() > 32 * 1024);
     commit_finding(&store, finding.clone(), 256)?;
     assert_eq!(route(&router, 300)?, 1);
     let state = router
@@ -42,8 +43,8 @@ fn control_notification_full_window_keeps_exact_revision_in_immutable_graph_resu
         store
             .graph_finding([1; 16], &reference.result_id, &reference.finding_id)?
             .ok_or("finding result is absent")?
-            .revision,
-        finding.revision
+            .1,
+        revision
     );
     let sink = Sink::default();
     assert_eq!(deliver(&router, &sink, 301)?, 1);
@@ -53,7 +54,7 @@ fn control_notification_full_window_keeps_exact_revision_in_immutable_graph_resu
             .as_ref()
             .ok_or("delivery finding is absent")?
             .revision,
-        finding.revision
+        revision
     );
     Ok(())
 }

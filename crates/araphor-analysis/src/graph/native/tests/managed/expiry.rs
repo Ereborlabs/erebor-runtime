@@ -233,7 +233,6 @@ async fn expiry_allows_new_input() -> TestResult {
         .store()
         .read_result(donor.source.tenant_id, &expired_id)?
         .ok_or("Donor expired Graph bytes")?;
-    assert_eq!(expired_body, serde_json::to_vec(&generated)?);
     assert_eq!(
         donor
             .query

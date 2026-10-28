@@ -54,23 +54,37 @@ impl GraphRows {
         Ok(Some(header))
     }
 
-    pub(super) fn check_bytes(
+    pub(in crate::analysis) fn check_bytes(
         writer: &Connection,
         result_id: &str,
         header: &GraphHeader,
     ) -> Result<()> {
-        header.check_bytes(result_id, Self::stored_bytes(writer, result_id)?)
+        let (bytes, subjects, edges, findings) = Self::stored_shape(writer, result_id)?;
+        header.check_shape(result_id, bytes, subjects, edges, findings)
     }
 
+    #[cfg(test)]
     pub(super) fn stored_bytes(writer: &Connection, result_id: &str) -> Result<u64> {
+        Self::stored_shape(writer, result_id).map(|shape| shape.0)
+    }
+
+    fn stored_shape(writer: &Connection, result_id: &str) -> Result<(u64, u64, u64, u64)> {
         let query = format!(
             "WITH analysis_results AS (
             SELECT result_id, tenant_id FROM main.analysis_results WHERE result_id = ?
-            ) SELECT coalesce(sum(bytes), 0)::UBIGINT FROM ({})",
+            ) SELECT coalesce(sum(bytes), 0)::UBIGINT,
+                (SELECT count(*) FROM graph_subjects WHERE result_id = ?),
+                (SELECT count(*) FROM graph_relationships WHERE result_id = ?),
+                (SELECT count(*) FROM graph_findings WHERE result_id = ?)
+            FROM ({})",
             Self::CHARGES
         );
         writer
-            .query_row(&query, params![result_id], |row| row.get(0))
+            .query_row(
+                &query,
+                params![result_id, result_id, result_id, result_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
             .context(AnalysisDatabaseSnafu {
                 operation: "check native graph bytes",
             })

@@ -40,7 +40,7 @@ fn native_header_batch_bounds() -> TestResult {
                 assert_eq!(saved.subject_count, header.subject_count);
                 assert_eq!(saved.edge_count, header.edge_count);
                 assert_eq!(saved.finding_count, header.finding_count);
-                assert_eq!(saved.snapshot_bytes, header.snapshot_bytes);
+                assert_eq!(saved.row_bytes, header.row_bytes);
                 assert!(header.snapshot.graph.subjects.is_empty());
                 assert!(header.snapshot.graph.edges.is_empty());
                 assert!(header.snapshot.findings.is_empty());
@@ -75,7 +75,7 @@ fn native_header_batch_bounds() -> TestResult {
         rejected(&ids, 1),
         Err(crate::Error::AnalysisInputTooLarge { .. })
     ));
-    let maximum = serde_json::to_vec(&fixture.snapshot)?.len()
+    let maximum = GraphRows::row_bytes(&fixture.snapshot)?
         + (fixture.snapshot.graph.subjects.len()
             + fixture.snapshot.graph.edges.len()
             + fixture.snapshot.findings.len())

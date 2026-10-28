@@ -74,16 +74,26 @@ impl GraphWalk<'_> {
             "WITH RECURSIVE requested(result_id) AS (VALUES {requested}),
              seeds(subject_id, tenant_id, subject_kind, authority, identity) AS (VALUES {seeds}),
              eligible_edges AS NOT MATERIALIZED (
-                 SELECT e.result_id, e.ordinal, e.from_subject_id, e.to_subject_id
-                     , e.edge_type
+                 SELECT e.result_id, e.ordinal,
+                     struct_pack(tenant_id := source.tenant_id, subject_kind := source.subject_kind,
+                         authority := source.authority, identity := source.identity) AS from_subject_id,
+                     struct_pack(tenant_id := target.tenant_id, subject_kind := target.subject_kind,
+                         authority := target.authority, identity := target.identity) AS to_subject_id,
+                     e.edge_type
                  FROM graph_relationships e JOIN requested USING (result_id)
-                 WHERE NOT ? OR e.evidence <> '[]'::BLOB
+                 LEFT JOIN graph_subjects source ON source.result_id = e.result_id
+                     AND source.ordinal = e.from_subject_id
+                 LEFT JOIN graph_subjects target ON target.result_id = e.result_id
+                     AND target.ordinal = e.to_subject_id
+                 WHERE NOT ? OR array_length(e.evidence) > 0
              ), edges AS MATERIALIZED (
                  SELECT result_id, ordinal, from_subject_id, to_subject_id
                  FROM eligible_edges e {filter}
              ), links AS ({links}),
              reach(subject_id, depth) USING KEY (subject_id) AS (
-                 SELECT DISTINCT seed.subject_id, 0::UINTEGER
+                 SELECT DISTINCT struct_pack(tenant_id := seed.tenant_id,
+                     subject_kind := seed.subject_kind, authority := seed.authority,
+                     identity := seed.identity), 0::UINTEGER
                  FROM seeds seed WHERE EXISTS (
                      SELECT 1 FROM graph_subjects subject JOIN requested USING (result_id)
                      WHERE subject.tenant_id = seed.tenant_id
@@ -116,7 +126,10 @@ impl GraphWalk<'_> {
                          WHERE boundary.depth = ? AND NOT EXISTS (
                              SELECT 1 FROM reach visited WHERE visited.subject_id = link.target
                          )) AS hop_boundary,
-                     ? + 2 * (coalesce((SELECT sum(octet_length(subject_id)) FROM reach), 0)
+                     ? + 2 * (coalesce((SELECT sum(octet_length(subject_id.tenant_id)
+                             + octet_length(encode(subject_id.subject_kind))
+                             + octet_length(subject_id.authority)
+                             + octet_length(subject_id.identity)) FROM reach), 0)
                          + (SELECT count(*) FROM reach) * ?
                          + coalesce((SELECT sum(octet_length(encode(result_id))) FROM edge_keys), 0)
                          + (SELECT count(*) FROM edge_keys) * ?) AS bytes
@@ -124,14 +137,18 @@ impl GraphWalk<'_> {
                  SELECT *, subject_count <= ? AND edge_count <= ? AND bytes <= ? AS included
                  FROM summary
              ), output AS (
-                 SELECT 0::UTINYINT AS kind, NULL::BLOB AS subject_id,
+                 SELECT 0::UTINYINT AS kind, NULL::STRUCT(tenant_id BLOB, subject_kind VARCHAR,
+                         authority BLOB, identity BLOB) AS subject_id,
                      NULL::UINTEGER AS depth, NULL::VARCHAR AS result_id, NULL::UINTEGER AS ordinal,
                      subject_count, edge_count, hop_boundary, bytes FROM bounded
                  UNION ALL SELECT 1, CASE WHEN included THEN subject_id END, depth, NULL, NULL,
                      subject_count, edge_count, hop_boundary, bytes FROM reach CROSS JOIN bounded
                  UNION ALL SELECT 2, NULL, NULL, CASE WHEN included THEN result_id END, ordinal,
                      subject_count, edge_count, hop_boundary, bytes FROM edge_keys CROSS JOIN bounded
-             ) SELECT * FROM output ORDER BY kind, depth, subject_id, result_id, ordinal"
+             ) SELECT kind, subject_id.tenant_id, subject_id.subject_kind,
+                 subject_id.authority, subject_id.identity, depth, result_id, ordinal,
+                 subject_count, edge_count, hop_boundary, bytes
+             FROM output ORDER BY kind, depth, subject_id, result_id, ordinal"
         );
         Ok((query, values))
     }

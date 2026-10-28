@@ -137,6 +137,26 @@ impl Graph<'_> {
                 }
             })
             .collect();
+        let mut indices = vec![0; self.subjects.len()];
+        let subjects = self
+            .subjects
+            .into_iter()
+            .enumerate()
+            .map(|(index, (subject, prior))| {
+                indices[prior as usize] = index as u32;
+                subject
+            })
+            .collect();
+        let mut edges = self
+            .edges
+            .into_values()
+            .map(|mut edge| {
+                edge.key.from = indices[edge.key.from as usize];
+                edge.key.to = indices[edge.key.to as usize];
+                edge
+            })
+            .collect::<Vec<_>>();
+        edges.sort_by(|left, right| left.key.cmp(&right.key));
         let snapshot = GraphSnapshotV1 {
             schema_version: GRAPH_SCHEMA_VERSION,
             scope: ProcessorScopeV1 {
@@ -146,11 +166,10 @@ impl Graph<'_> {
             },
             first_cursor: first,
             last_cursor: last,
-            input_manifest: self.revision.clone(),
+            input_manifest: self.revision,
             graph: GraphVersionV1 {
-                revision: self.revision,
-                subjects: self.subjects.into_iter().collect(),
-                edges: self.edges.into_values().collect(),
+                subjects,
+                edges,
                 branches: self.branches,
                 facts: self.facts,
             },

@@ -267,8 +267,8 @@ fn graph_notice_checks_authority() -> TestResult {
     assert_eq!(
         fixture
             .store
-            .read_result(fixture.snapshot.scope.identity.tenant_id, id)?,
-        Some(fixture.request.body.clone())
+            .graph_result(fixture.snapshot.scope.identity.tenant_id, id)?,
+        Some(fixture.snapshot.clone())
     );
     Ok(())
 }

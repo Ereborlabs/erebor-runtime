@@ -246,7 +246,7 @@ impl AnalysisStore {
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
         complete: bool,
-    ) -> Result<(GraphHeader, Option<Vec<u8>>)> {
+    ) -> Result<GraphHeader> {
         control.check()?;
         let length: u64 = snapshot
             .query_row(
@@ -270,25 +270,21 @@ impl AnalysisStore {
         output.charge(length.saturating_mul(2))?;
         let mut header = GraphRows::read_header(snapshot, tenant, result_id)?
             .ok_or_else(|| self.state_error("the selected graph header is absent"))?;
-        let remaining = header.snapshot_bytes.saturating_sub(length);
-        output.scan(remaining)?;
-        output.charge(remaining.saturating_mul(2))?;
-        let canonical = if complete {
-            let (graph, body) =
-                GraphRows::read_control(snapshot, result_id, &header, Some(control))?.into_parts();
-            header.snapshot = graph;
-            Some(body)
+        GraphRows::check_bytes(snapshot, result_id, &header)?;
+        output.scan(header.row_bytes)?;
+        output.charge(header.allocation_bytes()?)?;
+        if complete {
+            header.snapshot = GraphRows::read_control(snapshot, result_id, &header, Some(control))?;
         } else {
             header.snapshot.findings =
                 GraphRows::read_findings(snapshot, result_id, &header, Some(control))?;
-            None
-        };
+        }
         if header.snapshot.findings.len() != header.finding_count {
             return self.reject("the selected graph finding count differs");
         }
         if !complete {
             header.snapshot.validate()?;
         }
-        Ok((header, canonical))
+        Ok(header)
     }
 }

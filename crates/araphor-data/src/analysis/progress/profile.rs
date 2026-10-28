@@ -353,7 +353,6 @@ impl AnalysisStore {
             &[],
             &[],
             false,
-            false,
         )
         .map(|write| Some((write, origin)))
     }
@@ -390,7 +389,6 @@ impl AnalysisStore {
             &prepared.contexts,
             &[],
             &[],
-            false,
             &mut check,
         )
     }
@@ -430,7 +428,6 @@ impl AnalysisStore {
             &prepared.contexts,
             &[],
             &[],
-            false,
             &mut check,
         )
     }

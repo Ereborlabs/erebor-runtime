@@ -330,10 +330,6 @@ async fn frozen_keys_preserve_source() -> TestResult {
         .extend(retained.input_manifest.coverage.clone());
     frozen.input_manifest.coverage.sort();
     frozen.input_manifest.coverage.dedup();
-    frozen.graph.revision = frozen.input_manifest.clone();
-    for finding in &mut frozen.findings {
-        finding.revision = frozen.input_manifest.clone();
-    }
     let before = fixture.query.store().meta()?;
     let contexts = frozen
         .input_manifest

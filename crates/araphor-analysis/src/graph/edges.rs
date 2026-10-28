@@ -26,15 +26,15 @@ impl Graph<'_> {
         };
         from.validate()?;
         to.validate()?;
-        self.subjects.insert(from.clone());
-        self.subjects.insert(to.clone());
+        let from = self.subject_index(from)?;
+        let to = self.subject_index(to)?;
         self.edge(
             GraphEdgeKeyV1 {
                 from,
                 to,
                 edge_type,
                 package_id: package.into(),
-                evidence: self.selected_evidence(&edge.evidence)?,
+                evidence: self.evidence_indices(&edge.evidence)?,
                 cause: match edge.cause {
                     algorithm::Cause::Direct => GraphCauseV1::Direct,
                     algorithm::Cause::Contextual => GraphCauseV1::Contextual,
@@ -100,7 +100,7 @@ impl Graph<'_> {
                 return GraphInvalidSnafu {
                     field: "native edge selection",
                 }
-                .fail()
+                .fail();
             }
         })
     }
@@ -129,7 +129,7 @@ impl Graph<'_> {
                         return GraphInvalidSnafu {
                             field: "graph parent selection",
                         }
-                        .fail()
+                        .fail();
                     }
                 }
             }
@@ -166,7 +166,7 @@ impl Graph<'_> {
                     return GraphInvalidSnafu {
                         field: "graph authority selection",
                     }
-                    .fail()
+                    .fail();
                 }
             },
             algorithm::EdgeKind::Kubernetes => {
@@ -199,7 +199,7 @@ impl Graph<'_> {
                         return GraphInvalidSnafu {
                             field: "graph Kubernetes selection",
                         }
-                        .fail()
+                        .fail();
                     }
                 }
             }
@@ -207,7 +207,7 @@ impl Graph<'_> {
                 return GraphInvalidSnafu {
                     field: "fact edge selection",
                 }
-                .fail()
+                .fail();
             }
         })
     }

@@ -43,6 +43,7 @@ pub(super) struct Capture<'a> {
     received_min: Option<u64>,
     next_change: Option<u64>,
     packages: BTreeMap<usize, (Arc<sdk::Schema>, Vec<RecordBatch>, sdk::Coverage)>,
+    graph_manifests: std::collections::BTreeSet<String>,
     pub(super) graph_coverage: std::collections::BTreeSet<(crate::EvidenceIntakeIdentityV1, u64)>,
 }
 
@@ -61,6 +62,7 @@ impl<'a> Capture<'a> {
             received_min: None,
             next_change: None,
             packages: BTreeMap::new(),
+            graph_manifests: Default::default(),
             graph_coverage: Default::default(),
         }
     }
@@ -80,6 +82,10 @@ impl<'a> Capture<'a> {
 
     pub(super) fn graph_headers(&self) -> bool {
         self.read.requests.contains_key("graph_manifest")
+    }
+
+    pub(super) fn needs_manifest(&self, result_id: &str) -> bool {
+        self.read.projected("graph_manifest").is_some() && !self.graph_manifests.contains(result_id)
     }
 
     pub(super) fn graph_expiry(&mut self, captured: &crate::ManagedCapture) -> Result<()> {
@@ -315,25 +321,6 @@ fn batch_metadata(batches: &Vec<RecordBatch>) -> usize {
                         .sum::<usize>()
             })
             .sum::<usize>()
-}
-
-impl ReadBudget<'_> {
-    fn revision_json<'b>(
-        &mut self,
-        revision: &crate::GraphRevisionV1,
-        encoded: &'b std::cell::OnceCell<Vec<u8>>,
-    ) -> Result<&'b [u8]> {
-        if let Some(bytes) = encoded.get() {
-            if bytes.len() > self.remaining_bytes() {
-                return Err(overflow());
-            }
-            self.charge(bytes.len())?;
-            return Ok(bytes.as_slice());
-        }
-        let bytes = json(Some(revision), self)?
-            .ok_or_else(|| invalid("the Graph revision encoding is absent"))?;
-        Ok(encoded.get_or_init(|| bytes).as_slice())
-    }
 }
 
 fn json<T: serde::Serialize + ?Sized>(

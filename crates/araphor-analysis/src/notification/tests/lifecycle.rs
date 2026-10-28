@@ -172,7 +172,7 @@ fn control_notification_pending_subject() -> TestResult {
             .as_ref()
             .ok_or("old subject absent")?
             .revision,
-        finding(1, FindingSeverityV1::Warning).revision
+        manifest(1)
     );
     assert_eq!(
         calls[1]
@@ -180,7 +180,7 @@ fn control_notification_pending_subject() -> TestResult {
             .as_ref()
             .ok_or("new subject absent")?
             .revision,
-        finding(2, FindingSeverityV1::Critical).revision
+        manifest(2)
     );
     assert_eq!(
         router.finding_version(pending.key, pending.revision)?,
@@ -242,7 +242,7 @@ fn control_notification_pending_escalation() -> TestResult {
             .as_ref()
             .ok_or("old subject absent")?
             .revision,
-        finding(1, FindingSeverityV1::Warning).revision
+        manifest(1)
     );
     assert_eq!(
         router.finding_version(pending.key, pending.revision)?,

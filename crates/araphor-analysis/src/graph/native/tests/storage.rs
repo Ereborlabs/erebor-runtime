@@ -277,7 +277,10 @@ async fn graph_package_commit_refs() -> TestResult {
         .ok_or("committed graph absent")?;
     assert_eq!(retained.result_id, request.result_id);
     assert_eq!(retained.commit_revision, receipt.commit_revision);
-    assert_eq!(retained.body, serde_json::to_vec(&snapshot)?);
+    assert_eq!(
+        store.graph_result(tenant, &retained.result_id)?,
+        Some(snapshot.clone())
+    );
     let original = snapshot
         .previous_result_id
         .as_ref()
@@ -327,7 +330,6 @@ async fn graph_package_commit_refs() -> TestResult {
     replacement.result_id = "graph:storage-removed".into();
     replacement.expected_cursor = receipt.consumed_cursor;
     replacement.created_utc_ns += 1;
-    let replacement_body = serde_json::to_vec(&empty)?;
     replacement.body.clear();
     store.commit_graph_snapshot(
         replacement.clone(),
@@ -354,12 +356,12 @@ async fn graph_package_commit_refs() -> TestResult {
             Some(retained.body.clone())
         );
         assert_eq!(
-            store.read_result(tenant, &replacement.result_id)?,
-            Some(replacement_body.clone())
+            store.graph_result(tenant, &replacement.result_id)?,
+            Some(empty.clone())
         );
         assert_eq!(
             store.graph_finding(tenant, &request.result_id, &finding.finding_id)?,
-            Some(finding.clone())
+            Some((finding.clone(), snapshot.input_manifest.clone()))
         );
         assert_eq!(
             store.graph_result(tenant, &replacement.result_id)?,

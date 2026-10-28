@@ -508,13 +508,13 @@ async fn notification_guard_keeps_pending() -> TestResult {
             .as_ref()
             .ok_or("original subject")?
             .revision,
-        original_finding.revision
+        crate::notification::tests::manifest(1)
     );
     assert_eq!(calls[1].attempt, number + 1);
     assert_eq!(calls[1].route_revision, 2);
     assert_eq!(
         calls[1].finding.as_ref().ok_or("updated subject")?.revision,
-        updated_finding.revision
+        crate::notification::tests::manifest(2)
     );
     assert!(calls.iter().all(|call| {
         call.key == key
@@ -708,11 +708,13 @@ async fn notification_host_keeps_deadlines() -> TestResult {
         ]
     );
     assert!(calls.last().ok_or("overdue delivery")?.overdue);
-    assert!(calls.iter().all(|call| call.deadline_utc_ns == deadline
-        && call
-            .finding
-            .as_ref()
-            .is_some_and(|finding| finding.revision == subject.revision)));
+    assert!(calls.iter().all(|call| {
+        call.deadline_utc_ns == deadline
+            && call
+                .finding
+                .as_ref()
+                .is_some_and(|finding| finding.revision == crate::notification::tests::manifest(1))
+    }));
     assert_eq!(store.source_status(&subject.evidence[0].stream)?, source);
     let resume = store.managed_resume([1; 16], "notifications", &control)?;
     assert_eq!(resume.instance, *instance.admitted());

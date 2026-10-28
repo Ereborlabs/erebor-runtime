@@ -253,12 +253,9 @@ impl AnalysisStore {
             return self.reject("the processor result scope is invalid");
         }
         self.read_snapshot(|reader| {
-            let mut result = reader
+            let result = reader
                 .query_row(
-                    "SELECT r.result_id,
-                        CASE WHEN r.processor_id = 'graph-findings' AND r.stream_key IS NOT NULL THEN ''::BLOB
-                            ELSE r.body END,
-                        r.commit_revision
+                    "SELECT r.result_id, r.body, r.commit_revision
                      FROM processor_progress p JOIN analysis_results r
                        ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id
                          AND r.processor_id = p.processor_id
@@ -282,13 +279,6 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "read processor result",
                 })?;
-            if scope.processor_id == crate::GRAPH_PROCESSOR {
-                if let Some(result) = &mut result {
-                    result.body = self
-                        .read_result_from(reader, scope.identity.tenant_id, &result.result_id)?
-                        .ok_or_else(|| self.state_error("the processor graph result is absent"))?;
-                }
-            }
             if result.as_ref().is_some_and(|result| result.body.is_empty()) {
                 return self.reject("the processor result body is empty");
             }
@@ -309,28 +299,19 @@ impl AnalysisStore {
         if tenant == [0; 16] || result_id.is_empty() {
             return self.reject("the analysis result identity is invalid");
         }
-        let stored: Option<(bool, Vec<u8>)> = connection
+        let body: Option<Vec<u8>> = connection
             .query_row(
-                "SELECT processor_id = 'graph-findings' AND stream_key IS NOT NULL,
-                    CASE WHEN processor_id = 'graph-findings' AND stream_key IS NOT NULL THEN ''::BLOB
-                        ELSE body END
-                FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+                "SELECT body FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
                 params![tenant.as_slice(), result_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read retained analysis result",
             })?;
-        let Some((native, mut body)) = stored else {
+        let Some(body) = body else {
             return Ok(None);
         };
-        if native {
-            let header = super::graph_rows::GraphRows::read_header(connection, tenant, result_id)?
-                .ok_or_else(|| self.state_error("the retained graph result is absent"))?;
-            let graph = super::graph_rows::GraphRows::read(connection, result_id, &header)?;
-            body = header.body(&graph)?;
-        }
         if body.is_empty() {
             return self.reject("the retained analysis result size is invalid");
         }
@@ -597,31 +578,21 @@ impl AnalysisStore {
         if input.scope.processor_id == crate::GRAPH_PROCESSOR {
             return self.reject("the graph result requires a guarded graph commit");
         }
-        self.commit_progress(
-            input,
-            None,
-            true,
-            None,
-            None,
-            &[],
-            &[],
-            &[],
-            false,
-            &mut || Ok(()),
-        )
+        self.commit_progress(input, None, true, None, None, &[], &[], &[], &mut || Ok(()))
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn commit_graph(
         &self,
         input: &AnalysisResultCommitV1,
         advance: bool,
-        mut check: impl FnMut() -> Result<()>,
+        check: impl FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
-        if input.scope.processor_id != crate::GRAPH_PROCESSOR {
-            return self.reject("the graph result owner is invalid");
-        }
-        let graph = crate::GraphSnapshotV1::try_from(input.body.as_slice())?;
-        self.commit_graph_inner(input, &graph, &[], &[], &[], advance, false, &mut check)
+        let graph = serde_json::from_slice(&input.body).context(crate::GraphEncodingSnafu)?;
+        let prepared = super::graph_rows::CanonicalGraph::bounded(graph, usize::MAX)?;
+        let mut input = input.clone();
+        input.body.clear();
+        self.commit_graph_snapshot(input, prepared, &[], &[], &[], advance, check)
     }
 
     #[expect(
@@ -630,7 +601,7 @@ impl AnalysisStore {
     )]
     pub fn commit_graph_snapshot(
         &self,
-        mut input: AnalysisResultCommitV1,
+        input: AnalysisResultCommitV1,
         prepared: super::graph_rows::CanonicalGraph,
         contexts: &[super::AnalysisContextVersionV1],
         proofs: &[AnalysisContextRefV1],
@@ -644,40 +615,18 @@ impl AnalysisStore {
         if !input.body.is_empty() {
             return self.reject("the typed graph commit contains independent body bytes");
         }
-        let (graph, body) = prepared.into_parts();
-        input.body = body;
-        self.commit_graph_inner(
-            &input, &graph, contexts, proofs, sources, advance, true, &mut check,
-        )
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The typed graph commit shares one transaction with its exact context inputs."
-    )]
-    fn commit_graph_inner(
-        &self,
-        input: &AnalysisResultCommitV1,
-        graph: &crate::GraphSnapshotV1,
-        contexts: &[super::AnalysisContextVersionV1],
-        proofs: &[AnalysisContextRefV1],
-        sources: &[(String, u64)],
-        advance: bool,
-        canonical: bool,
-        check: &mut dyn FnMut() -> Result<()>,
-    ) -> Result<AnalysisResultReceiptV1> {
-        self.check_graph_commit(input, graph, advance)?;
+        let graph = prepared.into_snapshot();
+        self.check_graph_commit(&input, &graph, advance)?;
         self.commit_progress(
-            input,
+            &input,
             None,
             advance,
             None,
-            Some(graph),
+            Some(&graph),
             contexts,
             proofs,
             sources,
-            canonical,
-            check,
+            &mut check,
         )
     }
 
@@ -700,7 +649,6 @@ impl AnalysisStore {
             &[],
             &[],
             &[],
-            false,
             &mut || Ok(()),
         )
     }
@@ -725,7 +673,6 @@ impl AnalysisStore {
             &[],
             &[],
             &[],
-            false,
             &mut || Ok(()),
         )
     }
@@ -744,7 +691,6 @@ impl AnalysisStore {
         contexts: &[super::AnalysisContextVersionV1],
         proofs: &[AnalysisContextRefV1],
         sources: &[(String, u64)],
-        canonical: bool,
         check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
         let mut writer = self.maintenance_writer()?;
@@ -765,7 +711,6 @@ impl AnalysisStore {
             proofs,
             sources,
             false,
-            canonical,
         )?;
         if !write.commit {
             check()?;
@@ -818,7 +763,6 @@ impl AnalysisStore {
         proofs: &[AnalysisContextRefV1],
         sources: &[(String, u64)],
         captured_prefix: bool,
-        canonical: bool,
     ) -> Result<ProgressWrite> {
         let (graph, notice) = graph.map_or((None, 0), |(graph, notice)| (Some(graph), notice));
         let previous = match expected {
@@ -835,7 +779,9 @@ impl AnalysisStore {
         }
         if !input.scope.valid()
             || input.result_id.is_empty()
-            || (input.body.is_empty() && (profile.is_none() || contexts.is_empty()))
+            || (input.body.is_empty()
+                && graph.is_none()
+                && (profile.is_none() || contexts.is_empty()))
             || input.created_utc_ns == 0
             || input.consumed_cursor < input.expected_cursor
             || input.witnesses.windows(2).any(|pair| {
@@ -903,13 +849,7 @@ impl AnalysisStore {
         }
         let path = self.root.join("analysis.duckdb");
         let graph_header = graph
-            .map(|graph| {
-                if canonical {
-                    super::graph_rows::GraphRows::encode_canonical(graph, &input.body)
-                } else {
-                    super::graph_rows::GraphRows::encode_body(graph, &input.body)
-                }
-            })
+            .map(super::graph_rows::GraphRows::encode)
             .transpose()?;
         let key = input.scope.identity.key();
         let existing = transaction
@@ -1027,23 +967,24 @@ impl AnalysisStore {
 
         let replacing = existing.is_some() && previous.is_some();
         if let Some((tenant, stored, retained, revision)) = existing {
-            let (Some(tenant), Some(stored), Some(mut retained)) = (tenant, stored, retained)
-            else {
+            let (Some(tenant), Some(stored), Some(retained)) = (tenant, stored, retained) else {
                 return self.reject("the retained analysis result exceeds its byte bound");
             };
-            if tenant == input.scope.identity.tenant_id && stored == request && graph.is_some() {
-                retained = self
-                    .read_result_from(
-                        transaction,
-                        input.scope.identity.tenant_id,
-                        &input.result_id,
-                    )?
-                    .ok_or_else(|| self.state_error("the retry graph result is absent"))?;
-            }
-            if tenant == input.scope.identity.tenant_id
-                && stored == request
-                && retained == input.body
-            {
+            let same = if tenant != input.scope.identity.tenant_id || stored != request {
+                false
+            } else if let Some(graph) = graph {
+                let header = super::graph_rows::GraphRows::read_header(
+                    transaction,
+                    input.scope.identity.tenant_id,
+                    &input.result_id,
+                )?
+                .ok_or_else(|| self.state_error("the retry graph result is absent"))?;
+                super::graph_rows::GraphRows::read(transaction, &input.result_id, &header)?
+                    == *graph
+            } else {
+                retained == input.body
+            };
+            if same {
                 return Ok(ProgressWrite {
                     receipt: AnalysisResultReceiptV1 {
                         commit_revision: revision,

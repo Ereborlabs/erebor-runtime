@@ -1917,19 +1917,19 @@ impl AnalysisStore {
                     .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
                 let subjects = read.projected("graph_subjects").is_some();
                 let edges = read.projected("relationships").is_some();
-                let (header, canonical) = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control, complete_graph)?;
+                let header = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control, complete_graph)?;
                 let mut graph = header.snapshot;
                 if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
                 if !selection.permits_graph(&graph) { continue; }
                 let sensitivity = self.graph_sensitivity(snapshot, &graph.input_manifest, control)?;
-                if subjects && !complete_graph {
-                    graph.graph.subjects = super::graph_rows::GraphRows::read_subjects(snapshot, id, Some(control))?;
+                if (subjects || edges) && !complete_graph {
+                    graph.graph.subjects = super::graph_rows::GraphRows::read_subjects(snapshot, id, header.subject_count, Some(control))?;
                     if graph.graph.subjects.len() != header.subject_count {
                         return self.reject("the selected graph subject count differs");
                     }
                 }
                 if edges && !complete_graph {
-                    graph.graph.edges = super::graph_rows::GraphRows::read_edges(snapshot, id, Some(control))?;
+                    graph.graph.edges = super::graph_rows::GraphRows::read_edges(snapshot, id, header.edge_count, Some(control))?;
                     if graph.graph.edges.len() != header.edge_count {
                         return self.reject("the selected graph relationship count differs");
                     }
@@ -1940,17 +1940,12 @@ impl AnalysisStore {
                     self.graph_contexts(snapshot, selection.tenant_id, id, &mut output, control)?
                 } else { Vec::new() };
                 output.reference_result(id, revision, AnalysisReferenceOriginV1::Graph)?;
-                capture.graph(id, &graph, canonical.as_ref(), header.subject_count, header.edge_count,
-                    revision, sensitivity, None, &contexts, header.notice, &mut output.sink(control))?;
+                capture.graph(id, &graph, header.subject_count, header.edge_count,
+                    revision, sensitivity, None, None, &contexts, header.notice, &mut output.sink(control))?;
             }
             self.extract_graph_coverage(snapshot, &read, &mut output, &mut capture, control)?;
             let mut routes = BTreeMap::new();
-            let mut graphs = Vec::<(
-                String,
-                u64,
-                crate::GraphSnapshotV1,
-                std::cell::OnceCell<Vec<u8>>,
-            )>::new();
+            let mut graphs = Vec::<(String, u64, super::graph_rows::GraphHeader)>::new();
             for key in selection.obligations.as_slice() {
                 control.check()?;
                 let (context, revision) = Self::read_context_from(snapshot, &self.root, key)?
@@ -1958,8 +1953,9 @@ impl AnalysisStore {
                 output.scan(context.body.len())?;
                 output.charge(context.body.capacity().saturating_mul(2))?;
                 let obligation = crate::NotificationObligationV1::try_from(&context)?;
+                let mut parent = None;
                 let finding = if let Some(reference) = &obligation.finding {
-                    let index = match graphs.binary_search_by(|(id, _, _, _)| id.cmp(&reference.result_id)) {
+                    let index = match graphs.binary_search_by(|(id, _, _)| id.cmp(&reference.result_id)) {
                         Ok(index) => Some(index),
                         Err(index) => {
                             let metadata: Option<(Vec<u8>, u64)> = snapshot.query_row(
@@ -1973,32 +1969,45 @@ impl AnalysisStore {
                             })?;
                             if let Some((source_key, graph_revision)) = metadata {
                                 let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
-                                let (header, _) = self.graph_input(snapshot, selection.tenant_id,
-                                    &reference.result_id, &mut output, control, false)?;
-                                let graph = header.snapshot;
+                                let header = self.graph_input(snapshot, selection.tenant_id,
+                                    &reference.result_id, &mut output, control, complete_graph)?;
+                                let graph = &header.snapshot;
                                 if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
-                                if !selection.permits_graph(&graph) { continue; }
+                                if !selection.permits_graph(graph) { continue; }
                                 let mut budget = output.sink(control);
                                 budget.charge(reference.result_id.len())?;
                                 budget.grow(&mut graphs)?;
-                                graphs.insert(index, (reference.result_id.clone(), graph_revision, graph,
-                                    std::cell::OnceCell::new()));
+                                graphs.insert(index, (reference.result_id.clone(), graph_revision, header));
                                 Some(index)
                             } else if unscoped_notifications { None } else { continue; }
                         }
                     };
                     if let Some(index) = index {
-                        let (_, graph_revision, graph, encoded) = &graphs[index];
+                        let (_, graph_revision, header) = &graphs[index];
+                        parent = Some(index);
                         output.reference_result(&reference.result_id, *graph_revision, AnalysisReferenceOriginV1::Notification)?;
-                        graph.findings.iter().find(|finding| finding.finding_id == reference.finding_id)
-                            .map(|finding| (finding, encoded))
+                        header.snapshot.findings.iter().find(|finding| finding.finding_id == reference.finding_id)
                     } else { None }
                 } else if unscoped_notifications { None } else { continue; };
-                if !selection.binding_ids.is_empty() && finding.is_none_or(|(finding, _)| {
+                if !selection.binding_ids.is_empty() && finding.is_none_or(|finding| {
                     finding.effects.is_empty() || finding.effects.iter().any(|effect| {
                         effect.binding_id.is_none_or(|binding| !selection.binding_ids.contains(&binding))
                     })
                 }) { continue; }
+                if let Some(index) = parent.filter(|index| capture.needs_manifest(&graphs[*index].0)) {
+                        let (id, graph_revision, header) = &graphs[index];
+                        let graph = &header.snapshot;
+                        let sensitivity = self.graph_sensitivity(snapshot, &graph.input_manifest, control)?;
+                        let contexts = if graph_contexts {
+                            self.graph_contexts(snapshot, selection.tenant_id, id, &mut output, control)?
+                        } else { Vec::new() };
+                        if capture.graph_manifest(graph, id, *graph_revision, sensitivity,
+                            &graph.scope.identity.key(), header.subject_count, header.edge_count,
+                            &contexts, header.notice, &mut output.sink(control))?
+                        {
+                            output.reference_result(id, *graph_revision, AnalysisReferenceOriginV1::Graph)?;
+                        }
+                }
                 output.reference_context(&context.key, revision, AnalysisReferenceOriginV1::Notification)?;
                 let mut retry_utc_ns = None;
                 for kind in [crate::NotificationDeliveryKindV1::Finding,

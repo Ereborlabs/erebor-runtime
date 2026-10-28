@@ -10,28 +10,22 @@ pub(in crate::analysis) struct GraphHeader {
     pub(in crate::analysis) subject_count: usize,
     pub(in crate::analysis) edge_count: usize,
     pub(in crate::analysis) finding_count: usize,
-    pub(in crate::analysis) snapshot_bytes: usize,
+    pub(in crate::analysis) row_bytes: usize,
+    pub(in crate::analysis) metadata_allocation_bytes: usize,
     pub(in crate::analysis) notice: (u64, u64),
 }
 
 impl GraphHeader {
-    pub(in crate::analysis) const MAX_BYTES: usize =
-        GraphRows::MAX_CANONICAL_BYTES.saturating_add(128);
+    pub(in crate::analysis) const MAX_BYTES: usize = (u32::MAX as usize).saturating_add(128);
 
-    pub(super) fn encode(snapshot: &GraphSnapshotV1, canonical: &[u8]) -> Result<Vec<u8>> {
-        if canonical.len() > GraphRows::MAX_CANONICAL_BYTES || canonical.is_empty() {
-            return GraphInvalidSnafu {
-                field: "graph result bytes",
-            }
-            .fail();
-        }
+    pub(super) fn encode(snapshot: &GraphSnapshotV1) -> Result<Vec<u8>> {
+        let row_bytes = u64::try_from(GraphRows::row_bytes(snapshot)?).map_err(Self::error)?;
         let metadata =
             serde_json::to_value(HeaderMetadata(snapshot)).context(crate::GraphEncodingSnafu)?;
         let metadata = GraphRows::json(&metadata)?;
         let subjects = u32::try_from(snapshot.graph.subjects.len()).map_err(Self::error)?;
         let edges = u32::try_from(snapshot.graph.edges.len()).map_err(Self::error)?;
         let findings = u32::try_from(snapshot.findings.len()).map_err(Self::error)?;
-        let canonical_bytes = u32::try_from(canonical.len()).map_err(Self::error)?;
         let mut bytes = Vec::new();
         Encoder::new(&mut bytes)
             .array(6)
@@ -39,9 +33,15 @@ impl GraphHeader {
             .and_then(|e| e.u32(subjects))
             .and_then(|e| e.u32(edges))
             .and_then(|e| e.u32(findings))
-            .and_then(|e| e.u32(canonical_bytes))
+            .and_then(|e| e.u64(row_bytes))
             .and_then(|e| e.bytes(&metadata))
             .map_err(Self::error)?;
+        if bytes.len() > Self::MAX_BYTES {
+            return GraphInvalidSnafu {
+                field: "graph header bytes",
+            }
+            .fail();
+        }
         Ok(bytes)
     }
 
@@ -52,6 +52,16 @@ impl GraphHeader {
             }
             .fail();
         }
+        let metadata_allocation_bytes = bytes
+            .len()
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(size_of::<GraphSnapshotV1>()))
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph allocation byte bound",
+                }
+                .build()
+            })?;
         let mut decoder = Decoder::new(bytes);
         if decoder.array().map_err(Self::error)? != Some(6)
             || decoder.u32().map_err(Self::error)? != 2
@@ -64,12 +74,10 @@ impl GraphHeader {
         let subject_count = decoder.u32().map_err(Self::error)? as usize;
         let edge_count = decoder.u32().map_err(Self::error)? as usize;
         let finding_count = decoder.u32().map_err(Self::error)? as usize;
-        let snapshot_bytes = decoder.u32().map_err(Self::error)? as usize;
+        let row_bytes =
+            usize::try_from(decoder.u64().map_err(Self::error)?).map_err(Self::error)?;
         let metadata = decoder.bytes().map_err(Self::error)?;
-        if snapshot_bytes == 0
-            || metadata.len() > snapshot_bytes
-            || decoder.position() != bytes.len()
-        {
+        if metadata.is_empty() || decoder.position() != bytes.len() {
             return GraphInvalidSnafu {
                 field: "graph header format",
             }
@@ -99,16 +107,6 @@ impl GraphHeader {
         }
         let snapshot: GraphSnapshotV1 = GraphRows::decode(&GraphRows::json(&metadata)?)?;
         snapshot.validate()?;
-        if GraphRows::json(&snapshot.input_manifest)?
-            .len()
-            .checked_mul(finding_count)
-            .is_none_or(|bytes| bytes > snapshot_bytes)
-        {
-            return GraphInvalidSnafu {
-                field: "graph finding byte bound",
-            }
-            .fail();
-        }
         Ok(Self {
             notice: (
                 snapshot.context_notice_revision,
@@ -124,19 +122,9 @@ impl GraphHeader {
             subject_count,
             edge_count,
             finding_count,
-            snapshot_bytes,
+            row_bytes,
+            metadata_allocation_bytes,
         })
-    }
-
-    pub(in crate::analysis) fn body(&self, snapshot: &GraphSnapshotV1) -> Result<Vec<u8>> {
-        let canonical = GraphRows::json(snapshot)?;
-        if canonical.len() != self.snapshot_bytes {
-            return GraphInvalidSnafu {
-                field: "graph canonical bytes",
-            }
-            .fail();
-        }
-        Ok(canonical)
     }
 
     pub(in crate::analysis) fn check_index(
@@ -160,33 +148,78 @@ impl GraphHeader {
         Ok(())
     }
 
+    pub(in crate::analysis) fn allocation_bytes(&self) -> Result<usize> {
+        let bytes = self
+            .row_bytes
+            .checked_mul(2)
+            .and_then(|bytes| {
+                self.subject_count
+                    .checked_mul(size_of::<crate::GraphSubjectKeyV1>())
+                    .and_then(|added| bytes.checked_add(added))
+            })
+            .and_then(|bytes| {
+                self.edge_count
+                    .checked_mul(size_of::<crate::GraphEdgeV1>())
+                    .and_then(|added| bytes.checked_add(added))
+            })
+            .and_then(|bytes| {
+                self.finding_count
+                    .checked_mul(size_of::<crate::FindingV1>())
+                    .and_then(|added| bytes.checked_add(added))
+            })
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph allocation byte bound",
+                }
+                .build()
+            })?;
+        Ok(bytes)
+    }
+
+    pub(in crate::analysis) fn check_shape(
+        &self,
+        result_id: &str,
+        stored: u64,
+        subjects: u64,
+        edges: u64,
+        findings: u64,
+    ) -> Result<()> {
+        if usize::try_from(subjects).ok() != Some(self.subject_count)
+            || usize::try_from(edges).ok() != Some(self.edge_count)
+            || usize::try_from(findings).ok() != Some(self.finding_count)
+        {
+            return GraphInvalidSnafu {
+                field: "graph row counts or bytes",
+            }
+            .fail();
+        }
+        self.check_bytes(result_id, stored)
+    }
+
     pub(in crate::analysis) fn check_bytes(&self, result_id: &str, stored: u64) -> Result<()> {
         let count = self
             .subject_count
             .checked_add(self.edge_count)
             .and_then(|count| count.checked_add(self.finding_count))
-            .ok_or_else(|| Self::error("graph row count overflow"))?;
-        let maximum = self
-            .snapshot_bytes
-            .checked_add(
-                result_id
-                    .len()
-                    .checked_add(256)
-                    .and_then(|width| count.checked_mul(width))
-                    .ok_or_else(|| {
-                        GraphInvalidSnafu {
-                            field: "graph storage byte bound",
-                        }
-                        .build()
-                    })?,
-            )
             .ok_or_else(|| {
                 GraphInvalidSnafu {
                     field: "graph storage byte bound",
                 }
                 .build()
             })?;
-        if stored > maximum as u64 {
+        let expected = result_id
+            .len()
+            .checked_add(256)
+            .and_then(|width| count.checked_mul(width))
+            .and_then(|bytes| bytes.checked_add(self.row_bytes))
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph storage byte bound",
+                }
+                .build()
+            })?;
+        if stored > expected {
             return GraphInvalidSnafu {
                 field: "graph storage byte bound",
             }
@@ -228,8 +261,7 @@ impl Serialize for HeaderMetadata<'_> {
 
 impl Serialize for GraphMetadata<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(3))?;
-        map.serialize_entry("revision", &self.0.revision)?;
+        let mut map = serializer.serialize_map(Some(2))?;
         map.serialize_entry("branches", &self.0.branches)?;
         map.serialize_entry("facts", &self.0.facts)?;
         map.end()

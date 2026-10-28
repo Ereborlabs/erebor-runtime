@@ -49,9 +49,8 @@ impl AnalysisStore {
         {
             return Err(Code::Invalid.error("managed graph capture"));
         }
-        let (graph, body) = packet.graph.into_parts();
-        let mut input = packet.request;
-        input.body = body;
+        let graph = packet.graph.into_snapshot();
+        let input = packet.request;
         self.check_graph_commit(&input, &graph, packet.advance)?;
         if *operation == ManagedGraphOperation::Expire
             && (packet.advance
@@ -111,7 +110,6 @@ impl AnalysisStore {
                     &packet.proofs,
                     &packet.sources,
                     managed.attempt.follows_graph(),
-                    true,
                 )?;
                 graph_receipt = Some(write.receipt);
                 Ok(write.relations)

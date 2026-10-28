@@ -74,11 +74,11 @@ pub enum GraphEdgeTypeV1 {
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphEdgeKeyV1 {
-    pub from: GraphSubjectKeyV1,
-    pub to: GraphSubjectKeyV1,
+    pub from: u32,
+    pub to: u32,
     pub edge_type: GraphEdgeTypeV1,
     pub package_id: String,
-    pub evidence: Vec<DiscoveryRecordIdV1>,
+    pub evidence: Vec<u32>,
     pub cause: GraphCauseV1,
 }
 
@@ -267,7 +267,6 @@ pub struct GraphEffectV1 {
 pub struct FindingV1 {
     pub tenant_id: [u8; 16],
     pub finding_id: String,
-    pub revision: GraphRevisionV1,
     pub package_id: String,
     pub package_version: u64,
     pub subject_id: GraphSubjectKeyV1,
@@ -288,9 +287,9 @@ pub struct FindingV1 {
 impl FindingV1 {
     pub const PACKAGES: [&'static str; 3] = ["HF-PROC-001", "HF-DW-001", "HF-XNODE-001"];
 
-    pub fn validate(&self) -> Result<()> {
+    /// The caller must validate the parent revision first.
+    pub fn validate_in(&self, revision: &GraphRevisionV1) -> Result<()> {
         self.subject_id.validate()?;
-        self.revision.validate(self.tenant_id)?;
         self.reason.validate(&self.package_id)?;
         if self.tenant_id == [0; 16]
             || self.subject_id.tenant_id != self.tenant_id
@@ -303,7 +302,7 @@ impl FindingV1 {
             || self
                 .evidence
                 .iter()
-                .any(|id| self.revision.evidence.binary_search(id).is_err())
+                .any(|id| revision.evidence.binary_search(id).is_err())
             || self
                 .required_coverage_interval_ids
                 .windows(2)
@@ -341,7 +340,6 @@ impl FindingV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphVersionV1 {
-    pub revision: GraphRevisionV1,
     pub subjects: Vec<GraphSubjectKeyV1>,
     pub edges: Vec<GraphEdgeV1>,
     pub branches: Vec<GraphBranchV1>,
@@ -416,7 +414,6 @@ impl GraphSnapshotV1 {
             || !self.scope.identity.valid()
             || self.first_cursor == 0
             || self.last_cursor < self.first_cursor
-            || self.graph.revision != self.input_manifest
             || self.missing_ranges != self.input_manifest.missing_ranges
             || self.input_positions.iter().any(|(record, position)| {
                 self.input_manifest.evidence.binary_search(record).is_err()
@@ -472,20 +469,25 @@ impl GraphSnapshotV1 {
             }
         }
         for edge in &self.graph.edges {
-            if self.graph.subjects.binary_search(&edge.key.from).is_err()
-                || self.graph.subjects.binary_search(&edge.key.to).is_err()
-                || edge.first_boottime_ns > edge.last_boottime_ns
+            let (Some(from), Some(to)) = (
+                self.graph.subjects.get(edge.key.from as usize),
+                self.graph.subjects.get(edge.key.to as usize),
+            ) else {
+                return GraphInvalidSnafu {
+                    field: "graph edge proof",
+                }
+                .fail();
+            };
+            if edge.first_boottime_ns > edge.last_boottime_ns
+                || edge.key.evidence.windows(2).any(|pair| pair[0] >= pair[1])
                 || edge
                     .key
                     .evidence
                     .iter()
-                    .any(|id| self.input_manifest.evidence.binary_search(id).is_err())
+                    .any(|id| *id as usize >= self.input_manifest.evidence.len())
                 || (edge.key.edge_type == GraphEdgeTypeV1::NativeParent
-                    && (edge.key.from.authority != edge.key.to.authority
-                        || !matches!(
-                            edge.key.from.authority,
-                            GraphSubjectAuthorityV1::Native { .. }
-                        )))
+                    && (from.authority != to.authority
+                        || !matches!(from.authority, GraphSubjectAuthorityV1::Native { .. })))
             {
                 return GraphInvalidSnafu {
                     field: "graph edge proof",
@@ -508,12 +510,11 @@ impl GraphSnapshotV1 {
             }
         }
         for finding in &self.findings {
-            finding.validate()?;
+            finding.validate_in(&self.input_manifest)?;
             if !self.packages.iter().any(|package| {
                 package.package_id == finding.package_id
                     && package.package_version == finding.package_version
-            }) || finding.revision != self.input_manifest
-                || finding.tenant_id != self.scope.identity.tenant_id
+            }) || finding.tenant_id != self.scope.identity.tenant_id
             {
                 return GraphInvalidSnafu {
                     field: "graph finding manifest",

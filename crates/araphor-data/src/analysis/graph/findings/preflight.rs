@@ -27,14 +27,15 @@ impl FindingHeaders {
         self.headers.get(id)
     }
 
-    pub(super) fn insert(&mut self, id: String, header: GraphHeader) {
-        let charge = header.snapshot_bytes.saturating_add(384);
+    pub(super) fn insert(&mut self, id: String, header: GraphHeader) -> Result<()> {
+        let charge = header.metadata_allocation_bytes.saturating_add(384);
         if self.bytes.saturating_add(charge) > MAX_READ_BYTES + 384 {
             self.headers.clear();
             self.bytes = 0;
         }
         self.bytes += charge;
         self.headers.insert(id, header);
+        Ok(())
     }
 }
 
@@ -68,10 +69,9 @@ impl AnalysisStore {
         }
         drop(results);
         for key in &mut selection.keys {
-            let (header_bytes, revision_bytes) = *charges
+            let header_bytes = *charges
                 .get(&key.result)
                 .ok_or_else(|| self.state_error("the selected graph bounds are absent"))?;
-            key.bytes = key.bytes.saturating_add(revision_bytes);
             key.header_bytes = header_bytes;
         }
         Ok(selection)
@@ -123,7 +123,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         ids: &[&str],
         headers: &mut FindingHeaders,
-        charges: &mut BTreeMap<String, (u64, u64)>,
+        charges: &mut BTreeMap<String, u64>,
     ) -> Result<()> {
         let maximum = MAX_READ_BYTES as u64;
         let header_bytes = GraphHeader::MAX_BYTES as u64;
@@ -166,15 +166,24 @@ impl AnalysisStore {
             let stored: u64 = row.get(5).context(AnalysisDatabaseSnafu {
                 operation: "decode selected native graph bytes",
             })?;
-            header.check_bytes(&id, stored)?;
+            header.check_shape(
+                &id,
+                stored,
+                row.get(8).context(AnalysisDatabaseSnafu {
+                    operation: "decode selected graph subject count",
+                })?,
+                row.get(9).context(AnalysisDatabaseSnafu {
+                    operation: "decode selected graph edge count",
+                })?,
+                row.get(10).context(AnalysisDatabaseSnafu {
+                    operation: "decode selected graph finding count",
+                })?,
+            )?;
             let header_bytes: u64 = row.get(7).context(AnalysisDatabaseSnafu {
                 operation: "decode selected native header bytes",
             })?;
-            let revision_bytes = serde_json::to_vec(&header.snapshot.input_manifest)
-                .context(crate::GraphEncodingSnafu)?
-                .len() as u64;
-            headers.insert(id.clone(), header);
-            charges.insert(id, (header_bytes.saturating_add(384), revision_bytes));
+            headers.insert(id.clone(), header)?;
+            charges.insert(id, header_bytes.saturating_add(384));
         }
         for id in ids {
             if !charges.contains_key(*id) {

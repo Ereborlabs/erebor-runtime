@@ -9,16 +9,53 @@ use crate::{
 fn native_row_defaults() -> TestResult {
     let mut fixture = CommitFixture::new()?;
     let edge = fixture.snapshot.graph.edges[0].clone();
+    let from = fixture.snapshot.graph.subjects[edge.key.from as usize].clone();
+    let to = fixture.snapshot.graph.subjects[edge.key.to as usize].clone();
+    let mut edges = fixture
+        .snapshot
+        .graph
+        .edges
+        .iter()
+        .map(|edge| {
+            (
+                edge.clone(),
+                fixture.snapshot.graph.subjects[edge.key.from as usize].clone(),
+                fixture.snapshot.graph.subjects[edge.key.to as usize].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
     for index in 0..4_097_u64 {
-        let mut subject = edge.key.to.clone();
+        let mut subject = to.clone();
         subject.identity = [b"resource-".as_slice(), &index.to_be_bytes()].concat();
         fixture.snapshot.graph.subjects.push(subject.clone());
-        let mut next = edge.clone();
-        next.key.to = subject;
-        fixture.snapshot.graph.edges.push(next);
+        edges.push((edge.clone(), from.clone(), subject));
     }
     fixture.snapshot.graph.subjects.sort();
     fixture.snapshot.graph.subjects.dedup();
+    fixture.snapshot.graph.edges = edges
+        .into_iter()
+        .map(
+            |(mut edge, from, to)| -> std::result::Result<_, Box<dyn std::error::Error>> {
+                edge.key.from = u32::try_from(
+                    fixture
+                        .snapshot
+                        .graph
+                        .subjects
+                        .binary_search(&from)
+                        .map_err(|_| "source subject")?,
+                )?;
+                edge.key.to = u32::try_from(
+                    fixture
+                        .snapshot
+                        .graph
+                        .subjects
+                        .binary_search(&to)
+                        .map_err(|_| "target subject")?,
+                )?;
+                Ok(edge)
+            },
+        )
+        .collect::<std::result::Result<_, Box<dyn std::error::Error>>>()?;
     fixture
         .snapshot
         .graph
@@ -46,8 +83,8 @@ fn native_row_defaults() -> TestResult {
     assert_eq!(
         fixture
             .store
-            .read_result(tenant, &fixture.request.result_id)?,
-        Some(fixture.request.body.clone())
+            .graph_result(tenant, &fixture.request.result_id)?,
+        Some(fixture.snapshot.clone())
     );
     assert_eq!(
         fixture
@@ -58,7 +95,7 @@ fn native_row_defaults() -> TestResult {
     );
     let reader = fixture.store.writer_access()?;
     let request = GraphTraversalV1 {
-        seeds: vec![edge.key.from.clone()],
+        seeds: vec![from],
         result_ids: vec![fixture.request.result_id.clone()],
         ..Default::default()
     };

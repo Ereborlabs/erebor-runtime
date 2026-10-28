@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use sdk::arrow_array::{
-    Array, BinaryArray, BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray,
-    TimestampMicrosecondArray, UInt32Array, UInt64Array,
+    Array, BinaryArray, BooleanArray, Int32Array, Int64Array, ListArray, RecordBatch, StringArray,
+    StructArray, TimestampMicrosecondArray, UInt32Array, UInt64Array,
 };
 
 use super::*;
@@ -10,6 +10,15 @@ use crate::analysis::graph_rows::tests::fixture::CommitFixture;
 use crate::*;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+fn manifest_value(
+    batch: &RecordBatch,
+) -> std::result::Result<GraphRevisionV1, Box<dyn std::error::Error>> {
+    let column = column::<StructArray>(batch, "graph_revision")?;
+    let values: Vec<GraphRevisionV1> = serde_arrow::from_arrow(column.fields(), column.columns())?;
+    let [value]: [GraphRevisionV1; 1] = values.try_into().map_err(|_| "one native manifest row")?;
+    Ok(value)
+}
 
 fn read(
     store: &AnalysisStore,
@@ -356,10 +365,11 @@ fn graph_event_coverage_fields() -> TestResult {
             column::<UInt64Array>(batch, "commit_revision")?.value(0),
             receipt.commit_revision
         );
-        assert_eq!(
-            column::<BinaryArray>(batch, "graph_revision")?.value(0),
-            serde_json::to_vec(&graph.input_manifest)?
-        );
+        if *name == "graph_manifest" {
+            assert_eq!(manifest_value(batch)?, graph.input_manifest);
+        } else {
+            assert!(batch.column_by_name("graph_revision").is_none());
+        }
     }
     let finding = &page.tables["findings"][0];
     assert_eq!(
@@ -380,9 +390,31 @@ fn graph_event_coverage_fields() -> TestResult {
         serde_json::to_vec(&graph.graph.edges[0].key)?
     );
     let subjects = &page.tables["graph_subjects"][0];
+    assert_eq!(column::<UInt32Array>(subjects, "subject_id")?.value(0), 0);
     assert_eq!(
-        column::<BinaryArray>(subjects, "subject_id")?.value(0),
-        serde_json::to_vec(&graph.graph.subjects[0])?
+        column::<BinaryArray>(subjects, "identity")?.value(0),
+        graph.graph.subjects[0].identity
+    );
+    assert_eq!(
+        column::<BinaryArray>(subjects, "authority")?.value(0),
+        serde_json::to_vec(&graph.graph.subjects[0].authority)?
+    );
+    assert_eq!(
+        column::<UInt32Array>(edges, "from_subject_id")?.value(0),
+        graph.graph.edges[0].key.from
+    );
+    assert_eq!(
+        column::<UInt32Array>(edges, "to_subject_id")?.value(0),
+        graph.graph.edges[0].key.to
+    );
+    let evidence = column::<ListArray>(edges, "evidence")?.value(0);
+    let evidence = evidence
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or("native edge evidence")?;
+    assert_eq!(
+        evidence.values().as_ref(),
+        graph.graph.edges[0].key.evidence.as_slice()
     );
     assert!(column::<UInt32Array>(subjects, "traversal_depth")?.is_null(0));
     let branches = &page.tables["graph_branches"][0];
@@ -428,6 +460,42 @@ fn graph_event_coverage_fields() -> TestResult {
     assert!(page.extraction.references.iter().any(|reference| reference
         .result()
         .is_some_and(|result| result.result_id == fixture.request.result_id)));
+    let requests = AnalysisTableRequests::from([
+        ("graph_manifest".into(), None),
+        (
+            "findings".into(),
+            Some(
+                [AnalysisStore::table_schemas()["findings"].index_of("graph_result_id")?]
+                    .into_iter()
+                    .collect(),
+            ),
+        ),
+    ]);
+    let dependency = fixture.store.read_tables(
+        &selection,
+        AnalysisTableRead {
+            requests: &requests,
+            event_ranges: None,
+            inputs: None,
+            mode: AnalysisReadModeV1::Complete,
+            now: 100,
+        },
+        AnalysisExtractLimits::default(),
+        &AnalysisReadControl::default(),
+    )?;
+    assert!(!dependency.tables.contains_key("graph_manifest"));
+    assert_eq!(
+        column::<StringArray>(&dependency.tables["findings"][0], "graph_result_id")?.value(0),
+        fixture.request.result_id
+    );
+    assert!(dependency
+        .extraction
+        .references
+        .iter()
+        .any(|reference| reference
+            .result()
+            .is_some_and(|result| result.result_id == fixture.request.result_id
+                && result.commit_revision == receipt.commit_revision)));
     let foreign = read(
         &fixture.store,
         &AnalysisSelectionV1::tenant([9; 16]),
@@ -449,6 +517,7 @@ fn context_notification_fields() -> TestResult {
     fixture
         .store
         .commit_graph(&fixture.request, true, || Ok(()))?;
+    drop(fixture._graph);
     fixture.store.enable_notification_owner()?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
     let document = DiscoveryContextRevisionV1 {
@@ -627,6 +696,14 @@ fn context_notification_fields() -> TestResult {
     selection.select_notifications(Selection::All)?;
     let names = ["context_versions", "context", "targets", "notifications"];
     let page = read(&fixture.store, &selection, &names, 150)?;
+    assert!(!page.extraction.graph_enabled);
+    assert!(matches!(
+        read(&fixture.store, &selection, &["relationships"], 150),
+        Err(crate::Error::AnalysisUnavailable {
+            relation: "relationships",
+            ..
+        })
+    ));
     assert_eq!(
         page.tables["context_versions"]
             .iter()
@@ -742,9 +819,10 @@ fn context_notification_fields() -> TestResult {
     );
     assert!(column::<BooleanArray>(notifications, "finding_available")?.value(0));
     assert!(!column::<BooleanArray>(&concern_row, "finding_available")?.value(0));
+    assert!(notifications.column_by_name("finding_revision").is_none());
     assert_eq!(
-        column::<BinaryArray>(notifications, "finding_revision")?.value(0),
-        serde_json::to_vec(&fixture.snapshot.findings[0].revision)?
+        column::<StringArray>(notifications, "finding_result_id")?.value(0),
+        fixture.request.result_id
     );
     assert_eq!(
         column::<StringArray>(notifications, "priority")?.value(0),
@@ -963,7 +1041,7 @@ fn context_notification_fields() -> TestResult {
     );
     let missing_row = row(&unscoped, "notifications", 4)?;
     assert!(!column::<BooleanArray>(&missing_row, "finding_available")?.value(0));
-    assert!(column::<BinaryArray>(&missing_row, "finding_revision")?.is_null(0));
+    assert!(missing_row.column_by_name("finding_revision").is_none());
     assert_eq!(
         column::<StringArray>(&missing_row, "finding_result_id")?.value(0),
         "graph:missing"
@@ -978,7 +1056,7 @@ fn context_notification_fields() -> TestResult {
         expected_ids
     );
 
-    let old_revision = serde_json::to_vec(&fixture.snapshot.input_manifest)?;
+    let old_revision = fixture.snapshot.input_manifest.clone();
     let mut revision_selection = selection.clone();
     revision_selection.select_graphs(
         Selection::Exact(vec![fixture.request.result_id.clone()]),
@@ -987,26 +1065,27 @@ fn context_notification_fields() -> TestResult {
     let before = read(
         &fixture.store,
         &revision_selection,
-        &["findings", "notifications"],
+        &["findings", "notifications", "graph_manifest"],
         150,
     )?;
     let retained_finding = row(&before, "findings", 0)?;
     let retained_notification = row(&before, "notifications", 0)?;
+    let retained_parent = row(&before, "graph_manifest", 0)?;
+    assert_eq!(manifest_value(&retained_parent)?, old_revision);
     assert_eq!(
-        column::<BinaryArray>(&retained_finding, "finding_revision")?.value(0),
-        old_revision,
+        column::<StringArray>(&retained_finding, "graph_result_id")?.value(0),
+        fixture.request.result_id
     );
+    assert!(retained_finding
+        .column_by_name("finding_revision")
+        .is_none());
     let mut replacement = fixture.snapshot.clone();
     replacement.previous_result_id = Some(fixture.request.result_id.clone());
     replacement.input_manifest.context.push(context.key.clone());
-    replacement.graph.revision = replacement.input_manifest.clone();
-    for finding in &mut replacement.findings {
-        finding.revision = replacement.input_manifest.clone();
-    }
     replacement.validate()?;
     assert!(!replacement.input_manifest.context.is_empty());
     assert!(!replacement.input_manifest.coverage.is_empty());
-    let new_revision = serde_json::to_vec(&replacement.input_manifest)?;
+    let new_revision = replacement.input_manifest.clone();
     assert_ne!(new_revision, old_revision);
     let mut commit = fixture.request.clone();
     commit.expected_cursor = commit.consumed_cursor;
@@ -1023,14 +1102,32 @@ fn context_notification_fields() -> TestResult {
     let after = read(
         &fixture.store,
         &revision_selection,
-        &["findings", "notifications"],
+        &["findings", "notifications", "graph_manifest"],
         150,
     )?;
     let retained_replacement = row(&after, "findings", 0)?;
+    let retained_new_parent = row(&after, "graph_manifest", 0)?;
+    let retained_old_parent = row(&after, "graph_manifest", 1)?;
+    assert_eq!(manifest_value(&retained_new_parent)?, new_revision);
+    assert_eq!(manifest_value(&retained_old_parent)?, old_revision);
     assert_eq!(
-        column::<BinaryArray>(&retained_replacement, "finding_revision")?.value(0),
-        new_revision,
+        column::<StringArray>(&retained_new_parent, "graph_result_id")?.value(0),
+        commit.result_id
     );
+    assert_eq!(
+        column::<StringArray>(&retained_old_parent, "graph_result_id")?.value(0),
+        fixture.request.result_id
+    );
+    assert_eq!(
+        after.tables["graph_manifest"]
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
+    assert!(retained_replacement
+        .column_by_name("finding_revision")
+        .is_none());
     for index in 0..5 {
         assert_eq!(
             row(&after, "notifications", index)?,
@@ -1038,65 +1135,193 @@ fn context_notification_fields() -> TestResult {
         );
     }
     assert!(
-        column::<BinaryArray>(&row(&after, "notifications", 4)?, "finding_revision")?.is_null(0)
+        !column::<BooleanArray>(&row(&after, "notifications", 4)?, "finding_available")?.value(0)
+    );
+    drop((
+        before,
+        after,
+        replacement,
+        commit,
+        fixture.store,
+        fixture.snapshot,
+        fixture.request,
+    ));
+    assert_eq!(manifest_value(&retained_parent)?, old_revision);
+    assert_eq!(manifest_value(&retained_old_parent)?, old_revision);
+    assert_eq!(manifest_value(&retained_new_parent)?, new_revision);
+    assert_eq!(
+        column::<StringArray>(&retained_notification, "finding_result_id")?.value(0),
+        column::<StringArray>(&retained_old_parent, "graph_result_id")?.value(0)
+    );
+    assert_eq!(
+        column::<StringArray>(&retained_replacement, "graph_result_id")?.value(0),
+        column::<StringArray>(&retained_new_parent, "graph_result_id")?.value(0)
     );
 
-    {
-        let (mut output, control) = extraction()?;
-        let schema = &AnalysisStore::table_schemas()["notifications"];
-        let requests = BTreeMap::from([(
-            "notifications".into(),
-            Some([schema.index_of("finding_revision")?].into_iter().collect()),
-        )]);
-        let read = AnalysisTableRead {
-            requests: &requests,
-            event_ranges: None,
-            inputs: None,
-            mode: AnalysisReadModeV1::Complete,
-            now: 150,
+    Ok(())
+}
+
+#[test]
+fn native_manifest_budget() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let selection = AnalysisSelectionV1::tenant(fixture.snapshot.scope.identity.tenant_id);
+    let schema = &AnalysisStore::table_schemas()["graph_manifest"];
+    let requests = BTreeMap::from([(
+        "graph_manifest".into(),
+        Some([schema.index_of("graph_revision")?].into_iter().collect()),
+    )]);
+    let read = AnalysisTableRead {
+        requests: &requests,
+        event_ranges: None,
+        inputs: None,
+        mode: AnalysisReadModeV1::Complete,
+        now: 150,
+    };
+    let (mut output, control) = extraction()?;
+    let mut capture = Capture::new(&read, &selection);
+    let mut graph = fixture.snapshot.clone();
+    graph.graph.subjects.clear();
+    graph.graph.edges.clear();
+    graph.graph.branches.clear();
+    graph.graph.facts.clear();
+    graph.findings.clear();
+    graph.input_positions.clear();
+    graph.missing_ranges.clear();
+    for count in [0_usize, 1, 73] {
+        graph.input_manifest = GraphRevisionV1 {
+            evidence: (0..count)
+                .map(|index| DiscoveryRecordIdV1 {
+                    stream: fixture.snapshot.scope.identity.clone(),
+                    cpu_id: 0,
+                    durable_cursor: index as u64 + 1,
+                })
+                .collect(),
+            coverage: (0..count)
+                .map(|index| GraphCoverageKeyV1 {
+                    source: fixture.snapshot.scope.identity.clone(),
+                    cpu_id: 0,
+                    report_revision: index as u64 + 1,
+                    interval_id: [index as u8 + 1; 16],
+                    interval_revision: index as u64 + 1,
+                    state: match index % 4 {
+                        0 => DiscoveryCoverageStateV1::Healthy,
+                        1 => DiscoveryCoverageStateV1::Gapped,
+                        2 => DiscoveryCoverageStateV1::Unknown,
+                        _ => DiscoveryCoverageStateV1::Closed,
+                    },
+                    gap_reasons: vec![String::new(), "理由".repeat(index)],
+                })
+                .collect(),
+            context: (0..count)
+                .map(|index| AnalysisContextKeyV1 {
+                    tenant_id: fixture.snapshot.scope.identity.tenant_id,
+                    owner_id: format!("owner/{index:03}/é"),
+                    entity_key: vec![1; index + 1],
+                    lifetime_key: vec![2; index + 2],
+                    owner_revision: index as u64 + 1,
+                })
+                .collect(),
+            missing_ranges: if count == 0 {
+                Vec::new()
+            } else {
+                vec![(count as u64 + 1, count as u64 + 3)]
+            },
         };
-        let mut capture = Capture::new(&read, &selection);
-        let revision = std::cell::OnceCell::new();
-        let finding = &fixture.snapshot.findings[0];
-        let mut budget = output.sink(&control);
-        assert!(capture.notification(
-            &obligation,
-            Some((finding, &revision)),
-            context_revision,
-            None,
-            &mut budget,
+        graph.missing_ranges = graph.input_manifest.missing_ranges.clone();
+        graph.last_cursor = count as u64 + 3;
+        graph.input_manifest.validate(selection.tenant_id)?;
+        let id = format!("graph:manifest-{count}");
+        let bound = graph.input_manifest.arrow_bytes()?;
+        assert!(capture.graph_manifest(
+            &graph,
+            &id,
+            1,
+            ContextSensitivityV1::Tenant,
+            &graph.scope.identity.key(),
+            0,
+            0,
+            &[],
+            (0, 0),
+            &mut output.sink(&control)
         )?);
-        let rows = capture.tables["notifications"].total_rows;
-        budget.output.limits.input_bytes = budget.output.input_bytes;
-        assert!(matches!(
-            capture.notification(
-                &obligation,
-                Some((finding, &revision)),
-                context_revision,
-                None,
-                &mut budget,
-            ),
-            Err(crate::Error::AnalysisInputTooLarge {
-                resource: "native source Arrow allocation",
-                ..
-            })
-        ));
-        assert_eq!(capture.tables["notifications"].total_rows, rows);
+        let batch = capture.tables["graph_manifest"]
+            .batches
+            .last()
+            .ok_or("native manifest")?;
+        assert_eq!(manifest_value(batch)?, graph.input_manifest);
+        assert!(batch.get_array_memory_size() <= bound);
+        let rows = capture.tables["graph_manifest"].total_rows;
+        assert!(capture.graph_manifest(
+            &graph,
+            &id,
+            1,
+            ContextSensitivityV1::Tenant,
+            &graph.scope.identity.key(),
+            0,
+            0,
+            &[],
+            (0, 0),
+            &mut output.sink(&control)
+        )?);
+        assert_eq!(capture.tables["graph_manifest"].total_rows, rows);
     }
+    let id = "graph:manifest-over-budget";
+    output.limits.input_bytes = output.input_bytes
+        + id.len()
+        + size_of::<String>()
+        + graph.input_manifest.arrow_bytes()? / 2;
+    let rows = capture.tables["graph_manifest"].total_rows;
+    assert!(matches!(
+        capture.graph_manifest(
+            &graph,
+            id,
+            1,
+            ContextSensitivityV1::Tenant,
+            &graph.scope.identity.key(),
+            0,
+            0,
+            &[],
+            (0, 0),
+            &mut output.sink(&control)
+        ),
+        Err(crate::Error::AnalysisInputTooLarge {
+            resource: "native source Arrow allocation",
+            ..
+        })
+    ));
+    assert_eq!(capture.tables["graph_manifest"].total_rows, rows);
+    assert!(!capture.graph_manifests.contains(id));
+    drop(capture);
 
-    drop((before, after, replacement, commit, fixture));
-    assert_eq!(
-        column::<BinaryArray>(&retained_finding, "finding_revision")?.value(0),
-        old_revision,
-    );
-    assert_eq!(
-        column::<BinaryArray>(&retained_notification, "finding_revision")?.value(0),
-        old_revision,
-    );
-    assert_eq!(
-        column::<BinaryArray>(&retained_replacement, "finding_revision")?.value(0),
-        new_revision,
-    );
+    let requests = BTreeMap::from([(
+        "graph_manifest".into(),
+        Some([schema.index_of("graph_result_id")?].into_iter().collect()),
+    )]);
+    let read = AnalysisTableRead {
+        requests: &requests,
+        event_ranges: None,
+        inputs: None,
+        mode: AnalysisReadModeV1::Complete,
+        now: 150,
+    };
+    let (mut output, control) = extraction()?;
+    output.limits.input_bytes = output.input_bytes + 16 * 1024;
+    graph.input_manifest.context[0].owner_id = "é".repeat(1024 * 1024);
+    graph.packages[0].coverage_predicate = "x".repeat(1024 * 1024);
+    let mut capture = Capture::new(&read, &selection);
+    assert!(capture.graph_manifest(
+        &graph,
+        "graph:projected-id",
+        1,
+        ContextSensitivityV1::Tenant,
+        &graph.scope.identity.key(),
+        0,
+        0,
+        &[],
+        (0, 0),
+        &mut output.sink(&control)
+    )?);
+    assert_eq!(capture.tables["graph_manifest"].total_rows, 1);
     Ok(())
 }
 
@@ -1278,7 +1503,6 @@ fn catalog_values_match_schemas() -> TestResult {
                 | "graph_branches"
                 | "correlation_packages"
                 | "policy_observations"
-                | "graph_manifest"
                 | "notifications" => {
                     if enabled {
                         "enabled"

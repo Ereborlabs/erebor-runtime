@@ -111,6 +111,21 @@ fn source() -> EvidenceIntakeIdentityV1 {
         source_epoch: 1,
     }
 }
+pub(crate) fn manifest(cursor: u64) -> GraphRevisionV1 {
+    GraphRevisionV1 {
+        evidence: (1..=cursor)
+            .map(|durable_cursor| DiscoveryRecordIdV1 {
+                stream: source(),
+                cpu_id: 0,
+                durable_cursor,
+            })
+            .collect(),
+        coverage: vec![],
+        context: vec![],
+        missing_ranges: vec![],
+    }
+}
+
 pub(crate) fn finding(cursor: u64, severity: FindingSeverityV1) -> FindingV1 {
     let evidence = vec![DiscoveryRecordIdV1 {
         stream: source(),
@@ -120,18 +135,6 @@ pub(crate) fn finding(cursor: u64, severity: FindingSeverityV1) -> FindingV1 {
     FindingV1 {
         tenant_id: [1; 16],
         finding_id: "finding:exact-process-key".into(),
-        revision: GraphRevisionV1 {
-            evidence: (1..=cursor)
-                .map(|durable_cursor| DiscoveryRecordIdV1 {
-                    stream: source(),
-                    cpu_id: 0,
-                    durable_cursor,
-                })
-                .collect(),
-            coverage: vec![],
-            context: vec![],
-            missing_ranges: vec![],
-        },
         package_id: "HF-PROC-001".into(),
         package_version: 1,
         subject_id: GraphSubjectKeyV1::native(&source(), GraphSubjectKindV1::Process, vec![4]),
@@ -180,7 +183,7 @@ pub(crate) fn commit_finding_at(
         },
     )?;
     store.register_graph(&source())?;
-    let revision = finding.revision.clone();
+    let revision = manifest(cursor);
     let witnesses = revision
         .evidence
         .iter()
@@ -211,9 +214,8 @@ pub(crate) fn commit_finding_at(
         scope: scope.clone(),
         first_cursor: 1,
         last_cursor: cursor,
-        input_manifest: revision.clone(),
+        input_manifest: revision,
         graph: GraphVersionV1 {
-            revision,
             subjects: vec![finding.subject_id.clone()],
             edges: vec![],
             branches: vec![],

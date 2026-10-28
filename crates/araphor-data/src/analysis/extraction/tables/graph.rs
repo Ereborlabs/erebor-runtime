@@ -5,11 +5,62 @@ use crate::{
     PolicyProvenanceStateV1,
 };
 
+#[derive(serde::Serialize)]
+struct ManifestRow<'a> {
+    tenant_id: &'a serde_bytes::Bytes,
+    source_key: &'a serde_bytes::Bytes,
+    graph_result_id: &'a str,
+    commit_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graph_revision: Option<&'a crate::GraphRevisionV1>,
+    graph_sensitivity: &'a str,
+    first_cursor: u64,
+    last_cursor: u64,
+    previous_result_id: Option<&'a str>,
+    context_notice_revision: u64,
+    notice_context_revision: u64,
+    notice_coverage_revision: u64,
+    witness_deadline_utc_ns: u64,
+    retained_input_expired: bool,
+    subject_count: u64,
+    relationship_count: u64,
+    max_hops: u32,
+    hop_boundary: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot: Option<&'a serde_bytes::Bytes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_refs: Option<&'a serde_bytes::Bytes>,
+}
+
+#[derive(serde::Serialize)]
+struct RelationshipRow<'a> {
+    tenant_id: &'a serde_bytes::Bytes,
+    source_key: &'a serde_bytes::Bytes,
+    graph_result_id: &'a str,
+    commit_revision: u64,
+    graph_sensitivity: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relationship_key: Option<&'a serde_bytes::Bytes>,
+    from_subject_id: u32,
+    to_subject_id: u32,
+    edge_type: &'a str,
+    package_id: &'a str,
+    cause: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence: Option<&'a [u32]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof_quality: Option<&'a serde_bytes::Bytes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required_coverage_interval_ids: Option<&'a serde_bytes::Bytes>,
+    first_boottime_ns: u64,
+    last_boottime_ns: u64,
+}
+
 macro_rules! graph_row {
     (
         $append:ident, $schema:ident, $relation:literal;
         $capture:ident, $budget:ident, $graph:ident, $result:ident,
-        $revision:ident, $sensitivity:ident, $source:ident, $encoded:ident;
+        $revision:ident, $sensitivity:ident, $source:ident;
         $( $arg:ident: $arg_type:ty ),* $(,)?;
         $( $name:ident => $kind:ident($nullable:literal): $value:expr ),* $(,)?
     ) => {
@@ -22,7 +73,6 @@ macro_rules! graph_row {
                 $revision: u64,
                 $sensitivity: ContextSensitivityV1,
                 $source: &[u8],
-                $encoded: &std::cell::OnceCell<Vec<u8>>,
                 $( $arg: $arg_type, )*
                 $budget: &mut ReadBudget<'_>,
             );
@@ -34,7 +84,6 @@ macro_rules! graph_row {
                 source_key => Binary(false): Some($source),
                 graph_result_id => Utf8(false): Some($result),
                 commit_revision => UInt64(false): Some($revision),
-                graph_revision => Binary(false): Some($budget.revision_json(&$graph.input_manifest, $encoded)?),
                 graph_sensitivity => Utf8(false): Some(<&str>::from($sensitivity)),
                 $( $name => $kind($nullable): $value, )*
             }
@@ -63,12 +112,12 @@ impl Capture<'_> {
         &mut self,
         result_id: &str,
         graph: &GraphSnapshotV1,
-        canonical: Option<&Vec<u8>>,
         subject_count: usize,
         relationship_count: usize,
         commit_revision: u64,
         sensitivity: ContextSensitivityV1,
         traversal_depths: Option<&[(GraphSubjectKeyV1, u32)]>,
+        subject_ids: Option<&[u32]>,
         contexts: &[crate::AnalysisContextRefV1],
         notice: (u64, u64),
         budget: &mut ReadBudget<'_>,
@@ -76,11 +125,8 @@ impl Capture<'_> {
         if !self.scope.permits_graph(graph) {
             return Ok(true);
         }
-        let encoded = std::cell::OnceCell::new();
-        if let Some(canonical) = canonical {
-            if self.read.projects_field("graph_manifest", "snapshot") {
-                budget.charge(canonical.capacity())?;
-            }
+        if subject_ids.is_some_and(|ids| ids.len() != graph.graph.subjects.len()) {
+            return Err(invalid("the Graph subject ordinal map differs"));
         }
         let deadline = graph.witness_deadline_utc_ns;
         if deadline > self.read.now {
@@ -125,7 +171,6 @@ impl Capture<'_> {
                 commit_revision,
                 sensitivity,
                 &source_key,
-                &encoded,
                 finding,
                 budget,
             )? {
@@ -151,7 +196,6 @@ impl Capture<'_> {
                     commit_revision,
                     sensitivity,
                     &source_key,
-                    &encoded,
                     finding,
                     observation,
                     budget,
@@ -161,20 +205,35 @@ impl Capture<'_> {
             }
         }
         for edge in &graph.graph.edges {
+            let from = subject_ids
+                .map_or(Some(edge.key.from), |ids| {
+                    ids.get(edge.key.from as usize).copied()
+                })
+                .ok_or_else(|| invalid("the Graph edge source ordinal is absent"))?;
+            let to = subject_ids
+                .map_or(Some(edge.key.to), |ids| {
+                    ids.get(edge.key.to as usize).copied()
+                })
+                .ok_or_else(|| invalid("the Graph edge target ordinal is absent"))?;
             if !self.relationship_row(
                 graph,
                 result_id,
                 commit_revision,
                 sensitivity,
                 &source_key,
-                &encoded,
                 edge,
+                from,
+                to,
                 budget,
             )? {
                 return Ok(false);
             }
         }
-        for subject in &graph.graph.subjects {
+        for (index, subject) in graph.graph.subjects.iter().enumerate() {
+            let subject_id = match subject_ids {
+                Some(ids) => ids[index],
+                None => u32::try_from(index).map_err(|_| overflow())?,
+            };
             let depth = traversal_depths.and_then(|depths| {
                 depths
                     .iter()
@@ -187,7 +246,7 @@ impl Capture<'_> {
                 commit_revision,
                 sensitivity,
                 &source_key,
-                &encoded,
+                subject_id,
                 subject,
                 depth,
                 budget,
@@ -202,7 +261,6 @@ impl Capture<'_> {
                 commit_revision,
                 sensitivity,
                 &source_key,
-                &encoded,
                 branch,
                 budget,
             )? {
@@ -216,41 +274,31 @@ impl Capture<'_> {
                 commit_revision,
                 sensitivity,
                 &source_key,
-                &encoded,
                 package,
                 budget,
             )? {
                 return Ok(false);
             }
         }
-        let fallback =
-            if canonical.is_none() && self.read.projects_field("graph_manifest", "snapshot") {
-                json(Some(graph), budget)?
-            } else {
-                None
-            };
-        self.graph_row(
+        self.graph_manifest(
             graph,
             result_id,
             commit_revision,
             sensitivity,
             &source_key,
-            &encoded,
             subject_count,
             relationship_count,
             contexts,
             notice,
-            canonical.map(Vec::as_slice).or(fallback.as_deref()),
             budget,
         )
     }
 
     graph_row! {
         finding_row, finding_fields, "findings";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
         finding: &crate::FindingV1;
         finding_id => Utf8(false): Some(finding.finding_id.as_str()),
-        finding_revision => Binary(false): Some(budget.revision_json(&finding.revision, encoded)?),
         package_id => Utf8(false): Some(finding.package_id.as_str()),
         package_version => UInt64(false): Some(finding.package_version),
         subject_id => Json(false): Some(&finding.subject_id),
@@ -281,7 +329,7 @@ impl Capture<'_> {
 
     graph_row! {
         observation_row, observation_fields, "policy_observations";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
         finding: &crate::FindingV1, observation: &crate::PolicyObservationProvenanceV1;
         finding_id => Utf8(false): Some(finding.finding_id.as_str()),
         profile_generation_ref_id => UInt64(false): Some(observation.profile_generation_ref_id),
@@ -299,40 +347,195 @@ impl Capture<'_> {
         limits => Json(false): Some(&observation.limits),
     }
 
-    graph_row! {
-        relationship_row, relationship_fields, "relationships";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
-        edge: &crate::GraphEdgeV1;
-        relationship_key => Json(false): Some(&edge.key),
-        from_subject_id => Json(false): Some(&edge.key.from),
-        to_subject_id => Json(false): Some(&edge.key.to),
-        edge_type => Utf8(false): Some(match edge.key.edge_type {
+    #[allow(clippy::too_many_arguments)]
+    fn relationship_row(
+        &mut self,
+        graph: &GraphSnapshotV1,
+        result_id: &str,
+        commit_revision: u64,
+        sensitivity: ContextSensitivityV1,
+        source_key: &[u8],
+        edge: &crate::GraphEdgeV1,
+        from: u32,
+        to: u32,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<bool> {
+        if self.read.projected("relationships").is_none() {
+            return Ok(true);
+        }
+        budget.check()?;
+        const NAMES: &[&str] = &[
+            "tenant_id",
+            "source_key",
+            "graph_result_id",
+            "commit_revision",
+            "graph_sensitivity",
+            "relationship_key",
+            "from_subject_id",
+            "to_subject_id",
+            "edge_type",
+            "package_id",
+            "cause",
+            "evidence",
+            "proof_quality",
+            "required_coverage_interval_ids",
+            "first_boottime_ns",
+            "last_boottime_ns",
+        ];
+        let schema = Arc::clone(&self.table("relationships", NAMES, budget)?.schema);
+        let key = if self
+            .read
+            .projects_field("relationships", "relationship_key")
+        {
+            if edge.key.from != from || edge.key.to != to {
+                budget.charge(
+                    edge.key
+                        .evidence
+                        .len()
+                        .checked_mul(size_of::<u32>())
+                        .and_then(|bytes| bytes.checked_add(edge.key.package_id.len()))
+                        .ok_or_else(overflow)?,
+                )?;
+                let mut key = edge.key.clone();
+                key.from = from;
+                key.to = to;
+                json(Some(&key), budget)?
+            } else {
+                json(Some(&edge.key), budget)?
+            }
+        } else {
+            None
+        };
+        let proof = if self.read.projects_field("relationships", "proof_quality") {
+            json(Some(&edge.proof_quality), budget)?
+        } else {
+            None
+        };
+        let coverage = if self
+            .read
+            .projects_field("relationships", "required_coverage_interval_ids")
+        {
+            json(Some(&edge.required_coverage_interval_ids), budget)?
+        } else {
+            None
+        };
+        let evidence = self
+            .read
+            .projects_field("relationships", "evidence")
+            .then_some(edge.key.evidence.as_slice());
+        let kind = match edge.key.edge_type {
             GraphEdgeTypeV1::TaskInProcess => "task_in_process",
             GraphEdgeTypeV1::TaskInExecutionSet => "task_in_execution_set",
             GraphEdgeTypeV1::NativeParent => "native_parent",
             GraphEdgeTypeV1::NativeEffect => "native_effect",
             GraphEdgeTypeV1::CredentialAuthority => "credential_authority",
             GraphEdgeTypeV1::KubernetesExpansion => "kubernetes_expansion",
-        }),
-        package_id => Utf8(false): Some(edge.key.package_id.as_str()),
-        cause => Utf8(false): Some(match edge.key.cause {
+        };
+        let cause = match edge.key.cause {
             GraphCauseV1::Direct => "direct",
             GraphCauseV1::Contextual => "contextual",
             GraphCauseV1::Contradicted => "contradicted",
             GraphCauseV1::Superseded => "superseded",
-        }),
-        evidence => Json(false): Some(&edge.key.evidence),
-        proof_quality => Json(false): Some(&edge.proof_quality),
-        required_coverage_interval_ids => Json(false): Some(&edge.required_coverage_interval_ids),
-        first_boottime_ns => UInt64(false): Some(edge.first_boottime_ns),
-        last_boottime_ns => UInt64(false): Some(edge.last_boottime_ns),
+        };
+        budget.check()?;
+        if budget.output.limits.input_bytes != usize::MAX {
+            let mut bytes = 0_usize;
+            for field in schema.fields() {
+                let payload = match field.name().as_str() {
+                    "tenant_id" => 16,
+                    "source_key" => source_key.len(),
+                    "graph_result_id" => result_id.len(),
+                    "graph_sensitivity" => <&str>::from(sensitivity).len(),
+                    "relationship_key" => key.as_ref().map_or(0, Vec::len),
+                    "proof_quality" => proof.as_ref().map_or(0, Vec::len),
+                    "required_coverage_interval_ids" => coverage.as_ref().map_or(0, Vec::len),
+                    "evidence" => evidence
+                        .map_or(0, |values| values.len())
+                        .checked_mul(size_of::<u32>())
+                        .ok_or_else(overflow)?,
+                    "edge_type" => kind.len(),
+                    "package_id" => edge.key.package_id.len(),
+                    "cause" => cause.len(),
+                    _ => 8,
+                };
+                bytes = bytes
+                    .checked_add(payload.checked_mul(2).ok_or_else(overflow)?)
+                    .and_then(|bytes| bytes.checked_add(field.size()))
+                    .and_then(|bytes| bytes.checked_add(512))
+                    .ok_or_else(overflow)?;
+            }
+            if bytes > budget.remaining_bytes() {
+                return Err(overflow());
+            }
+        }
+        let row = RelationshipRow {
+            tenant_id: serde_bytes::Bytes::new(&graph.scope.identity.tenant_id),
+            source_key: serde_bytes::Bytes::new(source_key),
+            graph_result_id: result_id,
+            commit_revision,
+            graph_sensitivity: <&str>::from(sensitivity),
+            relationship_key: key.as_deref().map(serde_bytes::Bytes::new),
+            from_subject_id: from,
+            to_subject_id: to,
+            edge_type: kind,
+            package_id: &edge.key.package_id,
+            cause,
+            evidence,
+            proof_quality: proof.as_deref().map(serde_bytes::Bytes::new),
+            required_coverage_interval_ids: coverage.as_deref().map(serde_bytes::Bytes::new),
+            first_boottime_ns: edge.first_boottime_ns,
+            last_boottime_ns: edge.last_boottime_ns,
+        };
+        let batch = if schema.fields().is_empty() {
+            RecordBatch::try_new_with_options(
+                schema,
+                Vec::new(),
+                &sdk::arrow_array::RecordBatchOptions::new().with_row_count(Some(1)),
+            )
+            .map_err(arrow_error)?
+        } else {
+            serde_arrow::to_record_batch(schema.fields(), &[row]).map_err(|source| {
+                crate::Error::DiscoveryContext {
+                    source: Box::new(source),
+                    location: snafu::location!(),
+                }
+            })?
+        };
+        self.table("relationships", NAMES, budget)?
+            .append_native(batch, budget)
+    }
+
+    pub(super) fn relationship_fields() -> Vec<sdk::Field> {
+        use sdk::DataType::*;
+        vec![
+            sdk::Field::new("tenant_id", Binary, false),
+            sdk::Field::new("source_key", Binary, false),
+            sdk::Field::new("graph_result_id", Utf8, false),
+            sdk::Field::new("commit_revision", UInt64, false),
+            sdk::Field::new("graph_sensitivity", Utf8, false),
+            sdk::Field::new("relationship_key", Binary, false),
+            sdk::Field::new("from_subject_id", UInt32, false),
+            sdk::Field::new("to_subject_id", UInt32, false),
+            sdk::Field::new("edge_type", Utf8, false),
+            sdk::Field::new("package_id", Utf8, false),
+            sdk::Field::new("cause", Utf8, false),
+            sdk::Field::new(
+                "evidence",
+                List(Arc::new(sdk::Field::new("element", UInt32, false))),
+                false,
+            ),
+            sdk::Field::new("proof_quality", Binary, false),
+            sdk::Field::new("required_coverage_interval_ids", Binary, false),
+            sdk::Field::new("first_boottime_ns", UInt64, false),
+            sdk::Field::new("last_boottime_ns", UInt64, false),
+        ]
     }
 
     graph_row! {
         subject_row, subject_fields, "graph_subjects";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
-        subject: &GraphSubjectKeyV1, depth: Option<u32>;
-        subject_id => Json(false): Some(subject),
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
+        subject_id: u32, subject: &GraphSubjectKeyV1, depth: Option<u32>;
+        subject_id => UInt32(false): Some(subject_id),
         subject_kind => Utf8(false): Some(match subject.kind {
             GraphSubjectKindV1::Task => "task",
             GraphSubjectKindV1::Process => "process",
@@ -352,7 +555,7 @@ impl Capture<'_> {
 
     graph_row! {
         branch_row, branch_fields, "graph_branches";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
         branch: &crate::GraphBranchV1;
         package_id => Utf8(false): Some(branch.package_id.as_str()),
         seed_subject_id => Json(false): Some(&branch.seed),
@@ -369,7 +572,7 @@ impl Capture<'_> {
 
     graph_row! {
         package_row, package_fields, "correlation_packages";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
+        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
         package: &crate::GraphPackageCheckpointV1;
         package_id => Utf8(false): Some(package.package_id.as_str()),
         package_version => UInt64(false): Some(package.package_version),
@@ -403,23 +606,170 @@ impl Capture<'_> {
         observed_boottime_watermark_ns => UInt64(false): Some(package.observed_boottime_watermark_ns),
     }
 
-    graph_row! {
-        graph_row, graph_fields, "graph_manifest";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key, encoded;
-        subject_count: usize, relationship_count: usize, contexts: &[crate::AnalysisContextRefV1], notice: (u64, u64), canonical: Option<&[u8]>;
-        first_cursor => UInt64(false): Some(graph.first_cursor),
-        last_cursor => UInt64(false): Some(graph.last_cursor),
-        previous_result_id => Utf8(true): graph.previous_result_id.as_deref(),
-        context_notice_revision => UInt64(false): Some(graph.context_notice_revision),
-        notice_context_revision => UInt64(false): Some(notice.0),
-        notice_coverage_revision => UInt64(false): Some(notice.1),
-        witness_deadline_utc_ns => UInt64(false): Some(graph.witness_deadline_utc_ns),
-        retained_input_expired => Boolean(false): Some(graph.retained_input_expired()),
-        subject_count => UInt64(false): Some(u64::try_from(subject_count).map_err(|_| overflow())?),
-        relationship_count => UInt64(false): Some(u64::try_from(relationship_count).map_err(|_| overflow())?),
-        max_hops => UInt32(false): Some(0),
-        hop_boundary => Boolean(false): Some(false),
-        snapshot => Binary(false): canonical,
-        context_refs => Json(false): Some(contexts),
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::analysis::extraction) fn graph_manifest(
+        &mut self,
+        graph: &GraphSnapshotV1,
+        result_id: &str,
+        commit_revision: u64,
+        sensitivity: ContextSensitivityV1,
+        source_key: &[u8],
+        subject_count: usize,
+        relationship_count: usize,
+        contexts: &[crate::AnalysisContextRefV1],
+        notice: (u64, u64),
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<bool> {
+        budget.check()?;
+        if !self.needs_manifest(result_id) {
+            return Ok(true);
+        }
+        const NAMES: &[&str] = &[
+            "tenant_id",
+            "source_key",
+            "graph_result_id",
+            "commit_revision",
+            "graph_revision",
+            "graph_sensitivity",
+            "first_cursor",
+            "last_cursor",
+            "previous_result_id",
+            "context_notice_revision",
+            "notice_context_revision",
+            "notice_coverage_revision",
+            "witness_deadline_utc_ns",
+            "retained_input_expired",
+            "subject_count",
+            "relationship_count",
+            "max_hops",
+            "hop_boundary",
+            "snapshot",
+            "context_refs",
+        ];
+        let schema = Arc::clone(&self.table("graph_manifest", NAMES, budget)?.schema);
+        let revision = self
+            .read
+            .projects_field("graph_manifest", "graph_revision")
+            .then_some(&graph.input_manifest);
+        let snapshot = if self.read.projects_field("graph_manifest", "snapshot") {
+            json(Some(graph), budget)?
+        } else {
+            None
+        };
+        let contexts = if self.read.projects_field("graph_manifest", "context_refs") {
+            json(Some(contexts), budget)?
+        } else {
+            None
+        };
+        budget.charge(
+            result_id
+                .len()
+                .checked_add(size_of::<String>())
+                .ok_or_else(overflow)?,
+        )?;
+        budget.check()?;
+        if budget.output.limits.input_bytes != usize::MAX {
+            let mut bytes = 0_usize;
+            for field in schema.fields() {
+                let payload = match field.name().as_str() {
+                    "graph_revision" => revision
+                        .map(crate::GraphRevisionV1::arrow_bytes)
+                        .transpose()?
+                        .unwrap_or(0),
+                    "snapshot" => snapshot.as_ref().map_or(0, Vec::len),
+                    "context_refs" => contexts.as_ref().map_or(0, Vec::len),
+                    "tenant_id" => 16,
+                    "source_key" => source_key.len(),
+                    "graph_result_id" => result_id.len(),
+                    "previous_result_id" => {
+                        graph.previous_result_id.as_ref().map_or(0, String::len)
+                    }
+                    "graph_sensitivity" => <&str>::from(sensitivity).len(),
+                    _ => 8,
+                };
+                bytes = bytes
+                    .checked_add(payload.checked_mul(2).ok_or_else(overflow)?)
+                    .and_then(|bytes| bytes.checked_add(field.size()))
+                    .and_then(|bytes| bytes.checked_add(512))
+                    .ok_or_else(overflow)?;
+            }
+            if bytes > budget.remaining_bytes() {
+                return Err(overflow());
+            }
+        }
+        let row = ManifestRow {
+            tenant_id: serde_bytes::Bytes::new(&graph.scope.identity.tenant_id),
+            source_key: serde_bytes::Bytes::new(source_key),
+            graph_result_id: result_id,
+            commit_revision,
+            graph_revision: revision,
+            graph_sensitivity: <&str>::from(sensitivity),
+            first_cursor: graph.first_cursor,
+            last_cursor: graph.last_cursor,
+            previous_result_id: graph.previous_result_id.as_deref(),
+            context_notice_revision: graph.context_notice_revision,
+            notice_context_revision: notice.0,
+            notice_coverage_revision: notice.1,
+            witness_deadline_utc_ns: graph.witness_deadline_utc_ns,
+            retained_input_expired: graph.retained_input_expired(),
+            subject_count: subject_count.try_into().map_err(|_| overflow())?,
+            relationship_count: relationship_count.try_into().map_err(|_| overflow())?,
+            max_hops: 0,
+            hop_boundary: false,
+            snapshot: snapshot.as_deref().map(serde_bytes::Bytes::new),
+            context_refs: contexts.as_deref().map(serde_bytes::Bytes::new),
+        };
+        let batch = if schema.fields().is_empty() {
+            RecordBatch::try_new_with_options(
+                schema,
+                Vec::new(),
+                &sdk::arrow_array::RecordBatchOptions::new().with_row_count(Some(1)),
+            )
+            .map_err(arrow_error)?
+        } else {
+            serde_arrow::to_record_batch(schema.fields(), &[row]).map_err(|source| {
+                crate::Error::DiscoveryContext {
+                    source: Box::new(source),
+                    location: snafu::location!(),
+                }
+            })?
+        };
+        let admitted = self
+            .table("graph_manifest", NAMES, budget)?
+            .append_native(batch, budget)?;
+        if admitted {
+            self.graph_manifests.insert(result_id.to_owned());
+        }
+        Ok(admitted)
+    }
+
+    pub(super) fn graph_fields() -> Vec<sdk::Field> {
+        use sdk::DataType::*;
+        vec![
+            sdk::Field::new("tenant_id", Binary, false),
+            sdk::Field::new("source_key", Binary, false),
+            sdk::Field::new("graph_result_id", Utf8, false),
+            sdk::Field::new("commit_revision", UInt64, false),
+            sdk::Field::new(
+                "graph_revision",
+                Struct(crate::GraphRevisionV1::arrow_schema().fields().clone()),
+                false,
+            ),
+            sdk::Field::new("graph_sensitivity", Utf8, false),
+            sdk::Field::new("first_cursor", UInt64, false),
+            sdk::Field::new("last_cursor", UInt64, false),
+            sdk::Field::new("previous_result_id", Utf8, true),
+            sdk::Field::new("context_notice_revision", UInt64, false),
+            sdk::Field::new("notice_context_revision", UInt64, false),
+            sdk::Field::new("notice_coverage_revision", UInt64, false),
+            sdk::Field::new("witness_deadline_utc_ns", UInt64, false),
+            sdk::Field::new("retained_input_expired", Boolean, false),
+            sdk::Field::new("subject_count", UInt64, false),
+            sdk::Field::new("relationship_count", UInt64, false),
+            sdk::Field::new("max_hops", UInt32, false),
+            sdk::Field::new("hop_boundary", Boolean, false),
+            sdk::Field::new("snapshot", Binary, false),
+            sdk::Field::new("context_refs", Binary, false),
+        ]
     }
 }

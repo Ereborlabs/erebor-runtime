@@ -676,7 +676,7 @@ async fn source_keeps_credential_join() -> TestResult {
     );
     assert_eq!(
         store.graph_finding(fixture.source.tenant_id, &id, &finding.finding_id)?,
-        Some(finding.clone())
+        Some((finding.clone(), graph.input_manifest.clone()))
     );
     assert!(store
         .graph_finding([99; 16], &id, &finding.finding_id)?
@@ -857,7 +857,7 @@ async fn source_preserves_dense_findings() -> TestResult {
         .iter()
         .map(|record| record.id.clone())
         .collect::<Vec<_>>();
-    assert_eq!(credential.revision.evidence, expected);
+    assert_eq!(graph.input_manifest.evidence, expected);
     assert_eq!(credential.evidence, expected);
     Ok(())
 }

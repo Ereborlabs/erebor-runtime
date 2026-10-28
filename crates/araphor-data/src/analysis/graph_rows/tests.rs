@@ -53,7 +53,8 @@ fn native_rows_integrity() -> TestResult {
     let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, "version")?
         .ok_or("missing header")?;
     assert_eq!(GraphRows::read(&writer, "version", &header)?, *graph);
-    assert_eq!(header.body(graph)?, serde_json::to_vec(graph)?);
+    assert_eq!(header.row_bytes, GraphRows::row_bytes(graph)?);
+    assert!(header.allocation_bytes()? >= header.row_bytes);
     assert_eq!(
         serde_json::to_vec(&GraphRows::read(&writer, "version", &header)?)?,
         serde_json::to_vec(graph)?
@@ -117,7 +118,13 @@ fn native_rows_integrity() -> TestResult {
         "UPDATE graph_subjects SET identity = repeat('x', 16777217)::BLOB WHERE ordinal = 0",
         "UPDATE graph_subjects SET tenant_id = 'short'::BLOB WHERE ordinal = 0",
         "UPDATE graph_subjects SET authority = '{'::BLOB WHERE ordinal = 0",
-        "UPDATE graph_relationships SET evidence = '{'::BLOB WHERE ordinal = 0",
+        "UPDATE graph_relationships SET from_subject_id = 4294967295 WHERE ordinal = 0",
+        "UPDATE graph_relationships SET evidence = [4294967295]::UINTEGER[] WHERE ordinal = 0",
+        "UPDATE graph_relationships SET evidence = [NULL]::UINTEGER[] WHERE ordinal = 0",
+        "UPDATE graph_relationships SET proof_quality = struct_update(proof_quality, source_authority := 255::UTINYINT) WHERE ordinal = 0",
+        "UPDATE graph_relationships SET proof_quality = struct_update(proof_quality, source_authority := NULL::UTINYINT) WHERE ordinal = 0",
+        "UPDATE graph_relationships SET required_coverage_interval_ids = ['short'::BLOB] WHERE ordinal = 0",
+        "UPDATE graph_relationships SET required_coverage_interval_ids = [NULL::BLOB] WHERE ordinal = 0",
         "UPDATE graph_findings SET tenant_id = 'short'::BLOB WHERE ordinal = 0",
         "UPDATE graph_findings SET effects = '{'::BLOB WHERE ordinal = 0",
     ] {
@@ -129,6 +136,58 @@ fn native_rows_integrity() -> TestResult {
         );
         transaction.rollback()?;
     }
+    Ok(())
+}
+
+#[test]
+fn native_edge_columns() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let mut empty = fixture.snapshot.graph.edges[0].clone();
+    empty.key.evidence.clear();
+    empty.required_coverage_interval_ids.clear();
+    empty.proof_quality = crate::ProofQualityV1 {
+        source_authority: crate::SourceAuthorityV1::Unauthenticated,
+        local_subject_binding: crate::LocalSubjectBindingV1::None,
+        remote_subject_binding: crate::RemoteSubjectBindingV1::None,
+        operation_result_authority: crate::OperationResultAuthorityV1::Unknown,
+        temporal_coverage: crate::TemporalCoverageV1::Unknown,
+        integrity: crate::ProofIntegrityV1::Unverified,
+    };
+    let mut populated = empty.clone();
+    populated.key.evidence = vec![0, 2];
+    populated.required_coverage_interval_ids = vec![[3; 16], [4; 16]];
+    let rows = vec![empty.clone(), populated, empty.clone()];
+    let writer = Connection::open_in_memory()?;
+    writer.execute_batch(GraphRows::SCHEMA)?;
+    {
+        let mut appender = writer.appender("graph_relationships")?;
+        GraphRows::insert_edges(&mut appender, "native", &rows)?;
+        appender.flush()?;
+    }
+    assert_eq!(
+        GraphRows::read_edges(&writer, "native", rows.len(), None)?,
+        rows
+    );
+    assert_eq!(
+        GraphRows::selected_edges(&writer, "native", &[0, 2], &AnalysisReadControl::default())?,
+        vec![empty.clone(), empty]
+    );
+    let types: (String, String, String, String) = writer.query_row(
+        "SELECT typeof(from_subject_id), typeof(evidence),
+        typeof(proof_quality.source_authority), typeof(required_coverage_interval_ids)
+        FROM graph_relationships WHERE ordinal = 0",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(
+        types,
+        (
+            "UINTEGER".into(),
+            "UINTEGER[]".into(),
+            "UTINYINT".into(),
+            "BLOB[]".into()
+        )
+    );
     Ok(())
 }
 
@@ -195,8 +254,22 @@ fn native_row_read_cancel() -> TestResult {
     let control = AnalysisReadControl::default();
     control.cancel()?;
     for read in [
-        GraphRows::read_subjects(writer, result, Some(&control)).map(|_| ()),
-        GraphRows::read_edges(writer, result, Some(&control)).map(|_| ()),
+        GraphRows::read_subjects(
+            writer,
+            result,
+            fixture.snapshot.graph.subjects.len(),
+            Some(&control),
+        )
+        .map(|_| ()),
+        GraphRows::read_edges(
+            writer,
+            result,
+            fixture.snapshot.graph.edges.len(),
+            Some(&control),
+        )
+        .map(|_| ()),
+        GraphRows::read_subjects(writer, result, usize::MAX, Some(&control)).map(|_| ()),
+        GraphRows::read_edges(writer, result, usize::MAX, Some(&control)).map(|_| ()),
         GraphRows::read_findings(writer, result, &header, Some(&control)).map(|_| ()),
         GraphRows::read_finding(
             writer,
@@ -431,8 +504,6 @@ fn native_retry_rejects_corruption() -> TestResult {
 
 #[test]
 fn native_membership_validation() -> TestResult {
-    use crate::GraphValidate as _;
-
     let fixture = CommitFixture::new()?;
     let mut sorted = fixture.snapshot.clone();
     let record = sorted.input_manifest.evidence[0].clone();
@@ -445,7 +516,7 @@ fn native_membership_validation() -> TestResult {
         .to_vec();
     records.sort();
     sorted.input_manifest.evidence = records.clone();
-    sorted.graph.revision = sorted.input_manifest.clone();
+
     sorted.input_positions = vec![(
         records[1].clone(),
         crate::StorePositionV1 {
@@ -454,7 +525,6 @@ fn native_membership_validation() -> TestResult {
         },
     )];
     for finding in &mut sorted.findings {
-        finding.revision = sorted.input_manifest.clone();
         finding.evidence = records.clone();
         let effect = finding.effects.first().ok_or("fixture effect")?.clone();
         finding.effects = records
@@ -467,7 +537,7 @@ fn native_membership_validation() -> TestResult {
             .collect();
     }
     for edge in &mut sorted.graph.edges {
-        edge.key.evidence = records.clone();
+        edge.key.evidence = vec![0, 1, 2];
     }
     sorted.validate()?;
 
@@ -489,11 +559,17 @@ fn native_membership_validation() -> TestResult {
     for effect in &mut missing_finding.effects {
         effect.evidence = absent.clone();
     }
-    rejected(missing_finding.validate(), "finding revision");
+    rejected(
+        missing_finding.validate_in(&sorted.input_manifest),
+        "finding revision",
+    );
 
     let mut missing_effect = sorted.findings[0].clone();
     missing_effect.effects[0].evidence = absent.clone();
-    rejected(missing_effect.validate(), "finding revision");
+    rejected(
+        missing_effect.validate_in(&sorted.input_manifest),
+        "finding revision",
+    );
 
     for from in [true, false] {
         let mut missing_endpoint = sorted.clone();
@@ -503,42 +579,43 @@ fn native_membership_validation() -> TestResult {
         } else {
             &mut edge.key.to
         };
-        endpoint.identity[0] ^= 128;
-        endpoint.validate()?;
+        *endpoint = u32::try_from(missing_endpoint.graph.subjects.len())?;
         missing_endpoint.graph.edges = vec![edge];
         rejected(missing_endpoint.validate(), "graph edge proof");
     }
 
     let mut missing_edge_evidence = sorted.clone();
     let mut edge = missing_edge_evidence.graph.edges[0].clone();
-    edge.key.evidence = vec![absent];
+    edge.key.evidence = vec![u32::try_from(records.len())?];
     missing_edge_evidence.graph.edges = vec![edge];
     rejected(missing_edge_evidence.validate(), "graph edge proof");
 
     let mut unsorted_manifest = sorted.clone();
     unsorted_manifest.input_manifest.evidence.reverse();
-    unsorted_manifest.graph.revision = unsorted_manifest.input_manifest.clone();
-    for finding in &mut unsorted_manifest.findings {
-        finding.revision = unsorted_manifest.input_manifest.clone();
-    }
+
     unsorted_manifest.input_positions[0].1.commit_revision = 0;
     rejected(unsorted_manifest.validate(), "revision manifest");
 
     let mut unsorted_finding = sorted.findings[0].clone();
     unsorted_finding.evidence.reverse();
     unsorted_finding.effects.clear();
-    rejected(unsorted_finding.validate(), "finding revision");
+    rejected(
+        unsorted_finding.validate_in(&sorted.input_manifest),
+        "finding revision",
+    );
 
-    let mut invalid_revision = unsorted_finding;
-    invalid_revision.revision.evidence.reverse();
-    rejected(invalid_revision.validate(), "revision manifest");
+    let mut invalid_revision = sorted.input_manifest.clone();
+    invalid_revision.evidence.reverse();
+    rejected(
+        invalid_revision.validate(sorted.scope.identity.tenant_id),
+        "revision manifest",
+    );
 
     let mut unsorted_subjects = sorted;
     unsorted_subjects.graph.subjects.reverse();
     unsorted_subjects.graph.edges.truncate(1);
-    let endpoint = &mut unsorted_subjects.graph.edges[0].key.from;
-    endpoint.identity[0] ^= 128;
-    endpoint.validate()?;
+    unsorted_subjects.graph.edges[0].key.from =
+        u32::try_from(unsorted_subjects.graph.subjects.len())?;
     rejected(unsorted_subjects.validate(), "graph snapshot");
     Ok(())
 }

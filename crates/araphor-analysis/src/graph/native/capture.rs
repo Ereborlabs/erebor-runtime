@@ -136,7 +136,15 @@ impl Projection {
                 if Self::column::<BinaryArray>(batch, "source_key")?.value(row) != identity.key() {
                     continue;
                 }
-                let revision: GraphRevisionV1 = Self::json(batch, "graph_revision", row)?;
+                let column =
+                    Self::column::<sdk::arrow_array::StructArray>(batch, "graph_revision")?;
+                let selected = column.slice(row, 1);
+                let mut values: Vec<GraphRevisionV1> =
+                    serde_arrow::from_arrow(selected.fields(), selected.columns())
+                        .map_err(Self::external)?;
+                let revision = values
+                    .pop()
+                    .ok_or_else(|| Self::invalid("graph native revision"))?;
                 if revision
                     .evidence
                     .iter()

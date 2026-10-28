@@ -46,6 +46,11 @@ impl AnalysisStore {
         for (id, version) in ids.iter().zip(&versions) {
             control.check()?;
             self.traversal_memory(output, version.buffer)?;
+            output.charge(
+                keys.len().checked_mul(size_of::<u32>()).ok_or_else(|| {
+                    self.state_error("the traversal subject allocation overflows")
+                })?,
+            )?;
             let selected = GraphRows::selected_subjects(
                 snapshot,
                 id,
@@ -59,6 +64,14 @@ impl AnalysisStore {
             let header =
                 self.traversal_header(snapshot, selection, id, version, output, control)?;
             let mut graph = header.snapshot;
+            let (selected, subject_ids): (Vec<_>, Vec<_>) = selected.into_iter().unzip();
+            if subject_ids.windows(2).any(|pair| pair[0] >= pair[1])
+                || subject_ids
+                    .iter()
+                    .any(|id| *id as usize >= header.subject_count)
+            {
+                return self.reject("the traversal subject ordinals are invalid");
+            }
             graph.graph.subjects = selected;
             subjects = subjects
                 .checked_add(graph.graph.subjects.len())
@@ -79,6 +92,17 @@ impl AnalysisStore {
                 if graph.graph.edges.len() != ordinals.len() {
                     return self.reject("the selected traversal relationships are absent");
                 }
+                for edge in &mut graph.graph.edges {
+                    for endpoint in [&mut edge.key.from, &mut edge.key.to] {
+                        *endpoint = subject_ids
+                            .binary_search(endpoint)
+                            .ok()
+                            .and_then(|index| u32::try_from(index).ok())
+                            .ok_or_else(|| {
+                                self.state_error("the traversal edge subject is absent")
+                            })?;
+                    }
+                }
             }
             graph.validate()?;
             let remaining = output
@@ -97,12 +121,12 @@ impl AnalysisStore {
             capture.graph(
                 id,
                 &graph,
-                None,
                 graph.graph.subjects.len(),
                 graph.graph.edges.len(),
                 version.revision,
                 version.sensitivity,
                 Some(&walk.subjects),
+                Some(&subject_ids),
                 &[],
                 header.notice,
                 &mut output.sink(control),

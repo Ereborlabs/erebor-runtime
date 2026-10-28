@@ -1,5 +1,9 @@
 # Araphor Graph Commit Review
 
+The [compact Graph section](#compact-graph-storage-and-native-query-rows) describes
+the current working changes. Earlier sections retain their historical source
+state and verification records.
+
 This guide covers the approved typed graph handoff and buffered row appends.
 The retained source head is `cffde410`. Its final Rust procedure passes.
 The subsequent graph, Discovery, and finding changes are committed through
@@ -262,3 +266,146 @@ creates a changed finding and checks the new head and original history.
 Read the [exact correction and qualification record](../../recovery/araphor-immutable-retry-validation-20261021.json).
 All 24 related Data cases and both native Graph storage cases pass. The final
 shared Rust procedure remains **Not done** at this source record.
+
+
+## Compact Graph storage and native query rows
+
+This section covers the working changes after `f8e650ab`. The
+[incremental Graph plan](../plans/araphor-incremental-graphs.md) separates this
+storage change from the remaining builtin ownership and incremental work.
+**Result: Done for compact storage.** The production build, relevant runtime
+checks, and scoped static checks pass. The unchanged backlog case still fails
+its deadline. Incremental execution remains **Not done**. Runtime checks found
+schema, projection, and retained-parent availability errors; the corrections
+pass their relevant checks. The corrected history test also passes. The memory
+measurement error described below is resolved.
+
+### Intended end state
+
+Keep one input manifest for each immutable Graph result. Store subjects once
+and refer to those subjects by result-local integer IDs. Store edges in native
+columns. Preserve exact historical finding references, traversal, recovery,
+and atomic publication. Compact storage alone does not make derivation
+incremental.
+
+### Implementation review flow
+
+[GraphPublication::convert_graph](../../crates/araphor-analysis/src/graph/native/commit.rs) Analysis validates the captured package calls and creates a typed Graph result
+  -> [CanonicalGraph::bounded](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) the value validates the snapshot and checks a configured output byte bound
+  -> [AnalysisStore::commit_managed_graph](../../crates/araphor-data/src/analysis/progress/graph.rs) Data binds the Graph to the captured managed attempt
+  -> [AnalysisStore::progress_rows](../../crates/araphor-data/src/analysis/progress.rs) Data validates scope, witnesses, references, immutable retries, and progress
+  -> [GraphHeader::encode](../../crates/araphor-data/src/analysis/graph_rows/header.rs) Data encodes one manifest and the remaining result metadata
+  -> [GraphRows::insert](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data appends subjects, native edges, and findings in the existing transaction
+  -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the managed output, checkpoint, Graph, references, and progress together
+
+[GraphWalk::query](../../crates/araphor-data/src/analysis/graph/traversal/sql.rs) Traversal joins each endpoint to its subject within the same result
+  -> [GraphWalk::run](../../crates/araphor-data/src/analysis/graph/traversal/read.rs) traversal checks bounds before it allocates the selected rows
+  -> [AnalysisStore::traverse_graphs](../../crates/araphor-data/src/analysis/extraction/graph/traversal.rs) traversal returns a complete selected subject dictionary and valid local endpoint references
+  -> [Capture::graph](../../crates/araphor-data/src/analysis/extraction/tables/graph.rs) SQL rows keep original subject ordinals within the immutable result
+
+### Owners and contracts
+
+[GraphSnapshotV1](../../crates/araphor-data/src/graph/model.rs) owns the single
+`input_manifest`. Findings no longer own copies of that manifest. Detached
+finding reads return the finding and its exact parent manifest together.
+Notification delivery retains the original result ID and revision content.
+
+Each edge contains two subject indices and a list of evidence indices. The
+subject indices refer to the sorted subject dictionary. The evidence indices
+refer to the parent manifest. Validation rejects missing references, duplicate
+evidence indices, and incompatible native-parent authorities. IDs have meaning
+only within their immutable Graph result. Traversal compares full subject keys
+across results; it does not compare unrelated integer IDs.
+
+`CanonicalGraph` owns only the typed snapshot. The normal commit path creates
+no complete Graph JSON buffer. A finite output limit uses a counting writer.
+An unconfigured output limit skips that serialization. The byte-input Graph
+commit helper exists only for tests and calls the same typed commit path.
+Generic result reads return the retained header bytes. Typed callers use
+`graph_result`. SQL serializes a complete snapshot only when the query requests
+`graph_manifest.snapshot`.
+
+The six-field header keeps its existing contract version. The fifth field
+bounds native variable row bytes. Reads check row counts and this upper bound
+before decoding native rows. Header-cache accounting includes header metadata.
+Edge appends use DuckDB's existing Arrow appender for native list and struct
+columns. An append or flush error rolls back the same transaction.
+
+`graph_manifest.graph_revision` is one native Arrow struct for each admitted
+result. Child tables join this parent by result ID. A notification that cites
+an older result adds that exact parent row without adding old child rows.
+Repeated references do not add duplicate admitted parents. Projected reads
+retain their field-level allocation and validation behavior.
+
+### Verification route and limits
+
+Read the [native row tests](../../crates/araphor-data/src/analysis/graph_rows/tests.rs)
+for storage, corruption, retry, and rollback. Read the
+[native table tests](../../crates/araphor-data/src/analysis/extraction/tables/tests/native.rs)
+for parent projection, retained notification references, and configured
+allocation bounds. Read the
+[traversal tests](../../crates/araphor-analysis/src/graph/tests/traversal.rs)
+for direction, bindings, native IDs, replacement, and reopen. Read the
+[managed Graph tests](../../crates/araphor-analysis/src/graph/native/tests/managed.rs)
+for captured publication, expiry, retry, and restart.
+
+Graph construction and traversal checks pass in 54 cases. Native Graph checks
+pass in 76 cases. Notification checks pass in 41 cases. These totals combine
+the relevant groups and exact correction runs; they are not one full suite
+run. Data storage, native schema, projection, retained-parent, and health checks
+pass. Scoped Clippy passes with warnings denied. The last change affects only
+the history test; its exact rebuild and run pass, followed by the scoped
+Analysis Clippy check. Existing ignored artifact checks remain ignored. No
+full workspace or physical qualification is claimed.
+
+The current build and test artifacts are in
+`/tmp/araphor-package-qualification-active/compact-graph`. The incremental
+builtin owner change is not implemented. This change adds no BPF interface,
+graph engine, polling loop, or second store.
+
+### First matched backlog measurement
+
+Both runs use 1,592 events and the same test, assertions, deadlines, and build
+settings. All 746 compiler artifact feature and profile sets match. Both runs
+retain four Graph results: 18 subjects, 6,619 edges, and 277 findings. The
+selected event counts are 940, 639, 642, and 950. The test directory remains
+after shutdown for read-only storage inspection.
+
+| Measurement | Before | Compact storage |
+|---|---:|---:|
+| Graph column and header payload | 10,990,951 bytes | 3,687,217 bytes |
+| Edge column payload | 7,326,260 bytes | 865,704 bytes |
+| Graph headers | 2,833,677 bytes | 1,990,503 bytes |
+| Complete database file | 64,237,568 bytes | 59,518,976 bytes |
+| Elapsed test time | 126.42 seconds | 121.78 seconds |
+| Test result | Failed: deadline | Failed: deadline |
+
+Graph payload decreases by 66.45%. This count includes fixed column fields.
+It excludes row overhead, indexes, list offsets, and compression. The complete
+database file includes other retained data and reusable blocks. Used blocks
+increase from 168 to 170; free blocks decrease from 77 to 59. Each block is
+262,144 bytes. The smaller file does not prove fewer used blocks. Do not treat
+the payload count as physical disk use. Both runs fail, so these two timings
+do not establish a successful runtime improvement.
+
+The first runner reported a 2,220,883,968-byte memory peak. This value is not a
+valid workload measurement. Before it started the child, the runner read the
+complete executable into memory to compute its hash. The child's `wait4`
+high-water mark included this earlier allocation. An empty `/bin/true` child
+reproduces the value; streaming the same hash avoids it. Both measurement
+runners now stream file hashes. The original records remain unchanged.
+
+A separate run samples the exact test process through `/proc`. Its final
+sample reports a 935,911,424-byte high-water mark. Samples are one second apart,
+so this does not prove the peak after the final sample. This run also fails
+the deadline. The baseline has no equivalent process samples. No memory
+regression or improvement ratio is established by these records.
+
+The matched artifacts are in
+`/tmp/araphor-package-qualification-active/compact-graph/measured-compact/matched`.
+`build-comparison.json` records matching build settings. `incident-result.json`
+records the executable hash, source hash, time, memory, and failed result.
+`comparison.json` records the logical-byte calculation. `storage-result.json`
+records the read-only inspection and equal file hashes before and after it.
+`rss-accounting-check.json` records the empty-process control. The
+`rss-diagnostic` directory retains the separate workload samples and raw result.

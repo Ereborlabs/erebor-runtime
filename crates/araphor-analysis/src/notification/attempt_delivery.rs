@@ -68,9 +68,9 @@ impl NotificationRouter {
             })
             .transpose()?
             .flatten()
-            .map(|finding| NotificationFindingV1 {
+            .map(|(finding, revision)| NotificationFindingV1 {
                 finding_id: finding.finding_id,
-                revision: finding.revision,
+                revision,
             });
         let overdue = subject.overdue(pending.started_utc_ns);
         Ok(NotificationDeliveryV1 {
