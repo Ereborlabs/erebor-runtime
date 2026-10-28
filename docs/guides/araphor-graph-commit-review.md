@@ -495,14 +495,14 @@ The host preserves independent partial source fields, current-input evidence, po
 The small native reason details describe the final finding. Opaque declared reasons retain their declared schema and data.
 Native input encoding stays lazy. A finite input limit or shared pool admits a conservative allocation bound before encoding; actual Arrow ownership then replaces that reservation.
 The existing retained-expiry owner can downgrade proof. The host does not regenerate successful finding, action, or correlation semantics.
-Builtin checkpoints still declare resume_input_changes=false. This owner move does not implement incremental derivation or change the subscription window.
+At this deliverable, builtin checkpoints still declare resume_input_changes=false. This owner move does not implement incremental derivation or change the subscription window. The next section records the incremental implementation.
 [Typed baselines](../../crates/araphor-analysis/src/graph/tests/baseline.rs), [host validation](../../crates/araphor-analysis/src/graph/tests.rs), [native adapter parity](../../crates/araphor-analysis/src/graph/tests/execution.rs), and [capture admission](../../crates/araphor-analysis/src/graph/native/tests/gates.rs) are the review route for result and trust-boundary parity.
 Complete typed baselines, domain and hostile-output checks, opaque reasons, and SQL/Wasm/native adapter and pressure cases pass. Captured-source, exact-port, credential-join, extra-export, and atomic conversion-failure/retry checks pass. The configured allocation case rejects before encoding and retains usable buffers after temporary owners drop.
 The ten detached Analysis semantic files are removed: 1,348 lines. Retained originals and the reviewed deletion record remain in compact-graph/d3-host/deletion-review.
-Records in compact-graph/builtin-ownership retain each executed source and binary. Corrected descriptor, literal, activation-join, and old-output fixture failures remain recorded; those setup failures do not prove the intended allocation or conversion boundaries.
+Records in compact-graph/builtin-ownership retain each executed source and binary identity. Corrected descriptor, literal, activation-join, and old-output fixture failures remain recorded; those setup failures do not prove the intended allocation or conversion boundaries.
 Scoped formatting, patch whitespace, and Clippy for the seven affected crates and their tests pass with warnings denied. Runtime evidence precedes the reviewed borrow/import-only cleanup; final Clippy covers that cleanup.
 Source, artifact, environment, and verification records are in `/tmp/araphor-package-qualification-active/compact-graph/builtin-ownership`.
-Builtin ownership has passing relevant runtime checks. Incremental derivation, incident completion, current physical proof, and complete qualification remain Not done. No execution-time gain is claimed.
+Builtin ownership has passing relevant runtime checks. The next sections record incremental derivation and its measurement. Incident completion, current physical proof, and complete qualification remain Not done. No execution-time gain is claimed.
 
 
 ## Incremental builtin contributions
@@ -529,7 +529,109 @@ The shared [edge owner](../../crates/araphor-analysis-builtins/src/graph/edges.r
 Removal/window exit, changed old qualified input or facts, changed old order/window, or valid unusable progress selects a complete rebuild. Invalid SDK envelopes still fail. This implementation makes no incremental-removal claim.
 The [host](../../crates/araphor-analysis/src/graph/mod.rs) requires version 1 and State dataset 0. SDK validation owns additional ports and resume policy. State payload lookup is name-keyed; custom State-only packages remain valid. The host does not parse Progress.
 [Incremental tests](../../crates/araphor-analysis-builtins/src/graph/tests/incremental.rs) and [state tests](../../crates/araphor-analysis-builtins/src/graph/tests/incremental/state.rs) compare complete/continued output and actual derivation counts. Input decode, digesting, matching, and full output encoding can still scan the cut; these counts establish no timing or memory gain.
-The source-bound focused-v2 record passes 25 builtin Graph cases plus host and example checks. Four SQL/Wasm adapter/pressure cases and two source-built native adapter/pressure cases pass. Their records keep the executed v2 artifacts.
+The source-bound focused-v2 record passes 25 builtin Graph cases plus host and example checks. Four SQL/Wasm adapter/pressure cases and two source-built native adapter/pressure cases pass. Their records keep the executed artifact identities.
 Final seven-crate Clippy passes in clippy-v4.json with unchanged source; scoped formatting and whitespace pass. Earlier failed checks remain separate. All six final Graph owner cases pass: enhanced actual-Wasm subscription, failed-result reuse separation, unchanged-notice reuse, atomic conversion failure, retained replay, and committed-state Wasm restart.
 The final source record is source-final-rust-v4.json (SHA-256 d893f2a052dd24b9ba043846e80635b2e6d272ecb03062f0308b9a5eb49eed51). The six owner cases use Analysis ELF 750d627311c15539f28a92d5b584abcf6fdbf7c7052151631f683deb4077f9df. Records are in compact-graph/incremental-root.
-Two Data continuation/atomic-input cases and mixed_port_deadlines also pass on their recorded v2 executables. Incremental implementation checks are complete. Matched integration measurement and the overall plan remain Not done. No elapsed-time or storage gain is claimed.
+Two Data continuation/atomic-input cases and mixed_port_deadlines also pass on their recorded v2 executables. Incremental implementation checks are complete. The following section records the matched measurement. Backlog deadline qualification remains Not done. No elapsed-time gain is claimed.
+
+## Incremental integration measurement
+
+The existing backlog workload ran once on the current implementation. Its
+assertions, workload, deadline, and shutdown path are unchanged. The temporary
+fixture change only retained the store for inspection. The original fixture
+was restored before execution. Dependency features and build profiles match
+both historical builds. The Rust test profile is not a release benchmark.
+
+| Measurement | Compact storage before builtin ownership/continuation | Current implementation |
+|---|---:|---:|
+| Workload events | 1,592 | 1,592 |
+| Analysis raw segment bytes | 289,050 | 289,050 |
+| Retained Graph versions | 4 | 5 |
+| Current Graph subjects / edges / findings | 11 / 3,323 / 139 | 11 / 3,323 / 139 |
+| Current Graph logical columns and headers, bytes | 1,854,958 | 1,855,803 |
+| All Graph logical columns and headers, bytes | 3,687,217 | 4,482,156 |
+| All saved package/definition IPC content, bytes | 6,302,800 | 10,657,552 |
+| Current saved package output IPC, bytes | 368,016 | 1,598,576 |
+| All saved package output IPC, bytes | 733,088 | 3,889,624 |
+| Database file bytes | 59,518,976 | 76,034,048 |
+| DuckDB used blocks | 170 | 211 |
+| DuckDB free blocks | 59 | 79 |
+| Installed package artifact bytes | 8,331,264 | 14,852,608 |
+| Installed package descriptor bytes | 89,591 | 957,866 |
+| Failed-run wall time, seconds | 121.776 | 124.420 |
+| Workload result | Deadline failed | Deadline failed |
+
+The current cuts contain 940, 639, 941, 642, and 950 evidence entries. The
+earlier run has no cursor-941 version. That extra version occupies 794,094
+Graph bytes. The other four versions occupy 3,688,062 bytes, 845 bytes more
+than before. Their Graph row counts match. The latest actor revision has
+five coverage entries instead of three; complete revisions are not identical.
+Graph header bytes count once. They are not added again from result bodies.
+
+Checkpoint IPC contains 13,560 State bytes and 508,920 Progress bytes across
+all retained calls. Current calls account for 5,424 and 197,808 bytes,
+respectively. All output/checkpoint dataset names match their stored metadata;
+their totals reconcile to the corresponding IPC roles. These are partitions
+of the IPC total, not extra bytes. This comparison includes resolved builtin
+ownership, continuation, and different retained history. It does not isolate
+the incremental algorithm's cost. Full output rows are still encoded and saved.
+
+| Saved package IPC role | Compact current / history bytes | Current implementation current / history bytes |
+|---|---:|---:|
+| Input | 2,476,944 / 2,448,912 | 2,149,008 / 3,324,312 |
+| Output | 368,016 / 365,072 | 1,598,576 / 2,291,048 |
+| Checkpoint | 5,424 / 5,424 | 203,232 / 319,248 |
+| Reason | 196,824 / 195,408 | 303,576 / 303,576 |
+
+Definition-selected IPC is a further 164,976 bytes in the current total.
+There are 15 saved package results, versus 12 before. Evidence reference rows
+change from 19,029 to 20,560; context reference rows from 697 to 408; and
+managed dependency edges from 30 to 33. Notification-state versions fall from
+107 to 15. These history counts do not show equal processing progress.
+
+The database file grew by 16,515,072 bytes. Used block bytes grew from
+44,564,480 to 55,312,384; each block is 262,144 bytes. The current free block
+count is 79. WAL size is zero after shutdown. File length, used/free blocks,
+and logical payloads are separate measurements and must not be added together.
+The workload executable is 2,232,961,392 bytes; it is separate from the three
+installed package artifacts stored in the database.
+
+The current process used 421.145 seconds of user CPU and 8.664 seconds of
+system CPU across its threads. Its valid process peak is 1,048,372 KiB.
+Historical peaks include the runner's earlier whole-executable allocation;
+there is no valid before/after memory ratio. The new runner hashes the
+executable in small blocks before it starts the measured child.
+
+At timeout, the observer cached actor cursor 941 and background cursor 639.
+The earlier compact run cached 950 and 642. Later diagnostics and the closed
+store reached 950 and 642 in the current run. Those reads do not prove when
+the Graphs became available. The selected actor notification remained absent.
+There are 135 stale-current-finding reference conflicts, versus 132 in the
+earlier matched log. A newer result makes the captured reference fail the
+existing current-result guard. No new error category is recorded, but the
+observed deadline progress is worse.
+
+Three notification delivery intervals take 9.939, 5.531, and 8.611 seconds.
+Each interval includes reads, state saves, routing, and delivery handling.
+They are not native commit timings. The default unavailable sink returns
+failure without external network delivery; `ok=true` means handling returned
+successfully, not that delivery was accepted. These logs do not establish
+which operation dominates the cost.
+
+The integration build required the existing `GraphValidate` trait import in
+[Mithril Control](../../crates/mithril-control/src/store/graph.rs). No validation
+behavior changes. Scoped Control Clippy with warnings denied and the matched
+build pass. The first failed build remains under `failed-build-v1`.
+Relevant owner tests are listed in the preceding section. Full workspace CI
+and physical qualification were not run.
+
+Records are in
+`/tmp/araphor-package-qualification-active/compact-graph/incremental-integration`.
+`incident-result.json` binds the command, source, executable, time, and failure.
+The source hash is `be8a046db9f89817627938a995d36c1d3f67bca6aebcb356402e7cc6528e9693`;
+the executable hash is `c12b5ec392a7323a956e08ed10f6516eaca86229af1d2b6f3d7f0361fbc9a5fb`.
+`storage-result.json` records read-only inspection with unchanged file hashes.
+`incremental-comparison.json` records the payload calculations.
+`notification-run-comparison.json` records the bounded log comparison.
+Implementation and measurement are complete. Backlog deadline qualification
+and the overall performance goal remain Not done.

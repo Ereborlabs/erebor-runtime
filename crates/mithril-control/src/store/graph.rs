@@ -1,6 +1,6 @@
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, GraphFactV1,
-    GraphFactValueV1, GraphPolicyActivationV1, PolicyObservationProvenanceV1,
+    GraphFactValueV1, GraphPolicyActivationV1, GraphValidate, PolicyObservationProvenanceV1,
     PolicyProvenanceStateV1,
 };
 

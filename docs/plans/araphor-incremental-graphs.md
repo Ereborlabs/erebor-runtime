@@ -4,7 +4,7 @@ This plan implements the [recorded Graph requirement](araphor-production-dataflo
 A subscription selects data and an optional window. The builtin Graph package
 owns Graph derivation and the decision to update or rebuild its result.
 
-**Direction: Approved by the user. Concrete plan: Approved by the independent Sol 6.1 reviewer. Implementation: Not done.**
+**Direction: Approved by the user. Concrete plan: Approved by the independent Sol 6.1 reviewer. Incremental additions: Done. Backlog deadline qualification: Not done.**
 
 ## Intended end state
 
@@ -35,9 +35,9 @@ Native SQL parser
 | Owner | Current behavior | Required change |
 |---|---|---|
 | `araphor-analysis/src/graph/feed.rs` | Drives Graph programs from query subscription streams. | Keep the reactive owner. Carry the selected optional window. |
-| `araphor-analysis-builtins/src/graph/contract.rs` | Uses the same Computation to derive new and affected contributions through State dataset 0 and native Progress dataset 1. | Complete integrated proof and matched measurement. |
+| `araphor-analysis-builtins/src/graph/contract.rs` | Uses the same Computation to derive new and affected contributions through State dataset 0 and native Progress dataset 1. | Relevant owner checks pass. The measured backlog deadline remains unmet. |
 | `araphor-analysis/src/graph` | Qualifies captured inputs, validates resolved contributions, and structurally merges their values. | Keep independent authorization, proof validation, expiry, and atomic publication. No second semantic builder remains. |
-| `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior::state` applies the declared continuation policy. Ordinary packages still require matching input revisions and coverage. | Enable continuation in each builtin only when its update algorithm is complete. |
+| `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior::state` applies the declared continuation policy. Ordinary packages still require matching input revisions and coverage. | Continuation is enabled for the three Graph builtins after complete-result parity checks. |
 | `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior.retained` supplies the exact saved output through `Evaluation.previous_outputs`. | Use those rows in the builtin update algorithm. Keep current-input admission unchanged. |
 | `araphor-data/src/analysis/progress/graph.rs` | Uses the existing managed transaction for result, state, references, and progress. | Keep this single atomic commit owner. |
 
@@ -170,17 +170,18 @@ implementation and review its concrete diff before commit. Use existing
 DataFusion and dependency facilities where they apply. Escalate a new product
 or scope decision to the user; do not infer approval.
 
-**Result: Not done.** The requirement is recorded and the source audit is
-complete. The compact representation passes its relevant checks. The same
-backlog case retains the same four Graphs, 6,619 edges, and 277 findings. Graph
+**Result: Not done.** The requested incremental implementation and measurement
+are complete. Backlog deadline qualification remains open. The compact
+representation passes its relevant checks. Its first matched run retained
+four Graphs, 6,619 edges, and 277 findings. Graph
 column and header payload decreases from 10.99 MB to 3.69 MB. Both baseline
 and compact runs fail the existing deadline. The first memory comparison is
 invalid because executable hashing contaminated the runner's high-water mark;
 the corrected interpretation is in the [review guide](../guides/araphor-graph-commit-review.md#first-matched-backlog-measurement).
 
-Resolved builtin ownership passes its relevant runtime and static checks.
-Incremental algorithms and final measurements
-remain open. The independent Sol 6.1 reviewer approved this
+Resolved builtin ownership and incremental algorithms pass their relevant
+runtime and static checks. The final measurement below records the remaining
+deadline failure and storage costs. The independent Sol 6.1 reviewer approved this
 concrete plan on 2026-10-28. Each deliverable still needs a review of its code
 and test results. The compact storage result does not complete this plan.
 
@@ -213,7 +214,7 @@ Verification records are in
 `/tmp/araphor-package-qualification-active/compact-graph/continuation`.
 
 **State handoff result: Done.** Builtin Graph declarations still keep
-continuation disabled.
+continuation disabled at this deliverable.
 This state transport does not implement incremental Graph derivation.
 
 
@@ -225,7 +226,7 @@ The ten detached Analysis semantic files are removed after parity checks: 1,348 
 Relevant builtin, example, Data, typed baseline/domain, host-validation, opaque-reason, native/SQL/Wasm adapter/pressure, and captured-source checks pass. Exact-port, credential-join, extra-export, configured allocation, and atomic conversion-failure/retry checks also pass. Records in compact-graph/builtin-ownership keep each tested source and artifact identity, including earlier corrected fixture failures.
 The [current source review route](../guides/araphor-graph-commit-review.md#builtin-ownership-of-resolved-graph-rows) links the production owners and tests.
 **Builtin ownership result: Done.** Scoped formatting, patch whitespace, and seven-crate Clippy pass with warnings denied. Runtime evidence precedes the reviewed borrow/import-only cleanup; final Clippy covers that cleanup. Source and verification records are in `/tmp/araphor-package-qualification-active/compact-graph/builtin-ownership`.
-Builtin continuation remains false. Incremental algorithms and integrated measurement remain open. No execution-time gain or timeout fix is claimed.
+At this deliverable, builtin continuation remains false. The later sections record the incremental implementation and measurement. No execution-time gain or timeout fix is claimed.
 
 ### Approved initial incremental scope
 
@@ -245,5 +246,49 @@ Stable record-ID maps and exact per-record fact zippers admit normal additions w
 Analysis keeps generic State/version support, SDK authority for extra checkpoint ports, current-input evidence checks, and atomic publication. The [source route](../guides/araphor-graph-commit-review.md#incremental-builtin-contributions) links implementation and ordinary tests.
 The focused-v2 record passes 25 builtin Graph cases plus host/example groups. Four SQL/Wasm adapter/pressure cases and two fresh source-built native cases pass. Mechanical source cleanup keeps the reviewed runtime evidence identities. Final v4 Clippy, formatting, and whitespace pass.
 All six final owner cases pass in graph-owners.json: enhanced Wasm subscription, failure/reuse separation, unchanged-notice reuse, atomic conversion failure, retained replay, and committed-state Wasm restart. Final source: source-final-rust-v4.json, SHA-256 d893f2a052dd24b9ba043846e80635b2e6d272ecb03062f0308b9a5eb49eed51; Analysis ELF 750d627311c15539f28a92d5b584abcf6fdbf7c7052151631f683deb4077f9df.
-**Incremental implementation result: Done.** Integration and matched measurement remain open; the overall plan remains Not done.
+**Incremental implementation result: Done.** The following section records integration and matched measurement. The overall deadline qualification remains Not done.
 The records are in compact-graph/incremental-root. Full input/output scans can remain. Derivation-count proof is not an elapsed-time, storage, or process-memory result.
+
+### Integrated measurement result
+
+The relevant subscription, retry, atomic failure, replay, and committed-state
+restart checks pass. SQL, Wasm, and native adapters pass. The final integration
+build found one missing `GraphValidate` trait import in Mithril Control after
+the shared Graph model move. The import restores the existing validation call;
+it does not change the validation. Scoped Control Clippy passes with warnings
+denied. The first failed build remains in the measurement record.
+
+The existing backlog workload ran once with unchanged assertions and deadline.
+It failed after 124.420 seconds. The earlier compact run failed after 121.776
+seconds. This is failed-run wall time, not completion throughput. At timeout,
+the observer had actor cursor 941 and background cursor 639. Later diagnostics
+and the closed store reached 950 and 642. They do not prove pre-deadline progress.
+The selected actor notification remained absent. Both runs have stale-current-
+finding reference conflicts; the logs do not identify the dominant cost.
+
+The final two Graphs retain 11 subjects, 3,323 edges, and 139 findings. Their
+logical columns and headers occupy 1,855,803 bytes, versus 1,854,958 bytes in
+the compact run. The actor revision now has five coverage entries instead of
+three. All retained Graphs occupy 4,482,156 bytes across five versions. The
+compact run retained four versions and 3,687,217 bytes. The extra cursor-941
+version accounts for 794,094 bytes; history totals are not an equal-shape ratio.
+
+Saved package and definition IPC grows from 6,302,800 to 10,657,552 bytes.
+Resolved outputs, continuation state, and extra retained history contribute
+to this increase. Progress occupies 508,920 bytes across all retained calls.
+The database file grows from 59,518,976 to 76,034,048 bytes. These are measured
+drawbacks. The [measurement record](../guides/araphor-graph-commit-review.md#incremental-integration-measurement)
+separates current/history payloads, package artifacts, and database allocation.
+
+The current process peak is 1,048,372 KiB. Historical runner peaks are invalid,
+so no memory comparison is made. Dependency features and build profiles match
+the baseline. Source and executable identities are fixed; the retention-only
+fixture edit was restored before execution. Read-only inspection leaves store
+file contents unchanged. Records are in
+`/tmp/araphor-package-qualification-active/compact-graph/incremental-integration`.
+
+**Implementation and measurement: Done. Backlog deadline qualification: Not done.**
+Full input decode, validation, matching, and output encoding remain. Changes
+to old proof, facts, order, or window and event removal use complete rebuilds.
+No full workspace CI or physical qualification ran. This result
+does not claim that the overall performance goal is complete.

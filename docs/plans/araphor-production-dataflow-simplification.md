@@ -394,7 +394,7 @@ CI target below ten minutes remains unproven.
 
 ## Incremental builtin Graph updates
 
-**User requirement recorded on 2026-10-28. Design direction: Approved. Implementation: Not done.**
+**User requirement recorded on 2026-10-28. Design direction: Approved. Incremental additions: Done. Backlog deadline qualification: Not done.**
 
 A query subscription selects input data and an optional time window.
 The subscription can have no time window.
@@ -435,3 +435,8 @@ or remaining failure with the measured improvements.
 
 The [incremental Graph implementation plan](araphor-incremental-graphs.md) records
 the owner changes, retained-input contract, deliverables, and verification.
+The builtins reuse unchanged contributions and update affected correlations.
+Removal or changed old proof uses a complete rebuild. Relevant owner checks
+pass. The matched backlog run still fails its deadline; full input/output
+processing remains, and saved package data increased. The plan records these
+limits and the measured sizes. No end-to-end speed gain is established.
