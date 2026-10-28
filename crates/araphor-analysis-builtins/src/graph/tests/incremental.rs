@@ -246,6 +246,29 @@ fn shared_edges_update_seeds() -> TestResult {
         1
     );
     assert_eq!(Finding::decode(&prior.datasets[2])?.len(), 2);
+    let remaining = records[1..].to_vec();
+    let remaining_facts = selected
+        .iter()
+        .filter(|fact| fact.record != 0)
+        .cloned()
+        .map(|mut fact| {
+            fact.record -= 1;
+            fact
+        })
+        .collect::<Vec<_>>();
+    let (expired, work) = continued(
+        detector,
+        &input(detector, &remaining, &remaining_facts, 100)?,
+        &prior,
+    )?;
+    assert_eq!(work, 1);
+    assert_eq!(
+        Relationship::decode(&expired.datasets[1])?
+            .iter()
+            .filter(|edge| edge.edge.key.evidence == [0, 1])
+            .count(),
+        1
+    );
     let mut denied = base[2].clone();
     denied.id = identity(3);
     records.push(denied);

@@ -178,7 +178,7 @@ fn restricted_fact_updates_findings() -> TestResult {
 }
 
 #[test]
-fn changed_inputs_rebuild() -> TestResult {
+fn changed_inputs_rebuild_selectively() -> TestResult {
     let detector = Detector::Process;
     let old = records(3);
     let facts = vec![
@@ -222,7 +222,11 @@ fn changed_inputs_rebuild() -> TestResult {
             &input(detector, &current, &selected, window)?,
             &prior,
         )?;
-        assert_eq!(work, current.len(), "fallback {case}");
+        assert_eq!(
+            work,
+            if case == 4 { 0 } else { current.len() },
+            "fallback {case}"
+        );
     }
     let empty = input(detector, &[], &[], 100)?;
     let (output, work) = continued(detector, &empty, &prior)?;
@@ -232,6 +236,179 @@ fn changed_inputs_rebuild() -> TestResult {
         .is_empty());
     let (_, work) = continued(detector, &input(detector, &old, &facts, 100)?, &output)?;
     assert_eq!(work, old.len());
+    Ok(())
+}
+
+#[test]
+fn expired_records_reuse_survivors() -> TestResult {
+    let detector = Detector::Process;
+    let old = records(64);
+    for width in [1, 100, 10_000] {
+        let prior = detector.evaluate(&input(detector, &old, &[], width)?)?;
+        let (_, work) = continued(detector, &input(detector, &old[1..], &[], width)?, &prior)?;
+        assert_eq!(work, 0, "window {width}");
+    }
+    Ok(())
+}
+
+#[test]
+fn expired_join_reuses_unrelated() -> TestResult {
+    let detector = Detector::Credentials;
+    let (mut old, facts) = credential_input()?;
+    for row in 3..43 {
+        let mut value = record();
+        value.id = identity(row);
+        value.effect.task_cookie = row + 100;
+        value.process_instance_id = Some((row as u128).to_be_bytes());
+        value.observed_boottime_ns = row + 1_000;
+        old.push(value);
+    }
+    for width in [10, 100, 10_000] {
+        let prior = detector.evaluate(&input(detector, &old, &facts, width)?)?;
+        let mut current = old.clone();
+        current.remove(1);
+        let mut selected = facts.clone();
+        selected.retain(|fact| fact.record != 1);
+        for fact in &mut selected {
+            if fact.record > 1 {
+                fact.record -= 1;
+            }
+        }
+        let (_, work) = continued(
+            detector,
+            &input(detector, &current, &selected, width)?,
+            &prior,
+        )?;
+        assert!(work < current.len() / 2, "window {width}: {work}");
+    }
+    Ok(())
+}
+
+#[test]
+fn expired_authority_support_disappears() -> TestResult {
+    let detector = Detector::Credentials;
+    let (old, mut facts) = credential_input()?;
+    for fact in &mut facts {
+        if let FactValue::AuthorityUse {
+            workload_binding, ..
+        } = &mut fact.value
+        {
+            *workload_binding = None;
+        }
+    }
+    let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
+    assert!(Relationship::decode(&prior.datasets[1])?
+        .iter()
+        .any(|edge| edge.edge.key.edge_type == GraphEdgeTypeV1::CredentialAuthority));
+    for removed in [1, 2] {
+        let mut current = old.clone();
+        current.remove(removed);
+        let selected = facts
+            .iter()
+            .filter(|fact| fact.record != removed as u32)
+            .cloned()
+            .map(|mut fact| {
+                if fact.record > removed as u32 {
+                    fact.record -= 1;
+                }
+                fact
+            })
+            .collect::<Vec<_>>();
+        let (output, work) = continued(
+            detector,
+            &input(detector, &current, &selected, 100)?,
+            &prior,
+        )?;
+        assert!(work < current.len(), "removed {removed}: {work}");
+        assert!(Relationship::decode(&output.datasets[1])?
+            .iter()
+            .all(|edge| edge.edge.key.edge_type != GraphEdgeTypeV1::CredentialAuthority));
+        assert!(Subject::decode(&output.datasets[0])?
+            .iter()
+            .all(|subject| !matches!(
+                subject.key.authority,
+                GraphSubjectAuthorityV1::Provider { .. }
+            )));
+    }
+    Ok(())
+}
+
+#[test]
+fn surviving_parent_reanchors_process() -> TestResult {
+    let detector = Detector::Process;
+    let mut old = records(2);
+    old[1].process_instance_id = Some([8; 16]);
+    old[1].effect.task_cookie = 4;
+    let parent = GraphSubjectKeyV1::native(
+        &old[0].id.stream,
+        GraphSubjectKindV1::Process,
+        old[0].process_instance_id.ok_or("process")?.to_vec(),
+    );
+    let facts = [fact(
+        1,
+        FactValue::NativeParent {
+            parent: parent.clone(),
+            child: old[1].task_subject(),
+            proof_quality: proof(),
+        },
+    )];
+    let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
+    assert_eq!(
+        Subject::decode(&prior.datasets[0])?
+            .iter()
+            .find(|subject| subject.key == parent)
+            .ok_or("old process")?
+            .context,
+        None,
+    );
+    let mut remaining = facts[0].clone();
+    remaining.record = 0;
+    let (output, work) = continued(
+        detector,
+        &input(detector, &old[1..], &[remaining], 100)?,
+        &prior,
+    )?;
+    assert_eq!(work, 0);
+    let subject = Subject::decode(&output.datasets[0])?
+        .into_iter()
+        .find(|subject| subject.key == parent)
+        .ok_or("reanchored process")?;
+    assert_eq!((subject.record, subject.context), (0, Some(0)));
+    Ok(())
+}
+
+#[test]
+fn expired_state_and_sensitivity() -> TestResult {
+    let detector = Detector::Process;
+    let mut old = records(2);
+    old[0].effect.decision =
+        erebor_interceptor_abi::EffectPhysicalResultV1::UnknownAfterPreEffect as u32;
+    let mut restricted = fact(1, context(ContextClass::InMemory));
+    restricted.sensitivity = ContextSensitivityV1::HostRestricted;
+    let retained = fact(0, context(ContextClass::OutsideAuthority));
+    let prior = detector.evaluate(&input(
+        detector,
+        &old,
+        &[retained.clone(), restricted],
+        100,
+    )?)?;
+    assert_eq!(
+        Metadata::decode(&prior.datasets[4])?[0].package.state,
+        GraphPackageStateV1::NativeEffect
+    );
+    let (output, work) = continued(
+        detector,
+        &input(detector, &old[..1], &[retained], 100)?,
+        &prior,
+    )?;
+    assert_eq!(work, 0);
+    assert_eq!(
+        Metadata::decode(&output.datasets[4])?[0].package.state,
+        GraphPackageStateV1::Waiting
+    );
+    assert!(Finding::decode(&output.datasets[2])?
+        .iter()
+        .all(|finding| finding.sensitivity == ContextSensitivityV1::Tenant));
     Ok(())
 }
 

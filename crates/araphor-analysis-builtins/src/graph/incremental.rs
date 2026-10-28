@@ -84,11 +84,10 @@ impl Computation {
         {
             return Ok(None);
         }
-        let mut subjects = Subject::decode(dataset("subjects")?)?;
-        let mut edges = Relationship::decode(dataset("relationships")?)?;
-        let mut findings = Finding::decode(dataset("findings")?)?;
+        let subjects = Subject::decode(dataset("subjects")?)?;
+        let edges = Relationship::decode(dataset("relationships")?)?;
+        let findings = Finding::decode(dataset("findings")?)?;
 
-        // shortcut: Rebuild changed old input; add removal updates if measured work requires them.
         let restored = (|| {
             let current: BTreeMap<_, _> = self
                 .records
@@ -100,13 +99,17 @@ impl Computation {
                 .record_ids
                 .iter()
                 .map(|id| current.get(id).copied())
-                .collect::<Option<Vec<_>>>()?;
-            if records.windows(2).any(|pair| pair[0] >= pair[1]) {
-                return None;
+                .collect::<Vec<_>>();
+            let mut last = None;
+            for row in records.iter().copied().flatten() {
+                if last.is_some_and(|prior| prior >= row) {
+                    return None;
+                }
+                last = Some(row);
             }
-            for (old, &row) in progress.iter().zip(&records) {
+            for (old, row) in progress.iter().zip(&records) {
                 if !old.compatible(self.detector)
-                    || old.digest != self.progress[row as usize].digest
+                    || row.is_some_and(|row| old.digest != self.progress[row as usize].digest)
                 {
                     return None;
                 }
@@ -115,8 +118,9 @@ impl Computation {
             for (index, fact) in metadata.facts.iter().enumerate() {
                 prior_facts.get_mut(fact.record as usize)?.push(index);
             }
-            let mut facts = vec![0; metadata.facts.len()];
-            for (old, &row) in records.iter().enumerate() {
+            let mut facts = vec![None; metadata.facts.len()];
+            for (old, row) in records.iter().copied().enumerate() {
+                let Some(row) = row else { continue };
                 let prior = &prior_facts[old];
                 let selected = &self.fact_rows[row as usize];
                 if prior.len() != selected.len() {
@@ -131,12 +135,17 @@ impl Computation {
                     {
                         return None;
                     }
-                    facts[before] = after as u32;
+                    facts[before] = Some(after as u32);
                 }
             }
 
+            let record = |row: u32| records.get(row as usize).copied().flatten();
+            let context = |index: Option<u32>| match index {
+                Some(index) => facts.get(index as usize).copied().flatten().map(Some),
+                None => Some(None),
+            };
             let mut affected = vec![true; self.records.len()];
-            for &row in &records {
+            for row in records.iter().copied().flatten() {
                 affected[row as usize] = false;
             }
             if matches!(self.detector, Detector::Credentials) {
@@ -144,9 +153,9 @@ impl Computation {
                     .records
                     .iter()
                     .enumerate()
-                    .filter(|(row, record)| {
+                    .filter(|(row, value)| {
                         affected[*row]
-                            && (record.network()
+                            && (value.network()
                                 || self.facts(*row as u32).any(|(_, fact)| {
                                     matches!(
                                         fact.value,
@@ -154,9 +163,9 @@ impl Computation {
                                     )
                                 }))
                     })
-                    .map(|(_, record)| record)
+                    .map(|(_, value)| value)
                     .collect::<Vec<_>>();
-                for &row in &records {
+                for row in records.iter().copied().flatten() {
                     if self
                         .facts(row)
                         .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
@@ -169,54 +178,208 @@ impl Computation {
                 }
             }
 
-            let record = |row: u32| records.get(row as usize).copied();
-            let context = |index: Option<u32>| match index {
-                Some(index) => facts.get(index as usize).copied().map(Some),
-                None => Some(None),
+            if records.iter().any(Option::is_none) {
+                for edge in &edges {
+                    let stale = record(edge.record).is_none()
+                        || context(edge.fact).is_none()
+                        || edge
+                            .edge
+                            .key
+                            .evidence
+                            .iter()
+                            .any(|&row| record(row).is_none());
+                    if stale {
+                        for old in std::iter::once(edge.record)
+                            .chain(edge.edge.key.evidence.iter().copied())
+                        {
+                            if let Some(row) = record(old) {
+                                if !matches!(self.detector, Detector::Credentials)
+                                    || self.facts(row).any(|(_, fact)| {
+                                        matches!(fact.value, FactValue::Credential { .. })
+                                    })
+                                {
+                                    affected[row as usize] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                for finding in &findings {
+                    let stale = record(finding.record).is_none()
+                        || context(finding.context).is_none()
+                        || finding.evidence.iter().any(|id| !current.contains_key(id))
+                        || finding
+                            .effects
+                            .iter()
+                            .any(|effect| !current.contains_key(&effect.evidence))
+                        || finding
+                            .policy_provenance
+                            .iter()
+                            .flat_map(|value| &value.observations)
+                            .any(|id| !current.contains_key(id));
+                    if stale {
+                        if let Some(row) = record(finding.record) {
+                            affected[row as usize] = true;
+                        }
+                        for id in finding
+                            .evidence
+                            .iter()
+                            .chain(finding.effects.iter().map(|effect| &effect.evidence))
+                            .chain(
+                                finding
+                                    .policy_provenance
+                                    .iter()
+                                    .flat_map(|value| &value.observations),
+                            )
+                        {
+                            if let Some(&row) = current.get(id) {
+                                if !matches!(self.detector, Detector::Credentials)
+                                    || self.facts(row).any(|(_, fact)| {
+                                        matches!(fact.value, FactValue::Credential { .. })
+                                    })
+                                {
+                                    affected[row as usize] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if matches!(self.detector, Detector::Credentials) {
+                let times = self
+                    .records
+                    .iter()
+                    .enumerate()
+                    .filter(|(row, _)| {
+                        affected[*row]
+                            && self
+                                .facts(*row as u32)
+                                .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
+                    })
+                    .map(|(_, value)| value.observed_boottime_ns)
+                    .collect::<BTreeSet<_>>();
+                for (row, value) in self.records.iter().enumerate() {
+                    if times.contains(&value.observed_boottime_ns)
+                        && self
+                            .facts(row as u32)
+                            .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
+                    {
+                        affected[row] = true;
+                    }
+                }
+            }
+
+            let mut kept_subjects: Vec<Subject> = Vec::new();
+            let mut subject_rows = BTreeMap::new();
+            let mut add_subject = |key: GraphSubjectKeyV1, row, fact| {
+                if let Some(&index) = subject_rows.get(&key) {
+                    let subject: &mut Subject = &mut kept_subjects[index as usize];
+                    if (row, fact) < (subject.record, subject.context) {
+                        subject.record = row;
+                        subject.context = fact;
+                    }
+                    return Some(index);
+                }
+                let index = u32::try_from(kept_subjects.len()).ok()?;
+                subject_rows.insert(key.clone(), index);
+                kept_subjects.push(Subject {
+                    key,
+                    record: row,
+                    context: fact,
+                });
+                Some(index)
             };
-            for subject in &mut subjects {
-                subject.record = record(subject.record)?;
-                subject.context = context(subject.context)?;
-            }
-            if subjects
-                .iter()
-                .map(|subject| &subject.key)
-                .collect::<BTreeSet<_>>()
-                .len()
-                != subjects.len()
-            {
-                return None;
-            }
-            for edge in &mut edges {
-                edge.record = record(edge.record)?;
+            let mut kept_edges = Vec::new();
+            for mut edge in edges {
+                let Some(row) = record(edge.record) else {
+                    continue;
+                };
+                if affected[row as usize] {
+                    continue;
+                }
+                edge.record = row;
                 edge.fact = context(edge.fact)?;
-                subjects.get(edge.edge.key.from as usize)?;
-                subjects.get(edge.edge.key.to as usize)?;
+                let fact_anchor = edge
+                    .fact
+                    .map(|index| (self.facts[index as usize].record, Some(index)));
+                let local_anchor = (row, None);
+                let from_anchor = if edge.edge.key.edge_type == GraphEdgeTypeV1::NativeParent {
+                    fact_anchor?
+                } else {
+                    local_anchor
+                };
+                let to_anchor = if matches!(
+                    edge.edge.key.edge_type,
+                    GraphEdgeTypeV1::NativeParent
+                        | GraphEdgeTypeV1::CredentialAuthority
+                        | GraphEdgeTypeV1::KubernetesExpansion
+                ) {
+                    fact_anchor?
+                } else {
+                    local_anchor
+                };
+                edge.edge.key.from = add_subject(
+                    subjects.get(edge.edge.key.from as usize)?.key.clone(),
+                    from_anchor.0,
+                    from_anchor.1,
+                )?;
+                edge.edge.key.to = add_subject(
+                    subjects.get(edge.edge.key.to as usize)?.key.clone(),
+                    to_anchor.0,
+                    to_anchor.1,
+                )?;
                 edge.edge.key.evidence = edge
                     .edge
                     .key
                     .evidence
                     .iter()
-                    .map(|&row| record(row))
-                    .collect::<Option<_>>()?;
+                    .map(|&old| record(old))
+                    .collect::<Option<Vec<_>>>()?;
                 Self::canonical(&mut edge.edge.key.evidence);
+                kept_edges.push(edge);
             }
-            edges.retain(|edge| !affected[edge.record as usize]);
-            for finding in &mut findings {
-                finding.record = record(finding.record)?;
+            let mut kept_findings = Vec::new();
+            for mut finding in findings {
+                let Some(row) = record(finding.record) else {
+                    continue;
+                };
+                if affected[row as usize] {
+                    continue;
+                }
+                finding.record = row;
                 finding.context = context(finding.context)?;
-                if !finding.evidence.iter().all(|id| current.contains_key(id)) {
+                if finding.evidence.iter().any(|id| !current.contains_key(id))
+                    || finding
+                        .effects
+                        .iter()
+                        .any(|effect| !current.contains_key(&effect.evidence))
+                    || finding
+                        .policy_provenance
+                        .iter()
+                        .flat_map(|value| &value.observations)
+                        .any(|id| !current.contains_key(id))
+                {
                     return None;
                 }
+                add_subject(finding.subject_id.clone(), row, finding.context)?;
+                kept_findings.push(finding);
             }
-            findings.retain(|finding| !affected[finding.record as usize]);
-            Some((records, affected))
+            if matches!(self.detector, Detector::Process) {
+                for (row, value) in self.records.iter().enumerate() {
+                    if !affected[row] {
+                        add_subject(value.task_subject(), row as u32, None)?;
+                    }
+                }
+            }
+            Some((records, affected, kept_subjects, kept_edges, kept_findings))
         })();
-        let Some((records, affected)) = restored else {
+        let Some((records, affected, subjects, edges, findings)) = restored else {
             return Ok(None);
         };
         for (old, row) in progress.into_iter().zip(records) {
-            self.progress[row as usize].state = old.state;
+            if let Some(row) = row {
+                self.progress[row as usize].state = old.state;
+            }
         }
         self.subject_indices = subjects
             .iter()
