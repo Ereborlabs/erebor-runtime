@@ -885,6 +885,91 @@ mod tests {
     }
 
     #[test]
+    fn context_preserves_raw_state() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::analysis::tests::{batch, identity};
+        use crate::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
+        use std::sync::atomic::Ordering;
+
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("data"))?;
+        let source = identity();
+        let mut changes = store.subscribe_revision();
+        store.accept_validated_batch(source.clone(), batch(1, &[b"one"]))?;
+        assert!(!store.raw_dirty.load(Ordering::Acquire));
+        let receipt = store.source_receipt(&source)?.ok_or("evidence receipt")?;
+        assert_eq!(receipt.contiguous_cursor, 1);
+        let before = *changes.borrow_and_update();
+        let mut context = AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                tenant_id: source.tenant_id,
+                owner_id: "p".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![1],
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: Some(1),
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body: vec![1],
+        };
+        let first = store.commit_context_checked(&context, 0)?;
+        assert!(!store.raw_dirty.load(Ordering::Acquire));
+        assert!(first > before);
+        assert_eq!(*changes.borrow_and_update(), first);
+        assert_eq!(store.source_receipt(&source)?.as_ref(), Some(&receipt));
+        assert_eq!(
+            store.context_version(&context.key)?.as_ref(),
+            Some(&context)
+        );
+        {
+            let raw = store.raw.lock().map_err(|_| "raw owner lock")?;
+            assert_eq!((raw.budget.trace_reserve, raw.budget.trace_slots), (0, 0));
+        }
+
+        let trace = intent(3)?;
+        store.accept_trace(&trace)?;
+        assert!(store.raw_dirty.load(Ordering::Acquire));
+        let admitted = *changes.borrow_and_update();
+        assert!(admitted > first);
+        context.key.owner_revision = 2;
+        context.body = vec![2];
+        let second = store.commit_context_checked(&context, 1)?;
+        assert!(store.raw_dirty.load(Ordering::Acquire));
+        assert!(second > admitted);
+        assert_eq!(*changes.borrow_and_update(), second);
+
+        store.accept_validated_batch(source.clone(), batch(2, &[b"two"]))?;
+        assert!(!store.raw_dirty.load(Ordering::Acquire));
+        {
+            let raw = store.raw.lock().map_err(|_| "raw owner lock")?;
+            assert_eq!(
+                (raw.budget.trace_reserve, raw.budget.trace_slots),
+                (crate::analysis::quota::TRACE_RESERVE, 2)
+            );
+        }
+        assert_eq!(
+            store.source_receipt(&source)?,
+            Some(crate::AnalysisSourceReceiptV1 {
+                contiguous_cursor: 2,
+                ..receipt
+            })
+        );
+        assert!(*changes.borrow_and_update() > second);
+        let output = store
+            .trace_receipt(&trace.bindings[0].identity)?
+            .ok_or("admitted trace receipt")?;
+        assert_eq!(output.identity, trace.bindings[0].identity);
+        assert_eq!(output.last_sequence, 0);
+        assert_eq!(output.output_bytes, 0);
+        assert!(output.terminal.is_none());
+        assert_eq!(
+            store.context_version(&context.key)?.as_ref(),
+            Some(&context)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn observability_intent_raw_pending() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use std::sync::atomic::Ordering;
         let directory = tempfile::tempdir()?;

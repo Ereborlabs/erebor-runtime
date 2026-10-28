@@ -78,11 +78,14 @@ impl AnalysisStore {
                 return self.reject("the context version identity or bounds are invalid");
             }
         }
-        let mut writer_guard = self.writer()?;
-        let writer = writer_guard.get_mut()?;
-        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin context version",
-        })?;
+        let writer_guard = self.writer()?;
+        let writer = writer_guard.get()?;
+        // The writer guard stays held. Context writes do not change raw state.
+        let transaction = writer
+            .unchecked_transaction()
+            .context(AnalysisDatabaseSnafu {
+                operation: "begin context version",
+            })?;
         let mut revision = None;
         let references =
             self.context_rows(&transaction, inputs, intern, expected, &mut revision)?;

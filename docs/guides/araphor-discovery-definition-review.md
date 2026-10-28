@@ -5101,3 +5101,16 @@ This removes the intermediate dataset, revision, and coverage clones. The child 
 The [corrected focused record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/inherited-inputs-feature-results.json>) passes four exact cases, formatting, and strict Query Clippy on source 6b8e0086.
 The [initial record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/inherited-inputs-initial-results.json>) retains the standalone struct-planning failure and sequencing error. It is not a tested baseline or a borrowing regression.
 This cleanup adds no execution owner, planner implementation, cache, or dependency. It establishes no timeout fix or execution-time gain.
+
+
+## Context writes and raw bookkeeping
+
+[commit_context_values](../../crates/araphor-data/src/analysis/context/write.rs) keeps writer admission, raw projection, and capacity checks in their existing order.
+It borrows the same connection through get and uses DuckDB's [unchecked_transaction](../../vendor/duckdb/src/transaction.rs). The writer guard stays held through the transaction and commit.
+DuckDB uses the same BEGIN and rollback-on-drop path and rejects nested transactions. Context validation, expected-version checks, logical quotas, commit recovery, and revision publication remain.
+A context transaction changes context_versions and global revision metadata. It does not add a raw_dirty mark; any prior mark stays set.
+The next [raw access](../../crates/araphor-data/src/analysis/connection.rs) still refreshes receipts, reserves, pins, expiry, and segment bookkeeping when that mark requires it.
+The new [ordinary regression](../../crates/araphor-data/src/analysis/trace.rs) uses real intake, checked context writes, and trace admission. It checks cached state before public reads can hide a missing refresh.
+The [RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/context-transaction-red-results.json>) fails after contextv1 adds the unwanted mark. Its later checks are not reached.
+The [GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/context-transaction-green-results.json>) passes all nine exact cases, formatting, and strict Data Clippy on source 794833f3. It proves preserved pending refresh, receipt/watch progress, and the admitted trace reserve and output state.
+No incident completion, execution-time gain, or complete qualification is established by these owner checks.

@@ -1277,3 +1277,14 @@ Query also declares DataFusion nested_expressions. The existing native planner h
 The [four corrected cases, formatting, and strict Query Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/inherited-inputs-feature-results.json>) pass on source 6b8e0086b5c0e7d9ee51299bf2be8d5d3f201b1a4752358ebc3fced56af157cc and artifact 9c6cbbd1.
 The [initial record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/inherited-inputs-initial-results.json>) retains three passes, the standalone struct-planning failure, and the later checks run after that failure. That sequence is not a pass or a tested baseline.
 No timeout fix, execution-time gain, or new integrated proof is established. Busy-input completion, integration refresh, current images, paired physical proof, final evidence, owned-resource absence, and owned VM removal remain Not done.
+
+
+## Context commits preserve raw bookkeeping
+
+**Context invalidation correction and focused proof: Done. Incident completion and complete qualification: Not done.**
+The existing context writer uses DuckDB's shared-reference transaction API without adding a raw_dirty mark. Any prior mark remains set.
+Writer admission, capacity, pending projection, context validation, CAS, rollback, commit recovery, and revision publication retain their existing order.
+The [test-only RED](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/context-transaction-red-results.json>) fails at the intended contextv1 clean-state assertion; later checks are not reached.
+The [GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/context-transaction-green-results.json>) passes the complete new case and eight unchanged context/trace cases, two-file formatting, and strict Data Clippy with test-fixtures. Source: 794833f3e218c3514e210ac55e4d362aa3b6aebc280e84abb4a69f78685b9a02; artifact: 78d1d52e.
+The new case preserves real intake receipts, global watch progress, a pre-existing dirty mark, and the next raw refresh's exact admitted trace reserve/two slots. It uses no new hook, counter, or manual flag write.
+No incident run on this change, timing gain, or sole timeout cause is claimed. Busy-input completion, integration refresh, current images, paired physical proof, final evidence, owned-resource absence, and owned VM removal remain Not done.
