@@ -158,7 +158,7 @@ impl AnalysisStore {
                 operation: "decode bounded graph header marker",
             })?;
             let header = if included {
-                self.finding_header(row, tenant)?
+                self.finding_header(snapshot, row, tenant)?
             } else {
                 GraphRows::read_header(snapshot, tenant, &id)?
                     .ok_or_else(|| self.state_error("the current graph header is absent"))?
@@ -179,9 +179,7 @@ impl AnalysisStore {
                     operation: "decode selected graph finding count",
                 })?,
             )?;
-            let header_bytes: u64 = row.get(7).context(AnalysisDatabaseSnafu {
-                operation: "decode selected native header bytes",
-            })?;
+            let header_bytes = header.metadata_allocation_bytes as u64;
             headers.insert(id.clone(), header)?;
             charges.insert(id, header_bytes.saturating_add(384));
         }

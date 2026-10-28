@@ -280,9 +280,11 @@ impl AnalysisStore {
     pub(super) fn usage_projection() -> String {
         let graphs = format!(
             " UNION ALL SELECT tenant_id, 'graph_rows', bytes FROM ({})
+            UNION ALL SELECT tenant_id, 'graph_rows', bytes FROM ({})
             UNION ALL SELECT tenant_id, 'package_rows', bytes FROM ({})
             UNION ALL SELECT tenant_id, 'managed_rows', bytes FROM ({})",
             super::graph_rows::GraphRows::CHARGES,
+            super::graph_rows::GraphRows::SHARED_CHARGES,
             Self::PACKAGE_CHARGES,
             Self::MANAGED_CHARGES,
         );

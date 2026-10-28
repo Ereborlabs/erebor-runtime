@@ -71,3 +71,37 @@ fn native_schema_reopen() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn orphan_memberships_reject_reopen() -> TestResult {
+    for fault in [
+        "INSERT INTO graph_evidence_membership
+         SELECT 999999, evidence_id, valid_from, valid_to
+         FROM graph_evidence_membership LIMIT 1",
+        "INSERT INTO graph_input_positions VALUES
+         (999999, (SELECT evidence_id FROM graph_evidence LIMIT 1), 0, 1, 0, 1, NULL)",
+    ] {
+        let fixture = CommitFixture::new()?;
+        fixture
+            .store
+            .commit_graph(&fixture.request, true, || Ok(()))?;
+        fixture.store.fault_write(fault, &[])?;
+        let root = fixture._directory.path().join("analysis");
+        let CommitFixture {
+            store,
+            _graph,
+            _directory,
+            ..
+        } = fixture;
+        drop(_graph);
+        drop(store);
+        let database = root.join("analysis.duckdb");
+        let before = std::fs::read(&database)?;
+        assert!(
+            crate::AnalysisStore::open(&root).is_err(),
+            "accepted {fault}"
+        );
+        assert_eq!(std::fs::read(&database)?, before, "changed {fault}");
+    }
+    Ok(())
+}

@@ -6,6 +6,18 @@ use super::GraphRows;
 use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, Result};
 
 impl GraphRows {
+    pub(in crate::analysis) const SHARED_CHARGES: &str = "SELECT s.tenant_id,
+        256 + octet_length(e.stream_key) + 20 AS bytes
+        FROM graph_evidence e JOIN source_receipts s USING (stream_key)
+        UNION ALL SELECT s.tenant_id, 256 + 32
+        FROM graph_evidence_membership m JOIN graph_evidence e USING (evidence_id)
+        JOIN source_receipts s USING (stream_key)
+        UNION ALL SELECT s.tenant_id, 256 + 40
+        FROM graph_input_positions p JOIN graph_evidence e USING (evidence_id)
+        JOIN source_receipts s USING (stream_key)
+        UNION ALL SELECT r.tenant_id, 256 + octet_length(encode(v.result_id)) + 16
+        FROM graph_versions v JOIN analysis_results r USING (result_id)";
+
     pub(in crate::analysis) const CHARGES: &str = "SELECT r.tenant_id, r.result_id,
         256 + octet_length(encode(s.result_id)) + octet_length(s.tenant_id)
         + octet_length(encode(s.subject_kind)) + octet_length(s.authority)
@@ -28,7 +40,24 @@ impl GraphRows {
         + coalesce(octet_length(encode(f.required_action)), 0) + octet_length(f.limits)
         FROM graph_findings f JOIN analysis_results r USING (result_id)";
 
-    pub(in crate::analysis) const SCHEMA: &str = "CREATE TABLE graph_subjects (
+    pub(in crate::analysis) const SCHEMA: &str = "CREATE TABLE graph_versions (
+        result_id VARCHAR PRIMARY KEY, lineage_id UBIGINT NOT NULL,
+        commit_revision UBIGINT NOT NULL,
+        UNIQUE (lineage_id, commit_revision));
+    CREATE TABLE graph_evidence (
+        evidence_id UBIGINT PRIMARY KEY, stream_key BLOB NOT NULL,
+        cpu_id UINTEGER NOT NULL, durable_cursor UBIGINT NOT NULL,
+        UNIQUE (stream_key, cpu_id, durable_cursor));
+    CREATE TABLE graph_evidence_membership (
+        lineage_id UBIGINT NOT NULL, evidence_id UBIGINT NOT NULL,
+        valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (lineage_id, evidence_id, valid_from));
+    CREATE TABLE graph_input_positions (
+        lineage_id UBIGINT NOT NULL, evidence_id UBIGINT NOT NULL,
+        rank UINTEGER NOT NULL, commit_revision UBIGINT NOT NULL,
+        ordinal UINTEGER NOT NULL, valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (lineage_id, rank, valid_from));
+    CREATE TABLE graph_subjects (
         result_id VARCHAR NOT NULL, ordinal UINTEGER NOT NULL,
         tenant_id BLOB NOT NULL, subject_kind VARCHAR NOT NULL,
         authority BLOB NOT NULL, identity BLOB NOT NULL,
@@ -94,14 +123,18 @@ impl GraphRows {
                 nullable := is_nullable, ordinal := ordinal_position))::VARCHAR
             FROM information_schema.columns
             WHERE table_schema = 'main'
-                AND table_name IN ('graph_subjects', 'graph_relationships', 'graph_findings')
+                AND table_name IN ('graph_versions', 'graph_evidence',
+                    'graph_evidence_membership', 'graph_input_positions',
+                    'graph_subjects', 'graph_relationships', 'graph_findings')
             UNION ALL
             SELECT table_name, to_json(struct_pack(
                 kind := constraint_type, column_names := constraint_column_names,
                 expression := constraint_text))::VARCHAR
             FROM duckdb_constraints()
             WHERE schema_name = 'main'
-                AND table_name IN ('graph_subjects', 'graph_relationships', 'graph_findings')
+                AND table_name IN ('graph_versions', 'graph_evidence',
+                    'graph_evidence_membership', 'graph_input_positions',
+                    'graph_subjects', 'graph_relationships', 'graph_findings')
             ORDER BY 1, 2",
             )
             .context(AnalysisDatabaseSnafu {

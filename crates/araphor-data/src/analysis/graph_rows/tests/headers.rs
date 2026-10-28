@@ -36,7 +36,12 @@ fn native_header_batch_bounds() -> TestResult {
                 assert!(!bytes.is_empty());
                 assert_eq!(bytes.len() as u64, length);
                 let saved = GraphHeader::decode(&bytes)?;
-                assert_eq!(saved.snapshot, header.snapshot);
+                assert_eq!(saved.snapshot.scope, header.snapshot.scope);
+                assert_eq!(
+                    saved.evidence_count,
+                    header.snapshot.input_manifest.evidence.len()
+                );
+                assert_eq!(saved.position_count, header.snapshot.input_positions.len());
                 assert_eq!(saved.subject_count, header.subject_count);
                 assert_eq!(saved.edge_count, header.edge_count);
                 assert_eq!(saved.finding_count, header.finding_count);

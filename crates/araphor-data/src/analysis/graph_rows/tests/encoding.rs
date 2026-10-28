@@ -10,6 +10,8 @@ fn native_json_encoding_roundtrip() -> TestResult {
     metadata.graph.subjects.clear();
     metadata.graph.edges.clear();
     metadata.findings.clear();
+    metadata.input_manifest.evidence.clear();
+    metadata.input_positions.clear();
     assert_eq!(header.snapshot, metadata);
     assert_eq!(header.row_bytes, GraphRows::row_bytes(snapshot)?);
     assert_eq!(
@@ -154,14 +156,17 @@ fn native_header_metadata_current_format() -> TestResult {
     assert!(metadata["graph"].get("subjects").is_none());
     assert!(metadata["graph"].get("edges").is_none());
     assert!(metadata["graph"].get("revision").is_none());
+    assert!(metadata["input_manifest"].get("evidence").is_none());
+    assert!(metadata.get("input_positions").is_none());
     assert_eq!(
-        metadata["input_manifest"],
-        serde_json::to_value(&snapshot.input_manifest)?
+        metadata["evidence_count"],
+        snapshot.input_manifest.evidence.len()
     );
+    assert_eq!(metadata["position_count"], snapshot.input_positions.len());
     assert_eq!(decoder.position(), encoded.len());
     assert_eq!(
-        GraphHeader::decode(&encoded)?.snapshot.input_manifest,
-        snapshot.input_manifest
+        GraphHeader::decode(&encoded)?.evidence_count,
+        snapshot.input_manifest.evidence.len()
     );
     let public = serde_json::to_value(snapshot)?;
     assert!(public["graph"].get("revision").is_none());

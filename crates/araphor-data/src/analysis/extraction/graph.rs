@@ -268,8 +268,14 @@ impl AnalysisStore {
             .map_err(|_| self.state_error("the graph header length is invalid"))?;
         output.scan(length)?;
         output.charge(length.saturating_mul(2))?;
-        let mut header = GraphRows::read_header(snapshot, tenant, result_id)?
-            .ok_or_else(|| self.state_error("the selected graph header is absent"))?;
+        let mut header =
+            GraphRows::read_header_control(snapshot, tenant, result_id, Some(control))?
+                .ok_or_else(|| self.state_error("the selected graph header is absent"))?;
+        output.charge(
+            header
+                .metadata_allocation_bytes
+                .saturating_sub(length.saturating_mul(2)),
+        )?;
         GraphRows::check_bytes(snapshot, result_id, &header)?;
         output.scan(header.row_bytes)?;
         output.charge(header.allocation_bytes()?)?;

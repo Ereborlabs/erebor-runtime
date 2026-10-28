@@ -31,7 +31,15 @@ impl AnalysisStore {
             header_bytes,
             control,
             |id, mut header, revision, bytes| {
-                let buffer = header.allocation_bytes()?;
+                let buffer = header
+                    .allocation_bytes()?
+                    .checked_add(header.metadata_allocation_bytes)
+                    .ok_or_else(|| {
+                        AnalysisInputTooLargeSnafu {
+                            resource: "graph read buffers",
+                        }
+                        .build()
+                    })?;
                 self.traversal_memory(output, header_bytes.saturating_add(buffer))?;
                 output.scan(bytes.len())?;
                 let sensitivity =
@@ -89,6 +97,10 @@ impl AnalysisStore {
         control.check()?;
         self.traversal_memory(output, version.buffer)?;
         let mut header = GraphHeader::decode(&version.bytes)?;
+        let (evidence, positions) = GraphRows::load_inputs(snapshot, id, &header, Some(control))?;
+        header.snapshot.input_manifest.evidence = evidence;
+        header.snapshot.input_positions = positions;
+        header.snapshot.validate()?;
         self.traversal_findings(snapshot, selection, id, &mut header, output, control)?;
         Ok(header)
     }
@@ -103,7 +115,12 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
     ) -> Result<crate::ContextSensitivityV1> {
         control.check()?;
-        self.traversal_memory(output, header.allocation_bytes()?)?;
+        self.traversal_memory(
+            output,
+            header
+                .allocation_bytes()?
+                .saturating_add(header.metadata_allocation_bytes),
+        )?;
         if !selection
             .sources
             .as_slice()

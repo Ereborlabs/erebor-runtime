@@ -173,6 +173,58 @@ impl AnalysisStore {
 
     fn validate_graphs(writer: &Connection, root: &Path) -> Result<()> {
         use super::graph_rows::GraphRows;
+        for query in [
+            "SELECT EXISTS(SELECT 1 FROM graph_versions v
+                LEFT JOIN analysis_results r USING (result_id)
+                WHERE r.result_id IS NULL OR r.processor_id <> 'graph-findings'
+                    OR v.commit_revision <> r.commit_revision OR v.lineage_id > v.commit_revision)",
+            "SELECT EXISTS(SELECT 1 FROM graph_evidence e
+                LEFT JOIN source_receipts s USING (stream_key)
+                WHERE s.stream_key IS NULL OR e.durable_cursor = 0)",
+            "SELECT EXISTS(SELECT 1 FROM graph_evidence_membership m
+                LEFT JOIN graph_evidence e USING (evidence_id)
+                LEFT JOIN graph_versions origin
+                    ON origin.lineage_id = m.lineage_id
+                    AND origin.commit_revision = m.lineage_id
+                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
+                LEFT JOIN graph_versions opened
+                    ON opened.lineage_id = m.lineage_id
+                    AND opened.commit_revision = m.valid_from
+                LEFT JOIN graph_versions closed
+                    ON closed.lineage_id = m.lineage_id
+                    AND closed.commit_revision = m.valid_to
+                WHERE e.evidence_id IS NULL OR origin.result_id IS NULL
+                    OR r.stream_key <> e.stream_key OR opened.result_id IS NULL
+                    OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
+                    OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from))",
+            "SELECT EXISTS(SELECT 1 FROM graph_input_positions p
+                LEFT JOIN graph_evidence e USING (evidence_id)
+                LEFT JOIN graph_versions origin
+                    ON origin.lineage_id = p.lineage_id
+                    AND origin.commit_revision = p.lineage_id
+                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
+                LEFT JOIN graph_versions opened
+                    ON opened.lineage_id = p.lineage_id
+                    AND opened.commit_revision = p.valid_from
+                LEFT JOIN graph_versions closed
+                    ON closed.lineage_id = p.lineage_id
+                    AND closed.commit_revision = p.valid_to
+                WHERE e.evidence_id IS NULL OR origin.result_id IS NULL
+                    OR r.stream_key <> e.stream_key OR opened.result_id IS NULL
+                    OR (p.valid_to IS NOT NULL AND closed.result_id IS NULL)
+                    OR p.commit_revision = 0
+                    OR (p.valid_to IS NOT NULL AND p.valid_to <= p.valid_from))",
+        ] {
+            let invalid: bool =
+                writer
+                    .query_row(query, [], |row| row.get(0))
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "validate shared graph rows",
+                    })?;
+            if invalid {
+                return Self::reject_path(root, "a shared Graph row has an invalid reference");
+            }
+        }
         for table in ["graph_subjects", "graph_relationships", "graph_findings"] {
             let tenant = if table == "graph_relationships" {
                 ""

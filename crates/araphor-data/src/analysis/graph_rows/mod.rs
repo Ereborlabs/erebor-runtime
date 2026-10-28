@@ -11,6 +11,7 @@ use crate::{
     AnalysisDatabaseSnafu, GraphEncodingSnafu, GraphInvalidSnafu, GraphSnapshotV1, Result,
 };
 
+mod evidence;
 mod findings;
 mod header;
 mod headers;
@@ -73,6 +74,7 @@ impl GraphRows {
         writer: &Connection,
         result_id: &str,
     ) -> Result<()> {
+        Self::insert_inputs(snapshot, writer, result_id)?;
         {
             let mut appender =
                 writer
@@ -132,6 +134,13 @@ impl GraphRows {
     ) -> Result<GraphSnapshotV1> {
         Self::check_bytes(writer, result_id, header)?;
         let mut snapshot = header.snapshot.clone();
+        if snapshot.input_manifest.evidence.len() != header.evidence_count
+            || snapshot.input_positions.len() != header.position_count
+        {
+            let (evidence, positions) = Self::load_inputs(writer, result_id, header, control)?;
+            snapshot.input_manifest.evidence = evidence;
+            snapshot.input_positions = positions;
+        }
         snapshot.graph.subjects =
             Self::read_subjects(writer, result_id, header.subject_count, control)?;
         snapshot.graph.edges = Self::read_edges(writer, result_id, header.edge_count, control)?;

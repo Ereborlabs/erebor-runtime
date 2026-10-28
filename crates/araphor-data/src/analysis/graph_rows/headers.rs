@@ -67,8 +67,12 @@ impl GraphRows {
                     }
                     .fail();
                 }
-                let header = GraphHeader::decode(&bytes)?;
+                let mut header = GraphHeader::decode(&bytes)?;
                 header.check_index(tenant, &stream, bound.method, bound.first)?;
+                let (evidence, positions) = Self::load_inputs(reader, &id, &header, Some(control))?;
+                header.snapshot.input_manifest.evidence = evidence;
+                header.snapshot.input_positions = positions;
+                header.snapshot.validate()?;
                 header.check_bytes(&id, bound.stored)?;
                 visit(&id, header, bound.revision, bytes)?;
             }

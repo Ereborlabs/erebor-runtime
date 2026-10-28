@@ -10,6 +10,8 @@ pub(in crate::analysis) struct GraphHeader {
     pub(in crate::analysis) subject_count: usize,
     pub(in crate::analysis) edge_count: usize,
     pub(in crate::analysis) finding_count: usize,
+    pub(in crate::analysis) evidence_count: usize,
+    pub(in crate::analysis) position_count: usize,
     pub(in crate::analysis) row_bytes: usize,
     pub(in crate::analysis) metadata_allocation_bytes: usize,
     pub(in crate::analysis) notice: (u64, u64),
@@ -52,16 +54,6 @@ impl GraphHeader {
             }
             .fail();
         }
-        let metadata_allocation_bytes = bytes
-            .len()
-            .checked_mul(2)
-            .and_then(|bytes| bytes.checked_add(size_of::<GraphSnapshotV1>()))
-            .ok_or_else(|| {
-                GraphInvalidSnafu {
-                    field: "graph allocation byte bound",
-                }
-                .build()
-            })?;
         let mut decoder = Decoder::new(bytes);
         if decoder.array().map_err(Self::error)? != Some(6)
             || decoder.u32().map_err(Self::error)? != 2
@@ -84,7 +76,36 @@ impl GraphHeader {
             .fail();
         }
         let mut metadata: serde_json::Value = GraphRows::decode(metadata)?;
-        let graph = metadata
+        let object = metadata
+            .as_object_mut()
+            .ok_or_else(|| Self::error("snapshot metadata"))?;
+        let evidence_count = object
+            .remove("evidence_count")
+            .and_then(|value| value.as_u64())
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or_else(|| Self::error("graph evidence count"))?;
+        let position_count = object
+            .remove("position_count")
+            .and_then(|value| value.as_u64())
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or_else(|| Self::error("graph position count"))?;
+        let manifest = object
+            .get_mut("input_manifest")
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or_else(|| Self::error("graph input manifest"))?;
+        if manifest
+            .insert("evidence".to_owned(), serde_json::json!([]))
+            .is_some()
+            || object
+                .insert("input_positions".to_owned(), serde_json::json!([]))
+                .is_some()
+        {
+            return GraphInvalidSnafu {
+                field: "duplicate graph inputs",
+            }
+            .fail();
+        }
+        let graph = object
             .get_mut("graph")
             .and_then(serde_json::Value::as_object_mut)
             .ok_or_else(|| Self::error("graph metadata"))?;
@@ -94,9 +115,7 @@ impl GraphHeader {
             || graph
                 .insert("edges".to_owned(), serde_json::json!([]))
                 .is_some()
-            || metadata
-                .as_object_mut()
-                .ok_or_else(|| Self::error("snapshot metadata"))?
+            || object
                 .insert("findings".to_owned(), serde_json::json!([]))
                 .is_some()
         {
@@ -107,6 +126,41 @@ impl GraphHeader {
         }
         let snapshot: GraphSnapshotV1 = GraphRows::decode(&GraphRows::json(&metadata)?)?;
         snapshot.validate()?;
+        let source_bytes = snapshot.scope.identity.node_id.len();
+        let base_bytes = bytes
+            .len()
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(size_of::<GraphSnapshotV1>()))
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph allocation byte bound",
+                }
+                .build()
+            })?;
+        let expanded_bytes = evidence_count
+            .checked_mul(size_of::<crate::DiscoveryRecordIdV1>() + source_bytes)
+            .and_then(|bytes| {
+                position_count
+                    .checked_mul(
+                        size_of::<(crate::DiscoveryRecordIdV1, crate::StorePositionV1)>()
+                            + source_bytes,
+                    )
+                    .and_then(|added| bytes.checked_add(added))
+            })
+            .and_then(|bytes| bytes.checked_mul(2))
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph allocation byte bound",
+                }
+                .build()
+            })?;
+        let metadata_allocation_bytes =
+            base_bytes.checked_add(expanded_bytes).ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph allocation byte bound",
+                }
+                .build()
+            })?;
         Ok(Self {
             notice: (
                 snapshot.context_notice_revision,
@@ -122,6 +176,8 @@ impl GraphHeader {
             subject_count,
             edge_count,
             finding_count,
+            evidence_count,
+            position_count,
             row_bytes,
             metadata_allocation_bytes,
         })
@@ -238,23 +294,38 @@ impl GraphHeader {
 
 struct HeaderMetadata<'a>(&'a GraphSnapshotV1);
 struct GraphMetadata<'a>(&'a crate::GraphVersionV1);
+struct RevisionMetadata<'a>(&'a crate::GraphRevisionV1);
 
 impl Serialize for HeaderMetadata<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         let snapshot = self.0;
-        let mut map = serializer.serialize_map(Some(12))?;
+        let mut map = serializer.serialize_map(Some(13))?;
         map.serialize_entry("schema_version", &snapshot.schema_version)?;
         map.serialize_entry("scope", &snapshot.scope)?;
         map.serialize_entry("first_cursor", &snapshot.first_cursor)?;
         map.serialize_entry("last_cursor", &snapshot.last_cursor)?;
-        map.serialize_entry("input_manifest", &snapshot.input_manifest)?;
+        map.serialize_entry(
+            "input_manifest",
+            &RevisionMetadata(&snapshot.input_manifest),
+        )?;
         map.serialize_entry("graph", &GraphMetadata(&snapshot.graph))?;
         map.serialize_entry("packages", &snapshot.packages)?;
         map.serialize_entry("missing_ranges", &snapshot.missing_ranges)?;
-        map.serialize_entry("input_positions", &snapshot.input_positions)?;
+        map.serialize_entry("evidence_count", &snapshot.input_manifest.evidence.len())?;
+        map.serialize_entry("position_count", &snapshot.input_positions.len())?;
         map.serialize_entry("previous_result_id", &snapshot.previous_result_id)?;
         map.serialize_entry("context_notice_revision", &snapshot.context_notice_revision)?;
         map.serialize_entry("witness_deadline_utc_ns", &snapshot.witness_deadline_utc_ns)?;
+        map.end()
+    }
+}
+
+impl Serialize for RevisionMetadata<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("coverage", &self.0.coverage)?;
+        map.serialize_entry("context", &self.0.context)?;
+        map.serialize_entry("missing_ranges", &self.0.missing_ranges)?;
         map.end()
     }
 }

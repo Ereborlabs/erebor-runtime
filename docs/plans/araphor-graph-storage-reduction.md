@@ -1,0 +1,191 @@
+# Shared native Graph storage
+
+The user requires about 90% less stored Graph payload for the existing
+1,592-event backlog case. The current Graph packages reuse derivation work,
+but Data writes complete Graph rows and complete package inputs and outputs
+for each result. Store Graph nodes and relationships once, and record which
+ones exist at each result revision. Do not shrink repeated snapshots into a
+new compact snapshot format. Remove the repeated storage.
+
+[Neo4j's store model](https://neo4j.com/docs/operations-manual/current/database-internals/store-formats/)
+uses unique node and relationship IDs. A relationship holds its source node,
+target node, type, and properties. Use that ownership shape in Data's DuckDB
+tables. Keep Data as the only durable store.
+[DuckDB's property graph support](https://www.duckdb.org/docs/2.0/guides/sql_features/graph_queries)
+defines a graph over existing node and edge tables. It does not replace those
+tables with a durable Graph store. No query extension or second database is
+required for this storage change.
+
+**Status: Not done. The user approved the direction and implementation.**
+
+Native evidence identities and historical input membership are implemented.
+The shared subject, relationship, finding, and branch rows remain open. The
+90% target has not been measured on the changed store.
+
+## Intended end state
+
+For the same four Graph result cuts, reduce logical Graph columns and headers
+from 10,990,951 bytes to at most 1,099,095 bytes. Preserve each result ID and
+its exact historical Graph, finding, proof, source cut, and package attribution.
+The latest integrated run has a fifth result. Compare equal cuts and report
+the extra version separately. Report DuckDB file bytes and used blocks, saved
+Arrow bytes, and OCI artifacts as separate measurements.
+
+The Graph numerator includes every stable identity row, native row value,
+result membership, package contribution membership, per-call binding, and
+Graph-only state record. Count each unique row reachable from the four
+selected results, even if another result first created it. Do not count only
+the rows inserted while those four results ran.
+
+Query remains the native SQL parser, logical planner, optimizer, physical
+planner, and execution path. A query subscription invokes the builtin Graph
+packages. Data keeps the only durable Graph state and atomic commit. Do not
+add a polling loop, a Graph engine, or a second state store.
+
+## Measured gap
+
+| Stored payload in the latest five-result run | Bytes |
+| --- | ---: |
+| Graph header input positions | 1,244,674 |
+| Graph header input manifest | 1,095,180 |
+| Graph header branches | 174,316 |
+| Native edge rows | 1,112,372 |
+| Native finding rows | 831,266 |
+| All Graph columns and headers | 4,482,156 |
+| Saved managed Arrow payloads | 10,657,552 |
+| Exact repeated managed Arrow payloads | 4,986,688 |
+
+For the four matching Graph cuts, the current Graph uses 3,688,062 bytes.
+Input positions and manifests consume 1,804,033 bytes of that total. The
+older edge and finding copies account for at most another 843,028 bytes that
+can be shared. The native membership rows and shared branch and finding
+values must also fit the 1,099,095-byte limit. These are logical payload
+figures. They do not predict DuckDB file allocation.
+
+The installed OCI package artifacts total 14,852,608 logical bytes in the
+latest run. A 90% reduction of the entire database file is a separate goal.
+Graph-only changes cannot prove that result.
+
+## Execution flow
+
+A subscription selects a changed authorized input cut
+  -> Query captures the source and exact prior managed result
+  -> the builtin computes new and affected Graph contributions
+  -> Analysis checks each contribution against current captured input and proof
+  -> Data commits changed contributions, Graph version, state, and references in one transaction
+  -> Query and notification subscriptions receive the committed revision
+
+A Graph version is committed
+  -> Data identifies its source window and previous result
+  -> Data reuses stable subject and evidence IDs across source windows
+  -> Data stores new nodes, relationships, findings, and branches as native rows
+  -> Data changes membership for rows added or removed at this revision
+  -> Data records separate membership for the Graph and each package call
+  -> unchanged values keep one physical row across the result revisions
+
+A caller selects a historical Graph result ID
+  -> Data selects only the native rows valid for that exact result
+  -> Data maps stable IDs to the public result-local subject and evidence ordinals
+  -> Data reconstructs the existing GraphSnapshot and original order
+  -> Data checks the manifest, evidence, row counts, and result scope
+
+A process restarts or a managed call retries
+  -> Data restores the exact committed package contribution and checkpoint
+  -> Query binds that state to the same captured call without a self OutputRef
+  -> the builtin emits changes relative to that state
+  -> Data rejects a foreign call, stale reuse, or expired witness
+
+An input leaves a window or old proof changes
+  -> the builtin can rebuild its contribution
+  -> Data records the resulting row changes through the same transaction
+  -> valid changed proof produces a new Graph value
+  -> older Graph result IDs still select their old rows and proof
+
+Validation or commit fails
+  -> Data rolls back row membership, result, checkpoint, and progress together
+  -> a retry reads only the last committed state
+
+## Owners and implementation order
+
+1. **Store input membership as native rows.** Remove full evidence and
+   position lists from each Graph header. The Graph scope already owns the
+   exact source identity in `source_receipts`. Store each record's CPU and
+   durable cursor once across windows. Store its membership and each captured
+   position with validity by result revision. Preserve position order and
+   repeated occurrences. Reconstruct the exact manifest and positions on
+   historical read. Preserve gaps, source epoch, coverage, context, and proof.
+   Charge the native rows and expanded read values. Do not add a compact
+   metadata codec, a legacy decoder, or a version bump during development.
+2. **Store Graph nodes and relationships once.** `araphor-data` owns stable subject
+   and evidence identities across source windows. An evidence identity names
+   the exact source, CPU, and cursor. A subject identity names the exact
+   tenant, authority, kind, and identity key. The existing `source_receipts`
+   row owns the full source identity. Qualified proof and coverage remain in immutable row
+   values; an ID does not assert current proof. Physical edge and finding rows
+   refer to stable identities, not result-local sorted ordinals. A source
+   window is the scope of temporal membership, not value identity. Separate,
+   ordered memberships select each historical merged Graph and each package
+   contribution. Read maps stable IDs back to the public result-local ordinals
+   and charges expanded selected values. A changed proof creates a new row
+   value; an unchanged row is shared. Preserve direct
+   SQL traversal, finding lookup, projections, backup, reopen, corruption
+   checks, and atomic rollback. Keep the existing public result IDs and
+   GraphSnapshot values. Use DuckDB native columns and transactions. Do not
+   add a parallel Graph database.
+3. **Emit and retain only changed package contributions.** The three builtin
+   Graph calls return changed rows and progress through the existing
+   physical package call. Analysis validates the changed rows and retained
+   contribution against the current captured cut. Data stores each package's
+   ordered contribution membership in the same native Graph row owner and
+   binds its exact prior contribution on retry or restart. The Graph result is
+   the checked merge of those contributions. A merged Graph alone cannot
+   recover package-local subjects, facts, or an expiry-reduced contribution.
+   Keep the package contribution as a membership over shared row values, not a
+   second row copy. The Graph-only normalized prior state differs from the raw
+   update used for exact replay. Bind every update to its base call, result,
+   revision, and image. Reuse of an unchanged call must not apply its old
+   update twice. Keep ordered operation references for exact replay. Do not
+   persist a second complete Graph package output for these calls. Ordinary
+   packages keep their current exact raw-output state contract. Current saved
+   inputs can provide the exact record and fact basis when reconstructing a
+   transient prior native dataset. Remove the old Graph-only full-output path
+   after parity proof.
+
+The current Graph merge uses result-local subject and evidence ordinals. Those
+ordinals can change when a new record or subject sorts before an old one. Row
+sharing must use stable identities and remap to public ordinals on read. A
+row's package owner, proof, evidence, and valid result set must remain exact.
+The current Graph contract uses one exact evidence source per Graph scope.
+Do not add multi-source Graph storage to solve this task.
+Do not treat a content hash or an old saved output as fresh authority.
+
+After the three changes, measure exact duplicate saved Arrow payloads again.
+Use a shared payload table only if duplication remains material and the native
+Graph owner cannot remove it. Do not add a general content pool preemptively.
+Measure native branch reuse and repeated result or package keys before the
+final row layout. Keep branch and finding properties in the same shared Graph
+owner. If they keep payload above the target, remove repeated values and keys
+there. Do not add a second snapshot encoding.
+
+## Proof and stop point
+
+Use focused Data Graph storage, history, query, notification, replay, recovery,
+and managed package tests. Preserve all existing assertions. Add only tests
+that exercise exact historical reconstruction, changed proof, inserted earlier
+subject and evidence IDs, window removal, crash and rollback, and resumed
+package contribution. Run the existing backlog workload with unchanged
+events, assertions, and deadline after the focused checks pass.
+
+Measure Graph logical bytes on the four matching result cuts. The change is
+not done until they use at most 1,099,095 bytes and the same current and
+historical Graph values. Record any extra result cut separately. Measure
+DuckDB file size, used and free blocks, Arrow payloads, OCI artifacts, elapsed
+time, and process peak memory without treating one as a proxy for another.
+The current backlog deadline failure remains open until the test passes.
+Run only relevant checks during implementation. Commit each independently
+reviewed deliverable. The independent Sol 6.1 reviewer checks the owner,
+data flow, deletion, source diff, and proof before each commit.
+
+**Result: Not done.** Native evidence and input-position rows replace repeated
+header lists. Focused Graph row tests pass. Shared Graph values, package
+contribution membership, and the measured target remain open.

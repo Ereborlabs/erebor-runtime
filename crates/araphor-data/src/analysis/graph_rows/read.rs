@@ -2,7 +2,7 @@ use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::{GraphHeader, GraphRows};
-use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, Result};
+use crate::{AnalysisDatabaseSnafu, AnalysisReadControl, GraphInvalidSnafu, Result};
 
 type HeaderRow = (Option<Vec<u8>>, Option<Vec<u8>>, u64, u64, u64, u64);
 
@@ -11,6 +11,15 @@ impl GraphRows {
         writer: &Connection,
         tenant: [u8; 16],
         result_id: &str,
+    ) -> Result<Option<GraphHeader>> {
+        Self::read_header_control(writer, tenant, result_id, None)
+    }
+
+    pub(in crate::analysis) fn read_header_control(
+        writer: &Connection,
+        tenant: [u8; 16],
+        result_id: &str,
+        control: Option<&AnalysisReadControl>,
     ) -> Result<Option<GraphHeader>> {
         let stored: Option<HeaderRow> = writer
             .query_row(
@@ -50,6 +59,10 @@ impl GraphRows {
             .build()
         })?;
         header.check_index(tenant, &stream, method, first)?;
+        let (evidence, positions) = Self::load_inputs(writer, result_id, &header, control)?;
+        header.snapshot.input_manifest.evidence = evidence;
+        header.snapshot.input_positions = positions;
+        header.snapshot.validate()?;
         Self::check_bytes(writer, result_id, &header)?;
         Ok(Some(header))
     }

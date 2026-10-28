@@ -3,6 +3,8 @@
 This plan implements the [recorded Graph requirement](araphor-production-dataflow-simplification.md#incremental-builtin-graph-updates).
 A subscription selects data and an optional window. The builtin Graph package
 owns Graph derivation and the decision to update or rebuild its result.
+The [native Graph storage reduction plan](araphor-graph-storage-reduction.md)
+tracks the later 90% payload target and change-only durable results.
 
 **Direction: Approved by the user. Concrete plan: Approved by the independent Sol 6.1 reviewer. Incremental additions: Done. Backlog deadline qualification: Not done.**
 

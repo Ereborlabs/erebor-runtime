@@ -31,12 +31,22 @@ fn native_rows_integrity() -> TestResult {
         "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
         tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
         method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
-        coverage_revision UBIGINT)",
+        coverage_revision UBIGINT, commit_revision UBIGINT);
+        CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY,
+        identity_json VARCHAR, tenant_id BLOB)",
     )?;
     writer.execute_batch(GraphRows::SCHEMA)?;
     GraphRows::validate_tables(&writer)?;
     writer.execute(
-        "INSERT INTO analysis_results VALUES ('version', ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO source_receipts VALUES (?, ?, ?)",
+        params![
+            graph.scope.identity.key(),
+            serde_json::to_string(&graph.scope.identity)?,
+            graph.scope.identity.tenant_id.as_slice()
+        ],
+    )?;
+    writer.execute(
+        "INSERT INTO analysis_results VALUES ('version', ?, ?, ?, ?, ?, ?, ?, ?, 1)",
         params![
             graph.scope.identity.tenant_id.as_slice(),
             crate::GRAPH_PROCESSOR,
@@ -52,6 +62,12 @@ fn native_rows_integrity() -> TestResult {
     let inserted_bytes = GraphRows::stored_bytes(&writer, "version")? as i64;
     let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, "version")?
         .ok_or("missing header")?;
+    let cancelled = AnalysisReadControl::default();
+    cancelled.cancel()?;
+    assert!(matches!(
+        GraphRows::load_inputs(&writer, "version", &header, Some(&cancelled)),
+        Err(crate::Error::AnalysisReadCancelled { .. })
+    ));
     assert_eq!(GraphRows::read(&writer, "version", &header)?, *graph);
     assert_eq!(header.row_bytes, GraphRows::row_bytes(graph)?);
     assert!(header.allocation_bytes()? >= header.row_bytes);
@@ -69,14 +85,160 @@ fn native_rows_integrity() -> TestResult {
     {
         let transaction = writer.transaction()?;
         let other = "versión";
+        let mut next = graph.clone();
+        next.last_cursor = 2;
+        next.previous_result_id = Some("version".into());
+        let mut added = next.input_manifest.evidence[0].clone();
+        added.durable_cursor = 2;
+        next.input_manifest.evidence.push(added.clone());
+        next.input_positions = vec![
+            (
+                added,
+                crate::StorePositionV1 {
+                    commit_revision: 2,
+                    ordinal: 0,
+                },
+            ),
+            (
+                graph.input_manifest.evidence[0].clone(),
+                crate::StorePositionV1 {
+                    commit_revision: 1,
+                    ordinal: 0,
+                },
+            ),
+            (
+                graph.input_manifest.evidence[0].clone(),
+                crate::StorePositionV1 {
+                    commit_revision: 1,
+                    ordinal: 0,
+                },
+            ),
+        ];
+        next.validate()?;
         transaction.execute(
-            "INSERT INTO analysis_results SELECT ?, tenant_id, processor_id, body,
-            stream_key, method_version, first_cursor, facts_revision, coverage_revision
-            FROM analysis_results WHERE result_id = ?",
-            params![other, "version"],
+            "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2)",
+            params![
+                other,
+                next.scope.identity.tenant_id.as_slice(),
+                crate::GRAPH_PROCESSOR,
+                GraphRows::encode(&next)?,
+                next.scope.identity.key(),
+                next.scope.method_version,
+                next.first_cursor,
+                next.context_notice_revision,
+                fixture.request.coverage_revision
+            ],
         )?;
-        GraphRows::insert(graph, &transaction, other)?;
+        GraphRows::insert(&next, &transaction, other)?;
+        let other_header =
+            GraphRows::read_header(&transaction, graph.scope.identity.tenant_id, other)?
+                .ok_or("missing second header")?;
+        assert_eq!(GraphRows::read(&transaction, other, &other_header)?, next);
+        let old_header =
+            GraphRows::read_header(&transaction, graph.scope.identity.tenant_id, "version")?
+                .ok_or("missing historical header")?;
+        assert_eq!(
+            GraphRows::read(&transaction, "version", &old_header)?,
+            *graph
+        );
+        let mut removed = next.clone();
+        removed.previous_result_id = Some(other.into());
+        removed.input_manifest.evidence.remove(0);
+        removed.input_positions.truncate(1);
+        removed.graph.edges.clear();
+        removed.graph.branches.clear();
+        removed.graph.facts.clear();
+        removed.findings.clear();
+        removed.validate()?;
+        transaction.execute(
+            "INSERT INTO analysis_results VALUES ('removed', ?, ?, ?, ?, ?, ?, ?, ?, 3)",
+            params![
+                removed.scope.identity.tenant_id.as_slice(),
+                crate::GRAPH_PROCESSOR,
+                GraphRows::encode(&removed)?,
+                removed.scope.identity.key(),
+                removed.scope.method_version,
+                removed.first_cursor,
+                removed.context_notice_revision,
+                fixture.request.coverage_revision
+            ],
+        )?;
+        GraphRows::insert(&removed, &transaction, "removed")?;
+        let mut reentered = next.clone();
+        reentered.previous_result_id = Some("removed".into());
+        reentered.validate()?;
+        transaction.execute(
+            "INSERT INTO analysis_results VALUES ('reentered', ?, ?, ?, ?, ?, ?, ?, ?, 4)",
+            params![
+                reentered.scope.identity.tenant_id.as_slice(),
+                crate::GRAPH_PROCESSOR,
+                GraphRows::encode(&reentered)?,
+                reentered.scope.identity.key(),
+                reentered.scope.method_version,
+                reentered.first_cursor,
+                reentered.context_notice_revision,
+                fixture.request.coverage_revision
+            ],
+        )?;
+        GraphRows::insert(&reentered, &transaction, "reentered")?;
+        for (id, expected) in [
+            ("version", graph),
+            (other, &next),
+            ("removed", &removed),
+            ("reentered", &reentered),
+        ] {
+            let historical =
+                GraphRows::read_header(&transaction, graph.scope.identity.tenant_id, id)?
+                    .ok_or("missing historical Graph")?;
+            assert_eq!(GraphRows::read(&transaction, id, &historical)?, *expected);
+        }
+        let reentry: u64 = transaction.query_row(
+            "SELECT count(*)::UBIGINT FROM graph_evidence_membership
+             WHERE lineage_id = 1 AND evidence_id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(reentry, 2);
+        let mut window = next.clone();
+        window.first_cursor = 2;
+        window.previous_result_id = None;
+        window.input_manifest.evidence.remove(0);
+        window.input_positions.truncate(1);
+        window.graph.edges.clear();
+        window.graph.branches.clear();
+        window.graph.facts.clear();
+        window.findings.clear();
+        window.validate()?;
+        transaction.execute(
+            "INSERT INTO analysis_results VALUES ('new-window', ?, ?, ?, ?, ?, ?, ?, ?, 5)",
+            params![
+                window.scope.identity.tenant_id.as_slice(),
+                crate::GRAPH_PROCESSOR,
+                GraphRows::encode(&window)?,
+                window.scope.identity.key(),
+                window.scope.method_version,
+                window.first_cursor,
+                window.context_notice_revision,
+                fixture.request.coverage_revision
+            ],
+        )?;
+        GraphRows::insert(&window, &transaction, "new-window")?;
+        let window_header =
+            GraphRows::read_header(&transaction, graph.scope.identity.tenant_id, "new-window")?
+                .ok_or("missing new window")?;
+        assert_eq!(
+            GraphRows::read(&transaction, "new-window", &window_header)?,
+            window
+        );
+        let evidence_rows: u64 =
+            transaction.query_row("SELECT count(*)::UBIGINT FROM graph_evidence", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(evidence_rows, 2);
         let other_bytes = GraphRows::stored_bytes(&transaction, other)? as i64;
+        let removed_bytes = GraphRows::stored_bytes(&transaction, "removed")? as i64;
+        let reentered_bytes = GraphRows::stored_bytes(&transaction, "reentered")? as i64;
+        let window_bytes = GraphRows::stored_bytes(&transaction, "new-window")? as i64;
         let count =
             (graph.graph.subjects.len() + graph.graph.edges.len() + graph.findings.len()) as i64;
         assert_eq!(
@@ -96,9 +258,19 @@ fn native_rows_integrity() -> TestResult {
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(total, inserted_bytes + other_bytes);
+        assert_eq!(
+            total,
+            inserted_bytes + other_bytes + removed_bytes + reentered_bytes + window_bytes
+        );
         transaction.rollback()?;
     }
+    let retained: (u64, u64) = writer.query_row(
+        "SELECT (SELECT count(*)::UBIGINT FROM graph_versions),
+                (SELECT count(*)::UBIGINT FROM graph_evidence)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(retained, (1, 1));
     assert!(GraphRows::read_header(&writer, [9; 16], "version")?.is_none());
     assert_eq!(
         GraphRows::read_finding(
@@ -132,6 +304,20 @@ fn native_rows_integrity() -> TestResult {
         transaction.execute(mutation, [])?;
         assert!(
             GraphRows::read(&transaction, "version", &header).is_err(),
+            "{mutation}"
+        );
+        transaction.rollback()?;
+    }
+    for mutation in [
+        "DELETE FROM graph_versions",
+        "UPDATE graph_evidence SET durable_cursor = 0",
+        "UPDATE graph_evidence_membership SET valid_to = valid_from",
+    ] {
+        let transaction = writer.transaction()?;
+        transaction.execute(mutation, [])?;
+        assert!(
+            GraphRows::read_header(&transaction, graph.scope.identity.tenant_id, "version")
+                .is_err(),
             "{mutation}"
         );
         transaction.rollback()?;

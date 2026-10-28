@@ -111,7 +111,12 @@ impl AnalysisStore {
         })
     }
 
-    fn finding_header(&self, row: &Row<'_>, tenant: [u8; 16]) -> Result<GraphHeader> {
+    fn finding_header(
+        &self,
+        reader: &duckdb::Connection,
+        row: &Row<'_>,
+        tenant: [u8; 16],
+    ) -> Result<GraphHeader> {
         let body = row.get_ref(1).context(AnalysisDatabaseSnafu {
             operation: "read selected graph header",
         })?;
@@ -121,7 +126,7 @@ impl AnalysisStore {
             }
             .build()
         })?;
-        let header = GraphHeader::decode(body)?;
+        let mut header = GraphHeader::decode(body)?;
         let stream = row.get_ref(2).context(AnalysisDatabaseSnafu {
             operation: "read selected graph stream",
         })?;
@@ -138,6 +143,14 @@ impl AnalysisStore {
             operation: "read selected graph first cursor",
         })?;
         header.check_index(tenant, stream, method, first)?;
+        let id: String = row.get(0).context(AnalysisDatabaseSnafu {
+            operation: "read selected graph result ID",
+        })?;
+        let (evidence, positions) =
+            crate::analysis::graph_rows::GraphRows::load_inputs(reader, &id, &header, None)?;
+        header.snapshot.input_manifest.evidence = evidence;
+        header.snapshot.input_positions = positions;
+        header.snapshot.validate()?;
         Ok(header)
     }
 

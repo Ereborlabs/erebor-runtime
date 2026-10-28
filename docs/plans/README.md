@@ -40,6 +40,9 @@ master plan invented for them.
 - [Araphor performance simplification TODO](araphor-performance-simplification-todo.md) —
   the user approves all 17 source-audit items. The file records implementation
   and verification status for each item.
+- [Native Graph storage reduction](araphor-graph-storage-reduction.md) — the
+  approved 90% Graph payload target, shared native rows, historical membership,
+  and changed package contributions.
 - [Araphor component redesign](araphor-component-redesign.md) — the user
   approves one Arrow query operation and retained package admission. DataFusion
   replaces query execution. DuckDB retains durable storage. The source studies
