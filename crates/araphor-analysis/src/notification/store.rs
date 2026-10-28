@@ -141,7 +141,7 @@ impl NotificationRouter {
             .build()
         })?;
         state.validate()?;
-        let result = self.persist(&Self::state_key(state), state, previous, state.sensitivity);
+        let result = self.persist(Self::state_key(state), state, previous, state.sensitivity);
         if result.is_err() {
             state.revision = previous;
         }
@@ -150,7 +150,7 @@ impl NotificationRouter {
 
     pub(super) fn persist(
         &self,
-        key: &AnalysisContextKeyV1,
+        key: AnalysisContextKeyV1,
         value: &impl Serialize,
         expected: u64,
         sensitivity: ContextSensitivityV1,
@@ -158,7 +158,7 @@ impl NotificationRouter {
         let body = serde_json::to_vec(value).context(NotificationEncodingSnafu)?;
         self.store.commit_context_checked(
             &AnalysisContextVersionV1 {
-                key: key.clone(),
+                key,
                 valid_from_utc_ns: None,
                 valid_until_utc_ns: None,
                 sensitivity,

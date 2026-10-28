@@ -5076,3 +5076,17 @@ The [continuity record](</home/navid/mithril-test-hosts/araphor-package-qualific
 [The edited case, formatting, and Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-lint-results.json>) pass on source c389 and executable e4f8. The earlier 41-case record keeps its own source identity.
 Owner checks: Done. Current source: notification-flow-lint-source.json, SHA-256 c389b84cd17e3cd535304eb4fbd858a5954b6ed3115db0cfb24a53f4dbe45e88.
 The [current normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-incident-results.json>) fails in 118.81 seconds on c389/E2E 389f. Actor Graph 950/publication 96 contains a Confirmed finding with Exact policy provenance; background Graph 642/publication 89 has 138 findings and healthy CPU 0 coverage. The bounded failure sample contains eight current-background notices, each with two attempts and failure=sink_unavailable. The selected actor notice is absent from its direct lookup. Strict post-wait assertions do not run. No phase trace establishes the remaining cause; an absent actor notice does not prove absent saved state. Full qualification and current physical proof remain Not done. No execution-time gain is claimed.
+
+
+## Publication ownership and notification item errors
+
+[Publication::write_all](../../crates/araphor-analysis/src/instance/sink.rs) borrows calls from its captured receipt inside the existing blocking closure.
+The receipt and acknowledgement retain their existing leases. The checked row total also supplies the empty-Graph condition.
+[NotificationRouter::persist](../../crates/araphor-analysis/src/notification/store.rs) takes each fresh context key by value. Configure and save move that key; validation and checked CAS remain.
+[consume_rows](../../crates/araphor-analysis/src/notification/reactive.rs) emits item warnings when it retains each error. Publication no longer scans the returned errors to log them.
+Existing DEBUG and TRACE events record bounded identifiers and counts. Work entry precedes its guard and lock; a guard failure does not identify its cause.
+
+The [four cleanup checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/publication-ownership-results.json>) pass on source e7b1a8d8: Graph snapshot publication, nested calls, denied acknowledgement, and notification progress. Three-file formatting and Analysis Clippy pass.
+The separate [trace record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-work-trace-results.json>) has four passing owner checks and passing formatting and Clippy on source 332bdca3. Its unchanged busy case fails in 116.14 seconds.
+The final 139-row batch contains the actor Graph. Its 13 logged work entries all reference the background Graph, then a state guard fails. The authorized actor notification view is empty at post-timeout revision 183.
+These observations establish no sole cause, global state absence, or execution-time gain. The pending E2E diagnostic source remains outside this production commit.

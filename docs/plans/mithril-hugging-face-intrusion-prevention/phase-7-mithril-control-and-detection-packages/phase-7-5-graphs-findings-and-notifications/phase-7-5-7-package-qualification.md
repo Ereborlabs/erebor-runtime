@@ -1251,3 +1251,19 @@ Current source: notification-flow-lint-source.json, SHA-256 c389b84cd17e3cd53530
 The [current normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-incident-results.json>) fails in 118.81 seconds on c389/E2E 389f. Actor Graph 950/publication 96 contains a Confirmed finding with Exact policy provenance, without its selected notice; background 642/publication 89 has healthy CPU 0 coverage and 138 findings. The bounded failure sample contains eight current-background notices, each with two attempts and failure=sink_unavailable. Strict post-wait assertions do not run. No phase trace establishes the cause, saved-state absence, or an execution-time gain.
 PENDING: incident completion, deployment images, paired physical proof, final evidence, owned-resource absence, and owned VM removal.
 The whole acceptance matrix remains Not done. Earlier records retain their original source, feature, artifact, and assertion limits.
+
+
+## Publication ownership and item error reporting
+
+**Local cleanup and focused checks: Done. Busy-input completion and complete qualification: Not done.**
+Publication borrows the captured calls map and reuses its checked row total. Notification persistence moves fresh context keys.
+The Router logs retained item errors immediately; Publication removes its aggregate error scan. Bounded DEBUG and TRACE events keep their existing telemetry owner.
+Authorization, current-head checks, CAS, pending-attempt recovery, original deadlines, SQL order, and DataFusion execution remain.
+The [cleanup record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/publication-ownership-results.json>) passes four exact tests, three-file formatting, and strict Analysis Clippy on source e7b1a8d8bf8ee351ce29be4a7ef04c446acc8161fc59cdbcf35e8af94e104e0d.
+The [earlier trace record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-work-trace-results.json>) retains source 332bdca3669abbc9729060ccbc4580099b1519394cf2ce8f0b4004d4fb6b45a5 and E2E artifact f470555b. Four focused tests, formatting, and Clippy pass; the unchanged busy case fails in 116.14 seconds.
+Its final 139-row batch contains the actor Graph at cursor 950/publication 111. The 13 logged work entries reference only the background Graph at cursor 642/publication 106; the last state guard fails.
+A complete finite authorized read returns no actor notification row at post-timeout revision 183. This does not establish an earlier or global absence. Strict post-wait assertions do not run.
+The records establish no sole cause or execution-time gain. Pending E2E diagnostics are excluded from this production commit.
+The Graph Evaluate fact input requests all context versions in its permitted tenant scope. Notification writes can cause Graph re-evaluation without a new Graph result. Narrower inputs need an explicit contract for future, missing, and frozen context references; no such change is implemented.
+PENDING: busy-input completion, integration refresh, current deployment images, paired physical proof, final evidence, owned-resource absence, and owned VM removal.
+Earlier proof retains its original source, artifact, feature, and assertion limits.

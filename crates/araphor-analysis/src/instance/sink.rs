@@ -110,20 +110,11 @@ impl Publication {
             return Err(Code::Invalid.error("notification publication mode").into());
         };
         let check = || self.owner.check_notification(*lifecycle, control);
-        let update = router.consume_rows(tenant, now, batches, &check, &mut |delivery| {
-            Ok(sink.deliver(delivery))
-        })?;
-        for result in update
-            .routed
-            .into_iter()
-            .map(|(_, result)| result)
-            .chain(update.delivered.into_iter().map(|(_, result)| result))
-        {
-            if let Err(error) = result {
-                erebor_telemetry::warn!(error; "Notification candidate failed", instance_id = %self.owner.admitted.spec.id);
-            }
-        }
-        Ok(())
+        router
+            .consume_rows(tenant, now, batches, &check, &mut |delivery| {
+                Ok(sink.deliver(delivery))
+            })
+            .map(|_| ())
     }
 }
 
@@ -296,7 +287,6 @@ impl DataSink for Publication {
                     Code::Incomplete.error("managed execution attempt"),
                 ))
             })?;
-        let calls = receipt.calls().clone();
         let captured = receipt.clone();
         let acknowledgement = receipt.clone();
         let task = Arc::clone(context);
@@ -322,6 +312,7 @@ impl DataSink for Publication {
         let caller = mode.caller().map(|(grant, action)| (grant.clone(), action));
         let published = receipt
             .blocking(context, reservation, move |control| {
+                let calls = captured.calls();
                 let returns = calls
                     .iter()
                     .map(|(call, returned)| ManagedReturn {
@@ -355,11 +346,7 @@ impl DataSink for Publication {
                     ManagedDestination::Graph {
                         operation: ManagedGraphOperation::Evaluate,
                         ..
-                    } if calls.is_empty()
-                        && selected.batches.iter().all(|batch| batch.num_rows() == 0) =>
-                    {
-                        None
-                    }
+                    } if calls.is_empty() && rows == 0 => None,
                     ManagedDestination::Graph {
                         operation: ManagedGraphOperation::Evaluate,
                         ..

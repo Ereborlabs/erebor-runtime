@@ -90,10 +90,26 @@ impl NotificationRouter {
                 work.push((reference, key));
             }
         }
+        erebor_telemetry::debug!(
+            tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
+            rows = work.len(), routed_items = 0usize, handled_states = 0usize,
+            graph_results_sample = ?work.iter().filter_map(|(reference, _)|
+                reference.as_ref().map(|reference| reference.result_id.as_str()))
+                .collect::<BTreeSet<_>>().into_iter().take(4)
+                .map(|id| id.chars().take(64).collect::<String>()).collect::<Vec<_>>(),
+            "Notification batch begins"
+        );
         let mut update = NotificationUpdate::default();
         let mut routed = BTreeMap::new();
         let mut handled = BTreeSet::new();
         for (reference, key) in work {
+            erebor_telemetry::trace!(
+                tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
+                notification_id = ?key.map(|key| uuid::Uuid::from_bytes(key.notification_id)),
+                graph_result_id = %reference.as_ref().map(|reference| reference.result_id.chars()
+                    .take(64).collect::<String>()).unwrap_or_default(),
+                "Notification work begins"
+            );
             check()?;
             let _guard = self.lock()?;
             let mut states = Vec::new();
@@ -112,6 +128,9 @@ impl NotificationRouter {
                             update.routed.push((reference, Ok(count)));
                         }
                         Err(error) => {
+                            erebor_telemetry::warn!(error; "Notification routing failed",
+                                tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = %now,
+                                graph_result_id = %reference.result_id.chars().take(64).collect::<String>());
                             update.routed.push((reference, Err(error)));
                             continue;
                         }
@@ -123,6 +142,9 @@ impl NotificationRouter {
                     match self.state(key) {
                         Ok(state) => states.push(state),
                         Err(error) => {
+                            erebor_telemetry::warn!(error; "Notification state read failed",
+                                tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = %now,
+                                notification_id = %uuid::Uuid::from_bytes(key.notification_id));
                             handled.insert(key);
                             update.delivered.push((key, Err(error)));
                         }
@@ -135,6 +157,15 @@ impl NotificationRouter {
                 }
             }
         }
+        erebor_telemetry::debug!(
+            tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
+            rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            routed_items = update.routed.len(), handled_states = handled.len(),
+            graph_results_sample = ?update.routed.iter().map(|(reference, _)|
+                reference.result_id.as_str()).collect::<BTreeSet<_>>().into_iter().take(4)
+                .map(|id| id.chars().take(64).collect::<String>()).collect::<Vec<_>>(),
+            "Notification batch ends"
+        );
         Ok(update)
     }
 
@@ -146,6 +177,13 @@ impl NotificationRouter {
         effect: &mut Effect<'_>,
         update: &mut NotificationUpdate,
     ) -> Result<()> {
+        erebor_telemetry::trace!(
+            tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = now,
+            notification_id = %uuid::Uuid::from_bytes(state.key.notification_id),
+            graph_result_id = %state.finding.as_ref().map(|reference| reference.result_id.chars()
+                .take(64).collect::<String>()).unwrap_or_default(),
+            "Notification state begins"
+        );
         let mut guard_failed = false;
         let result = self.deliver_state(
             &mut state,
@@ -158,9 +196,27 @@ impl NotificationRouter {
             },
             now,
         );
+        erebor_telemetry::trace!(
+            tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = now,
+            notification_id = %uuid::Uuid::from_bytes(state.key.notification_id),
+            ok = result.is_ok(), guard_failed,
+            "Notification state returns"
+        );
         match result {
-            Err(error) if guard_failed => return Err(error),
-            result => update.delivered.push((state.key, result)),
+            Err(error) if guard_failed => {
+                erebor_telemetry::trace!("Notification state guard failed",
+                    tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = %now,
+                    notification_id = %uuid::Uuid::from_bytes(state.key.notification_id));
+                return Err(error);
+            }
+            result => {
+                if let Err(error) = &result {
+                    erebor_telemetry::warn!(error; "Notification delivery failed",
+                        tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = %now,
+                        notification_id = %uuid::Uuid::from_bytes(state.key.notification_id));
+                }
+                update.delivered.push((state.key, result));
+            }
         }
         Ok(())
     }

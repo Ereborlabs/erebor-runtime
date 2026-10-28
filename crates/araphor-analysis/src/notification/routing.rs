@@ -49,7 +49,7 @@ impl NotificationRouter {
             "route revision",
         )?;
         self.persist(
-            &AnalysisContextKeyV1 {
+            AnalysisContextKeyV1 {
                 tenant_id: approved.policy.tenant_id,
                 owner_id: NOTIFICATION_ROUTE_OWNER.into(),
                 entity_key: approved.policy.route_id.as_bytes().to_vec(),
