@@ -1267,3 +1267,13 @@ The records establish no sole cause or execution-time gain. Pending E2E diagnost
 The Graph Evaluate fact input requests all context versions in its permitted tenant scope. Notification writes can cause Graph re-evaluation without a new Graph result. Narrower inputs need an explicit contract for future, missing, and frozen context references; no such change is implemented.
 PENDING: busy-input completion, integration refresh, current deployment images, paired physical proof, final evidence, owned-resource absence, and owned VM removal.
 Earlier proof retains its original source, artifact, feature, and assertion limits.
+
+
+## Inherited package input ownership
+
+**Borrowed inputs and standalone native struct SQL: Done. Complete qualification: Not done.**
+Query retains each completed child owner while it borrows input metadata. Traversal order, duplicates, source revisions, coverage, hashes, and guards remain.
+Query also declares DataFusion nested_expressions. The existing native planner handles struct fields in standalone builds; Standalone Query no longer relies on Analysis to enable this feature.
+The [four corrected cases, formatting, and strict Query Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/inherited-inputs-feature-results.json>) pass on source 6b8e0086b5c0e7d9ee51299bf2be8d5d3f201b1a4752358ebc3fced56af157cc and artifact 9c6cbbd1.
+The [initial record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/inherited-inputs-initial-results.json>) retains three passes, the standalone struct-planning failure, and the later checks run after that failure. That sequence is not a pass or a tested baseline.
+No timeout fix, execution-time gain, or new integrated proof is established. Busy-input completion, integration refresh, current images, paired physical proof, final evidence, owned-resource absence, and owned VM removal remain Not done.

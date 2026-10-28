@@ -5090,3 +5090,14 @@ The [four cleanup checks](</home/navid/mithril-test-hosts/araphor-package-qualif
 The separate [trace record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-work-trace-results.json>) has four passing owner checks and passing formatting and Clippy on source 332bdca3. Its unchanged busy case fails in 116.14 seconds.
 The final 139-row batch contains the actor Graph. Its 13 logged work entries all reference the background Graph, then a state guard fails. The authorized actor notification view is empty at post-timeout revision 183.
 These observations establish no sole cause, global state absence, or execution-time gain. The pending E2E diagnostic source remains outside this production commit.
+
+
+## Borrow inherited package inputs
+
+[PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) retains completed child CallResult owners for each input port.
+It borrows their inputs in the same traversal order, including duplicates. [Inputs::input_for](../../crates/araphor-query/src/inputs/receipt.rs) passes these references through its existing metadata checks.
+This removes the intermediate dataset, revision, and coverage clones. The child owners remain alive until receipt construction returns.
+[Query's DataFusion dependency](../../crates/araphor-query/Cargo.toml) now declares nested_expressions. Standalone Query uses the native FieldAccessPlanner for attributes['uid']; it does not rely on Analysis to enable that feature.
+The [corrected focused record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/inherited-inputs-feature-results.json>) passes four exact cases, formatting, and strict Query Clippy on source 6b8e0086.
+The [initial record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/inherited-inputs-initial-results.json>) retains the standalone struct-planning failure and sequencing error. It is not a tested baseline or a borrowing regression.
+This cleanup adds no execution owner, planner implementation, cache, or dependency. It establishes no timeout fix or execution-time gain.

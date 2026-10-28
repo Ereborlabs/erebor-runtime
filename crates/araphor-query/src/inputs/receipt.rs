@@ -151,7 +151,7 @@ impl Inputs {
         source: &SourceSnapshot,
         (call, slot): (u64, usize),
         physical: &Arc<dyn ExecutionPlan>,
-        inherited: &[sdk::Input],
+        inherited: &[&sdk::Input],
         memory: &Memory,
     ) -> Result<sdk::Input> {
         let port = self.plans.get(slot).ok_or_else(|| {
@@ -224,6 +224,7 @@ impl Inputs {
             },
             inherited
                 .iter()
+                .copied()
                 .chain(bound.iter().map(|input| input.as_ref())),
             memory,
         )

@@ -681,18 +681,22 @@ impl PackageExec {
                     .collect(slot, &port.port.schema, &owner, &context, &input, true)
                     .await?,
             };
-            let mut inherited = Vec::new();
+            let mut completed = Vec::new();
             self.call.children[slot].apply_with_subqueries(|plan| {
                 if let LogicalPlan::Extension(extension) = plan {
                     if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
                         if let Some(result) = owner.completed(call.id)? {
-                            inherited.extend(result.evaluation.inputs.iter().cloned());
+                            completed.push(result);
                         }
                         return Ok(TreeNodeRecursion::Jump);
                     }
                 }
                 Ok(TreeNodeRecursion::Continue)
             })?;
+            let inherited = completed
+                .iter()
+                .flat_map(|result| result.evaluation.inputs.iter())
+                .collect::<Vec<_>>();
             inputs.push(
                 self.call
                     .input_scope
