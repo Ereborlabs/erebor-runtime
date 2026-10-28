@@ -69,6 +69,17 @@ impl NotificationRouter {
         now: u64,
     ) -> Result<usize> {
         let _guard = self.lock()?;
+        self.route_states(tenant, reference, now)
+            .map(|(count, _)| count)
+    }
+
+    // The caller holds the router lock.
+    pub(super) fn route_states(
+        &self,
+        tenant: [u8; 16],
+        reference: &NotificationFindingRefV1,
+        now: u64,
+    ) -> Result<(usize, Vec<NotificationObligationV1>)> {
         NotificationErrorCodeV1::Invalid.require(now > 0, "finding reference")?;
         let finding = self.store.notification_finding(tenant, reference)?;
         let routes = self.routes(tenant)?;

@@ -78,16 +78,7 @@ async fn native_action_changes() -> TestResult {
         let initial = finding(1, FindingSeverityV1::High);
         commit_finding(&store, initial.clone(), 1)?;
         let sink = Sink::default();
-        let update = capture(&engine, NotificationRouter::SQL, 100).await?;
-        let routed = router.consume(&update, &sink)?;
-        assert_eq!(routed.routed.len(), 1);
-        assert_eq!(
-            *routed.routed[0]
-                .1
-                .as_ref()
-                .map_err(|error| error.to_string())?,
-            1
-        );
+        assert_eq!(route(&router, 100)?, 1);
         let update = capture(&engine, NotificationRouter::SQL, 100).await?;
         let delivered = router.consume(&update, &sink)?;
         assert!(delivered.routed.is_empty());
@@ -111,13 +102,23 @@ async fn native_action_changes() -> TestResult {
                 .map_err(|error| error.to_string())?,
             1
         );
+        assert_eq!(result.delivered.len(), 1);
+        assert_eq!(
+            *result.delivered[0]
+                .1
+                .as_ref()
+                .map_err(|error| error.to_string())?,
+            usize::from(matched)
+        );
+        let before = store.meta()?;
         let update = capture(&engine, NotificationRouter::SQL, 150).await?;
-        let delivered = router.consume(&update, &sink)?;
-        assert!(delivered.routed.is_empty());
-        assert_eq!(delivered.delivered.len(), usize::from(matched));
-        for (_, result) in &delivered.delivered {
-            assert_eq!(*result.as_ref().map_err(|error| error.to_string())?, 1);
-        }
+        let stable = router.consume(&update, &sink)?;
+        assert!(stable.routed.is_empty() && stable.delivered.is_empty());
+        assert_eq!(store.meta()?, before);
+        assert_eq!(
+            sink.calls.lock().map_err(|_| "sink lock")?.len(),
+            2 * usize::from(matched)
+        );
         let states = router.obligations(&human, 150)?;
         assert_eq!(states.len(), 2);
         assert!(states.iter().any(|state| state.required_action.is_none()));
@@ -155,16 +156,7 @@ async fn native_priority_changes() -> TestResult {
         let initial = finding(1, FindingSeverityV1::Warning);
         commit_finding(&store, initial.clone(), 1)?;
         let sink = Sink::default();
-        let update = capture(&engine, NotificationRouter::SQL, 100).await?;
-        let routed = router.consume(&update, &sink)?;
-        assert_eq!(routed.routed.len(), 1);
-        assert_eq!(
-            *routed.routed[0]
-                .1
-                .as_ref()
-                .map_err(|error| error.to_string())?,
-            1
-        );
+        assert_eq!(route(&router, 100)?, 1);
         let human = grant(NotificationPrincipalV1::Human);
         let original = router.obligations(&human, 100)?.remove(0);
         let mut raised = initial.clone();
@@ -186,18 +178,20 @@ async fn native_priority_changes() -> TestResult {
         assert_eq!(current.deadline_utc_ns, original.deadline_utc_ns);
         assert_eq!(current.source_priority, NotificationPriorityV1::Critical);
         assert_eq!(current.sensitivity, original.sensitivity);
-        assert_eq!(result.delivered.len(), usize::from(matched));
+        assert_eq!(result.delivered.len(), 1);
+        assert_eq!(
+            *result.delivered[0]
+                .1
+                .as_ref()
+                .map_err(|error| error.to_string())?,
+            usize::from(matched)
+        );
         if matched {
-            assert_eq!(
-                *result.delivered[0]
-                    .1
-                    .as_ref()
-                    .map_err(|error| error.to_string())?,
-                1
-            );
             let calls = sink.calls.lock().map_err(|_| "sink lock")?;
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0].priority, NotificationPriorityV1::Critical);
+        } else {
+            assert!(sink.calls.lock().map_err(|_| "sink lock")?.is_empty());
         }
         let before = store.meta()?;
         let update = capture(&engine, NotificationRouter::SQL, 151).await?;
@@ -232,16 +226,7 @@ async fn native_sensitivity_changes() -> TestResult {
         initial.sensitivity = ContextSensitivityV1::Public;
         commit_finding(&store, initial.clone(), 1)?;
         let sink = Sink::default();
-        let update = capture(&engine, NotificationRouter::SQL, 100).await?;
-        let routed = router.consume(&update, &sink)?;
-        assert_eq!(routed.routed.len(), 1);
-        assert_eq!(
-            *routed.routed[0]
-                .1
-                .as_ref()
-                .map_err(|error| error.to_string())?,
-            1
-        );
+        assert_eq!(route(&router, 100)?, 1);
         let human = grant(NotificationPrincipalV1::Human);
         let original = router.obligations(&human, 100)?.remove(0);
         let mut raised = initial.clone();
@@ -263,16 +248,18 @@ async fn native_sensitivity_changes() -> TestResult {
         assert_eq!(current.deadline_utc_ns, original.deadline_utc_ns);
         assert_eq!(current.sensitivity, ContextSensitivityV1::HostRestricted);
         assert_eq!(current.source_priority, original.source_priority);
-        assert_eq!(result.delivered.len(), usize::from(matched));
+        assert_eq!(result.delivered.len(), 1);
+        assert_eq!(
+            *result.delivered[0]
+                .1
+                .as_ref()
+                .map_err(|error| error.to_string())?,
+            usize::from(matched)
+        );
         if matched {
-            assert_eq!(
-                *result.delivered[0]
-                    .1
-                    .as_ref()
-                    .map_err(|error| error.to_string())?,
-                1
-            );
             assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?.len(), 1);
+        } else {
+            assert!(sink.calls.lock().map_err(|_| "sink lock")?.is_empty());
         }
         let before = store.meta()?;
         let update = capture(&engine, NotificationRouter::SQL, 151).await?;

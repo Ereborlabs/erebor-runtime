@@ -65,20 +65,22 @@ WITH current_findings AS (
     SELECT finding_id, result_id FROM missing_routes
     UNION
     SELECT finding_id, result_id FROM missing_findings
+), ready_states AS (
+    SELECT state.finding_id, state.notification_id FROM current_states state
+    LEFT JOIN approved_routes route
+        ON route.tenant_id = state.tenant_id AND route.route_id = state.route_id
+    LEFT JOIN current_routes escalation
+        ON escalation.tenant_id = route.tenant_id
+            AND escalation.route_id = route.escalation_route_id
+    WHERE state.delivery_ready OR (
+        state.kind = 'unconfirmed_concern' AND NOT state.acknowledged
+        AND route.route_id IS NOT NULL
+        AND ((state.route_revision IS DISTINCT FROM route.route_revision)
+            OR (state.escalation_route_id IS DISTINCT FROM escalation.route_id)
+            OR (state.escalation_route_revision IS DISTINCT FROM escalation.route_revision))
+    )
 )
-SELECT finding_id, result_id, arrow_cast(NULL, 'Binary') AS notification_id FROM routing
-UNION ALL
-SELECT CAST(NULL AS VARCHAR) AS finding_id, CAST(NULL AS VARCHAR) AS result_id,
-    state.notification_id FROM current_states state
-LEFT JOIN approved_routes route
-    ON route.tenant_id = state.tenant_id AND route.route_id = state.route_id
-LEFT JOIN current_routes escalation
-    ON escalation.tenant_id = route.tenant_id
-        AND escalation.route_id = route.escalation_route_id
-WHERE state.delivery_ready OR (
-    state.kind = 'unconfirmed_concern' AND NOT state.acknowledged
-    AND route.route_id IS NOT NULL
-    AND ((state.route_revision IS DISTINCT FROM route.route_revision)
-        OR (state.escalation_route_id IS DISTINCT FROM escalation.route_id)
-        OR (state.escalation_route_revision IS DISTINCT FROM escalation.route_revision))
-)
+SELECT routing.finding_id, routing.result_id, ready.notification_id
+FROM routing FULL OUTER JOIN ready_states ready
+    ON routing.finding_id = ready.finding_id
+ORDER BY notification_id NULLS LAST

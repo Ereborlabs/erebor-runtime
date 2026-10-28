@@ -22,7 +22,7 @@ impl NotificationRouter {
         self.deliver_state(&mut state, effect, now)
     }
 
-    fn deliver_state(
+    pub(super) fn deliver_state(
         &self,
         state: &mut NotificationObligationV1,
         effect: &mut Effect<'_>,

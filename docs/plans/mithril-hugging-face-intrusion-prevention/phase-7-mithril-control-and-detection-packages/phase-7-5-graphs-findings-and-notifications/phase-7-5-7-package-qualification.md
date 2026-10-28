@@ -1231,3 +1231,23 @@ Source: capture-coordinator-lint-source.json, SHA-256 e10d19719af2dfadec5ca3c50d
 The [E10 normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-lint-incident-checks.json>) fails in 120.373 seconds. This is not an incident completion or performance result.
 PENDING: full qualification, current images, paired physical proof, final evidence, owned-resource absence, and owned VM removal.
 Earlier evidence retains its own source, feature, artifact, and assertion limits.
+
+## Native per-notification progress
+
+**Owner behavior and focused proof: Done. Complete qualification: Not done.**
+Native DataFusion SQL uses FULL OUTER JOIN to associate routing with ready notification keys and orders ready keys first.
+The sink validates complete input. One Router loop checks each row, reconciles its required current finding and route, saves with CAS, and delivers already-owned states.
+A required reconciliation failure defers its associated delivery. Unrelated item operation errors remain isolated; a job guard failure stops effects.
+Finding-reference and obligation-key deduplication apply within one consume. New eligible obligations can send without a second capture.
+Pending attempts keep their immutable captured finding, route, sequence, and original ACK deadline. Current authority, disclosure checks, retries, and per-obligation CAS remain.
+Pending-state, inserted-state, and sink-result moves remove the corresponding clones. No execution-time gain is established.
+The [review flow](../../../../guides/araphor-discovery-definition-review.md#per-notification-routing-and-delivery) links the owners and tests.
+The [source-bound RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-red-results.json>) fails at the intended same-call delivery and ordered progress assertions.
+The [GREEN record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-green-results.json>) has 41 passes: 34 Router cases and seven Host cases, on source fc7 and executable 7171.
+After the test-only 807898 lexical-scope change, [one edited case, formatting, and Clippy pass](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-lint-results.json>) on source c389 and executable e4f8.
+[Continuity](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-lint-continuity.json>) retains the other 40 cases with unchanged production code. Do not relabel the 41-case execution source.
+The tests retain upgrades, deadlines, exact zero-effect outcomes, current authority, capacity deferral, pending replay, and complete-capture limits.
+Current source: notification-flow-lint-source.json, SHA-256 c389b84cd17e3cd535304eb4fbd858a5954b6ed3115db0cfb24a53f4dbe45e88.
+The [current normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-incident-results.json>) fails in 118.81 seconds on c389/E2E 389f. Actor Graph 950/publication 96 contains a Confirmed finding with Exact policy provenance, without its selected notice; background 642/publication 89 has healthy CPU 0 coverage and 138 findings. The bounded failure sample contains eight current-background notices, each with two attempts and failure=sink_unavailable. Strict post-wait assertions do not run. No phase trace establishes the cause, saved-state absence, or an execution-time gain.
+PENDING: incident completion, deployment images, paired physical proof, final evidence, owned-resource absence, and owned VM removal.
+The whole acceptance matrix remains Not done. Earlier records retain their original source, feature, artifact, and assertion limits.

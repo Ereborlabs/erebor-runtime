@@ -5045,3 +5045,34 @@ The [RED case](</home/navid/mithril-test-hosts/araphor-package-qualification-ver
 [Eight earlier cases](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-lint-continuity.json>) retain source 1aa and executable 27da. The exact test-only statement comparison supports continuity; these are not nine fresh cases on one executable.
 The [E10 normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-lint-incident-checks.json>) still fails in 120.373 seconds. No incident fix or execution-time gain is claimed.
 Owner checks: Done. Source: capture-coordinator-lint-source.json, SHA-256 e10d19719af2dfadec5ca3c50d5654bb0d337cd85c8276d0dad2ba3111f4f3b2. Full qualification and current physical proof remain Not done.
+
+## Per-notification routing and delivery
+
+This flow lets one eligible notification proceed after its own required state update.
+
+### Intended end state
+
+A new eligible obligation can send in the same consume call. Native SQL puts ready rows before routing-only rows.
+[Native eligibility SQL](../../crates/araphor-analysis/src/notification/reactive.sql) joins routing and ready states with FULL OUTER JOIN and orders non-null notification IDs first.
+  -> [Publication](../../crates/araphor-analysis/src/instance/sink.rs) supplies complete captured rows through native DataSinkExec.
+  -> [consume_rows](../../crates/araphor-analysis/src/notification/reactive.rs) validates the complete input before effects, checks each row, and takes the Router guard.
+  -> [route_states](../../crates/araphor-analysis/src/notification/routing.rs) checks the current finding and route authority; [schedule](../../crates/araphor-analysis/src/notification/obligation.rs) saves required state changes through Data CAS.
+  -> [deliver_state](../../crates/araphor-analysis/src/notification/delivery.rs) uses the already-owned states; [attempts](../../crates/araphor-analysis/src/notification/attempt.rs) record the pending attempt before the guarded sink call.
+
+```mermaid
+sequenceDiagram
+    Query->>Router: Complete joined rows
+    Router->>Data: Check and save required state
+    Data-->>Router: Commit succeeds
+    Router->>Sink: Deliver one obligation
+```
+A required reconciliation failure defers its associated delivery. Item operation errors stay isolated; a job guard failure stops effects.
+The consumer handles each finding reference and obligation key once within that consume. The three Arrow columns remain unchanged.
+Pending attempts retain their captured finding, route, sequence, and original deadline. Current authority, disclosure checks, per-obligation CAS, human ACK rules, and retries remain.
+Schedule moves pending and new states; attempt completion moves the sink result. These moves remove those state and result clones.
+[Native tests](../../crates/araphor-analysis/src/notification/tests/reactive.rs), [upgrade tests](../../crates/araphor-analysis/src/notification/tests/reactive/findings.rs), [capacity tests](../../crates/araphor-analysis/src/notification/tests/reactive/routing.rs), and [Host tests](../../crates/araphor-analysis/src/instance/host/notification/tests.rs) retain exact effects, replay, bounds, guards, and deadlines.
+The [RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-red-results.json>) fails at same-call delivery and ready-key event order. [Forty-one GREEN cases](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-green-results.json>) pass on source fc7 and executable 7171.
+The [continuity record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-lint-continuity.json>) retains 40 unchanged cases with identical production code. The test-only 807898 scope change keeps the same eligibility assertions.
+[The edited case, formatting, and Clippy](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-lint-results.json>) pass on source c389 and executable e4f8. The earlier 41-case record keeps its own source identity.
+Owner checks: Done. Current source: notification-flow-lint-source.json, SHA-256 c389b84cd17e3cd535304eb4fbd858a5954b6ed3115db0cfb24a53f4dbe45e88.
+The [current normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/notification-flow-incident-results.json>) fails in 118.81 seconds on c389/E2E 389f. Actor Graph 950/publication 96 contains a Confirmed finding with Exact policy provenance; background Graph 642/publication 89 has 138 findings and healthy CPU 0 coverage. The bounded failure sample contains eight current-background notices, each with two attempts and failure=sink_unavailable. The selected actor notice is absent from its direct lookup. Strict post-wait assertions do not run. No phase trace establishes the remaining cause; an absent actor notice does not prove absent saved state. Full qualification and current physical proof remain Not done. No execution-time gain is claimed.

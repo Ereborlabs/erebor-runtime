@@ -170,19 +170,29 @@ async fn native_notification_eligibility() -> TestResult {
             .map_err(|error| error.to_string())?,
         1
     );
-    assert!(routed.delivered.is_empty());
-    let update = capture(&engine, NotificationRouter::SQL, 100).await?;
-    let delivered = router.consume(&update, &sink)?;
-    assert!(delivered.routed.is_empty());
-    assert_eq!(delivered.delivered.len(), 1);
+    assert_eq!(routed.delivered.len(), 1);
     assert_eq!(
-        *delivered.delivered[0]
+        *routed.delivered[0]
             .1
             .as_ref()
             .map_err(|error| error.to_string())?,
         1
     );
-    let key = delivered.delivered[0].0;
+    let key = routed.delivered[0].0;
+    {
+        let calls = sink.calls.lock().map_err(|_| "sink lock")?;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].key, key);
+        assert_eq!(
+            calls[0].finding.as_ref().ok_or("finding absent")?.revision,
+            finding(1, FindingSeverityV1::High).revision
+        );
+    }
+    assert_eq!(router.state(key)?.deadline_utc_ns, Some(200));
+    let update = capture(&engine, NotificationRouter::SQL, 100).await?;
+    let delivered = router.consume(&update, &sink)?;
+    assert!(delivered.routed.is_empty() && delivered.delivered.is_empty());
+    assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?.len(), 1);
     let update = capture(&engine, NotificationRouter::SQL, 101).await?;
     assert_eq!(update.snapshot.next_change, Some(200));
     let stable = router.consume(&update, &sink)?;
@@ -202,7 +212,11 @@ async fn native_notification_eligibility() -> TestResult {
             .map_err(|error| error.to_string())?,
         1
     );
-    assert!(changed.delivered.is_empty());
+    assert_eq!(changed.delivered.len(), 1);
+    for (_, result) in &changed.delivered {
+        assert_eq!(*result.as_ref().map_err(|error| error.to_string())?, 0);
+    }
+    assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?.len(), 1);
     assert_eq!(
         router
             .state(key)?
@@ -218,9 +232,8 @@ async fn native_notification_eligibility() -> TestResult {
 
     commit_finding(&store, finding(2, FindingSeverityV1::Critical), 2)?;
     let update = capture(&engine, NotificationRouter::SQL, 120).await?;
-    assert_eq!(router.consume(&update, &sink)?.routed.len(), 1);
-    let update = capture(&engine, NotificationRouter::SQL, 120).await?;
     let revised = router.consume(&update, &sink)?;
+    assert_eq!(revised.routed.len(), 1);
     assert_eq!(revised.delivered.len(), 1);
     assert_eq!(revised.delivered[0].0, key);
     assert_eq!(
@@ -231,6 +244,12 @@ async fn native_notification_eligibility() -> TestResult {
         1
     );
     assert_eq!(router.state(key)?.deadline_utc_ns, Some(200));
+    let after_revision = store.meta()?;
+    let update = capture(&engine, NotificationRouter::SQL, 120).await?;
+    let quiet = router.consume(&update, &sink)?;
+    assert!(quiet.routed.is_empty() && quiet.delivered.is_empty());
+    assert_eq!(store.meta()?, after_revision);
+    assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?.len(), 2);
     Ok(())
 }
 
@@ -251,8 +270,7 @@ async fn native_notification_retry_deadline() -> TestResult {
     retry.retry_delay_ns = 10;
     router.configure(&grant(NotificationPrincipalV1::Human), retry, 20)?;
     commit_finding(&store, finding(1, FindingSeverityV1::High), 1)?;
-    let update = capture(&engine, NotificationRouter::SQL, 100).await?;
-    router.consume(&update, &sink)?;
+    assert_eq!(route(&router, 100)?, 1);
     let update = capture(&engine, NotificationRouter::SQL, 100).await?;
     let failed = router.consume(&update, &sink)?;
     assert_eq!(
@@ -393,5 +411,89 @@ async fn native_notification_item_isolation() -> TestResult {
             .map_err(|error| error.to_string())?,
         1
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_notification_progress() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
+    let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
+    let engine = Engine::new(store.clone(), Limits::default())?;
+    configure(&router)?;
+    commit_finding(&store, finding(1, FindingSeverityV1::High), 1)?;
+    assert_eq!(route(&router, 100)?, 1);
+    let key = router.obligations(&grant(NotificationPrincipalV1::Human), 100)?[0].key;
+    let update = capture(
+        &engine,
+        "SELECT CAST(NULL AS VARCHAR) AS finding_id, CAST(NULL AS VARCHAR) AS result_id,
+        notification_id FROM notifications WHERE delivery_ready UNION ALL
+        SELECT 'finding:unrelated-missing', 'graph:unrelated-missing', arrow_cast(NULL, 'Binary')
+        ORDER BY notification_id NULLS LAST",
+        100,
+    )
+    .await?;
+    assert_eq!(
+        update
+            .batches
+            .iter()
+            .flatten()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        2
+    );
+    let effects = std::cell::Cell::new(0usize);
+    let checked_after_effect = std::cell::Cell::new(false);
+    let result = router.consume_rows(
+        [1; 16],
+        100,
+        update
+            .batches
+            .as_deref()
+            .ok_or("notification batches absent")?,
+        &|| {
+            if effects.get() > 0 {
+                checked_after_effect.set(true);
+            }
+            Ok(())
+        },
+        &mut |delivery| {
+            assert_eq!(delivery.key, key);
+            assert_eq!(delivery.attempt, 1);
+            assert_eq!(delivery.deadline_utc_ns, 200);
+            assert_eq!(
+                delivery.finding.as_ref().map(|value| &value.revision),
+                Some(&finding(1, FindingSeverityV1::High).revision)
+            );
+            effects.set(effects.get() + 1);
+            Ok(NotificationSinkResultV1::Accepted {
+                receipt: "accepted".into(),
+            })
+        },
+    )?;
+    assert!(
+        checked_after_effect.get(),
+        "unrelated routing ran before the ready delivery"
+    );
+    assert_eq!(effects.get(), 1);
+    assert_eq!(result.routed.len(), 1);
+    assert!(result.routed[0].1.is_err());
+    assert_eq!(result.delivered.len(), 1);
+    assert_eq!(result.delivered[0].0, key);
+    assert_eq!(
+        *result.delivered[0]
+            .1
+            .as_ref()
+            .map_err(|error| error.to_string())?,
+        1
+    );
+    let saved = router.state(key)?;
+    assert_eq!(saved.deadline_utc_ns, Some(200));
+    assert_eq!(saved.attempts.len(), 1);
+    assert!(saved.attempts[0]
+        .result
+        .as_ref()
+        .is_some_and(NotificationSinkResultV1::accepted));
     Ok(())
 }

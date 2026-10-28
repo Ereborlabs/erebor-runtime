@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use araphor_query::follow::Update;
 use snafu::ResultExt as _;
 
@@ -46,29 +48,17 @@ impl NotificationRouter {
         effect: &mut Effect<'_>,
     ) -> Result<NotificationUpdate> {
         NotificationErrorCodeV1::Invalid.require(now > 0, "notification evaluation time")?;
-        let mut references = Vec::new();
-        let mut keys = Vec::new();
+        let mut work = Vec::new();
         for batch in batches {
             let rows: Vec<Row> =
                 serde_arrow::from_record_batch(batch).context(crate::error::ArrowSnafu)?;
             for row in rows {
-                match (row.finding_id, row.result_id, row.notification_id) {
-                    (Some(finding_id), Some(result_id), None) => {
-                        references.push(NotificationFindingRefV1 {
-                            finding_id,
-                            result_id,
-                        });
-                    }
-                    (None, None, Some(id)) => keys.push(NotificationKeyV1 {
-                        tenant_id: tenant,
-                        notification_id: id.try_into().map_err(|_| {
-                            NotificationSnafu {
-                                code: NotificationErrorCodeV1::Invalid,
-                                field: "notification subscription key",
-                            }
-                            .build()
-                        })?,
+                let reference = match (row.finding_id, row.result_id) {
+                    (Some(finding_id), Some(result_id)) => Some(NotificationFindingRefV1 {
+                        finding_id,
+                        result_id,
                     }),
+                    (None, None) => None,
                     _ => {
                         return Err(NotificationSnafu {
                             code: NotificationErrorCodeV1::Invalid,
@@ -77,34 +67,101 @@ impl NotificationRouter {
                         .build()
                         .into())
                     }
-                }
+                };
+                let key = row
+                    .notification_id
+                    .map(|id| -> Result<NotificationKeyV1> {
+                        Ok(NotificationKeyV1 {
+                            tenant_id: tenant,
+                            notification_id: id.try_into().map_err(|_| {
+                                NotificationSnafu {
+                                    code: NotificationErrorCodeV1::Invalid,
+                                    field: "notification subscription key",
+                                }
+                                .build()
+                            })?,
+                        })
+                    })
+                    .transpose()?;
+                NotificationErrorCodeV1::Invalid.require(
+                    reference.is_some() || key.is_some(),
+                    "notification subscription row",
+                )?;
+                work.push((reference, key));
             }
         }
         let mut update = NotificationUpdate::default();
-        for reference in references {
+        let mut routed = BTreeMap::new();
+        let mut handled = BTreeSet::new();
+        for (reference, key) in work {
             check()?;
-            let result = self.route_finding(tenant, &reference, now);
-            update.routed.push((reference, result));
-        }
-        for key in keys {
-            check()?;
-            let mut guard_failed = false;
-            let result = self.deliver_checked(
-                key,
-                &mut |delivery| {
-                    if let Err(error) = check() {
-                        guard_failed = true;
-                        return Err(error);
+            let _guard = self.lock()?;
+            let mut states = Vec::new();
+            if let Some(reference) = reference {
+                let identity = (reference.finding_id.clone(), reference.result_id.clone());
+                if let Some(valid) = routed.get(&identity) {
+                    if !valid {
+                        continue;
                     }
-                    effect(delivery)
-                },
-                now,
-            );
-            match result {
-                Err(error) if guard_failed => return Err(error),
-                result => update.delivered.push((key, result)),
+                } else {
+                    let result = self.route_states(tenant, &reference, now);
+                    routed.insert(identity, result.is_ok());
+                    match result {
+                        Ok((count, values)) => {
+                            states = values;
+                            update.routed.push((reference, Ok(count)));
+                        }
+                        Err(error) => {
+                            update.routed.push((reference, Err(error)));
+                            continue;
+                        }
+                    }
+                }
+            }
+            if let Some(key) = key {
+                if !handled.contains(&key) && !states.iter().any(|state| state.key == key) {
+                    match self.state(key) {
+                        Ok(state) => states.push(state),
+                        Err(error) => {
+                            handled.insert(key);
+                            update.delivered.push((key, Err(error)));
+                        }
+                    }
+                }
+            }
+            for state in states {
+                if handled.insert(state.key) {
+                    self.consume_state(state, now, check, effect, &mut update)?;
+                }
             }
         }
         Ok(update)
+    }
+
+    fn consume_state(
+        &self,
+        mut state: NotificationObligationV1,
+        now: u64,
+        check: &dyn Fn() -> Result<()>,
+        effect: &mut Effect<'_>,
+        update: &mut NotificationUpdate,
+    ) -> Result<()> {
+        let mut guard_failed = false;
+        let result = self.deliver_state(
+            &mut state,
+            &mut |delivery| {
+                if let Err(error) = check() {
+                    guard_failed = true;
+                    return Err(error);
+                }
+                effect(delivery)
+            },
+            now,
+        );
+        match result {
+            Err(error) if guard_failed => return Err(error),
+            result => update.delivered.push((state.key, result)),
+        }
+        Ok(())
     }
 }

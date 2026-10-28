@@ -170,14 +170,13 @@ impl NotificationRouter {
         NotificationErrorCodeV1::Invalid
             .require(now >= attempt.started_utc_ns, "delivery completion time")?;
         attempt.completed_utc_ns = Some(now);
-        attempt.result = Some(result.clone());
         state.sink_health = if result.accepted() {
             NotificationSinkHealthV1::Healthy
         } else {
             NotificationSinkHealthV1::Unhealthy
         };
-        match result {
-            NotificationSinkResultV1::Failed { reason } => state.failure = Some(reason),
+        match &result {
+            NotificationSinkResultV1::Failed { reason } => state.failure = Some(*reason),
             _ if kind == NotificationDeliveryKindV1::Finding => {
                 state.failure = state
                     .escalation
@@ -186,6 +185,7 @@ impl NotificationRouter {
             }
             _ => {}
         }
+        attempt.result = Some(result);
         self.save(state)
     }
 }

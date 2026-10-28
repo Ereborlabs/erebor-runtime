@@ -12,16 +12,7 @@ async fn native_escalation_route_changes() -> TestResult {
         let sink = Sink::default();
         router.configure(&human, policy("primary"), 10)?;
         commit_finding(&store, finding(1, FindingSeverityV1::High), 1)?;
-        let update = capture(&engine, NotificationRouter::SQL, 100).await?;
-        let routed = router.consume(&update, &sink)?;
-        assert_eq!(routed.routed.len(), 1);
-        assert_eq!(
-            *routed.routed[0]
-                .1
-                .as_ref()
-                .map_err(|error| error.to_string())?,
-            1
-        );
+        assert_eq!(route(&router, 100)?, 1);
         let update = capture(&engine, NotificationRouter::SQL, 100).await?;
         let delivered = router.consume(&update, &sink)?;
         assert_eq!(delivered.delivered.len(), 1);
@@ -53,7 +44,14 @@ async fn native_escalation_route_changes() -> TestResult {
                 .map_err(|error| error.to_string())?,
             1
         );
-        assert!(added.delivered.is_empty());
+        assert_eq!(added.delivered.len(), 1);
+        assert_eq!(
+            *added.delivered[0]
+                .1
+                .as_ref()
+                .map_err(|error| error.to_string())?,
+            0
+        );
         let current = router.obligations(&human, 150)?.remove(0);
         assert_eq!(current.key, first.key);
         assert_eq!(current.finding_revision, first.finding_revision);
@@ -79,7 +77,14 @@ async fn native_escalation_route_changes() -> TestResult {
                 .map_err(|error| error.to_string())?,
             1
         );
-        assert!(revised.delivered.is_empty());
+        assert_eq!(revised.delivered.len(), 1);
+        assert_eq!(
+            *revised.delivered[0]
+                .1
+                .as_ref()
+                .map_err(|error| error.to_string())?,
+            0
+        );
         let current = router.obligations(&human, 151)?.remove(0);
         assert_eq!(current.key, first.key);
         assert_eq!(current.finding_revision, first.finding_revision);
@@ -148,17 +153,12 @@ async fn native_tenant_capacity_isolation() -> TestResult {
     let sink = Sink::default();
     configure(&router)?;
     commit_finding(&store, finding(1, FindingSeverityV1::High), 1)?;
-    let update = capture(&engine, NotificationRouter::SQL, 100).await?;
-    let initial = router.consume(&update, &sink)?;
-    assert_eq!(initial.routed.len(), 1);
-    assert_eq!(
-        *initial.routed[0]
-            .1
-            .as_ref()
-            .map_err(|error| error.to_string())?,
-        1
-    );
-    assert!(initial.delivered.is_empty());
+    assert_eq!(route(&router, 100)?, 1);
+    assert!(sink.calls.lock().map_err(|_| "sink lock")?.is_empty());
+    let initial = router
+        .obligations(&grant(NotificationPrincipalV1::Human), 100)?
+        .remove(0);
+    assert!(initial.attempts.is_empty());
 
     let mut other = grant(NotificationPrincipalV1::Agent);
     other.tenant_id = [2; 16];
@@ -215,20 +215,24 @@ async fn native_tenant_capacity_isolation() -> TestResult {
     for now in [150, 151] {
         let update = capture(&engine, NotificationRouter::SQL, now).await?;
         assert_eq!(update.snapshot.selection.tenant_id, [1; 16]);
+        let calls_before = sink.calls.lock().map_err(|_| "sink lock")?.len();
         let failed = router.consume(&update, &sink)?;
         assert_eq!(failed.routed.len(), 1);
-        assert_eq!(failed.delivered.len(), 1);
-        for result in [&failed.routed[0].1, &failed.delivered[0].1] {
-            assert!(matches!(
-                result,
-                Err(crate::Error::Data {
-                    source: araphor_data::Error::StorageCapacity {
-                        resource: "tenant retained revisions",
-                        ..
-                    }
-                })
-            ));
-        }
+        assert!(matches!(
+            &failed.routed[0].1,
+            Err(crate::Error::Data {
+                source: araphor_data::Error::StorageCapacity {
+                    resource: "tenant retained revisions",
+                    ..
+                }
+            })
+        ));
+        assert!(failed.delivered.is_empty());
+        assert_eq!(router.state(initial.key)?, initial);
+        assert_eq!(
+            sink.calls.lock().map_err(|_| "sink lock")?.len(),
+            calls_before
+        );
         drop(update);
         let update = capture_tenant(&engine, other.tenant_id, NotificationRouter::SQL, now).await?;
         assert_eq!(update.snapshot.selection.tenant_id, other.tenant_id);

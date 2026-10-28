@@ -7,7 +7,7 @@ impl NotificationRouter {
         result_id: &str,
         routes: &[ApprovedNotificationRouteV1],
         now: u64,
-    ) -> Result<usize> {
+    ) -> Result<(usize, Vec<NotificationObligationV1>)> {
         let mut states = self.related_states(finding)?;
         let matching: Vec<_> = routes
             .iter()
@@ -36,12 +36,12 @@ impl NotificationRouter {
                 }
             }
             if !states.is_empty() {
-                return Ok(count);
+                return Ok((count, states));
             }
             let mut state = self.obligation(finding, result_id, first_seen);
             state.failure = Some(NotificationFailureV1::NoRoute);
-            self.insert(&mut state, &mut states)?;
-            return Ok(1);
+            self.insert(state, &mut states)?;
+            return Ok((1, states));
         }
         let mut count = 0;
         for route in matching {
@@ -63,17 +63,19 @@ impl NotificationRouter {
             let pending = states.iter().position(|state| state.route.is_none());
             let mut state = pending.map_or_else(
                 || self.obligation(finding, result_id, first_seen),
-                |index| states[index].clone(),
+                |index| states.remove(index),
             );
-            self.update_finding(&mut state, finding, result_id)?;
+            if pending.is_some() {
+                self.update_finding(&mut state, finding, result_id)?;
+                state.finding_revision = state.revision.checked_add(1).ok_or_else(|| {
+                    NotificationSnafu {
+                        code: NotificationErrorCodeV1::Limit,
+                        field: "routed finding revision",
+                    }
+                    .build()
+                })?;
+            }
             Self::update_route(&mut state, &route.policy, routes);
-            state.finding_revision = state.revision.checked_add(1).ok_or_else(|| {
-                NotificationSnafu {
-                    code: NotificationErrorCodeV1::Limit,
-                    field: "routed finding revision",
-                }
-                .build()
-            })?;
             state.deadline_utc_ns = Some(
                 first_seen
                     .checked_add(route.policy.acknowledgement_ns)
@@ -87,13 +89,13 @@ impl NotificationRouter {
             );
             if let Some(index) = pending {
                 self.save(&mut state)?;
-                states[index] = state;
+                states.insert(index, state);
             } else {
-                self.insert(&mut state, &mut states)?;
+                self.insert(state, &mut states)?;
             }
             count += 1;
         }
-        Ok(count)
+        Ok((count, states))
     }
 
     fn update_finding(
@@ -216,7 +218,7 @@ impl NotificationRouter {
 
     pub(super) fn insert(
         &self,
-        state: &mut NotificationObligationV1,
+        mut state: NotificationObligationV1,
         states: &mut Vec<NotificationObligationV1>,
     ) -> Result<()> {
         NotificationErrorCodeV1::Limit.require(
@@ -226,8 +228,8 @@ impl NotificationRouter {
                 .is_none_or(|limit| states.len() <= limit),
             "related obligation count",
         )?;
-        self.save(state)?;
-        states.push(state.clone());
+        self.save(&mut state)?;
+        states.push(state);
         Ok(())
     }
 }
