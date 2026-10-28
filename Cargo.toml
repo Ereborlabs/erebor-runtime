@@ -22,6 +22,7 @@ members = [
     "crates/erebor-runtime-terminal",
     "crates/mithril-control",
     "crates/araphor-data",
+    "crates/araphor-graph",
     "crates/araphor-package",
     "crates/araphor-package-runtime",
     "crates/araphor-discovery-definition",

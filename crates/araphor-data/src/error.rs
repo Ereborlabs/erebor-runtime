@@ -325,6 +325,31 @@ impl From<araphor_package::Error> for Error {
     }
 }
 
+impl From<araphor_graph::Error> for Error {
+    fn from(source: araphor_graph::Error) -> Self {
+        match source {
+            araphor_graph::Error::Invalid { field, location } => {
+                Self::GraphInvalid { field, location }
+            }
+            araphor_graph::Error::Encoding { source, location } => {
+                Self::GraphEncoding { source, location }
+            }
+            araphor_graph::Error::Contract { source, location } => {
+                Self::AnalysisContract { source, location }
+            }
+            araphor_graph::Error::Database {
+                operation,
+                source,
+                location,
+            } => Self::AnalysisDatabase {
+                operation,
+                source,
+                location,
+            },
+        }
+    }
+}
+
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {

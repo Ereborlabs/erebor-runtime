@@ -640,7 +640,7 @@ and the overall performance goal remain Not done.
 This section covers the Graph and Data changes after `e10ae42`. Earlier
 byte-charge and bounded-header routes in this guide describe historical code.
 The [storage plan](../plans/araphor-graph-storage-reduction.md) records the
-remaining edge, finding, branch, and package contribution work.
+remaining edge, branch, and package contribution work.
 
 ### Intended end state
 
@@ -656,12 +656,17 @@ logical Graph bytes. This target is not yet met or measured on this source.
   -> [AnalysisStore::commit_managed_graph](../../crates/araphor-data/src/analysis/progress/graph.rs) Data binds the Graph to the captured call
   -> [GraphRows::insert_inputs](../../crates/araphor-data/src/analysis/graph_rows/evidence.rs) Data stores evidence identities and revision membership
   -> [GraphRows::insert_subjects](../../crates/araphor-data/src/analysis/graph_rows/subjects.rs) Data stores subject values and revision membership
-  -> Partial [GraphRows::insert](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data still stores complete edge and finding rows per result
+  -> [FindingRows::apply](../../crates/araphor-graph/src/findings.rs) Graph stores finding values and revision membership through Data's transaction
+  -> Partial [GraphRows::insert](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data still stores complete edge rows per result
   -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the Graph, output, state, and progress in one transaction
 
 [AnalysisStore::graph_result](../../crates/araphor-data/src/analysis/graph.rs) A caller selects one historical Graph result ID
   -> [GraphRows::read_header](../../crates/araphor-data/src/analysis/graph_rows/read.rs) Data checks the result and native row shape
-  -> [GraphRows::read](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data selects evidence and subjects by valid membership
+  -> [GraphRows::read](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data selects evidence, subjects, and findings by valid membership
+
+[SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) Query exposes captured Graph rows through its existing DataFusion table provider
+  -> [GraphRows::read_findings](../../crates/araphor-data/src/analysis/graph_rows/findings.rs) Data reads the selected result from the native finding view
+  -> [FindingRows::decode](../../crates/araphor-graph/src/findings.rs) Graph restores the typed finding and Data checks its manifest
 
 [AnalysisStore::traverse_graphs](../../crates/araphor-data/src/analysis/extraction/graph/traversal.rs) A traversal request selects Graph result IDs
   -> [GraphWalk::query](../../crates/araphor-data/src/analysis/graph/traversal/sql.rs) Data builds SQL confined to those result IDs
@@ -684,6 +689,43 @@ row-byte field. The store has no logical or tenant byte charge that excludes
 Graph rows. Data keeps its real filesystem reserve and DuckDB resource checks.
 This change adds no Graph engine, polling loop, Application Binary Interface
 (ABI), or Berkeley Packet Filter (BPF) path.
+
+The new `araphor-graph` crate owns the finding value table, validity
+membership, historical view, and typed row codec. It receives Data's borrowed
+transaction. It does not open a database or commit. It compares complete
+`FindingV1` values and reuses an existing value when the same finding returns.
+The view derives each result's ordinal from `finding_id`. Data still checks
+the tenant, manifest, row count, and selected result. Query keeps its existing
+DataFusion parser, planner, and table provider.
+Nested subject, evidence, provenance, and effect properties remain encoded
+inside each finding value. This slice does not normalize them to shared IDs.
+
+For an exact result ID in the finding fixture, DuckDB `EXPLAIN` places the
+`result_id` filter on `graph_versions` before the ordinal window. This check
+does not prove DataFusion filter pushdown or the matched workload time.
+
+Read [finding version tests](../../crates/araphor-graph/src/findings/tests.rs)
+for unchanged values, changed proof, earlier insertion, removal, return, and
+independent lineages. Read [native Graph row tests](../../crates/araphor-data/src/analysis/graph_rows/tests.rs)
+for selected finding validation, duplicate membership, and rollback. Read
+[Graph storage tests](../../crates/araphor-analysis/src/graph/native/tests/storage.rs)
+for backup and reopen with corrupt finding rows. The current source still
+copies relationship rows and package contributions. The matched Graph storage
+target remains open.
+
+Focused checks on this source passed:
+
+- `cargo test -p araphor-graph --lib`: 2 tests.
+- `cargo test -p araphor-data --lib graph_rows`: 42 tests.
+- `cargo test -p araphor-data --lib analysis::graph::findings::tests`: 7 tests.
+- `cargo test -p araphor-data --lib graph_event_coverage_fields`: 1 test.
+- `cargo test -p araphor-query --lib native_graph_admission`: 1 test.
+- `cargo test -p araphor-analysis --lib graph_package_commit_refs`: 1 test in 434.21 seconds.
+- `cargo fmt --check -p araphor-graph -p araphor-data -p araphor-analysis`: passed.
+- `cargo clippy -p araphor-graph -p araphor-data --lib -- -D warnings`: passed.
+
+The full workspace CI procedure and matched 1,592-event workload did not run.
+These checks do not prove the 90% Graph storage target or a runtime gain.
 
 Read [native Graph row tests](../../crates/araphor-data/src/analysis/graph_rows/tests.rs)
 for historical membership, malformed rows, and rollback. Read

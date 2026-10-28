@@ -174,6 +174,8 @@ fn context_failure_rolls_back() -> TestResult {
             "graph_subjects",
             "graph_relationships",
             "graph_findings",
+            "graph_finding_values",
+            "graph_finding_membership",
             "evidence_refs",
             "context_refs",
         ] {

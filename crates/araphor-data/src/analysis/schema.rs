@@ -164,6 +164,7 @@ impl AnalysisStore {
 
     fn validate_graphs(writer: &Connection, root: &Path) -> Result<()> {
         use super::graph_rows::GraphRows;
+        araphor_graph::FindingRows::validate(writer)?;
         for query in [
             "SELECT EXISTS(SELECT 1 FROM graph_versions v
                 LEFT JOIN analysis_results r USING (result_id)
@@ -227,6 +228,22 @@ impl AnalysisStore {
                     AND closed.commit_revision = m.valid_to
                 WHERE s.subject_id IS NULL OR origin.result_id IS NULL
                     OR r.tenant_id <> s.tenant_id OR opened.result_id IS NULL
+                    OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
+                    OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from))",
+            "SELECT EXISTS(SELECT 1 FROM graph_finding_membership m
+                LEFT JOIN graph_finding_values f USING (value_id)
+                LEFT JOIN graph_versions origin
+                    ON origin.lineage_id = m.lineage_id
+                    AND origin.commit_revision = m.lineage_id
+                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
+                LEFT JOIN graph_versions opened
+                    ON opened.lineage_id = m.lineage_id
+                    AND opened.commit_revision = m.valid_from
+                LEFT JOIN graph_versions closed
+                    ON closed.lineage_id = m.lineage_id
+                    AND closed.commit_revision = m.valid_to
+                WHERE f.value_id IS NULL OR origin.result_id IS NULL
+                    OR r.tenant_id <> f.tenant_id OR opened.result_id IS NULL
                     OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
                     OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from))",
         ] {

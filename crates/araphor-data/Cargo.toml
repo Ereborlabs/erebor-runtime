@@ -12,6 +12,7 @@ test-fixtures = []
 araphor-discovery-definition = { path = "../araphor-discovery-definition" }
 araphor-package = { path = "../araphor-package" }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
+araphor-graph = { path = "../araphor-graph" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 arrow-ipc = "=58.4.0"
 arrow-json = "=58.4.0"

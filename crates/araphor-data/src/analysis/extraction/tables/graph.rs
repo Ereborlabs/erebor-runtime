@@ -315,7 +315,7 @@ impl Capture<'_> {
         required_coverage_interval_ids => Json(false): Some(&finding.required_coverage_interval_ids),
         policy_provenance => Json(false): Some(&finding.policy_provenance),
         effects => Json(false): Some(&finding.effects),
-        reason => Utf8(false): { budget.charge(4096)?; Some(crate::graph::contract::label(&finding.reason)?) },
+        reason => Utf8(false): { budget.charge(4096)?; Some(araphor_graph::FindingRows::reason_label(&finding.reason)?) },
         severity => Utf8(false): Some(match finding.severity {
             FindingSeverityV1::Info => "info",
             FindingSeverityV1::Warning => "warning",

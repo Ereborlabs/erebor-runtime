@@ -21,7 +21,10 @@ fn reason_codes_are_reversible() -> TestResult {
     for id in FindingV1::PACKAGES {
         for reason in REASONS {
             let code = reason.analysis_code(id)?;
-            assert_eq!(label(&reason)?, reason.label()?);
+            assert_eq!(
+                araphor_graph::FindingRows::reason_label(&reason)?,
+                reason.label()?
+            );
             assert_eq!(FindingReasonV1::from_analysis_code(id, &code)?, reason);
             assert!(
                 FindingReasonV1::from_analysis_code("HF-PROC-001", &format!("other.{code}"))
@@ -55,7 +58,6 @@ fn declared_reason_preserves_typed_details() -> TestResult {
     let reason = FindingReasonV1::Declared(DeclaredFindingReasonV1::from_value(&value)?);
     validate(&reason, "example-detector")?;
     assert_eq!(reason.label()?, value.code);
-    assert_eq!(restore(&storage(&reason)?)?, reason);
     assert_eq!(
         serde_json::from_value::<FindingReasonV1>(serde_json::to_value(&reason)?)?,
         reason
@@ -64,10 +66,6 @@ fn declared_reason_preserves_typed_details() -> TestResult {
     assert_eq!(
         serde_json::to_value(FindingReasonV1::UnexpectedEffect)?,
         "UNEXPECTED_EFFECT"
-    );
-    assert_eq!(
-        restore("UNEXPECTED_EFFECT")?,
-        FindingReasonV1::UnexpectedEffect
     );
     Ok(())
 }

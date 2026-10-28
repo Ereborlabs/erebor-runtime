@@ -57,9 +57,9 @@ layers. Our interval membership lets Data select one result revision directly.
 **Status: Not done. The user approved the direction and implementation.**
 
 Native evidence identities, historical input membership, shared subject
-values, and historical subject membership are implemented. Shared
-relationships, findings, and branches remain open. The 90% target has not
-been measured on the changed store.
+values, historical subject membership, and shared finding values are
+implemented. Shared relationships, branches, and package contributions remain
+open. The 90% target has not been measured on the changed store.
 
 ## Intended end state
 
@@ -146,6 +146,22 @@ Validation or commit fails
 
 ## Owners and implementation order
 
+`araphor-graph` owns native finding values, validity membership, and the
+historical `graph_findings` view. Data passes its borrowed transaction, lineage,
+revision, and validated findings to that crate. The crate does not open a store
+or commit. Data checks the tenant, input manifest, row count, and references.
+Query reads the selected Graph rows through its existing DataFusion table
+provider. It does not need a new parser, planner, or provider.
+
+Finding values move before relationships because `finding_id` gives each
+result a stable sort key. A view can derive the public ordinal after selecting
+the result. Relationship sharing must first map result-local subject and
+evidence ordinals to stable identities. Both row families use validity
+membership. They do not use a chain of Graph layers or a rollup task.
+This finding slice shares complete `FindingV1` values. Nested subject,
+evidence, provenance, and effect properties remain encoded inside each value.
+They are not yet normalized to shared IDs.
+
 1. **Store input membership as native rows.** Remove full evidence and
    position lists from each Graph header. The Graph scope already owns the
    exact source identity in `source_receipts`. Store each record's CPU and
@@ -226,6 +242,12 @@ reviewed deliverable. The independent Sol 6.1 reviewer checks the owner,
 data flow, deletion, source diff, and proof before each commit.
 
 **Result: Not done.** Native evidence and input-position rows replace repeated
-header lists. Subject values now have stable IDs and historical membership.
-Focused Graph row, finding, and extraction tests pass. Shared relationships,
-findings, package contribution membership, and the measured target remain open.
+header lists. Subject and finding values now have stable IDs and historical
+membership. Shared relationships, branches, package contribution membership,
+and the measured target remain open.
+
+The finding value slice is **Done**. Focused Graph, Data, Query, and Analysis
+tests pass on this source. The [review guide](../guides/araphor-graph-commit-review.md)
+lists the commands and results. The package backup/reopen case took 434.21
+seconds. The matched 1,592-event storage and time measurement has not run on
+this source.

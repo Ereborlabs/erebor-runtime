@@ -7,17 +7,23 @@ fn graph_appender_constraint_rollback() -> TestResult {
     assert!(!fixture.snapshot.graph.subjects.is_empty());
     assert!(!fixture.snapshot.graph.edges.is_empty());
     assert!(!fixture.snapshot.findings.is_empty());
-    let (_, finding) = GraphRows::SCHEMA
-        .split_once("CREATE TABLE graph_findings")
-        .ok_or("finding schema")?;
-    let original = format!("CREATE TABLE graph_findings{finding}");
-    let rejecting = original.replace(
-        "PRIMARY KEY (result_id, ordinal)",
-        "CHECK (false), PRIMARY KEY (result_id, ordinal)",
+    let original = araphor_graph::FindingRows::SCHEMA;
+    let (table, _) = original
+        .split_once("CREATE INDEX graph_finding_identity")
+        .ok_or("finding value schema")?;
+    let (_, view) = original
+        .split_once("CREATE VIEW graph_findings")
+        .ok_or("finding view schema")?;
+    let view = format!("CREATE VIEW graph_findings{view}");
+    let rejecting = table.replace(
+        "limits BLOB NOT NULL\n);",
+        "limits BLOB NOT NULL, CHECK (false)\n);",
     );
-    fixture
-        .store
-        .fault_write(&format!("DROP TABLE graph_findings; {rejecting}"), &[])?;
+    assert_ne!(rejecting, table);
+    fixture.store.fault_write(
+        &format!("DROP VIEW graph_findings; DROP TABLE graph_finding_values; {rejecting} {view}"),
+        &[],
+    )?;
     let before = fixture.store.meta()?;
     let usage = fixture
         .store
@@ -50,6 +56,8 @@ fn graph_appender_constraint_rollback() -> TestResult {
         "graph_subjects",
         "graph_relationships",
         "graph_findings",
+        "graph_finding_values",
+        "graph_finding_membership",
         "evidence_refs",
     ] {
         let count: u64 =
@@ -69,9 +77,14 @@ fn graph_appender_constraint_rollback() -> TestResult {
             .consumed_cursor,
         0
     );
-    fixture
-        .store
-        .fault_write(&format!("DROP TABLE graph_findings; {original}"), &[])?;
+    fixture.store.fault_write(
+        &format!(
+            "DROP VIEW graph_findings; DROP TABLE graph_finding_values;
+                 {table} CREATE INDEX graph_finding_identity
+                 ON graph_finding_values (tenant_id, finding_id); {view}"
+        ),
+        &[],
+    )?;
     let receipt = fixture
         .store
         .commit_graph(&fixture.request, true, || Ok(()))?;

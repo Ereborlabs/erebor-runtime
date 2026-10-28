@@ -424,7 +424,7 @@ fn native_witness_defaults() -> TestResult {
 fn native_subject_order() -> TestResult {
     let fixture = CommitFixture::new()?;
     let reader = Connection::open_in_memory()?;
-    reader.execute_batch(GraphRows::SCHEMA)?;
+    reader.execute_batch(&GraphRows::schema())?;
     reader.execute("INSERT INTO graph_versions VALUES ('first', 1, 1)", [])?;
     let base = fixture.snapshot.graph.subjects[0].clone();
     let mut process = base.clone();

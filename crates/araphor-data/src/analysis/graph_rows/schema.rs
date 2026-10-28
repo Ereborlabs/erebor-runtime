@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 use super::GraphRows;
 use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, Result};
+use araphor_graph::FindingRows;
 
 impl GraphRows {
     pub(in crate::analysis) const SCHEMA: &str = "CREATE TABLE graph_versions (
@@ -58,18 +59,13 @@ impl GraphRows {
             temporal_coverage UTINYINT, integrity UTINYINT) NOT NULL,
         required_coverage_interval_ids BLOB[] NOT NULL,
         first_boottime_ns UBIGINT NOT NULL, last_boottime_ns UBIGINT NOT NULL,
-        PRIMARY KEY (result_id, ordinal));
-    CREATE TABLE graph_findings (
-        result_id VARCHAR NOT NULL, ordinal UINTEGER NOT NULL,
-        tenant_id BLOB NOT NULL, finding_id VARCHAR NOT NULL,
-        package_id VARCHAR NOT NULL, package_version UBIGINT NOT NULL,
-        subject_id BLOB NOT NULL, state VARCHAR NOT NULL,
-        window_start_utc_ns BIGINT NOT NULL, window_end_utc_ns BIGINT NOT NULL,
-        evidence BLOB NOT NULL, required_coverage_interval_ids BLOB NOT NULL,
-        policy_provenance BLOB NOT NULL, effects BLOB NOT NULL,
-        reason VARCHAR NOT NULL, severity VARCHAR NOT NULL, sensitivity VARCHAR NOT NULL,
-        required_action VARCHAR, limits BLOB NOT NULL,
-        PRIMARY KEY (result_id, ordinal), UNIQUE (result_id, finding_id));";
+        PRIMARY KEY (result_id, ordinal));";
+
+    pub(in crate::analysis) fn schema() -> String {
+        let mut schema = String::from(Self::SCHEMA);
+        schema.push_str(FindingRows::SCHEMA);
+        schema
+    }
 
     pub(in crate::analysis) fn validate_tables(writer: &Connection) -> Result<()> {
         let expected = Self::expected_shape()?;
@@ -93,7 +89,7 @@ impl GraphRows {
             duckdb::AccessMode::Automatic,
         )?;
         expected
-            .execute_batch(Self::SCHEMA)
+            .execute_batch(&Self::schema())
             .context(AnalysisDatabaseSnafu {
                 operation: "create expected native graph schema",
             })?;
@@ -112,7 +108,8 @@ impl GraphRows {
                 AND table_name IN ('graph_versions', 'graph_evidence',
                     'graph_evidence_membership', 'graph_input_positions',
                     'graph_subject_values', 'graph_subject_membership',
-                    'graph_subjects', 'graph_relationships', 'graph_findings')
+                    'graph_subjects', 'graph_relationships', 'graph_findings',
+                    'graph_finding_values', 'graph_finding_membership')
             UNION ALL
             SELECT table_name, to_json(struct_pack(
                 kind := constraint_type, column_names := constraint_column_names,
@@ -122,14 +119,15 @@ impl GraphRows {
                 AND table_name IN ('graph_versions', 'graph_evidence',
                     'graph_evidence_membership', 'graph_input_positions',
                     'graph_subject_values', 'graph_subject_membership',
-                    'graph_subjects', 'graph_relationships', 'graph_findings')
+                    'graph_subjects', 'graph_relationships', 'graph_findings',
+                    'graph_finding_values', 'graph_finding_membership')
             UNION ALL
             -- DuckDB quotes this cast until the database is reopened.
             SELECT view_name,
                 replace(sql, 'AS ' || chr(34) || 'UINTEGER' || chr(34)
                     || ') AS ordinal', 'AS UINTEGER) AS ordinal')
             FROM duckdb_views()
-            WHERE schema_name = 'main' AND view_name = 'graph_subjects'
+            WHERE schema_name = 'main' AND view_name IN ('graph_subjects', 'graph_findings')
             ORDER BY 1, 2",
             )
             .context(AnalysisDatabaseSnafu {

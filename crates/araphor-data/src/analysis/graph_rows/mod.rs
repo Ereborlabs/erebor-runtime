@@ -1,3 +1,4 @@
+use araphor_graph::FindingRows;
 use duckdb::{
     params,
     types::{FromSql, FromSqlError, FromSqlResult, ValueRef},
@@ -70,20 +71,13 @@ impl GraphRows {
                 operation: "flush native graph relationships",
             })?;
         }
-        {
-            let mut appender =
-                writer
-                    .appender("graph_findings")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "prepare native graph findings",
-                    })?;
-            for (ordinal, finding) in snapshot.findings.iter().enumerate() {
-                Self::insert_finding(&mut appender, result_id, ordinal, finding)?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush native graph findings",
-            })?;
-        }
+        FindingRows::apply(
+            writer,
+            snapshot.scope.identity.tenant_id,
+            lineage,
+            revision,
+            &snapshot.findings,
+        )?;
         Ok(())
     }
 
@@ -245,6 +239,7 @@ impl GraphRows {
         })
     }
 
+    #[cfg(test)]
     fn json_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> Result<T> {
         Self::decode(Self::borrowed(row, index, |value| value.as_blob())?)
     }

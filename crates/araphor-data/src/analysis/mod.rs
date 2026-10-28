@@ -501,7 +501,7 @@ impl AnalysisStore {
                     operation: "create trace metadata",
                 })?;
             transaction
-                .execute_batch(graph_rows::GraphRows::SCHEMA)
+                .execute_batch(&graph_rows::GraphRows::schema())
                 .context(AnalysisDatabaseSnafu {
                     operation: "create native graph rows",
                 })?;

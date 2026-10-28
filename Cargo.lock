@@ -266,6 +266,7 @@ dependencies = [
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
  "araphor-discovery-definition",
+ "araphor-graph",
  "araphor-package",
  "arrow-ipc",
  "arrow-json",
@@ -328,6 +329,19 @@ dependencies = [
  "snafu",
  "sqlparser 0.61.0",
  "tempfile",
+]
+
+[[package]]
+name = "araphor-graph"
+version = "0.1.0"
+dependencies = [
+ "araphor-analysis-builtins",
+ "araphor-analysis-sdk",
+ "duckdb",
+ "erebor-runtime-error",
+ "serde",
+ "serde_json",
+ "snafu",
 ]
 
 [[package]]

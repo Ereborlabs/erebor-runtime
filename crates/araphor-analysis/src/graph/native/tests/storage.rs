@@ -395,10 +395,10 @@ async fn graph_package_commit_refs() -> TestResult {
     drop(restored);
     check(&AnalysisStore::open(&target)?)?;
     for (index, fault) in [
-        "DELETE FROM graph_findings",
+        "DELETE FROM graph_finding_membership",
         "UPDATE graph_subject_values SET subject_kind = 255",
-        "UPDATE graph_findings SET result_id = 'orphan' WHERE result_id = 'graph:storage-committed'",
-        "UPDATE graph_findings SET tenant_id = 'foreign'::BLOB",
+        "UPDATE graph_finding_membership SET lineage_id = 999999",
+        "UPDATE graph_finding_values SET tenant_id = 'foreign'::BLOB",
         "DROP TABLE graph_relationships",
         "UPDATE analysis_results SET body = 'invalid'::BLOB WHERE processor_id = 'graph-findings'",
         "UPDATE analysis_results SET method_version = 99 WHERE processor_id = 'graph-findings'",

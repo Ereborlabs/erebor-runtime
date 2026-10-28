@@ -86,7 +86,9 @@
   dispatch, approvals, and approved connectors. `araphor-data` owns retained
   evidence, query, discovery, graph/finding, notification, and trace-output
   data. Control embeds this crate by default; the crate does not depend on
-  Control. `mithril-e2e` owns fixtures, qualification, and release proof.
+  Control. `araphor-graph` owns native finding values and result membership
+  through Data's transaction; it does not open or commit a store.
+  `mithril-e2e` owns fixtures, qualification, and release proof.
 - `araphor-observability` owns shared trace contracts, recipes, grant checks,
   request lifecycle, and bounded local capture. It depends on `araphor-data`
   and the Interceptor, not Control or Node. Control supplies authentication,

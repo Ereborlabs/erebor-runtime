@@ -3,19 +3,22 @@ use super::*;
 #[test]
 fn native_schema_integrity() -> TestResult {
     let faults = [
-        GraphRows::SCHEMA.replace("ordinal UINTEGER", "ordinal INTEGER"),
-        GraphRows::SCHEMA.replace(
+        GraphRows::schema().replace("ordinal UINTEGER", "ordinal INTEGER"),
+        GraphRows::schema().replace(
             "required_action VARCHAR",
             "required_action VARCHAR NOT NULL",
         ),
-        GraphRows::SCHEMA.replace("tenant_id BLOB NOT NULL", "tenant_id BLOB"),
-        GraphRows::SCHEMA.replace(
+        GraphRows::schema().replace("tenant_id BLOB NOT NULL", "tenant_id BLOB"),
+        GraphRows::schema().replace(
             "PRIMARY KEY (result_id, ordinal)",
             "UNIQUE (result_id, ordinal)",
         ),
-        GraphRows::SCHEMA.replace(", UNIQUE (result_id, finding_id)", ""),
-        GraphRows::SCHEMA.replace("subject_kind UTINYINT NOT NULL,", "subject_kind UTINYINT,"),
-        GraphRows::SCHEMA.replace(
+        GraphRows::schema().replace(
+            "PRIMARY KEY (lineage_id, value_id, valid_from)",
+            "UNIQUE (lineage_id, value_id, valid_from)",
+        ),
+        GraphRows::schema().replace("subject_kind UTINYINT NOT NULL,", "subject_kind UTINYINT,"),
+        GraphRows::schema().replace(
             "tenant_id BLOB NOT NULL, authority_rank UTINYINT NOT NULL",
             "authority_rank UTINYINT NOT NULL, tenant_id BLOB NOT NULL",
         ),
@@ -32,12 +35,12 @@ fn native_schema_integrity() -> TestResult {
         ));
     }
     let writer = Connection::open_in_memory()?;
-    writer.execute_batch(GraphRows::SCHEMA)?;
+    writer.execute_batch(&GraphRows::schema())?;
     GraphRows::validate_tables(&writer)?;
     writer.execute_batch("ALTER TABLE graph_subject_membership ADD COLUMN extra INTEGER")?;
     assert!(GraphRows::validate_tables(&writer).is_err());
     let other = Connection::open_in_memory()?;
-    other.execute_batch(GraphRows::SCHEMA)?;
+    other.execute_batch(&GraphRows::schema())?;
     GraphRows::validate_tables(&other)?;
     Ok(())
 }
@@ -48,7 +51,7 @@ fn native_schema_reopen() -> TestResult {
         "ALTER TABLE graph_subject_membership ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_subject_values ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_relationships ALTER COLUMN first_boottime_ns TYPE BIGINT",
-        "ALTER TABLE graph_findings ALTER COLUMN required_action SET NOT NULL",
+        "DROP VIEW graph_findings",
         "DROP VIEW graph_subjects; CREATE VIEW graph_subjects AS
             SELECT v.result_id, 0::UINTEGER AS ordinal, s.tenant_id,
                 s.authority_rank, s.authority_text, s.authority_boot,
@@ -85,6 +88,9 @@ fn shared_corruption_rejects_reopen() -> TestResult {
         "INSERT INTO graph_subject_membership
          SELECT 999999, subject_id, valid_from, valid_to
          FROM graph_subject_membership LIMIT 1",
+        "INSERT INTO graph_finding_membership
+         SELECT 999999, value_id, valid_from, valid_to
+         FROM graph_finding_membership LIMIT 1",
     ] {
         let fixture = CommitFixture::new()?;
         fixture
