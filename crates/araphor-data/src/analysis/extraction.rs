@@ -1556,6 +1556,10 @@ impl AnalysisStore {
             && selection.binding_ids.is_empty();
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
+            // The revision fixes raw selection. The lease prevents segment deletion.
+            drop(coordinator);
+            #[cfg(test)]
+            control.test_snapshot()?;
             let requested = selection;
             let (selection, key_bytes) =
                 self.resolve_selection(snapshot, selection, control, limits)?;
@@ -1573,8 +1577,6 @@ impl AnalysisStore {
             if after.is_some_and(|position| position > end) {
                 return self.reject("the position read starts beyond the captured revision");
             }
-            // The revision fixes raw selection. The lease prevents segment deletion.
-            drop(coordinator);
             let mut output = AnalysisExtractionV1 {
                 discovery_enabled: self.discovery_enabled(),
                 graph_enabled: self.graph_enabled(),

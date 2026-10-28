@@ -1251,4 +1251,172 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn capture_snapshot_releases_writer() -> TestResult {
+        use araphor_analysis_sdk::arrow_array::{Array as _, BinaryArray, UInt64Array};
+        use std::sync::{atomic::AtomicU8, Arc};
+
+        for dependencies in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
+            let first = identity();
+            let next = EvidenceIntakeIdentityV1 {
+                source_id: [4; 16],
+                node_boot_id: [5; 16],
+                ..first.clone()
+            };
+            store.accept_validated_batch(first.clone(), batch(1))?;
+            let context = crate::AnalysisContextVersionV1 {
+                key: crate::AnalysisContextKeyV1 {
+                    tenant_id: first.tenant_id,
+                    owner_id: "snapshot-check".into(),
+                    entity_key: vec![1],
+                    lifetime_key: vec![2],
+                    owner_revision: 1,
+                },
+                valid_from_utc_ns: None,
+                valid_until_utc_ns: None,
+                sensitivity: crate::ContextSensitivityV1::Tenant,
+                body: b"before".to_vec(),
+            };
+            store.commit_context_checked(&context, 0)?;
+            let mut replacement = context.clone();
+            replacement.key.owner_revision = 2;
+            replacement.body = b"after".to_vec();
+            let selection = crate::AnalysisSelectionV1::tenant(first.tenant_id);
+            let schemas = AnalysisStore::table_schemas();
+            let requests = crate::AnalysisTableRequests::from([
+                (
+                    "events".into(),
+                    Some(
+                        [schemas["events"].index_of("source_id")?]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ),
+                (
+                    "context_versions".into(),
+                    Some(
+                        [schemas["context_versions"].index_of("owner_revision")?]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ),
+            ]);
+            let before = store.meta()?;
+            let control = AnalysisReadControl::default();
+            let observed = Arc::new(AtomicU8::new(0));
+            let observation = Arc::clone(&observed);
+            let writer = Arc::clone(&store);
+            let late = next.clone();
+            *control
+                .snapshot_step
+                .lock()
+                .map_err(|_| "snapshot hook poisoned")? = Some(Box::new(move || {
+                let available = match writer.writer.try_lock() {
+                    Ok(guard) => {
+                        drop(guard);
+                        true
+                    }
+                    Err(_) => false,
+                };
+                observation.store(if available { 2 } else { 1 }, Ordering::SeqCst);
+                if !available {
+                    return Ok(());
+                }
+                writer.accept_validated_batch(late, batch(1))?;
+                writer.commit_context_checked(&replacement, 1)?;
+                Ok(())
+            }));
+            let mut captured = None;
+            let (meta, revision) = if dependencies {
+                store.dependency_revision_for(&selection, &requests, &control)?
+            } else {
+                let page = store.read_tables(
+                    &selection,
+                    crate::AnalysisTableRead {
+                        requests: &requests,
+                        event_ranges: None,
+                        inputs: None,
+                        mode: crate::AnalysisReadModeV1::Complete,
+                        now: 10,
+                    },
+                    crate::AnalysisExtractLimits::default(),
+                    &control,
+                )?;
+                let meta = page.extraction.meta.clone();
+                let revision = meta.commit_revision;
+                captured = Some(page);
+                (meta, revision)
+            };
+            assert_eq!(
+                observed.load(Ordering::SeqCst),
+                2,
+                "snapshot retained the writer (dependencies={dependencies})"
+            );
+            assert_eq!(meta, before);
+            assert_eq!(revision, before.commit_revision);
+            let (after, changed) = store.dependency_revision_for(
+                &selection,
+                &requests,
+                &AnalysisReadControl::default(),
+            )?;
+            assert!(after.commit_revision > before.commit_revision);
+            assert_eq!(changed, after.commit_revision);
+            let next_page = store.read_tables(
+                &selection,
+                crate::AnalysisTableRead {
+                    requests: &requests,
+                    event_ranges: None,
+                    inputs: None,
+                    mode: crate::AnalysisReadModeV1::Complete,
+                    now: 10,
+                },
+                crate::AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+            )?;
+            assert_eq!(next_page.extraction.meta, after);
+            let mut pages = Vec::new();
+            if let Some(page) = captured {
+                pages.push((page, vec![first.source_id.to_vec()], vec![1]));
+            }
+            pages.push((
+                next_page,
+                vec![first.source_id.to_vec(), next.source_id.to_vec()],
+                vec![1, 2],
+            ));
+            for (page, mut expected_sources, expected_contexts) in pages {
+                assert!(page.exhausted);
+                assert_eq!(page.extraction.sources.len(), expected_sources.len());
+                let mut sources = Vec::new();
+                for rows in &page.tables["events"] {
+                    let values = rows
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<BinaryArray>()
+                        .ok_or("source ID column type differs")?;
+                    assert_eq!(values.null_count(), 0);
+                    sources.extend((0..values.len()).map(|row| values.value(row).to_vec()));
+                }
+                sources.sort();
+                expected_sources.sort();
+                assert_eq!(sources, expected_sources);
+                let mut contexts = Vec::new();
+                for rows in &page.tables["context_versions"] {
+                    let values = rows
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or("context revision column type differs")?;
+                    assert_eq!(values.null_count(), 0);
+                    contexts.extend_from_slice(values.values());
+                }
+                assert_eq!(contexts, expected_contexts);
+            }
+            assert!(store.writer.try_lock().is_ok());
+            assert!(store.maintenance.try_write().is_ok());
+        }
+        Ok(())
+    }
 }

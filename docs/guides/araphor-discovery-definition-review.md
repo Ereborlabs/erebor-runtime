@@ -5025,3 +5025,23 @@ Actor Graph cursor 950/publication 98 contains a Confirmed finding with Exact po
 These records prove no overall speed gain, sole timeout cause, zero-copy behavior, or absence of saved obligations.
 Local reuse is Done. Busy-input completion, full qualification, current images, paired physical proof, owned-resource absence, and owned VM removal remain Not done.
 Earlier proof retains its original source, artifact, feature, and assertion limits.
+
+## Release the writer after the SQL snapshot is fixed
+
+Intended end state: a captured read keeps cut C while another writer can proceed during SQL selection.
+[read_tables_inner](../../crates/araphor-data/src/analysis/extraction.rs) and [read_dependency_revision](../../crates/araphor-data/src/analysis/dependencies.rs) keep their existing coordinated reader admission.
+  -> [AnalysisReadControl::run](../../crates/araphor-data/src/analysis/read.rs) starts the native transaction; the successful store_meta read fixes cut C.
+  -> [resolve_selection](../../crates/araphor-data/src/analysis/extraction.rs) runs against that same SQL snapshot after the existing writer coordinator drops.
+  -> [RawJournal selection](../../crates/araphor-data/src/analysis/raw.rs) stays bounded by C. The reader and maintenance leases still protect raw segments.
+
+```mermaid
+sequenceDiagram
+    Query->>Data: Capture selected input
+    Data->>DuckDB: Fix metadata cut C
+    Data-->>Query: Keep C through selection
+```
+The private cfg(test) snapshot seam proves both consumers at this boundary. The 23 existing late read hooks remain unchanged.
+The [RED case](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-red-facts.json>) fails at retained writer ownership. The [corrected new case and static checks](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-lint-facts.json>) pass on source E10.
+[Eight earlier cases](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-lint-continuity.json>) retain source 1aa and executable 27da. The exact test-only statement comparison supports continuity; these are not nine fresh cases on one executable.
+The [E10 normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-lint-incident-checks.json>) still fails in 120.373 seconds. No incident fix or execution-time gain is claimed.
+Owner checks: Done. Source: capture-coordinator-lint-source.json, SHA-256 e10d19719af2dfadec5ca3c50d5654bb0d337cd85c8276d0dad2ba3111f4f3b2. Full qualification and current physical proof remain Not done.

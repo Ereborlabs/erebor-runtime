@@ -27,6 +27,8 @@ pub struct AnalysisReadControl {
     #[cfg(any(test, feature = "test-fixtures"))]
     read_step: Arc<Mutex<Option<ReadStep>>>,
     #[cfg(test)]
+    pub(super) snapshot_step: Arc<Mutex<Option<ReadStep>>>,
+    #[cfg(test)]
     pub(super) wait_signal: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
@@ -53,6 +55,8 @@ impl AnalysisReadControl {
             monitor,
             #[cfg(any(test, feature = "test-fixtures"))]
             read_step: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            snapshot_step: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             wait_signal: Mutex::new(None),
         }
@@ -88,6 +92,8 @@ impl AnalysisReadControl {
             #[cfg(any(test, feature = "test-fixtures"))]
             read_step: Arc::clone(&self.read_step),
             #[cfg(test)]
+            snapshot_step: Arc::clone(&self.snapshot_step),
+            #[cfg(test)]
             wait_signal: Mutex::new(None),
         }
     }
@@ -117,6 +123,8 @@ impl AnalysisReadControl {
         Ok(Self {
             #[cfg(any(test, feature = "test-fixtures"))]
             read_step: Arc::clone(&self.read_step),
+            #[cfg(test)]
+            snapshot_step: Arc::clone(&self.snapshot_step),
             ..Self::at(
                 self.deadline,
                 Arc::clone(&self.monitor),
@@ -148,6 +156,19 @@ impl AnalysisReadControl {
     pub(super) fn test_read_step(&self) -> Result<()> {
         let hook = self
             .read_step
+            .lock()
+            .map_err(|_| Self::lock_error())?
+            .take();
+        if let Some(hook) = hook {
+            hook()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_snapshot(&self) -> Result<()> {
+        let hook = self
+            .snapshot_step
             .lock()
             .map_err(|_| Self::lock_error())?
             .take();

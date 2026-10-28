@@ -181,6 +181,9 @@ impl AnalysisStore {
                 Self::check_managed_metadata(snapshot, managed)?;
             }
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
+            drop(coordinator);
+            #[cfg(test)]
+            control.test_snapshot()?;
             let (selection, _) =
                 self.resolve_selection(
                     snapshot,
@@ -189,7 +192,6 @@ impl AnalysisStore {
                 limits,
                 )?;
             let selection = selection.as_ref();
-            drop(coordinator);
             let mut revision = self.selected_revision(selection, meta.commit_revision, control)?;
             if tables.contains_key("discovery_state") || tables.contains_key("graph_state") {
                 let scoped_progress = if let Some(sources) = graph_sources {

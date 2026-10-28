@@ -1214,3 +1214,20 @@ The records establish no execution-time gain, sole timeout cause, zero-copy resu
 No global cache, owner, public API, schema, dependency, timer, quota, or version is added.
 PENDING: busy-input completion, current images, paired physical proof, final evidence, owned-resource absence, and owned VM removal.
 The whole qualification matrix remains Not done. Earlier proof keeps its original source, artifact, feature, and assertion limits.
+
+## Release the Data writer after snapshot metadata
+
+**Two consumer lock scopes and focused proof: Done. Complete qualification: Not done.**
+The existing coordinated reader still fixes the native DuckDB transaction snapshot at the successful store_meta read.
+The extraction and dependency consumers then drop the writer coordinator before resolve_selection.
+Selection stays in that SQL transaction. Raw reads remain bounded by captured revision C; reader and maintenance leases remain until their existing end points.
+The private cfg(test) snapshot seam checks this boundary without changing the 23 existing late read hooks or adding a public hook.
+The [RED record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-red-facts.json>) fails at the exact retained-writer assertion. Later assertions are not reached in RED.
+The [corrected GREEN and static record](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-lint-facts.json>) passes the edited new case, four-file formatting, and Data test-fixtures Clippy.
+The new case covers both consumers, old and next SQL/raw cuts, later context/source writes, and released guards.
+[Eight existing cases and their continuity proof](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-lint-continuity.json>) keep source 1aa and executable 27da. The later one-statement test fix leaves their bodies and runtime unchanged.
+Do not report these records as nine cases freshly run on one binary.
+Source: capture-coordinator-lint-source.json, SHA-256 e10d19719af2dfadec5ca3c50d5654bb0d337cd85c8276d0dad2ba3111f4f3b2. The [review flow](../../../../guides/araphor-discovery-definition-review.md#release-the-writer-after-the-sql-snapshot-is-fixed) links the owners.
+The [E10 normal incident](</home/navid/mithril-test-hosts/araphor-package-qualification-verification/capture-coordinator-lint-incident-checks.json>) fails in 120.373 seconds. This is not an incident completion or performance result.
+PENDING: full qualification, current images, paired physical proof, final evidence, owned-resource absence, and owned VM removal.
+Earlier evidence retains its own source, feature, artifact, and assertion limits.
