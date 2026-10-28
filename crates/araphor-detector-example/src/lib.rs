@@ -26,55 +26,105 @@ impl sdk::Guest for BurstDetector {
         let evaluation = checked.evaluation();
         let model = checked.model();
         let threshold = Self::threshold(evaluation)?;
-        let records: Vec<Observation> = Rows::input(checked, "records")?;
+        let records = Observation::read(checked)?;
+        let facts = Fact::read(checked)?;
         let mut groups = BTreeMap::new();
         for (row, record) in records.iter().enumerate() {
             groups
-                .entry((&record.lifetime, record.task))
+                .entry((
+                    &record.id.stream.node_id,
+                    record.id.stream.node_boot_id,
+                    record.id.stream.label_epoch,
+                    record.effect.task_cookie,
+                ))
                 .or_insert_with(Vec::new)
-                .push(row as u64);
+                .push(
+                    u32::try_from(row).map_err(|_| {
+                        sdk::Error::contract(sdk::ErrorCode::Invalid, "record count")
+                    })?,
+                );
         }
-        let findings: Vec<_> = groups
+        let mut output = sdk::Output::default();
+        let mut findings = Vec::new();
+        let mut branches = Vec::new();
+        for rows in groups
             .into_values()
             .filter(|rows| rows.len() as u64 >= threshold)
-            .map(|rows| Finding {
-                record: rows[0],
-                context: None,
-                reason: "THRESHOLD".into(),
-                confirmed: false,
-                evidence: rows,
-                limits: vec!["CONTEXTUAL_ACTIVITY".into()],
-            })
-            .collect();
-        let subjects: Vec<_> = findings
-            .iter()
-            .map(|finding| Subject {
-                record: finding.record,
-                context: None,
-            })
-            .collect();
-        let mut output = sdk::Output {
-            datasets: vec![
-                Rows::encode(&model.outputs[0], &subjects)?,
-                Rows::encode::<Relationship>(&model.outputs[1], &[])?,
-                Rows::encode(&model.outputs[2], &findings)?,
-            ],
-            ..Default::default()
-        };
-        for (row, finding) in findings.iter().enumerate() {
-            Self::reason(&mut output, model, finding, row as u64, threshold)?;
+        {
+            let row = findings.len() as u64;
+            let reason = Self::reason(model, row, threshold, rows.len() as u64)?;
+            let declared = FindingReasonV1::Declared(DeclaredFindingReasonV1::from_value(&reason)?);
+            let value = FindingV1::resolve(
+                &checked.package().id,
+                declared.clone(),
+                ReasonDetails {
+                    record: rows[0],
+                    context: None,
+                    reason: "THRESHOLD".into(),
+                    confirmed: false,
+                    evidence: rows.clone(),
+                    limits: vec!["CONTEXTUAL_ACTIVITY".into()],
+                },
+                &records,
+                &facts,
+            )?;
+            let finding = Finding::from_finding(rows[0], None, value, reason.code.clone());
+            branches.push(GraphBranchV1::from_finding(&finding, &declared));
+            findings.push(finding);
+            for record in rows {
+                output.evidence.push(sdk::EvidenceLink {
+                    output: reason.output.clone(),
+                    input: sdk::RowRef {
+                        dataset: "records".into(),
+                        row: u64::from(record),
+                    },
+                });
+            }
+            output.reasons.push(reason);
         }
+        let subjects = findings
+            .iter()
+            .map(|finding| {
+                (
+                    finding.subject_id.clone(),
+                    Subject {
+                        record: finding.record,
+                        context: None,
+                        key: finding.subject_id.clone(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+            .into_values()
+            .collect::<Vec<_>>();
+        let state = records.len().to_string();
+        output.datasets = vec![
+            Subject::encode(&subjects)?,
+            Relationship::encode(&[])?,
+            Finding::encode(&findings)?,
+            GraphBranchV1::encode(&branches)?,
+            Metadata::encode(&[Metadata {
+                record_ids: records.iter().map(|record| record.id.clone()).collect(),
+                facts,
+                package: GraphPackageCheckpointV1::from_package(
+                    checked.package(),
+                    model,
+                    GraphPackageStateV1::Declared(state.clone()),
+                    records.last().map_or(0, |record| record.id.durable_cursor),
+                    records
+                        .iter()
+                        .map(|record| record.observed_boottime_ns)
+                        .max()
+                        .unwrap_or(0),
+                ),
+            }])?,
+        ];
         let spec = model.checkpoint.as_ref().ok_or_else(|| {
             sdk::Error::contract(sdk::ErrorCode::Invalid, "checkpoint declaration")
         })?;
         output.checkpoint = Some(sdk::Checkpoint {
             version: spec.version,
-            datasets: vec![Rows::encode(
-                &spec.datasets[0],
-                &[State {
-                    value: records.len().to_string(),
-                }],
-            )?],
+            datasets: vec![Rows::encode(&spec.datasets[0], &[State { value: state }])?],
         });
         Ok(output)
     }
@@ -107,36 +157,24 @@ impl BurstDetector {
     }
 
     fn reason(
-        output: &mut sdk::Output,
         model: &sdk::Model,
-        finding: &Finding,
         row: u64,
         threshold: u64,
-    ) -> sdk::Result<()> {
-        let reference = sdk::RowRef {
-            dataset: "findings".into(),
-            row,
-        };
-        output
-            .evidence
-            .extend(finding.evidence.iter().map(|row| sdk::EvidenceLink {
-                output: reference.clone(),
-                input: sdk::RowRef {
-                    dataset: "records".into(),
-                    row: *row,
-                },
-            }));
-        output.reasons.push(sdk::ReasonValue {
-            output: reference,
+        count: u64,
+    ) -> sdk::Result<sdk::ReasonValue> {
+        Ok(sdk::ReasonValue {
+            output: sdk::RowRef {
+                dataset: "findings".into(),
+                row,
+            },
             code: model.reasons[0].code.clone(),
             details: sdk::RecordBatch::try_new(
                 Arc::new(model.reasons[0].details.clone()),
                 vec![
                     Arc::new(UInt64Array::from(vec![threshold])),
-                    Arc::new(UInt64Array::from(vec![finding.evidence.len() as u64])),
+                    Arc::new(UInt64Array::from(vec![count])),
                 ],
             )?,
-        });
-        Ok(())
+        })
     }
 }

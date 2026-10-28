@@ -11,20 +11,25 @@ impl BurstDetector {
     }
 
     fn build_package() -> sdk::Package {
-        let inputs = vec![
-            Rows::port::<Observation>("records", "graph.observation.v1"),
-            Rows::port::<Fact>("facts", "graph.fact.v1"),
-            Rows::port::<Manifest>("manifest", "graph.manifest.v1"),
-        ];
-        let mut subjects = Rows::port::<Subject>("subjects", "graph.subject-selection.v1");
+        let inputs = Detector::inputs().to_vec();
+        let mut subjects = Subject::port();
         subjects.kind = sdk::OutputKind::Subjects;
-        let mut relationships =
-            Rows::port::<Relationship>("relationships", "graph.relationship-candidate.v1");
+        let mut relationships = Relationship::port();
         relationships.kind = sdk::OutputKind::Relationships;
-        let mut findings = Rows::port::<Finding>("findings", "graph.finding-candidate.v1");
+        let mut findings = Finding::port();
         findings.kind = sdk::OutputKind::Findings;
         findings.evidence_required = true;
-        let mut model = sdk::Model::new("detect", inputs, vec![subjects, relationships, findings]);
+        let mut model = sdk::Model::new(
+            "detect",
+            inputs,
+            vec![
+                subjects,
+                relationships,
+                findings,
+                GraphBranchV1::port(),
+                Metadata::port(),
+            ],
+        );
         model.parameters = sdk::Schema::new(vec![sdk::Field::new(
             "threshold",
             sdk::DataType::UInt64,

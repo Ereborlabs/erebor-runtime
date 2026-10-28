@@ -14,35 +14,7 @@ type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 
 pub use araphor_analysis_builtins::graph::AnalysisContextKeyV1;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ContextSensitivityV1 {
-    Public,
-    Tenant,
-    HostRestricted,
-}
-
-impl From<ContextSensitivityV1> for &'static str {
-    fn from(value: ContextSensitivityV1) -> Self {
-        match value {
-            ContextSensitivityV1::Public => "public",
-            ContextSensitivityV1::Tenant => "tenant",
-            ContextSensitivityV1::HostRestricted => "host_restricted",
-        }
-    }
-}
-
-impl TryFrom<&str> for ContextSensitivityV1 {
-    type Error = ();
-
-    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
-        match value {
-            "public" => Ok(Self::Public),
-            "tenant" => Ok(Self::Tenant),
-            "host_restricted" => Ok(Self::HostRestricted),
-            _ => Err(()),
-        }
-    }
-}
+pub use araphor_analysis_builtins::graph::ContextSensitivityV1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AnalysisContextVersionV1 {

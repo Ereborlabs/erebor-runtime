@@ -43,6 +43,7 @@ const SHARED: &[&str] = &[
     "crates/araphor-analysis-builtins",
     "crates/araphor-component-build",
     "crates/erebor-runtime-error",
+    "crates/erebor-interceptor-abi",
 ];
 
 impl ComponentBuilder {

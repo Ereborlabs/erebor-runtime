@@ -8,7 +8,8 @@ use std::{sync::Arc, time::Duration};
 
 mod baseline;
 mod runtime;
-use runtime::{Fixture, Target};
+pub(in crate::graph) use runtime::Fixture;
+use runtime::Target;
 
 #[tokio::test]
 async fn sql_graph_adapter() -> TestResult {
@@ -308,12 +309,9 @@ fn evaluation(
             .any(|range| range.state == DiscoveryCoverageStateV1::Gapped)
     {
         sdk::CoverageState::Gapped
-    } else if Rows::decode::<algorithm::Observation>(
-        &package.exports[0].inputs[0].port,
-        &evaluation.input("records")?.data,
-    )?
-    .iter()
-    .any(|record| !record.complete)
+    } else if algorithm::Observation::decode(&evaluation.input("records")?.data)?
+        .iter()
+        .any(|record| record.proof_quality.temporal_coverage != TemporalCoverageV1::Complete)
     {
         sdk::CoverageState::Unknown
     } else {

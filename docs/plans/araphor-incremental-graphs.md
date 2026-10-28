@@ -35,8 +35,8 @@ Native SQL parser
 | Owner | Current behavior | Required change |
 |---|---|---|
 | `araphor-analysis/src/graph/feed.rs` | Drives Graph programs from query subscription streams. | Keep the reactive owner. Carry the selected optional window. |
-| `araphor-analysis-builtins/src/graph/contract.rs` | Reads a label-only checkpoint, then discards it and evaluates the selected records. | Restore declared state and update affected contributions. |
-| `araphor-analysis/src/graph` | `from_input`, `apply_output`, and `finish` derive resolved subjects, edges, proof, provenance, findings, and branches from candidate selections. | Move pure semantic derivation into the shared builtin Graph module. Keep authorization and publication in Analysis. |
+| `araphor-analysis-builtins/src/graph/contract.rs` | Uses the shared Computation to emit resolved native contributions. The builtin still evaluates the complete selected cut. | Restore State dataset 0 and native Progress dataset 1 for the approved addition path. |
+| `araphor-analysis/src/graph` | Qualifies captured inputs, validates resolved contributions, and structurally merges their values. | Keep independent authorization, proof validation, expiry, and atomic publication. No second semantic builder remains. |
 | `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior::state` applies the declared continuation policy. Ordinary packages still require matching input revisions and coverage. | Enable continuation in each builtin only when its update algorithm is complete. |
 | `araphor-data/src/analysis/managed/model.rs` | `ManagedPrior.retained` supplies the exact saved output through `Evaluation.previous_outputs`. | Use those rows in the builtin update algorithm. Keep current-input admission unchanged. |
 | `araphor-data/src/analysis/progress/graph.rs` | Uses the existing managed transaction for result, state, references, and progress. | Keep this single atomic commit owner. |
@@ -57,14 +57,14 @@ A subscription receives a relevant data or window change
   -> Data commits output, checkpoint, Graph rows, references, and progress together
   -> existing subscription streams receive the committed change
 
-A relevant policy or coverage value changes
-  -> the builtin updates the affected contributions or selects a complete rebuild
+A relevant old policy or coverage value changes
+  -> the initial incremental path selects a complete rebuild
   -> the result preserves the proof for the captured input cut
   -> Data commits the result through the same transaction
 
 An event leaves a selected window
-  -> the builtin removes its current contribution
-  -> the builtin updates correlations and findings that used that contribution
+  -> the initial incremental path selects a complete rebuild
+  -> the complete result excludes removed contributions and updates affected findings
   -> Data retains the earlier immutable result under the existing retention rules
 
 Execution fails before commit
@@ -130,10 +130,12 @@ exact retained-result reuse and `CallResult` matching for retries.
    limits against qualified captured input and the pinned package. Valid output
    schema alone does not establish authority. Keep atomic publication. Prove complete-result parity
    before committing the change.
-4. **Incremental builtin updates.** Reuse retained contributions and compute
-   additions plus affected correlations. Handle window removal, late arrivals,
-   context and coverage changes, and incompatible state. Prove equivalence to
-   complete evaluation for each builtin. Commit the passing change.
+4. **Incremental builtin updates.** Reuse retained contributions for additions
+   and affected correlations through State dataset 0 and native Progress dataset 1.
+   Use stable-ID maps and exact per-record fact zippers. Use complete rebuilds
+   for removal/window exit, changed old proof/facts/order/window, and valid but
+   unusable state. This slice makes no incremental-removal claim. Prove complete
+   evaluation equality for each builtin before enabling continuation and commit.
 5. **Integrated proof and measurement.** Prove retry, restart, rollback, window
    and no-window behavior through production owners. Run the same backlog
    workload and report timing, logical Graph bytes, actual store size, and peak
@@ -176,7 +178,8 @@ and compact runs fail the existing deadline. The first memory comparison is
 invalid because executable hashing contaminated the runner's high-water mark;
 the corrected interpretation is in the [review guide](../guides/araphor-graph-commit-review.md#first-matched-backlog-measurement).
 
-Resolved builtin ownership, incremental algorithms, and final measurements
+Resolved builtin ownership passes its relevant runtime and static checks.
+Incremental algorithms and final measurements
 remain open. The independent Sol 6.1 reviewer approved this
 concrete plan on 2026-10-28. Each deliverable still needs a review of its code
 and test results. The compact storage result does not complete this plan.
@@ -212,3 +215,24 @@ Verification records are in
 **State handoff result: Done.** Builtin Graph declarations still keep
 continuation disabled.
 This state transport does not implement incremental Graph derivation.
+
+
+### Builtin ownership result
+
+The existing builtin Computation produces resolved native subjects, relationships, findings, branches, and package metadata. The three pinned calls remain separate.
+Analysis validates exact captured inputs, source and fact anchors, package metadata, complete-input watermarks, effects, provenance limits, evidence, reasons, and branch projection. Its remaining Graph owner merges, remaps, and sorts the checked values. The existing Data transaction remains the atomic publication owner. Retained expiry still reduces proof.
+The ten detached Analysis semantic files are removed after parity checks: 1,348 lines. Exact originals remain in compact-graph/d3-host/deletion-review.
+Relevant builtin, example, Data, typed baseline/domain, host-validation, opaque-reason, native/SQL/Wasm adapter/pressure, and captured-source checks pass. Exact-port, credential-join, extra-export, configured allocation, and atomic conversion-failure/retry checks also pass. Records in compact-graph/builtin-ownership keep each tested source and artifact identity, including earlier corrected fixture failures.
+The [current source review route](../guides/araphor-graph-commit-review.md#builtin-ownership-of-resolved-graph-rows) links the production owners and tests.
+**Builtin ownership result: Done.** Scoped formatting, patch whitespace, and seven-crate Clippy pass with warnings denied. Runtime evidence precedes the reviewed borrow/import-only cleanup; final Clippy covers that cleanup. Source and verification records are in `/tmp/araphor-package-qualification-active/compact-graph/builtin-ownership`.
+Builtin continuation remains false. Incremental algorithms and integrated measurement remain open. No execution-time gain or timeout fix is claimed.
+
+### Approved initial incremental scope
+
+Keep the aggregate State label in checkpoint dataset 0. Add one private native Progress dataset 1 with each prior record's qualified-observation digest and optional last state assignment. Keep the current version values.
+Match prior and current stable record IDs once. Preserve old relative record order; allow new CPU-0 records before retained CPU-1 records. For each matched record, compare its ordered facts by exact key, sensitivity, value, and multiplicity, then zip their global indices. Do not require a prefix append or add a fact matcher.
+Reuse only when the qualified Observation digest and explicit correlation window match. Rebind subject, relationship, fact, and evidence indices through these maps. Current inputs remain the sole evidence authority.
+Process derives new records and new Context facts in the existing phase order. Kubernetes derives new Kubernetes facts. Credentials derives new records and old seeds affected by the broad correlation time window of new network, Channel, or AuthorityUse inputs. Do not narrow that seed prefilter by principal, object, task, or binding.
+Reduce saved and new record-state assignments in current order, including repeated equal assignments and suppressed candidates. Use the shared finalizer for current package watermarks, reasons, evidence links, branches, and sensitivity. Preserve the complete-result semantics.
+Use a complete rebuild for record removal or window exit; changed old qualified observations, proof, context, or ordered facts; changed correlation window or old record order; and valid but unusable algorithm state. Invalid envelopes and schemas still fail admission. This initial slice does not claim incremental removal.
+Prove complete/continued equality and actual derivation counts with ordinary existing-owner tests before enabling builtin continuation. Full input decode, digesting, matching, and output serialization can still scan the cut. These counts establish no timing or memory result.

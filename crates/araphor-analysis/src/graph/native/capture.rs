@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 use std::sync::{Arc, Weak};
 
-use araphor_analysis_builtins::Rows;
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, DiscoveryRecordIdV1, DiscoveryRecordV1,
@@ -332,7 +331,6 @@ impl Projection {
                 && manifest == &graph.revision;
         }
         frames.try_grow(Self::graph_metadata(&graph)?)?;
-        graph._memory = Some(frames);
         let mut retained = positions
             .capacity()
             .checked_mul(size_of::<(DiscoveryRecordIdV1, StorePositionV1)>())
@@ -397,9 +395,9 @@ impl Projection {
             }),
         };
         let incomplete = graph.input.records.iter().any(|record| {
-            graph
-                .observation(record)
-                .is_ok_and(|record| !record.complete)
+            graph.observation(record).is_ok_and(|record| {
+                record.proof_quality.temporal_coverage != araphor_data::TemporalCoverageV1::Complete
+            })
         });
         let state = if !graph.input.missing_ranges.is_empty()
             || graph
@@ -422,40 +420,9 @@ impl Projection {
                 vec!["SOURCE_COVERAGE_INSUFFICIENT".into()]
             },
         };
-        let values = graph.projection();
-        let mut inputs = Vec::with_capacity(3);
-        for (port, values) in self.ports.iter().zip(values) {
-            let (bytes, allocation) = Rows::capacity(values).map_err(Self::external)?;
-            if bytes > self.limits.input_bytes {
-                return Err(Self::external(
-                    araphor_data::PackageErrorCodeV1::Limit.error("graph input bytes"),
-                ));
-            }
-            let before = memory.size();
-            memory.try_grow(allocation)?;
-            let data = Rows::encode_capacity(port, values, bytes).map_err(Self::external)?;
-            for batch in &data.batches {
-                self.memory.retain_input(batch, &memory)?;
-            }
-            memory.try_resize(
-                before
-                    .checked_add(data.metadata_bytes())
-                    .ok_or_else(|| Self::invalid("graph input metadata overflow"))?,
-            )?;
-            let input = sdk::Input {
-                data,
-                revision: revision.clone(),
-                coverage: coverage.clone(),
-            };
-            memory.try_grow(
-                input
-                    .metadata_bytes()
-                    .saturating_sub(input.data.metadata_bytes())
-                    .checked_add(size_of::<sdk::Input>())
-                    .ok_or_else(|| Self::invalid("graph port metadata overflow"))?,
-            )?;
-            inputs.push(input);
-        }
+        control.check().map_err(Self::external)?;
+        let inputs = self.inputs(&graph, &revision, &coverage, &memory, &frames)?;
+        graph._memory = Some(frames);
         control.check().map_err(Self::external)?;
         Ok(Capture {
             source: Arc::downgrade(source),
@@ -472,7 +439,80 @@ impl Projection {
         })
     }
 
-    fn graph_metadata(graph: &Graph<'_>) -> Result<usize> {
+    pub(super) fn inputs(
+        &self,
+        graph: &Graph<'_>,
+        revision: &sdk::Revision,
+        coverage: &sdk::Coverage,
+        memory: &datafusion::execution::memory_pool::MemoryReservation,
+        frames: &datafusion::execution::memory_pool::MemoryReservation,
+    ) -> Result<Vec<sdk::Input>> {
+        let before_projection = memory.size();
+        if self.limits.input_bytes != usize::MAX || self.limits.input_capacity.is_some() {
+            let bound = Self::native_bound(graph, frames.size(), &self.ports)?;
+            if bound > self.limits.input_bytes {
+                return Err(Self::external(
+                    araphor_data::PackageErrorCodeV1::Limit.error("graph input bytes"),
+                ));
+            }
+            memory.try_grow(bound)?;
+        }
+        let values = graph.projection().map_err(Self::external)?;
+        let mut inputs = Vec::with_capacity(3);
+        let mut input_metadata = 0usize;
+        for data in values {
+            if data.allocated_bytes() > self.limits.input_bytes {
+                return Err(Self::external(
+                    araphor_data::PackageErrorCodeV1::Limit.error("graph input bytes"),
+                ));
+            }
+            frames.try_grow(data.metadata_bytes())?;
+            let input = sdk::Input {
+                data: data.clone(),
+                revision: revision.clone(),
+                coverage: coverage.clone(),
+            };
+            for batch in &input.data.batches {
+                self.memory.retain_input(batch, memory)?;
+            }
+            input_metadata = input_metadata
+                .checked_add(input.metadata_bytes())
+                .and_then(|bytes| bytes.checked_add(size_of::<sdk::Input>()))
+                .ok_or_else(|| Self::invalid("graph port metadata overflow"))?;
+            inputs.push(input);
+        }
+        memory.try_resize(
+            before_projection
+                .checked_add(input_metadata)
+                .ok_or_else(|| Self::invalid("graph input metadata overflow"))?,
+        )?;
+        Ok(inputs)
+    }
+
+    fn native_bound(graph: &Graph<'_>, owned: usize, ports: &[sdk::Port]) -> Result<usize> {
+        let mut bytes = owned
+            .checked_mul(4)
+            .ok_or_else(|| Self::invalid("graph native allocation overflow"))?;
+        for (port, rows) in ports
+            .iter()
+            .zip([graph.observations.len(), graph.facts.len(), 1])
+        {
+            let buffers = rows
+                .checked_add(1)
+                .and_then(|rows| rows.checked_mul(32))
+                .and_then(|bytes| bytes.checked_add(512))
+                .ok_or_else(|| Self::invalid("graph native allocation overflow"))?;
+            for field in port.schema.flattened_fields() {
+                bytes = bytes
+                    .checked_add(buffers)
+                    .and_then(|bytes| bytes.checked_add(field.size()))
+                    .ok_or_else(|| Self::invalid("graph native allocation overflow"))?;
+            }
+        }
+        Ok(bytes)
+    }
+
+    pub(super) fn graph_metadata(graph: &Graph<'_>) -> Result<usize> {
         let input = &graph.input;
         let mut bytes = 0usize;
         let mut add = |size| {
@@ -565,35 +605,21 @@ impl Projection {
         for fact in &input.facts {
             add(fact.body.capacity())?;
         }
-        let mut values = Vec::new();
-        for rows in graph.projection() {
-            add(rows
-                .capacity()
-                .checked_mul(size_of::<serde_json::Value>())
-                .ok_or_else(|| Self::invalid("graph metadata overflow"))?)?;
-            values.extend(rows);
-        }
-        while let Some(value) = values.pop() {
-            match value {
-                serde_json::Value::String(value) => add(value.capacity())?,
-                serde_json::Value::Array(array) => {
-                    add(array
-                        .capacity()
-                        .checked_mul(size_of::<serde_json::Value>())
-                        .ok_or_else(|| Self::invalid("graph metadata overflow"))?)?;
-                    values.extend(array);
-                }
-                serde_json::Value::Object(object) => {
-                    add(object
-                        .len()
-                        .checked_mul(size_of::<(String, serde_json::Value)>())
-                        .ok_or_else(|| Self::invalid("graph metadata overflow"))?)?;
-                    for (key, value) in object {
-                        add(key.capacity())?;
-                        values.push(value);
-                    }
-                }
-                _ => {}
+        add(graph
+            .observations
+            .capacity()
+            .checked_mul(size_of::<araphor_analysis_builtins::graph::Observation>())
+            .ok_or_else(|| Self::invalid("graph metadata overflow"))?)?;
+        for value in &graph.observations {
+            for bytes in [
+                value.id.stream.node_id.capacity(),
+                value.coverage_interval_id.capacity(),
+                value.effect.process_lineage_id.capacity(),
+                value.effect.authority_domain_id.capacity(),
+                value.effect.execution_set_id.capacity(),
+                value.effect.exact_object_id.capacity(),
+            ] {
+                add(bytes)?;
             }
         }
         Ok(bytes)

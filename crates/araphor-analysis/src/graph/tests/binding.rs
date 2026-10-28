@@ -29,9 +29,9 @@ fn input_binding_preserves_order() -> TestResult {
     let package = algorithm::Detector::Credentials.descriptor();
     let model = &package.exports[0];
     let mut evaluation = graph.evaluation_for(model)?;
-    let [mut records, _, _] = graph.projection().clone();
+    let mut records = algorithm::Observation::decode(&graph.projection()?[0])?;
     records.swap(0, 1);
-    evaluation.inputs[0].data = Rows::encode(&model.inputs[0].port, &records)?;
+    evaluation.inputs[0].data = algorithm::Observation::encode(&records)?;
     assert!(matches!(
         graph.check_inputs(model, &evaluation),
         Err(araphor_data::Error::GraphInvalid {
@@ -40,13 +40,18 @@ fn input_binding_preserves_order() -> TestResult {
         })
     ));
     let mut evaluation = graph.evaluation_for(model)?;
-    let [_, mut facts, _] = graph.projection().clone();
-    let reviewed = facts
+    let mut facts = algorithm::Fact::decode(&graph.projection()?[1])?;
+    let value = facts
         .iter_mut()
-        .find(|fact| fact["reviewed"] == serde_json::Value::Bool(true))
-        .ok_or("reviewed fact")?;
-    reviewed["reviewed"] = serde_json::Value::Bool(false);
-    evaluation.inputs[1].data = Rows::encode(&model.inputs[1].port, &facts)?;
+        .find_map(|fact| match &mut fact.value {
+            GraphFactValueV1::Credential {
+                expected_access, ..
+            } => Some(expected_access),
+            _ => None,
+        })
+        .ok_or("credential fact")?;
+    *value = !*value;
+    evaluation.inputs[1].data = algorithm::Fact::encode(&facts)?;
     assert!(graph.check_inputs(model, &evaluation).is_err());
     let mut evaluation = graph.evaluation_for(model)?;
     evaluation.inputs.pop();
@@ -69,7 +74,7 @@ async fn result_requires_exact_image() -> TestResult {
     use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore};
     use araphor_discovery_definition::{Definition, Program, Source};
     use araphor_package::{
-        PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
+        PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1,
     };
     use araphor_query::definition::Invocation;
     use araphor_query::execution::Engine;
@@ -97,13 +102,7 @@ async fn result_requires_exact_image() -> TestResult {
             &input.data.batches,
         )?;
     }
-    let mut sql = SqlModelV1::default();
-    for port in &model.outputs {
-        sql.outputs.insert(
-            port.name.clone(),
-            "SELECT value FROM records WHERE FALSE".into(),
-        );
-    }
+    let expected = algorithm::Detector::Process.evaluate(&evaluation)?;
     let checkpoint = model.checkpoint.as_ref().ok_or("checkpoint declaration")?;
     let state = &checkpoint.datasets[0];
     let data = Rows::encode(
@@ -112,12 +111,28 @@ async fn result_requires_exact_image() -> TestResult {
             value: "WAITING".into(),
         }],
     )?;
-    sql.checkpoint
-        .insert("state".into(), "SELECT value FROM prior_state".into());
     let mut returns = Vec::new();
     for revision in ["1", "2"] {
         let mut descriptor = package.clone();
         descriptor.revision = revision.into();
+        let mut returned = expected.clone();
+        let metadata = returned
+            .datasets
+            .iter_mut()
+            .find(|data| data.name == "metadata")
+            .ok_or("metadata")?;
+        let mut rows = algorithm::Metadata::decode(metadata)?;
+        for row in &mut rows {
+            row.package = GraphPackageCheckpointV1::from_package(
+                &descriptor,
+                &descriptor.exports[0],
+                row.package.state.clone(),
+                row.package.accepted_cursor_watermark,
+                row.package.observed_boottime_watermark_ns,
+            );
+        }
+        *metadata = algorithm::Metadata::encode(&rows)?;
+        let sql = super::execution::Fixture::sql(&returned)?;
         let bundle = PackageBundleV1 {
             schema_version: 1,
             root: PackageRefV1 {
@@ -258,7 +273,10 @@ fn expiry_downgrades_all_proofs() -> TestResult {
 fn owned_input_preserves_semantic_binding() -> TestResult {
     let input = credential_input()?.normalized()?;
     let graph = Graph::try_from(input)?;
-    let pointers = graph.projection().each_ref().map(|rows| rows.as_ptr());
+    let pointers = graph
+        .projection()?
+        .each_ref()
+        .map(|rows| rows.batches.as_ptr());
     for detector in [
         algorithm::Detector::Process,
         algorithm::Detector::Credentials,
@@ -276,7 +294,10 @@ fn owned_input_preserves_semantic_binding() -> TestResult {
         }
         graph.check_inputs(model, &evaluation)?;
         assert_eq!(
-            graph.projection().each_ref().map(|rows| rows.as_ptr()),
+            graph
+                .projection()?
+                .each_ref()
+                .map(|rows| rows.batches.as_ptr()),
             pointers
         );
     }

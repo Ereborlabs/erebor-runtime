@@ -8,6 +8,114 @@ use araphor_data::{
 };
 use prost::Message as _;
 
+#[test]
+fn native_projection_requires_admission() -> TestResult {
+    let mut input = crate::graph::tests::fixture::credential_input_from(1)?;
+    let ids = input
+        .records
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    for context in &mut input.facts {
+        let mut fact: araphor_data::GraphFactV1 = serde_json::from_slice(&context.body)?;
+        if let araphor_data::GraphFactValueV1::Policy(policy) = &mut fact.value {
+            policy.observations = ids.clone();
+            policy.limits = vec!["NATIVE_NESTED_LIMIT".repeat(256)];
+            context.body = serde_json::to_vec(&fact)?;
+        }
+    }
+    let input = input.normalized()?;
+    for mode in 0..3 {
+        let graph = Graph::new(&input)?;
+        assert!(graph.projection.get().is_none());
+        let owned = super::super::Projection::graph_metadata(&graph)?;
+        let limits = araphor_query::execution::Limits {
+            input_bytes: if mode == 0 { 1 } else { usize::MAX },
+            input_capacity: match mode {
+                0 => None,
+                1 => Some(owned.checked_mul(2).ok_or("test admission overflow")?),
+                _ => Some(64 * 1024 * 1024),
+            },
+            ..Default::default()
+        };
+        let memory = araphor_query::memory::Memory::new(limits.input_capacity, None);
+        let frames = memory.reserve_input(owned)?;
+        let retained = memory.reserve_input(0)?;
+        let projection = super::super::Projection {
+            tenant: input.source.tenant_id,
+            facts: Arc::new(Facts::default()),
+            ports: araphor_analysis_builtins::graph::Detector::Process
+                .descriptor()
+                .exports[0]
+                .inputs
+                .iter()
+                .map(|input| input.port.clone())
+                .collect(),
+            memory: Arc::clone(&memory),
+            limits,
+            projections: Default::default(),
+            observed: Default::default(),
+        };
+        let result = projection.inputs(
+            &graph,
+            &sdk::Revision {
+                owner: "captured".into(),
+                id: "native-admission".into(),
+                window: None,
+            },
+            &sdk::Coverage {
+                state: sdk::CoverageState::Complete,
+                limits: Vec::new(),
+            },
+            &retained,
+            &frames,
+        );
+        if mode < 2 {
+            if mode == 0 {
+                assert!(
+                    matches!(&result, Err(DataFusionError::External(source))
+                    if matches!(source.downcast_ref::<araphor_data::Error>(),
+                        Some(araphor_data::Error::Package {
+                            code: araphor_data::PackageErrorCodeV1::Limit,
+                            field: "graph input bytes", ..
+                        }))),
+                    "{result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(&result, Err(DataFusionError::ResourcesExhausted(_))),
+                    "{result:?}"
+                );
+            }
+            assert!(graph.projection.get().is_none());
+            drop(result);
+            drop(retained);
+            drop(frames);
+            assert_eq!(memory.input_reserved(), 0);
+        } else {
+            let inputs = result?;
+            let expected = graph.observations.clone();
+            assert!(graph.projection.get().is_some());
+            let facts = araphor_analysis_builtins::graph::Fact::decode(&inputs[1].data)?;
+            assert!(facts.iter().any(|fact| matches!(&fact.value,
+                araphor_data::GraphFactValueV1::Policy(policy)
+                    if policy.observations == ids && policy.limits.iter()
+                        .any(|value| value.len() > 4096))));
+            drop(retained);
+            drop(frames);
+            drop(graph);
+            assert!(memory.input_reserved() > 0);
+            assert_eq!(
+                araphor_analysis_builtins::graph::Observation::decode(&inputs[0].data)?,
+                expected
+            );
+            drop(inputs);
+            assert_eq!(memory.input_reserved(), 0);
+        }
+    }
+    Ok(())
+}
+
 fn records(
     temporal: i32,
     intervals: [[u8; 16]; 3],
@@ -194,11 +302,27 @@ async fn payload(
                 vec!["SOURCE_COVERAGE_INSUFFICIENT".to_owned()]
             }
         );
-        let actual = araphor_analysis_builtins::Rows::decode::<serde_json::Value>(
-            &projection.ports[index],
-            &input.data,
-        )?;
-        assert_eq!(actual, expected_graph.projection()[index]);
+        match input.data.name.as_str() {
+            "records" => assert_eq!(
+                araphor_analysis_builtins::graph::Observation::decode(&input.data)?,
+                araphor_analysis_builtins::graph::Observation::decode(
+                    &expected_graph.projection()?[index]
+                )?
+            ),
+            "facts" => assert_eq!(
+                araphor_analysis_builtins::graph::Fact::decode(&input.data)?,
+                araphor_analysis_builtins::graph::Fact::decode(
+                    &expected_graph.projection()?[index]
+                )?
+            ),
+            "manifest" => assert_eq!(
+                araphor_analysis_builtins::graph::Manifest::decode(&input.data)?,
+                araphor_analysis_builtins::graph::Manifest::decode(
+                    &expected_graph.projection()?[index]
+                )?
+            ),
+            _ => return Err("unexpected Graph input".into()),
+        }
     }
     let first = expected
         .records
@@ -829,35 +953,30 @@ fn extra(fixture: &Fixture, id: &str) -> TestResult {
             sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]),
         )],
     ));
-    let implementations = ["detect", "spare"]
+    let mut implementations = ["detect", "spare"]
         .into_iter()
         .map(|export| {
-            let mut program = araphor_package::SqlModelV1::default();
-            for name in ["subjects", "relationships", "findings"] {
-                program
-                    .outputs
-                    .insert(name.into(), "SELECT value FROM records WHERE FALSE".into());
-            }
-            program.checkpoint.insert(
-                "state".into(),
-                r#"SELECT CAST('{"value":"WAITING"}' AS BYTEA) AS value"#.into(),
-            );
-            PackageImplementationV1::Sql {
+            let model = descriptor
+                .exports
+                .iter()
+                .find(|model| model.name == export)
+                .ok_or("extra Graph export")?;
+            Ok(PackageImplementationV1::Sql {
                 export: export.into(),
-                program,
-            }
+                program: Fixture::sql(&descriptor, model)?,
+            })
         })
-        .chain(std::iter::once(PackageImplementationV1::Sql {
-            export: "aux".into(),
-            program: araphor_package::SqlModelV1 {
-                outputs: BTreeMap::from([(
-                    "data".into(),
-                    "SELECT CAST(1 AS BIGINT UNSIGNED) AS value".into(),
-                )]),
-                ..Default::default()
-            },
-        }))
-        .collect();
+        .collect::<TestResult<Vec<_>>>()?;
+    implementations.push(PackageImplementationV1::Sql {
+        export: "aux".into(),
+        program: araphor_package::SqlModelV1 {
+            outputs: BTreeMap::from([(
+                "data".into(),
+                "SELECT CAST(1 AS BIGINT UNSIGNED) AS value".into(),
+            )]),
+            ..Default::default()
+        },
+    });
     let artifact = PackageArtifactV1 {
         descriptor,
         implementations,

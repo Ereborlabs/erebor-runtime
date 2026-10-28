@@ -50,26 +50,87 @@ fn descriptor_preserves_owners() -> TestResult {
                 .collect::<Vec<_>>(),
             ["records", "facts", "manifest"]
         );
-        let subject = &model
-            .outputs
-            .iter()
-            .find(|port| port.name == "subjects")
-            .ok_or("subject port")?
-            .schema
-            .fields()[0];
         assert_eq!(
-            subject.metadata()["araphor.type"],
-            "graph.subject-selection.v1"
+            model
+                .outputs
+                .iter()
+                .map(|port| port.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "subjects",
+                "relationships",
+                "findings",
+                "branches",
+                "metadata"
+            ]
         );
-        assert_eq!(subject.data_type(), &sdk::DataType::Binary);
+        for (port, kind) in model.outputs.iter().zip([
+            sdk::OutputKind::Subjects,
+            sdk::OutputKind::Relationships,
+            sdk::OutputKind::Findings,
+        ]) {
+            assert_eq!(port.kind, kind);
+        }
+        let subject = &model.outputs[0].schema;
+        assert_eq!(subject.fields().len(), 3);
+        assert_eq!(
+            subject.field(0),
+            &sdk::Field::new("record", sdk::DataType::UInt32, false)
+        );
+        assert_eq!(
+            subject.field(1),
+            &sdk::Field::new("context", sdk::DataType::UInt32, true)
+        );
+        let key = subject.field(2);
+        assert_eq!(key.name(), "key");
+        assert!(!key.is_nullable());
+        let sdk::DataType::Struct(fields) = key.data_type() else {
+            return Err("native subject key is not a Struct".into());
+        };
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            ["tenant_id", "authority", "kind", "identity"]
+        );
+        assert!(fields.iter().all(|field| !field.is_nullable()));
+        assert_eq!(fields[0].data_type(), &sdk::DataType::Binary);
+        assert!(matches!(fields[1].data_type(), sdk::DataType::Struct(_)));
+        assert_eq!(fields[2].data_type(), &sdk::DataType::Utf8);
+        assert_eq!(fields[3].data_type(), &sdk::DataType::Binary);
         let findings = model
             .outputs
             .iter()
             .find(|port| port.name == "findings")
             .ok_or("finding port")?;
         assert!(findings.evidence_required);
+        let details = sdk::Schema::new(vec![
+            sdk::Field::new("record", sdk::DataType::UInt32, false),
+            sdk::Field::new("context", sdk::DataType::UInt32, true),
+            sdk::Field::new("reason", sdk::DataType::Utf8, false),
+            sdk::Field::new("confirmed", sdk::DataType::Boolean, false),
+            sdk::Field::new(
+                "evidence",
+                sdk::DataType::List(std::sync::Arc::new(sdk::Field::new(
+                    "item",
+                    sdk::DataType::UInt32,
+                    false,
+                ))),
+                false,
+            ),
+            sdk::Field::new(
+                "limits",
+                sdk::DataType::List(std::sync::Arc::new(sdk::Field::new(
+                    "item",
+                    sdk::DataType::Utf8,
+                    false,
+                ))),
+                false,
+            ),
+        ]);
         for reason in &model.reasons {
-            assert_eq!(reason.details, findings.schema);
+            assert_eq!(reason.details, details);
         }
         assert_eq!(model.checkpoint.as_ref().ok_or("checkpoint")?.version, 1);
         let inspected = package.inspect()?;

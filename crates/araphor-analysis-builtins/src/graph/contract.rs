@@ -3,6 +3,92 @@ use std::sync::OnceLock;
 use super::*;
 use crate::Rows;
 
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub struct ReasonDetails {
+    pub record: u32,
+    pub context: Option<u32>,
+    pub reason: String,
+    pub confirmed: bool,
+    pub evidence: Vec<u32>,
+    pub limits: Vec<String>,
+}
+
+impl ReasonDetails {
+    pub fn port() -> sdk::Port {
+        use sdk::{DataType as Type, Field};
+        sdk::Port::new(
+            "reason_details",
+            sdk::Schema::new(vec![
+                Field::new("record", Type::UInt32, false),
+                Field::new("context", Type::UInt32, true),
+                Field::new("reason", Type::Utf8, false),
+                Field::new("confirmed", Type::Boolean, false),
+                Field::new(
+                    "evidence",
+                    Type::List(std::sync::Arc::new(Field::new("item", Type::UInt32, false))),
+                    false,
+                ),
+                Field::new(
+                    "limits",
+                    Type::List(std::sync::Arc::new(Field::new("item", Type::Utf8, false))),
+                    false,
+                ),
+            ]),
+        )
+    }
+
+    pub fn from_finding(
+        finding: &Finding,
+        records: &BTreeMap<&crate::discovery::DiscoveryRecordIdV1, u32>,
+    ) -> sdk::Result<Self> {
+        let prefix = format!("{}.", finding.package_id);
+        let reason = finding
+            .reason_code
+            .strip_prefix(&prefix)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| Computation::invalid("graph reason namespace"))?;
+        Ok(Self {
+            record: finding.record,
+            context: finding.context,
+            reason: reason.into(),
+            confirmed: finding.state == FindingStateV1::Confirmed,
+            evidence: finding
+                .evidence
+                .iter()
+                .map(|id| {
+                    records
+                        .get(id)
+                        .copied()
+                        .ok_or_else(|| Computation::invalid("graph reason evidence"))
+                })
+                .collect::<sdk::Result<_>>()?,
+            limits: finding.limits.clone(),
+        })
+    }
+
+    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        let port = Self::port();
+        Ok(sdk::Dataset {
+            name: port.name,
+            batches: vec![
+                serde_arrow::to_record_batch(port.schema.fields(), &rows).map_err(Self::error)?
+            ],
+        })
+    }
+
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        let mut rows = Vec::new();
+        for batch in &data.batches {
+            rows.extend(serde_arrow::from_record_batch::<Vec<Self>>(batch).map_err(Self::error)?);
+        }
+        Ok(rows)
+    }
+
+    fn error(error: serde_arrow::Error) -> sdk::Error {
+        sdk::arrow_schema::ArrowError::ExternalError(Box::new(error)).into()
+    }
+}
+
 impl Detector {
     pub const fn id(self) -> &'static str {
         match self {
@@ -42,27 +128,30 @@ impl Detector {
 
     pub fn inputs() -> &'static [sdk::Port] {
         static INPUTS: OnceLock<Vec<sdk::Port>> = OnceLock::new();
-        INPUTS.get_or_init(|| {
-            vec![
-                Rows::port::<Observation>("records", "graph.observation.v1"),
-                Rows::port::<Fact>("facts", "graph.fact.v1"),
-                Rows::port::<Manifest>("manifest", "graph.manifest.v1"),
-            ]
-        })
+        INPUTS.get_or_init(|| vec![Observation::port(), Fact::port(), Manifest::port()])
     }
 
     fn build_descriptor(self) -> sdk::Package {
         let inputs = Self::inputs().to_vec();
-        let mut findings = Rows::port::<Finding>("findings", "graph.finding-candidate.v1");
+        let mut findings = Finding::port();
         findings.kind = sdk::OutputKind::Findings;
         findings.evidence_required = true;
-        let details = findings.schema.clone();
-        let mut subjects = Rows::port::<Subject>("subjects", "graph.subject-selection.v1");
+        let details = ReasonDetails::port().schema;
+        let mut subjects = Subject::port();
         subjects.kind = sdk::OutputKind::Subjects;
-        let mut relationships =
-            Rows::port::<Relationship>("relationships", "graph.relationship-candidate.v1");
+        let mut relationships = Relationship::port();
         relationships.kind = sdk::OutputKind::Relationships;
-        let mut model = sdk::Model::new("detect", inputs, vec![subjects, relationships, findings]);
+        let mut model = sdk::Model::new(
+            "detect",
+            inputs,
+            vec![
+                subjects,
+                relationships,
+                findings,
+                GraphBranchV1::port(),
+                Metadata::port(),
+            ],
+        );
         model.reasons = self
             .reasons()
             .iter()
@@ -108,16 +197,15 @@ impl Detector {
                 ));
             }
         }
-        let records = Rows::input(checked, "records")?;
-        let facts = Rows::input(checked, "facts")?;
-        let mut manifests = Rows::input(checked, "manifest")?;
+        let records = Observation::read(checked)?;
+        let facts = Fact::read(checked)?;
+        let mut manifests = Manifest::read(checked)?;
         if manifests.len() != 1 {
             return Err(sdk::Error::contract(
                 sdk::ErrorCode::Invalid,
                 "graph manifest count",
             ));
         }
-        // Each evaluation replays its complete retained window.
         let mut computation = Computation::new(records, facts, manifests.remove(0), self)?;
         match self {
             Self::Process => computation.process()?,
@@ -146,62 +234,5 @@ impl Detector {
             ],
             Self::Kubernetes => &["KUBERNETES_PROOF_MISSING"],
         }
-    }
-}
-
-impl Computation {
-    pub(super) fn output(mut self, package: &sdk::Package) -> sdk::Result<sdk::Output> {
-        for evidence in self.edges.iter_mut().map(|edge| &mut edge.evidence).chain(
-            self.findings
-                .iter_mut()
-                .map(|finding| &mut finding.evidence),
-        ) {
-            Self::canonical(evidence);
-        }
-        let model = &package.exports[0];
-        let mut output = sdk::Output {
-            datasets: vec![
-                Rows::encode(&model.outputs[0], &self.subjects)?,
-                Rows::encode(&model.outputs[1], &self.edges)?,
-                Rows::encode(&model.outputs[2], &self.findings)?,
-            ],
-            ..Default::default()
-        };
-        for (row, finding) in self.findings.iter().enumerate() {
-            let reference = sdk::RowRef {
-                dataset: "findings".into(),
-                row: row as u64,
-            };
-            for &row in &finding.evidence {
-                output.evidence.push(sdk::EvidenceLink {
-                    output: reference.clone(),
-                    input: sdk::RowRef {
-                        dataset: "records".into(),
-                        row,
-                    },
-                });
-            }
-            let details = Rows::encode(&model.outputs[2], std::slice::from_ref(finding))?
-                .batches
-                .remove(0);
-            output.reasons.push(sdk::ReasonValue {
-                output: reference,
-                code: format!("{}.{}", package.id, finding.reason),
-                details,
-            });
-        }
-        let checkpoint = model.checkpoint.as_ref().ok_or_else(|| {
-            sdk::Error::contract(sdk::ErrorCode::Invalid, "graph checkpoint descriptor")
-        })?;
-        output.checkpoint = Some(sdk::Checkpoint {
-            version: 1,
-            datasets: vec![Rows::encode(&checkpoint.datasets[0], &[self.state])?],
-        });
-        Ok(output)
-    }
-
-    pub(super) fn canonical(evidence: &mut Vec<u64>) {
-        evidence.sort_unstable();
-        evidence.dedup();
     }
 }

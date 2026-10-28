@@ -6,7 +6,7 @@ impl Computation {
         record: &Observation,
         credential: &FactValue,
         bytes: bool,
-        evidence: &mut Vec<u64>,
+        evidence: &mut Vec<u32>,
     ) -> sdk::Result<Vec<(usize, bool)>> {
         let FactValue::Credential {
             object_id,
@@ -23,11 +23,13 @@ impl Computation {
         let mut qualified: Vec<(usize, bool)> = Vec::new();
         let mut positions = BTreeMap::new();
         for (row, channel) in self.records.iter().enumerate() {
-            if channel.lifetime != record.lifetime
+            if !channel.same_lifetime(record)
                 || !self.bounded(record, channel)
-                || !channel.network
-                || !((channel.task == record.task && record.task > 0)
-                    || (record.process.is_some() && channel.process == record.process))
+                || !channel.network()
+                || !((channel.effect.task_cookie == record.effect.task_cookie
+                    && record.effect.task_cookie > 0)
+                    || (record.process_instance_id.is_some()
+                        && channel.process_instance_id == record.process_instance_id))
             {
                 continue;
             }
@@ -46,9 +48,12 @@ impl Computation {
                 else {
                     continue;
                 };
-                let local = (*task_cookie == Some(record.task) && record.task > 0)
-                    || (record.process.is_some() && *process_instance_id == record.process);
-                let socket = socket_object_id.is_some_and(|socket| channel.object == socket);
+                let local = (*task_cookie == Some(record.effect.task_cookie)
+                    && record.effect.task_cookie > 0)
+                    || (record.process_instance_id.is_some()
+                        && *process_instance_id == record.process_instance_id);
+                let socket =
+                    socket_object_id.is_some_and(|socket| channel.effect.exact_object_id == socket);
                 if !*outside_reviewed_behavior
                     || !self.bounded(record, self.record(fact.record)?)
                     || (!(local && socket && *credential_object_id == Some(*object_id))
@@ -65,12 +70,12 @@ impl Computation {
                             && completion.credential_lease_id.is_some()
                             && completion.principal_id.as_ref() == Some(authority_principal)
                     })
-                    && channel.admitted
-                    && channel.complete
+                    && channel.admitted()
+                    && channel.complete()
                     && proof_quality.authority_direct()
-                    && self.carried(row as u64, channel, &fact.value);
-                evidence.push(row as u64);
-                let position = *positions.entry(fact.identity).or_insert_with(|| {
+                    && self.carried(row as u32, channel, &fact.value);
+                evidence.push(row as u32);
+                let position = *positions.entry(self.fact_ids[index]).or_insert_with(|| {
                     let position = qualified.len();
                     qualified.push((index, false));
                     position
@@ -89,9 +94,9 @@ impl Computation {
             if *outside_reviewed_behavior
                 && Self::contextual(record, principal_id, &fact.value)
                 && self.bounded(record, self.record(fact.record)?)
-                && !positions.contains_key(&fact.identity)
+                && !positions.contains_key(&self.fact_ids[index])
             {
-                positions.insert(fact.identity, qualified.len());
+                positions.insert(self.fact_ids[index], qualified.len());
                 qualified.push((index, false));
             }
         }
@@ -100,8 +105,8 @@ impl Computation {
     }
 
     fn bounded(&self, record: &Observation, later: &Observation) -> bool {
-        later.boottime >= record.boottime
-            && later.boottime - record.boottime <= self.manifest.window_ns
+        later.observed_boottime_ns >= record.observed_boottime_ns
+            && later.observed_boottime_ns - record.observed_boottime_ns <= self.manifest.window_ns
     }
 
     fn contextual(record: &Observation, principal: &Option<String>, authority: &FactValue) -> bool {
@@ -114,15 +119,15 @@ impl Computation {
         else {
             return false;
         };
-        record.execution.iter().any(|byte| *byte != 0)
+        record.effect.execution_set_id.iter().any(|byte| *byte != 0)
             && workload_binding
                 .as_ref()
-                .is_some_and(|subject| subject.identity == record.execution)
+                .is_some_and(|subject| subject.identity == record.effect.execution_set_id)
             && principal.as_ref() == Some(principal_id)
             && proof_quality.authority_contextual()
     }
 
-    fn carried(&self, row: u64, record: &Observation, authority: &FactValue) -> bool {
+    fn carried(&self, row: u32, record: &Observation, authority: &FactValue) -> bool {
         let FactValue::AuthorityUse {
             authority_id,
             request_id,
@@ -149,9 +154,9 @@ impl Computation {
             else {
                 return false;
             };
-            *task_cookie == record.task
-                && Some(*process_instance_id) == record.process
-                && record.object == *socket_object_id
+            *task_cookie == record.effect.task_cookie
+                && Some(*process_instance_id) == record.process_instance_id
+                && record.effect.exact_object_id == *socket_object_id
                 && channel_authority == authority_id
                 && Some(carried_request_id) == request_id.as_ref()
                 && Some(channel_lease) == credential_lease_id.as_ref()

@@ -419,9 +419,9 @@ bounds. A Graph reader facade and a second worker mutex are unnecessary.
 native call result. Query and Package Runtime validate the complete SDK return
 before they construct that result. Graph then checks the exact admission,
 image, export, tenant, and canonical inputs. Its
-[output validator](../../crates/araphor-analysis/src/graph/output.rs) checks
+[output validator](../../crates/araphor-analysis/src/graph/resolved.rs) checks
 selected records, facts, subjects, evidence, reasons, and checkpoint rows.
-[Graph::finish](../../crates/araphor-analysis/src/graph/finish.rs) assembles the
+[Graph::finish](../../crates/araphor-analysis/src/graph/assembly.rs) assembles the
 snapshot and calls the existing Data snapshot validator.
 
 These finite owners do not implement Graph production, historical replay,
@@ -4166,7 +4166,7 @@ with all existing loss and accounting guards.
   -> [Node coverage](../../crates/mithril-node/src/observation/coverage.rs) retains the sampled counters and observed interval.
   -> [ControlConnection::send_coverage_report](../../crates/mithril-node/src/control.rs) sends those counters through the authenticated coverage protocol.
   -> [Coverage SQL](../../crates/araphor-analysis-builtins/src/discovery/sql/coverage_ranges.sql) uses native DataFusion operators to accept the inclusive closing sequence after all other guards pass.
-  -> [Graph::proof](../../crates/araphor-analysis/src/graph/proof.rs) uses the selected coverage range when it derives evidence quality.
+  -> [Graph::proof](../../crates/araphor-analysis/src/graph/input.rs) uses the selected coverage range when it derives evidence quality.
 
 [CoverageInterval::is_complete](../../crates/araphor-data/src/discovery/profile.rs) applies the same counter boundary to the portable interval value.
   -> [coverage_includes_assigned_tail](../../crates/araphor-analysis/src/package/tests/sql/coverage.rs) compares its result with native SQL output.

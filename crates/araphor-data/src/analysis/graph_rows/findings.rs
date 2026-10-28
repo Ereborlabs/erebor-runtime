@@ -37,7 +37,7 @@ impl GraphRows {
                 Self::json(&finding.required_coverage_interval_ids)?,
                 Self::json(&finding.policy_provenance)?,
                 Self::json(&finding.effects)?,
-                finding.reason.storage()?,
+                crate::graph::contract::storage(&finding.reason)?,
                 Self::label(&finding.severity)?,
                 <&str>::from(finding.sensitivity),
                 &finding.required_action,
@@ -70,7 +70,7 @@ impl GraphRows {
             required_coverage_interval_ids: Self::json_column(row, 10)?,
             policy_provenance: Self::json_column(row, 11)?,
             effects: Self::json_column(row, 12)?,
-            reason: crate::FindingReasonV1::restore(Self::borrowed(row, 13, |value| {
+            reason: crate::graph::contract::restore(Self::borrowed(row, 13, |value| {
                 value.as_str()
             })?)?,
             severity: Self::label_column(row, 14)?,
@@ -92,7 +92,7 @@ impl GraphRows {
             }
             .fail();
         }
-        finding.validate_in(&header.snapshot.input_manifest)?;
+        header.snapshot.input_manifest.validate_finding(&finding)?;
         Ok(finding)
     }
     pub(in crate::analysis) fn read_findings(

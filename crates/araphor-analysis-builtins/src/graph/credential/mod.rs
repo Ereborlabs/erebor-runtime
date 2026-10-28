@@ -7,29 +7,28 @@ mod join;
 impl Computation {
     pub(super) fn credentials(&mut self) -> sdk::Result<()> {
         for row in 0..self.records.len() {
-            let record = self.record(row as u64)?.clone();
+            let record = self.record(row as u32)?.clone();
             let credentials: Vec<_> = self
-                .facts(row as u64)
+                .facts(row as u32)
                 .filter_map(|(_, fact)| match &fact.value {
-                    FactValue::Credential { object_id, .. } if record.object == *object_id => {
+                    FactValue::Credential { object_id, .. }
+                        if record.effect.exact_object_id == *object_id =>
+                    {
                         Some(fact.clone())
                     }
                     _ => None,
                 })
                 .collect();
-            if Self::credential_conflict(&record, &credentials) {
+            if Self::credential_conflict(self.policy_conflict(row as u32)?, &credentials) {
                 self.state.value = "CONTRADICTED".into();
-                self.subjects.push(Subject {
-                    record: row as u64,
-                    context: None,
-                });
+                self.subject(row as u32, None)?;
                 self.finding(
-                    row as u64,
+                    row as u32,
                     "CONTRADICTION",
                     false,
-                    vec![row as u64],
+                    vec![row as u32],
                     vec!["CREDENTIAL_FACTS_CONTRADICTED".into()],
-                );
+                )?;
                 continue;
             }
             for credential in credentials {
@@ -40,18 +39,18 @@ impl Computation {
                         ..
                     }
                 ) || !matches!(
-                    record.operation,
+                    record.operation(),
                     Operation::OpenRead | Operation::Read | Operation::MmapRead
                 ) {
                     continue;
                 }
-                self.credential(row as u64, &record, &credential)?;
+                self.credential(row as u32, &record, &credential)?;
             }
         }
         Ok(())
     }
 
-    fn credential_conflict(record: &Observation, credentials: &[Fact]) -> bool {
+    fn credential_conflict(policy_conflict: bool, credentials: &[Fact]) -> bool {
         let classifications: BTreeSet<_> = credentials
             .iter()
             .filter_map(|fact| match &fact.value {
@@ -63,7 +62,7 @@ impl Computation {
             .collect();
         let mut completions = BTreeMap::new();
         let mut conflict =
-            classifications.len() > 1 || (!credentials.is_empty() && record.policy_conflict);
+            classifications.len() > 1 || (!credentials.is_empty() && policy_conflict);
         for completion in credentials.iter().filter_map(|fact| match &fact.value {
             FactValue::Credential { completion, .. } => completion.as_ref(),
             _ => None,
@@ -78,7 +77,7 @@ impl Computation {
         conflict
     }
 
-    fn credential(&mut self, row: u64, record: &Observation, credential: &Fact) -> sdk::Result<()> {
+    fn credential(&mut self, row: u32, record: &Observation, credential: &Fact) -> sdk::Result<()> {
         let FactValue::Credential {
             object_id,
             completion,
@@ -92,31 +91,29 @@ impl Computation {
             ));
         };
         self.state.value = "CREDENTIAL_OBSERVED".into();
-        self.subjects.push(Subject {
-            record: row,
-            context: None,
-        });
-        let bytes = record.admitted
-            && credential.reviewed
+        self.subject(row, None)?;
+        let reviewed = self.reviewed(credential)?;
+        let bytes = record.admitted()
+            && reviewed
             && proof_quality.succeeded()
             && completion.as_ref().is_some_and(|completion| {
                 completion.byte_count > 0
                     && completion.result > 0
-                    && completion.task_cookie == record.task
-                    && Some(completion.process_instance_id) == record.process
+                    && completion.task_cookie == record.effect.task_cookie
+                    && Some(completion.process_instance_id) == record.process_instance_id
                     && completion.object_id == *object_id
                     && matches!(
                         completion.path,
                         ReadPath::Read | ReadPath::InheritedFd | ReadPath::IoUring
                     )
-                    && record.operation == Operation::Read
+                    && record.operation() == Operation::Read
             });
         let mut evidence = vec![row];
         let mut limits = vec!["TLS_PAYLOAD_UNOBSERVABLE".into()];
         if !bytes {
             limits.push("CREDENTIAL_BYTES_UNPROVEN".into());
         }
-        if !credential.reviewed {
+        if !reviewed {
             limits.push("REVIEWED_CREDENTIAL_PROVENANCE_MISSING".into());
         }
         let matched = self.authorities(record, &credential.value, bytes, &mut evidence)?;
@@ -162,7 +159,7 @@ impl Computation {
             edge_evidence.push(fact_record);
             self.edge(
                 row,
-                Some(index as u64),
+                Some(index as u32),
                 EdgeKind::Authority,
                 if contradicted {
                     Cause::Contradicted
@@ -172,15 +169,15 @@ impl Computation {
                     Cause::Contextual
                 },
                 edge_evidence.clone(),
-            );
+            )?;
         }
         self.finding(
             row,
             reason,
-            direct && !contradicted && record.complete,
+            direct && !contradicted && record.complete(),
             evidence,
             limits,
-        );
+        )?;
         Ok(())
     }
 

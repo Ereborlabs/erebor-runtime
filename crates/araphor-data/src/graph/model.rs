@@ -6,27 +6,22 @@ use snafu::ResultExt as _;
 
 use super::*;
 use crate::{
-    AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, DiscoveryCoverageV1,
-    DiscoveryRecordIdV1, DiscoveryRecordV1, EvidenceIntakeIdentityV1, GraphEncodingSnafu,
-    GraphInvalidSnafu, ProcessorScopeV1, Result,
+    AnalysisContextKeyV1, AnalysisContextVersionV1, DiscoveryCoverageV1, DiscoveryRecordIdV1,
+    DiscoveryRecordV1, EvidenceIntakeIdentityV1, GraphEncodingSnafu, GraphInvalidSnafu,
+    ProcessorScopeV1, Result,
 };
 
 pub use araphor_analysis_builtins::graph::{
-    GraphContextActionV1, GraphFactValueV1, GraphPolicyActivationV1, GraphReadCompletionV1,
+    DeclaredFindingReasonV1, FindingReasonV1, FindingSeverityV1, FindingV1, GraphBranchStateV1,
+    GraphBranchV1, GraphCauseV1, GraphContextActionV1, GraphEdgeKeyV1, GraphEdgeTypeV1,
+    GraphEdgeV1, GraphEffectV1, GraphFactV1, GraphFactValueV1, GraphPackageCheckpointV1,
+    GraphPackageStateV1, GraphPhysicalResultV1, GraphPolicyActivationV1, GraphReadCompletionV1,
     GraphReadPathV1, GraphSubjectAuthorityV1, GraphSubjectKeyV1, GraphSubjectKindV1,
     KubernetesStageProofV1, PolicyObservationProvenanceV1, PolicyProvenanceStateV1,
 };
 
 pub trait GraphValidate {
     fn validate(&self) -> Result<()>;
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub enum FindingSeverityV1 {
-    Info,
-    Warning,
-    High,
-    Critical,
 }
 
 impl GraphValidate for GraphSubjectKeyV1 {
@@ -49,47 +44,6 @@ impl GraphValidate for GraphSubjectKeyV1 {
         }
         Ok(())
     }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GraphCauseV1 {
-    Direct,
-    Contextual,
-    Contradicted,
-    Superseded,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GraphEdgeTypeV1 {
-    TaskInProcess,
-    TaskInExecutionSet,
-    NativeParent,
-    NativeEffect,
-    CredentialAuthority,
-    KubernetesExpansion,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphEdgeKeyV1 {
-    pub from: u32,
-    pub to: u32,
-    pub edge_type: GraphEdgeTypeV1,
-    pub package_id: String,
-    pub evidence: Vec<u32>,
-    pub cause: GraphCauseV1,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphEdgeV1 {
-    pub key: GraphEdgeKeyV1,
-    pub proof_quality: ProofQualityV1,
-    pub required_coverage_interval_ids: Vec<[u8; 16]>,
-    pub first_boottime_ns: u64,
-    pub last_boottime_ns: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -185,156 +139,77 @@ impl GraphValidate for PolicyObservationProvenanceV1 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum FindingReasonV1 {
-    UnexpectedEffect,
-    AuditedRoleDeviation,
-    LineageCoverageGap,
-    CredentialPivot,
-    ContextualCredentialPivot,
-    MissingAuthorityProof,
-    Contradiction,
-    KubernetesProofMissing,
-    OutsideAuthority,
-    InMemoryOnly,
-    PayloadUnobservable,
-    #[serde(untagged)]
-    Declared(DeclaredFindingReasonV1),
+impl GraphValidate for FindingV1 {
+    fn validate(&self) -> Result<()> {
+        validate_finding_fields(self)?;
+        validate_finding_provenance(self)
+    }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeclaredFindingReasonV1 {
-    pub code: String,
-    pub schema: araphor_analysis_sdk::Schema,
-    pub ipc: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GraphBranchStateV1 {
-    Open,
-    TerminalVerified,
-    ContextualOnly,
-    OutsideAuthority,
-    CoverageUnknown,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphBranchV1 {
-    pub package_id: String,
-    pub seed: GraphSubjectKeyV1,
-    pub evidence: Vec<DiscoveryRecordIdV1>,
-    pub state: GraphBranchStateV1,
-    pub missing_fields: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GraphPhysicalResultV1 {
-    Prevented,
-    PacketDropped,
-    TerminationQueued,
-    Unknown,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphEffectV1 {
-    pub evidence: DiscoveryRecordIdV1,
-    pub process_instance_id: Option<[u8; 16]>,
-    pub entry_instance_id: Option<[u8; 16]>,
-    pub binding_id: Option<[u8; 16]>,
-    pub role_id: Option<u32>,
-    pub state_id: Option<u32>,
-    pub entry_rule_id: Option<u32>,
-    pub profile_generation_ref_id: Option<u64>,
-    pub original_kernel_sequence: Option<u64>,
-    pub effect_family: u32,
-    pub operation: u32,
-    pub source_decision: u32,
-    pub source_reason: u32,
-    pub configured_errno: i32,
-    pub kernel_result: i32,
-    pub physical_result: GraphPhysicalResultV1,
-    pub proof_quality: ProofQualityV1,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FindingV1 {
-    pub tenant_id: [u8; 16],
-    pub finding_id: String,
-    pub package_id: String,
-    pub package_version: u64,
-    pub subject_id: GraphSubjectKeyV1,
-    pub state: FindingStateV1,
-    pub window_start_utc_ns: i64,
-    pub window_end_utc_ns: i64,
-    pub evidence: Vec<DiscoveryRecordIdV1>,
-    pub required_coverage_interval_ids: Vec<[u8; 16]>,
-    pub policy_provenance: Vec<PolicyObservationProvenanceV1>,
-    pub effects: Vec<GraphEffectV1>,
-    pub reason: FindingReasonV1,
-    pub severity: FindingSeverityV1,
-    pub sensitivity: ContextSensitivityV1,
-    pub required_action: Option<String>,
-    pub limits: Vec<String>,
-}
-
-impl FindingV1 {
-    pub const PACKAGES: [&'static str; 3] = ["HF-PROC-001", "HF-DW-001", "HF-XNODE-001"];
-
-    /// The caller must validate the parent revision first.
-    pub fn validate_in(&self, revision: &GraphRevisionV1) -> Result<()> {
-        self.subject_id.validate()?;
-        self.reason.validate(&self.package_id)?;
-        if self.tenant_id == [0; 16]
-            || self.subject_id.tenant_id != self.tenant_id
-            || self.finding_id.is_empty()
-            || self.package_id.is_empty()
-            || self.package_version != 1
-            || self.window_start_utc_ns > self.window_end_utc_ns
-            || self.evidence.is_empty()
-            || self.evidence.windows(2).any(|pair| pair[0] >= pair[1])
-            || self
-                .evidence
-                .iter()
-                .any(|id| revision.evidence.binary_search(id).is_err())
-            || self
-                .required_coverage_interval_ids
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
-            || self.required_coverage_interval_ids.contains(&[0; 16])
-            || self
-                .effects
-                .iter()
-                .any(|effect| self.evidence.binary_search(&effect.evidence).is_err())
-            || self
-                .required_action
-                .as_ref()
-                .is_some_and(|action| action.is_empty())
-            || self.limits.iter().any(|limit| limit.is_empty())
-            || self.limits.windows(2).any(|pair| pair[0] >= pair[1])
+impl GraphRevisionV1 {
+    /// The caller must validate this revision first.
+    pub fn validate_finding(&self, finding: &FindingV1) -> Result<()> {
+        validate_finding_fields(finding)?;
+        if finding
+            .evidence
+            .iter()
+            .any(|id| self.evidence.binary_search(id).is_err())
         {
             return GraphInvalidSnafu {
                 field: "finding revision",
             }
             .fail();
         }
-        for provenance in &self.policy_provenance {
-            provenance.validate()?;
-            if provenance.source.tenant_id != self.tenant_id {
-                return GraphInvalidSnafu {
-                    field: "finding provenance tenant",
-                }
-                .fail();
-            }
-        }
-        Ok(())
+        validate_finding_provenance(finding)
     }
+}
+
+fn validate_finding_fields(finding: &FindingV1) -> Result<()> {
+    finding.subject_id.validate()?;
+    super::contract::validate(&finding.reason, &finding.package_id)?;
+    if finding.tenant_id == [0; 16]
+        || finding.subject_id.tenant_id != finding.tenant_id
+        || finding.finding_id.is_empty()
+        || finding.package_id.is_empty()
+        || finding.package_version != 1
+        || finding.window_start_utc_ns > finding.window_end_utc_ns
+        || finding.evidence.is_empty()
+        || finding.evidence.windows(2).any(|pair| pair[0] >= pair[1])
+        || finding
+            .required_coverage_interval_ids
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || finding.required_coverage_interval_ids.contains(&[0; 16])
+        || finding
+            .effects
+            .iter()
+            .any(|effect| finding.evidence.binary_search(&effect.evidence).is_err())
+        || finding
+            .required_action
+            .as_ref()
+            .is_some_and(|action| action.is_empty())
+        || finding.limits.iter().any(|limit| limit.is_empty())
+        || finding.limits.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return GraphInvalidSnafu {
+            field: "finding revision",
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+fn validate_finding_provenance(finding: &FindingV1) -> Result<()> {
+    for provenance in &finding.policy_provenance {
+        provenance.validate()?;
+        if provenance.source.tenant_id != finding.tenant_id {
+            return GraphInvalidSnafu {
+                field: "finding provenance tenant",
+            }
+            .fail();
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -344,46 +219,6 @@ pub struct GraphVersionV1 {
     pub edges: Vec<GraphEdgeV1>,
     pub branches: Vec<GraphBranchV1>,
     pub facts: Vec<GraphFactV1>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GraphPackageStateV1 {
-    Waiting,
-    NativeEffect,
-    CredentialObserved,
-    AuthorityChannel,
-    DirectPivot,
-    ContextualPivot,
-    Contradicted,
-    CoverageInsufficient,
-    KubernetesProofMissing,
-    KubernetesRequest,
-    KubernetesAudit,
-    KubernetesObject,
-    KubernetesScheduled,
-    RemoteAdmission,
-    #[serde(untagged)]
-    Declared(String),
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphPackageCheckpointV1 {
-    pub package_id: String,
-    pub package_version: u64,
-    pub required_inputs: Vec<String>,
-    pub state: GraphPackageStateV1,
-    pub maximum_lateness_ns: u64,
-    pub retention_ttl_ns: u64,
-    pub clock_uncertainty_ns: Option<u64>,
-    pub late_action: String,
-    pub window_ns: u64,
-    pub coverage_predicate: String,
-    pub replay_contract_id: String,
-    pub result_states: Vec<FindingStateV1>,
-    pub accepted_cursor_watermark: u64,
-    pub observed_boottime_watermark_ns: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -510,7 +345,7 @@ impl GraphSnapshotV1 {
             }
         }
         for finding in &self.findings {
-            finding.validate_in(&self.input_manifest)?;
+            self.input_manifest.validate_finding(finding)?;
             if !self.packages.iter().any(|package| {
                 package.package_id == finding.package_id
                     && package.package_version == finding.package_version
@@ -536,15 +371,8 @@ impl TryFrom<&[u8]> for GraphSnapshotV1 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphFactV1 {
-    pub record_id: DiscoveryRecordIdV1,
-    pub value: GraphFactValueV1,
-}
-
-impl GraphFactV1 {
-    pub fn validate(&self) -> Result<()> {
+impl GraphValidate for GraphFactV1 {
+    fn validate(&self) -> Result<()> {
         self.record_id.validate()?;
         match &self.value {
             GraphFactValueV1::Activation(activation) => {

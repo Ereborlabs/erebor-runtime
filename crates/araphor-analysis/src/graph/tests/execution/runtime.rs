@@ -5,7 +5,8 @@ use araphor_package::{
     SqlReasonV1,
 };
 use datafusion::sql::sqlparser::ast::Value;
-use sdk::arrow_array::{Array as _, BinaryArray};
+use datafusion::{common::ScalarValue, logical_expr::lit, sql::unparser::expr_to_sql};
+use sdk::arrow_array::Array;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Target {
@@ -14,7 +15,7 @@ pub(super) enum Target {
     Native,
 }
 
-pub(super) struct Fixture {
+pub(in crate::graph) struct Fixture {
     pub(super) engine: Arc<Engine>,
     store: Arc<AnalysisStore>,
     package: sdk::Package,
@@ -267,7 +268,7 @@ impl Fixture {
         Ok(())
     }
 
-    fn sql(output: &sdk::Output) -> TestResult<SqlModelV1> {
+    pub(in crate::graph::tests) fn sql(output: &sdk::Output) -> TestResult<SqlModelV1> {
         let mut sql = SqlModelV1::default();
         for data in &output.datasets {
             sql.outputs
@@ -296,23 +297,31 @@ impl Fixture {
                 .join(", ");
             sql.evidence = Some(format!("SELECT * FROM (VALUES {rows}) AS links(output_dataset, output_row, input_dataset, input_row)"));
         }
-        let mut reasons = BTreeMap::<_, Vec<_>>::new();
+        let mut reasons = BTreeMap::<_, (sdk::arrow_schema::SchemaRef, Vec<String>)>::new();
         for reason in &output.reasons {
-            reasons
+            let (schema, rows) = reasons
                 .entry((reason.output.dataset.clone(), reason.code.clone()))
-                .or_default()
-                .push(format!(
-                    "(CAST({} AS BIGINT UNSIGNED), CAST({} AS BYTEA))",
-                    reason.output.row,
-                    Self::literal(&reason.details, 0)?,
-                ));
+                .or_insert_with(|| (reason.details.schema(), Vec::new()));
+            assert_eq!(schema.as_ref(), reason.details.schema().as_ref());
+            let mut values = vec![format!("arrow_cast({}, 'UInt64')", reason.output.row)];
+            for column in reason.details.columns() {
+                values.push(Self::literal(column.as_ref(), 0)?);
+            }
+            rows.push(format!("({})", values.join(", ")));
         }
-        for ((output, code), rows) in reasons {
+        for ((output, code), (schema, rows)) in reasons {
+            let columns = std::iter::once("output_row".to_owned())
+                .chain(schema.fields().iter().map(|field| {
+                    datafusion::sql::sqlparser::ast::Ident::with_quote('"', field.name())
+                        .to_string()
+                }))
+                .collect::<Vec<_>>()
+                .join(", ");
             sql.reasons.push(SqlReasonV1 {
                 output,
                 code,
                 sql: format!(
-                    "SELECT * FROM (VALUES {}) AS details(output_row, value)",
+                    "SELECT * FROM (VALUES {}) AS details({columns})",
                     rows.join(", ")
                 ),
             });
@@ -320,32 +329,94 @@ impl Fixture {
         Ok(sql)
     }
 
-    fn rows(batches: &[sdk::RecordBatch]) -> TestResult<String> {
+    pub(in crate::graph) fn rows(batches: &[sdk::RecordBatch]) -> TestResult<String> {
+        let schema = batches.first().ok_or("native output schema")?.schema();
         let mut values = Vec::new();
         for batch in batches {
             for row in 0..batch.num_rows() {
-                values.push(format!("(CAST({} AS BYTEA))", Self::literal(batch, row)?));
+                let fields = batch
+                    .columns()
+                    .iter()
+                    .map(|column| Self::literal(column.as_ref(), row))
+                    .collect::<TestResult<Vec<_>>>()?;
+                values.push(format!("({})", fields.join(", ")));
             }
         }
+        let names = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                datafusion::sql::sqlparser::ast::Ident::with_quote('"', field.name()).to_string()
+            })
+            .collect::<Vec<_>>();
         Ok(if values.is_empty() {
-            "SELECT value FROM records WHERE FALSE".into()
+            let fields = schema
+                .fields()
+                .iter()
+                .zip(&names)
+                .map(|(field, name)| {
+                    format!(
+                        "arrow_cast(NULL, {}) AS {name}",
+                        Value::SingleQuotedString(field.data_type().to_string())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("SELECT {fields} WHERE FALSE")
         } else {
             format!(
-                "SELECT * FROM (VALUES {}) AS rows(value)",
-                values.join(", ")
+                "SELECT * FROM (VALUES {}) AS rows({})",
+                values.join(", "),
+                names.join(", ")
             )
         })
     }
 
-    fn literal(batch: &sdk::RecordBatch, row: usize) -> TestResult<Value> {
-        let array = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .ok_or("Rows Binary field")?;
-        assert_eq!(array.null_count(), 0);
-        Ok(Value::SingleQuotedString(
-            std::str::from_utf8(array.value(row))?.into(),
-        ))
+    pub(in crate::graph) fn literal(array: &dyn Array, row: usize) -> TestResult<String> {
+        let kind = Value::SingleQuotedString(array.data_type().to_string());
+        if array.is_null(row) {
+            return Ok(format!("arrow_cast(NULL, {kind})"));
+        }
+        let value = ScalarValue::try_from_array(array, row)?;
+        let expression = match value {
+            ScalarValue::Binary(Some(bytes))
+            | ScalarValue::LargeBinary(Some(bytes))
+            | ScalarValue::BinaryView(Some(bytes))
+            | ScalarValue::FixedSizeBinary(_, Some(bytes)) => {
+                Value::HexStringLiteral(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+                    .to_string()
+            }
+            ScalarValue::Struct(array) => {
+                let mut fields = Vec::new();
+                for (field, column) in array.fields().iter().zip(array.columns()) {
+                    fields.push(Value::SingleQuotedString(field.name().clone()).to_string());
+                    fields.push(Self::literal(column.as_ref(), 0)?);
+                }
+                return Ok(format!("named_struct({})", fields.join(", ")));
+            }
+            ScalarValue::List(array) => {
+                let values = array.value(0);
+                let fields = (0..values.len())
+                    .map(|row| Self::literal(values.as_ref(), row))
+                    .collect::<TestResult<Vec<_>>>()?;
+                format!("make_array({})", fields.join(", "))
+            }
+            ScalarValue::LargeList(array) => {
+                let values = array.value(0);
+                let fields = (0..values.len())
+                    .map(|row| Self::literal(values.as_ref(), row))
+                    .collect::<TestResult<Vec<_>>>()?;
+                format!("make_array({})", fields.join(", "))
+            }
+            ScalarValue::FixedSizeList(array) => {
+                let values = array.value(0);
+                let fields = (0..values.len())
+                    .map(|row| Self::literal(values.as_ref(), row))
+                    .collect::<TestResult<Vec<_>>>()?;
+                format!("make_array({})", fields.join(", "))
+            }
+            value => expr_to_sql(&lit(value))?.to_string(),
+        };
+        Ok(format!("arrow_cast({expression}, {kind})"))
     }
 }

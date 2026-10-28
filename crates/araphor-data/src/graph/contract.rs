@@ -7,135 +7,72 @@ use crate::{AnalysisContractSnafu, GraphEncodingSnafu, GraphInvalidSnafu, Result
 #[cfg(test)]
 mod tests;
 
-impl FindingReasonV1 {
-    fn contract_id(package_id: &str) -> Result<()> {
-        if FindingV1::PACKAGES.contains(&package_id) {
-            Ok(())
-        } else {
-            GraphInvalidSnafu {
-                field: "analysis package identity",
-            }
-            .fail()
+fn contract_id(package_id: &str) -> Result<()> {
+    if FindingV1::PACKAGES.contains(&package_id) {
+        Ok(())
+    } else {
+        GraphInvalidSnafu {
+            field: "analysis package identity",
         }
-    }
-
-    pub fn analysis_code(&self, package_id: &str) -> Result<String> {
-        if let Self::Declared(reason) = self {
-            reason.validate(package_id)?;
-            return Ok(reason.code.clone());
-        }
-        Self::contract_id(package_id)?;
-        let value = serde_json::to_value(self).context(GraphEncodingSnafu)?;
-        let code = value.as_str().ok_or_else(|| {
-            GraphInvalidSnafu {
-                field: "analysis reason spelling",
-            }
-            .build()
-        })?;
-        Ok(format!("{package_id}.{code}"))
-    }
-
-    pub fn from_analysis_code(package_id: &str, code: &str) -> Result<Self> {
-        Self::contract_id(package_id)?;
-        let local = code
-            .strip_prefix(&format!("{package_id}."))
-            .ok_or_else(|| {
-                GraphInvalidSnafu {
-                    field: "analysis reason namespace",
-                }
-                .build()
-            })?;
-        serde_json::from_value(serde_json::Value::String(local.into())).map_err(|_| {
-            GraphInvalidSnafu {
-                field: "analysis reason code",
-            }
-            .build()
-        })
-    }
-    pub fn label(&self) -> Result<String> {
-        match self {
-            Self::Declared(reason) => Ok(reason.code.clone()),
-            _ => serde_json::to_value(self)
-                .context(GraphEncodingSnafu)?
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| {
-                    GraphInvalidSnafu {
-                        field: "finding reason label",
-                    }
-                    .build()
-                }),
-        }
-    }
-
-    pub fn storage(&self) -> Result<String> {
-        match self {
-            Self::Declared(_) => serde_json::to_string(self).context(GraphEncodingSnafu),
-            _ => self.label(),
-        }
-    }
-
-    pub fn restore(value: &str) -> Result<Self> {
-        if value.starts_with('{') {
-            serde_json::from_str(value).context(GraphEncodingSnafu)
-        } else {
-            serde_json::from_value(serde_json::Value::String(value.into()))
-                .context(GraphEncodingSnafu)
-        }
-    }
-
-    pub(super) fn validate(&self, package: &str) -> Result<()> {
-        match self {
-            Self::Declared(reason) => reason.validate(package),
-            _ => Self::contract_id(package),
-        }
+        .fail()
     }
 }
 
-impl DeclaredFindingReasonV1 {
-    pub fn from_value(value: &sdk::ReasonValue) -> Result<Self> {
-        let schema = value.details.schema().as_ref().clone();
-        let encoded = sdk::wire::Dataset::encode(
-            &sdk::Dataset {
-                name: "details".into(),
-                batches: vec![value.details.clone()],
-            },
-            &schema,
-        )
-        .context(AnalysisContractSnafu)?;
-        Ok(Self {
-            code: value.code.clone(),
-            schema,
-            ipc: encoded.arrow_ipc,
-        })
+pub(crate) fn label(reason: &FindingReasonV1) -> Result<String> {
+    match reason.label() {
+        Ok(value) => Ok(value),
+        Err(sdk::Error::Encoding { source, .. }) => Err(source).context(GraphEncodingSnafu),
+        Err(sdk::Error::Contract {
+            code: sdk::ErrorCode::Invalid,
+            field,
+            ..
+        }) if field == "finding reason label" => GraphInvalidSnafu {
+            field: "finding reason label",
+        }
+        .fail(),
+        Err(source) => Err(source).context(AnalysisContractSnafu),
     }
+}
 
-    fn validate(&self, package: &str) -> Result<()> {
-        let local = self.code.strip_prefix(&format!("{package}."));
-        if local.is_none_or(str::is_empty) {
-            return GraphInvalidSnafu {
-                field: "finding reason namespace",
-            }
-            .fail();
+pub(crate) fn storage(reason: &FindingReasonV1) -> Result<String> {
+    match reason {
+        FindingReasonV1::Declared(_) => serde_json::to_string(reason).context(GraphEncodingSnafu),
+        _ => label(reason),
+    }
+}
+
+pub(crate) fn restore(value: &str) -> Result<FindingReasonV1> {
+    if value.starts_with('{') {
+        serde_json::from_str(value).context(GraphEncodingSnafu)
+    } else {
+        serde_json::from_value(serde_json::Value::String(value.into())).context(GraphEncodingSnafu)
+    }
+}
+
+pub(crate) fn validate(reason: &FindingReasonV1, package: &str) -> Result<()> {
+    match reason {
+        FindingReasonV1::Declared(reason) => validate_declared(reason, package),
+        _ => contract_id(package),
+    }
+}
+fn validate_declared(reason: &DeclaredFindingReasonV1, package: &str) -> Result<()> {
+    match reason.validate(package) {
+        Err(sdk::Error::Contract {
+            code: sdk::ErrorCode::Invalid,
+            field,
+            ..
+        }) if field == "finding reason namespace" => GraphInvalidSnafu {
+            field: "finding reason namespace",
         }
-        let data = sdk::wire::Dataset::decode_ipc("details", &self.ipc, Some(&self.schema))
-            .context(AnalysisContractSnafu)?;
-        if data.batches.len() != 1 || data.batches[0].num_rows() != 1 {
-            return GraphInvalidSnafu {
-                field: "finding reason details",
-            }
-            .fail();
+        .fail(),
+        Err(sdk::Error::Contract {
+            code: sdk::ErrorCode::Invalid,
+            field,
+            ..
+        }) if field == "finding reason details" => GraphInvalidSnafu {
+            field: "finding reason details",
         }
-        sdk::Package::new(
-            package,
-            "1",
-            vec![sdk::Model::new(
-                "reason",
-                Vec::new(),
-                vec![sdk::Port::new("details", self.schema.clone())],
-            )],
-        )
-        .validate()
-        .context(AnalysisContractSnafu)
+        .fail(),
+        result => result.context(AnalysisContractSnafu),
     }
 }

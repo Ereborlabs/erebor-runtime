@@ -1,46 +1,75 @@
 use super::*;
+use erebor_interceptor_abi::{
+    EffectPhysicalResultV1, KernelEffectFamilyV1, KernelEffectOperationV1,
+};
 
 pub(super) fn record() -> Observation {
     Observation {
-        lifetime: vec![2],
-        task: 3,
-        process: Some([4; 16]),
-        execution: vec![5; 16],
-        object: vec![6; 16],
-        role: Some(1),
-        state: Some(1),
-        exact_identity: true,
-        policy_conflict: false,
-        complete: true,
-        network: false,
-        denied: true,
-        admitted: false,
-        operation: Operation::Read,
-        physical: Physical::Prevented,
-        boottime: 10,
+        id: identity(0),
+        effect: crate::discovery::DiscoveryEffectKeyV1 {
+            task_cookie: 3,
+            target_task_cookie: None,
+            process_lineage_id: vec![4; 16],
+            authority_domain_id: vec![4; 16],
+            execution_set_id: vec![5; 16],
+            exact_object_id: vec![6; 16],
+            destination_id: 0,
+            policy_rule_id: 1,
+            reason: 1,
+            decision: EffectPhysicalResultV1::DeniedBeforeEffect as u32,
+            effect_family: KernelEffectFamilyV1::File as u32,
+            operation: KernelEffectOperationV1::Read as u32,
+            operation_argument: None,
+            configured_errno: 1,
+            kernel_result: -1,
+            exact_file_object: None,
+        },
+        ingested_utc_ns: 10,
+        observed_boottime_ns: 10,
+        profile_generation_ref_id: Some(1),
+        original_kernel_sequence: Some(1),
+        coverage_interval_id: vec![7; 16],
+        process_instance_id: Some([4; 16]),
+        entry_instance_id: Some([8; 16]),
+        binding_id: Some([9; 16]),
+        role_id: Some(1),
+        state_id: Some(1),
+        entry_rule_id: Some(1),
+        proof_quality: ProofQualityV1 {
+            integrity: ProofIntegrityV1::AuthenticatedChannel,
+            ..ProofQualityV1::kernel_decision(TemporalCoverageV1::Complete)
+        },
     }
 }
 
-pub(super) fn fact(record: u64, value: FactValue) -> Fact {
+pub(super) fn fact(record: u32, value: FactValue) -> Fact {
     Fact {
-        identity: record,
         record,
-        reviewed: true,
+        key: AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "fixture".into(),
+            entity_key: record.to_be_bytes().to_vec(),
+            lifetime_key: identity(0).stream.key(),
+            owner_revision: 1,
+        },
+        sensitivity: ContextSensitivityV1::Tenant,
         value,
     }
 }
 
 pub(super) fn fixture(
-    detector: Detector,
+    _detector: Detector,
     records: &[Observation],
     facts: &[Fact],
 ) -> sdk::Result<sdk::Fixture> {
-    let package = detector.descriptor();
-    let model = &package.exports[0];
+    let mut records = records.to_vec();
+    for (row, record) in records.iter_mut().enumerate() {
+        record.id = identity(row as u64);
+    }
     let datasets = vec![
-        Rows::encode(&model.inputs[0].port, records)?,
-        Rows::encode(&model.inputs[1].port, facts)?,
-        Rows::encode(&model.inputs[2].port, &[Manifest { window_ns: 100 }])?,
+        Observation::encode(&records)?,
+        Fact::encode(facts)?,
+        Manifest::encode(&[Manifest { window_ns: 100 }])?,
     ];
     Ok(sdk::Fixture {
         implementation: "shared-rust".into(),
@@ -80,7 +109,7 @@ pub(super) fn findings(
 ) -> sdk::Result<(Vec<Finding>, sdk::Output)> {
     let package = detector.descriptor();
     let report = package.test(fixture, |evaluation| detector.evaluate(evaluation))?;
-    let rows = Rows::decode(&package.exports[0].outputs[2], &report.output.datasets[2])?;
+    let rows = Finding::decode(&report.output.datasets[2])?;
     Ok((rows, report.output))
 }
 
@@ -116,7 +145,7 @@ pub(super) fn proof() -> ProofQualityV1 {
 
 pub(super) fn context(classification: ContextClass) -> FactValue {
     FactValue::Context {
-        subject: subject(GraphSubjectKindV1::Task, 3_u64.to_be_bytes().to_vec()),
+        subject: subject(GraphSubjectKindV1::Artifact, vec![9; 16]),
         action_id: "context".into(),
         classification,
         proof_quality: proof(),

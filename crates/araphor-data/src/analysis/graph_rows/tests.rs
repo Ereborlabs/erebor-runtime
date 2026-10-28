@@ -560,14 +560,14 @@ fn native_membership_validation() -> TestResult {
         effect.evidence = absent.clone();
     }
     rejected(
-        missing_finding.validate_in(&sorted.input_manifest),
+        sorted.input_manifest.validate_finding(&missing_finding),
         "finding revision",
     );
 
     let mut missing_effect = sorted.findings[0].clone();
     missing_effect.effects[0].evidence = absent.clone();
     rejected(
-        missing_effect.validate_in(&sorted.input_manifest),
+        sorted.input_manifest.validate_finding(&missing_effect),
         "finding revision",
     );
 
@@ -600,7 +600,7 @@ fn native_membership_validation() -> TestResult {
     unsorted_finding.evidence.reverse();
     unsorted_finding.effects.clear();
     rejected(
-        unsorted_finding.validate_in(&sorted.input_manifest),
+        sorted.input_manifest.validate_finding(&unsorted_finding),
         "finding revision",
     );
 

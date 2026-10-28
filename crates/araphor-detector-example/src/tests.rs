@@ -7,29 +7,58 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     let package = BurstDetector::package();
     let model = &package.exports[0];
     let first = Observation {
-        lifetime: vec![1],
-        task: 7,
-        process: Some([2; 16]),
-        execution: vec![3],
-        object: vec![4],
-        role: None,
-        state: None,
-        exact_identity: true,
-        policy_conflict: false,
-        complete: true,
-        network: false,
-        denied: false,
-        admitted: true,
-        operation: Operation::Read,
-        physical: Physical::Unknown,
-        boottime: 10,
+        id: araphor_analysis_builtins::discovery::DiscoveryRecordIdV1 {
+            stream: araphor_analysis_builtins::discovery::EvidenceIntakeIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "example".into(),
+                node_boot_id: [2; 16],
+                label_epoch: 1,
+                source_id: [3; 16],
+                source_epoch: 1,
+            },
+            cpu_id: 0,
+            durable_cursor: 1,
+        },
+        effect: araphor_analysis_builtins::discovery::DiscoveryEffectKeyV1 {
+            task_cookie: 7,
+            target_task_cookie: None,
+            process_lineage_id: vec![2; 16],
+            authority_domain_id: vec![3; 16],
+            execution_set_id: vec![4; 16],
+            exact_object_id: vec![5; 16],
+            destination_id: 0,
+            policy_rule_id: 0,
+            reason: 0,
+            decision: 0,
+            effect_family: 0,
+            operation: 0,
+            operation_argument: None,
+            configured_errno: 0,
+            kernel_result: 0,
+            exact_file_object: None,
+        },
+        ingested_utc_ns: 10,
+        observed_boottime_ns: 10,
+        profile_generation_ref_id: None,
+        original_kernel_sequence: None,
+        coverage_interval_id: vec![6; 16],
+        process_instance_id: Some([2; 16]),
+        entry_instance_id: None,
+        binding_id: None,
+        role_id: None,
+        state_id: None,
+        entry_rule_id: None,
+        proof_quality: ProofQualityV1::kernel_decision(TemporalCoverageV1::Complete),
     };
     let mut separate = first.clone();
-    separate.lifetime = vec![9];
+    separate.id.stream.node_boot_id = [9; 16];
+    let mut last = first.clone();
+    last.id.durable_cursor = 3;
+    let expected = vec![first.id.clone(), last.id.clone()];
     let inputs = vec![
-        Rows::encode(&model.inputs[0].port, &[first.clone(), separate, first])?,
-        Rows::encode::<Fact>(&model.inputs[1].port, &[])?,
-        Rows::encode(&model.inputs[2].port, &[Manifest { window_ns: 100 }])?,
+        Observation::encode(&[first, separate, last])?,
+        Fact::encode(&[])?,
+        Manifest::encode(&[Manifest { window_ns: 100 }])?,
     ];
     let mut evaluation = sdk::Evaluation {
         previous_outputs: Vec::new(),
@@ -73,10 +102,10 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     let other = other.check_evaluation(&evaluation)?;
     assert!(matches!(<BurstDetector as sdk::Guest>::compute(&other),
         Err(sdk::Error::Contract { code: sdk::ErrorCode::Incompatible, field, .. }) if field == "detector package"));
-    let findings: Vec<Finding> = Rows::decode(&model.outputs[2], &output.datasets[2])?;
+    let findings = Finding::decode(&output.datasets[2])?;
     assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0].evidence, vec![0, 2]);
-    assert!(!findings[0].confirmed);
+    assert_eq!(findings[0].evidence, expected);
+    assert_eq!(findings[0].state, FindingStateV1::CoverageInsufficient);
     assert_eq!(output.evidence.len(), 2);
     assert_eq!(output.reasons[0].code, "example-burst.THRESHOLD");
     assert_eq!(

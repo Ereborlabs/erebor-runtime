@@ -1,4 +1,4 @@
-mod contract;
+pub(crate) mod contract;
 mod input;
 mod model;
 mod proof;
@@ -11,8 +11,7 @@ pub use traversal::*;
 
 pub const GRAPH_PROCESSOR: &str = "graph-findings";
 pub const GRAPH_SCHEMA_VERSION: u32 = 1;
-pub const GRAPH_WINDOW_NS: u64 = 300_000_000_000;
-pub const GRAPH_WITNESS_TTL_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
+pub use araphor_analysis_builtins::graph::{GRAPH_WINDOW_NS, GRAPH_WITNESS_TTL_NS};
 
 impl GraphSnapshotV1 {
     pub fn retained_input_expired(&self) -> bool {

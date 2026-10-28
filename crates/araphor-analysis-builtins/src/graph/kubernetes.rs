@@ -8,10 +8,7 @@ impl Computation {
                 continue;
             };
             self.record(fact.record)?;
-            self.subjects.push(Subject {
-                record: fact.record,
-                context: None,
-            });
+            self.subject(fact.record, None)?;
             let qualified = stage.proof_quality.kubernetes_qualified();
             let mut missing = Vec::new();
             for (proved, name) in [
@@ -58,11 +55,11 @@ impl Computation {
             if stage.object_uid.is_some() {
                 self.edge(
                     fact.record,
-                    Some(index as u64),
+                    Some(index as u32),
                     EdgeKind::Kubernetes,
                     Cause::Contextual,
                     vec![fact.record],
-                );
+                )?;
             }
             missing.push("CROSS_NODE_CAUSALITY_UNQUALIFIED".into());
             missing.sort();
@@ -72,7 +69,7 @@ impl Computation {
                 false,
                 vec![fact.record],
                 missing,
-            );
+            )?;
         }
         Ok(())
     }

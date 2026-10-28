@@ -467,3 +467,38 @@ Scoped formatting and patch whitespace pass. Clippy passes for affected crates
 and tests with warnings denied. The records and source hashes are in
 `/tmp/araphor-package-qualification-active/compact-graph/continuation`.
 No full workspace or physical qualification was run for this state change.
+
+
+## Builtin ownership of resolved Graph rows
+
+Each pinned builtin produces its resolved Graph contribution. Analysis validates and publishes that contribution.
+[Projection::capture](../../crates/araphor-analysis/src/graph/native/capture.rs) fixes the authorized source cut and keeps its witnesses.
+  -> [Graph input](../../crates/araphor-analysis/src/graph/input.rs) qualifies native records, facts, and the manifest without deriving Graph effects.
+  -> [Detector::compute](../../crates/araphor-analysis-builtins/src/graph/contract.rs) runs the existing builtin Computation and its domain algorithms.
+  -> [Computation::output](../../crates/araphor-analysis-builtins/src/graph/finish.rs) emits native subjects, relationships, findings, branches, and metadata.
+  -> [Graph::apply](../../crates/araphor-analysis/src/graph/mod.rs) checks the pinned call, image, tenant, export, and exact captured inputs.
+  -> [Graph::apply_output](../../crates/araphor-analysis/src/graph/resolved.rs) checks metadata, complete-input watermarks, evidence links, reason details, and branch projection.
+  -> [Graph authority](../../crates/araphor-analysis/src/graph/authority.rs) checks source anchors, endpoint authority, effect fields, exact policy provenance, required limits, and proof ceilings.
+  -> [Graph::finish](../../crates/araphor-analysis/src/graph/assembly.rs) merges identical values, remaps ordinals, sorts rows, and validates the snapshot.
+  -> [GraphConversion](../../crates/araphor-analysis/src/graph/native/commit.rs) retains receipt lineage, captured references, and witness expiry for the existing [Data transaction](../../crates/araphor-data/src/analysis/progress/graph.rs).
+
+```mermaid
+sequenceDiagram
+    Query->>Builtin: Qualified native inputs
+    Builtin-->>Analysis: Resolved native contribution
+    Analysis->>Analysis: Validate and merge
+    Analysis->>Data: Commit Graph, checkpoint, and progress
+```
+Metadata owns each contribution's stable record and fact basis. Local evidence and endpoint ordinals refer to that contribution. Context keys alone do not establish equal fact contents.
+The host preserves independent partial source fields, current-input evidence, policy limits, and exact effect coverage. A schema-valid guest cannot remove required provenance or upgrade authority.
+The small native reason details describe the final finding. Opaque declared reasons retain their declared schema and data.
+Native input encoding stays lazy. A finite input limit or shared pool admits a conservative allocation bound before encoding; actual Arrow ownership then replaces that reservation.
+The existing retained-expiry owner can downgrade proof. The host does not regenerate successful finding, action, or correlation semantics.
+Builtin checkpoints still declare resume_input_changes=false. This owner move does not implement incremental derivation or change the subscription window.
+[Typed baselines](../../crates/araphor-analysis/src/graph/tests/baseline.rs), [host validation](../../crates/araphor-analysis/src/graph/tests.rs), [native adapter parity](../../crates/araphor-analysis/src/graph/tests/execution.rs), and [capture admission](../../crates/araphor-analysis/src/graph/native/tests/gates.rs) are the review route for result and trust-boundary parity.
+Complete typed baselines, domain and hostile-output checks, opaque reasons, and SQL/Wasm/native adapter and pressure cases pass. Captured-source, exact-port, credential-join, extra-export, and atomic conversion-failure/retry checks pass. The configured allocation case rejects before encoding and retains usable buffers after temporary owners drop.
+The ten detached Analysis semantic files are removed: 1,348 lines. Retained originals and the reviewed deletion record remain in compact-graph/d3-host/deletion-review.
+Records in compact-graph/builtin-ownership retain each executed source and binary. Corrected descriptor, literal, activation-join, and old-output fixture failures remain recorded; those setup failures do not prove the intended allocation or conversion boundaries.
+Scoped formatting, patch whitespace, and Clippy for the seven affected crates and their tests pass with warnings denied. Runtime evidence precedes the reviewed borrow/import-only cleanup; final Clippy covers that cleanup.
+Source, artifact, environment, and verification records are in `/tmp/araphor-package-qualification-active/compact-graph/builtin-ownership`.
+Builtin ownership has passing relevant runtime checks. Incremental derivation, incident completion, current physical proof, and complete qualification remain Not done. No execution-time gain is claimed.

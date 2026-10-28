@@ -64,7 +64,7 @@ impl GraphRows {
             add(Self::json_bytes(&finding.required_coverage_interval_ids)?)?;
             add(Self::json_bytes(&finding.policy_provenance)?)?;
             add(Self::json_bytes(&finding.effects)?)?;
-            add(finding.reason.storage()?.len())?;
+            add(crate::graph::contract::storage(&finding.reason)?.len())?;
             add(Self::label(&finding.severity)?.len())?;
             add(<&str>::from(finding.sensitivity).len())?;
             add(finding.required_action.as_ref().map_or(0, String::len))?;

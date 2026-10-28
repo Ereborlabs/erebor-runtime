@@ -12,19 +12,32 @@ async fn graph_conversion_failure_finishes() -> TestResult {
     let fixture = Fixture::target(Target::Sql)?;
     let mut descriptor = Detector::Process.descriptor();
     descriptor.revision = "conversion".into();
-    let mut program = araphor_package::SqlModelV1::default();
+    let mut program = Fixture::sql(&descriptor, &descriptor.exports[0])?;
+    let key = araphor_data::GraphSubjectKeyV1 {
+        tenant_id: fixture.source.tenant_id,
+        authority: araphor_data::GraphSubjectAuthorityV1::Native {
+            node_id: fixture.source.node_id.clone(),
+            node_boot_id: fixture.source.node_boot_id,
+            label_epoch: fixture.source.label_epoch,
+        },
+        kind: araphor_data::GraphSubjectKindV1::Task,
+        identity: 1u64.to_be_bytes().to_vec(),
+    };
+    araphor_data::GraphValidate::validate(&key)?;
+    let subjects = araphor_analysis_builtins::graph::Subject::encode(&[
+        araphor_analysis_builtins::graph::Subject {
+            record: u32::MAX,
+            context: None,
+            key,
+        },
+    ])?;
+    let invalid = crate::graph::tests::execution::Fixture::rows(&subjects.batches)
+        .map_err(|error| error.to_string())?;
     program.outputs.insert(
         "subjects".into(),
-        "SELECT CAST('{}' AS BYTEA) AS value WHERE (SELECT COUNT(*) FROM records) = 3".into(),
-    );
-    for name in ["relationships", "findings"] {
-        program
-            .outputs
-            .insert(name.into(), "SELECT value FROM records WHERE FALSE".into());
-    }
-    program.checkpoint.insert(
-        "state".into(),
-        r#"SELECT CAST('{"value":"WAITING"}' AS BYTEA) AS value"#.into(),
+        format!(
+            "SELECT * FROM ({invalid}) AS invalid_subject WHERE (SELECT COUNT(*) FROM records) = 3"
+        ),
     );
     let artifact = PackageArtifactV1 {
         descriptor,
@@ -82,10 +95,37 @@ async fn graph_conversion_failure_finishes() -> TestResult {
         .await
         .err()
         .ok_or("invalid Graph subject published")?;
-    assert!(
-        format!("{failure:?}").contains("missing field `record`"),
-        "{failure:?}"
-    );
+    let mut error: &(dyn std::error::Error + 'static) = &failure;
+    let invalid_record = loop {
+        if matches!(
+            error.downcast_ref::<araphor_data::Error>(),
+            Some(araphor_data::Error::GraphInvalid {
+                field: "graph output record",
+                ..
+            })
+        ) {
+            break true;
+        }
+        if let Some(crate::Error::Data { source }) = error.downcast_ref::<crate::Error>() {
+            error = source;
+            continue;
+        }
+        if let Some(crate::Error::Query { source }) = error.downcast_ref::<crate::Error>() {
+            error = source;
+            continue;
+        }
+        if let Some(araphor_query::Error::Data { source }) =
+            error.downcast_ref::<araphor_query::Error>()
+        {
+            error = source;
+            continue;
+        }
+        let Some(source) = error.source() else {
+            break false;
+        };
+        error = source;
+    };
+    assert!(invalid_record, "{failure:?}");
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
     let saved = fixture
         .query

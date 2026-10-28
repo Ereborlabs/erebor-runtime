@@ -5,52 +5,47 @@ use araphor_analysis_builtins::{graph as algorithm, Rows};
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
     AnalysisContractSnafu, ContextSensitivityV1, DeclaredFindingReasonV1, DiscoveryCoverageStateV1,
-    DiscoveryRecordIdV1, DiscoveryRecordV1, EvidenceRecord, FindingReasonV1, FindingSeverityV1,
-    FindingStateV1, FindingV1, GraphBranchStateV1, GraphBranchV1, GraphCauseV1, GraphEdgeKeyV1,
-    GraphEdgeTypeV1, GraphEdgeV1, GraphEffectV1, GraphEncodingSnafu, GraphFactV1, GraphFactValueV1,
-    GraphInvalidSnafu, GraphPackageCheckpointV1, GraphPackageStateV1, GraphPhysicalResultV1,
-    GraphReplayInputV1, GraphRevisionV1, GraphSnapshotV1, GraphSubjectAuthorityV1,
-    GraphSubjectKeyV1, GraphSubjectKindV1, GraphValidate, GraphVersionV1, LocalSubjectBindingV1,
+    DiscoveryRecordIdV1, DiscoveryRecordV1, FindingReasonV1, FindingStateV1, FindingV1,
+    GraphBranchStateV1, GraphBranchV1, GraphCauseV1, GraphEdgeKeyV1, GraphEdgeTypeV1, GraphEdgeV1,
+    GraphEffectV1, GraphEncodingSnafu, GraphFactV1, GraphFactValueV1, GraphInvalidSnafu,
+    GraphPackageCheckpointV1, GraphPackageStateV1, GraphPhysicalResultV1, GraphReplayInputV1,
+    GraphRevisionV1, GraphSnapshotV1, GraphSubjectAuthorityV1, GraphSubjectKeyV1,
+    GraphSubjectKindV1, GraphValidate, GraphVersionV1, LocalSubjectBindingV1,
     OperationResultAuthorityV1, PolicyObservationProvenanceV1, PolicyProvenanceStateV1,
     ProcessorScopeV1, ProofIntegrityV1, ProofQualityV1, Result, TemporalCoverageV1,
-    GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, GRAPH_WINDOW_NS, GRAPH_WITNESS_TTL_NS,
+    GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, GRAPH_WINDOW_NS,
 };
+#[cfg(test)]
+use araphor_data::{EvidenceRecord, GRAPH_WITNESS_TTL_NS};
 use araphor_query::definition::{CallResult, PackageCall};
-use erebor_interceptor_abi::{
-    EffectPhysicalResultV1, KernelEffectFamilyV1, KernelEffectOperationV1,
-};
+use erebor_interceptor_abi::{EffectPhysicalResultV1, KernelEffectFamilyV1};
 use snafu::ResultExt as _;
 
-mod edges;
+mod assembly;
+mod authority;
 mod expiry;
-mod facts;
 mod feed;
+mod input;
+mod resolved;
 pub use feed::{GraphOwner, GraphProgram};
-mod finding;
-mod finish;
-mod identity;
 mod native;
 pub(crate) use native::GraphConversion;
 pub use native::{GraphFacts, GraphPublication};
-mod output;
-mod policy;
-mod projection;
-mod proof;
-mod validation;
 
 #[cfg(test)]
 mod tests;
 
 pub struct Graph<'a> {
     input: Cow<'a, GraphReplayInputV1>,
-    projection: [Vec<serde_json::Value>; 3],
+    projection: std::cell::OnceCell<[sdk::Dataset; 3]>,
+    observations: Vec<algorithm::Observation>,
     revision: GraphRevisionV1,
     subjects: BTreeMap<GraphSubjectKeyV1, u32>,
     edges: BTreeMap<GraphEdgeKeyV1, GraphEdgeV1>,
     branches: Vec<GraphBranchV1>,
     findings: BTreeMap<String, FindingV1>,
     facts: Vec<GraphFactV1>,
-    packages: Vec<(sdk::Package, GraphPackageStateV1)>,
+    packages: Vec<GraphPackageCheckpointV1>,
     _memory: Option<datafusion::execution::memory_pool::MemoryReservation>,
 }
 
@@ -70,7 +65,8 @@ impl<'a> Graph<'a> {
             .collect::<Result<Vec<_>>>()?;
         let mut graph = Self {
             input,
-            projection: std::array::from_fn(|_| Vec::new()),
+            projection: std::cell::OnceCell::new(),
+            observations: Vec::new(),
             revision,
             subjects: BTreeMap::new(),
             edges: BTreeMap::new(),
@@ -80,7 +76,12 @@ impl<'a> Graph<'a> {
             packages: Vec::new(),
             _memory: None,
         };
-        graph.projection = graph.build_projection()?;
+        graph.observations = graph
+            .input
+            .records
+            .iter()
+            .map(|record| graph.qualify_record(record))
+            .collect::<Result<Vec<_>>>()?;
         Ok(graph)
     }
 
@@ -107,7 +108,7 @@ impl<'a> Graph<'a> {
             || self
                 .packages
                 .iter()
-                .any(|(previous, _)| previous.id == package.id)
+                .any(|previous| previous.package_id == package.id)
         {
             return GraphInvalidSnafu {
                 field: "graph package call",
