@@ -100,3 +100,57 @@ fn native_header_batch_integrity() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn native_header_shape_rejects_missing_values_and_duplicate_subjects() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    fixture
+        .store
+        .commit_graph(&fixture.request, true, || Ok(()))?;
+    let tenant = fixture.snapshot.scope.identity.tenant_id;
+    let result = &fixture.request.result_id;
+    let mut writer = fixture.store.writer_access()?;
+    for (table, key) in [
+        ("graph_subject_values", "subject_id"),
+        ("graph_edge_values", "edge_id"),
+        ("graph_finding_values", "value_id"),
+    ] {
+        let transaction = writer.get_mut()?.transaction()?;
+        transaction.execute(
+            &format!("DELETE FROM {table} WHERE {key} = (SELECT min({key}) FROM {table})"),
+            [],
+        )?;
+        assert!(matches!(
+            GraphRows::read_header(&transaction, tenant, result),
+            Err(crate::Error::GraphInvalid { .. })
+        ));
+        transaction.rollback()?;
+    }
+    let transaction = writer.get_mut()?.transaction()?;
+    let (lineage, first, last): (u64, u64, u64) = transaction.query_row(
+        "SELECT m.lineage_id, min(m.subject_id), max(m.subject_id)
+         FROM graph_subject_membership m
+         JOIN graph_versions v ON v.lineage_id = m.lineage_id
+         WHERE v.result_id = ? GROUP BY m.lineage_id",
+        params![result],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_ne!(first, last);
+    transaction.execute(
+        "DELETE FROM graph_subject_membership WHERE lineage_id = ? AND subject_id = ?",
+        params![lineage, last],
+    )?;
+    transaction.execute(
+        "INSERT INTO graph_subject_membership VALUES (?, ?, 0, NULL)",
+        params![lineage, first],
+    )?;
+    assert!(matches!(
+        GraphRows::stored_shape(&transaction, result),
+        Err(crate::Error::GraphInvalid {
+            field: "duplicate graph subject membership",
+            ..
+        })
+    ));
+    transaction.rollback()?;
+    Ok(())
+}

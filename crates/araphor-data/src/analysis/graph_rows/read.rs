@@ -73,16 +73,41 @@ impl GraphRows {
     }
 
     pub(super) fn stored_shape(writer: &Connection, result_id: &str) -> Result<(u64, u64, u64)> {
-        writer
+        let (subjects, distinct_subjects, edges, findings): (u64, u64, u64, u64) = writer
             .query_row(
-                "SELECT (SELECT count(*)::UBIGINT FROM graph_subjects WHERE result_id = ?),
-                    (SELECT count(*)::UBIGINT FROM graph_relationships WHERE result_id = ?),
-                    (SELECT count(*)::UBIGINT FROM graph_findings WHERE result_id = ?)",
-                params![result_id, result_id, result_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                "WITH version AS (
+                    SELECT lineage_id, commit_revision FROM graph_versions WHERE result_id = ?
+                ), subjects AS (
+                    SELECT s.subject_id FROM version v
+                    JOIN graph_subject_membership m ON m.lineage_id = v.lineage_id
+                        AND m.valid_from <= v.commit_revision
+                        AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
+                    JOIN graph_subject_values s USING (subject_id)
+                ) SELECT
+                    (SELECT count(*)::UBIGINT FROM subjects),
+                    (SELECT count(DISTINCT subject_id)::UBIGINT FROM subjects),
+                    (SELECT count(*)::UBIGINT FROM version v
+                        JOIN graph_edge_membership m ON m.lineage_id = v.lineage_id
+                            AND m.valid_from <= v.commit_revision
+                            AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
+                        JOIN graph_edge_values e USING (edge_id)),
+                    (SELECT count(*)::UBIGINT FROM version v
+                        JOIN graph_finding_membership m ON m.lineage_id = v.lineage_id
+                            AND m.valid_from <= v.commit_revision
+                            AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
+                        JOIN graph_finding_values f USING (value_id))",
+                params![result_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "check native graph row counts",
-            })
+            })?;
+        if subjects != distinct_subjects {
+            return GraphInvalidSnafu {
+                field: "duplicate graph subject membership",
+            }
+            .fail();
+        }
+        Ok((subjects, edges, findings))
     }
 }
