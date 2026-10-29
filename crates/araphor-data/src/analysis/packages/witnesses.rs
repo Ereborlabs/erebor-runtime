@@ -28,7 +28,8 @@ impl AnalysisStore {
         self.read_snapshot(|reader| {
             keys.iter()
                 .map(|key| {
-                    let (_, commit_revision) = Self::read_context_from(reader, &self.root, key)?
+                    let (_, commit_revision) = self
+                        .read_context_cached_from(reader, &self.root, key)?
                         .ok_or_else(|| self.state_error("the package context is absent"))?;
                     Ok(AnalysisContextRefV1 {
                         key: key.clone(),

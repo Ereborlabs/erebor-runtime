@@ -1166,7 +1166,7 @@ impl AnalysisStore {
         let mut checked_context = 0;
         for reference in references.as_ref() {
             let Some((_, revision)) =
-                Self::read_context_from(transaction, &self.root, &reference.key)?
+                self.read_context_cached_from(transaction, &self.root, &reference.key)?
             else {
                 return self.reject("the result context version is absent");
             };

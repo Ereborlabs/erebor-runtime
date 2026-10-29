@@ -30,7 +30,9 @@ impl AnalysisStore {
             return self.reject("the context version key is invalid");
         }
         self.read_snapshot(|reader| {
-            Ok(Self::read_context_from(reader, &self.root, key)?.map(|(version, _)| version))
+            Ok(self
+                .read_context_cached_from(reader, &self.root, key)?
+                .map(|(version, _)| version))
         })
     }
 
@@ -65,7 +67,9 @@ impl AnalysisStore {
                 lifetime_key: lifetime.into(),
                 owner_revision,
             };
-            Ok(Self::read_context_from(reader, &self.root, &key)?.map(|(version, _)| version))
+            Ok(self
+                .read_context_cached_from(reader, &self.root, &key)?
+                .map(|(version, _)| version))
         })
     }
 
@@ -77,6 +81,20 @@ impl AnalysisStore {
         Self::read_context_row_from(connection, root, key)?
             .map(|result| {
                 Self::validate_stored_context_packages(connection, &result.0)?;
+                Ok(result)
+            })
+            .transpose()
+    }
+
+    pub(in crate::analysis) fn read_context_cached_from(
+        &self,
+        connection: &Connection,
+        root: &Path,
+        key: &AnalysisContextKeyV1,
+    ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
+        Self::read_context_row_from(connection, root, key)?
+            .map(|result| {
+                self.check_cached_provenance(connection, &result.0)?;
                 Ok(result)
             })
             .transpose()

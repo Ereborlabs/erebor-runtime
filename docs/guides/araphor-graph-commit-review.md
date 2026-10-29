@@ -990,3 +990,37 @@ selected input, Graph assembly still reconstructs complete current values,
 and [FindingRows::apply](../../crates/araphor-graph/src/findings.rs) still
 visits all current findings and active membership. The matched backlog
 workload, full workspace procedure, and 100-fold target remain **Not done**.
+
+## Current package provenance read reuse
+
+The intended result is to avoid repeated package image decoding during live
+context reads. Data must still detect a changed context, package, or dependency.
+The current change retains a validated summary in one AnalysisStore process.
+
+[AnalysisStore::read_context_cached_from](../../crates/araphor-data/src/analysis/context/reads.rs) reads the current stored context body
+  -> [AnalysisStore::check_cached_provenance](../../crates/araphor-data/src/analysis/context/provenance.rs) checks the current body and each stored package row on a warm read
+  -> [PackageRevisionV1::fingerprint](../../crates/araphor-data/src/analysis/packages/model.rs) hashes stored descriptor and artifact bytes with dependency identities
+
+[AnalysisStore::check_cached_provenance](../../crates/araphor-data/src/analysis/context/provenance.rs) starts a cold read when no summary exists
+  -> [AnalysisStore::package_artifacts_inspect_from](../../crates/araphor-data/src/analysis/packages/image.rs) fetches and inspects the complete package closure
+  -> [NativePackageContext::validate](../../crates/araphor-data/src/package/provenance.rs) validates the complete image before Data stores the summary
+
+[AnalysisStore::validate_context_packages](../../crates/araphor-data/src/analysis/context/provenance.rs) runs full validation when a warm row changes
+
+[AnalysisStore::read_context_from](../../crates/araphor-data/src/analysis/context/reads.rs) uses full validation for recovery
+
+The store owns the in-memory summary. The summary stores the context body and
+package fingerprints. The store does not cache query output or authorization.
+The warm path reads every referenced package row. A missing or changed row
+cannot pass the summary check. The cold path validates the complete package
+closure before it stores a summary. Recovery does not depend on the summary.
+
+The focused `native_context_rejects_corruption` and
+`cached_context_checks_dependency` tests in
+[context tests](../../crates/araphor-data/src/analysis/packages/tests/context.rs)
+passed. The large dependency-closure test was interrupted and is unverified.
+The unchanged 1,592-event backlog test failed its 90-second Follow deadline
+after 137.31 seconds of test runtime. The change has no proven end-to-end
+speed gain. Profiled Graph cuts spent about 15.7 seconds each in repeated
+DataFusion physical planning. Backlog qualification and the 100-fold target
+remain **Not done**.

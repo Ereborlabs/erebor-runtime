@@ -995,7 +995,8 @@ impl AnalysisStore {
                 freshness = SourceFreshness::EvidenceExpired;
             }
             for reference in &capture.contexts {
-                if Self::read_context_from(reader, &self.root, &reference.key)?
+                if self
+                    .read_context_cached_from(reader, &self.root, &reference.key)?
                     .is_none_or(|(_, current)| current != reference.commit_revision)
                 {
                     return Ok(SourceFreshness::Changed);

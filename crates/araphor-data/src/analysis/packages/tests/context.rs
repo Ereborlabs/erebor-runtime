@@ -379,6 +379,7 @@ fn native_context_rejects_corruption() -> TestResult {
             "rows",
         )?;
         store.commit_context(&context)?;
+        assert_eq!(store.context_version(&context.key)?, Some(context.clone()));
         {
             let mut writer = store.writer()?;
             let writer = writer.get_mut()?;
@@ -448,5 +449,32 @@ fn native_context_rejects_corruption() -> TestResult {
         drop(store);
         assert!(AnalysisStore::open(&root).is_err(), "{fault}");
     }
+    Ok(())
+}
+
+#[test]
+fn cached_context_checks_dependency() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let bundle = PackageBundle::try_from(bundle()?)?;
+    store.install_package(
+        &PackageRevisionV1::from_bundle(&bundle, [1; 16])?,
+        || Ok(()),
+    )?;
+    let dependency = bundle.bundle().artifacts[1].reference();
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &dependency,
+        "model",
+        "rows",
+    )?;
+    store.commit_context(&context)?;
+    assert_eq!(store.context_version(&context.key)?, Some(context.clone()));
+    store.writer()?.get_mut()?.execute(
+        "DELETE FROM package_revisions WHERE package_id = ?",
+        duckdb::params![dependency.package_id],
+    )?;
+    assert!(store.context_version(&context.key).is_err());
     Ok(())
 }

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PackageRevisionRefV1 {
@@ -17,6 +18,23 @@ pub struct PackageRevisionV1 {
 }
 
 impl PackageRevisionV1 {
+    pub(in crate::analysis) fn fingerprint(&self) -> [u8; 32] {
+        fn field(hash: &mut Sha256, bytes: &[u8]) {
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(bytes);
+        }
+
+        let mut hash = Sha256::new();
+        field(&mut hash, &self.descriptor);
+        field(&mut hash, &self.artifact);
+        hash.update((self.dependencies.len() as u64).to_le_bytes());
+        for dependency in &self.dependencies {
+            field(&mut hash, dependency.package_id.as_bytes());
+            field(&mut hash, dependency.revision.as_bytes());
+        }
+        hash.finalize().into()
+    }
+
     pub fn from_artifact(
         artifact: &crate::PackageArtifactV1,
         tenant_id: [u8; 16],

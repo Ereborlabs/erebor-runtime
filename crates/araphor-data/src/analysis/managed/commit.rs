@@ -384,7 +384,8 @@ impl AnalysisStore {
         }
         Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, &control)?;
         for reference in &capture.contexts {
-            if Self::read_context_from(reader, &self.root, &reference.key)?
+            if self
+                .read_context_cached_from(reader, &self.root, &reference.key)?
                 .is_none_or(|(_, revision)| revision != reference.commit_revision)
             {
                 return crate::AnalysisConflictSnafu.fail();

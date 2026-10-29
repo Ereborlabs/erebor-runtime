@@ -259,6 +259,16 @@ impl AnalysisStore {
         root: &PackageRefV1,
         control: &AnalysisReadControl,
     ) -> Result<Vec<crate::PackageArtifactV1>> {
+        Self::package_artifacts_inspect_from(reader, tenant, root, control, |_| {})
+    }
+
+    pub(in crate::analysis) fn package_artifacts_inspect_from(
+        reader: &Connection,
+        tenant: [u8; 16],
+        root: &PackageRefV1,
+        control: &AnalysisReadControl,
+        mut inspect: impl FnMut(&PackageRevisionV1),
+    ) -> Result<Vec<crate::PackageArtifactV1>> {
         let mut pending = vec![root.clone()];
         let mut seen = BTreeSet::new();
         let mut artifacts = Vec::new();
@@ -270,6 +280,7 @@ impl AnalysisStore {
             let retained =
                 Self::package_from(reader, tenant, &reference.package_id, &reference.revision)?
                     .ok_or_else(|| Code::Missing.error("installed image artifact"))?;
+            inspect(&retained);
             artifacts.push(
                 retained
                     .decode_artifact()

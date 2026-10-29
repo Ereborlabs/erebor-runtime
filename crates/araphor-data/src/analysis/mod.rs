@@ -113,6 +113,8 @@ pub struct AnalysisStore {
     read_slots: Option<Arc<tokio::sync::Semaphore>>,
     read_next: AtomicUsize,
     pub(crate) package_lifecycle: Arc<Mutex<()>>,
+    package_provenance:
+        Mutex<std::collections::BTreeMap<AnalysisContextKeyV1, context::ValidatedProvenance>>,
     pub(crate) discovery_owners: AtomicUsize,
     pub(crate) notification_owner: AtomicBool,
     pub(crate) graph_owner: Mutex<Option<Vec<AnalysisSelectionV1>>>,
@@ -561,6 +563,7 @@ impl AnalysisStore {
                 .map(|limit| Arc::new(tokio::sync::Semaphore::new(limit))),
             read_next: AtomicUsize::new(0),
             package_lifecycle: Arc::new(Mutex::new(())),
+            package_provenance: Mutex::new(std::collections::BTreeMap::new()),
             discovery_owners: AtomicUsize::new(0),
             maintenance: RwLock::new(()),
             revision,

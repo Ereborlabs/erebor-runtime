@@ -61,7 +61,7 @@ impl AnalysisStore {
                     operation: "decode context head page",
                 })?;
                 let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
-                Self::validate_stored_context_packages(reader, &version)?;
+                self.check_cached_provenance(reader, &version)?;
                 versions.push(version);
             }
             Ok(versions)
@@ -115,7 +115,8 @@ impl AnalysisStore {
                     }
                     .fail();
                 }
-                let (version, _) = Self::read_context_from(reader, &self.root, &key)?
+                let (version, _) = self
+                    .read_context_cached_from(reader, &self.root, &key)?
                     .ok_or_else(|| self.state_error("the context head is absent"))?;
                 versions.push(version);
             }

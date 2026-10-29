@@ -16,6 +16,12 @@ disclosure floor changed. It does not derive all 950
 Graph contributions again. Different input batches produce the same typed
 Graph as a complete evaluation of the same authorized input cut.
 
+A qualifying new network event creates a distinct finding anchored to that
+event. It can use an earlier credential read as evidence. The earlier finding
+stays unchanged when its selected facts, coverage, disclosure floor, and
+window stay unchanged. A newly selected record with an older store position
+uses the full rebuild path.
+
 Keep the three pinned builtin calls and their individual package attribution.
 Each builtin produces resolved, compact Graph rows with their proof and
 provenance. Analysis validates and publishes those rows. It does not run a
@@ -189,6 +195,23 @@ runtime and static checks. The final measurement below records the remaining
 deadline failure and storage costs. The independent Sol 6.1 reviewer approved this
 concrete plan on 2026-10-28. Each deliverable still needs a review of its code
 and test results. The compact storage result does not complete this plan.
+
+### Package provenance read reuse
+
+Data now retains a validated package provenance summary for each live context.
+Each later read checks the current context body and the current stored package
+rows before it uses that summary. A changed or missing row uses full validation
+or fails. Recovery still uses full validation. The focused corruption and
+missing-dependency tests passed. The large dependency-closure test was
+interrupted and is unverified.
+
+The unchanged 1,592-event backlog test still failed its 90-second Follow
+deadline. Its test runtime was 137.31 seconds with this change. The result
+does not prove an end-to-end speed gain. The 100-fold target and backlog
+qualification remain **Not done**. Profiling identified repeated native
+physical planning as the largest measured Graph stage: about 15.7 seconds
+per affected Graph cut. The next change must measure that stage and the same
+backlog workload again.
 
 ### State handoff implementation
 

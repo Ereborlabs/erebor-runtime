@@ -10,6 +10,8 @@ mod reads;
 mod tests;
 mod write;
 
+pub(super) use provenance::ValidatedProvenance;
+
 type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 
 pub use araphor_analysis_builtins::graph::AnalysisContextKeyV1;
