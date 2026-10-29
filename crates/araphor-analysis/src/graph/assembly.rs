@@ -104,7 +104,7 @@ impl Graph<'_> {
             findings: self.findings.into_values().collect(),
             packages: self.packages,
             missing_ranges: self.input.missing_ranges.clone(),
-            input_positions: Vec::new(),
+            input_positions: self.input.input_positions.clone(),
             previous_result_id: None,
             context_notice_revision: 0,
             witness_deadline_utc_ns: 0,

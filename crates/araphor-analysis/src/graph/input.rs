@@ -120,11 +120,16 @@ impl Graph<'_> {
     pub(super) fn qualify_record(
         &self,
         record: &DiscoveryRecordV1,
+        position: araphor_data::StorePositionV1,
     ) -> Result<algorithm::Observation> {
         let wire = record.decode()?;
         let context = wire.decision_context.as_ref();
         Ok(algorithm::Observation {
             id: record.id.clone(),
+            position: algorithm::Position {
+                commit_revision: position.commit_revision,
+                ordinal: position.ordinal,
+            },
             effect: araphor_data::DiscoveryEffectKeyV1::from(&wire),
             ingested_utc_ns: wire.ingested_utc_ns,
             observed_boottime_ns: wire.observed_boottime_ns,

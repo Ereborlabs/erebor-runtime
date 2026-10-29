@@ -40,6 +40,7 @@ fn insertions_rebind_native_rows() -> TestResult {
         );
         let mut added = record();
         added.observed_boottime_ns = 12;
+        added.position.commit_revision = 2;
         let current = vec![added, old[0].clone(), old[1].clone()];
         let mut added_fact = fact(0, value);
         if let FactValue::Kubernetes(stage) = &mut added_fact.value {
@@ -97,6 +98,7 @@ fn inserted_state_keeps_last() -> TestResult {
     let prior = detector.evaluate(&input(detector, &old, &[], 100)?)?;
     let mut added = record();
     added.id = identity(1);
+    added.position.ordinal = 2;
     let policy = PolicyObservationProvenanceV1 {
         source: added.id.stream.clone(),
         profile_generation_ref_id: 1,
@@ -256,6 +258,7 @@ fn expired_join_reuses_unrelated() -> TestResult {
     for row in 3..43 {
         let mut value = record();
         value.id = identity(row);
+        value.position.ordinal = row as u32;
         value.effect.task_cookie = row + 100;
         value.process_instance_id = Some((row as u128).to_be_bytes());
         value.observed_boottime_ns = row + 1_000;
@@ -295,6 +298,10 @@ fn expired_authority_support_disappears() -> TestResult {
         }
     }
     let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
+    let read = FindingChange::decode(&prior.datasets[4])?
+        .into_iter()
+        .find(|finding| finding.anchor.record == old[0].id)
+        .ok_or("read finding")?;
     assert!(RelationshipChange::decode(&prior.datasets[2])?
         .iter()
         .any(|edge| edge.key.edge_type == GraphEdgeTypeV1::CredentialAuthority));
@@ -312,12 +319,23 @@ fn expired_authority_support_disappears() -> TestResult {
                 fact
             })
             .collect::<Vec<_>>();
-        let (output, work) = continued(
-            detector,
-            &input(detector, &current, &selected, 100)?,
-            &prior,
-        )?;
-        assert!(work < current.len(), "removed {removed}: {work}");
+        let record_count = current.len();
+        let current = input(detector, &current, &selected, 100)?;
+        let (output, work) = continued(detector, &current, &prior)?;
+        assert!(work < record_count, "removed {removed}: {work}");
+        let mut resumed = current.clone();
+        resumed.checkpoint = prior.checkpoint.clone();
+        resumed.previous_outputs = normalized_prior(&prior)?;
+        let delta = detector.evaluate(&resumed)?;
+        assert!(FindingRemoval::decode(&delta.datasets[5])?
+            .iter()
+            .all(|finding| finding.finding_id != read.finding_id));
+        assert!(FindingChange::decode(&delta.datasets[4])?
+            .iter()
+            .all(|finding| finding.finding_id != read.finding_id));
+        assert!(FindingChange::decode(&output.datasets[4])?
+            .iter()
+            .any(|finding| finding == &read));
         assert!(RelationshipChange::decode(&output.datasets[2])?
             .iter()
             .all(|edge| edge.key.edge_type != GraphEdgeTypeV1::CredentialAuthority));

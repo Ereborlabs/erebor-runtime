@@ -121,6 +121,7 @@ impl Computation {
                 .ok_or_else(|| Self::invalid("graph previous finding reason"))?;
             let expected = FindingReasonV1::from_analysis_code(&row.package_id, &row.reason_code)?;
             if reason != expected
+                || row.evidence.windows(2).any(|pair| pair[0] >= pair[1])
                 || self
                     .prior_findings
                     .insert(
@@ -150,55 +151,62 @@ impl Computation {
                 }
             }
         }
+        if matches!(self.detector, Detector::Credentials) {
+            let latest_retained = self
+                .records
+                .iter()
+                .filter(|record| self.prior_progress.contains_key(&record.id))
+                .map(|record| record.position)
+                .max();
+            if latest_retained.is_some_and(|latest| {
+                self.records.iter().any(|record| {
+                    !self.prior_progress.contains_key(&record.id) && record.position <= latest
+                })
+            }) {
+                return Ok(None);
+            }
+        }
         for (id, previous) in &self.prior_progress {
             if let Some(&row) = current.get(id) {
                 affected[row as usize] = false;
                 self.progress[row as usize].state = previous.state.clone();
             }
         }
-        if matches!(self.detector, Detector::Credentials) {
-            let triggers = self
-                .records
-                .iter()
-                .enumerate()
-                .filter(|(row, value)| {
-                    affected[*row]
-                        && (value.network()
-                            || self.facts(*row as u32).any(|(_, fact)| {
-                                matches!(
-                                    fact.value,
-                                    FactValue::AuthorityUse { .. } | FactValue::Channel { .. }
-                                )
-                            }))
-                })
-                .map(|(_, value)| value)
-                .collect::<Vec<_>>();
-            for row in 0..self.records.len() {
-                if self
-                    .facts(row as u32)
-                    .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
-                    && triggers
-                        .iter()
-                        .any(|later| self.bounded(&self.records[row], later))
-                {
-                    affected[row] = true;
-                }
-            }
-        }
         let relevant = |row: u32| {
             !matches!(self.detector, Detector::Credentials)
-                || self
-                    .facts(row)
-                    .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
+                || self.records[row as usize].network()
+                || self.facts(row).any(|(_, fact)| {
+                    matches!(
+                        fact.value,
+                        FactValue::Credential { .. } | FactValue::AuthorityUse { .. }
+                    )
+                })
         };
         for edge in self.prior_edges.values() {
             let stale = self.local_anchor(&edge.anchor, &current).is_none()
                 || edge.key.evidence.iter().any(|id| !current.contains_key(id));
             if stale {
-                for id in std::iter::once(&edge.anchor.record).chain(&edge.key.evidence) {
-                    if let Some(&row) = current.get(id) {
-                        if relevant(row) {
-                            affected[row as usize] = true;
+                if matches!(self.detector, Detector::Credentials) {
+                    for finding in &previous_findings {
+                        if edge
+                            .key
+                            .evidence
+                            .iter()
+                            .all(|id| finding.evidence.binary_search(id).is_ok())
+                        {
+                            if let Some(&row) = current.get(&finding.anchor.record) {
+                                if relevant(row) {
+                                    affected[row as usize] = true;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for id in std::iter::once(&edge.anchor.record).chain(&edge.key.evidence) {
+                        if let Some(&row) = current.get(id) {
+                            if relevant(row) {
+                                affected[row as usize] = true;
+                            }
                         }
                     }
                 }
@@ -217,44 +225,29 @@ impl Computation {
                     .flat_map(|value| &value.observations)
                     .any(|id| !current.contains_key(id));
             if stale {
-                for id in std::iter::once(&finding.anchor.record)
-                    .chain(&finding.evidence)
-                    .chain(finding.effects.iter().map(|effect| &effect.evidence))
-                    .chain(
-                        finding
-                            .policy_provenance
-                            .iter()
-                            .flat_map(|value| &value.observations),
-                    )
-                {
-                    if let Some(&row) = current.get(id) {
+                if matches!(self.detector, Detector::Credentials) {
+                    if let Some(&row) = current.get(&finding.anchor.record) {
                         if relevant(row) {
                             affected[row as usize] = true;
                         }
                     }
-                }
-            }
-        }
-        if matches!(self.detector, Detector::Credentials) {
-            let times = self
-                .records
-                .iter()
-                .enumerate()
-                .filter(|(row, _)| {
-                    affected[*row]
-                        && self
-                            .facts(*row as u32)
-                            .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
-                })
-                .map(|(_, value)| value.observed_boottime_ns)
-                .collect::<BTreeSet<_>>();
-            for (row, value) in self.records.iter().enumerate() {
-                if times.contains(&value.observed_boottime_ns)
-                    && self
-                        .facts(row as u32)
-                        .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
-                {
-                    affected[row] = true;
+                } else {
+                    for id in std::iter::once(&finding.anchor.record)
+                        .chain(&finding.evidence)
+                        .chain(finding.effects.iter().map(|effect| &effect.evidence))
+                        .chain(
+                            finding
+                                .policy_provenance
+                                .iter()
+                                .flat_map(|value| &value.observations),
+                        )
+                    {
+                        if let Some(&row) = current.get(id) {
+                            if relevant(row) {
+                                affected[row as usize] = true;
+                            }
+                        }
+                    }
                 }
             }
         }

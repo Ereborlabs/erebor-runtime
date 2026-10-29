@@ -654,6 +654,7 @@ impl TryFrom<&AnalysisContextVersionV1> for GraphFactV1 {
 pub struct GraphReplayInputV1 {
     pub source: EvidenceIntakeIdentityV1,
     pub records: Vec<DiscoveryRecordV1>,
+    pub input_positions: Vec<(DiscoveryRecordIdV1, crate::StorePositionV1)>,
     pub coverage: Vec<DiscoveryCoverageV1>,
     pub coverage_keys: Vec<GraphCoverageKeyV1>,
     pub facts: Vec<AnalysisContextVersionV1>,
@@ -677,6 +678,26 @@ impl GraphReplayInputV1 {
                 }
                 .fail();
             }
+        }
+        let mut positioned = BTreeSet::new();
+        let mut positions = BTreeSet::new();
+        for (id, position) in &self.input_positions {
+            if !ids.contains(id)
+                || position.commit_revision == 0
+                || !positioned.insert(id)
+                || !positions.insert(position)
+            {
+                return GraphInvalidSnafu {
+                    field: "replay input position",
+                }
+                .fail();
+            }
+        }
+        if positioned != ids {
+            return GraphInvalidSnafu {
+                field: "replay input position",
+            }
+            .fail();
         }
         for range in &self.coverage {
             range.validate()?;

@@ -34,6 +34,19 @@ fn graph_native_baseline() -> TestResult {
 fn graph_credential_baseline() -> TestResult {
     let mut input = credential_input()?;
     let direct = historical_baseline(&input)?;
+    let direct_finding = direct
+        .findings
+        .iter()
+        .find(|finding| finding.state == FindingStateV1::Confirmed)
+        .ok_or("missing confirmed network finding")?;
+    assert_eq!(
+        direct_finding
+            .evidence
+            .iter()
+            .map(|record| record.durable_cursor)
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
     let mut use_fact = GraphFactV1::try_from(&input.facts[5])?;
     if let GraphFactValueV1::AuthorityUse {
         process_instance_id,

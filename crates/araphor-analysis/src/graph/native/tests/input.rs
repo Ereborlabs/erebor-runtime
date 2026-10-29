@@ -660,10 +660,23 @@ async fn source_keeps_credential_join() -> TestResult {
         .graph_result(fixture.source.tenant_id, &id)?
         .ok_or("Credential join Graph")?;
     assert_eq!(graph.last_cursor, 258);
-    let finding = graph
+    let credential_findings = graph
         .findings
         .iter()
-        .find(|finding| finding.package_id == "HF-DW-001")
+        .filter(|finding| finding.package_id == "HF-DW-001")
+        .collect::<Vec<_>>();
+    assert_eq!(credential_findings.len(), 2);
+    assert!(credential_findings.iter().any(|finding| {
+        finding.state == araphor_data::FindingStateV1::CoverageInsufficient
+            && finding
+                .evidence
+                .iter()
+                .map(|id| id.durable_cursor)
+                .eq([256])
+    }));
+    let finding = credential_findings
+        .into_iter()
+        .find(|finding| finding.state == araphor_data::FindingStateV1::Confirmed)
         .ok_or("Credential join finding")?;
     assert_eq!(finding.state, araphor_data::FindingStateV1::Confirmed);
     assert_eq!(

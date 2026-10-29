@@ -293,6 +293,7 @@ impl Projection {
         let input = GraphReplayInputV1 {
             source: identity.clone(),
             records,
+            input_positions: positions.clone(),
             coverage,
             coverage_keys,
             facts,
@@ -381,6 +382,7 @@ impl Projection {
             id: araphor_data::InputRevision::of(&(
                 &graph.input.source,
                 &graph.input.records,
+                &graph.input.input_positions,
                 &graph.input.coverage,
                 &graph.input.coverage_keys,
                 &graph.input.facts,

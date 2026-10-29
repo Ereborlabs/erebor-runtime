@@ -241,16 +241,6 @@ async fn payload(
     instance_id: &str,
     filter: &str,
 ) -> TestResult<Arc<crate::Instance>> {
-    let expected = expected.normalized()?;
-    let revision = InputRevision::of(&(
-        &expected.source,
-        &expected.records,
-        &expected.coverage,
-        &expected.coverage_keys,
-        &expected.facts,
-        &expected.missing_ranges,
-    ))?;
-    let expected_graph = Graph::new(&expected)?;
     assert_eq!(expected.source, fixture.source);
     let publication = fixture.prepare(filter).await?;
     let grant = publication.grant.clone();
@@ -273,6 +263,19 @@ async fn payload(
         .run(managed::request("payload")?, &fixture.control)
         .await?;
     let captured = observed.try_recv()?;
+    let mut expected = expected;
+    expected.input_positions = captured.positions.clone();
+    let expected = expected.normalized()?;
+    let revision = InputRevision::of(&(
+        &expected.source,
+        &expected.records,
+        &expected.input_positions,
+        &expected.coverage,
+        &expected.coverage_keys,
+        &expected.facts,
+        &expected.missing_ranges,
+    ))?;
+    let expected_graph = Graph::new(&expected)?;
     assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
     assert_eq!(captured.inputs.len(), 3);
     let canonical = Detector::inputs();
@@ -483,6 +486,7 @@ async fn graph_complete_port_payloads() -> TestResult {
                 GraphReplayInputV1 {
                     source: fixture.source.clone(),
                     records: fixture.records.clone(),
+                    input_positions: Vec::new(),
                     coverage,
                     coverage_keys,
                     facts,
@@ -572,6 +576,7 @@ async fn graph_partial_coverage_reports() -> TestResult {
     let expected = GraphReplayInputV1 {
         source: fixture.source.clone(),
         records: fixture.records.clone(),
+        input_positions: Vec::new(),
         coverage,
         coverage_keys: keys,
         facts,

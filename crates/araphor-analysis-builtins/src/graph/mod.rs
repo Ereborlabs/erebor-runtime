@@ -64,8 +64,13 @@ impl Computation {
             return Err(Self::invalid("graph record count"));
         }
         let mut record_ids = BTreeSet::new();
+        let mut positions = BTreeSet::new();
         for record in &records {
-            if record.id.stream != records[0].id.stream || !record_ids.insert(record.id.clone()) {
+            if record.id.stream != records[0].id.stream
+                || !record_ids.insert(record.id.clone())
+                || record.position.commit_revision == 0
+                || !positions.insert(record.position)
+            {
                 return Err(Self::invalid("graph record identity"));
             }
         }

@@ -70,6 +70,7 @@ async fn parity(target: Target) -> TestResult {
             let mut expected = Graph::new(&input)?;
             expected.apply_output(&package, &evaluation, &trusted, false, None)?;
             let expected = expected.finish()?;
+            assert_eq!(expected.input_positions, input.input_positions);
             let actual_graph = Graph::new(&input)?.apply(&call, result)?.finish()?;
             assert_eq!(
                 serde_json::to_value(actual_graph)?,
@@ -412,9 +413,8 @@ fn selected(detector: algorithm::Detector) -> TestResult<GraphReplayInputV1> {
 }
 
 fn large_input() -> TestResult<GraphReplayInputV1> {
-    let mut input = fixture::credential_input()?;
-    let first = input.records[0].clone();
-    input.records = (1..=185)
+    let first = fixture::credential_input()?.records[0].clone();
+    let records = (1..=185)
         .map(|cursor| {
             let mut record = first.clone();
             record.id.durable_cursor = cursor;
@@ -434,8 +434,5 @@ fn large_input() -> TestResult<GraphReplayInputV1> {
             Ok(record)
         })
         .collect::<TestResult<Vec<_>>>()?;
-    input.facts.clear();
-    input.coverage[0].last_cursor = 185;
-    input.coverage[0].expected_records = 185;
-    Ok(input.normalized()?)
+    Ok(fixture::input(records).normalized()?)
 }

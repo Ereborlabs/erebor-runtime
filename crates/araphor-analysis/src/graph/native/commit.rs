@@ -157,7 +157,9 @@ impl GraphPublication {
             .iter()
             .find(|head| head.first == snapshot.first_cursor);
         snapshot.previous_result_id = previous.map(|head| head.id.clone());
-        snapshot.input_positions = captured.positions.clone();
+        if snapshot.input_positions != captured.positions {
+            return Err(Code::Invalid.error("graph captured positions").into());
+        }
         snapshot.context_notice_revision = proofs
             .iter()
             .map(|reference| reference.commit_revision)

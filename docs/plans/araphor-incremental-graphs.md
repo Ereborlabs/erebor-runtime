@@ -11,7 +11,8 @@ tracks the later 90% payload target and change-only durable results.
 ## Intended end state
 
 An ordinary append of 10 events to 940 retained events computes the 10 new
-contributions and any affected older correlations. It does not derive all 950
+contributions and any earlier anchors whose selected facts, coverage, or
+disclosure floor changed. It does not derive all 950
 Graph contributions again. Different input batches produce the same typed
 Graph as a complete evaluation of the same authorized input cut.
 
@@ -147,7 +148,9 @@ exact retained-result reuse and `CallResult` matching for retries.
 ## Required checks
 
 - The same events, supplied in different batches, produce equal typed results.
-- A new network or authority fact can complete an earlier credential read.
+- A new network or authority-use event creates its own finding when prior
+  credential proof qualifies. An earlier finding stays unchanged if its
+  selected facts, coverage, and disclosure floor stay unchanged.
 - Duplicate input and exact retry create no duplicate Graph contribution.
 - Window removal changes only the required current contributions and findings.
 - No-window input has no implicit selection cutoff.
@@ -294,3 +297,16 @@ Full input decode, validation, matching, and output encoding remain. Changes
 to old proof, facts, order, or window and event removal use complete rebuilds.
 No full workspace CI or physical qualification ran. This result
 does not claim that the overall performance goal is complete.
+
+### Current credential event correction
+
+**Done:** A new qualifying network or authority-use event creates a finding
+anchored to that event. Its earlier credential read remains separate. The
+historical broad credential-seed result above describes the prior source and
+its old verification hashes. The current source uses captured Data store
+positions and evaluates the new event. It retains an earlier finding when that
+finding's selected facts, coverage, and global disclosure floor do not change.
+An appended `HostRestricted` fact can raise that floor and emit replacement
+values for earlier findings. Window exit or corrected older input can also
+require recomputation. The [storage plan](araphor-graph-storage-reduction.md#event-anchored-credential-findings)
+records the current remaining work. The 100-fold speed target is **Not done**.

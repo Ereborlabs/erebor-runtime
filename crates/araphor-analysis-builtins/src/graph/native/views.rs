@@ -672,6 +672,7 @@ impl TryFrom<PackageRow> for GraphPackageCheckpointV1 {
 #[serde(deny_unknown_fields)]
 pub(super) struct ObservationRow {
     pub id: RecordIdRow,
+    pub position: Position,
     pub effect: discovery::DiscoveryEffectKeyV1,
     pub ingested_utc_ns: i64,
     pub observed_boottime_ns: u64,
@@ -690,6 +691,7 @@ impl From<&Observation> for ObservationRow {
     fn from(v: &Observation) -> Self {
         Self {
             id: RecordIdRow::from(&v.id),
+            position: v.position,
             effect: v.effect.clone(),
             ingested_utc_ns: v.ingested_utc_ns,
             observed_boottime_ns: v.observed_boottime_ns,
@@ -715,6 +717,7 @@ impl TryFrom<ObservationRow> for Observation {
     fn try_from(v: ObservationRow) -> sdk::Result<Self> {
         Ok(Self {
             id: v.id.try_into()?,
+            position: v.position,
             effect: v.effect,
             ingested_utc_ns: v.ingested_utc_ns,
             observed_boottime_ns: v.observed_boottime_ns,

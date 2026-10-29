@@ -72,6 +72,11 @@ impl<'a> Graph<'a> {
             .iter()
             .map(GraphFactV1::try_from)
             .collect::<Result<Vec<_>>>()?;
+        let positions = input
+            .input_positions
+            .iter()
+            .cloned()
+            .collect::<BTreeMap<_, _>>();
         let mut graph = Self {
             input,
             projection: std::cell::OnceCell::new(),
@@ -88,7 +93,15 @@ impl<'a> Graph<'a> {
             .input
             .records
             .iter()
-            .map(|record| graph.qualify_record(record))
+            .map(|record| {
+                let position = positions.get(&record.id).ok_or_else(|| {
+                    GraphInvalidSnafu {
+                        field: "graph input position",
+                    }
+                    .build()
+                })?;
+                graph.qualify_record(record, *position)
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok(graph)
     }

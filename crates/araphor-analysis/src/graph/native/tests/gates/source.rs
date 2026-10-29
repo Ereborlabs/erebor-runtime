@@ -47,6 +47,7 @@ async fn retained_floor_is_gapped() -> TestResult {
         GraphReplayInputV1 {
             source: source.clone(),
             records: fixture.records.clone(),
+            input_positions: Vec::new(),
             coverage: vec![range(
                 &fixture,
                 1,
@@ -390,6 +391,7 @@ async fn frozen_keys_preserve_source() -> TestResult {
             GraphReplayInputV1 {
                 source: fixture.source.clone(),
                 records: selected.to_vec(),
+                input_positions: Vec::new(),
                 coverage: [0, 2]
                     .into_iter()
                     .map(|index| {

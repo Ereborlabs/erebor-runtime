@@ -73,6 +73,42 @@ fn input_normalizes_record_order() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn input_positions_bind_exact_records() -> TestResult {
+    let input = credential_input()?;
+    for case in 0..3 {
+        let mut invalid = input.clone();
+        match case {
+            0 => {
+                invalid.input_positions.pop();
+            }
+            1 => invalid.input_positions[1].1 = invalid.input_positions[0].1,
+            _ => invalid.input_positions[1].0 = invalid.input_positions[0].0.clone(),
+        }
+        assert!(matches!(
+            Graph::new(&invalid),
+            Err(araphor_data::Error::GraphInvalid {
+                field: "replay input position",
+                ..
+            })
+        ));
+    }
+    let graph = Graph::new(&input)?;
+    let model = &algorithm::Detector::Credentials.descriptor().exports[0];
+    let mut evaluation = graph.evaluation_for(model)?;
+    let mut records = algorithm::Observation::decode(&evaluation.inputs[0].data)?;
+    records[0].position.ordinal += 1;
+    evaluation.inputs[0].data = algorithm::Observation::encode(&records)?;
+    assert!(matches!(
+        graph.check_inputs(model, &evaluation),
+        Err(araphor_data::Error::GraphInvalid {
+            field: "graph input binding",
+            ..
+        })
+    ));
+    Ok(())
+}
+
 #[tokio::test]
 async fn result_requires_exact_image() -> TestResult {
     use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore};

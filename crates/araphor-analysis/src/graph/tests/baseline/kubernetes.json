@@ -373,7 +373,26 @@
       ],
       "missing_ranges": []
     },
-    "input_positions": [],
+    "input_positions": [
+      [
+        {
+          "cpu_id": 0,
+          "durable_cursor": 1,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+            "node_id": "node",
+            "source_epoch": 1,
+            "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+            "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+          }
+        },
+        {
+          "commit_revision": 2,
+          "ordinal": 0
+        }
+      ]
+    ],
     "last_cursor": 1,
     "missing_ranges": [],
     "packages": [
@@ -846,7 +865,26 @@
       ],
       "missing_ranges": []
     },
-    "input_positions": [],
+    "input_positions": [
+      [
+        {
+          "cpu_id": 0,
+          "durable_cursor": 1,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+            "node_id": "node",
+            "source_epoch": 1,
+            "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+            "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+          }
+        },
+        {
+          "commit_revision": 2,
+          "ordinal": 0
+        }
+      ]
+    ],
     "last_cursor": 1,
     "missing_ranges": [],
     "packages": [
@@ -1317,7 +1355,26 @@
       ],
       "missing_ranges": []
     },
-    "input_positions": [],
+    "input_positions": [
+      [
+        {
+          "cpu_id": 0,
+          "durable_cursor": 1,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+            "node_id": "node",
+            "source_epoch": 1,
+            "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+            "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+          }
+        },
+        {
+          "commit_revision": 2,
+          "ordinal": 0
+        }
+      ]
+    ],
     "last_cursor": 1,
     "missing_ranges": [],
     "packages": [
@@ -1818,7 +1875,26 @@
       ],
       "missing_ranges": []
     },
-    "input_positions": [],
+    "input_positions": [
+      [
+        {
+          "cpu_id": 0,
+          "durable_cursor": 1,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+            "node_id": "node",
+            "source_epoch": 1,
+            "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+            "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+          }
+        },
+        {
+          "commit_revision": 2,
+          "ordinal": 0
+        }
+      ]
+    ],
     "last_cursor": 1,
     "missing_ranges": [],
     "packages": [
@@ -2315,7 +2391,26 @@
       ],
       "missing_ranges": []
     },
-    "input_positions": [],
+    "input_positions": [
+      [
+        {
+          "cpu_id": 0,
+          "durable_cursor": 1,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+            "node_id": "node",
+            "source_epoch": 1,
+            "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+            "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+          }
+        },
+        {
+          "commit_revision": 2,
+          "ordinal": 0
+        }
+      ]
+    ],
     "last_cursor": 1,
     "missing_ranges": [],
     "packages": [
@@ -2810,7 +2905,26 @@
       ],
       "missing_ranges": []
     },
-    "input_positions": [],
+    "input_positions": [
+      [
+        {
+          "cpu_id": 0,
+          "durable_cursor": 1,
+          "stream": {
+            "label_epoch": 1,
+            "node_boot_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+            "node_id": "node",
+            "source_epoch": 1,
+            "source_id": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+            "tenant_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+          }
+        },
+        {
+          "commit_revision": 2,
+          "ordinal": 0
+        }
+      ]
+    ],
     "last_cursor": 1,
     "missing_ranges": [],
     "packages": [

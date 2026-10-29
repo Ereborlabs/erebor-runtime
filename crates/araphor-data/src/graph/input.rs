@@ -17,6 +17,15 @@ impl GraphReplayInputV1 {
                 .fail();
             }
         }
+        let mut positions = BTreeMap::new();
+        for (id, position) in &self.input_positions {
+            if positions.insert(id.clone(), *position).is_some() {
+                return GraphInvalidSnafu {
+                    field: "conflicting input position",
+                }
+                .fail();
+            }
+        }
         let mut facts = BTreeMap::new();
         for fact in &self.facts {
             if facts
@@ -41,6 +50,7 @@ impl GraphReplayInputV1 {
         Ok(Self {
             source: self.source.clone(),
             records: records.into_values().collect(),
+            input_positions: positions.into_iter().collect(),
             coverage,
             coverage_keys,
             facts: facts.into_values().collect(),

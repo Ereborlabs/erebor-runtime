@@ -115,4 +115,13 @@ impl Observation {
             && self.id.stream.node_boot_id == other.id.stream.node_boot_id
             && self.id.stream.label_epoch == other.id.stream.label_epoch
     }
+
+    pub(super) fn same_task(&self, other: &Self) -> bool {
+        if self.effect.task_cookie > 0 && other.effect.task_cookie > 0 {
+            self.effect.task_cookie == other.effect.task_cookie
+        } else {
+            self.process_instance_id.is_some()
+                && self.process_instance_id == other.process_instance_id
+        }
+    }
 }

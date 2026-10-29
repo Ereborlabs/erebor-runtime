@@ -6,6 +6,10 @@ use erebor_interceptor_abi::{
 pub(super) fn record() -> Observation {
     Observation {
         id: identity(0),
+        position: Position {
+            commit_revision: 1,
+            ordinal: 0,
+        },
         effect: crate::discovery::DiscoveryEffectKeyV1 {
             task_cookie: 3,
             target_task_cookie: None,
@@ -65,6 +69,10 @@ pub(super) fn fixture(
     let mut records = records.to_vec();
     for (row, record) in records.iter_mut().enumerate() {
         record.id = identity(row as u64);
+        record.position = Position {
+            commit_revision: 1,
+            ordinal: row as u32,
+        };
     }
     let datasets = vec![
         Observation::encode(&records)?,

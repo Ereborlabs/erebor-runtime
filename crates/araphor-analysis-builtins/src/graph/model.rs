@@ -12,10 +12,18 @@ pub use resolved::*;
 
 use crate::discovery::{DiscoveryEffectKeyV1, DiscoveryRecordIdV1};
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Position {
+    pub commit_revision: u64,
+    pub ordinal: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Observation {
     pub id: DiscoveryRecordIdV1,
+    pub position: Position,
     pub effect: DiscoveryEffectKeyV1,
     pub ingested_utc_ns: i64,
     pub observed_boottime_ns: u64,

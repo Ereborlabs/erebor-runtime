@@ -504,3 +504,26 @@ update. Query reads current and historical Graph
 rows through the existing DataFusion table provider. Remove the complete
 managed Graph output, snapshot comparison, and finding-history scan only after
 these paths pass the focused tests and the unchanged workload.
+
+## Event-anchored credential findings
+
+**Done:** A new network or authority-use event creates a finding anchored to
+that event when the selected proof qualifies. An earlier event's finding stays
+unchanged when its selected facts, coverage, and global disclosure floor stay
+unchanged. The builtin uses the captured Data store position to order events
+across CPUs. It retains prior findings and edges for unchanged input records.
+It selects the credential reads and proof facts that can support the new event.
+
+An existing anchor can require recomputation when its selected facts, coverage,
+or disclosure floor change, when supporting evidence leaves a window, or when a
+newly selected record has an earlier store position. An appended
+`HostRestricted` fact can raise the global disclosure floor and emit replacement
+values for earlier findings. An ordinary network append with no such change
+does not revise an older finding. The rebuild path preserves exact historical
+results.
+
+The builtin Graph tests, baseline snapshots, native capture, subscription
+replay, and restart checks are the focused proof for this slice. Full input
+capture, reconstruction of complete current contributions, and the writer's
+complete active finding scan remain. The 100-fold speed target and the matched
+backlog deadline are **Not done**.

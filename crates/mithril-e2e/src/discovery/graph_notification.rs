@@ -672,6 +672,7 @@ impl GraphNotificationQualification {
             source: source.clone(),
             coverage,
             records,
+            input_positions: snapshot.input_positions.clone(),
             coverage_keys: snapshot.input_manifest.coverage.clone(),
             facts: snapshot
                 .input_manifest

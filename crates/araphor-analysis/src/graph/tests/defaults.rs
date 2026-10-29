@@ -41,7 +41,7 @@ fn graph_omits_record_ceiling() -> TestResult {
         )
     });
     for cursor in 4..=256 {
-        input.records.push(fixture::record(
+        let record = fixture::record(
             cursor,
             &fixture::wire(
                 cursor,
@@ -50,7 +50,15 @@ fn graph_omits_record_ceiling() -> TestResult {
                 2,
                 [20; 16],
             ),
-        )?);
+        )?;
+        input.input_positions.push((
+            record.id.clone(),
+            araphor_data::StorePositionV1 {
+                commit_revision: cursor + 1,
+                ordinal: 0,
+            },
+        ));
+        input.records.push(record);
     }
     input.coverage[0].last_cursor = 256;
     input.coverage[0].expected_records = 256;

@@ -1,3 +1,4 @@
+use super::credential::CredentialIndex;
 use super::*;
 use erebor_interceptor_abi::{EffectPhysicalResultV1, KernelEffectFamilyV1};
 
@@ -299,16 +300,114 @@ fn credential_exact_and_missing() -> TestResult {
     let batch = complete.evaluation.inputs[0].data.batches.remove(0);
     complete.evaluation.inputs[0].data.batches = vec![batch.slice(0, 1), batch.slice(1, 2)];
     let (rows, output) = findings(detector, &complete)?;
-    assert_eq!(rows[0].reason_code, "HF-DW-001.CREDENTIAL_PIVOT");
-    assert_eq!(rows[0].state, FindingStateV1::Confirmed);
-    assert_eq!(rows[0].evidence, [identity(0), identity(1), identity(2)]);
-    assert_eq!(output.evidence.len(), 3);
+    assert_eq!(rows.len(), 2);
+    let read = rows
+        .iter()
+        .find(|row| row.record == 0)
+        .ok_or("read finding")?;
+    assert_eq!(read.reason_code, "HF-DW-001.MISSING_AUTHORITY_PROOF");
+    assert_eq!(read.state, FindingStateV1::CoverageInsufficient);
+    assert_eq!(read.evidence, [identity(0)]);
+    let remote = rows
+        .iter()
+        .find(|row| row.record == 2)
+        .ok_or("remote finding")?;
+    assert_eq!(remote.reason_code, "HF-DW-001.CREDENTIAL_PIVOT");
+    assert_eq!(remote.state, FindingStateV1::Confirmed);
+    assert_eq!(remote.evidence, [identity(0), identity(1), identity(2)]);
+    assert_eq!(output.evidence.len(), 4);
     authority_identity_order(&complete, &facts)?;
     let mut missing = complete;
     missing.evaluation.inputs[1].data = Fact::encode(&[facts[0].clone(), facts[3].clone()])?;
     let (rows, _) = findings(detector, &missing)?;
     assert_eq!(rows[0].reason_code, "HF-DW-001.MISSING_AUTHORITY_PROOF");
     assert_eq!(rows[0].state, FindingStateV1::CoverageInsufficient);
+    Ok(())
+}
+
+#[test]
+fn network_authority_uses_prior_channel() -> TestResult {
+    let detector = Detector::Credentials;
+    let mut fixture = credential_fixture()?;
+    let mut records = Observation::decode(&fixture.evaluation.inputs[0].data)?;
+    records[2].effect.effect_family = KernelEffectFamilyV1::Network as u32;
+    fixture.evaluation.inputs[0].data = Observation::encode(&records)?;
+    let (findings, _) = findings(detector, &fixture)?;
+    let authority = findings
+        .iter()
+        .find(|finding| finding.record == 2)
+        .ok_or("network authority finding")?;
+    assert_eq!(authority.state, FindingStateV1::Confirmed);
+    assert_eq!(authority.evidence, [identity(0), identity(1), identity(2)]);
+    Ok(())
+}
+
+#[test]
+fn unrelated_credential_fact_does_not_contradict_read() -> TestResult {
+    let detector = Detector::Credentials;
+    let mut fixture = credential_fixture()?;
+    let mut facts = Fact::decode(&fixture.evaluation.inputs[1].data)?;
+    let mut unrelated = facts[0].clone();
+    unrelated.key.owner_revision += 1;
+    if let FactValue::Credential {
+        object_id,
+        expected_access,
+        ..
+    } = &mut unrelated.value
+    {
+        *object_id = [9; 16];
+        *expected_access = true;
+    }
+    facts.push(unrelated);
+    fixture.evaluation.inputs[1].data = Fact::encode(&facts)?;
+    let (findings, _) = findings(detector, &fixture)?;
+    assert!(findings
+        .iter()
+        .all(|finding| finding.reason_code != "HF-DW-001.CONTRADICTION"));
+    assert_eq!(findings.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn channel_fact_must_match_observed_socket() -> TestResult {
+    let detector = Detector::Credentials;
+    let mut fixture = credential_fixture()?;
+    let mut records = Observation::decode(&fixture.evaluation.inputs[0].data)?;
+    records[1].effect.exact_object_id = vec![8; 16];
+    fixture.evaluation.inputs[0].data = Observation::encode(&records)?;
+    let (findings, output) = findings(detector, &fixture)?;
+    assert!(findings.iter().all(|finding| {
+        finding.reason_code != "HF-DW-001.CREDENTIAL_PIVOT"
+            && finding.state != FindingStateV1::Confirmed
+    }));
+    assert!(RelationshipChange::decode(&output.datasets[2])?
+        .iter()
+        .all(|edge| edge.key.cause != GraphCauseV1::Direct));
+    Ok(())
+}
+
+#[test]
+fn known_task_mismatch_blocks_channel_join() -> TestResult {
+    let detector = Detector::Credentials;
+    let mut fixture = credential_fixture()?;
+    let mut records = Observation::decode(&fixture.evaluation.inputs[0].data)?;
+    records[1].effect.task_cookie = 4;
+    fixture.evaluation.inputs[0].data = Observation::encode(&records)?;
+    let mut facts = Fact::decode(&fixture.evaluation.inputs[1].data)?;
+    if let FactValue::Channel { task_cookie, .. } = &mut facts[1].value {
+        *task_cookie = 4;
+    }
+    fixture.evaluation.inputs[1].data = Fact::encode(&facts)?;
+    let (findings, output) = findings(detector, &fixture)?;
+    assert_eq!(findings.len(), 2);
+    assert!(findings.iter().all(|finding| finding.record != 1));
+    assert!(findings.iter().all(|finding| {
+        finding.reason_code != "HF-DW-001.CREDENTIAL_PIVOT"
+            && finding.state != FindingStateV1::Confirmed
+    }));
+    assert!(RelationshipChange::decode(&output.datasets[2])?
+        .iter()
+        .all(|edge| edge.key.cause != GraphCauseV1::Direct));
     Ok(())
 }
 
@@ -362,30 +461,36 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
             manifests.pop().ok_or("graph manifest")?,
             detector,
         )?;
-        let (reason, evidence, prefix) = if network {
-            (
-                "CREDENTIAL_PIVOT",
-                vec![0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 4, 5],
-                9,
-            )
+        let reason = if network {
+            "CREDENTIAL_PIVOT"
         } else {
-            ("CONTEXTUAL_CREDENTIAL_PIVOT", vec![0, 3, 4, 5], 1)
+            "CONTEXTUAL_CREDENTIAL_PIVOT"
         };
         let credential = &computation.facts[0].value;
         assert!(matches!(credential, FactValue::Credential { .. }));
-        let mut joined_evidence = vec![0];
+        let index = CredentialIndex::new(&computation)?;
         let matched = computation.authorities(
             &computation.records[0],
             credential,
             true,
-            &mut joined_evidence,
+            computation.records[5].position,
+            None,
+            &index,
         )?;
         assert_eq!(computation.fact_ids[2], computation.fact_ids[4]);
         assert_ne!(computation.facts[2].key, computation.facts[4].key);
-        assert_eq!(matched, [(3, network), (2, network), (5, network)]);
-        assert_eq!(joined_evidence, evidence[..prefix]);
+        assert_eq!(
+            matched
+                .iter()
+                .map(|value| (value.fact_index, value.direct))
+                .collect::<Vec<_>>(),
+            [(3, network), (2, network), (5, network)]
+        );
+        assert!(matched.iter().all(|value| {
+            value.channels.as_slice() == if network { &[2][..] } else { &[][..] }
+        }));
         computation.update(&fixture.evaluation)?;
-        assert_eq!(computation.findings.len(), 1);
+        assert_eq!(computation.findings.len(), 4);
         assert_eq!(computation.edges.len(), 3);
         assert_eq!(
             computation
@@ -395,7 +500,7 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
                 .collect::<Vec<_>>(),
             [Some(3), Some(2), Some(5)]
         );
-        for (index, edge) in computation.edges.values().enumerate() {
+        for edge in computation.edges.values() {
             assert_eq!(edge.record, 0);
             assert_eq!(
                 edge.edge.key.edge_type,
@@ -405,28 +510,25 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
                 (network, edge.edge.key.cause),
                 (true, GraphCauseV1::Direct) | (false, GraphCauseV1::Contextual)
             ));
-            assert_eq!(
-                edge.edge.key.evidence,
-                evidence[..prefix + index + 1]
-                    .iter()
-                    .copied()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>()
-            );
+            let mut evidence = vec![0, facts[edge.fact.ok_or("authority fact")? as usize].record];
+            if network {
+                evidence.push(2);
+            }
+            evidence.sort_unstable();
+            assert_eq!(edge.edge.key.evidence, evidence);
         }
         let finding = computation
             .findings
             .values()
-            .next()
+            .find(|finding| finding.record == 5)
             .ok_or("credential finding")?;
         assert_eq!(finding.reason_code, format!("HF-DW-001.{reason}"));
         assert_eq!(finding.state == FindingStateV1::Confirmed, network);
         assert_eq!(
             finding.evidence,
-            evidence
-                .iter()
-                .copied()
+            [0_u32, 3, 4, 5]
+                .into_iter()
+                .chain(network.then_some(2))
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .map(|row| identity(u64::from(row)))
@@ -451,17 +553,23 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
                 &computation.records[0],
                 &computation.facts[0].value,
                 true,
-                &mut vec![0],
+                computation.records[5].position,
+                None,
+                &CredentialIndex::new(&computation)?,
             )?;
-            assert!(matched.contains(&(2, false)));
-            assert!(matched.contains(&(4, true)));
+            assert!(matched
+                .iter()
+                .any(|value| value.fact_index == 2 && !value.direct));
+            assert!(matched
+                .iter()
+                .any(|value| value.fact_index == 4 && value.direct));
             let mut current = fixture.evaluation.clone();
             current.inputs[1].data = Fact::encode(&computation.facts)?;
             computation.update(&current)?;
             let finding = computation
                 .findings
                 .values()
-                .next()
+                .find(|finding| finding.record == 5)
                 .ok_or("contextual finding")?;
             assert_eq!(finding.reason_code, "HF-DW-001.CONTEXTUAL_CREDENTIAL_PIVOT");
             assert_eq!(finding.state, FindingStateV1::CoverageInsufficient);
@@ -476,12 +584,8 @@ fn authority_publication(
     expected_edges: Vec<Relationship>,
 ) -> TestResult {
     let package = Detector::Credentials.descriptor();
-    let expected_finding = computation
-        .findings
-        .values()
-        .next()
-        .ok_or("saved finding")?
-        .clone();
+    let expected_findings = computation.findings.values().cloned().collect::<Vec<_>>();
+    assert!(!expected_findings.is_empty());
     let prior_subjects = computation.subjects.clone();
     let expected_facts = computation.facts.clone();
     let expected_state = computation.state.clone();
@@ -537,24 +641,22 @@ fn authority_publication(
         expected_changes
     );
     let findings = FindingChange::decode(&output.datasets[4])?;
-    assert_eq!(
-        findings,
-        [FindingChange::from_local(
-            expected_finding.clone(),
-            Anchor::from_positions(
-                expected_finding.record,
-                expected_finding.context,
-                &record_ids,
-                &expected_facts
-            )?,
-        )]
-    );
-    assert_eq!(output.reasons.len(), 1);
-    assert_eq!(output.reasons[0].code, findings[0].reason_code);
-    let details = ReasonDetails::decode(&sdk::Dataset {
-        name: ReasonDetails::port().name,
-        batches: vec![output.reasons[0].details.clone()],
-    })?;
+    let expected_changes = expected_findings
+        .iter()
+        .map(|finding| {
+            Ok(FindingChange::from_local(
+                finding.clone(),
+                Anchor::from_positions(
+                    finding.record,
+                    finding.context,
+                    &record_ids,
+                    &expected_facts,
+                )?,
+            ))
+        })
+        .collect::<sdk::Result<Vec<_>>>()?;
+    assert_eq!(findings, expected_changes);
+    assert_eq!(output.reasons.len(), findings.len());
     assert_eq!(
         Fact::decode(&fixture.evaluation.inputs[1].data)?,
         expected_facts
@@ -564,28 +666,38 @@ fn authority_publication(
         .enumerate()
         .map(|(row, id)| (id, row as u32))
         .collect();
-    assert_eq!(
-        details,
-        [ReasonDetails::from_finding(
-            &expected_finding,
-            &record_rows
-        )?]
-    );
+    let mut expected_evidence = Vec::new();
+    for (row, (finding, reason)) in expected_findings.iter().zip(&output.reasons).enumerate() {
+        assert_eq!(reason.code, finding.reason_code);
+        assert_eq!(reason.output.dataset, "findings");
+        assert_eq!(reason.output.row, row as u64);
+        let details = ReasonDetails::decode(&sdk::Dataset {
+            name: ReasonDetails::port().name,
+            batches: vec![reason.details.clone()],
+        })?;
+        assert_eq!(
+            details,
+            [ReasonDetails::from_finding(finding, &record_rows)?]
+        );
+        expected_evidence.extend(
+            details[0]
+                .evidence
+                .iter()
+                .map(|record| (row as u64, u64::from(*record))),
+        );
+    }
     assert_eq!(
         output
             .evidence
             .iter()
-            .map(|link| link.input.row)
+            .map(|link| {
+                assert_eq!(link.output.dataset, "findings");
+                assert_eq!(link.input.dataset, "records");
+                (link.output.row, link.input.row)
+            })
             .collect::<Vec<_>>(),
-        details[0]
-            .evidence
-            .iter()
-            .map(|row| u64::from(*row))
-            .collect::<Vec<_>>()
+        expected_evidence
     );
-    assert!(output.evidence.iter().all(|link| {
-        link.output.dataset == "findings" && link.output.row == 0 && link.input.dataset == "records"
-    }));
     let checkpoint = output.checkpoint.ok_or("checkpoint")?;
     assert_eq!(checkpoint.version, 1);
     let states = GraphPackageStateV1::decode(&checkpoint.datasets[0])?;

@@ -934,3 +934,59 @@ seconds for its full test path. An earlier worktree run took 22.92 seconds.
 These two times do not isolate edge work or
 prove a speed change. The matched 1,592-event workload, its logical bytes,
 and the full workspace procedure remain open. The overall result is Not done.
+
+## Event-anchored credential findings and captured positions
+
+[Projection::capture](../../crates/araphor-analysis/src/graph/native/capture.rs) runs the selected DataFusion source plans and reads the exact captured event positions
+  -> [GraphReplayInputV1::validate](../../crates/araphor-data/src/graph/model.rs) requires one nonzero store position for each selected record
+  -> [Graph::new](../../crates/araphor-analysis/src/graph/mod.rs) qualifies each record with its captured position
+  -> [Computation::resume](../../crates/araphor-analysis-builtins/src/graph/incremental.rs) retains unchanged contributions and selects new event anchors
+  -> [CredentialIndex::new](../../crates/araphor-analysis-builtins/src/graph/credential/mod.rs) indexes credential reads and authority or channel facts by their join keys
+  -> [Computation::credential_event](../../crates/araphor-analysis-builtins/src/graph/credential/mod.rs) creates a finding anchored to the qualifying event
+  -> [Graph::apply](../../crates/araphor-analysis/src/graph/mod.rs) checks the package call and captured inputs before it merges the output
+  -> [Graph::finish](../../crates/araphor-analysis/src/graph/assembly.rs) retains the captured positions in the public Graph result
+  -> [GraphPublication::convert_graph](../../crates/araphor-analysis/src/graph/native/commit.rs) checks the same positions before Data's atomic commit
+
+A new network event can use an earlier credential read as evidence. It gets a
+new finding ID and anchor. The read event's finding stays unchanged when its
+selected facts, coverage, and global disclosure floor stay unchanged. A
+network Channel event can use only its own Channel fact for direct proof. A
+network AuthorityUse event without a Channel fact can use a qualifying earlier
+channel. Task, process, socket, request, lease, and operation checks still
+control direct proof. A changed selected fact, coverage, disclosure, or window
+can require recomputation of the affected earlier anchor. An appended
+`HostRestricted` fact can raise the floor and emit replacement values for
+earlier findings. An inserted event with an older store position selects the
+safe rebuild path.
+
+The position is Data's commit revision and ordinal. The per-CPU durable cursor
+remains part of the stable record ID; it is not the cross-CPU event order.
+Query still uses its existing DataFusion table provider and physical package
+call. Data still owns the transaction and historical Graph rows. This change
+adds the captured store position to the typed Graph package input. It adds no
+parser, planner, TableProvider, BPF program, or kernel ABI field.
+
+The current source passed these focused checks:
+
+- `cargo test -p araphor-analysis-builtins graph::tests --no-default-features`:
+  37 tests, including new network findings, exact channel proof, expiry, and
+  cross-CPU order.
+- `cargo test -p araphor-analysis graph::tests::baseline --lib`: all three
+  public Graph snapshots. The credential test requires a Confirmed event
+  finding with evidence cursors 1, 2, and 3.
+- `cargo test -p araphor-analysis source_keeps_credential_join --lib`:
+  captured native source and separate read and authority findings.
+- `cargo test -p araphor-analysis graph_adapter --lib`: SQL and Wasm adapters
+  passed. The source-built native adapter was ignored by its existing artifact
+  requirement; the native source join above ran separately.
+- `cargo test -p araphor-analysis drains_captured_backlog --lib`: exact saved
+  output, replay, checkpoint, and folded progress.
+- `cargo test -p araphor-analysis graph_restart_keeps_frontier --lib` and
+  `cargo test -p araphor-analysis graph_replay_survives_removal --lib`:
+  restart and window removal.
+
+These checks do not measure a 100-fold speed gain. Capture still reads the
+selected input, Graph assembly still reconstructs complete current values,
+and [FindingRows::apply](../../crates/araphor-graph/src/findings.rs) still
+visits all current findings and active membership. The matched backlog
+workload, full workspace procedure, and 100-fold target remain **Not done**.

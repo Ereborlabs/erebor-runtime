@@ -317,6 +317,10 @@ fn package() -> GraphPackageCheckpointV1 {
 fn qualified_variants_roundtrip() -> sdk::Result<()> {
     let raw = Observation {
         id: record(7, 11),
+        position: Position {
+            commit_revision: 1,
+            ordinal: 0,
+        },
         effect: DiscoveryEffectKeyV1 {
             task_cookie: 33,
             target_task_cookie: Some(34),

@@ -82,9 +82,22 @@ pub(super) fn input(records: Vec<DiscoveryRecordV1>) -> GraphReplayInputV1 {
     let last = records
         .last()
         .map_or(first, |record| record.id.durable_cursor);
+    let input_positions = records
+        .iter()
+        .map(|record| {
+            (
+                record.id.clone(),
+                araphor_data::StorePositionV1 {
+                    commit_revision: record.id.durable_cursor + 1,
+                    ordinal: 0,
+                },
+            )
+        })
+        .collect();
     GraphReplayInputV1 {
         source: source(),
         records,
+        input_positions,
         coverage: vec![DiscoveryCoverageV1 {
             stream: source(),
             cpu_id: 0,
