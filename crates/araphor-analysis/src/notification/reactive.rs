@@ -117,6 +117,7 @@ impl NotificationRouter {
         let mut update = NotificationUpdate::default();
         let mut routed = BTreeMap::new();
         let mut handled = BTreeSet::new();
+        let mut skipped_stale = false;
         for (reference, key) in work {
             erebor_telemetry::trace!(
                 tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
@@ -125,6 +126,31 @@ impl NotificationRouter {
                     .take(64).collect::<String>()).unwrap_or_default(),
                 "Notification work begins"
             );
+            if let Some(reference) = reference.as_ref().filter(|reference| {
+                NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
+                    && NotificationGrantV1::identifier(&reference.result_id, usize::MAX)
+                    && heads
+                        .as_ref()
+                        .and_then(|heads| heads.get(&reference.finding_id))
+                        .is_some_and(|result| result != &reference.result_id)
+            }) {
+                let reference = reference.clone();
+                let identity = (reference.finding_id.clone(), reference.result_id.clone());
+                if routed.insert(identity, false).is_none() {
+                    let error: crate::Error = NotificationSnafu {
+                        code: NotificationErrorCodeV1::Conflict,
+                        field: "current finding reference",
+                    }
+                    .build()
+                    .into();
+                    erebor_telemetry::warn!(error; "Notification routing failed",
+                        tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = %now,
+                        graph_result_id = %reference.result_id.chars().take(64).collect::<String>());
+                    update.routed.push((reference, Err(error)));
+                }
+                skipped_stale = true;
+                continue;
+            }
             check()?;
             let _guard = self.lock()?;
             let mut states = Vec::new();
@@ -135,22 +161,7 @@ impl NotificationRouter {
                         continue;
                     }
                 } else {
-                    let result =
-                        if NotificationGrantV1::identifier(&reference.result_id, usize::MAX)
-                            && heads
-                                .as_ref()
-                                .and_then(|heads| heads.get(&reference.finding_id))
-                                .is_some_and(|result| result != &reference.result_id)
-                        {
-                            Err(NotificationSnafu {
-                                code: NotificationErrorCodeV1::Conflict,
-                                field: "current finding reference",
-                            }
-                            .build()
-                            .into())
-                        } else {
-                            self.route_states(tenant, &reference, now)
-                        };
+                    let result = self.route_states(tenant, &reference, now);
                     routed.insert(identity, result.is_ok());
                     match result {
                         Ok((count, values)) => {
@@ -186,6 +197,9 @@ impl NotificationRouter {
                     self.consume_state(state, now, check, effect, &mut update)?;
                 }
             }
+        }
+        if skipped_stale {
+            check()?;
         }
         erebor_telemetry::debug!(
             tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,

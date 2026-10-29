@@ -578,6 +578,90 @@ async fn stale_batch_keeps_current_and_ready_work() -> TestResult {
 }
 
 #[tokio::test]
+async fn stale_batch_checks_lifecycle_after_skipping_rows() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
+    let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
+    let engine = Engine::new(store.clone(), Limits::default())?;
+    commit_finding_at(&store, finding(1, FindingSeverityV1::High), 1, 1)?;
+    commit_finding_at(&store, finding(2, FindingSeverityV1::High), 2, 2)?;
+    let copies = std::iter::repeat_n("(1)", 12)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT 'finding:exact-process-key' AS finding_id,
+            'graph-test-1' AS result_id,
+            arrow_cast(NULL, 'Binary') AS notification_id
+         FROM (VALUES {copies}) AS repeated(value)"
+    );
+    let update = capture(&engine, &sql, 100).await?;
+    let batches = update.batches.as_deref().ok_or("notification rows")?;
+    assert_eq!(
+        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        12
+    );
+    let checks = std::cell::Cell::new(0);
+    let result = router.consume_rows(
+        [1; 16],
+        100,
+        batches,
+        &|| {
+            checks.set(checks.get() + 1);
+            Ok(())
+        },
+        &mut |_| {
+            Err(NotificationSnafu {
+                code: NotificationErrorCodeV1::Invalid,
+                field: "stale delivery",
+            }
+            .build()
+            .into())
+        },
+    )?;
+    assert_eq!(checks.get(), 2);
+    assert_eq!(result.routed.len(), 1);
+    assert!(matches!(
+        &result.routed[0].1,
+        Err(crate::Error::Data {
+            source: araphor_data::Error::Notification {
+                code: NotificationErrorCodeV1::Conflict,
+                field: "current finding reference",
+                ..
+            }
+        })
+    ));
+    assert!(result.delivered.is_empty());
+
+    let final_checks = std::cell::Cell::new(0);
+    let stopped = router.consume_rows(
+        [1; 16],
+        100,
+        batches,
+        &|| {
+            final_checks.set(final_checks.get() + 1);
+            if final_checks.get() == 2 {
+                return Err(NotificationSnafu {
+                    code: NotificationErrorCodeV1::Unavailable,
+                    field: "stopped notification",
+                }
+                .build()
+                .into());
+            }
+            Ok(())
+        },
+        &mut |_| {
+            Ok(NotificationSinkResultV1::Accepted {
+                receipt: "unexpected".into(),
+            })
+        },
+    );
+    assert!(stopped.is_err());
+    assert_eq!(final_checks.get(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn current_head_change_after_preflight_stays_checked() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
