@@ -382,3 +382,23 @@ end at a fixed timeout and do not establish a completed-work throughput gain.
 The next change must identify which relation revisions cause repeated source
 captures, including revisions of the published Graph manifest. The [source review](../guides/araphor-graph-commit-review.md#prepared-graph-source-leaves)
 records the proof and timing limits.
+
+### Native source change notices
+
+**Requested-source revision coverage: Done. Backlog deadline: Not done.**
+Data now includes the committed Graph-result relation revision when a query
+requests `findings` or `graph_manifest`. It includes the context-version
+relation revision when a query requests `notifications` or
+`notification_routes`. A Graph-only commit can wake a direct findings query
+even when its raw-event selection does not change. These global relation
+revisions can also wake another tenant or an unrelated context query.
+
+The focused Data checks `graph_only_commit_wakes_native_findings` and
+`graph_notice_changes_dependency` pass. The unchanged 1,592-event backlog
+still failed its 90-second Follow deadline after 123.35 seconds of test-body
+time. The protected Graph reached cursor 950, but its notification was absent.
+A separate diagnostic run showed a notification query cut processing 138 rows
+for 27.379 seconds. The first two deliveries took about six seconds each;
+most remaining rows used an obsolete Graph result and were rejected. In that
+run, the protected Graph had reached only cursor 940 at timeout. Both runs
+failed, so neither measures completed-work throughput or proves a speed gain.

@@ -193,6 +193,25 @@ impl AnalysisStore {
                 )?;
             let selection = selection.as_ref();
             let mut revision = self.selected_revision(selection, meta.commit_revision, control)?;
+            let graph = (tables.contains_key("findings") || tables.contains_key("graph_manifest"))
+                .then_some("analysis_results");
+            let notification =
+                (tables.contains_key("notifications") || tables.contains_key("notification_routes"))
+                    .then_some("context_versions");
+            if graph.is_some() || notification.is_some() {
+                let changed: u64 = snapshot
+                    .query_row(
+                        "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT
+                         FROM relation_revisions WHERE relation_name IN (?, ?)
+                           AND last_changed_revision <= ?",
+                        params![graph, notification, meta.commit_revision],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read native source dependencies",
+                    })?;
+                revision = revision.max(changed);
+            }
             if tables.contains_key("discovery_state") || tables.contains_key("graph_state") {
                 let scoped_progress = if let Some(sources) = graph_sources {
                     let mut heads = snapshot.prepare(
@@ -629,6 +648,54 @@ mod tests {
     }
 
     use crate::analysis::graph_rows::tests::fixture::CommitFixture;
+
+    #[test]
+    fn graph_only_commit_wakes_native_findings() -> TestResult {
+        let fixture = CommitFixture::new()?;
+        let tenant = fixture.snapshot.scope.identity.tenant_id;
+        let mut selection = AnalysisSelectionV1::tenant(tenant);
+        selection.contexts = crate::Selection::Exact(Vec::new());
+        selection.traces = crate::Selection::Exact(Vec::new());
+        let control = AnalysisReadControl::default();
+        let revision = |name: &str| -> Result<u64> {
+            let tables = AnalysisTableRequests::from([(name.to_owned(), None)]);
+            fixture
+                .store
+                .dependency_revision_for(&selection, &tables, &control)
+                .map(|(_, revision)| revision)
+        };
+        let before = revision("findings")?;
+        let notification = revision("notifications")?;
+        let committed = fixture
+            .store
+            .commit_graph(&fixture.request, true, || Ok(()))?
+            .commit_revision;
+        assert!(committed > before);
+        for name in ["findings", "graph_manifest"] {
+            assert_eq!(revision(name)?, committed, "{name}");
+        }
+        assert_eq!(revision("notifications")?, notification);
+
+        let context = crate::AnalysisContextVersionV1 {
+            key: crate::AnalysisContextKeyV1 {
+                tenant_id: tenant,
+                owner_id: "unrelated-context".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![2],
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: crate::ContextSensitivityV1::Tenant,
+            body: b"context".to_vec(),
+        };
+        let context_revision = fixture.store.commit_context(&context)?;
+        assert_eq!(revision("findings")?, committed);
+        for name in ["notifications", "notification_routes"] {
+            assert_eq!(revision(name)?, context_revision, "{name}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn graph_notice_changes_dependency() -> TestResult {
