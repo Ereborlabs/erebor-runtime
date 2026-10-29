@@ -16,9 +16,10 @@ CREATE TABLE graph_finding_values (
     severity VARCHAR NOT NULL,
     sensitivity VARCHAR NOT NULL,
     required_action VARCHAR,
-    limits VARCHAR[] NOT NULL
+    limits VARCHAR[] NOT NULL,
+    value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32)
 );
-CREATE INDEX graph_finding_identity ON graph_finding_values (tenant_id, finding_id);
+CREATE INDEX graph_finding_identity ON graph_finding_values (value_hash);
 CREATE TABLE graph_finding_membership (
     lineage_id UBIGINT NOT NULL,
     value_id UBIGINT NOT NULL,

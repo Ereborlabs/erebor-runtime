@@ -16,8 +16,8 @@ fn graph_appender_constraint_rollback() -> TestResult {
         .ok_or("finding view schema")?;
     let view = format!("CREATE VIEW graph_findings{view}");
     let rejecting = table.replace(
-        "limits VARCHAR[] NOT NULL\n);",
-        "limits VARCHAR[] NOT NULL, CHECK (false)\n);",
+        "value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32)\n);",
+        "value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32), CHECK (false)\n);",
     );
     assert_ne!(rejecting, table);
     fixture.store.fault_write(
@@ -81,7 +81,7 @@ fn graph_appender_constraint_rollback() -> TestResult {
         &format!(
             "DROP VIEW graph_findings; DROP TABLE graph_finding_values;
                  {table} CREATE INDEX graph_finding_identity
-                 ON graph_finding_values (tenant_id, finding_id); {view}"
+                 ON graph_finding_values (value_hash); {view}"
         ),
         &[],
     )?;

@@ -14,6 +14,7 @@ use duckdb::arrow::array::{
 use duckdb::arrow::datatypes::{Field, Schema};
 use duckdb::{params, types::Value, Appender, Connection, Row};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use snafu::ResultExt as _;
 
 use crate::error::{DatabaseSnafu, DecodingSnafu, EncodingSnafu, InvalidSnafu};
@@ -104,7 +105,8 @@ impl FindingRows {
                 subject_ref, state, window_start_utc_ns, window_end_utc_ns, evidence_refs,
                 required_coverage_interval_ids, policy_provenance, effects, reason, severity,
                 sensitivity, required_action, limits
-                FROM graph_finding_values WHERE tenant_id = ? AND finding_id = ?",
+                FROM graph_finding_values WHERE tenant_id = ? AND finding_id = ?
+                    AND value_hash = ?",
             )
             .context(DatabaseSnafu {
                 operation: "prepare graph finding value lookup",
@@ -120,8 +122,13 @@ impl FindingRows {
                 }
                 .fail();
             }
+            let hash = Self::value_hash(references)?;
             let mut rows = candidates
-                .query(params![tenant.as_slice(), &finding.finding_id])
+                .query(params![
+                    tenant.as_slice(),
+                    &finding.finding_id,
+                    hash.as_slice()
+                ])
                 .context(DatabaseSnafu {
                     operation: "read graph finding values",
                 })?;
@@ -152,7 +159,7 @@ impl FindingRows {
                         }
                         .build()
                     })?;
-                    added.push((next, references));
+                    added.push((next, references, hash));
                     next
                 }
             };
@@ -247,9 +254,27 @@ impl FindingRows {
         Ok(())
     }
 
-    fn insert(writer: &mut Appender<'_>, rows: &[(u64, &FindingRefs<'_>)]) -> Result<()> {
+    fn value_hash(references: &FindingRefs<'_>) -> Result<[u8; 32]> {
+        let value =
+            serde_value::to_value(&(references.finding, references.subject, &references.evidence))
+                .map_err(|_| {
+                    InvalidSnafu {
+                        field: "graph finding canonical value",
+                    }
+                    .build()
+                })?;
+        let mut digest = Sha256::new();
+        value
+            .serialize(&mut rmp_serde::Serializer::new(&mut digest))
+            .context(EncodingSnafu)?;
+        let mut hash = [0; 32];
+        hash.copy_from_slice(&digest.finalize());
+        Ok(hash)
+    }
+
+    fn insert(writer: &mut Appender<'_>, rows: &[(u64, &FindingRefs<'_>, [u8; 32])]) -> Result<()> {
         let mut offsets = [0usize; 6];
-        for (_, references) in rows {
+        for (_, references, _) in rows {
             let finding = references.finding;
             let coverage_bytes = finding
                 .required_coverage_interval_ids
@@ -313,7 +338,7 @@ impl FindingRows {
         let mut provenance = LargeBinaryBuilder::new();
         let mut effects = LargeBinaryBuilder::new();
         let mut reasons = LargeBinaryBuilder::new();
-        for (_, references) in rows {
+        for (_, references, _) in rows {
             let finding = references.finding;
             evidence.values().append_slice(&references.evidence);
             evidence.append(true);
@@ -331,32 +356,35 @@ impl FindingRows {
         }
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(UInt64Array::from_iter_values(
-                rows.iter().map(|(id, _)| *id),
+                rows.iter().map(|(id, _, _)| *id),
             )),
             Arc::new(LargeBinaryArray::from_iter_values(
-                rows.iter().map(|(_, row)| row.finding.tenant_id),
-            )),
-            Arc::new(LargeStringArray::from_iter_values(
-                rows.iter().map(|(_, row)| row.finding.finding_id.as_str()),
-            )),
-            Arc::new(LargeStringArray::from_iter_values(
-                rows.iter().map(|(_, row)| row.finding.package_id.as_str()),
-            )),
-            Arc::new(UInt64Array::from_iter_values(
-                rows.iter().map(|(_, row)| row.finding.package_version),
-            )),
-            Arc::new(UInt64Array::from_iter_values(
-                rows.iter().map(|(_, row)| row.subject),
+                rows.iter().map(|(_, row, _)| row.finding.tenant_id),
             )),
             Arc::new(LargeStringArray::from_iter_values(
                 rows.iter()
-                    .map(|(_, row)| Self::state_label(row.finding.state)),
+                    .map(|(_, row, _)| row.finding.finding_id.as_str()),
+            )),
+            Arc::new(LargeStringArray::from_iter_values(
+                rows.iter()
+                    .map(|(_, row, _)| row.finding.package_id.as_str()),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|(_, row, _)| row.finding.package_version),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|(_, row, _)| row.subject),
+            )),
+            Arc::new(LargeStringArray::from_iter_values(
+                rows.iter()
+                    .map(|(_, row, _)| Self::state_label(row.finding.state)),
             )),
             Arc::new(Int64Array::from_iter_values(
-                rows.iter().map(|(_, row)| row.finding.window_start_utc_ns),
+                rows.iter()
+                    .map(|(_, row, _)| row.finding.window_start_utc_ns),
             )),
             Arc::new(Int64Array::from_iter_values(
-                rows.iter().map(|(_, row)| row.finding.window_end_utc_ns),
+                rows.iter().map(|(_, row, _)| row.finding.window_end_utc_ns),
             )),
             Arc::new(evidence.finish()),
             Arc::new(coverage.finish()),
@@ -365,20 +393,24 @@ impl FindingRows {
             Arc::new(reasons.finish()),
             Arc::new(LargeStringArray::from_iter_values(
                 rows.iter()
-                    .map(|(_, row)| Self::severity_label(row.finding.severity)),
+                    .map(|(_, row, _)| Self::severity_label(row.finding.severity)),
             )),
             Arc::new(LargeStringArray::from_iter_values(
                 rows.iter()
-                    .map(|(_, row)| <&str>::from(row.finding.sensitivity)),
+                    .map(|(_, row, _)| <&str>::from(row.finding.sensitivity)),
             )),
             Arc::new(LargeStringArray::from_iter(
                 rows.iter()
-                    .map(|(_, row)| row.finding.required_action.as_deref()),
+                    .map(|(_, row, _)| row.finding.required_action.as_deref()),
             )),
             Arc::new(limits.finish()),
+            Arc::new(LargeBinaryArray::from_iter_values(
+                rows.iter().map(|(_, _, hash)| hash.as_slice()),
+            )),
         ];
         let fields = Self::COLUMNS
             .split(',')
+            .chain(std::iter::once("value_hash"))
             .zip(&arrays)
             .enumerate()
             .map(|(index, (name, array))| {

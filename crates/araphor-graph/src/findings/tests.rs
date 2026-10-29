@@ -130,6 +130,147 @@ fn finding_values_follow_versions() -> TestResult {
 }
 
 #[test]
+fn indexed_finding_values_keep_exact_identity() -> TestResult {
+    use std::collections::HashMap;
+
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+    ))?;
+    let mut finding: FindingV1 = serde_json::from_value(fixture["findings"][0].clone())?;
+    let tenant = finding.tenant_id;
+    let mut first = HashMap::new();
+    first.insert("z".into(), "last".into());
+    first.insert("a".into(), "first".into());
+    let mut second = HashMap::new();
+    second.insert("a".into(), "first".into());
+    second.insert("z".into(), "last".into());
+    let reason = |metadata| {
+        FindingReasonV1::Declared(DeclaredFindingReasonV1 {
+            code: "HF-PROC-001.EXACT".into(),
+            schema: sdk::Schema::new(vec![sdk::Field::new(
+                "detail",
+                sdk::DataType::UInt64,
+                false,
+            )
+            .with_metadata(metadata)]),
+            ipc: vec![1, 2, 3],
+        })
+    };
+    finding.reason = reason(first);
+    let mut reordered = finding.clone();
+    reordered.reason = reason(second);
+    assert_eq!(finding, reordered);
+    let evidence = vec![9; finding.evidence.len()];
+    let refs = FindingRefs {
+        finding: &finding,
+        subject: 17,
+        evidence: evidence.clone(),
+    };
+    let reordered_refs = FindingRefs {
+        finding: &reordered,
+        subject: 17,
+        evidence: evidence.clone(),
+    };
+    assert_eq!(
+        FindingRows::value_hash(&refs)?,
+        FindingRows::value_hash(&reordered_refs)?
+    );
+    assert_ne!(
+        FindingRows::value_hash(&refs)?,
+        FindingRows::value_hash(&FindingRefs {
+            finding: &finding,
+            subject: 18,
+            evidence: evidence.clone()
+        })?
+    );
+    assert_ne!(
+        FindingRows::value_hash(&refs)?,
+        FindingRows::value_hash(&FindingRefs {
+            finding: &finding,
+            subject: 17,
+            evidence: vec![8; finding.evidence.len()]
+        })?
+    );
+
+    let mut writer = Connection::open_in_memory()?;
+    writer.execute_batch("CREATE TABLE graph_versions (
+        result_id VARCHAR PRIMARY KEY, lineage_id UBIGINT NOT NULL, commit_revision UBIGINT NOT NULL);
+        INSERT INTO graph_versions VALUES ('first', 1, 1), ('same', 1, 2), ('changed', 1, 3)")?;
+    writer.execute_batch(FindingRows::SCHEMA)?;
+    FindingRows::apply(&writer, tenant, 1, 1, &[refs], 1)?;
+    FindingRows::apply(&writer, tenant, 1, 2, &[reordered_refs], 1)?;
+    let count: u64 = writer.query_row(
+        "SELECT count(*)::UBIGINT FROM graph_finding_values",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(count, 1);
+
+    let mut changed = finding.clone();
+    changed.limits.push("NEW_PROOF".into());
+    let changed_refs = FindingRefs {
+        finding: &changed,
+        subject: 17,
+        evidence,
+    };
+    writer.execute(
+        "UPDATE graph_finding_values SET value_hash = ?",
+        params![FindingRows::value_hash(&changed_refs)?.as_slice()],
+    )?;
+    FindingRows::apply(&writer, tenant, 1, 3, &[changed_refs], 1)?;
+    let count: u64 = writer.query_row(
+        "SELECT count(*)::UBIGINT FROM graph_finding_values",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(count, 2);
+    let mut statement = writer.prepare(&format!(
+        "SELECT {} FROM graph_findings WHERE result_id = ?",
+        FindingRows::COLUMNS
+    ))?;
+    for (id, expected) in [
+        ("first", &finding),
+        ("same", &finding),
+        ("changed", &changed),
+    ] {
+        let actual = statement.query_row(params![id], |row| {
+            Ok(FindingRows::decode(
+                row,
+                expected.subject_id.clone(),
+                expected.evidence.clone(),
+            ))
+        })??;
+        assert_eq!(&actual, expected);
+    }
+    drop(statement);
+    {
+        let transaction = writer.transaction()?;
+        transaction.execute(
+            "INSERT INTO graph_versions VALUES ('rolled-back', 1, 4)",
+            [],
+        )?;
+        FindingRows::apply(&transaction, tenant, 1, 4, &[], 1)?;
+    }
+    assert_eq!(
+        writer.query_row::<u64, _, _>(
+            "SELECT count(*)::UBIGINT FROM graph_finding_membership",
+            [],
+            |row| row.get(0)
+        )?,
+        2
+    );
+    assert_eq!(
+        writer.query_row::<u64, _, _>(
+            "SELECT count(*)::UBIGINT FROM graph_versions",
+            [],
+            |row| row.get(0)
+        )?,
+        3
+    );
+    Ok(())
+}
+
+#[test]
 fn reason_codec_keeps_details() -> TestResult {
     use sdk::arrow_array::UInt64Array;
     use std::sync::Arc;

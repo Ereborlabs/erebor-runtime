@@ -342,7 +342,9 @@ dependencies = [
  "erebor-runtime-error",
  "rmp-serde",
  "serde",
+ "serde-value",
  "serde_json",
+ "sha2 0.10.9",
  "snafu",
 ]
 

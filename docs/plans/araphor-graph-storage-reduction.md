@@ -266,12 +266,20 @@ Arrow batches. Focused native Graph, Data header, history, selection, schema,
 and rollback tests pass. The matched workload and full workspace procedure
 have not run on this change.
 
+Indexed immutable finding-value lookup is **Done** as a storage step. The
+finding owner hashes a typed, canonically ordered value with its native
+subject and evidence IDs. The schema creates a single-column hash index for candidate
+lookup. The owner still compares the full typed value before reuse. Focused
+native history, metadata-order, collision, and rollback tests pass. The Graph
+result writer still reads complete active finding membership, so incremental
+Graph storage and the measured reduction remain **Not done**.
+
 Incremental Graph production and storage are **Not done**. The builtin
 detectors restore and emit complete package outputs in the committed product
 path. Managed calls save those complete Arrow outputs. Graph assembly creates
-a complete snapshot. The finding writer scans current findings, active
-membership, and prior values to infer changes. This work grows with retained
-state and history.
+a complete snapshot. The finding writer still visits all current findings and
+active membership to infer changes. It filters prior value candidates by a
+typed hash. The complete membership work grows with retained state.
 The matched 1,592-event storage and time target is still open.
 
 The required path takes changes from the query subscription, selects affected

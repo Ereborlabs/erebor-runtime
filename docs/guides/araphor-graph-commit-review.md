@@ -783,6 +783,15 @@ columns use native DuckDB lists. Reason, provenance, and effect values use
 typed MessagePack with strict end-of-input checks. Data maps native IDs back
 to public Graph keys for the selected result.
 
+`FindingRows::value_hash` converts the typed finding and native references to
+an ordered value before it writes MessagePack into SHA-256. The writer filters
+candidates by this hash. The single-column DuckDB index can serve this filter.
+The writer checks the tenant,
+finding ID, native references, and full typed value before reuse. A collision
+cannot merge different values. The [DuckDB index rules](https://duckdb.org/docs/1.5/guides/performance/indexing)
+require a single column for an eligible ART index scan. This change does not
+prove that each lookup uses that scan.
+
 The header retains the existing five-item CBOR envelope. The metadata field
 uses typed MessagePack. The decoder rejects missing required fields, unknown
 fields, and trailing bytes. Data still reconstructs the public Graph snapshot
@@ -791,17 +800,24 @@ The Graph result writer still compares complete finding membership. Managed
 package outputs still retain complete Arrow datasets. Relationships and
 branches still need shared incremental storage.
 
-The focused checks on this source pass:
+The earlier native storage source passed these focused checks:
 
 - `cargo test -p araphor-graph --lib`: 5 tests. The history test writes two
   new values with one-row Arrow batches.
 - `cargo test -p araphor-data analysis::graph_rows::tests::encoding:: --lib`: 8 tests.
-- `cargo test -p araphor-data analysis::graph_rows::tests::native_rows_integrity --lib`: 1 test.
 - `cargo test -p araphor-data analysis::graph::findings::tests::native_finding_batches --lib`: 1 test.
-- `cargo test -p araphor-data analysis::graph_rows::tests::schema:: --lib`: 3 tests.
 - `cargo test -p araphor-data analysis::graph_rows::tests::atomic:: --lib`: 6 tests.
 - `cargo test -p araphor-query native_graph_admission --lib`: 1 test.
 - `cargo fmt --check -p araphor-data -p araphor-graph`: passed.
+
+The indexed lookup source passed these focused checks:
+
+- `cargo test -p araphor-graph --lib`: 6 tests. The new test checks metadata
+  order, native references, a hash collision, history, and rollback.
+- `cargo test -p araphor-data graph_appender_constraint_rollback --lib`: 1 test.
+- `cargo test -p araphor-data analysis::graph_rows::tests::schema:: --lib`: 3 tests.
+- `cargo test -p araphor-data native_rows_integrity --lib`: 1 test.
+- `cargo fmt --check -p araphor-graph -p araphor-data`: passed.
 
 The native finding history test checks value and membership reuse. The
 `native_rows_integrity` test checks historical rows, selected references,
