@@ -1,7 +1,8 @@
 use std::fs::{self, DirBuilder, OpenOptions};
+use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
-use std::sync::{atomic::Ordering, TryLockError};
+use std::sync::{atomic::Ordering, Arc};
 
 use super::read::locks::{MutexGuard, ReadGuard};
 
@@ -81,12 +82,163 @@ impl Drop for AnalysisLease {
 }
 
 pub(super) struct AnalysisConnection<'a> {
-    pub(super) connection: MutexGuard<'a, Option<Connection>>,
-    pub(super) monitor: Option<&'a super::read::ReadMonitor>,
+    pub(super) connection: ConnectionSlot<'a>,
     root: &'a Path,
     dirty: Option<&'a std::sync::atomic::AtomicBool>,
     _snapshot: Option<ReadGuard<'a, ()>>,
     _permit: Option<ReadPermit>,
+}
+
+pub(super) enum ConnectionSlot<'a> {
+    Locked(MutexGuard<'a, Option<Connection>>),
+    Reader(ReaderLease<'a>),
+}
+
+impl Deref for ConnectionSlot<'_> {
+    type Target = Option<Connection>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Locked(connection) => connection,
+            Self::Reader(reader) => &reader.connection,
+        }
+    }
+}
+
+impl DerefMut for ConnectionSlot<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Locked(connection) => connection,
+            Self::Reader(reader) => &mut reader.connection,
+        }
+    }
+}
+
+struct Reader {
+    connection: Connection,
+    monitor: Arc<super::read::ReadMonitor>,
+}
+
+struct PoolState {
+    factory: Option<Connection>,
+    idle: Vec<Reader>,
+}
+
+pub(super) struct ReaderPool {
+    state: super::read::locks::Mutex<PoolState>,
+}
+
+pub(super) struct ReaderLease<'a> {
+    pool: &'a ReaderPool,
+    connection: Option<Connection>,
+    monitor: Arc<super::read::ReadMonitor>,
+}
+
+impl Drop for ReaderLease<'_> {
+    fn drop(&mut self) {
+        let Some(connection) = self.connection.take() else {
+            return;
+        };
+        if let Ok(mut state) = self.pool.state.lock() {
+            state.idle.push(Reader {
+                connection,
+                monitor: Arc::clone(&self.monitor),
+            });
+        }
+    }
+}
+
+impl ReaderPool {
+    pub(super) fn new(writer: &Connection) -> Result<Self> {
+        let factory = writer.try_clone().context(AnalysisDatabaseSnafu {
+            operation: "open trusted reader factory",
+        })?;
+        Ok(Self {
+            state: super::read::locks::Mutex::new(PoolState {
+                factory: Some(factory),
+                idle: Vec::new(),
+            }),
+        })
+    }
+
+    fn checkout<'a>(
+        &'a self,
+        root: &Path,
+        control: Option<&AnalysisReadControl>,
+    ) -> Result<ReaderLease<'a>> {
+        if let Some(control) = control {
+            control.check()?;
+        }
+        let mut state = match control {
+            Some(control) => self.state.until(control)?,
+            None => self.state.lock().map_err(|_| {
+                AnalysisStateSnafu {
+                    path: root,
+                    reason: "the analysis reader pool lock is poisoned",
+                }
+                .build()
+            })?,
+        };
+        let reader = match state.idle.pop() {
+            Some(reader) => reader,
+            None => Reader {
+                connection: state
+                    .factory
+                    .as_ref()
+                    .ok_or_else(|| {
+                        AnalysisStateSnafu {
+                            path: root,
+                            reason: "the analysis reader factory is closed",
+                        }
+                        .build()
+                    })?
+                    .try_clone()
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "clone trusted reader",
+                    })?,
+                monitor: Arc::new(super::read::ReadMonitor::default()),
+            },
+        };
+        drop(state);
+        let lease = ReaderLease {
+            pool: self,
+            connection: Some(reader.connection),
+            monitor: reader.monitor,
+        };
+        if let Some(control) = control {
+            control.check()?;
+        }
+        Ok(lease)
+    }
+
+    pub(super) fn close(&self, root: &Path) -> Result<()> {
+        let mut state = self.state.lock().map_err(|_| {
+            AnalysisStateSnafu {
+                path: root,
+                reason: "the analysis reader pool lock is poisoned",
+            }
+            .build()
+        })?;
+        state.idle.clear();
+        state.factory = None;
+        Ok(())
+    }
+
+    pub(super) fn reopen(&self, writer: &Connection, root: &Path) -> Result<()> {
+        let factory = writer.try_clone().context(AnalysisDatabaseSnafu {
+            operation: "reopen trusted reader factory",
+        })?;
+        let mut state = self.state.lock().map_err(|_| {
+            AnalysisStateSnafu {
+                path: root,
+                reason: "the analysis reader pool lock is poisoned",
+            }
+            .build()
+        })?;
+        state.idle.clear();
+        state.factory = Some(factory);
+        Ok(())
+    }
 }
 
 pub(crate) struct ReadPermit {
@@ -102,6 +254,12 @@ impl Drop for ReadPermit {
 }
 
 impl AnalysisConnection<'_> {
+    pub(super) fn read_monitor(&self) -> Option<Arc<super::read::ReadMonitor>> {
+        match &self.connection {
+            ConnectionSlot::Locked(_) => None,
+            ConnectionSlot::Reader(reader) => Some(Arc::clone(&reader.monitor)),
+        }
+    }
     pub(super) fn get(&self) -> Result<&Connection> {
         self.connection.as_ref().ok_or_else(|| {
             AnalysisStateSnafu {
@@ -137,17 +295,7 @@ impl AnalysisStore {
             .write()
             .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
         self.write_ready.store(false, Ordering::Release);
-        let mut readers = [
-            self.readers[0]
-                .lock()
-                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
-            self.readers[1]
-                .lock()
-                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
-        ];
-        for reader in &mut readers {
-            drop(reader.take());
-        }
+        self.readers.close(&self.root)?;
         drop(writer.take());
         let path = self.root.join("analysis.duckdb");
         let file = fs::symlink_metadata(&path).context(IoSnafu { path: &path })?;
@@ -174,14 +322,7 @@ impl AnalysisStore {
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))? = raw;
         self.raw_dirty.store(false, Ordering::Release);
         self.raw_pending.store(false, Ordering::Release);
-        let first = connection.try_clone().context(AnalysisDatabaseSnafu {
-            operation: "recover first trusted reader",
-        })?;
-        let second = connection.try_clone().context(AnalysisDatabaseSnafu {
-            operation: "recover second trusted reader",
-        })?;
-        *readers[0] = Some(first);
-        *readers[1] = Some(second);
+        self.readers.reopen(&connection, &self.root)?;
         *writer = Some(connection);
         let recovered = *self.revision.borrow() != meta.commit_revision;
         self.write_ready.store(true, Ordering::Release);
@@ -303,40 +444,20 @@ impl AnalysisStore {
         &self,
         control: &AnalysisReadControl,
     ) -> Result<(AnalysisConnection<'_>, AnalysisConnection<'_>)> {
-        let mut coordinator = self.read_coordinator(control)?;
+        let coordinator = self.read_coordinator(control)?;
         let permit = self.reserve_reader()?;
-        let mut snapshot = self.maintenance.read_until(control)?;
-        let first = self.read_next.fetch_add(1, Ordering::Relaxed) % self.readers.len();
-        loop {
-            for offset in 0..self.readers.len() {
-                let index = (first + offset) % self.readers.len();
-                match self.readers[index].try_lock() {
-                    Ok(connection) => {
-                        return Ok((
-                            coordinator,
-                            AnalysisConnection {
-                                connection,
-                                monitor: Some(&self.read_monitors[index]),
-                                root: &self.root,
-                                dirty: None,
-                                _snapshot: Some(snapshot),
-                                _permit: Some(permit),
-                            },
-                        ));
-                    }
-                    Err(TryLockError::WouldBlock) => {}
-                    Err(TryLockError::Poisoned(_)) => {
-                        return Err(self.state_error("the analysis reader lock is poisoned"));
-                    }
-                }
-            }
-            drop(snapshot);
-            drop(coordinator);
-            // Backup and recovery acquire the writer before the readers.
-            drop(self.readers[first].until(control)?);
-            coordinator = self.read_coordinator(control)?;
-            snapshot = self.maintenance.read_until(control)?;
-        }
+        let snapshot = self.maintenance.read_until(control)?;
+        let connection = self.readers.checkout(&self.root, Some(control))?;
+        Ok((
+            coordinator,
+            AnalysisConnection {
+                connection: ConnectionSlot::Reader(connection),
+                root: &self.root,
+                dirty: None,
+                _snapshot: Some(snapshot),
+                _permit: Some(permit),
+            },
+        ))
     }
 
     pub(super) fn project_raw(
@@ -396,8 +517,7 @@ impl AnalysisStore {
         }
         drop(raw);
         Ok(AnalysisConnection {
-            connection,
-            monitor: None,
+            connection: ConnectionSlot::Locked(connection),
             root: &self.root,
             dirty: Some(&self.raw_dirty),
             _snapshot: None,
@@ -476,35 +596,9 @@ impl AnalysisStore {
                 .read()
                 .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?,
         };
-        let first = self.read_next.fetch_add(1, Ordering::Relaxed) % self.readers.len();
-        for index in 0..self.readers.len() {
-            match self.readers[(first + index) % self.readers.len()].try_lock() {
-                Ok(connection) => {
-                    return Ok(AnalysisConnection {
-                        connection,
-                        monitor: Some(&self.read_monitors[(first + index) % self.readers.len()]),
-                        root: &self.root,
-                        dirty: None,
-                        _snapshot: Some(snapshot),
-                        _permit: Some(permit),
-                    });
-                }
-                Err(TryLockError::WouldBlock) => {}
-                Err(TryLockError::Poisoned(_)) => {
-                    return Err(self.state_error("the analysis reader lock is poisoned"));
-                }
-            }
-        }
-        // ponytail: a queued read keeps its selected reader. Use a shared queue if measurements show imbalance.
-        let connection = match control {
-            Some(control) => self.readers[first].until(control)?,
-            None => self.readers[first]
-                .lock()
-                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
-        };
+        let connection = self.readers.checkout(&self.root, control)?;
         Ok(AnalysisConnection {
-            connection,
-            monitor: Some(&self.read_monitors[first]),
+            connection: ConnectionSlot::Reader(connection),
             root: &self.root,
             dirty: None,
             _snapshot: Some(snapshot),
@@ -603,182 +697,119 @@ mod tests {
     }
 
     #[test]
-    fn capture_wait_releases_writer() -> TestResult {
+    fn default_readers_keep_distinct_snapshots() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
-        store.meta()?;
-        let first = store.reader()?;
-        let second = store.reader()?;
-        let ordinal = AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
-        let requests = crate::AnalysisTableRequests::from([(
-            "events".into(),
-            Some([ordinal].into_iter().collect()),
-        )]);
-        let selection = crate::AnalysisSelectionV1::tenant([1; 16]);
-        let control = AnalysisReadControl::default();
-        let (entered, observed) = mpsc::channel();
-        *control
-            .wait_signal
-            .lock()
-            .map_err(|_| "wait signal poisoned")? = Some(entered);
-        thread::scope(|scope| -> TestResult {
-            let worker = scope.spawn(|| {
-                store.read_tables(
-                    &selection,
-                    crate::AnalysisTableRead {
-                        requests: &requests,
-                        event_ranges: None,
-                        inputs: None,
-                        mode: crate::AnalysisReadModeV1::Metadata,
-                        now: 1,
-                    },
-                    crate::AnalysisExtractLimits::default(),
-                    &control,
-                )
-            });
-            let waited = observed.recv_timeout(Duration::from_secs(5));
-            let available = store.writer.try_lock().is_ok();
-            let cancelled = if waited.is_err() {
-                control.cancel()
-            } else {
-                Ok(())
-            };
-            drop(first);
-            drop(second);
-            let outcome = worker.join().map_err(|_| "capture panicked")?;
-            waited?;
-            cancelled?;
-            let page = outcome?;
-            assert_eq!(page.extraction.meta.store_uuid, store.store_uuid);
-            assert!(page.exhausted);
-            assert!(page
-                .tables
-                .values()
-                .flatten()
-                .all(|batch| batch.num_rows() == 0));
-            assert!(available, "a queued capture retained the writer");
-            Ok(())
-        })?;
-        assert!(store.writer.try_lock().is_ok());
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let path = root.join("analysis.duckdb");
+        let before = store.meta()?;
+        let mut first = store.reader()?;
+        let mut second = store.reader()?;
+        let mut third = store.reader()?;
+        let first_snapshot = first.get_mut()?.transaction()?;
+        let second_snapshot = second.get_mut()?.transaction()?;
+        let third_snapshot = third.get_mut()?.transaction()?;
+        for snapshot in [&first_snapshot, &second_snapshot, &third_snapshot] {
+            assert_eq!(
+                AnalysisStore::read_meta_from(snapshot, &path)?.commit_revision,
+                before.commit_revision
+            );
+        }
+        store.accept_validated_batch(identity(), batch(1))?;
+        let current = store.meta()?;
+        assert!(current.commit_revision > before.commit_revision);
+        for snapshot in [&first_snapshot, &second_snapshot, &third_snapshot] {
+            assert_eq!(
+                AnalysisStore::read_meta_from(snapshot, &path)?.commit_revision,
+                before.commit_revision
+            );
+        }
+        drop((first_snapshot, second_snapshot, third_snapshot));
+        drop((first, second, third));
         assert!(store.maintenance.try_write().is_ok());
-        store.meta()?;
         Ok(())
     }
 
     #[test]
-    fn capture_retry_state() -> TestResult {
-        use araphor_analysis_sdk::arrow_array::UInt64Array;
+    fn cancelled_reader_does_not_interrupt_another_snapshot() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let mut held = store.reader()?;
+        let snapshot = held.get_mut()?.transaction()?;
+        assert_eq!(
+            snapshot.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?,
+            1
+        );
+        let control = AnalysisReadControl::with_timeout(Duration::from_millis(50))?;
+        let mut cancelled = store.reader_until(&control)?;
+        let outcome = control.run(&mut cancelled, |reader| {
+            reader
+                .query_row("SELECT sum(i) FROM range(100000000000) t(i)", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .context(AnalysisDatabaseSnafu {
+                    operation: "test cancelled pooled reader",
+                })
+        });
+        assert!(matches!(
+            outcome,
+            Err(crate::Error::AnalysisReadDeadline { .. })
+        ));
+        drop(cancelled);
+        assert_eq!(
+            snapshot.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?,
+            1
+        );
+        let next = store.reader()?;
+        assert_eq!(
+            next.get()?
+                .query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?,
+            1
+        );
+        drop(snapshot);
+        drop(held);
+        drop(next);
+        assert!(store.maintenance.try_write().is_ok());
+        Ok(())
+    }
 
-        for cancelled in [false, true] {
-            let directory = tempfile::tempdir()?;
-            let store = AnalysisStore::open_with_limits(
-                directory.path().join("analysis"),
-                Default::default(),
-                StorageLimitsV1 {
-                    reader_admissions: Some(3),
-                    ..Default::default()
-                },
-            )?;
-            store.meta()?;
-            let first = store.reader()?;
-            let second = store.reader()?;
-            let slots = store
-                .read_slots
-                .as_ref()
-                .ok_or("configured reader admissions")?;
-            let ordinal = AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
-            let requests = crate::AnalysisTableRequests::from([(
-                "events".into(),
-                Some([ordinal].into_iter().collect()),
-            )]);
-            let identity = identity();
-            let selection = crate::AnalysisSelectionV1::tenant(identity.tenant_id);
-            let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
-            let (entered, observed) = mpsc::channel();
-            *control
-                .wait_signal
-                .lock()
-                .map_err(|_| "wait signal poisoned")? = Some(entered);
-            let (finished, completed) = mpsc::channel();
+    #[test]
+    fn backup_and_recovery_wait_for_reader_leases() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        store.accept_validated_batch(identity(), batch(1))?;
+        store.meta()?;
+        for backup in [true, false] {
+            let (sender, receiver) = mpsc::channel();
             thread::scope(|scope| -> TestResult {
+                let mut reader = store.reader()?;
+                let snapshot = reader.get_mut()?.transaction()?;
+                assert_eq!(
+                    snapshot.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?,
+                    1
+                );
                 let worker = scope.spawn(|| {
-                    let outcome = store.read_tables(
-                        &selection,
-                        crate::AnalysisTableRead {
-                            requests: &requests,
-                            event_ranges: None,
-                            inputs: None,
-                            mode: crate::AnalysisReadModeV1::Complete,
-                            now: 1,
-                        },
-                        crate::AnalysisExtractLimits::default(),
-                        &control,
-                    );
-                    let _sent = finished.send(outcome);
-                });
-                let waited = observed.recv_timeout(Duration::from_secs(5));
-                let queued_permits = slots.available_permits();
-                let available = store.writer.try_lock().is_ok();
-                let action = if waited.is_ok() && available {
-                    if cancelled {
-                        control.cancel().map(|_| None)
-                    } else {
+                    let result = if backup {
                         store
-                            .accept_validated_batch(identity.clone(), batch(1))
-                            .map(Some)
-                    }
-                } else {
-                    control.cancel().map(|_| None)
-                };
-                let revision = *store.revision.borrow();
-                let before_release =
-                    cancelled.then(|| completed.recv_timeout(Duration::from_secs(5)));
-                let released_permits = slots.available_permits();
-                drop(first);
-                drop(second);
-                let joined = worker.join().map_err(|_| "capture panicked");
-                let outcome = match before_release {
-                    Some(outcome) => outcome,
-                    None => completed.recv_timeout(Duration::from_secs(5)),
-                };
-                joined?;
-                waited?;
-                let action = action?;
-                let outcome = outcome?;
-                assert!(available, "a queued capture retained the writer");
-                assert_eq!(queued_permits, 0);
-                if cancelled {
-                    assert!(matches!(
-                        outcome,
-                        Err(crate::Error::AnalysisReadCancelled { .. })
-                    ));
-                    assert_eq!(released_permits, 1);
-                } else {
-                    assert_eq!(action, Some(crate::EvidenceStoreOutcomeV1::Accepted));
-                    let page = outcome?;
-                    assert_eq!(page.extraction.meta.commit_revision, revision);
-                    assert_eq!(page.extraction.sources.len(), 1);
-                    assert_eq!(page.extraction.sources[0].receipt.identity, identity);
-                    assert_eq!(page.extraction.sources[0].receipt.contiguous_cursor, 1);
-                    let batches = &page.tables["events"];
-                    assert_eq!(
-                        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
-                        1
-                    );
-                    let cursors = batches[0]
-                        .column_by_name("source_cursor")
-                        .ok_or("captured cursor column")?
-                        .as_any()
-                        .downcast_ref::<UInt64Array>()
-                        .ok_or("captured cursor type")?;
-                    assert_eq!(cursors.value(0), 1);
-                }
+                            .backup(&root.join("backups").join("reader-lease"))
+                            .map(|_| ())
+                    } else {
+                        store.recover()
+                    };
+                    let _sent = sender.send(result);
+                });
+                assert!(matches!(
+                    receiver.recv_timeout(Duration::from_millis(50)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ));
+                drop(snapshot);
+                drop(reader);
+                receiver.recv_timeout(Duration::from_secs(10))??;
+                worker.join().map_err(|_| "maintenance worker panicked")?;
                 Ok(())
             })?;
-            assert_eq!(slots.available_permits(), 3);
-            assert!(store.writer.try_lock().is_ok());
-            assert!(store.maintenance.try_write().is_ok());
-            store.meta()?;
+            assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
         }
         Ok(())
     }
@@ -822,7 +853,6 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         assert!(store.read_slots.is_none());
-        assert_eq!(store.readers.len(), 2);
         let held = store
             .maintenance
             .write()
@@ -1038,40 +1068,26 @@ mod tests {
             }
             Ok(())
         })?;
-        let first = store.reader()?;
-        let second = store.reader()?;
-        thread::scope(|scope| -> TestResult {
-            let queued: Vec<_> = (0..14)
-                .map(|_| scope.spawn(|| store.reader().map(|_| ())))
-                .collect();
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while store
+        let readers = (0..16)
+            .map(|_| store.reader())
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            store
                 .read_slots
                 .as_ref()
                 .ok_or("configured reader admissions")?
-                .available_permits()
-                != 0
-            {
-                if std::time::Instant::now() >= deadline {
-                    drop((first, second));
-                    return Err("readers did not enter admission".into());
-                }
-                thread::yield_now();
-            }
-            assert!(matches!(
-                store.meta(),
-                Err(crate::Error::AnalysisBusy {
-                    resource: "reader",
-                    ..
-                })
-            ));
-            store.accept_validated_batch(identity(), batch(1))?;
-            drop((first, second));
-            for worker in queued {
-                worker.join().map_err(|_| "reader panicked")??;
-            }
-            Ok(())
-        })?;
+                .available_permits(),
+            0
+        );
+        assert!(matches!(
+            store.meta(),
+            Err(crate::Error::AnalysisBusy {
+                resource: "reader",
+                ..
+            })
+        ));
+        store.accept_validated_batch(identity(), batch(1))?;
+        drop(readers);
         assert_eq!(
             store
                 .read_slots

@@ -103,15 +103,13 @@ pub struct AnalysisStore {
     root: PathBuf,
     store_uuid: Uuid,
     // Close the cloned readers before their owning writer.
-    readers: [WaitMutex<Option<Connection>>; 2],
-    read_monitors: [read::ReadMonitor; 2],
+    readers: connection::ReaderPool,
     write_monitor: Arc<read::ReadMonitor>,
     writer: WaitMutex<Option<Connection>>,
     raw: WaitMutex<raw::RawJournal>,
     raw_dirty: AtomicBool,
     raw_pending: AtomicBool,
     read_slots: Option<Arc<tokio::sync::Semaphore>>,
-    read_next: AtomicUsize,
     pub(crate) package_lifecycle: Arc<Mutex<()>>,
     package_provenance:
         Mutex<std::collections::BTreeMap<AnalysisContextKeyV1, context::ValidatedProvenance>>,
@@ -536,14 +534,7 @@ impl AnalysisStore {
         let (revision, _) = watch::channel(meta.commit_revision);
         let (activations, _) = watch::channel(meta.commit_revision);
         let (capacity, _) = watch::channel(());
-        let readers = [
-            WaitMutex::new(Some(writer.try_clone().context(AnalysisDatabaseSnafu {
-                operation: "open first trusted reader",
-            })?)),
-            WaitMutex::new(Some(writer.try_clone().context(AnalysisDatabaseSnafu {
-                operation: "open second trusted reader",
-            })?)),
-        ];
+        let readers = connection::ReaderPool::new(&writer)?;
         Ok(Self {
             root,
             store_uuid: meta.store_uuid,
@@ -556,12 +547,10 @@ impl AnalysisStore {
             raw_dirty: AtomicBool::new(false),
             raw_pending: AtomicBool::new(false),
             readers,
-            read_monitors: std::array::from_fn(|_| read::ReadMonitor::default()),
             write_monitor: Arc::new(read::ReadMonitor::default()),
             read_slots: storage
                 .reader_admissions
                 .map(|limit| Arc::new(tokio::sync::Semaphore::new(limit))),
-            read_next: AtomicUsize::new(0),
             package_lifecycle: Arc::new(Mutex::new(())),
             package_provenance: Mutex::new(std::collections::BTreeMap::new()),
             discovery_owners: AtomicUsize::new(0),

@@ -189,14 +189,6 @@ impl AnalysisStore {
             .maintenance
             .write()
             .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
-        let mut readers = [
-            self.readers[0]
-                .lock()
-                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
-            self.readers[1]
-                .lock()
-                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
-        ];
         self.write_ready.store(false, Ordering::Release);
         {
             let mut raw = self
@@ -226,22 +218,13 @@ impl AnalysisStore {
         let meta = Self::read_meta_from(writer.get()?, &source)?;
         #[cfg(test)]
         self.crash_at("backup.sealed");
-        for reader in &mut readers {
-            drop(reader.take());
-        }
+        self.readers.close(&self.root)?;
         drop(writer.connection.take());
         #[cfg(test)]
         self.crash_at("backup.closed");
         let result = self.copy_backup(destination, &meta, &files);
         let connection = self.reopen_backup(&meta)?;
-        let first = connection.try_clone().context(AnalysisDatabaseSnafu {
-            operation: "reopen first trusted reader",
-        })?;
-        let second = connection.try_clone().context(AnalysisDatabaseSnafu {
-            operation: "reopen second trusted reader",
-        })?;
-        *readers[0] = Some(first);
-        *readers[1] = Some(second);
+        self.readers.reopen(&connection, &self.root)?;
         *writer.connection = Some(connection);
         self.write_ready.store(true, Ordering::Release);
         #[cfg(test)]
@@ -1268,9 +1251,7 @@ mod tests {
         store.checkpoint()?;
         let mut meta = store.meta()?;
         store.write_ready.store(false, Ordering::Release);
-        for reader in &store.readers {
-            drop(reader.lock().map_err(|_| "reader poisoned")?.take());
-        }
+        store.readers.close(&store.root)?;
         drop(store.writer.lock().map_err(|_| "writer poisoned")?.take());
         assert!(store.meta().is_err());
         assert!(store.checkpoint().is_err());

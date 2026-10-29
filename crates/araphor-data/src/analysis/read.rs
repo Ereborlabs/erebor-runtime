@@ -260,11 +260,13 @@ impl AnalysisReadControl {
         read: impl FnOnce(&duckdb::Connection) -> Result<T>,
     ) -> Result<T> {
         self.check()?;
-        let monitor = reader.monitor.unwrap_or(&self.monitor);
+        let monitor = reader
+            .read_monitor()
+            .unwrap_or_else(|| Arc::clone(&self.monitor));
         let connection = reader.get_mut()?;
         let mut snapshot = None;
         let mut attempted = false;
-        let result = self.native_run(monitor, connection.interrupt_handle(), || {
+        let result = self.native_run(&monitor, connection.interrupt_handle(), || {
             attempted = true;
             let transaction = connection.transaction().context(AnalysisDatabaseSnafu {
                 operation: "begin read snapshot",
@@ -943,23 +945,18 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let expected = store.meta()?;
-        let workers = || -> std::result::Result<Vec<_>, &str> {
-            store
-                .read_monitors
-                .iter()
-                .map(|monitor| {
-                    Ok(monitor
-                        .worker
-                        .lock()
-                        .map_err(|_| "monitor poisoned")?
-                        .as_ref()
-                        .map(|worker| worker.thread().id()))
-                })
-                .collect()
+        let monitor = store.reader()?.read_monitor().ok_or("reader monitor")?;
+        let workers = || -> std::result::Result<_, &str> {
+            Ok(monitor
+                .worker
+                .lock()
+                .map_err(|_| "monitor poisoned")?
+                .as_ref()
+                .map(|worker| worker.thread().id()))
         };
         assert_eq!(store.meta()?, expected);
         let before = workers()?;
-        assert!(before.iter().all(Option::is_none));
+        assert!(before.is_none());
         assert_eq!(store.meta()?, expected);
         assert_eq!(workers()?, before);
         assert!(store.trace_intent([1; 16], [1; 16])?.is_none());
