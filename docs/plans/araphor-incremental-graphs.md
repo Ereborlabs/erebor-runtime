@@ -402,3 +402,34 @@ for 27.379 seconds. The first two deliveries took about six seconds each;
 most remaining rows used an obsolete Graph result and were rejected. In that
 run, the protected Graph had reached only cursor 940 at timeout. Both runs
 failed, so neither measures completed-work throughput or proves a speed gain.
+
+### Per-execution source state
+
+**Concurrent source cuts: Done. Shared immutable source data and 100-fold speed target: Not done.**
+Query keeps the DataFusion plan and binds a separate Data source snapshot to
+each execution's task context. Data reads the requested tables, source
+receipts, and managed state in one store snapshot. A subscription at commit
+revision 42 can finish with its captured rows while another subscription
+starts at revision 43. Neither execution changes the other's tables. The
+evaluation time is separate from the commit revision; it controls window and
+delivery deadlines.
+
+Do not replace tables in a shared DataFusion catalog when a source changes.
+Do not use a commit revision alone to read mutable tables later: progress,
+notification state, and managed calls can change after that revision. A future
+reuse path can share immutable Graph value blocks by their owning version.
+Data must still resolve the selected Graph heads, tenant scope, receipts,
+managed state, and time-dependent fields in one fresh store snapshot before
+it binds each execution. The task context then selects that execution's rows
+at physical scan time.
+
+The unchanged 1,592-event backlog case still fails its 90-second Follow
+deadline. One failed test body took 124.76 seconds. In that run, 62 Graph
+input reads
+took 14.289 seconds in summed, overlapping time; 34 reads each loaded 138
+findings. One notification update consumed 138 rows in 23.282 seconds. A
+second failed test body took 127.15 seconds. Its 138-row update took 21.647 seconds:
+current-head selection took 50 milliseconds, routing took 6.094 seconds, and
+notification state processing took 13.909 seconds. These totals include
+concurrent work and a fixed timeout. They do not measure completed workload
+throughput or prove a speed gain.
