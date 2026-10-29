@@ -738,3 +738,74 @@ for a failed maintenance reserve, unchanged durable state, and one later
 settlement. The scoped verification record for this source is the focused test
 and Clippy result reported with its commit. The full Graph
 storage target and matched backlog measurement remain open.
+
+## Current native finding references and binary header
+
+This section covers the current native finding and header storage changes.
+Earlier sections record older source states. The current Graph header uses a
+CBOR envelope and typed MessagePack metadata. Finding rows use native subject
+and evidence IDs. Data owns the transaction.
+
+### Intended end state
+
+Store each changed Graph contribution once. Select an exact historical Graph
+through native result membership. Let the existing DataFusion table provider
+read the selected Graph rows. This change covers the row encoding and selected
+finding reads. Per-call incremental contribution storage remains open.
+
+### Implementation review flow
+
+[GraphConversion::convert_graph](../../crates/araphor-analysis/src/graph/native/commit.rs) Analysis prepares the validated Graph snapshot
+  -> [AnalysisStore::commit_managed_graph](../../crates/araphor-data/src/analysis/progress/graph.rs) Data checks the managed capture and Graph scope
+  -> [GraphRows::encode](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data validates the Graph snapshot and prepares the result header
+  -> [GraphHeader::encode](../../crates/araphor-data/src/analysis/graph_rows/header.rs) Data encodes typed metadata and native row counts
+  -> [GraphRows::insert](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data writes native Graph rows in the result transaction
+  -> [GraphRows::insert_inputs](../../crates/araphor-data/src/analysis/graph_rows/evidence.rs) Data resolves stable evidence IDs for the selected source
+  -> [GraphRows::insert_subjects](../../crates/araphor-data/src/analysis/graph_rows/subjects.rs) Data resolves stable subject IDs for the selected tenant
+  -> [FindingRows::apply](../../crates/araphor-graph/src/findings.rs) The finding owner shares native values and updates historical membership
+  -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits Graph rows, references, and progress together
+
+[SourceProvider](../../crates/araphor-query/src/sources/mod.rs) DataFusion requests selected Graph tables
+  -> [AnalysisStore::read_tables](../../crates/araphor-data/src/analysis/extraction.rs) Data selects the authorized result
+  -> [GraphRows::read_findings](../../crates/araphor-data/src/analysis/graph_rows/findings.rs) Data resolves only finding subject and evidence references
+  -> [FindingRows::decode](../../crates/araphor-graph/src/findings.rs) The finding owner decodes native columns and strict MessagePack fields
+
+[GraphRows::read_finding](../../crates/araphor-data/src/analysis/graph_rows/findings.rs) A point read requests one finding identity
+  -> [GraphRows::finding_references](../../crates/araphor-data/src/analysis/graph_rows/findings.rs) Data resolves only IDs in that finding and checks result membership
+  -> [GraphRows::finding](../../crates/araphor-data/src/analysis/graph_rows/findings.rs) Data checks tenant, source, and input manifest before return
+
+### Owners and proof
+
+`araphor-graph` owns immutable finding values and validity membership. It
+accepts a borrowed DuckDB transaction. It does not open or commit a store.
+The subject and evidence columns contain numeric IDs. Coverage and limit
+columns use native DuckDB lists. Reason, provenance, and effect values use
+typed MessagePack with strict end-of-input checks. Data maps native IDs back
+to public Graph keys for the selected result.
+
+The header retains the existing five-item CBOR envelope. The metadata field
+uses typed MessagePack. The decoder rejects missing required fields, unknown
+fields, and trailing bytes. Data still reconstructs the public Graph snapshot
+for some reads.
+The Graph result writer still compares complete finding membership. Managed
+package outputs still retain complete Arrow datasets. Relationships and
+branches still need shared incremental storage.
+
+The focused checks on this source pass:
+
+- `cargo test -p araphor-graph --lib`: 5 tests. The history test writes two
+  new values with one-row Arrow batches.
+- `cargo test -p araphor-data analysis::graph_rows::tests::encoding:: --lib`: 8 tests.
+- `cargo test -p araphor-data analysis::graph_rows::tests::native_rows_integrity --lib`: 1 test.
+- `cargo test -p araphor-data analysis::graph::findings::tests::native_finding_batches --lib`: 1 test.
+- `cargo test -p araphor-data analysis::graph_rows::tests::schema:: --lib`: 3 tests.
+- `cargo test -p araphor-data analysis::graph_rows::tests::atomic:: --lib`: 6 tests.
+- `cargo test -p araphor-query native_graph_admission --lib`: 1 test.
+- `cargo fmt --check -p araphor-data -p araphor-graph`: passed.
+
+The native finding history test checks value and membership reuse. The
+`native_rows_integrity` test checks historical rows, selected references,
+damaged referenced rows, and rollback. The batch test checks that an unrelated
+damaged subject does not break a selected finding. The header test checks nonempty
+typed metadata and malformed bytes. No BPF program or ABI changes in this
+change. The full workspace procedure and matched backlog case remain open.

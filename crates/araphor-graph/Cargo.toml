@@ -10,9 +10,12 @@ araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 duckdb = { workspace = true, features = ["json", "vtab", "appender-arrow"] }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+rmp-serde.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 snafu.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

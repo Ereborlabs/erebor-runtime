@@ -182,6 +182,93 @@ fn native_rows_integrity() -> TestResult {
                     .ok_or("missing historical Graph")?;
             assert_eq!(GraphRows::read(&transaction, id, &historical)?, *expected);
         }
+        transaction.execute(
+            "DELETE FROM graph_relationships WHERE result_id = ?",
+            params![other],
+        )?;
+        let seed = graph.findings[0].subject_id.clone();
+        let control = AnalysisReadControl::default();
+        let allowed = GraphRows::selected_subjects(
+            &transaction,
+            other,
+            std::slice::from_ref(&seed),
+            &control,
+            true,
+        )?;
+        assert_eq!(allowed.len(), 1);
+        assert_eq!(allowed[0].0, seed);
+        assert!(GraphRows::selected_subjects(
+            &transaction,
+            "removed",
+            std::slice::from_ref(&seed),
+            &control,
+            true,
+        )?
+        .is_empty());
+        for (id, allowed) in [(other, true), ("removed", false)] {
+            let request = crate::GraphTraversalV1 {
+                seeds: vec![seed.clone()],
+                result_ids: vec![id.into()],
+                max_hops: 0,
+                ..Default::default()
+            };
+            let walk = crate::analysis::graph::traversal::read::GraphWalk::new(
+                &transaction,
+                &control,
+                &request,
+                &request.result_ids,
+                true,
+            )
+            .run()?;
+            assert_eq!(walk.subjects.len(), usize::from(allowed));
+            assert!(walk.edges.is_empty());
+        }
+        let finding = &next.findings[0];
+        let unrelated: u64 = transaction.query_row(
+            "SELECT evidence_id FROM graph_evidence WHERE durable_cursor = 2",
+            [],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "UPDATE graph_evidence SET stream_key = 'wrong'::BLOB WHERE evidence_id = ?",
+            params![unrelated],
+        )?;
+        assert_eq!(
+            GraphRows::read_finding(
+                &transaction,
+                other,
+                &finding.finding_id,
+                &other_header,
+                None,
+            )?,
+            Some(finding.clone())
+        );
+        transaction.execute(
+            "UPDATE graph_evidence SET stream_key = ? WHERE evidence_id = ?",
+            params![graph.scope.identity.key(), unrelated],
+        )?;
+        let referenced: u64 = transaction.query_row(
+            "SELECT list_extract(evidence_refs, 1)::UBIGINT FROM graph_findings
+             WHERE result_id = ? AND finding_id = ?",
+            params![other, &finding.finding_id],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "UPDATE graph_evidence SET stream_key = 'wrong'::BLOB WHERE evidence_id = ?",
+            params![referenced],
+        )?;
+        assert!(GraphRows::read_finding(
+            &transaction,
+            other,
+            &finding.finding_id,
+            &other_header,
+            None,
+        )
+        .is_err());
+        transaction.execute(
+            "UPDATE graph_evidence SET stream_key = ? WHERE evidence_id = ?",
+            params![graph.scope.identity.key(), referenced],
+        )?;
         let reentry: u64 = transaction.query_row(
             "SELECT count(*)::UBIGINT FROM graph_evidence_membership
              WHERE lineage_id = 1 AND evidence_id = 1",
@@ -392,25 +479,12 @@ fn native_edge_columns() -> TestResult {
 #[test]
 fn native_borrowed_columns() -> TestResult {
     let writer = Connection::open_in_memory()?;
-    let json = |sql: &str| {
-        writer.query_row(sql, [], |row| {
-            Ok(GraphRows::json_column::<Vec<String>>(row, 0))
-        })
-    };
-    assert_eq!(json("SELECT '[\"value\"]'::BLOB")??, vec!["value"]);
-    for sql in ["SELECT 1 AS value", "SELECT NULL::BLOB AS value"] {
-        assert!(matches!(
-            json(sql)?,
-            Err(crate::Error::AnalysisDatabase {
-                source: duckdb::Error::InvalidColumnType(0, name, _),
-                ..
-            }) if name == "value"
-        ));
-    }
-    assert!(matches!(
-        json("SELECT '{'::BLOB")?,
-        Err(crate::Error::GraphEncoding { .. })
-    ));
+    let kind = crate::GraphEdgeTypeV1::NativeEffect;
+    let label = GraphRows::label(&kind)?;
+    let roundtrip = writer.query_row("SELECT ?", params![label], |row| {
+        Ok(GraphRows::label_column::<crate::GraphEdgeTypeV1>(row, 0))
+    })??;
+    assert_eq!(roundtrip, kind);
     let label = writer.query_row("SELECT 1 AS value", [], |row| {
         Ok(GraphRows::label_column::<crate::GraphEdgeTypeV1>(row, 0))
     })?;
@@ -424,7 +498,7 @@ fn native_borrowed_columns() -> TestResult {
     let label = writer.query_row("SELECT 'INVALID'", [], |row| {
         Ok(GraphRows::label_column::<crate::GraphEdgeTypeV1>(row, 0))
     })?;
-    assert!(matches!(label, Err(crate::Error::GraphEncoding { .. })));
+    assert!(matches!(label, Err(crate::Error::GraphInvalid { .. })));
     let ordinal = writer.query_row("SELECT -1::BIGINT", [], |row| {
         Ok(GraphRows::column::<u32>(row, 0))
     })?;
@@ -615,7 +689,7 @@ fn native_selected_corruption() -> TestResult {
     )?;
     assert!(matches!(
         fixture.store.graph_findings(tenant, None, None, usize::MAX),
-        Err(crate::Error::GraphEncoding { .. })
+        Err(crate::Error::GraphNativeDecoding { .. })
     ));
     fixture.store.fault_write(
         "UPDATE graph_finding_values SET effects = ? WHERE finding_id = ?",

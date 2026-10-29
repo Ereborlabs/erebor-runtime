@@ -4,19 +4,19 @@ CREATE TABLE graph_finding_values (
     finding_id VARCHAR NOT NULL,
     package_id VARCHAR NOT NULL,
     package_version UBIGINT NOT NULL,
-    subject_id BLOB NOT NULL,
+    subject_ref UBIGINT NOT NULL,
     state VARCHAR NOT NULL,
     window_start_utc_ns BIGINT NOT NULL,
     window_end_utc_ns BIGINT NOT NULL,
-    evidence BLOB NOT NULL,
-    required_coverage_interval_ids BLOB NOT NULL,
+    evidence_refs UBIGINT[] NOT NULL,
+    required_coverage_interval_ids BLOB[] NOT NULL,
     policy_provenance BLOB NOT NULL,
     effects BLOB NOT NULL,
-    reason VARCHAR NOT NULL,
+    reason BLOB NOT NULL,
     severity VARCHAR NOT NULL,
     sensitivity VARCHAR NOT NULL,
     required_action VARCHAR,
-    limits BLOB NOT NULL
+    limits VARCHAR[] NOT NULL
 );
 CREATE INDEX graph_finding_identity ON graph_finding_values (tenant_id, finding_id);
 CREATE TABLE graph_finding_membership (
@@ -30,8 +30,8 @@ CREATE TABLE graph_finding_membership (
 CREATE VIEW graph_findings AS
     SELECT v.result_id,
         (row_number() OVER (PARTITION BY v.result_id ORDER BY f.finding_id) - 1)::UINTEGER AS ordinal,
-        f.tenant_id, f.finding_id, f.package_id, f.package_version, f.subject_id,
-        f.state, f.window_start_utc_ns, f.window_end_utc_ns, f.evidence,
+        f.tenant_id, f.finding_id, f.package_id, f.package_version, f.subject_ref,
+        f.state, f.window_start_utc_ns, f.window_end_utc_ns, f.evidence_refs,
         f.required_coverage_interval_ids, f.policy_provenance, f.effects,
         f.reason, f.severity, f.sensitivity, f.required_action, f.limits
     FROM graph_versions v

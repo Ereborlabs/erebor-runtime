@@ -1,9 +1,11 @@
 use minicbor::{Decoder, Encoder};
-use serde::ser::{Serialize, SerializeMap as _, Serializer};
-use snafu::ResultExt as _;
+use serde::{Deserialize, Serialize};
 
-use super::GraphRows;
-use crate::{GraphInvalidSnafu, GraphSnapshotV1, Result};
+use crate::{
+    AnalysisContextKeyV1, GraphBranchV1, GraphCoverageKeyV1, GraphFactV1, GraphInvalidSnafu,
+    GraphPackageCheckpointV1, GraphRevisionV1, GraphSnapshotV1, GraphVersionV1, ProcessorScopeV1,
+    Result,
+};
 
 pub(in crate::analysis) struct GraphHeader {
     pub(in crate::analysis) snapshot: GraphSnapshotV1,
@@ -17,12 +19,22 @@ pub(in crate::analysis) struct GraphHeader {
 
 impl GraphHeader {
     pub(super) fn encode(snapshot: &GraphSnapshotV1) -> Result<Vec<u8>> {
-        let metadata =
-            serde_json::to_value(HeaderMetadata(snapshot)).context(crate::GraphEncodingSnafu)?;
-        let metadata = GraphRows::json(&metadata)?;
+        Self::encode_with_finding_count(snapshot, snapshot.findings.len())
+    }
+
+    pub(super) fn encode_with_finding_count(
+        snapshot: &GraphSnapshotV1,
+        finding_count: usize,
+    ) -> Result<Vec<u8>> {
         let subjects = u32::try_from(snapshot.graph.subjects.len()).map_err(Self::error)?;
         let edges = u32::try_from(snapshot.graph.edges.len()).map_err(Self::error)?;
-        let findings = u32::try_from(snapshot.findings.len()).map_err(Self::error)?;
+        let findings = u32::try_from(finding_count).map_err(Self::error)?;
+        let metadata = HeaderMetadata::try_from(snapshot)?;
+        let mut metadata_bytes = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut metadata_bytes)
+            .with_struct_map()
+            .with_bytes(rmp_serde::config::BytesMode::ForceIterables);
+        metadata.serialize(&mut serializer).map_err(Self::error)?;
         let mut bytes = Vec::new();
         Encoder::new(&mut bytes)
             .array(5)
@@ -30,7 +42,7 @@ impl GraphHeader {
             .and_then(|e| e.u32(subjects))
             .and_then(|e| e.u32(edges))
             .and_then(|e| e.u32(findings))
-            .and_then(|e| e.bytes(&metadata))
+            .and_then(|e| e.bytes(&metadata_bytes))
             .map_err(Self::error)?;
         Ok(bytes)
     }
@@ -55,56 +67,14 @@ impl GraphHeader {
             }
             .fail();
         }
-        let mut metadata: serde_json::Value = GraphRows::decode(metadata)?;
-        let object = metadata
-            .as_object_mut()
-            .ok_or_else(|| Self::error("snapshot metadata"))?;
-        let evidence_count = object
-            .remove("evidence_count")
-            .and_then(|value| value.as_u64())
-            .and_then(|count| usize::try_from(count).ok())
-            .ok_or_else(|| Self::error("graph evidence count"))?;
-        let position_count = object
-            .remove("position_count")
-            .and_then(|value| value.as_u64())
-            .and_then(|count| usize::try_from(count).ok())
-            .ok_or_else(|| Self::error("graph position count"))?;
-        let manifest = object
-            .get_mut("input_manifest")
-            .and_then(serde_json::Value::as_object_mut)
-            .ok_or_else(|| Self::error("graph input manifest"))?;
-        if manifest
-            .insert("evidence".to_owned(), serde_json::json!([]))
-            .is_some()
-            || object
-                .insert("input_positions".to_owned(), serde_json::json!([]))
-                .is_some()
-        {
-            return GraphInvalidSnafu {
-                field: "duplicate graph inputs",
-            }
-            .fail();
+        let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(metadata));
+        let decoded = HeaderMetadata::deserialize(&mut decoder).map_err(Self::error)?;
+        if decoder.position() != metadata.len() as u64 {
+            return Err(Self::error("trailing metadata"));
         }
-        let graph = object
-            .get_mut("graph")
-            .and_then(serde_json::Value::as_object_mut)
-            .ok_or_else(|| Self::error("graph metadata"))?;
-        if graph
-            .insert("subjects".to_owned(), serde_json::json!([]))
-            .is_some()
-            || graph
-                .insert("edges".to_owned(), serde_json::json!([]))
-                .is_some()
-            || object
-                .insert("findings".to_owned(), serde_json::json!([]))
-                .is_some()
-        {
-            return GraphInvalidSnafu {
-                field: "duplicate graph rows",
-            }
-            .fail();
-        }
-        let snapshot: GraphSnapshotV1 = GraphRows::decode(&GraphRows::json(&metadata)?)?;
+        let evidence_count = usize::try_from(decoded.evidence_count).map_err(Self::error)?;
+        let position_count = usize::try_from(decoded.position_count).map_err(Self::error)?;
+        let snapshot = GraphSnapshotV1::from(decoded);
         snapshot.validate()?;
         Ok(Self {
             notice: (
@@ -173,49 +143,96 @@ impl GraphHeader {
     }
 }
 
-struct HeaderMetadata<'a>(&'a GraphSnapshotV1);
-struct GraphMetadata<'a>(&'a crate::GraphVersionV1);
-struct RevisionMetadata<'a>(&'a crate::GraphRevisionV1);
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HeaderMetadata {
+    schema_version: u32,
+    scope: ProcessorScopeV1,
+    first_cursor: u64,
+    last_cursor: u64,
+    input_manifest: RevisionMetadata,
+    graph: GraphMetadata,
+    packages: Vec<GraphPackageCheckpointV1>,
+    missing_ranges: Vec<(u64, u64)>,
+    evidence_count: u32,
+    position_count: u32,
+    previous_result_id: Option<String>,
+    context_notice_revision: u64,
+    witness_deadline_utc_ns: u64,
+}
 
-impl Serialize for HeaderMetadata<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let snapshot = self.0;
-        let mut map = serializer.serialize_map(Some(13))?;
-        map.serialize_entry("schema_version", &snapshot.schema_version)?;
-        map.serialize_entry("scope", &snapshot.scope)?;
-        map.serialize_entry("first_cursor", &snapshot.first_cursor)?;
-        map.serialize_entry("last_cursor", &snapshot.last_cursor)?;
-        map.serialize_entry(
-            "input_manifest",
-            &RevisionMetadata(&snapshot.input_manifest),
-        )?;
-        map.serialize_entry("graph", &GraphMetadata(&snapshot.graph))?;
-        map.serialize_entry("packages", &snapshot.packages)?;
-        map.serialize_entry("missing_ranges", &snapshot.missing_ranges)?;
-        map.serialize_entry("evidence_count", &snapshot.input_manifest.evidence.len())?;
-        map.serialize_entry("position_count", &snapshot.input_positions.len())?;
-        map.serialize_entry("previous_result_id", &snapshot.previous_result_id)?;
-        map.serialize_entry("context_notice_revision", &snapshot.context_notice_revision)?;
-        map.serialize_entry("witness_deadline_utc_ns", &snapshot.witness_deadline_utc_ns)?;
-        map.end()
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GraphMetadata {
+    branches: Vec<GraphBranchV1>,
+    facts: Vec<GraphFactV1>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RevisionMetadata {
+    coverage: Vec<GraphCoverageKeyV1>,
+    context: Vec<AnalysisContextKeyV1>,
+    missing_ranges: Vec<(u64, u64)>,
+}
+
+impl TryFrom<&GraphSnapshotV1> for HeaderMetadata {
+    type Error = crate::Error;
+
+    fn try_from(snapshot: &GraphSnapshotV1) -> Result<Self> {
+        Ok(Self {
+            schema_version: snapshot.schema_version,
+            scope: snapshot.scope.clone(),
+            first_cursor: snapshot.first_cursor,
+            last_cursor: snapshot.last_cursor,
+            input_manifest: RevisionMetadata {
+                coverage: snapshot.input_manifest.coverage.clone(),
+                context: snapshot.input_manifest.context.clone(),
+                missing_ranges: snapshot.input_manifest.missing_ranges.clone(),
+            },
+            graph: GraphMetadata {
+                branches: snapshot.graph.branches.clone(),
+                facts: snapshot.graph.facts.clone(),
+            },
+            packages: snapshot.packages.clone(),
+            missing_ranges: snapshot.missing_ranges.clone(),
+            evidence_count: u32::try_from(snapshot.input_manifest.evidence.len())
+                .map_err(GraphHeader::error)?,
+            position_count: u32::try_from(snapshot.input_positions.len())
+                .map_err(GraphHeader::error)?,
+            previous_result_id: snapshot.previous_result_id.clone(),
+            context_notice_revision: snapshot.context_notice_revision,
+            witness_deadline_utc_ns: snapshot.witness_deadline_utc_ns,
+        })
     }
 }
 
-impl Serialize for RevisionMetadata<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(3))?;
-        map.serialize_entry("coverage", &self.0.coverage)?;
-        map.serialize_entry("context", &self.0.context)?;
-        map.serialize_entry("missing_ranges", &self.0.missing_ranges)?;
-        map.end()
-    }
-}
-
-impl Serialize for GraphMetadata<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(2))?;
-        map.serialize_entry("branches", &self.0.branches)?;
-        map.serialize_entry("facts", &self.0.facts)?;
-        map.end()
+impl From<HeaderMetadata> for GraphSnapshotV1 {
+    fn from(metadata: HeaderMetadata) -> Self {
+        Self {
+            schema_version: metadata.schema_version,
+            scope: metadata.scope,
+            first_cursor: metadata.first_cursor,
+            last_cursor: metadata.last_cursor,
+            input_manifest: GraphRevisionV1 {
+                evidence: Vec::new(),
+                coverage: metadata.input_manifest.coverage,
+                context: metadata.input_manifest.context,
+                missing_ranges: metadata.input_manifest.missing_ranges,
+            },
+            graph: GraphVersionV1 {
+                subjects: Vec::new(),
+                edges: Vec::new(),
+                branches: metadata.graph.branches,
+                facts: metadata.graph.facts,
+            },
+            findings: Vec::new(),
+            packages: metadata.packages,
+            missing_ranges: metadata.missing_ranges,
+            input_positions: Vec::new(),
+            previous_result_id: metadata.previous_result_id,
+            context_notice_revision: metadata.context_notice_revision,
+            witness_deadline_utc_ns: metadata.witness_deadline_utc_ns,
+        }
     }
 }

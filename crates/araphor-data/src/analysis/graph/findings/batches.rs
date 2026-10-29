@@ -26,6 +26,21 @@ impl AnalysisStore {
         headers: &mut BTreeMap<String, GraphHeader>,
         output: &mut Vec<(String, FindingV1)>,
     ) -> Result<()> {
+        let mut grouped = BTreeMap::new();
+        for key in keys {
+            let entry: &mut (&FindingKey, Vec<&str>) = grouped
+                .entry(key.result.as_str())
+                .or_insert_with(|| (key, Vec::new()));
+            entry.1.push(&key.finding);
+        }
+        let mut references = BTreeMap::new();
+        for (result, (key, names)) in grouped {
+            let header = self.cached_finding_header(snapshot, headers, tenant, key)?;
+            references.insert(
+                result,
+                GraphRows::finding_references(snapshot, result, header, Some(&names), None)?,
+            );
+        }
         let positions = (0..keys.len())
             .map(|index| index as i64)
             .collect::<Vec<_>>();
@@ -63,7 +78,7 @@ impl AnalysisStore {
             }
             let key = &keys[read];
             let header = self.cached_finding_header(snapshot, headers, tenant, key)?;
-            let finding = GraphRows::decode_finding(row, header)?;
+            let finding = GraphRows::decode_finding(row, header, &references[key.result.as_str()])?;
             output.push((key.result.clone(), finding));
             read += 1;
         }

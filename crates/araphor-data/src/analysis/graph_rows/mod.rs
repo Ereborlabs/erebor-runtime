@@ -1,4 +1,4 @@
-use araphor_graph::FindingRows;
+use araphor_graph::{FindingRefs, FindingRows};
 use duckdb::{
     params,
     types::{FromSql, FromSqlError, FromSqlResult, ValueRef},
@@ -8,12 +8,11 @@ use serde::{de::DeserializeOwned, Serialize};
 use snafu::ResultExt as _;
 
 use super::AnalysisReadControl;
-use crate::{
-    AnalysisDatabaseSnafu, GraphEncodingSnafu, GraphInvalidSnafu, GraphSnapshotV1, Result,
-};
+use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, GraphSnapshotV1, Result};
 
 mod evidence;
 mod findings;
+pub(in crate::analysis) use findings::NativeFindingRefs;
 mod header;
 mod headers;
 mod read;
@@ -57,8 +56,8 @@ impl GraphRows {
         writer: &Connection,
         result_id: &str,
     ) -> Result<()> {
-        let (lineage, revision) = Self::insert_inputs(snapshot, writer, result_id)?;
-        Self::insert_subjects(writer, &snapshot.graph.subjects, lineage, revision)?;
+        let (lineage, revision, evidence) = Self::insert_inputs(snapshot, writer, result_id)?;
+        let subjects = Self::insert_subjects(writer, &snapshot.graph.subjects, lineage, revision)?;
         {
             let mut appender =
                 writer
@@ -71,12 +70,51 @@ impl GraphRows {
                 operation: "flush native graph relationships",
             })?;
         }
+        let findings = snapshot
+            .findings
+            .iter()
+            .map(|finding| {
+                let subject = *subjects.get(&finding.subject_id).ok_or_else(|| {
+                    GraphInvalidSnafu {
+                        field: "graph finding subject reference",
+                    }
+                    .build()
+                })?;
+                let evidence = finding
+                    .evidence
+                    .iter()
+                    .map(|record| {
+                        if record.stream != snapshot.scope.identity {
+                            return GraphInvalidSnafu {
+                                field: "graph finding evidence source",
+                            }
+                            .fail();
+                        }
+                        evidence
+                            .get(&(record.cpu_id, record.durable_cursor))
+                            .copied()
+                            .ok_or_else(|| {
+                                GraphInvalidSnafu {
+                                    field: "graph finding evidence reference",
+                                }
+                                .build()
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(FindingRefs {
+                    finding,
+                    subject,
+                    evidence,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         FindingRows::apply(
             writer,
             snapshot.scope.identity.tenant_id,
             lineage,
             revision,
-            &snapshot.findings,
+            &findings,
+            crate::analysis::MAX_ANALYSIS_PAGE_RECORDS,
         )?;
         Ok(())
     }
@@ -186,24 +224,21 @@ impl GraphRows {
         Ok(values)
     }
 
-    fn json(value: &impl Serialize) -> Result<Vec<u8>> {
-        serde_json::to_vec(value).context(GraphEncodingSnafu)
-    }
-    fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-        serde_json::from_slice(bytes).context(GraphEncodingSnafu)
-    }
     fn label(value: &impl Serialize) -> Result<String> {
-        match serde_json::to_value(value).context(GraphEncodingSnafu)? {
-            serde_json::Value::String(value) => Ok(value),
-            _ => GraphInvalidSnafu {
+        serde_plain::to_string(value).map_err(|_| {
+            GraphInvalidSnafu {
                 field: "graph scalar label",
             }
-            .fail(),
-        }
+            .build()
+        })
     }
     fn parse<T: DeserializeOwned>(label: &str) -> Result<T> {
-        serde_json::from_value(serde_json::Value::String(label.to_owned()))
-            .context(GraphEncodingSnafu)
+        serde_plain::from_str(label).map_err(|_| {
+            GraphInvalidSnafu {
+                field: "graph scalar label",
+            }
+            .build()
+        })
     }
 
     fn column<T: FromSql>(row: &Row<'_>, index: usize) -> Result<T> {
@@ -237,11 +272,6 @@ impl GraphRows {
         native().context(AnalysisDatabaseSnafu {
             operation: "decode native graph columns",
         })
-    }
-
-    #[cfg(test)]
-    fn json_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> Result<T> {
-        Self::decode(Self::borrowed(row, index, |value| value.as_blob())?)
     }
 
     fn label_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> Result<T> {

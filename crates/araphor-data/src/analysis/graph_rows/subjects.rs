@@ -18,7 +18,7 @@ impl GraphRows {
         subjects: &[GraphSubjectKeyV1],
         lineage: u64,
         revision: u64,
-    ) -> Result<()> {
+    ) -> Result<BTreeMap<GraphSubjectKeyV1, u64>> {
         let mut known = BTreeMap::new();
         for selected in subjects.chunks(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS) {
             let placeholders = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?)", selected.len())
@@ -181,7 +181,7 @@ impl GraphRows {
         appender.flush().context(AnalysisDatabaseSnafu {
             operation: "flush graph subject membership",
         })?;
-        Ok(())
+        Ok(known)
     }
 
     pub(super) fn subject_sort(subject: &GraphSubjectKeyV1) -> (u8, &str, &[u8], u64) {
@@ -257,7 +257,7 @@ impl GraphRows {
         }
         "EXISTS (
             SELECT 1 FROM graph_findings finding
-            WHERE finding.result_id = subject.result_id AND finding.subject_id = seed.subject_id
+            WHERE finding.result_id = subject.result_id AND finding.subject_ref = subject.subject_id
          ) OR EXISTS (
             SELECT 1 FROM graph_relationships edge
             WHERE edge.result_id = subject.result_id AND array_length(edge.evidence) > 0
@@ -288,12 +288,11 @@ impl GraphRows {
         let mut selected = Vec::new();
         for keys in keys.chunks(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS) {
             control.check()?;
-            let values = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?, ?)", keys.len())
+            let values = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?)", keys.len())
                 .collect::<Vec<_>>()
                 .join(", ");
             let mut parameters = Vec::new();
             for key in keys {
-                parameters.push(Value::Blob(Self::json(key)?));
                 parameters.extend(Self::subject_fields(key));
             }
             parameters.push(Value::Text(result_id.to_owned()));
@@ -305,7 +304,7 @@ impl GraphRows {
             let permission = Self::subject_permission(binding_scope);
             let mut statement = reader
                 .prepare(&format!(
-                    "WITH requested(subject_id, tenant_id, authority_rank, authority_text,
+                    "WITH requested(tenant_id, authority_rank, authority_text,
                         authority_boot, authority_epoch, subject_kind, identity)
                  AS (VALUES {values})
                  SELECT {columns} FROM graph_subjects subject JOIN requested seed

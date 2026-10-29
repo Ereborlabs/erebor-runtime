@@ -12,7 +12,13 @@ pub enum Error {
     },
     #[snafu(display("Graph encoding failed: {source}"))]
     Encoding {
-        source: serde_json::Error,
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Graph decoding failed: {source}"))]
+    Decoding {
+        source: rmp_serde::decode::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -37,7 +43,7 @@ impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Invalid { .. } => StatusCode::InvalidArguments,
-            Self::Encoding { .. } => StatusCode::Internal,
+            Self::Encoding { .. } | Self::Decoding { .. } => StatusCode::Internal,
             Self::Contract { source, .. } => source.status_code(),
             Self::Database { .. } => StatusCode::External,
         }

@@ -19,7 +19,7 @@ impl GraphRows {
         graph: &GraphSnapshotV1,
         writer: &Connection,
         result_id: &str,
-    ) -> Result<(u64, u64)> {
+    ) -> Result<(u64, u64, BTreeMap<(u32, u64), u64>)> {
         let revision: u64 = writer
             .query_row(
                 "SELECT commit_revision FROM analysis_results WHERE result_id = ?",
@@ -363,7 +363,7 @@ impl GraphRows {
                 operation: "flush graph input positions",
             })?;
         }
-        Ok((lineage, revision))
+        Ok((lineage, revision, existing))
     }
 
     pub(in crate::analysis) fn load_inputs(

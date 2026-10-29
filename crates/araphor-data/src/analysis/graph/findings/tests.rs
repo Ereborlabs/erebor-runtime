@@ -57,6 +57,35 @@ fn native_finding_batches() -> std::result::Result<(), Box<dyn std::error::Error
         )?,
         expected[256..]
     );
+    let (referenced, unrelated): (u64, u64) = {
+        let mut writer = fixture.store.writer_access()?;
+        writer.get_mut()?.query_row(
+            "SELECT f.subject_ref,
+                (SELECT min(subject_id) FROM graph_subject_values
+                 WHERE subject_id <> f.subject_ref)
+             FROM graph_finding_values f LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?
+    };
+    fixture.store.fault_write(
+        "UPDATE graph_subject_values SET authority_rank = 255 WHERE subject_id = ?",
+        duckdb::params![unrelated],
+    )?;
+    assert_eq!(
+        fixture
+            .store
+            .graph_findings(tenant, None, Some(&expected[0].1.finding_id), 1,)?,
+        expected[..1]
+    );
+    fixture.store.fault_write(
+        "UPDATE graph_subject_values SET authority_rank = 255 WHERE subject_id = ?",
+        duckdb::params![referenced],
+    )?;
+    assert!(fixture
+        .store
+        .graph_findings(tenant, None, Some(&expected[0].1.finding_id), 1)
+        .is_err());
     Ok(())
 }
 

@@ -1,16 +1,14 @@
-use duckdb::types::Value;
-use snafu::ResultExt as _;
-
 use super::read::GraphWalk;
 use crate::analysis::graph_rows::GraphRows;
-use crate::{GraphEncodingSnafu, GraphTraversalDirectionV1, Result};
+use crate::{GraphTraversalDirectionV1, Result};
+use duckdb::types::Value;
 
 impl GraphWalk<'_> {
     pub(super) fn query(&self) -> Result<(String, Vec<Value>)> {
         let requested = std::iter::repeat_n("(?)", self.result_ids.len())
             .collect::<Vec<_>>()
             .join(", ");
-        let seeds = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?, ?)", self.request.seeds.len())
+        let seeds = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?)", self.request.seeds.len())
             .collect::<Vec<_>>()
             .join(", ");
         let mut values = self
@@ -20,9 +18,6 @@ impl GraphWalk<'_> {
             .map(Value::Text)
             .collect::<Vec<_>>();
         for seed in &self.request.seeds {
-            values.push(Value::Blob(
-                serde_json::to_vec(seed).context(GraphEncodingSnafu)?,
-            ));
             values.extend(GraphRows::subject_fields(seed));
         }
         values.push(Value::Boolean(self.binding_scope));
@@ -68,7 +63,7 @@ impl GraphWalk<'_> {
         let subject_permission = GraphRows::subject_permission(self.binding_scope);
         let query = format!(
             "WITH RECURSIVE requested(result_id) AS (VALUES {requested}),
-             seeds(subject_id, tenant_id, authority_rank, authority_text, authority_boot,
+             seeds(tenant_id, authority_rank, authority_text, authority_boot,
                  authority_epoch, subject_kind, identity) AS (VALUES {seeds}),
              eligible_edges AS NOT MATERIALIZED (
                  SELECT e.result_id, e.ordinal,

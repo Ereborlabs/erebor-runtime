@@ -1,12 +1,22 @@
 use std::collections::BTreeSet;
+use std::io::Cursor;
+use std::sync::Arc;
 
-use araphor_analysis_builtins::graph::{ContextSensitivityV1, FindingReasonV1, FindingV1};
-use araphor_analysis_sdk as sdk;
-use duckdb::{params, Appender, Connection, Row};
-use serde::{de::DeserializeOwned, Serialize};
+use araphor_analysis_builtins::discovery::DiscoveryRecordIdV1;
+use araphor_analysis_builtins::graph::{
+    ContextSensitivityV1, DeclaredFindingReasonV1, FindingReasonV1, FindingSeverityV1,
+    FindingStateV1, FindingV1, GraphSubjectKeyV1,
+};
+use duckdb::arrow::array::{
+    builder::{LargeBinaryBuilder, LargeListBuilder, LargeStringBuilder, UInt64Builder},
+    ArrayRef, Int64Array, LargeBinaryArray, LargeStringArray, RecordBatch, UInt64Array,
+};
+use duckdb::arrow::datatypes::{Field, Schema};
+use duckdb::{params, types::Value, Appender, Connection, Row};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use crate::error::{ContractSnafu, DatabaseSnafu, EncodingSnafu, InvalidSnafu};
+use crate::error::{DatabaseSnafu, DecodingSnafu, EncodingSnafu, InvalidSnafu};
 use crate::Result;
 
 #[cfg(test)]
@@ -14,10 +24,22 @@ mod tests;
 
 pub struct FindingRows;
 
+pub struct FindingRefs<'a> {
+    pub finding: &'a FindingV1,
+    pub subject: u64,
+    pub evidence: Vec<u64>,
+}
+
+#[derive(Deserialize, Serialize)]
+enum StoredReason<T> {
+    Builtin(String),
+    Declared(T),
+}
+
 impl FindingRows {
     pub const SCHEMA: &'static str = include_str!("findings.sql");
     pub const COLUMNS: &'static str = "ordinal, tenant_id, finding_id, package_id, package_version,
-        subject_id, state, window_start_utc_ns, window_end_utc_ns, evidence,
+        subject_ref, state, window_start_utc_ns, window_end_utc_ns, evidence_refs,
         required_coverage_interval_ids, policy_provenance, effects, reason, severity,
         sensitivity, required_action, limits";
 
@@ -55,8 +77,15 @@ impl FindingRows {
         tenant: [u8; 16],
         lineage: u64,
         revision: u64,
-        findings: &[FindingV1],
+        findings: &[FindingRefs<'_>],
+        batch_rows: usize,
     ) -> Result<()> {
+        if batch_rows == 0 {
+            return InvalidSnafu {
+                field: "graph finding batch size",
+            }
+            .fail();
+        }
         let mut next: u64 = writer
             .query_row(
                 "SELECT coalesce(max(value_id), 0) FROM graph_finding_values",
@@ -72,7 +101,7 @@ impl FindingRows {
         let mut candidates = writer
             .prepare(
                 "SELECT value_id, tenant_id, finding_id, package_id, package_version,
-                subject_id, state, window_start_utc_ns, window_end_utc_ns, evidence,
+                subject_ref, state, window_start_utc_ns, window_end_utc_ns, evidence_refs,
                 required_coverage_interval_ids, policy_provenance, effects, reason, severity,
                 sensitivity, required_action, limits
                 FROM graph_finding_values WHERE tenant_id = ? AND finding_id = ?",
@@ -80,8 +109,12 @@ impl FindingRows {
             .context(DatabaseSnafu {
                 operation: "prepare graph finding value lookup",
             })?;
-        for finding in findings {
-            if finding.tenant_id != tenant || !names.insert(finding.finding_id.as_str()) {
+        for references in findings {
+            let finding = references.finding;
+            if finding.tenant_id != tenant
+                || references.evidence.len() != finding.evidence.len()
+                || !names.insert(finding.finding_id.as_str())
+            {
                 return InvalidSnafu {
                     field: "graph finding identity",
                 }
@@ -96,7 +129,11 @@ impl FindingRows {
             while let Some(row) = rows.next().context(DatabaseSnafu {
                 operation: "advance graph finding values",
             })? {
-                if Self::decode(row)? == *finding {
+                let ids = Self::references(row)?;
+                let value =
+                    Self::decode(row, finding.subject_id.clone(), finding.evidence.clone())?;
+                if ids.0 == references.subject && ids.1 == references.evidence && value == *finding
+                {
                     if value_id.is_some() {
                         return InvalidSnafu {
                             field: "duplicate graph finding value",
@@ -115,7 +152,7 @@ impl FindingRows {
                         }
                         .build()
                     })?;
-                    added.push((next, finding));
+                    added.push((next, references));
                     next
                 }
             };
@@ -133,8 +170,8 @@ impl FindingRows {
                 .context(DatabaseSnafu {
                     operation: "prepare graph finding value insert",
                 })?;
-            for (id, finding) in added {
-                Self::insert(&mut appender, id, finding)?;
+            for rows in added.chunks(batch_rows) {
+                Self::insert(&mut appender, rows)?;
             }
             appender.flush().context(DatabaseSnafu {
                 operation: "flush graph finding values",
@@ -210,35 +247,183 @@ impl FindingRows {
         Ok(())
     }
 
-    fn insert(writer: &mut Appender<'_>, id: u64, finding: &FindingV1) -> Result<()> {
-        writer
-            .append_row(params![
-                id,
-                finding.tenant_id.as_slice(),
-                &finding.finding_id,
-                &finding.package_id,
-                finding.package_version,
-                Self::json(&finding.subject_id)?,
-                Self::scalar_label(&finding.state)?,
-                finding.window_start_utc_ns,
-                finding.window_end_utc_ns,
-                Self::json(&finding.evidence)?,
-                Self::json(&finding.required_coverage_interval_ids)?,
-                Self::json(&finding.policy_provenance)?,
-                Self::json(&finding.effects)?,
-                Self::reason(&finding.reason)?,
-                Self::scalar_label(&finding.severity)?,
-                <&str>::from(finding.sensitivity),
-                &finding.required_action,
-                Self::json(&finding.limits)?
-            ])
-            .context(DatabaseSnafu {
-                operation: "insert graph finding value",
+    fn insert(writer: &mut Appender<'_>, rows: &[(u64, &FindingRefs<'_>)]) -> Result<()> {
+        let mut offsets = [0usize; 6];
+        for (_, references) in rows {
+            let finding = references.finding;
+            let coverage_bytes = finding
+                .required_coverage_interval_ids
+                .len()
+                .checked_mul(16)
+                .ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "graph finding array offsets",
+                    }
+                    .build()
+                })?;
+            let limit_bytes = finding.limits.iter().try_fold(0usize, |total, value| {
+                total.checked_add(value.len()).ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "graph finding array offsets",
+                    }
+                    .build()
+                })
             })?;
+            let strings = finding
+                .finding_id
+                .len()
+                .checked_add(finding.package_id.len())
+                .and_then(|length| {
+                    length.checked_add(finding.required_action.as_ref().map_or(0, String::len))
+                })
+                .ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "graph finding array offsets",
+                    }
+                    .build()
+                })?;
+            for (total, next) in offsets.iter_mut().zip([
+                references.evidence.len(),
+                finding.required_coverage_interval_ids.len(),
+                coverage_bytes,
+                finding.limits.len(),
+                limit_bytes,
+                strings,
+            ]) {
+                *total = total.checked_add(next).ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "graph finding array offsets",
+                    }
+                    .build()
+                })?;
+            }
+        }
+        if offsets
+            .into_iter()
+            .any(|count| i64::try_from(count).is_err())
+        {
+            return InvalidSnafu {
+                field: "graph finding array offsets",
+            }
+            .fail();
+        }
+        let mut evidence = LargeListBuilder::new(UInt64Builder::new());
+        let mut coverage = LargeListBuilder::new(LargeBinaryBuilder::new());
+        let mut limits = LargeListBuilder::new(LargeStringBuilder::new());
+        let mut provenance = LargeBinaryBuilder::new();
+        let mut effects = LargeBinaryBuilder::new();
+        let mut reasons = LargeBinaryBuilder::new();
+        for (_, references) in rows {
+            let finding = references.finding;
+            evidence.values().append_slice(&references.evidence);
+            evidence.append(true);
+            for id in &finding.required_coverage_interval_ids {
+                coverage.values().append_value(id);
+            }
+            coverage.append(true);
+            for value in &finding.limits {
+                limits.values().append_value(value);
+            }
+            limits.append(true);
+            provenance.append_value(Self::encode(&finding.policy_provenance)?);
+            effects.append_value(Self::encode(&finding.effects)?);
+            reasons.append_value(Self::reason(&finding.reason)?);
+        }
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|(id, _)| *id),
+            )),
+            Arc::new(LargeBinaryArray::from_iter_values(
+                rows.iter().map(|(_, row)| row.finding.tenant_id),
+            )),
+            Arc::new(LargeStringArray::from_iter_values(
+                rows.iter().map(|(_, row)| row.finding.finding_id.as_str()),
+            )),
+            Arc::new(LargeStringArray::from_iter_values(
+                rows.iter().map(|(_, row)| row.finding.package_id.as_str()),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|(_, row)| row.finding.package_version),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|(_, row)| row.subject),
+            )),
+            Arc::new(LargeStringArray::from_iter_values(
+                rows.iter()
+                    .map(|(_, row)| Self::state_label(row.finding.state)),
+            )),
+            Arc::new(Int64Array::from_iter_values(
+                rows.iter().map(|(_, row)| row.finding.window_start_utc_ns),
+            )),
+            Arc::new(Int64Array::from_iter_values(
+                rows.iter().map(|(_, row)| row.finding.window_end_utc_ns),
+            )),
+            Arc::new(evidence.finish()),
+            Arc::new(coverage.finish()),
+            Arc::new(provenance.finish()),
+            Arc::new(effects.finish()),
+            Arc::new(reasons.finish()),
+            Arc::new(LargeStringArray::from_iter_values(
+                rows.iter()
+                    .map(|(_, row)| Self::severity_label(row.finding.severity)),
+            )),
+            Arc::new(LargeStringArray::from_iter_values(
+                rows.iter()
+                    .map(|(_, row)| <&str>::from(row.finding.sensitivity)),
+            )),
+            Arc::new(LargeStringArray::from_iter(
+                rows.iter()
+                    .map(|(_, row)| row.finding.required_action.as_deref()),
+            )),
+            Arc::new(limits.finish()),
+        ];
+        let fields = Self::COLUMNS
+            .split(',')
+            .zip(&arrays)
+            .enumerate()
+            .map(|(index, (name, array))| {
+                Field::new(
+                    if index == 0 { "value_id" } else { name.trim() },
+                    array.data_type().clone(),
+                    index == 16,
+                )
+            })
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|_| {
+            InvalidSnafu {
+                field: "graph finding record batch",
+            }
+            .build()
+        })?;
+        writer.append_record_batch(batch).context(DatabaseSnafu {
+            operation: "insert graph finding values",
+        })?;
         Ok(())
     }
 
-    pub fn decode(row: &Row<'_>) -> Result<FindingV1> {
+    pub fn references(row: &Row<'_>) -> Result<(u64, Vec<u64>)> {
+        let subject = Self::column(row, 5)?;
+        Ok((subject, Self::evidence_references(row, 9)?))
+    }
+
+    pub fn evidence_references(row: &Row<'_>, index: usize) -> Result<Vec<u64>> {
+        Self::list_column(row, index)?
+            .into_iter()
+            .map(|value| match value {
+                Value::UBigInt(value) => Ok(value),
+                _ => InvalidSnafu {
+                    field: "graph finding evidence reference",
+                }
+                .fail(),
+            })
+            .collect()
+    }
+
+    pub fn decode(
+        row: &Row<'_>,
+        subject: GraphSubjectKeyV1,
+        evidence: Vec<DiscoveryRecordIdV1>,
+    ) -> Result<FindingV1> {
         let tenant: Vec<u8> = Self::column(row, 1)?;
         let sensitivity: String = Self::column(row, 15)?;
         Ok(FindingV1 {
@@ -251,15 +436,29 @@ impl FindingRows {
             finding_id: Self::column(row, 2)?,
             package_id: Self::column(row, 3)?,
             package_version: Self::column(row, 4)?,
-            subject_id: Self::json_column(row, 5)?,
+            subject_id: subject,
             state: Self::label_column(row, 6)?,
             window_start_utc_ns: Self::column(row, 7)?,
             window_end_utc_ns: Self::column(row, 8)?,
-            evidence: Self::json_column(row, 9)?,
-            required_coverage_interval_ids: Self::json_column(row, 10)?,
-            policy_provenance: Self::json_column(row, 11)?,
-            effects: Self::json_column(row, 12)?,
-            reason: Self::restore_reason(&Self::column::<String>(row, 13)?)?,
+            evidence,
+            required_coverage_interval_ids: Self::list_column(row, 10)?
+                .into_iter()
+                .map(|value| match value {
+                    Value::Blob(bytes) => bytes.try_into().map_err(|_| {
+                        InvalidSnafu {
+                            field: "graph finding coverage bytes",
+                        }
+                        .build()
+                    }),
+                    _ => InvalidSnafu {
+                        field: "graph finding coverage bytes",
+                    }
+                    .fail(),
+                })
+                .collect::<Result<_>>()?,
+            policy_provenance: Self::binary_column(row, 11)?,
+            effects: Self::binary_column(row, 12)?,
+            reason: Self::restore_reason(Self::binary_column(row, 13)?)?,
             severity: Self::label_column(row, 14)?,
             sensitivity: ContextSensitivityV1::try_from(sensitivity.as_str()).map_err(|_| {
                 InvalidSnafu {
@@ -268,38 +467,77 @@ impl FindingRows {
                 .build()
             })?,
             required_action: Self::column(row, 16)?,
-            limits: Self::json_column(row, 17)?,
+            limits: Self::list_column(row, 17)?
+                .into_iter()
+                .map(|value| match value {
+                    Value::Text(value) => Ok(value),
+                    _ => InvalidSnafu {
+                        field: "graph finding limit",
+                    }
+                    .fail(),
+                })
+                .collect::<Result<_>>()?,
         })
     }
 
     pub fn reason_label(reason: &FindingReasonV1) -> Result<String> {
-        match reason.label() {
-            Ok(value) => Ok(value),
-            Err(sdk::Error::Encoding { source, .. }) => Err(source).context(EncodingSnafu),
-            Err(sdk::Error::Contract {
-                code: sdk::ErrorCode::Invalid,
-                field,
-                ..
-            }) if field == "finding reason label" => InvalidSnafu {
-                field: "finding reason label",
+        Ok(match reason {
+            FindingReasonV1::UnexpectedEffect => "UNEXPECTED_EFFECT",
+            FindingReasonV1::AuditedRoleDeviation => "AUDITED_ROLE_DEVIATION",
+            FindingReasonV1::LineageCoverageGap => "LINEAGE_COVERAGE_GAP",
+            FindingReasonV1::CredentialPivot => "CREDENTIAL_PIVOT",
+            FindingReasonV1::ContextualCredentialPivot => "CONTEXTUAL_CREDENTIAL_PIVOT",
+            FindingReasonV1::MissingAuthorityProof => "MISSING_AUTHORITY_PROOF",
+            FindingReasonV1::Contradiction => "CONTRADICTION",
+            FindingReasonV1::KubernetesProofMissing => "KUBERNETES_PROOF_MISSING",
+            FindingReasonV1::OutsideAuthority => "OUTSIDE_AUTHORITY",
+            FindingReasonV1::InMemoryOnly => "IN_MEMORY_ONLY",
+            FindingReasonV1::PayloadUnobservable => "PAYLOAD_UNOBSERVABLE",
+            FindingReasonV1::Declared(reason) => &reason.code,
+        }
+        .to_owned())
+    }
+
+    fn reason(reason: &FindingReasonV1) -> Result<Vec<u8>> {
+        Self::encode(&match reason {
+            FindingReasonV1::Declared(value) => StoredReason::Declared(value),
+            _ => StoredReason::Builtin(Self::reason_label(reason)?),
+        })
+    }
+
+    fn restore_reason(value: StoredReason<DeclaredFindingReasonV1>) -> Result<FindingReasonV1> {
+        match value {
+            StoredReason::Declared(reason) => Ok(FindingReasonV1::Declared(reason)),
+            StoredReason::Builtin(label) => {
+                FindingReasonV1::deserialize(serde::de::value::StringDeserializer::<
+                    serde::de::value::Error,
+                >::new(label))
+                .map_err(|_| {
+                    InvalidSnafu {
+                        field: "graph finding reason",
+                    }
+                    .build()
+                })
             }
-            .fail(),
-            Err(source) => Err(source).context(ContractSnafu),
         }
     }
 
-    fn reason(reason: &FindingReasonV1) -> Result<String> {
-        match reason {
-            FindingReasonV1::Declared(_) => serde_json::to_string(reason).context(EncodingSnafu),
-            _ => Self::reason_label(reason),
+    fn state_label(state: FindingStateV1) -> &'static str {
+        match state {
+            FindingStateV1::Provisional => "PROVISIONAL",
+            FindingStateV1::Confirmed => "CONFIRMED",
+            FindingStateV1::Superseded => "SUPERSEDED",
+            FindingStateV1::Retracted => "RETRACTED",
+            FindingStateV1::CoverageInsufficient => "COVERAGE_INSUFFICIENT",
         }
     }
 
-    fn restore_reason(value: &str) -> Result<FindingReasonV1> {
-        if value.starts_with('{') {
-            serde_json::from_str(value).context(EncodingSnafu)
-        } else {
-            serde_json::from_value(serde_json::Value::String(value.into())).context(EncodingSnafu)
+    fn severity_label(severity: FindingSeverityV1) -> &'static str {
+        match severity {
+            FindingSeverityV1::Info => "Info",
+            FindingSeverityV1::Warning => "Warning",
+            FindingSeverityV1::High => "High",
+            FindingSeverityV1::Critical => "Critical",
         }
     }
 
@@ -309,11 +547,19 @@ impl FindingRows {
         })
     }
 
-    fn json(value: &impl Serialize) -> Result<Vec<u8>> {
-        serde_json::to_vec(value).context(EncodingSnafu)
+    fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        value
+            .serialize(
+                &mut rmp_serde::Serializer::new(&mut bytes)
+                    .with_struct_map()
+                    .with_bytes(rmp_serde::config::BytesMode::ForceIterables),
+            )
+            .context(EncodingSnafu)?;
+        Ok(bytes)
     }
 
-    fn json_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> Result<T> {
+    fn binary_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> Result<T> {
         let value = row.get_ref(index).context(DatabaseSnafu {
             operation: "decode graph finding columns",
         })?;
@@ -325,14 +571,26 @@ impl FindingRows {
             .context(DatabaseSnafu {
                 operation: "decode graph finding columns",
             })?;
-        serde_json::from_slice(bytes).context(EncodingSnafu)
+        Self::decode_bytes(bytes)
     }
 
-    fn scalar_label(value: &impl Serialize) -> Result<String> {
-        match serde_json::to_value(value).context(EncodingSnafu)? {
-            serde_json::Value::String(value) => Ok(value),
+    fn decode_bytes<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+        let mut decoder = rmp_serde::Deserializer::new(Cursor::new(bytes));
+        let value = T::deserialize(&mut decoder).context(DecodingSnafu)?;
+        if decoder.position() != bytes.len() as u64 {
+            return InvalidSnafu {
+                field: "graph finding trailing bytes",
+            }
+            .fail();
+        }
+        Ok(value)
+    }
+
+    fn list_column(row: &Row<'_>, index: usize) -> Result<Vec<Value>> {
+        match Self::column(row, index)? {
+            Value::List(values) => Ok(values),
             _ => InvalidSnafu {
-                field: "graph scalar label",
+                field: "graph finding list",
             }
             .fail(),
         }
@@ -340,6 +598,14 @@ impl FindingRows {
 
     fn label_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> Result<T> {
         let label: String = Self::column(row, index)?;
-        serde_json::from_value(serde_json::Value::String(label)).context(EncodingSnafu)
+        T::deserialize(serde::de::value::StringDeserializer::<
+            serde::de::value::Error,
+        >::new(label))
+        .map_err(|_| {
+            InvalidSnafu {
+                field: "graph finding label",
+            }
+            .build()
+        })
     }
 }

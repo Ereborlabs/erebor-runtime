@@ -16,8 +16,8 @@ fn graph_appender_constraint_rollback() -> TestResult {
         .ok_or("finding view schema")?;
     let view = format!("CREATE VIEW graph_findings{view}");
     let rejecting = table.replace(
-        "limits BLOB NOT NULL\n);",
-        "limits BLOB NOT NULL, CHECK (false)\n);",
+        "limits VARCHAR[] NOT NULL\n);",
+        "limits VARCHAR[] NOT NULL, CHECK (false)\n);",
     );
     assert_ne!(rejecting, table);
     fixture.store.fault_write(

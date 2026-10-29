@@ -43,7 +43,8 @@ impl GraphRows {
                     s.authority_boot, s.authority_epoch, s.subject_kind,
                     s.identity) - 1)::UINTEGER AS ordinal,
             s.tenant_id, s.authority_rank, s.authority_text,
-            s.authority_boot, s.authority_epoch, s.subject_kind, s.identity
+            s.authority_boot, s.authority_epoch, s.subject_kind, s.identity,
+            s.subject_id
         FROM graph_versions v
         JOIN graph_subject_membership m ON m.lineage_id = v.lineage_id
             AND m.valid_from <= v.commit_revision

@@ -58,8 +58,10 @@ layers. Our interval membership lets Data select one result revision directly.
 
 Native evidence identities, historical input membership, shared subject
 values, historical subject membership, and shared finding values are
-implemented. Shared relationships, branches, and package contributions remain
-open. The 90% target has not been measured on the changed store.
+implemented. Finding rows use native subject and evidence IDs. The Graph
+header and complex finding fields use typed MessagePack. Shared
+relationships, branches, and package contributions remain open. The 90%
+target has not been measured on the changed store.
 
 ## Intended end state
 
@@ -164,9 +166,9 @@ result a stable sort key. A view can derive the public ordinal after selecting
 the result. Relationship sharing must first map result-local subject and
 evidence ordinals to stable identities. Both row families use validity
 membership. They do not use a chain of Graph layers or a rollup task.
-This finding slice shares complete `FindingV1` values. Nested subject,
-evidence, provenance, and effect properties remain encoded inside each value.
-They are not yet normalized to shared IDs.
+This finding slice shares complete `FindingV1` values. Subject and evidence
+references use native IDs. Provenance and effect values use typed MessagePack.
+They are not yet separate shared rows.
 
 1. **Store input membership as native rows.** Remove full evidence and
    position lists from each Graph header. The Graph scope already owns the
@@ -257,11 +259,19 @@ Graph, Data, Query, and Analysis tests pass on this source. The
 [review guide](../guides/araphor-graph-commit-review.md) lists the commands and
 results. The package backup/reopen case took 434.21 seconds.
 
+Native finding references and typed Graph header metadata are **Done** as
+storage encodings. A selected finding read resolves only the subject and
+evidence IDs in that finding. The finding writer splits new rows into bounded
+Arrow batches. Focused native Graph, Data header, history, selection, schema,
+and rollback tests pass. The matched workload and full workspace procedure
+have not run on this change.
+
 Incremental Graph production and storage are **Not done**. The builtin
-detectors restore and emit complete package outputs. Managed calls save those
-complete Arrow outputs. Graph assembly creates a complete snapshot. The
-finding writer then scans the current findings, active membership, and prior
-values to infer changes. This work grows with retained state and history.
+detectors restore and emit complete package outputs in the committed product
+path. Managed calls save those complete Arrow outputs. Graph assembly creates
+a complete snapshot. The finding writer scans current findings, active
+membership, and prior values to infer changes. This work grows with retained
+state and history.
 The matched 1,592-event storage and time target is still open.
 
 The required path takes changes from the query subscription, selects affected

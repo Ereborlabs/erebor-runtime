@@ -78,6 +78,18 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Graph native encoding failed: {source}"))]
+    GraphNativeEncoding {
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Graph native decoding failed: {source}"))]
+    GraphNativeDecoding {
+        source: rmp_serde::decode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Graph context failed: {source}"))]
     GraphContext {
         source: Box<dyn std::error::Error + Send + Sync>,
@@ -332,7 +344,10 @@ impl From<araphor_graph::Error> for Error {
                 Self::GraphInvalid { field, location }
             }
             araphor_graph::Error::Encoding { source, location } => {
-                Self::GraphEncoding { source, location }
+                Self::GraphNativeEncoding { source, location }
+            }
+            araphor_graph::Error::Decoding { source, location } => {
+                Self::GraphNativeDecoding { source, location }
             }
             araphor_graph::Error::Contract { source, location } => {
                 Self::AnalysisContract { source, location }
@@ -408,7 +423,9 @@ impl ErrorExt for Error {
             | Self::DiscoveryContext { .. }
             | Self::DiscoveryExecution { .. } => StatusCode::External,
             Self::GraphContext { .. } => StatusCode::External,
-            Self::GraphEncoding { .. } => StatusCode::Internal,
+            Self::GraphEncoding { .. }
+            | Self::GraphNativeEncoding { .. }
+            | Self::GraphNativeDecoding { .. } => StatusCode::Internal,
             Self::DiscoveryEncoding { .. } => StatusCode::Internal,
         }
     }
