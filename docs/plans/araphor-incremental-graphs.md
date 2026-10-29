@@ -433,3 +433,23 @@ current-head selection took 50 milliseconds, routing took 6.094 seconds, and
 notification state processing took 13.909 seconds. These totals include
 concurrent work and a fixed timeout. They do not measure completed workload
 throughput or prove a speed gain.
+
+### Concurrent Data readers
+
+**Reader concurrency: Done. Backlog deadline and 100-fold target: Not done.**
+Data previously shared two DuckDB reader connections across all source cuts.
+The default admission setting had no cap, but a third read still waited for a
+connection. Data now creates a reader when no idle reader exists and returns a
+healthy reader after its snapshot closes. A configured `reader_admissions`
+limit still controls admission. Each reader has its own cancellation monitor.
+Backup and recovery wait for active readers before they close the connections.
+
+The final source passed 14 connection tests, 21 read tests, and 11 backup tests.
+The tests include three concurrent pinned snapshots, cancellation isolation,
+configured admission, backup, and recovery. The same 1,592-event backlog test
+still failed its 90-second Follow deadline on the earlier equivalent lease
+layout. Its body took 125.76 seconds. Both Graph results reached the required
+cursors; five notices existed at timeout. The final panic-free lease layout
+has not been measured with that workload.
+The command-level memory peak included compilation and is not a valid runtime
+memory measure. Reader concurrency alone does not establish an end-to-end gain.

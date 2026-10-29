@@ -1096,3 +1096,39 @@ after 129.18 seconds. The outer Graph package physical plans took 7.376 and
 roots. Admission still took 7.427 seconds. The source plans and Data capture
 remain costly. Temporary probes were removed after measurement. No completed
 workload gain or 100-fold improvement is established.
+
+## Concurrent Data readers
+
+The intended result is that two subscriptions can read different committed
+cuts at the same time. A third read must not wait for a fixed two-reader queue
+when no admission limit is configured.
+
+[Session::capture_physical](../../crates/araphor-query/src/execution.rs) binds a new source cut to the execution's DataFusion task context
+  -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) requests the selected Data tables
+  -> [AnalysisStore::read_tables_inner](../../crates/araphor-data/src/analysis/extraction.rs) starts one Data source capture
+  -> [AnalysisStore::coordinated_reader](../../crates/araphor-data/src/analysis/connection.rs) projects pending raw data and reserves a reader
+  -> [ReaderPool::checkout](../../crates/araphor-data/src/analysis/connection.rs) reuses an idle reader or clones a trusted reader
+  -> [AnalysisReadControl::run](../../crates/araphor-data/src/analysis/read.rs) opens one DuckDB read transaction and uses that reader's cancellation monitor
+  -> [ReaderLease::drop](../../crates/araphor-data/src/analysis/connection.rs) returns a healthy connection while the maintenance read lock remains held
+  -> [SourceData::open](../../crates/araphor-query/src/sources/mod.rs) reads captured Arrow rows from the current task context
+
+[AnalysisStore::backup](../../crates/araphor-data/src/analysis/backup.rs) waits for the maintenance write lock
+  -> [ReaderPool::close](../../crates/araphor-data/src/analysis/connection.rs) closes the factory and idle readers before the writer closes
+  -> [ReaderPool::reopen](../../crates/araphor-data/src/analysis/connection.rs) creates a factory from the reopened writer
+
+[AnalysisStore::recover](../../crates/araphor-data/src/analysis/connection.rs) uses the same exclusive reader close and reopen order.
+The store owns the pool and the DuckDB file. A reader lease owns one connection
+and one cancellation monitor. The maintenance lock prevents backup or recovery
+from closing the writer while a reader has an active snapshot. A configured
+`reader_admissions` value limits admitted reads; the default has no admission
+cap. Query retains a separate captured source cut for each execution.
+
+The source revision is `d207af17f`. Final-source connection tests passed
+14/14, read tests passed 21/21, and backup tests passed 11/11. Scoped formatting
+and whitespace checks passed. The unchanged 1,592-event backlog test failed
+its 90-second Follow deadline on the earlier equivalent lease layout after
+125.76 seconds of test-body time. Both Graph results reached their required
+cursors; five notices existed at timeout. The final panic-free lease layout
+has not been measured with that workload.
+The measured command peak included compilation. It is not a runtime memory
+comparison. Backlog qualification and the 100-fold target remain **Not done**.
