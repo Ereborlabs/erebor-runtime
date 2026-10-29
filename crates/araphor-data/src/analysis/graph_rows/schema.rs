@@ -53,21 +53,33 @@ impl GraphRows {
             AND m.valid_from <= v.commit_revision
             AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
         JOIN graph_subject_values s USING (subject_id);
+    CREATE TABLE graph_edge_properties (
+        property_ref UBIGINT PRIMARY KEY,
+        property_hash BLOB NOT NULL CHECK (octet_length(property_hash) = 32),
+        edge_type VARCHAR NOT NULL, edge_type_rank UTINYINT NOT NULL,
+        package_id VARCHAR NOT NULL,
+        cause VARCHAR NOT NULL, cause_rank UTINYINT NOT NULL,
+        proof_quality STRUCT(source_authority UTINYINT, local_subject_binding UTINYINT,
+            remote_subject_binding UTINYINT, operation_result_authority UTINYINT,
+            temporal_coverage UTINYINT, integrity UTINYINT) NOT NULL,
+        required_coverage_interval_ids BLOB[] NOT NULL);
+    CREATE INDEX graph_edge_property_hash ON graph_edge_properties (property_hash);
     CREATE TABLE graph_edge_values (
         edge_id UBIGINT PRIMARY KEY,
         value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32),
         from_ref UBIGINT NOT NULL, to_ref UBIGINT NOT NULL,
-        edge_type VARCHAR NOT NULL, edge_type_rank UTINYINT NOT NULL,
-        package_id VARCHAR NOT NULL,
-        cause VARCHAR NOT NULL, cause_rank UTINYINT NOT NULL,
+        property_ref UBIGINT NOT NULL,
         evidence_refs UBIGINT[] NOT NULL,
-        proof_quality STRUCT(source_authority UTINYINT, local_subject_binding UTINYINT,
-            remote_subject_binding UTINYINT, operation_result_authority UTINYINT,
-            temporal_coverage UTINYINT, integrity UTINYINT) NOT NULL,
-        required_coverage_interval_ids BLOB[] NOT NULL,
         first_boottime_ns UBIGINT NOT NULL, last_boottime_ns UBIGINT NOT NULL,
         CHECK (first_boottime_ns <= last_boottime_ns));
     CREATE INDEX graph_edge_hash ON graph_edge_values (value_hash);
+    CREATE VIEW graph_edge_values_expanded AS
+        SELECT e.edge_id, e.value_hash, e.from_ref, e.to_ref,
+            p.edge_type, p.edge_type_rank, p.package_id,
+            p.cause, p.cause_rank, e.evidence_refs, p.proof_quality,
+            p.required_coverage_interval_ids,
+            e.first_boottime_ns, e.last_boottime_ns
+        FROM graph_edge_values e LEFT JOIN graph_edge_properties p USING (property_ref);
     CREATE TABLE graph_edge_membership (
         lineage_id UBIGINT NOT NULL, edge_id UBIGINT NOT NULL,
         valid_from UBIGINT NOT NULL, valid_to UBIGINT,
@@ -130,7 +142,7 @@ impl GraphRows {
             JOIN graph_edge_membership m ON m.lineage_id = v.lineage_id
                 AND m.valid_from <= v.commit_revision
                 AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
-            JOIN graph_edge_values e USING (edge_id)
+            JOIN graph_edge_values_expanded e USING (edge_id)
             LEFT JOIN graph_subjects source ON source.result_id = v.result_id
                 AND source.subject_id = e.from_ref
             LEFT JOIN graph_subjects target ON target.result_id = v.result_id

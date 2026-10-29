@@ -500,10 +500,11 @@ fn native_rows_integrity() -> TestResult {
         "UPDATE graph_edge_values SET from_ref = 4294967295",
         "UPDATE graph_edge_values SET evidence_refs = [4294967295]::UBIGINT[]",
         "UPDATE graph_edge_values SET evidence_refs = [NULL]::UBIGINT[]",
-        "UPDATE graph_edge_values SET proof_quality = struct_update(proof_quality, source_authority := 255::UTINYINT)",
-        "UPDATE graph_edge_values SET proof_quality = struct_update(proof_quality, source_authority := NULL::UTINYINT)",
-        "UPDATE graph_edge_values SET required_coverage_interval_ids = ['short'::BLOB]",
-        "UPDATE graph_edge_values SET required_coverage_interval_ids = [NULL::BLOB]",
+        "UPDATE graph_edge_values SET property_ref = 4294967295",
+        "UPDATE graph_edge_properties SET proof_quality = struct_update(proof_quality, source_authority := 255::UTINYINT)",
+        "UPDATE graph_edge_properties SET proof_quality = struct_update(proof_quality, source_authority := NULL::UTINYINT)",
+        "UPDATE graph_edge_properties SET required_coverage_interval_ids = ['short'::BLOB]",
+        "UPDATE graph_edge_properties SET required_coverage_interval_ids = [NULL::BLOB]",
         "UPDATE graph_finding_values SET tenant_id = 'short'::BLOB",
         "UPDATE graph_finding_values SET effects = '{'::BLOB",
     ] {
@@ -698,10 +699,25 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
     let fixture = CommitFixture::new()?;
     let mut first = fixture.snapshot.clone();
     let edge = first.graph.edges[0].clone();
-    first.graph.edges = (0..=crate::analysis::MAX_ANALYSIS_PAGE_RECORDS)
+    let first_edge_count = crate::analysis::MAX_ANALYSIS_PAGE_RECORDS + 2;
+    let mut extra_record = first.input_manifest.evidence[0].clone();
+    extra_record.durable_cursor = 2;
+    first.input_manifest.evidence.push(extra_record.clone());
+    first.input_positions.push((
+        extra_record,
+        crate::StorePositionV1 {
+            commit_revision: 2,
+            ordinal: 0,
+        },
+    ));
+    first.last_cursor = 2;
+    first.graph.edges = (0..first_edge_count)
         .map(|index| {
             let mut edge = edge.clone();
-            edge.key.package_id = format!("HF-PROC-001:{index:03}");
+            edge.key.package_id = format!("HF-PROC-001:{:03}", if index == 1 { 0 } else { index });
+            if index == 1 {
+                edge.key.evidence = vec![1];
+            }
             edge
         })
         .collect();
@@ -717,7 +733,7 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
     let mut second = first.clone();
     second.previous_result_id = Some("first".into());
     let mut added = edge;
-    added.key.package_id = "HF-PROC-001:257".into();
+    added.key.package_id = format!("HF-PROC-001:{first_edge_count:03}");
     second.graph.edges.push(added);
     second
         .graph
@@ -766,13 +782,18 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
             .ok_or("missing graph version")?;
         assert_eq!(GraphRows::read(&writer, id, &header)?, *graph);
     }
-    let counts: (u64, u64) = writer.query_row(
+    let counts: (u64, u64, u64) = writer.query_row(
         "SELECT (SELECT count(*)::UBIGINT FROM graph_edge_values),
-            (SELECT count(*)::UBIGINT FROM graph_edge_membership)",
+            (SELECT count(*)::UBIGINT FROM graph_edge_membership),
+            (SELECT count(*)::UBIGINT FROM graph_edge_properties)",
         [],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    assert_eq!(counts, (258, 258));
+    let first_edge_count = u64::try_from(first_edge_count)?;
+    assert_eq!(
+        counts,
+        (first_edge_count + 1, first_edge_count + 1, first_edge_count)
+    );
     let ids = second_ids.ok_or("missing second graph IDs")?;
     let (lineage, revision): (u64, u64) = writer.query_row(
         "SELECT lineage_id, commit_revision FROM graph_versions WHERE result_id = 'second'",
@@ -783,6 +804,23 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
         "SELECT edge_id FROM graph_edge_values ORDER BY edge_id LIMIT 1",
         [],
         |row| row.get(0),
+    )?;
+    let (property_ref, other_ref): (u64, u64) = writer.query_row(
+        "SELECT property_ref,
+            (SELECT max(property_ref)::UBIGINT FROM graph_edge_properties)
+         FROM graph_edge_values WHERE edge_id = ?",
+        params![edge_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_ne!(property_ref, other_ref);
+    writer.execute(
+        "UPDATE graph_edge_values SET property_ref = ? WHERE edge_id = ?",
+        params![other_ref, edge_id],
+    )?;
+    assert!(GraphRows::validate_edge_values(&writer).is_err());
+    writer.execute(
+        "UPDATE graph_edge_values SET property_ref = ? WHERE edge_id = ?",
+        params![property_ref, edge_id],
     )?;
     writer.execute(
         "UPDATE graph_edge_values SET last_boottime_ns = last_boottime_ns + 1 WHERE edge_id = ?",

@@ -50,7 +50,9 @@ fn native_schema_reopen() -> TestResult {
     for fault in [
         "ALTER TABLE graph_subject_membership ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_subject_values ADD COLUMN extra INTEGER",
+        "ALTER TABLE graph_edge_properties ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_edge_values ADD COLUMN extra INTEGER",
+        "DROP VIEW graph_edge_values_expanded",
         "DROP VIEW graph_relationships",
         "DROP VIEW graph_findings",
         "DROP VIEW graph_subjects; CREATE VIEW graph_subjects AS
@@ -81,6 +83,10 @@ fn native_schema_reopen() -> TestResult {
 fn shared_corruption_rejects_reopen() -> TestResult {
     for fault in [
         "UPDATE graph_subject_values SET authority_rank = 3 WHERE authority_rank = 0",
+        "UPDATE graph_edge_values SET property_ref = property_ref + 1",
+        "UPDATE graph_edge_properties SET edge_type_rank = 255",
+        "UPDATE graph_edge_properties SET property_hash =
+            (SELECT value_hash FROM graph_edge_values LIMIT 1)",
         "UPDATE graph_evidence SET source_ref = source_ref + 1",
         "UPDATE graph_sources SET tenant_id = 'wrong'::BLOB",
         "INSERT INTO graph_evidence_membership

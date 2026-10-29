@@ -185,6 +185,18 @@ layout would save 103,286 logical bytes: 1,592 copies of a 73-byte key become
 1,550,265 bytes, still 451,170 bytes above the target. This is a calculation,
 not a new four-cut database measurement. The backlog result remains open.
 
+Shared native edge properties are **Done** as a storage encoding. Each edge
+keeps its stable endpoints, evidence, time, and full-value hash. An immutable
+property row owns its type, package, cause, proof, and coverage. A private
+DuckDB view restores the typed edge columns; the public Graph view is
+unchanged. Data checks exact property values before reuse. The 48 focused Data
+Graph row tests, the two-batch property reuse test, and the Analysis restart
+test passed. The prior four-cut store held 195,362 bytes of repeated edge
+properties. Replacing them with 3,323 eight-byte references and at most 12
+property rows projects a saving of at least 167,554 logical bytes. Together
+with source references, the projected Graph total is at most 1,382,711 bytes.
+The 90% target, actual four-cut size, and backlog deadline remain open.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42

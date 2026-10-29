@@ -149,7 +149,7 @@ impl GraphRows {
                 e.proof_quality.operation_result_authority, e.proof_quality.temporal_coverage,
                 e.proof_quality.integrity, e.required_coverage_interval_ids,
                 e.first_boottime_ns, e.edge_type_rank, e.cause_rank, e.last_boottime_ns
-             FROM graph_edge_membership m JOIN graph_edge_values e USING (edge_id)
+             FROM graph_edge_membership m JOIN graph_edge_values_expanded e USING (edge_id)
              WHERE m.lineage_id = ? AND m.valid_from <= ?
                  AND (m.valid_to IS NULL OR m.valid_to > ?)",
             )

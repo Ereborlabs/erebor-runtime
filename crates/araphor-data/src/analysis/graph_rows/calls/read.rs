@@ -176,7 +176,7 @@ impl GraphCallRows {
                 v.proof_quality.integrity, v.required_coverage_interval_ids,
                 v.first_boottime_ns, v.edge_type_rank, v.cause_rank, v.last_boottime_ns,
                 m.anchor_record_id, m.anchor_fact
-             FROM graph_call_edges m JOIN graph_edge_values v USING (edge_id)
+             FROM graph_call_edges m JOIN graph_edge_values_expanded v USING (edge_id)
              WHERE m.scope_id = ? AND m.valid_from <= ?
                  AND (m.valid_to IS NULL OR m.valid_to > ?)
              ORDER BY v.edge_id",

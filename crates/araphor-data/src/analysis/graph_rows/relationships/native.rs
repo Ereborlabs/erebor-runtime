@@ -19,6 +19,12 @@ use crate::{
 
 mod arrays;
 
+const PROPERTY_COLUMNS: &str = "property_ref, edge_type, package_id, cause,
+    proof_quality.source_authority, proof_quality.local_subject_binding,
+    proof_quality.remote_subject_binding, proof_quality.operation_result_authority,
+    proof_quality.temporal_coverage, proof_quality.integrity,
+    required_coverage_interval_ids, edge_type_rank, cause_rank, property_hash";
+
 #[derive(PartialEq, Serialize)]
 pub(in crate::analysis::graph_rows) struct StoredEdge {
     pub(in crate::analysis::graph_rows) from: u64,
@@ -33,7 +39,67 @@ pub(in crate::analysis::graph_rows) struct StoredEdge {
     last: u64,
 }
 
+#[derive(Clone, PartialEq, Serialize)]
+struct StoredEdgeProperty {
+    edge_type: GraphEdgeTypeV1,
+    package_id: String,
+    cause: GraphCauseV1,
+    proof_quality: ProofQualityV1,
+    coverage: Vec<[u8; 16]>,
+}
+
+impl StoredEdgeProperty {
+    fn hash(&self) -> Result<[u8; 32]> {
+        let mut digest = Sha256::new();
+        self.serialize(&mut rmp_serde::Serializer::new(&mut digest))
+            .map_err(|_| {
+                GraphInvalidSnafu {
+                    field: "graph edge property encoding",
+                }
+                .build()
+            })?;
+        Ok(digest.finalize().into())
+    }
+
+    fn from_row(row: &Row<'_>) -> Result<Self> {
+        let edge_type: GraphEdgeTypeV1 = GraphRows::label_column(row, 1)?;
+        let cause: GraphCauseV1 = GraphRows::label_column(row, 3)?;
+        let type_rank: u8 = GraphRows::column(row, 11)?;
+        let cause_rank: u8 = GraphRows::column(row, 12)?;
+        if type_rank != edge_type as u8 || cause_rank != cause as u8 {
+            return GraphInvalidSnafu {
+                field: "graph edge property rank",
+            }
+            .fail();
+        }
+        Ok(Self {
+            edge_type,
+            package_id: GraphRows::column(row, 2)?,
+            cause,
+            proof_quality: ProofQualityV1 {
+                source_authority: GraphRows::enum_column(row, 4)?,
+                local_subject_binding: GraphRows::enum_column(row, 5)?,
+                remote_subject_binding: GraphRows::enum_column(row, 6)?,
+                operation_result_authority: GraphRows::enum_column(row, 7)?,
+                temporal_coverage: GraphRows::enum_column(row, 8)?,
+                integrity: GraphRows::enum_column(row, 9)?,
+            },
+            coverage: GraphRows::coverage_column(row, 10)?,
+        })
+    }
+}
+
 impl StoredEdge {
+    fn property(&self) -> StoredEdgeProperty {
+        StoredEdgeProperty {
+            edge_type: self.edge_type,
+            package_id: self.package_id.clone(),
+            cause: self.cause,
+            proof_quality: self.proof_quality.clone(),
+            coverage: self.coverage.clone(),
+        }
+    }
+
     fn new(
         row: &GraphEdgeV1,
         graph: &GraphSnapshotV1,
@@ -206,6 +272,30 @@ impl StoredEdge {
 impl GraphRows {
     pub(in crate::analysis) fn validate_edge_values(writer: &Connection) -> Result<()> {
         let mut statement = writer
+            .prepare(&format!(
+                "SELECT {PROPERTY_COLUMNS} FROM graph_edge_properties"
+            ))
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare graph edge property validation",
+            })?;
+        let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
+            operation: "read graph edge properties for validation",
+        })?;
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "advance graph edge property validation",
+        })? {
+            let value = StoredEdgeProperty::from_row(row)?;
+            let hash: Vec<u8> = Self::column(row, 13)?;
+            if hash.as_slice() != value.hash()? {
+                return GraphInvalidSnafu {
+                    field: "graph edge property hash",
+                }
+                .fail();
+            }
+        }
+        drop(rows);
+        drop(statement);
+        let mut statement = writer
             .prepare(
                 "SELECT edge_id, from_ref, to_ref, edge_type, package_id, cause,
                 evidence_refs, proof_quality.source_authority,
@@ -213,7 +303,7 @@ impl GraphRows {
                 proof_quality.operation_result_authority, proof_quality.temporal_coverage,
                 proof_quality.integrity, required_coverage_interval_ids,
                 first_boottime_ns, edge_type_rank, cause_rank, last_boottime_ns, value_hash
-             FROM graph_edge_values",
+             FROM graph_edge_values_expanded",
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare graph edge value validation",
@@ -233,6 +323,26 @@ impl GraphRows {
                 .fail();
             }
         }
+        Ok(())
+    }
+
+    fn stage_lookup_hashes(writer: &Connection, hashes: &BTreeSet<[u8; 32]>) -> Result<()> {
+        let mut appender = writer
+            .appender_to_catalog_and_db("graph_value_lookup_hashes", "temp", "main")
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare graph value lookup hashes",
+            })?;
+        for hash in hashes {
+            appender
+                .append_row(params![hash.as_slice()])
+                .context(AnalysisDatabaseSnafu {
+                    operation: "append graph value lookup hash",
+                })?;
+        }
+        appender.flush().context(AnalysisDatabaseSnafu {
+            operation: "flush graph value lookup hashes",
+        })?;
+        drop(appender);
         Ok(())
     }
 
@@ -272,36 +382,139 @@ impl GraphRows {
         let hashes = requested
             .iter()
             .map(|(_, _, hash)| *hash)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let properties = requested
+            .iter()
+            .map(|(_, value, _)| value.property())
             .collect::<Vec<_>>();
+        let property_hashes = properties
+            .iter()
+            .map(StoredEdgeProperty::hash)
+            .collect::<Result<BTreeSet<_>>>()?;
+        let mut property_ids = Vec::with_capacity(properties.len());
         let mut candidates = BTreeMap::<[u8; 32], Vec<(u64, StoredEdge)>>::new();
         if !hashes.is_empty() {
             writer
                 .execute_batch(
-                    "CREATE TEMPORARY TABLE temp.main.graph_edge_lookup_hashes
+                    "CREATE TEMPORARY TABLE temp.main.graph_value_lookup_hashes
                     (value_hash BLOB PRIMARY KEY)",
                 )
                 .context(AnalysisDatabaseSnafu {
-                    operation: "create graph edge lookup",
+                    operation: "create graph value lookup",
                 })?;
             let lookup = (|| -> Result<()> {
-                let mut appender = writer
-                    .appender_to_catalog_and_db("graph_edge_lookup_hashes", "temp", "main")
+                Self::stage_lookup_hashes(writer, &property_hashes)?;
+                let mut property_candidates =
+                    BTreeMap::<[u8; 32], Vec<(u64, StoredEdgeProperty)>>::new();
+                let mut statement = writer
+                    .prepare(&format!(
+                        "SELECT {PROPERTY_COLUMNS} FROM graph_edge_properties p
+                        JOIN temp.main.graph_value_lookup_hashes h
+                            ON p.property_hash = h.value_hash"
+                    ))
                     .context(AnalysisDatabaseSnafu {
-                        operation: "prepare graph edge lookup hashes",
+                        operation: "prepare graph edge property lookup",
                     })?;
-                for hash in &hashes {
-                    appender.append_row(params![hash.as_slice()]).context(
+                let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
+                    operation: "read graph edge property candidates",
+                })?;
+                while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                    operation: "advance graph edge property candidates",
+                })? {
+                    let id = GraphRows::column(row, 0)?;
+                    let value = StoredEdgeProperty::from_row(row)?;
+                    let hash: [u8; 32] = GraphRows::column::<Vec<u8>>(row, 13)?
+                        .try_into()
+                        .map_err(|_| {
+                            GraphInvalidSnafu {
+                                field: "graph edge property hash",
+                            }
+                            .build()
+                        })?;
+                    if value.hash()? != hash
+                        || property_candidates
+                            .entry(hash)
+                            .or_default()
+                            .iter()
+                            .any(|(_, known)| known == &value)
+                    {
+                        return GraphInvalidSnafu {
+                            field: "duplicate graph edge property",
+                        }
+                        .fail();
+                    }
+                    property_candidates
+                        .entry(hash)
+                        .or_default()
+                        .push((id, value));
+                }
+                drop(rows);
+                drop(statement);
+                let mut next_property: u64 = writer
+                    .query_row(
+                        "SELECT coalesce(max(property_ref), 0) FROM graph_edge_properties",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read next graph edge property ID",
+                    })?;
+                let mut new_properties: Vec<(u64, StoredEdgeProperty, [u8; 32])> = Vec::new();
+                let mut new_by_hash = BTreeMap::<[u8; 32], Vec<usize>>::new();
+                for property in properties {
+                    let hash = property.hash()?;
+                    let mut found = property_candidates.get(&hash).and_then(|bucket| {
+                        bucket
+                            .iter()
+                            .find(|(_, candidate)| candidate == &property)
+                            .map(|(id, _)| *id)
+                    });
+                    for index in new_by_hash.get(&hash).into_iter().flatten() {
+                        if new_properties[*index].1 == property
+                            && found.replace(new_properties[*index].0).is_some()
+                        {
+                            return GraphInvalidSnafu {
+                                field: "duplicate graph edge property",
+                            }
+                            .fail();
+                        }
+                    }
+                    let id = if let Some(id) = found {
+                        id
+                    } else {
+                        next_property = next_property.checked_add(1).ok_or_else(|| {
+                            GraphInvalidSnafu {
+                                field: "graph edge property ID",
+                            }
+                            .build()
+                        })?;
+                        new_by_hash
+                            .entry(hash)
+                            .or_default()
+                            .push(new_properties.len());
+                        new_properties.push((next_property, property, hash));
+                        next_property
+                    };
+                    property_ids.push(id);
+                }
+                if !new_properties.is_empty() {
+                    let mut appender = writer.appender("graph_edge_properties").context(
                         AnalysisDatabaseSnafu {
-                            operation: "append graph edge lookup hash",
+                            operation: "prepare graph edge property insert",
                         },
                     )?;
+                    Self::append_edge_properties(&mut appender, &new_properties)?;
+                    appender.flush().context(AnalysisDatabaseSnafu {
+                        operation: "flush graph edge properties",
+                    })?;
+                    drop(appender);
                 }
-                appender.flush().context(AnalysisDatabaseSnafu {
-                    operation: "flush graph edge lookup hashes",
-                })?;
-                drop(appender);
+                writer
+                    .execute_batch("DELETE FROM temp.main.graph_value_lookup_hashes")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "clear graph value lookup",
+                    })?;
+                Self::stage_lookup_hashes(writer, &hashes)?;
                 let mut statement = writer
                     .prepare(
                         "SELECT edge_id, from_ref, to_ref, edge_type, package_id, cause,
@@ -310,8 +523,8 @@ impl GraphRows {
                         proof_quality.operation_result_authority, proof_quality.temporal_coverage,
                         proof_quality.integrity, required_coverage_interval_ids,
                         first_boottime_ns, edge_type_rank, cause_rank, last_boottime_ns, value_hash
-                        FROM graph_edge_values
-                        JOIN temp.main.graph_edge_lookup_hashes USING (value_hash)",
+                        FROM graph_edge_values_expanded
+                        JOIN temp.main.graph_value_lookup_hashes USING (value_hash)",
                     )
                     .context(AnalysisDatabaseSnafu {
                         operation: "prepare graph edge value lookup",
@@ -349,18 +562,18 @@ impl GraphRows {
                 Ok(())
             })();
             let cleanup = writer
-                .execute_batch("DROP TABLE temp.main.graph_edge_lookup_hashes")
+                .execute_batch("DROP TABLE temp.main.graph_value_lookup_hashes")
                 .context(AnalysisDatabaseSnafu {
-                    operation: "drop graph edge lookup",
+                    operation: "drop graph value lookup",
                 });
             lookup?;
             cleanup?;
         }
         let mut selected = BTreeSet::new();
         let mut values = BTreeMap::new();
-        let mut added: Vec<(u64, StoredEdge, [u8; 32])> = Vec::new();
+        let mut added: Vec<(u64, StoredEdge, [u8; 32], u64)> = Vec::new();
         let mut new_by_hash = BTreeMap::<[u8; 32], Vec<usize>>::new();
-        for (key, value, hash) in requested {
+        for ((key, value, hash), property_ref) in requested.into_iter().zip(property_ids) {
             let mut found = candidates.get(&hash).and_then(|bucket| {
                 bucket
                     .iter()
@@ -387,7 +600,7 @@ impl GraphRows {
                     .build()
                 })?;
                 new_by_hash.entry(hash).or_default().push(added.len());
-                added.push((next, value, hash));
+                added.push((next, value, hash, property_ref));
                 next
             };
             if !selected.insert(id) {
