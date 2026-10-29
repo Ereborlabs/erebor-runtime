@@ -59,9 +59,10 @@ layers. Our interval membership lets Data select one result revision directly.
 Native evidence identities, historical input membership, shared subject
 values, historical subject membership, and shared finding values are
 implemented. Finding rows use native subject and evidence IDs. The Graph
-header and complex finding fields use typed MessagePack. Shared
-relationships, branches, and package contributions remain open. The 90%
-target has not been measured on the changed store.
+header and complex finding fields use typed MessagePack. Shared relationship
+values and historical membership are implemented. Branches and package
+contributions remain open. The 90% target has not been measured on the
+changed store.
 
 Builtin Graph finding IDs now hash typed binary identity fields. Provider and
 Kubernetes subject keys use typed binary identity fields. The Analysis owner
@@ -71,7 +72,7 @@ not make package output or Graph membership incremental.
 Graph checkpoint state now uses the existing native Arrow state row. The
 builtin, custom detector example, and Analysis owner use one typed state
 contract. Generic managed attempt envelopes still use JSON storage. The
-Graph contribution and relationship work remains open.
+Graph contribution work remains open.
 
 ## Intended end state
 
@@ -261,8 +262,9 @@ data flow, deletion, source diff, and proof before each commit.
 
 **Result: Not done.** Native evidence and input-position rows replace repeated
 header lists. Subject and finding values now have stable IDs and historical
-membership. Shared relationships, branches, package contribution membership,
-and the measured target remain open.
+membership. Shared relationships have native values and historical
+membership. Branches, package contribution membership, and the measured
+target remain open.
 
 Immutable finding-value sharing is **Done** as a storage encoding. Focused
 Graph, Data, Query, and Analysis tests pass on this source. The
@@ -284,7 +286,11 @@ native history, metadata-order, collision, and rollback tests pass. The Graph
 result writer still reads complete active finding membership, so incremental
 Graph storage and the measured reduction remain **Not done**.
 
-Incremental Graph production and storage are **Not done**. The builtin
+Incremental Graph production and storage are **Not done**. Shared edge values
+and interval membership remove complete per-result relationship rows. The
+writer still visits each current edge and active edge membership. The public
+view maps stable subject and evidence IDs to result ordinals at read time.
+The builtin
 detectors restore and emit complete package outputs in the committed product
 path. Managed calls save those complete Arrow outputs. Graph assembly creates
 a complete snapshot. The finding writer still visits all current findings and

@@ -640,7 +640,7 @@ and the overall performance goal remain Not done.
 This section covers the Graph and Data changes after `e10ae42`. Earlier
 byte-charge and bounded-header routes in this guide describe historical code.
 The [storage plan](../plans/araphor-graph-storage-reduction.md) records the
-remaining edge, branch, and package contribution work.
+remaining branch and package contribution work.
 
 ### Intended end state
 
@@ -657,7 +657,7 @@ logical Graph bytes. This target is not yet met or measured on this source.
   -> [GraphRows::insert_inputs](../../crates/araphor-data/src/analysis/graph_rows/evidence.rs) Data stores evidence identities and revision membership
   -> [GraphRows::insert_subjects](../../crates/araphor-data/src/analysis/graph_rows/subjects.rs) Data stores subject values and revision membership
   -> [FindingRows::apply](../../crates/araphor-graph/src/findings.rs) Graph stores finding values and revision membership through Data's transaction
-  -> Partial [GraphRows::insert](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data still stores complete edge rows per result
+  -> [GraphRows::insert_edge_values](../../crates/araphor-data/src/analysis/graph_rows/relationships/native.rs) Data shares stable edge values through revision membership
   -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the Graph, output, state, and progress in one transaction
 
 [AnalysisStore::graph_result](../../crates/araphor-data/src/analysis/graph.rs) A caller selects one historical Graph result ID
@@ -840,7 +840,7 @@ change. The full workspace procedure and matched backlog case remain open.
   -> The builtin stores typed binary key bytes
   -> Analysis checks the same key bytes
 
-[Progress::new](../../crates/araphor-analysis-builtins/src/graph/incremental.rs) The builtin hashes each observation and window with typed MessagePack. These identities do not store JSON text. Package contribution membership and shared relationships are still open.
+[Progress::new](../../crates/araphor-analysis-builtins/src/graph/incremental.rs) The builtin hashes each observation and window with typed MessagePack. These identities do not store JSON text. Package contribution membership is still open. Shared relationships are described below.
 
 Focused checks on this source passed:
 
@@ -885,3 +885,52 @@ after 54.49 seconds on this worktree. Analysis rejected full branch output
 because the unstaged builtin delta work returned changed findings only. The
 staged State patch still returns complete findings. An isolated recovery run
 of the staged patch did not run. This failure does not qualify recovery.
+
+## Shared native Graph relationships
+
+[GraphRows::insert](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) Data receives a validated Graph result
+  -> [GraphRows::insert_inputs](../../crates/araphor-data/src/analysis/graph_rows/evidence.rs) Data assigns stable evidence IDs
+  -> [GraphRows::insert_subjects](../../crates/araphor-data/src/analysis/graph_rows/subjects.rs) Data assigns stable subject IDs
+  -> [GraphRows::insert_edge_values](../../crates/araphor-data/src/analysis/graph_rows/relationships/native.rs) Data maps edge references to stable IDs and compares exact native values
+  -> [GraphRows::append_edge_values](../../crates/araphor-data/src/analysis/graph_rows/relationships/native/arrays.rs) Data writes new edge values in Arrow batches
+  -> [graph_edge_membership](../../crates/araphor-data/src/analysis/graph_rows/schema.rs) Data opens or closes edge membership in the result lineage
+  -> [graph_relationships](../../crates/araphor-data/src/analysis/graph_rows/schema.rs) The view maps stable IDs to public result ordinals
+  -> [GraphRows::read_edges](../../crates/araphor-data/src/analysis/graph_rows/relationships.rs) Data reads and validates all edge rows of the selected result
+
+An edge value stores stable subject and evidence IDs, type, package, cause,
+proof, coverage, and time. A typed MessagePack hash finds candidate values.
+The writer compares each candidate's native fields before reuse. A valid
+edge value remains in the store after its membership closes. Old result IDs
+still select that value through their revision interval.
+
+The public view ranks subjects and evidence for each selected version. It
+joins each edge evidence ID to its version rank. It keeps the original
+evidence order. An empty evidence list remains empty. A missing evidence ID
+produces a null list entry, which the Graph reader rejects. A missing subject
+produces a null endpoint, which the Graph reader rejects. The view joins
+evidence IDs and uses ordered list aggregation. It does not search a complete
+evidence list for each edge.
+
+[SourceProvider](../../crates/araphor-query/src/sources/mod.rs) remains the
+DataFusion table provider. Data owns the DuckDB transaction and native Graph
+rows. The query path has no new parser or planner. The edge writer still
+visits every current edge and active membership. Builtin packages still save
+complete output in the committed path. This change does not prove producer
+delta execution or the 90% storage target.
+
+Focused worktree checks for the edge-storage source committed at `c9bce49`
+passed. The commit was not tested in isolation:
+
+- `cargo test -p araphor-data analysis::graph_rows::tests:: --lib`: 46 tests.
+- `cargo test -p araphor-data graph_event_coverage_fields --lib`: 1 test.
+- `cargo test -p araphor-data native_result_defaults --lib`: 1 reopen test.
+- `cargo fmt -p araphor-data -- --check` and staged whitespace check.
+
+`earlier_keys_keep_edge_membership` inserts a subject and evidence record
+before existing public ordinals. It proves that the same edge uses one native
+value and one open membership across two versions. `native_row_defaults`
+adds 4,097 edges to the fixture's three existing edges. It passed in 25.94
+seconds for its full test path. An earlier worktree run took 22.92 seconds.
+These two times do not isolate edge work or
+prove a speed change. The matched 1,592-event workload, its logical bytes,
+and the full workspace procedure remain open. The overall result is Not done.
