@@ -1069,3 +1069,30 @@ cleanup limit this comparison. The initial production Graph plans took
 An earlier ineligible run spent 59.006 seconds planning six later cuts.
 Graph capture and execution remain costly, and some other captures waited
 for many seconds. The 100-fold end-to-end target is **Not done**.
+
+## Prepared Graph source leaves
+
+[Session::prepare_reusable_inputs](../../crates/araphor-query/src/execution.rs) checks reset safety and prepares six DataFusion source plans for a retained Graph instance
+  -> [SourcePort::prepared](../../crates/araphor-query/src/sources/port.rs) keeps their durable source origins in the logical plan
+  -> [Graph Port](../../crates/araphor-analysis/src/graph/native/node.rs) exposes one physical leaf to DataFusion and retains the six source plans in a `SourceDependenciesExec` wrapper
+  -> [SourceScan](../../crates/araphor-query/src/sources/mod.rs) visits the retained plans under the current package input frame to collect exact columns, bounds, and window scope
+  -> [Projection::read](../../crates/araphor-analysis/src/graph/native/capture.rs) resets the same plans once inside the cut's Graph capture and executes them with the current task context
+
+The `hidden_source_requests_match_physical_tree` Query test compares the
+wrapper with the original source tree. It checks the exact `events` columns and
+time bounds and confirms that DataFusion sees only the leaf as a child.
+The `prepared_view_port_admits_and_captures_its_source` test checks durable
+source admission and captured revision through a prepared view port.
+The focused `drains_captured_backlog` Graph test passed with the leaf and
+checked that records, facts, and manifest use one captured revision and
+coverage. `prepared_calls_capture_fresh`, `empty_gate_keeps_history`, and
+`graph_restart_keeps_frontier` also passed after the temporary probes were
+removed.
+
+The unchanged production backlog test failed its 90-second Follow deadline
+after 126.96 seconds of test runtime. The earlier attached-root run failed
+after 129.18 seconds. The outer Graph package physical plans took 7.376 and
+0.585 seconds with leaves, versus 11.297 and 4.655 seconds with attached
+roots. Admission still took 7.427 seconds. The source plans and Data capture
+remain costly. Temporary probes were removed after measurement. No completed
+workload gain or 100-fold improvement is established.

@@ -1254,6 +1254,41 @@ impl Session {
         Ok(state)
     }
 
+    pub async fn prepare_reusable_inputs(
+        &self,
+        plans: &[LogicalPlan],
+    ) -> Result<Option<Vec<Arc<dyn ExecutionPlan>>>> {
+        for plan in plans {
+            if crate::definition::PackageCall::contains(plan).context(SqlSnafu)?
+                || !crate::stream::physical::SubscribeExec::reusable(
+                    plan,
+                    &mut std::collections::BTreeSet::new(),
+                )
+                .context(SqlSnafu)?
+                || crate::follow::Window::clocks(plan)? != 0
+            {
+                return Ok(None);
+            }
+        }
+        let mut state = self.state()?;
+        let config = state
+            .config()
+            .clone()
+            .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", false);
+        *state.config_mut() = config;
+        let mut physical = Vec::with_capacity(plans.len());
+        for plan in plans {
+            let compiled = self.physical(plan, &state).await?;
+            if datafusion::physical_plan::execution_plan::reset_plan_states(Arc::clone(&compiled))
+                .is_err()
+            {
+                return Ok(None);
+            }
+            physical.push(compiled);
+        }
+        Ok(Some(physical))
+    }
+
     pub(crate) async fn physical(
         &self,
         plan: &LogicalPlan,

@@ -1,14 +1,19 @@
+use std::any::Any;
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DFSchema, DFSchemaRef, Result};
+use datafusion::execution::TaskContext;
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+};
 
-use super::SourceProvider;
+use super::{SourceOrigin, SourceProvider};
 
 pub trait PortSource: fmt::Debug + Send + Sync {
     /// Return true only when the physical plan supports DataFusion state reset.
@@ -24,18 +29,84 @@ pub trait PortSource: fmt::Debug + Send + Sync {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
+#[derive(Debug)]
+pub struct SourceDependenciesExec {
+    input: Arc<dyn ExecutionPlan>,
+    sources: Vec<Arc<dyn ExecutionPlan>>,
+}
+
+impl SourceDependenciesExec {
+    pub fn new(input: Arc<dyn ExecutionPlan>, sources: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+        Self { input, sources }
+    }
+
+    pub(crate) fn sources(&self) -> &[Arc<dyn ExecutionPlan>] {
+        &self.sources
+    }
+}
+
+impl DisplayAs for SourceDependenciesExec {
+    fn fmt_as(&self, _: DisplayFormatType, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "SourceDependenciesExec: {}", self.sources.len())
+    }
+}
+
+impl ExecutionPlan for SourceDependenciesExec {
+    fn name(&self) -> &str {
+        "SourceDependenciesExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        self.input.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let [input] = <[Arc<dyn ExecutionPlan>; 1]>::try_from(children).map_err(|_| {
+            datafusion::common::DataFusionError::Internal("source port child count changed".into())
+        })?;
+        Ok(Arc::new(Self {
+            input,
+            sources: self.sources.clone(),
+        }))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.input.execute(partition, context)
+    }
+}
+
 #[derive(Clone)]
 pub struct SourcePort {
     pub(crate) slot: usize,
     role: String,
     schema: DFSchemaRef,
     inputs: Vec<LogicalPlan>,
+    origins: BTreeSet<SourceOrigin>,
     source: Arc<dyn PortSource>,
 }
 
 impl SourcePort {
     pub(crate) fn reusable(&self) -> bool {
         self.source.reusable()
+    }
+
+    pub(crate) fn origins(&self) -> &BTreeSet<SourceOrigin> {
+        &self.origins
     }
 
     pub fn new(
@@ -52,8 +123,23 @@ impl SourcePort {
                     .map_err(|source| crate::Error::Sql { source })?,
             ),
             inputs,
+            origins: BTreeSet::new(),
             source,
         })
+    }
+
+    pub fn prepared(
+        role: String,
+        schema: SchemaRef,
+        inputs: &[LogicalPlan],
+        source: Arc<dyn PortSource>,
+    ) -> crate::Result<Self> {
+        let mut port = Self::new(role, schema, Vec::new(), source)?;
+        for input in inputs {
+            port.origins
+                .extend(crate::planner::Planner::dependencies(input)?);
+        }
+        Ok(port)
     }
 
     pub(crate) fn plan(&self, inputs: &[Arc<dyn ExecutionPlan>]) -> Result<Arc<dyn ExecutionPlan>> {
@@ -78,7 +164,10 @@ impl fmt::Debug for SourcePort {
 }
 impl PartialEq for SourcePort {
     fn eq(&self, other: &Self) -> bool {
-        self.slot == other.slot && self.inputs == other.inputs && self.schema == other.schema
+        self.slot == other.slot
+            && self.inputs == other.inputs
+            && self.origins == other.origins
+            && self.schema == other.schema
     }
 }
 impl Eq for SourcePort {}
@@ -86,13 +175,16 @@ impl Hash for SourcePort {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.role.hash(state);
         self.inputs.hash(state);
+        self.origins.hash(state);
         self.schema.hash(state);
     }
 }
 impl PartialOrd for SourcePort {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.slot.cmp(&other.slot) {
-            Ordering::Equal => self.inputs.partial_cmp(&other.inputs),
+            Ordering::Equal => {
+                (&self.inputs, &self.origins).partial_cmp(&(&other.inputs, &other.origins))
+            }
             order => Some(order),
         }
         .filter(|order| *order != Ordering::Equal || self == other)

@@ -361,3 +361,24 @@ These are inclusive timings and can overlap. The next work is to split Data
 read time from capture wait time and to reduce the large initial Graph plan.
 The [source review](../guides/araphor-graph-commit-review.md#native-physical-plan-reuse)
 records the owners and focused checks.
+
+### Prepared Graph source leaves
+
+**Source plan factoring: Done. Backlog deadline and 100-fold target: Not done.**
+Query prepares the six Graph source plans once for each retained Graph instance.
+Each Graph port has one physical leaf. A Query wrapper keeps the six prepared
+plans outside the DataFusion child tree and presents them to the existing
+source-request visitor under the current package input scope. The Graph capture
+resets those plans once for each captured cut. The fallback retains the former
+child plans when a source cannot be reset safely. Admission still records every
+durable source, and the empty-input gate still controls package execution.
+
+The unchanged 1,592-event backlog test still failed its 90-second Follow
+deadline. Its body took 126.96 seconds, versus 129.18 seconds with prepared
+source roots still attached to each Graph port. The two outer package physical
+plans took 7.376 and 0.585 seconds, versus 11.297 and 4.655 seconds in the
+earlier measured run. Admission took 7.427 seconds in the new run. These runs
+end at a fixed timeout and do not establish a completed-work throughput gain.
+The next change must identify which relation revisions cause repeated source
+captures, including revisions of the published Graph manifest. The [source review](../guides/araphor-graph-commit-review.md#prepared-graph-source-leaves)
+records the proof and timing limits.

@@ -6,10 +6,11 @@ use araphor_data::{AnalysisSelectionV1, AnalysisStore, AnalysisTableRequests};
 use datafusion::common::ScalarValue;
 use datafusion::datasource::MemTable;
 use datafusion::execution::SessionState;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 
-use super::{ScanBounds, SourceSnapshot};
+use super::{ScanBounds, SourceDependenciesExec, SourceSnapshot};
 use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
 use crate::planner::Planner;
@@ -206,6 +207,42 @@ async fn physical_projection_requests() {
     assert_eq!(
         Fixture::requests(std::slice::from_ref(&physical)).0["events"],
         Some(BTreeSet::from([operation, cursor]))
+    );
+}
+
+#[tokio::test]
+async fn hidden_source_requests_match_physical_tree() {
+    let fixture = Fixture::new();
+    let physical = fixture
+        .plan(
+            "SELECT source_cursor FROM events WHERE received_utc_ns >= 1000 AND received_utc_ns < 3000",
+            vec![],
+        )
+        .await;
+    let direct = Fixture::requests(std::slice::from_ref(&physical));
+    let port: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(physical.schema()));
+    let hidden: Arc<dyn ExecutionPlan> = Arc::new(SourceDependenciesExec::new(
+        Arc::clone(&port),
+        vec![physical],
+    ));
+    assert!(port.children().is_empty());
+    assert_eq!(hidden.children().len(), 1);
+    assert_eq!(Fixture::requests(&[hidden]), direct);
+    let events = &SourceSnapshot::schemas()["events"];
+    assert_eq!(
+        direct.0["events"],
+        Some(BTreeSet::from([
+            events.index_of("source_cursor").unwrap(),
+            events.index_of("received_utc_ns").unwrap(),
+        ]))
+    );
+    assert_eq!(
+        direct.1.fields["received_utc_ns"].lower(),
+        &ScalarValue::UInt64(Some(1000))
+    );
+    assert_eq!(
+        direct.1.fields["received_utc_ns"].upper(),
+        &ScalarValue::UInt64(Some(2999))
     );
 }
 

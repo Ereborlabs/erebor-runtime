@@ -12,6 +12,7 @@ use araphor_query::sources::SourceSnapshot;
 use datafusion::arrow::array::{Array, BinaryArray, StringArray, UInt32Array, UInt64Array};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
+use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use futures_util::TryStreamExt as _;
 
@@ -70,6 +71,17 @@ impl Projection {
         context: &Arc<TaskContext>,
         source: Arc<SourceSnapshot>,
     ) -> Result<Capture> {
+        let reset;
+        let plans = match &self.prepared {
+            Some(prepared) => {
+                reset = prepared
+                    .iter()
+                    .map(|plan| reset_plan_states(Arc::clone(plan)))
+                    .collect::<Result<Vec<_>>>()?;
+                reset.as_slice()
+            }
+            None => plans,
+        };
         if plans.len() != 6 {
             return Err(Self::invalid("graph source plans"));
         }

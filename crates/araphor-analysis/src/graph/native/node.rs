@@ -2,7 +2,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use araphor_query::sources::{PortSource, SourceSnapshot};
+use araphor_query::sources::{PortSource, SourceDependenciesExec, SourceSnapshot};
 use datafusion::common::Result;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
@@ -38,6 +38,11 @@ impl PortSource for Port {
         slot: usize,
         inputs: &[Arc<dyn ExecutionPlan>],
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let children = if self.owner.prepared.is_some() {
+            Vec::new()
+        } else {
+            inputs.to_vec()
+        };
         let schema = Arc::new(self.owner.ports[self.index].schema.clone());
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
@@ -45,13 +50,17 @@ impl PortSource for Port {
             EmissionType::Final,
             Boundedness::Bounded,
         ));
-        Ok(Arc::new(PortExec {
+        let port: Arc<dyn ExecutionPlan> = Arc::new(PortExec {
             owner: Arc::clone(&self.owner),
             index: self.index,
             slot,
-            children: inputs.to_vec(),
+            children,
             properties,
-        }))
+        });
+        Ok(match &self.owner.prepared {
+            Some(prepared) => Arc::new(SourceDependenciesExec::new(port, prepared.clone())),
+            None => port,
+        })
     }
 }
 

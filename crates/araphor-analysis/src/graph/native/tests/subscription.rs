@@ -23,6 +23,7 @@ async fn drains_captured_backlog() -> TestResult {
         .await?;
     let job = fixture.running_graph(job).await?;
     let projection = &job.graph_owner().ok_or("Running Graph owner")?.projection;
+    assert_eq!(projection.prepared.as_ref().map(Vec::len), Some(6));
     let observed = projection.observe_capture();
     let mut stream = job.subscribe(
         Arc::new(AnalysisReadControl::default()),
@@ -111,6 +112,11 @@ async fn drains_captured_backlog() -> TestResult {
                     &fixture.control,
                 )?;
                 let records_input = evaluation.input("records")?;
+                for port in ["facts", "manifest"] {
+                    let bound = evaluation.input(port)?;
+                    assert_eq!(bound.revision, records_input.revision);
+                    assert_eq!(bound.coverage, records_input.coverage);
+                }
                 let records = algorithm::Observation::decode(&records_input.data)?;
                 let facts = algorithm::Fact::decode(&evaluation.input("facts")?.data)?;
                 assert_eq!(records.len(), consumed as usize);

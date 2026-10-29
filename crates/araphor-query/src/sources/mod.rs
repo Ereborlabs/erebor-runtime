@@ -36,7 +36,7 @@ mod bounds;
 mod journal;
 mod port;
 mod rows;
-pub use port::{PortSource, SourcePort};
+pub use port::{PortSource, SourceDependenciesExec, SourcePort};
 mod schema;
 #[cfg(test)]
 mod tests;
@@ -45,7 +45,7 @@ pub(crate) use journal::Changes;
 pub use rows::ArrowSnapshot;
 pub(crate) use rows::{Captured, CapturedRequests};
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum SourceOrigin {
     Durable(String),
     Port(usize),
@@ -189,6 +189,11 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
             }
         }
         self.frames.push(frame);
+        if let Some(port) = node.as_any().downcast_ref::<SourceDependenciesExec>() {
+            for source in port.sources() {
+                source.visit(self)?;
+            }
+        }
         Ok(TreeNodeRecursion::Continue)
     }
 

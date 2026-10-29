@@ -49,9 +49,18 @@ impl crate::GraphProgram {
         facts: Arc<dyn GraphFacts>,
     ) -> Result<Self> {
         let events = session.engine().prepare(&events_sql, Vec::new()).await?.0;
-        let publication =
-            GraphPublication::prepare(session, authority, grant.clone(), events, definition, facts)
-                .await?;
+        let feedback = araphor_query::planner::Planner::reads_table(&events, "graph_manifest")?;
+        let publication = GraphPublication::prepare_on(
+            session,
+            authority,
+            grant.clone(),
+            events,
+            feedback,
+            DefinitionRef::Fresh(&definition),
+            facts,
+            false,
+        )
+        .await?;
         Ok(Self {
             grant,
             definition: publication.prepared.resolved().clone(),

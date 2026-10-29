@@ -239,6 +239,7 @@ impl GraphPublication {
             feedback,
             DefinitionRef::Retained(&definition),
             facts,
+            true,
         )
         .await?;
         if owner.prepared.resolved() != &definition {

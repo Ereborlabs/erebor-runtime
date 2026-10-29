@@ -91,6 +91,14 @@ impl SourceDemand {
     }
 
     fn collect(plan: &LogicalPlan, scoped: bool) -> NativeResult<BTreeSet<SourceOrigin>> {
+        Self::collect_with_views(plan, scoped, &mut BTreeSet::new())
+    }
+
+    fn collect_with_views(
+        plan: &LogicalPlan,
+        scoped: bool,
+        views: &mut BTreeSet<usize>,
+    ) -> NativeResult<BTreeSet<SourceOrigin>> {
         let mut origins = BTreeSet::new();
         let mut ports = BTreeSet::new();
         plan.apply_with_subqueries(|plan| {
@@ -104,6 +112,7 @@ impl SourceDemand {
                     if scoped {
                         return Ok(TreeNodeRecursion::Jump);
                     }
+                    origins.extend(source.origins().iter().cloned());
                 }
                 if let Some(call) = extension
                     .node
@@ -127,6 +136,16 @@ impl SourceDemand {
                 if let Ok(provider) = source_as_provider(&scan.source) {
                     if let Some(source) = provider.as_any().downcast_ref::<SourceProvider>() {
                         origins.insert(source.origin.clone());
+                    }
+                }
+                if !scoped {
+                    if let Some(view) = scan.source.get_logical_plan() {
+                        let identity = Arc::as_ptr(&scan.source) as *const () as usize;
+                        if !views.insert(identity) {
+                            return Err(DataFusionError::Plan("recursive source view".into()));
+                        }
+                        origins.extend(Self::collect_with_views(&view, false, views)?);
+                        views.remove(&identity);
                     }
                 }
             }
@@ -175,6 +194,10 @@ impl<'a> Planner<'a> {
 
     pub(crate) fn sources(plan: &LogicalPlan) -> Result<BTreeSet<SourceOrigin>> {
         SourceDemand::collect(plan, true).context(crate::SqlSnafu)
+    }
+
+    pub(crate) fn dependencies(plan: &LogicalPlan) -> Result<BTreeSet<SourceOrigin>> {
+        SourceDemand::collect(plan, false).context(crate::SqlSnafu)
     }
 
     pub fn reads_table(plan: &LogicalPlan, name: &str) -> Result<bool> {

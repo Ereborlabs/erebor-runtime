@@ -71,7 +71,7 @@ type Initial = (
 );
 
 impl SubscribeExec {
-    fn reusable(
+    pub(crate) fn reusable(
         plan: &LogicalPlan,
         views: &mut std::collections::BTreeSet<usize>,
     ) -> NativeResult<bool> {

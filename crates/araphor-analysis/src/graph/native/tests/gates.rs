@@ -52,6 +52,7 @@ fn native_projection_requires_admission() -> TestResult {
                 .collect(),
             memory: Arc::clone(&memory),
             limits,
+            prepared: None,
             projections: Default::default(),
             observed: Default::default(),
         };

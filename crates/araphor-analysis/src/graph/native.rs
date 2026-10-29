@@ -17,6 +17,7 @@ use datafusion::common::DataFusionError;
 use datafusion::datasource::view::ViewTable;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::{Extension, LogicalPlan};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::sql::sqlparser::ast::Statement;
 use tokio::sync::OnceCell;
 
@@ -57,6 +58,7 @@ struct Projection {
     ports: Vec<sdk::Port>,
     memory: Arc<Memory>,
     limits: Limits,
+    prepared: Option<Vec<Arc<dyn ExecutionPlan>>>,
     #[cfg(test)]
     projections: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
@@ -114,6 +116,7 @@ impl GraphPublication {
             feedback,
             DefinitionRef::Fresh(&definition),
             facts,
+            true,
         )
         .await
     }
@@ -126,6 +129,7 @@ impl GraphPublication {
         feedback: bool,
         definition: DefinitionRef<'_>,
         facts: Arc<dyn GraphFacts>,
+        compile_inputs: bool,
     ) -> Result<Self> {
         let mut selection = session.selection().clone();
         selection.sources = grant.selection.sources.clone();
@@ -207,12 +211,18 @@ impl GraphPublication {
         }
         children.insert(2, ranges.plan.clone());
         children.push(coverage);
+        let prepared_inputs = if compile_inputs {
+            session.prepare_reusable_inputs(&children).await?
+        } else {
+            None
+        };
         let projection = Arc::new(Projection {
             tenant: grant.selection.tenant_id,
             facts,
             ports: Detector::inputs().to_vec(),
             memory: Arc::clone(session.memory()),
             limits: query.limits().clone(),
+            prepared: prepared_inputs,
             #[cfg(test)]
             projections: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -223,12 +233,21 @@ impl GraphPublication {
                 owner: Arc::clone(&projection),
                 index,
             });
-            let port = araphor_query::sources::SourcePort::new(
-                projection.ports[index].name.clone(),
-                Arc::new(projection.ports[index].schema.clone()),
-                children.clone(),
-                source,
-            )?;
+            let port = if projection.prepared.is_some() {
+                araphor_query::sources::SourcePort::prepared(
+                    projection.ports[index].name.clone(),
+                    Arc::new(projection.ports[index].schema.clone()),
+                    &children,
+                    source,
+                )?
+            } else {
+                araphor_query::sources::SourcePort::new(
+                    projection.ports[index].name.clone(),
+                    Arc::new(projection.ports[index].schema.clone()),
+                    children.clone(),
+                    source,
+                )?
+            };
             session.register_table(
                 &projection.ports[index].name,
                 Arc::new(ViewTable::new(
