@@ -322,6 +322,7 @@ fn recovery_checks_terminal_contract() -> TestResult {
                         commit_revision: terminal.revision,
                     },
                     results: BTreeMap::new(),
+                    graph: None,
                 })
             }
             _ => {}

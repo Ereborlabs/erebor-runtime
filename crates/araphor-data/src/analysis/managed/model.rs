@@ -662,6 +662,7 @@ pub struct ManagedReceipt {
     pub commit_revision: u64,
     pub selected: PackageResultRefV1,
     pub results: BTreeMap<u64, PackageResultRefV1>,
+    pub graph: Option<PackageResultRefV1>,
 }
 
 impl ManagedReceipt {

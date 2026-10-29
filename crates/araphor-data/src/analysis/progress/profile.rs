@@ -126,7 +126,7 @@ impl AnalysisStore {
                     return Err(Code::Invalid.error("managed profile schema"));
                 }
                 let Some(packet) = packet else {
-                    return Ok(Vec::new());
+                    return Ok((Vec::new(), None));
                 };
                 let id = packet.request.result_id.clone();
                 let result = publication
@@ -136,7 +136,7 @@ impl AnalysisStore {
                 let Some((write, origin)) =
                     self.profile_rows(transaction, packet, managed.attempt)?
                 else {
-                    return Ok(Vec::new());
+                    return Ok((Vec::new(), None));
                 };
                 Self::insert_managed_edges(
                     transaction,
@@ -145,7 +145,7 @@ impl AnalysisStore {
                     std::slice::from_ref(origin.as_ref().unwrap_or(result)),
                 )?;
                 profile_receipt = Some(write.receipt);
-                Ok(write.relations)
+                Ok((write.relations, None))
             },
             check,
         )?;

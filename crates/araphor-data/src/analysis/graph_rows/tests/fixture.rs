@@ -9,7 +9,7 @@ pub(in crate::analysis) struct CommitFixture {
     pub(in crate::analysis) snapshot: GraphSnapshotV1,
     pub(in crate::analysis) request: AnalysisResultCommitV1,
     pub(in crate::analysis) _graph: GraphLease,
-    pub(super) _directory: tempfile::TempDir,
+    pub(in crate::analysis) _directory: tempfile::TempDir,
 }
 
 impl CommitFixture {

@@ -281,6 +281,24 @@ about 0.13 seconds in Analysis Graph application, and about 0.3 seconds per
 package call in input collection. Incremental Graph computation and the
 backlog deadline remain **Not done**.
 
+The next unchanged backlog run measured the native Graph write by stage. On a
+cut that added three records and six edges, Data revisited 642 evidence rows,
+1,422 edges, 138 unchanged findings, and 138 unchanged branches. Input
+membership took 189 ms, subjects 12 ms, edges 171 ms, findings 732 ms, and
+branches 294 ms. The write took about 1.40 seconds. The test still failed its
+observation deadline after 141.34 seconds. These timings show that the current
+writer repeats finding and branch work when their values do not change. The
+temporary timers were removed after this run.
+
+Exact managed Graph publication binding is **Done**. A selected Graph step now
+records the Graph result that it published or reused in its receipt, in the
+same Data transaction as the managed rows. Selected reads check the receipt,
+step dependency, Graph header, source, and revision against that exact result.
+The focused Data publication corruption test and Analysis no-op reuse and
+profile version tests passed on 2026-10-29. This binds the next incremental
+write to a proven base. Incremental computation and the 100-fold speed target
+remain **Not done**.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42

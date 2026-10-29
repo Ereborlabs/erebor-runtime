@@ -147,13 +147,17 @@ impl AnalysisStore {
         if input.attempt.1.spec.destination != ManagedDestination::Selected {
             return Err(Code::Invalid.error("managed selected destination"));
         }
-        self.commit_managed_projection(input, |_, _, _| Ok(Vec::new()), check)
+        self.commit_managed_projection(input, |_, _, _| Ok((Vec::new(), None)), check)
     }
 
     pub(in crate::analysis) fn commit_managed_projection(
         &self,
         input: &ManagedCommit<'_>,
-        project: impl FnOnce(&Transaction<'_>, u64, &ManagedReceipt) -> Result<Vec<&'static str>>,
+        project: impl FnOnce(
+            &Transaction<'_>,
+            u64,
+            &ManagedReceipt,
+        ) -> Result<(Vec<&'static str>, Option<PackageResultRefV1>)>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<ManagedReceipt> {
         let mut writer = self.writer()?;
@@ -164,9 +168,10 @@ impl AnalysisStore {
                 operation: "begin managed publication",
             })?;
         let revision = self.package_next(&transaction)?;
-        let receipt = self.managed_commit_rows(&transaction, input, revision)?;
+        let (receipt, projected) =
+            self.managed_commit_rows(&transaction, input, revision, project)?;
         let mut relations = Self::MANAGED_RELATIONS.to_vec();
-        relations.extend(project(&transaction, revision, &receipt)?);
+        relations.extend(projected);
         relations.sort_unstable();
         relations.dedup();
         let tenant = input.attempt.1.spec.tenant;
@@ -193,7 +198,12 @@ impl AnalysisStore {
         transaction: &Transaction<'_>,
         input: &ManagedCommit<'_>,
         revision: u64,
-    ) -> Result<ManagedReceipt> {
+        project: impl FnOnce(
+            &Transaction<'_>,
+            u64,
+            &ManagedReceipt,
+        ) -> Result<(Vec<&'static str>, Option<PackageResultRefV1>)>,
+    ) -> Result<(ManagedReceipt, Vec<&'static str>)> {
         if input.now_utc_ns < input.attempt.request().time_utc_ns {
             return Err(Code::Invalid.error("managed publication time"));
         }
@@ -215,7 +225,7 @@ impl AnalysisStore {
             return crate::AnalysisConflictSnafu.fail();
         }
         self.check_managed_claim(input.attempt)?;
-        let (packets, step, selected, receipt) =
+        let (packets, mut step, selected, mut receipt) =
             self.prepare_managed(transaction, &attempt, input, revision)?;
         self.check_managed_capture(transaction, &attempt.capture, input.now_utc_ns)?;
         let segments = self.resolve_witnesses(&attempt.capture.witnesses, revision - 1)?;
@@ -248,6 +258,18 @@ impl AnalysisStore {
         for packet in packets {
             self.insert_managed(transaction, spec, packet, revision, &segments)?;
         }
+        let (projected, graph) = project(transaction, revision, &receipt)?;
+        if let Some(reference) = &graph {
+            let ManagedDestination::Graph { source, .. } = &spec.destination else {
+                return Err(Code::Invalid.error("managed Graph publication destination"));
+            };
+            Self::check_graph_publication(transaction, spec.tenant, source, reference, revision)?;
+            step.dependencies.push(reference.clone());
+            step.dependencies
+                .sort_by(|left, right| left.result_id.cmp(&right.result_id));
+            step.dependencies.dedup();
+        }
+        receipt.graph = graph;
         Self::insert_managed_step(
             transaction,
             spec,
@@ -275,7 +297,7 @@ impl AnalysisStore {
         transaction.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ?",
             params![serde_json::to_vec(&attempt).context(crate::PackageEncodingSnafu)?, revision, spec.tenant.as_slice(), spec.id, attempt.request.id])
             .context(AnalysisDatabaseSnafu { operation: "complete managed attempt" })?;
-        Ok(receipt)
+        Ok((receipt, projected))
     }
 
     pub(super) fn check_managed_claim(&self, attempt: &ManagedAttempt) -> Result<()> {
@@ -629,6 +651,7 @@ impl AnalysisStore {
                 commit_revision: revision,
             },
             results: ids,
+            graph: None,
         };
         Ok((packets, step, selected, receipt))
     }

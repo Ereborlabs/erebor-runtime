@@ -188,6 +188,11 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
         .store()
         .processor_result(&fixture.graph_scope())?
         .ok_or("Graph notice head")?;
+    let initial_graph = araphor_data::analysis::PackageResultRefV1 {
+        result_id: head.result_id.clone(),
+        commit_revision: head.commit_revision,
+    };
+    assert_eq!(first.graph.as_ref(), Some(&initial_graph));
     let original = fixture
         .query
         .store()
@@ -212,6 +217,7 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
             .pending
     );
     assert_eq!(reused.results, first.results);
+    assert_eq!(reused.graph.as_ref(), Some(&initial_graph));
     assert_eq!(
         entered.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
@@ -452,6 +458,13 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
     )
     .await?;
     assert_ne!(forced.results, first.results);
+    assert_eq!(
+        forced.graph,
+        Some(araphor_data::analysis::PackageResultRefV1 {
+            result_id: changed.clone(),
+            commit_revision: changed_revision,
+        })
+    );
     assert_eq!(entries, 3);
     assert_eq!(
         fixture

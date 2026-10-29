@@ -472,6 +472,7 @@ mod tests {
             commit_revision: 17,
             selected: reference.clone(),
             results: std::collections::BTreeMap::from([(10, reference)]),
+            graph: None,
         };
         for history in [Vec::new(), vec![receipt]] {
             for mode in [OutputMode::Jsonl, OutputMode::Table] {

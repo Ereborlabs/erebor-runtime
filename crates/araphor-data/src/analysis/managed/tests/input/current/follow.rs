@@ -1,5 +1,5 @@
 use super::*;
-use crate::analysis::graph_rows::{tests::fixture::CommitFixture, CanonicalGraph};
+use crate::analysis::graph_rows::{tests::fixture::CommitFixture, CanonicalGraph, GraphRows};
 
 fn fixture() -> TestResult<(CommitFixture, Fixture)> {
     let graph = CommitFixture::new()?;
@@ -183,6 +183,23 @@ fn graph_follow_retains_prefix() -> TestResult {
                 receipt.commit_revision
             );
             assert_eq!(receipt.results.len(), 2);
+            assert_eq!(
+                receipt.graph,
+                Some(crate::analysis::PackageResultRefV1 {
+                    result_id: graph.request.result_id.clone(),
+                    commit_revision: receipt.commit_revision,
+                })
+            );
+            assert!(matches!(
+                graph.store.managed_query_output(
+                    &fixture.instance.grant.selection,
+                    &fixture.instance.spec.id,
+                    Some(&receipt.selected.result_id),
+                    10,
+                    &AnalysisReadControl::default(),
+                )?,
+                ManagedOutput::Selected { .. }
+            ));
             let ManagedOutput::Call { result, data } = graph.store.managed_query_output(
                 &fixture.instance.grant.selection,
                 &fixture.instance.spec.id,
@@ -219,6 +236,243 @@ fn graph_follow_retains_prefix() -> TestResult {
                 .ok_or("saved attempt absent")?;
             assert!(saved.follows_graph());
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn graph_empty_step_has_no_publication() -> TestResult {
+    let (graph, fixture) = fixture()?;
+    let captured = read(&graph, &mode(&fixture, true))?;
+    let attempt = graph
+        .store
+        .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
+    let selected = sdk::Dataset {
+        name: "selected".into(),
+        batches: Vec::new(),
+    };
+    let (receipt, graph_result) = graph.store.commit_managed_graph(
+        &ManagedCommit {
+            completed: true,
+            attempt: &attempt,
+            now_utc_ns: 10,
+            returns: &[],
+            selected: &selected,
+            selected_schema: &fixture.model.outputs[0].schema,
+        },
+        None,
+        || Ok(()),
+    )?;
+    assert!(receipt.results.is_empty());
+    assert!(receipt.graph.is_none());
+    assert!(graph_result.is_none());
+    assert!(matches!(
+        graph.store.managed_query_output(
+            &fixture.instance.grant.selection,
+            &fixture.instance.spec.id,
+            Some(&receipt.selected.result_id),
+            10,
+            &AnalysisReadControl::default(),
+        )?,
+        ManagedOutput::Selected { .. }
+    ));
+    let writer = graph.store.writer()?;
+    let (mut step, _, revision) = AnalysisStore::managed_step_from(
+        writer.get()?,
+        fixture.instance.spec.tenant,
+        &receipt.selected.result_id,
+    )?;
+    step.rows = 1;
+    assert!(AnalysisStore::validate_selected_header(
+        writer.get()?,
+        fixture.instance.spec.tenant,
+        &receipt.selected.result_id,
+        &step,
+        revision,
+    )
+    .is_err());
+    Ok(())
+}
+
+#[test]
+fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
+    for fault in [
+        "missing_edge",
+        "wrong_edge",
+        "wrong_receipt",
+        "damaged_header",
+        "header_source",
+    ] {
+        let (mut graph, fixture) = fixture()?;
+        let captured = read(&graph, &mode(&fixture, true))?;
+        let attempt = graph
+            .store
+            .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
+        let receipt = publish(&graph, &fixture, &captured, &attempt, None)?;
+        let original = receipt.graph.as_ref().ok_or("Graph publication")?;
+        let mut request = graph.request.clone();
+        request.body.clear();
+        request.result_id = format!("graph:later-{fault}");
+        request.expected_cursor = graph.snapshot.last_cursor;
+        request.consumed_cursor = graph.snapshot.last_cursor;
+        request.created_utc_ns += 1;
+        let mut snapshot = graph.snapshot.clone();
+        snapshot.previous_result_id = Some(original.result_id.clone());
+        snapshot.packages[0].coverage_predicate.push_str("-later");
+        let later = graph.store.commit_graph_snapshot(
+            request.clone(),
+            CanonicalGraph::new(snapshot)?,
+            &[],
+            &[],
+            &[],
+            false,
+            || Ok(()),
+        )?;
+        let later = crate::analysis::PackageResultRefV1 {
+            result_id: request.result_id,
+            commit_revision: later.commit_revision,
+        };
+        if fault == "wrong_receipt" {
+            let writer = graph.store.writer()?;
+            let reader = writer.get()?;
+            let mut other_source = graph.snapshot.scope.identity.clone();
+            other_source.source_id = [93; 16];
+            assert!(AnalysisStore::check_graph_publication(
+                reader,
+                graph.snapshot.scope.identity.tenant_id,
+                &other_source,
+                original,
+                receipt.commit_revision,
+            )
+            .is_err());
+            assert!(AnalysisStore::check_graph_publication(
+                reader,
+                [9; 16],
+                &graph.snapshot.scope.identity,
+                original,
+                receipt.commit_revision,
+            )
+            .is_err());
+            assert!(AnalysisStore::check_graph_publication(
+                reader,
+                graph.snapshot.scope.identity.tenant_id,
+                &graph.snapshot.scope.identity,
+                &receipt.results[&10],
+                receipt.commit_revision,
+            )
+            .is_err());
+            let mut wrong_revision = original.clone();
+            wrong_revision.commit_revision += 1;
+            assert!(AnalysisStore::check_graph_publication(
+                reader,
+                graph.snapshot.scope.identity.tenant_id,
+                &graph.snapshot.scope.identity,
+                &wrong_revision,
+                wrong_revision.commit_revision,
+            )
+            .is_err());
+        }
+        assert!(matches!(
+            graph.store.managed_query_output(
+                &fixture.instance.grant.selection,
+                &fixture.instance.spec.id,
+                Some(&receipt.selected.result_id),
+                10,
+                &AnalysisReadControl::default(),
+            )?,
+            ManagedOutput::Selected { .. }
+        ));
+        {
+            let mut writer = graph.store.writer()?;
+            let writer = writer.get_mut()?;
+            if fault == "missing_edge" {
+                writer.execute(
+                    "DELETE FROM managed_edges WHERE result_id = ? AND dependency_id = ?",
+                    params![receipt.selected.result_id, original.result_id],
+                )?;
+            } else if fault == "wrong_edge" {
+                let metadata: Vec<u8> = writer.query_row(
+                    "SELECT request_meta FROM analysis_results WHERE result_id = ?",
+                    params![receipt.selected.result_id],
+                    |row| row.get(0),
+                )?;
+                let mut step: model::Step = serde_json::from_slice(&metadata)?;
+                *step
+                    .dependencies
+                    .iter_mut()
+                    .find(|reference| reference.result_id == original.result_id)
+                    .ok_or("selected Graph dependency")? = later.clone();
+                step.dependencies
+                    .sort_by(|left, right| left.result_id.cmp(&right.result_id));
+                writer.execute(
+                    "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
+                    params![serde_json::to_vec(&step)?, receipt.selected.result_id],
+                )?;
+                writer.execute(
+                    "UPDATE managed_edges SET dependency_id = ?, commit_revision = ?
+                     WHERE result_id = ? AND dependency_id = ?",
+                    params![
+                        later.result_id,
+                        later.commit_revision,
+                        receipt.selected.result_id,
+                        original.result_id
+                    ],
+                )?;
+            } else if fault == "wrong_receipt" {
+                let metadata: Vec<u8> = writer.query_row(
+                    "SELECT contract FROM managed_attempts
+                     WHERE instance_id = ? AND attempt_id = ?",
+                    params![fixture.instance.spec.id, attempt.request().id],
+                    |row| row.get(0),
+                )?;
+                let mut saved: model::Attempt = serde_json::from_slice(&metadata)?;
+                saved.receipt.as_mut().ok_or("saved Graph receipt")?.graph = Some(later);
+                writer.execute(
+                    "UPDATE managed_attempts SET contract = ?
+                     WHERE instance_id = ? AND attempt_id = ?",
+                    params![
+                        serde_json::to_vec(&saved)?,
+                        fixture.instance.spec.id,
+                        attempt.request().id
+                    ],
+                )?;
+            } else if fault == "damaged_header" {
+                writer.execute(
+                    "UPDATE analysis_results SET body = 'invalid'::BLOB WHERE result_id = ?",
+                    params![original.result_id],
+                )?;
+            } else {
+                let mut wrong = graph.snapshot.clone();
+                wrong.scope.identity.source_id = [93; 16];
+                wrong.input_manifest.evidence.clear();
+                wrong.input_positions.clear();
+                wrong.graph.subjects.clear();
+                wrong.graph.edges.clear();
+                wrong.graph.branches.clear();
+                wrong.findings.clear();
+                let body = GraphRows::encode(&wrong)?;
+                writer.execute(
+                    "UPDATE analysis_results SET body = ? WHERE result_id = ?",
+                    params![body, original.result_id],
+                )?;
+            }
+        }
+        assert!(graph
+            .store
+            .managed_query_output(
+                &fixture.instance.grant.selection,
+                &fixture.instance.spec.id,
+                Some(&receipt.selected.result_id),
+                10,
+                &AnalysisReadControl::default(),
+            )
+            .is_err());
+        let directory = std::mem::replace(&mut graph._directory, tempfile::tempdir()?);
+        drop(graph);
+        assert!(
+            AnalysisStore::open(directory.path().join("analysis")).is_err(),
+            "{fault}"
+        );
     }
     Ok(())
 }

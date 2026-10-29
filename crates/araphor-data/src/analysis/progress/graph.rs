@@ -33,7 +33,7 @@ impl AnalysisStore {
                 return Err(Code::Invalid.error("managed graph empty result"));
             }
             return self
-                .commit_managed_projection(managed, |_, _, _| Ok(Vec::new()), check)
+                .commit_managed_projection(managed, |_, _, _| Ok((Vec::new(), None)), check)
                 .map(|receipt| (receipt, None));
         };
         if calls
@@ -91,9 +91,8 @@ impl AnalysisStore {
             return Err(Code::Invalid.error("managed graph expiry"));
         }
         let mut graph_receipt = None;
-        let receipt = self.commit_managed_projection(
-            managed,
-            |transaction, revision, receipt| {
+        let project =
+            |transaction: &duckdb::Transaction<'_>, revision: u64, receipt: &ManagedReceipt| {
                 let notice = if managed.attempt.follows_graph() {
                     managed.attempt.captured_revision()
                 } else {
@@ -190,10 +189,16 @@ impl AnalysisStore {
                     ]);
                 }
                 graph_receipt = Some(write.receipt);
-                Ok(write.relations)
-            },
-            check,
-        )?;
+                Ok((
+                    write.relations,
+                    Some(
+                        write.graph_result.ok_or_else(|| {
+                            Code::Invalid.error("managed Graph publication result")
+                        })?,
+                    ),
+                ))
+            };
+        let receipt = self.commit_managed_projection(managed, project, check)?;
         Ok((
             receipt,
             Some(graph_receipt.ok_or_else(|| Code::Incomplete.error("managed graph receipt"))?),
