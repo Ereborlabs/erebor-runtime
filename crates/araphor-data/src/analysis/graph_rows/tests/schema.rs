@@ -10,8 +10,8 @@ fn native_schema_integrity() -> TestResult {
         ),
         GraphRows::schema().replace("tenant_id BLOB NOT NULL", "tenant_id BLOB"),
         GraphRows::schema().replace(
-            "PRIMARY KEY (result_id, ordinal)",
-            "UNIQUE (result_id, ordinal)",
+            "PRIMARY KEY (lineage_id, edge_id, valid_from)",
+            "UNIQUE (lineage_id, edge_id, valid_from)",
         ),
         GraphRows::schema().replace(
             "PRIMARY KEY (lineage_id, value_id, valid_from)",
@@ -50,7 +50,8 @@ fn native_schema_reopen() -> TestResult {
     for fault in [
         "ALTER TABLE graph_subject_membership ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_subject_values ADD COLUMN extra INTEGER",
-        "ALTER TABLE graph_relationships ALTER COLUMN first_boottime_ns TYPE BIGINT",
+        "ALTER TABLE graph_edge_values ADD COLUMN extra INTEGER",
+        "DROP VIEW graph_relationships",
         "DROP VIEW graph_findings",
         "DROP VIEW graph_subjects; CREATE VIEW graph_subjects AS
             SELECT v.result_id, 0::UINTEGER AS ordinal, s.tenant_id,
@@ -88,6 +89,9 @@ fn shared_corruption_rejects_reopen() -> TestResult {
         "INSERT INTO graph_subject_membership
          SELECT 999999, subject_id, valid_from, valid_to
          FROM graph_subject_membership LIMIT 1",
+        "INSERT INTO graph_edge_membership
+         SELECT 999999, edge_id, valid_from, valid_to
+         FROM graph_edge_membership LIMIT 1",
         "INSERT INTO graph_finding_membership
          SELECT 999999, value_id, valid_from, valid_to
          FROM graph_finding_membership LIMIT 1",

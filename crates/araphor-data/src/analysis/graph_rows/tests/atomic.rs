@@ -173,6 +173,8 @@ fn context_failure_rolls_back() -> TestResult {
         for table in [
             "graph_subjects",
             "graph_relationships",
+            "graph_edge_values",
+            "graph_edge_membership",
             "graph_findings",
             "graph_finding_values",
             "graph_finding_membership",

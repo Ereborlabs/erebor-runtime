@@ -12,7 +12,6 @@ use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, GraphSnapshotV1, Result};
 
 mod evidence;
 mod findings;
-pub(in crate::analysis) use findings::NativeFindingRefs;
 mod header;
 mod headers;
 mod read;
@@ -58,18 +57,7 @@ impl GraphRows {
     ) -> Result<()> {
         let (lineage, revision, evidence) = Self::insert_inputs(snapshot, writer, result_id)?;
         let subjects = Self::insert_subjects(writer, &snapshot.graph.subjects, lineage, revision)?;
-        {
-            let mut appender =
-                writer
-                    .appender("graph_relationships")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "prepare native graph relationships",
-                    })?;
-            Self::insert_edges(&mut appender, result_id, &snapshot.graph.edges)?;
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush native graph relationships",
-            })?;
-        }
+        Self::insert_edge_values(writer, snapshot, &subjects, &evidence, lineage, revision)?;
         let findings = snapshot
             .findings
             .iter()

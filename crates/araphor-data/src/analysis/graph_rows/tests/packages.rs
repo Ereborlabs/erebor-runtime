@@ -55,6 +55,8 @@ fn graph_appender_constraint_rollback() -> TestResult {
     for table in [
         "graph_subjects",
         "graph_relationships",
+        "graph_edge_values",
+        "graph_edge_membership",
         "graph_findings",
         "graph_finding_values",
         "graph_finding_membership",
@@ -157,6 +159,8 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
     for table in [
         "graph_subjects",
         "graph_relationships",
+        "graph_edge_values",
+        "graph_edge_membership",
         "graph_findings",
         "evidence_refs",
         "context_refs",

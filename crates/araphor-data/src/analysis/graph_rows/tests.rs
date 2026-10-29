@@ -237,8 +237,10 @@ fn native_rows_integrity() -> TestResult {
             assert_eq!(GraphRows::read(&transaction, id, &historical)?, *expected);
         }
         transaction.execute(
-            "DELETE FROM graph_relationships WHERE result_id = ?",
-            params![other],
+            "DELETE FROM graph_edge_membership
+             WHERE lineage_id = (SELECT lineage_id FROM graph_versions WHERE result_id = ?)
+                 AND valid_from = (SELECT commit_revision FROM graph_versions WHERE result_id = ?)",
+            params![other, other],
         )?;
         let seed = graph.findings[0].subject_id.clone();
         let control = AnalysisReadControl::default();
@@ -438,18 +440,17 @@ fn native_rows_integrity() -> TestResult {
     );
     for mutation in [
         "DELETE FROM graph_subject_membership WHERE subject_id = 1",
-        "UPDATE graph_relationships SET first_boottime_ns = last_boottime_ns + 1",
         "UPDATE graph_finding_values SET severity = 'INVALID'",
         "DELETE FROM graph_finding_membership WHERE value_id = (SELECT min(value_id) FROM graph_finding_values)",
         "UPDATE graph_subject_values SET tenant_id = 'short'::BLOB WHERE subject_id = 1",
         "UPDATE graph_subject_values SET authority_rank = 255 WHERE subject_id = 1",
-        "UPDATE graph_relationships SET from_subject_id = 4294967295 WHERE ordinal = 0",
-        "UPDATE graph_relationships SET evidence = [4294967295]::UINTEGER[] WHERE ordinal = 0",
-        "UPDATE graph_relationships SET evidence = [NULL]::UINTEGER[] WHERE ordinal = 0",
-        "UPDATE graph_relationships SET proof_quality = struct_update(proof_quality, source_authority := 255::UTINYINT) WHERE ordinal = 0",
-        "UPDATE graph_relationships SET proof_quality = struct_update(proof_quality, source_authority := NULL::UTINYINT) WHERE ordinal = 0",
-        "UPDATE graph_relationships SET required_coverage_interval_ids = ['short'::BLOB] WHERE ordinal = 0",
-        "UPDATE graph_relationships SET required_coverage_interval_ids = [NULL::BLOB] WHERE ordinal = 0",
+        "UPDATE graph_edge_values SET from_ref = 4294967295",
+        "UPDATE graph_edge_values SET evidence_refs = [4294967295]::UBIGINT[]",
+        "UPDATE graph_edge_values SET evidence_refs = [NULL]::UBIGINT[]",
+        "UPDATE graph_edge_values SET proof_quality = struct_update(proof_quality, source_authority := 255::UTINYINT)",
+        "UPDATE graph_edge_values SET proof_quality = struct_update(proof_quality, source_authority := NULL::UTINYINT)",
+        "UPDATE graph_edge_values SET required_coverage_interval_ids = ['short'::BLOB]",
+        "UPDATE graph_edge_values SET required_coverage_interval_ids = [NULL::BLOB]",
         "UPDATE graph_finding_values SET tenant_id = 'short'::BLOB",
         "UPDATE graph_finding_values SET effects = '{'::BLOB",
     ] {
@@ -459,6 +460,16 @@ fn native_rows_integrity() -> TestResult {
             GraphRows::read(&transaction, "version", &header).is_err(),
             "{mutation}"
         );
+        transaction.rollback()?;
+    }
+    {
+        let transaction = writer.transaction()?;
+        assert!(transaction
+            .execute(
+                "UPDATE graph_edge_values SET first_boottime_ns = last_boottime_ns + 1",
+                []
+            )
+            .is_err());
         transaction.rollback()?;
     }
     for mutation in [
@@ -492,30 +503,47 @@ fn native_edge_columns() -> TestResult {
         temporal_coverage: crate::TemporalCoverageV1::Unknown,
         integrity: crate::ProofIntegrityV1::Unverified,
     };
-    let mut populated = empty.clone();
-    populated.key.evidence = vec![0, 2];
-    populated.required_coverage_interval_ids = vec![[3; 16], [4; 16]];
-    let rows = vec![empty.clone(), populated, empty.clone()];
-    let writer = Connection::open_in_memory()?;
-    writer.execute_batch(&GraphRows::schema())?;
-    {
-        let mut appender = writer.appender("graph_relationships")?;
-        GraphRows::insert_edges(&mut appender, "native", &rows)?;
-        appender.flush()?;
-    }
+    let mut graph = fixture.snapshot.clone();
+    graph.graph.edges[0] = empty;
+    graph
+        .graph
+        .edges
+        .sort_by(|left, right| left.key.cmp(&right.key));
+    graph.validate()?;
+    let mut request = fixture.request.clone();
+    request.body.clear();
+    fixture.store.commit_graph_snapshot(
+        request,
+        CanonicalGraph::new(graph.clone())?,
+        &[],
+        &[],
+        &[],
+        true,
+        || Ok(()),
+    )?;
+    let writer = fixture.store.writer_access()?;
+    let writer = writer.get()?;
+    let rows = &graph.graph.edges;
     assert_eq!(
-        GraphRows::read_edges(&writer, "native", rows.len(), None)?,
-        rows
+        GraphRows::read_edges(writer, &fixture.request.result_id, rows.len(), None)?,
+        *rows
     );
     assert_eq!(
-        GraphRows::selected_edges(&writer, "native", &[0, 2], &AnalysisReadControl::default())?,
-        vec![empty.clone(), empty]
+        GraphRows::selected_edges(
+            writer,
+            &fixture.request.result_id,
+            &[0, 2],
+            &AnalysisReadControl::default()
+        )?,
+        vec![rows[0].clone(), rows[2].clone()]
     );
+    assert!(rows.iter().any(|row| row.key.evidence.is_empty()));
+    assert!(rows.iter().any(|row| !row.key.evidence.is_empty()));
     let types: (String, String, String, String) = writer.query_row(
         "SELECT typeof(from_subject_id), typeof(evidence),
         typeof(proof_quality.source_authority), typeof(required_coverage_interval_ids)
-        FROM graph_relationships WHERE ordinal = 0",
-        [],
+        FROM graph_relationships WHERE result_id = ? AND ordinal = 0",
+        params![fixture.request.result_id],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )?;
     assert_eq!(
@@ -527,6 +555,88 @@ fn native_edge_columns() -> TestResult {
             "BLOB[]".into()
         )
     );
+    Ok(())
+}
+
+#[test]
+fn earlier_keys_keep_edge_membership() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let mut first = fixture.snapshot.clone();
+    first.graph.edges.truncate(1);
+    first.graph.branches.clear();
+    first.graph.facts.clear();
+    first.findings.clear();
+    first.input_manifest.evidence[0].cpu_id = 1;
+    first.validate()?;
+    let from = first.graph.subjects[first.graph.edges[0].key.from as usize].clone();
+    let to = first.graph.subjects[first.graph.edges[0].key.to as usize].clone();
+
+    let mut second = first.clone();
+    second.previous_result_id = Some("first".into());
+    let mut earlier = first.input_manifest.evidence[0].clone();
+    earlier.cpu_id = 0;
+    second.input_manifest.evidence.insert(0, earlier);
+    let mut subject = first.graph.subjects[0].clone();
+    subject.identity = vec![0];
+    second.graph.subjects.push(subject);
+    second.graph.subjects.sort();
+    second.graph.edges[0].key.from = second
+        .graph
+        .subjects
+        .binary_search(&from)
+        .map_err(|_| "missing from subject")? as u32;
+    second.graph.edges[0].key.to = second
+        .graph
+        .subjects
+        .binary_search(&to)
+        .map_err(|_| "missing to subject")? as u32;
+    second.graph.edges[0].key.evidence = vec![1];
+    second.validate()?;
+
+    let writer = Connection::open_in_memory()?;
+    writer.execute_batch(
+        "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
+            tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
+            method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
+            coverage_revision UBIGINT, commit_revision UBIGINT);
+         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB)",
+    )?;
+    writer.execute_batch(&GraphRows::schema())?;
+    writer.execute(
+        "INSERT INTO source_receipts VALUES (?, ?)",
+        params![
+            first.scope.identity.key(),
+            first.scope.identity.tenant_id.as_slice()
+        ],
+    )?;
+    for (id, revision, graph) in [("first", 1, &first), ("second", 2, &second)] {
+        writer.execute(
+            "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                id,
+                graph.scope.identity.tenant_id.as_slice(),
+                crate::GRAPH_PROCESSOR,
+                GraphRows::encode(graph)?,
+                graph.scope.identity.key(),
+                graph.scope.method_version,
+                graph.first_cursor,
+                graph.context_notice_revision,
+                fixture.request.coverage_revision,
+                revision
+            ],
+        )?;
+        GraphRows::insert(graph, &writer, id)?;
+        let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, id)?
+            .ok_or("missing graph version")?;
+        assert_eq!(GraphRows::read(&writer, id, &header)?, *graph);
+    }
+    let counts: (u64, u64) = writer.query_row(
+        "SELECT (SELECT count(*)::UBIGINT FROM graph_edge_values),
+            (SELECT count(*)::UBIGINT FROM graph_edge_membership)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(counts, (1, 1));
     Ok(())
 }
 

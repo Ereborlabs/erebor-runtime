@@ -69,6 +69,8 @@ fn graph_authority_rolls_back() -> TestResult {
             "analysis_results",
             "graph_subjects",
             "graph_relationships",
+            "graph_edge_values",
+            "graph_edge_membership",
             "graph_findings",
             "graph_finding_values",
             "graph_finding_membership",

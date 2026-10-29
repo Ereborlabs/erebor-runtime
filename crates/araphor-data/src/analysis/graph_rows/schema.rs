@@ -50,17 +50,78 @@ impl GraphRows {
             AND m.valid_from <= v.commit_revision
             AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
         JOIN graph_subject_values s USING (subject_id);
-    CREATE TABLE graph_relationships (
-        result_id VARCHAR NOT NULL, ordinal UINTEGER NOT NULL,
-        from_subject_id UINTEGER NOT NULL, to_subject_id UINTEGER NOT NULL,
-        edge_type VARCHAR NOT NULL, package_id VARCHAR NOT NULL,
-        cause VARCHAR NOT NULL, evidence UINTEGER[] NOT NULL,
+    CREATE TABLE graph_edge_values (
+        edge_id UBIGINT PRIMARY KEY,
+        value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32),
+        from_ref UBIGINT NOT NULL, to_ref UBIGINT NOT NULL,
+        edge_type VARCHAR NOT NULL, edge_type_rank UTINYINT NOT NULL,
+        package_id VARCHAR NOT NULL,
+        cause VARCHAR NOT NULL, cause_rank UTINYINT NOT NULL,
+        evidence_refs UBIGINT[] NOT NULL,
         proof_quality STRUCT(source_authority UTINYINT, local_subject_binding UTINYINT,
             remote_subject_binding UTINYINT, operation_result_authority UTINYINT,
             temporal_coverage UTINYINT, integrity UTINYINT) NOT NULL,
         required_coverage_interval_ids BLOB[] NOT NULL,
         first_boottime_ns UBIGINT NOT NULL, last_boottime_ns UBIGINT NOT NULL,
-        PRIMARY KEY (result_id, ordinal));";
+        CHECK (first_boottime_ns <= last_boottime_ns));
+    CREATE INDEX graph_edge_hash ON graph_edge_values (value_hash);
+    CREATE TABLE graph_edge_membership (
+        lineage_id UBIGINT NOT NULL, edge_id UBIGINT NOT NULL,
+        valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (lineage_id, edge_id, valid_from),
+        CHECK (valid_to IS NULL OR valid_to > valid_from));
+    CREATE VIEW graph_relationships AS
+        WITH evidence_ordinals AS (
+            SELECT v.result_id, e.evidence_id,
+                (row_number() OVER (PARTITION BY v.result_id
+                    ORDER BY e.cpu_id, e.durable_cursor) - 1)::UINTEGER AS ordinal
+            FROM graph_versions v
+            JOIN graph_evidence_membership m ON m.lineage_id = v.lineage_id
+                AND m.valid_from <= v.commit_revision
+                AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
+            JOIN graph_evidence e USING (evidence_id)
+        ), selected AS (
+            SELECT v.result_id, e.edge_id, source.ordinal AS from_subject_id,
+                target.ordinal AS to_subject_id,
+                e.edge_type, e.edge_type_rank, e.package_id,
+                e.cause, e.cause_rank, e.evidence_refs,
+                e.proof_quality, e.required_coverage_interval_ids,
+                e.first_boottime_ns, e.last_boottime_ns
+            FROM graph_versions v
+            JOIN graph_edge_membership m ON m.lineage_id = v.lineage_id
+                AND m.valid_from <= v.commit_revision
+                AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
+            JOIN graph_edge_values e USING (edge_id)
+            LEFT JOIN graph_subjects source ON source.result_id = v.result_id
+                AND source.subject_id = e.from_ref
+            LEFT JOIN graph_subjects target ON target.result_id = v.result_id
+                AND target.subject_id = e.to_ref
+        ), edge_evidence AS (
+            SELECT s.result_id, s.edge_id,
+                list(o.ordinal ORDER BY refs.position)::UINTEGER[] AS evidence
+            FROM selected s
+            CROSS JOIN unnest(s.evidence_refs)
+                WITH ORDINALITY AS refs(evidence_id, position)
+            LEFT JOIN evidence_ordinals o ON o.result_id = s.result_id
+                AND o.evidence_id = refs.evidence_id
+            GROUP BY s.result_id, s.edge_id
+        ), resolved AS (
+            SELECT s.result_id, s.from_subject_id, s.to_subject_id,
+                s.edge_type, s.edge_type_rank, s.package_id,
+                s.cause, s.cause_rank,
+                coalesce(edge_evidence.evidence, []::UINTEGER[]) AS evidence,
+                s.proof_quality, s.required_coverage_interval_ids,
+                s.first_boottime_ns, s.last_boottime_ns
+            FROM selected s LEFT JOIN edge_evidence
+                ON edge_evidence.result_id = s.result_id
+                AND edge_evidence.edge_id = s.edge_id
+        ) SELECT result_id,
+            (row_number() OVER (PARTITION BY result_id
+                ORDER BY from_subject_id, to_subject_id, edge_type_rank,
+                    package_id, evidence, cause_rank) - 1)::UINTEGER AS ordinal,
+            from_subject_id, to_subject_id, edge_type, package_id,
+            cause, evidence, proof_quality, required_coverage_interval_ids,
+            first_boottime_ns, last_boottime_ns FROM resolved;";
 
     pub(in crate::analysis) fn schema() -> String {
         let mut schema = String::from(Self::SCHEMA);
@@ -109,7 +170,8 @@ impl GraphRows {
                 AND table_name IN ('graph_versions', 'graph_evidence',
                     'graph_evidence_membership', 'graph_input_positions',
                     'graph_subject_values', 'graph_subject_membership',
-                    'graph_subjects', 'graph_relationships', 'graph_findings',
+                    'graph_subjects', 'graph_edge_values', 'graph_edge_membership',
+                    'graph_relationships', 'graph_findings',
                     'graph_finding_values', 'graph_finding_membership')
             UNION ALL
             SELECT table_name, to_json(struct_pack(
@@ -120,15 +182,22 @@ impl GraphRows {
                 AND table_name IN ('graph_versions', 'graph_evidence',
                     'graph_evidence_membership', 'graph_input_positions',
                     'graph_subject_values', 'graph_subject_membership',
-                    'graph_subjects', 'graph_relationships', 'graph_findings',
+                    'graph_subjects', 'graph_edge_values', 'graph_edge_membership',
+                    'graph_relationships', 'graph_findings',
                     'graph_finding_values', 'graph_finding_membership')
             UNION ALL
             -- DuckDB quotes this cast until the database is reopened.
             SELECT view_name,
-                replace(sql, 'AS ' || chr(34) || 'UINTEGER' || chr(34)
-                    || ') AS ordinal', 'AS UINTEGER) AS ordinal')
+                replace(replace(replace(replace(sql, 'AS ' || chr(34) || 'UINTEGER' || chr(34)
+                    || ') AS ordinal', 'AS UINTEGER) AS ordinal'),
+                    'AS ' || chr(34) || 'UINTEGER' || chr(34)
+                    || '))) AS evidence', 'AS UINTEGER))) AS evidence'),
+                    'AS ' || chr(34) || 'UINTEGER' || chr(34)
+                    || '[]', 'AS UINTEGER[]'),
+                    'CROSS JOIN unnest(', ', unnest(')
             FROM duckdb_views()
-            WHERE schema_name = 'main' AND view_name IN ('graph_subjects', 'graph_findings')
+            WHERE schema_name = 'main' AND view_name IN
+                ('graph_subjects', 'graph_relationships', 'graph_findings')
             ORDER BY 1, 2",
             )
             .context(AnalysisDatabaseSnafu {

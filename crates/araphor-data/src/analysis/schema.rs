@@ -165,6 +165,7 @@ impl AnalysisStore {
     fn validate_graphs(writer: &Connection, root: &Path) -> Result<()> {
         use super::graph_rows::GraphRows;
         araphor_graph::FindingRows::validate(writer)?;
+        GraphRows::validate_edge_values(writer)?;
         for query in [
             "SELECT EXISTS(SELECT 1 FROM graph_versions v
                 LEFT JOIN analysis_results r USING (result_id)
@@ -230,6 +231,43 @@ impl AnalysisStore {
                     OR r.tenant_id <> s.tenant_id OR opened.result_id IS NULL
                     OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
                     OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from))",
+            "SELECT EXISTS(SELECT 1 FROM graph_edge_values e
+                LEFT JOIN graph_subject_values source ON source.subject_id = e.from_ref
+                LEFT JOIN graph_subject_values target ON target.subject_id = e.to_ref
+                WHERE source.subject_id IS NULL OR target.subject_id IS NULL
+                    OR source.tenant_id <> target.tenant_id
+                    OR EXISTS(SELECT 1 FROM unnest(e.evidence_refs) refs(evidence_id)
+                        LEFT JOIN graph_evidence record USING (evidence_id)
+                        WHERE record.evidence_id IS NULL))",
+            "SELECT EXISTS(SELECT 1 FROM graph_edge_membership m
+                LEFT JOIN graph_edge_values e USING (edge_id)
+                LEFT JOIN graph_subject_values source ON source.subject_id = e.from_ref
+                LEFT JOIN graph_versions origin
+                    ON origin.lineage_id = m.lineage_id
+                    AND origin.commit_revision = m.lineage_id
+                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
+                LEFT JOIN graph_versions opened
+                    ON opened.lineage_id = m.lineage_id
+                    AND opened.commit_revision = m.valid_from
+                LEFT JOIN graph_versions closed
+                    ON closed.lineage_id = m.lineage_id
+                    AND closed.commit_revision = m.valid_to
+                WHERE e.edge_id IS NULL OR origin.result_id IS NULL
+                    OR r.tenant_id <> source.tenant_id OR opened.result_id IS NULL
+                    OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
+                    OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from)
+                    OR EXISTS(SELECT 1 FROM unnest(e.evidence_refs) refs(evidence_id)
+                        JOIN graph_evidence record USING (evidence_id)
+                        WHERE record.stream_key <> r.stream_key))",
+            "SELECT EXISTS(SELECT 1 FROM (
+                SELECT m.lineage_id, m.edge_id, m.valid_from, m.valid_to,
+                    lag(m.valid_to) OVER (PARTITION BY m.lineage_id, m.edge_id
+                        ORDER BY m.valid_from) AS prior_to,
+                    lag(m.valid_from) OVER (PARTITION BY m.lineage_id, m.edge_id
+                        ORDER BY m.valid_from) AS prior_from
+                FROM graph_edge_membership m
+            ) ranges WHERE prior_from IS NOT NULL
+                AND (prior_to IS NULL OR prior_to > valid_from))",
             "SELECT EXISTS(SELECT 1 FROM graph_finding_membership m
                 LEFT JOIN graph_finding_values f USING (value_id)
                 LEFT JOIN graph_versions origin
