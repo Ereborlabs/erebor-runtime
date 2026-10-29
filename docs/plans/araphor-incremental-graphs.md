@@ -333,3 +333,31 @@ An appended `HostRestricted` fact can raise that floor and emit replacement
 values for earlier findings. Window exit or corrected older input can also
 require recomputation. The [storage plan](araphor-graph-storage-reduction.md#event-anchored-credential-findings)
 records the current remaining work. The 100-fold speed target is **Not done**.
+
+### Native physical plan reuse
+
+**Plan reuse: Done. Backlog deadline and 100-fold end-to-end target: Not done.**
+Query now keeps a native DataFusion physical plan for a follow subscription
+when its expressions, views, and source ports can be reset safely. Each cut
+uses DataFusion's `reset_plan_states` with a new task context and a new captured
+source. A query with a changing SQL clock, an unknown provider, or a call
+window still uses the existing per-cut planner. Graph supplies its cut time
+through the captured `graph_state` table. Mithril's Graph event SQL uses this
+time for the pending-deadline check.
+
+The unchanged 1,592-event backlog case confirms that production Graph now
+qualifies for reuse. Its initial Graph plans took 23.524 and 14.206 seconds.
+Eleven later Graph cuts reset their plans in 11–12 milliseconds each. The
+matched earlier run did not qualify: six later Graph cuts spent 59.006 seconds
+in physical planning. These are stage timings; concurrent cuts can overlap.
+
+The backlog case still failed its 90-second Follow deadline. The test body
+took 137.53 seconds, versus 140.15 seconds in the earlier failed run. Both
+include the fixed timeout and failure cleanup, so they do not show completion
+throughput. In the reuse run, Graph capture took 33.786 seconds across eleven
+cuts, and Graph output execution took 36.278 seconds. Other subscriptions
+also waited in capture; one `graph_state` capture took 26.939 seconds.
+These are inclusive timings and can overlap. The next work is to split Data
+read time from capture wait time and to reduce the large initial Graph plan.
+The [source review](../guides/araphor-graph-commit-review.md#native-physical-plan-reuse)
+records the owners and focused checks.

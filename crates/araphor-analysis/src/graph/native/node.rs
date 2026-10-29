@@ -29,6 +29,10 @@ impl fmt::Debug for Port {
     }
 }
 impl PortSource for Port {
+    fn reusable(&self) -> bool {
+        true
+    }
+
     fn plan(
         &self,
         slot: usize,

@@ -19,7 +19,7 @@ WITH state AS (
     SELECT COALESCE(MAX(CASE WHEN retained_input_expired THEN last_cursor ELSE 0 END), 0) AS expired_until,
         COUNT(*) FILTER (WHERE NOT retained_input_expired AND (
             heads.first_cursor <= state.retained_floor
-            OR witness_deadline_utc_ns <= CAST(CAST(CURRENT_TIMESTAMP AS BIGINT) AS BIGINT UNSIGNED))) AS pending
+            OR witness_deadline_utc_ns <= state.capture_time_utc_ns)) AS pending
     FROM heads CROSS JOIN state
 ), retained AS (
     SELECT MIN(events.source_cursor) AS first_cursor

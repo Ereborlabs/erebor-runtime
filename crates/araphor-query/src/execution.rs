@@ -191,6 +191,18 @@ impl Drop for Engine {
 }
 
 impl Engine {
+    #[cfg(test)]
+    pub(crate) fn add_physical_optimizer_rule(
+        &mut self,
+        rule: Arc<dyn datafusion::physical_optimizer::PhysicalOptimizerRule + Send + Sync>,
+    ) {
+        let mut rules = self.state.physical_optimizers().to_vec();
+        rules.push(rule);
+        self.state = SessionStateBuilder::new_from_existing(self.state.clone())
+            .with_physical_optimizer_rules(rules)
+            .build();
+    }
+
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn guest_entry(
         &self,

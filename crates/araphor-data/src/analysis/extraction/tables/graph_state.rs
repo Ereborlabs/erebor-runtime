@@ -23,6 +23,7 @@ impl Capture<'_> {
         setup {
             let source = &receipt.identity;
             let source_key = source.key();
+            let captured_time = self.now();
             budget.charge(source_key.capacity())?;
         }
         fields {
@@ -37,6 +38,7 @@ impl Capture<'_> {
             contiguous_cursor => UInt64(false): Some(receipt.contiguous_cursor),
             retained_floor => UInt64(false): Some(receipt.retained_floor),
             coverage_revision => UInt64(false): Some(receipt.coverage_revision),
+            capture_time_utc_ns => UInt64(false): Some(captured_time),
             method_version => UInt64(false): Some(u64::from(crate::GRAPH_SCHEMA_VERSION)),
             processor_present => Boolean(false): Some(state.class.is_some()),
             processor_class => Utf8(true): state.class.as_deref(),

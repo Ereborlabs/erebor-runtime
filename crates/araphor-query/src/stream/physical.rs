@@ -4,12 +4,17 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{DataFusionError, Result as NativeResult};
+use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source_as_provider;
+use datafusion::datasource::view::ViewTable;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::Count;
 use datafusion::functions_aggregate::sum::Sum;
+use datafusion::logical_expr::{Expr, LogicalPlan, Volatility};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -26,7 +31,7 @@ use snafu::ResultExt as _;
 
 use super::progress::Progress;
 use super::{Output, OutputStream, Run};
-use crate::sources::{SourceData, SourceSnapshot};
+use crate::sources::{SourceData, SourcePort, SourceProvider, SourceSnapshot};
 use crate::{Result, SqlSnafu};
 
 mod kernel;
@@ -66,6 +71,67 @@ type Initial = (
 );
 
 impl SubscribeExec {
+    fn reusable(
+        plan: &LogicalPlan,
+        views: &mut std::collections::BTreeSet<usize>,
+    ) -> NativeResult<bool> {
+        let mut safe = true;
+        plan.apply_with_subqueries(|node| {
+            if matches!(node, LogicalPlan::RecursiveQuery(_)) {
+                safe = false;
+            }
+            if let LogicalPlan::Extension(extension) = node {
+                if let Some(port) = extension.node.as_any().downcast_ref::<SourcePort>() {
+                    safe &= port.reusable();
+                } else if !extension
+                    .node
+                    .as_any()
+                    .is::<crate::definition::PackageCall>()
+                {
+                    safe = false;
+                }
+            }
+            if let LogicalPlan::TableScan(scan) = node {
+                if let Ok(provider) = source_as_provider(&scan.source) {
+                    if let Some(view) = provider.as_any().downcast_ref::<ViewTable>() {
+                        let identity = Arc::as_ptr(&provider) as *const () as usize;
+                        if views.insert(identity) {
+                            safe &= Self::reusable(view.logical_plan(), views)?;
+                            views.remove(&identity);
+                        } else {
+                            safe = false;
+                        }
+                    } else {
+                        safe &= provider.as_any().is::<SourceProvider>()
+                            || provider.as_any().is::<EmptyTable>();
+                    }
+                } else {
+                    safe = false;
+                }
+            }
+            for expression in node.expressions() {
+                expression.apply(|expression| {
+                    safe &= match expression {
+                        Expr::ScalarFunction(function) => {
+                            function.func.signature().volatility == Volatility::Immutable
+                        }
+                        Expr::AggregateFunction(function) => {
+                            function.func.signature().volatility == Volatility::Immutable
+                        }
+                        Expr::WindowFunction(function) => {
+                            function.fun.signature().volatility == Volatility::Immutable
+                        }
+                        Expr::ScalarVariable(..) | Expr::Placeholder(..) => false,
+                        _ => true,
+                    };
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(safe)
+    }
+
     pub(crate) fn new(input: Arc<dyn ExecutionPlan>, maintainable: bool) -> NativeResult<Self> {
         let compiled = if maintainable {
             Self::compile(&input)?
@@ -230,6 +296,15 @@ impl SubscribeExec {
             break (permit, now, session);
         };
         let mut state = session.state()?;
+        let reusable = run.follow
+            && run.operation == crate::follow::Operation::Replace
+            && run.window.is_none()
+            && !session
+                .calls
+                .as_ref()
+                .is_some_and(|calls| calls.has_windows())
+            && Self::reusable(&run.plan, &mut std::collections::BTreeSet::new())
+                .context(SqlSnafu)?;
         let logical = crate::planner::subscription::Subscribe::runtime(
             run.plan.as_ref().clone(),
             run.operation == crate::follow::Operation::Append,
@@ -238,13 +313,25 @@ impl SubscribeExec {
         state.config_mut().set_extension(run);
         let mut planning = state.clone();
         planning.config_mut().set_extension(Arc::clone(&permit));
+        if reusable {
+            let config = planning
+                .config()
+                .clone()
+                .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", false);
+            *planning.config_mut() = config;
+        }
         let physical = session.physical(&logical, &planning).await?;
         let subscription = physical
             .as_any()
             .downcast_ref::<Self>()
             .ok_or_else(|| DataFusionError::Internal("subscription physical root changed".into()))
             .context(SqlSnafu)?;
-        subscription.execute_committed(0, state.task_ctx(), Some((permit, now, session, progress)))
+        subscription.execute_committed(
+            0,
+            state.task_ctx(),
+            Some((permit, now, session, progress)),
+            reusable,
+        )
     }
 
     pub(crate) fn execute_committed(
@@ -252,6 +339,7 @@ impl SubscribeExec {
         partition: usize,
         context: Arc<TaskContext>,
         initial: Option<Initial>,
+        reusable: bool,
     ) -> Result<OutputStream> {
         if partition != 0 {
             return Err(DataFusionError::Execution(
@@ -272,7 +360,7 @@ impl SubscribeExec {
                 Progress::new(run.session.engine().store(), Arc::clone(&run.clock), None),
             ),
         };
-        let state = runtime::Runtime::new(self, context, run, initial, progress)?;
+        let state = runtime::Runtime::new(self, context, run, initial, progress, reusable)?;
         Ok(Box::pin(stream::try_unfold(
             state,
             |mut state| async move { Ok(state.next().await?.map(|output| (output, state))) },
@@ -376,7 +464,7 @@ impl ExecutionPlan for SubscribeExec {
         context: Arc<TaskContext>,
     ) -> NativeResult<SendableRecordBatchStream> {
         let stream = self
-            .execute_committed(partition, context, None)
+            .execute_committed(partition, context, None, false)
             .map_err(|source| DataFusionError::External(Box::new(source)))?
             .map_err(|(source, _)| source)
             .map_ok(
@@ -399,5 +487,28 @@ impl ExecutionPlan for SubscribeExec {
             self.schema(),
             stream,
         )))
+    }
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn nested_view_clock_requires_replanning() -> NativeResult<()> {
+        let context = datafusion::prelude::SessionContext::new();
+        let inner = context
+            .sql("SELECT CURRENT_TIMESTAMP AS captured_at")
+            .await?;
+        context.register_table(
+            "clock_view",
+            Arc::new(ViewTable::new(inner.logical_plan().clone(), None)),
+        )?;
+        let outer = context.sql("SELECT * FROM clock_view").await?;
+        assert!(!SubscribeExec::reusable(
+            outer.logical_plan(),
+            &mut std::collections::BTreeSet::new(),
+        )?);
+        Ok(())
     }
 }

@@ -31,7 +31,7 @@ impl GraphPublication {
                     FROM heads h JOIN graph_state s USING (tenant_id, source_key)
                     WHERE NOT h.retained_input_expired AND (
                         h.first_cursor <= s.retained_floor OR h.witness_deadline_utc_ns
-                            <= CAST(CAST(CURRENT_TIMESTAMP AS BIGINT) AS BIGINT UNSIGNED))
+                            <= s.capture_time_utc_ns)
                     ORDER BY h.tenant_id, h.source_key, h.first_cursor"
                         .into(),
                 },
@@ -219,8 +219,7 @@ impl GraphPublication {
                                     AND s.source_id = e.source_id AND s.source_epoch = e.source_epoch
                             WHERE e.source_cursor BETWEEN h.first_cursor AND h.last_cursor
                                 AND (h.retained_input_expired OR h.first_cursor <= s.retained_floor
-                                    OR h.witness_deadline_utc_ns <= CAST(CAST(CURRENT_TIMESTAMP
-                                        AS BIGINT) AS BIGINT UNSIGNED))
+                                    OR h.witness_deadline_utc_ns <= s.capture_time_utc_ns)
                         ) SELECT e.* FROM __graph_current_events e LEFT JOIN expired s
                             ON e.tenant_id = s.tenant_id AND e.node_id = s.node_id
                                 AND e.node_boot_id = s.node_boot_id AND e.label_epoch = s.label_epoch

@@ -4,6 +4,7 @@ use araphor_data::{AnalysisStoreMetaV1, StorePositionV1};
 use datafusion::common::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::aggregates::AggregateExec;
+use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::ExecutionPlan;
 use snafu::ResultExt as _;
 
@@ -21,6 +22,7 @@ pub(super) struct Runtime {
     input: Arc<dyn ExecutionPlan>,
     schema: datafusion::arrow::datatypes::SchemaRef,
     context: Arc<TaskContext>,
+    reusable: bool,
     maintained: Option<Maintained>,
     progress: Progress,
     snapshot: Option<Arc<ArrowSnapshot>>,
@@ -56,6 +58,7 @@ impl Runtime {
         run: Arc<Run>,
         initial: Option<(Arc<crate::execution::Permit>, u64, Session)>,
         progress: Progress,
+        reusable: bool,
     ) -> Result<Self> {
         let maintained = match &physical.mode {
             Mode::Replace {
@@ -99,6 +102,7 @@ impl Runtime {
             input: Arc::clone(&physical.input),
             schema: physical.schema(),
             context,
+            reusable,
             maintained,
             progress,
             snapshot: None,
@@ -302,16 +306,21 @@ impl Runtime {
                 drop(input);
                 output
             } else {
-                let (physical, context) = if reuse {
+                let (physical, context) = if reuse && !self.reusable {
                     (Arc::clone(&self.input), Arc::clone(&self.context))
                 } else {
                     let mut state = session.state()?;
                     state.config_mut().set_extension(Arc::clone(&permit));
                     state.config_mut().set_extension(Arc::clone(&self.run));
-                    (
-                        session.physical(&self.run.plan, &state).await?,
-                        state.task_ctx(),
-                    )
+                    let physical = if self.reusable {
+                        match reset_plan_states(Arc::clone(&self.input)) {
+                            Ok(physical) => physical,
+                            Err(_) => session.physical(&self.run.plan, &state).await?,
+                        }
+                    } else {
+                        session.physical(&self.run.plan, &state).await?
+                    };
+                    (physical, state.task_ctx())
                 };
                 let pending = PendingRead {
                     control: Arc::clone(session.control()),

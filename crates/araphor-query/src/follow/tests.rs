@@ -146,13 +146,17 @@ impl Fixture {
 
     fn notification(&self, deadline: u64) {
         self.store.enable_notification_owner().unwrap();
+        self.notification_revision(deadline, 1);
+    }
+
+    fn notification_revision(&self, deadline: u64, revision: u64) {
         let value = NotificationObligationV1 {
             schema_version: 1,
             key: NotificationKeyV1 {
                 tenant_id: self.source.tenant_id,
                 notification_id: [7; 16],
             },
-            revision: 1,
+            revision,
             finding: None,
             unconfirmed_concern: Some(UnconfirmedNotificationConcernV1 {
                 concern_id: [9; 16],
@@ -1885,7 +1889,7 @@ async fn replacement_reads_source_bounds() {
         .downcast_ref::<crate::stream::physical::SubscribeExec>()
         .unwrap();
     let mut stream = subscription
-        .execute_committed(0, state.task_ctx(), None)
+        .execute_committed(0, state.task_ctx(), None, false)
         .unwrap();
     for (count, cursors) in [(2, vec![2, 3]), (3, vec![2, 3, 4])] {
         let event = stream.next().await.unwrap().unwrap();
@@ -2500,6 +2504,75 @@ async fn native_join_source_capture() {
         );
         assert!(subscription.next().await.is_none());
     }
+}
+
+#[tokio::test]
+async fn follow_join_replaces_build_side() {
+    #[derive(Debug)]
+    struct PlanningCounter(Arc<AtomicU64>);
+
+    impl datafusion::physical_optimizer::PhysicalOptimizerRule for PlanningCounter {
+        fn optimize(
+            &self,
+            plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+            _: &datafusion::common::config::ConfigOptions,
+        ) -> datafusion::common::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "count_subscription_plans"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    let mut fixture = Fixture::new(Limits::default());
+    let plans = Arc::new(AtomicU64::new(0));
+    Arc::get_mut(&mut fixture.engine)
+        .unwrap()
+        .add_physical_optimizer_rule(Arc::new(PlanningCounter(Arc::clone(&plans))));
+    fixture.commit(&fixture.source, 1, 1, 1_000_000_000);
+    fixture.store.enable_notification_owner().unwrap();
+    fixture.notification_revision(10_000_000_000, 1);
+    let clock = TestClock::new(2_000_000_000);
+    let (plan, sources) = fixture.plan(
+        "SELECT n.notification_revision, e.source_cursor FROM notifications n CROSS JOIN events e",
+        vec![],
+    );
+    let mut subscription = Subscription::new(
+        fixture
+            .engine
+            .session(
+                AnalysisSelectionV1::tenant(fixture.source.tenant_id),
+                &Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
+                0,
+            )
+            .unwrap(),
+        plan,
+        sources,
+        b"join principal",
+        None,
+        clock,
+        true,
+    )
+    .unwrap();
+    let first = next(&mut subscription).await;
+    assert_eq!(first.operation, Operation::Replace);
+    assert_eq!(values(&first, 0), vec![ScalarValue::UInt64(Some(1))]);
+    assert_eq!(values(&first, 1), vec![ScalarValue::UInt64(Some(1))]);
+    let planned = plans.load(Ordering::SeqCst);
+    assert!(planned > 0);
+
+    fixture.notification_revision(10_000_000_000, 2);
+    let second = next(&mut subscription).await;
+    assert_eq!(second.operation, Operation::Replace);
+    assert_eq!(values(&second, 0), vec![ScalarValue::UInt64(Some(2))]);
+    assert_eq!(values(&second, 1), vec![ScalarValue::UInt64(Some(1))]);
+    assert_eq!(plans.load(Ordering::SeqCst), planned);
 }
 
 #[tokio::test]

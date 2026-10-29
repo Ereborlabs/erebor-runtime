@@ -11,6 +11,12 @@ use datafusion::physical_plan::ExecutionPlan;
 use super::SourceProvider;
 
 pub trait PortSource: fmt::Debug + Send + Sync {
+    /// Return true only when the physical plan supports DataFusion state reset.
+    /// The plan must read each capture from the current TaskContext.
+    fn reusable(&self) -> bool {
+        false
+    }
+
     fn plan(
         &self,
         slot: usize,
@@ -28,6 +34,10 @@ pub struct SourcePort {
 }
 
 impl SourcePort {
+    pub(crate) fn reusable(&self) -> bool {
+        self.source.reusable()
+    }
+
     pub fn new(
         role: String,
         schema: SchemaRef,

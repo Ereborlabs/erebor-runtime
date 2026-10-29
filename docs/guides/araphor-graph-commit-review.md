@@ -1024,3 +1024,48 @@ after 137.31 seconds of test runtime. The change has no proven end-to-end
 speed gain. Profiled Graph cuts spent about 15.7 seconds each in repeated
 DataFusion physical planning. Backlog qualification and the 100-fold target
 remain **Not done**.
+
+## Native physical plan reuse
+
+[SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) checks native logical expressions, views, and source ports before it enables plan reuse
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) calls DataFusion `reset_plan_states` for each eligible cut
+  -> [Session::capture_physical](../../crates/araphor-query/src/execution.rs) binds the current source snapshot and package call context
+  -> [CapturedPhysical::start](../../crates/araphor-query/src/execution.rs) binds the current read control
+  -> [Graph Port](../../crates/araphor-analysis/src/graph/native/node.rs) opts in because its capture belongs to the current task context
+
+[graph_state capture](../../crates/araphor-data/src/analysis/extraction/tables/graph_state.rs) exposes the cut time
+  -> [Graph continuation and expiry](../../crates/araphor-analysis/src/graph/native/managed.rs) compare deadlines with that time
+  -> [Mithril Graph event SQL](../../crates/mithril-control/src/service/packages/graph-events.sql) uses the same time for its pending-deadline check
+
+The opt-in applies only to follow, Replace, and no external window. Unknown
+providers and non-immutable functions retain per-cut planning. The package
+call still receives current captured Arrow inputs, pinned image, saved state,
+authority, and control. Data still owns the atomic commit.
+
+The two-cut `follow_join_replaces_build_side` test in
+[Query follow tests](../../crates/araphor-query/src/follow/tests.rs) passed. A
+physical optimizer rule counted planning calls. The count was nonzero after
+the first cut and did not increase on the second cut.
+The second cut returned the new notification revision and removed the old
+one. `nested_view_clock_requires_replanning` passed with a DataFusion view
+that reads `CURRENT_TIMESTAMP`. The focused Graph `expiry_query_clock`,
+`graph_restart_keeps_frontier`, `prepared_calls_capture_fresh`,
+`authority_denial_joins`, `final_cancel_rolls_back`, and
+`drains_captured_backlog` tests passed. The last test confirmed that a live
+Graph follow qualifies for reuse. The production SQL uses the same captured
+time and qualified in the matched backlog run.
+
+Seven existing Query follow regressions also passed on the final source:
+`native_predicate_captures_deadline`, `window_expires_without_intake`,
+`cancel_joins_source_read`, `fallback_sum_keeps_progress`,
+`health_uses_remaining_capacity`, `join_uses_new_cut`, and
+`moving_window_nanoseconds`.
+
+Temporary probes were removed before this source record. The unchanged
+backlog test still failed its 90-second Follow deadline. Its test body took
+137.53 seconds; the earlier failed run took 140.15 seconds. The timeout and
+cleanup limit this comparison. The initial production Graph plans took
+23.524 and 14.206 seconds. Eleven later cuts reset in 11–12 milliseconds.
+An earlier ineligible run spent 59.006 seconds planning six later cuts.
+Graph capture and execution remain costly, and some other captures waited
+for many seconds. The 100-fold end-to-end target is **Not done**.
