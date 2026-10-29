@@ -89,6 +89,25 @@ impl ReasonDetails {
 }
 
 impl Detector {
+    pub fn supports(model: &sdk::Model) -> bool {
+        let expected = Self::Process.descriptor();
+        let expected = &expected.exports[0];
+        model
+            .inputs
+            .iter()
+            .map(|input| &input.port)
+            .eq(expected.inputs.iter().map(|input| &input.port))
+            && model.outputs == expected.outputs
+            && model.checkpoint.as_ref().is_some_and(|checkpoint| {
+                checkpoint.version == 1
+                    && checkpoint.datasets.first()
+                        == expected
+                            .checkpoint
+                            .as_ref()
+                            .and_then(|spec| spec.datasets.first())
+            })
+    }
+
     pub const fn id(self) -> &'static str {
         match self {
             Self::Process => "HF-PROC-001",
