@@ -38,12 +38,16 @@ impl AnalysisStore {
                 PARTITION BY stream_key, first_cursor
                 ORDER BY commit_revision DESC, result_id DESC) = 1
          ), current_findings AS (
-            SELECT finding.result_id, finding.finding_id
-            FROM graph_findings finding JOIN heads USING (result_id)
+            SELECT v.result_id, finding.finding_id
+            FROM heads h JOIN graph_versions v ON v.result_id = h.result_id
+            JOIN graph_finding_membership m ON m.lineage_id = v.lineage_id
+                AND m.valid_from <= v.commit_revision
+                AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
+            JOIN graph_finding_values finding USING (value_id)
             {filter}
             QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY finding_id
-                ORDER BY commit_revision DESC, finding.result_id DESC) = 1
+                PARTITION BY finding.finding_id
+                ORDER BY h.commit_revision DESC, v.result_id DESC) = 1
          )"
         )
     }
