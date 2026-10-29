@@ -586,7 +586,6 @@ impl FindingRows {
         value
             .serialize(
                 &mut rmp_serde::Serializer::new(&mut bytes)
-                    .with_struct_map()
                     .with_bytes(rmp_serde::config::BytesMode::ForceIterables),
             )
             .context(EncodingSnafu)?;

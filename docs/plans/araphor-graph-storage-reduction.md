@@ -252,6 +252,14 @@ delivered its notification at the deadline. The database measures the four
 committed cuts at backup time, after that deadline. The benchmark result
 remains **Not done**.
 
+Finding policy, effect, and reason payloads now use typed MessagePack sequences
+instead of repeated struct field names. The strict decoder, typed value hash,
+native finding columns, and historical membership are unchanged. All six
+focused `araphor-graph` tests passed, including nested payloads, declared
+Arrow reasons, reopen, hash reuse, and damaged values. The 49 focused Data
+Graph row tests passed. This change has no matched four-cut size or backlog
+time result yet. The 90% target and deadline remain **Not done**.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42
