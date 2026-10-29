@@ -12,7 +12,7 @@ impl Computation {
                 self.progress[row].state = state;
             }
         }
-        self.state.value = self
+        self.state = self
             .progress
             .iter()
             .rev()

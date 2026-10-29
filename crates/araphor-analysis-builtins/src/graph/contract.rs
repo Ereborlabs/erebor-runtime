@@ -1,7 +1,6 @@
 use std::sync::OnceLock;
 
 use super::*;
-use crate::Rows;
 
 #[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct ReasonDetails {
@@ -163,10 +162,7 @@ impl Detector {
         model.checkpoint = Some(sdk::CheckpointSpec {
             resume_input_changes: true,
             version: 1,
-            datasets: vec![
-                Rows::port::<State>("state", "graph.state.v1"),
-                Progress::port(),
-            ],
+            datasets: vec![GraphPackageStateV1::port(), Progress::port()],
         });
         sdk::Package::new(self.id(), "1", vec![model])
     }
@@ -197,7 +193,7 @@ impl Detector {
                 .iter()
                 .find(|data| data.name == state.name)
                 .ok_or_else(|| Computation::invalid("graph checkpoint state"))?;
-            let states: Vec<State> = Rows::decode(state, data)?;
+            let states = GraphPackageStateV1::decode(data)?;
             if states.len() != 1 {
                 return Err(sdk::Error::contract(
                     sdk::ErrorCode::Invalid,

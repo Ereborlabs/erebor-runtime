@@ -127,8 +127,7 @@ impl Computation {
                 ))
         });
         branches.dedup();
-        let state = serde_json::from_value(serde_json::Value::String(self.state.value.clone()))
-            .map_err(Self::json_error)?;
+        let state = GraphPackageStateV1::from_marker(&self.state)?;
         let metadata = Metadata {
             record_ids: self
                 .records
@@ -187,14 +186,10 @@ impl Computation {
                 details: ReasonDetails::encode(&[details])?.batches.remove(0),
             });
         }
-        let checkpoint = package.exports[0]
-            .checkpoint
-            .as_ref()
-            .ok_or_else(|| Self::invalid("graph checkpoint descriptor"))?;
         output.checkpoint = Some(sdk::Checkpoint {
             version: 1,
             datasets: vec![
-                crate::Rows::encode(&checkpoint.datasets[0], &[self.state])?,
+                GraphPackageStateV1::encode(std::slice::from_ref(&metadata.package.state))?,
                 Progress::encode(&self.progress)?,
             ],
         });

@@ -179,9 +179,3 @@ impl Finding {
         }
     }
 }
-
-#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct State {
-    pub value: String,
-}

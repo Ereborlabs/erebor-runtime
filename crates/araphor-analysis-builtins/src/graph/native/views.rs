@@ -544,8 +544,8 @@ impl TryFrom<EdgeRow> for GraphEdgeV1 {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct StateRow {
-    tag: String,
-    declared: Option<String>,
+    pub(super) tag: String,
+    pub(super) declared: Option<String>,
 }
 impl From<&GraphPackageStateV1> for StateRow {
     fn from(value: &GraphPackageStateV1) -> Self {

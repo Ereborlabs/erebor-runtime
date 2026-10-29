@@ -187,7 +187,7 @@ fn support_requires_exact_ports() -> TestResult {
 }
 
 #[test]
-fn support_keeps_generic_state() -> TestResult {
+fn support_keeps_native_state() -> TestResult {
     let mut package = algorithm::Detector::Process.descriptor();
     let checkpoint = package.exports[0].checkpoint.as_mut().ok_or("checkpoint")?;
     checkpoint.datasets.truncate(1);

@@ -108,14 +108,10 @@ impl Graph<'_> {
                 }
                 .build()
             })?;
-        let states: Vec<algorithm::State> =
-            Rows::decode(state, data).context(AnalysisContractSnafu)?;
+        let states = GraphPackageStateV1::decode(data).context(AnalysisContractSnafu)?;
         Self::require(states.len() == 1, "graph checkpoint rows")?;
-        let state: GraphPackageStateV1 =
-            serde_json::from_value(serde_json::Value::String(states[0].value.clone()))
-                .context(GraphEncodingSnafu)?;
         Self::require(
-            state == metadata.package.state,
+            states[0] == metadata.package.state,
             "graph package checkpoint state",
         )?;
 

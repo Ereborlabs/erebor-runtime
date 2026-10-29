@@ -90,6 +90,32 @@ fn computation(
 }
 
 #[test]
+fn checkpoint_state_matches_metadata() -> TestResult {
+    let input = input()?;
+    let (mut owner, evaluation, mut output) = computation(&input)?;
+    let state = algorithm::Metadata::decode(&output.datasets[4])?[0]
+        .package
+        .state
+        .clone();
+    let wrong = if state == GraphPackageStateV1::Waiting {
+        GraphPackageStateV1::NativeEffect
+    } else {
+        GraphPackageStateV1::Waiting
+    };
+    let checkpoint = output.checkpoint.as_mut().ok_or("checkpoint")?;
+    checkpoint.datasets[0] = GraphPackageStateV1::encode(&[wrong])?;
+    let package = algorithm::Detector::Credentials.descriptor();
+    assert!(matches!(
+        owner.apply_output(&package, &evaluation, &output),
+        Err(araphor_data::Error::GraphInvalid {
+            field: "graph package checkpoint state",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
 fn candidate_reason_matches_contract() -> TestResult {
     let input = input()?;
     let (mut owner, evaluation, mut output) = computation(&input)?;

@@ -45,7 +45,7 @@ impl BurstDetector {
         model.checkpoint = Some(sdk::CheckpointSpec {
             resume_input_changes: false,
             version: 1,
-            datasets: vec![Rows::port::<State>("state", "graph.state.v1")],
+            datasets: vec![GraphPackageStateV1::port()],
         });
         sdk::Package::new("example-burst", "1", vec![model])
     }

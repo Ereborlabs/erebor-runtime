@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use araphor_analysis_builtins::{graph::*, Rows};
+use araphor_analysis_builtins::graph::*;
 use araphor_analysis_sdk as sdk;
 use sdk::arrow_array::{cast::AsArray as _, types::UInt64Type, UInt64Array};
 
@@ -124,7 +124,9 @@ impl sdk::Guest for BurstDetector {
         })?;
         output.checkpoint = Some(sdk::Checkpoint {
             version: spec.version,
-            datasets: vec![Rows::encode(&spec.datasets[0], &[State { value: state }])?],
+            datasets: vec![GraphPackageStateV1::encode(&[
+                GraphPackageStateV1::Declared(state),
+            ])?],
         });
         Ok(output)
     }

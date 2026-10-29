@@ -55,8 +55,10 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     let mut last = first.clone();
     last.id.durable_cursor = 3;
     let expected = vec![first.id.clone(), last.id.clone()];
+    let records = [first, separate, last];
+    let record_count = records.len();
     let inputs = vec![
-        Observation::encode(&[first, separate, last])?,
+        Observation::encode(&records)?,
         Fact::encode(&[])?,
         Manifest::encode(&[Manifest { window_ns: 100 }])?,
     ];
@@ -103,6 +105,10 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     assert!(matches!(<BurstDetector as sdk::Guest>::compute(&other),
         Err(sdk::Error::Contract { code: sdk::ErrorCode::Incompatible, field, .. }) if field == "detector package"));
     let findings = Finding::decode(&output.datasets[2])?;
+    assert_eq!(
+        GraphPackageStateV1::decode(&output.checkpoint.as_ref().ok_or("checkpoint")?.datasets[0])?,
+        [GraphPackageStateV1::Declared(record_count.to_string())]
+    );
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].evidence, expected);
     assert_eq!(findings[0].state, FindingStateV1::CoverageInsufficient);

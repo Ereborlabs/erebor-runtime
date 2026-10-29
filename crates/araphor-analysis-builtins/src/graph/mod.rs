@@ -43,7 +43,7 @@ struct Computation {
     subject_indices: BTreeMap<GraphSubjectKeyV1, u32>,
     edges: BTreeMap<GraphEdgeKeyV1, Relationship>,
     findings: BTreeMap<String, Finding>,
-    state: State,
+    state: String,
     progress: Vec<Progress>,
     #[cfg(test)]
     work: usize,
@@ -83,13 +83,11 @@ impl Computation {
             progress,
             #[cfg(test)]
             work: 0,
-            state: State {
-                value: match detector {
-                    Detector::Kubernetes => "KUBERNETES_PROOF_MISSING",
-                    _ => "WAITING",
-                }
-                .into(),
-            },
+            state: match detector {
+                Detector::Kubernetes => "KUBERNETES_PROOF_MISSING",
+                _ => "WAITING",
+            }
+            .into(),
         };
         for (index, fact) in computation.facts.iter().enumerate() {
             computation.record(fact.record)?;
@@ -121,10 +119,6 @@ impl Computation {
 
     fn invalid(field: &str) -> sdk::Error {
         sdk::Error::contract(sdk::ErrorCode::Invalid, field)
-    }
-
-    fn json_error(error: serde_json::Error) -> sdk::Error {
-        sdk::Error::contract(sdk::ErrorCode::Invalid, error.to_string())
     }
 }
 

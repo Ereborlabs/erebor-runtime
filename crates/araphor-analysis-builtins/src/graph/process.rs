@@ -31,7 +31,7 @@ impl Computation {
                 vec!["CONTEXT_ANCHOR_HAS_NO_PHYSICAL_ACTION_PROOF".into()],
             )?;
         }
-        self.state.value = self
+        self.state = self
             .progress
             .iter()
             .rev()

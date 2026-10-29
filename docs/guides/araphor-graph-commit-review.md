@@ -851,3 +851,37 @@ Focused checks on this source passed:
 
 The full workspace procedure and the matched backlog workload did not run
 on this source. The overall storage target is Not done.
+
+## Native Graph checkpoint state
+
+[GraphPackageStateV1::port](../../crates/araphor-analysis-builtins/src/graph/native.rs) The Graph package declares a native Arrow state row
+  -> [GraphPackageStateV1::encode](../../crates/araphor-analysis-builtins/src/graph/native.rs) The builtin or custom detector writes one typed state row
+  -> [Detector::compute](../../crates/araphor-analysis-builtins/src/graph/contract.rs) The builtin checks the row count on continuation
+  -> [Graph::apply_output](../../crates/araphor-analysis/src/graph/resolved.rs) Analysis checks one typed state against the package metadata
+
+The State row uses the existing tag and optional declared value fields. The
+decoder rejects unknown tags, a missing declared value, or a declared value
+on a builtin tag. The custom detector uses the Declared variant. Per-record
+progress markers remain strings in the existing native Arrow progress rows.
+Ordinary package state still uses its own Rows contract. Managed attempt
+envelopes still use JSON storage. This change does not add per-call Graph
+membership or change the DataFusion table provider.
+
+Focused checks on the current worktree passed:
+
+- `cargo test -p araphor-analysis-builtins graph --lib`: 34 tests.
+- `cargo test -p araphor-detector-example --lib`: 1 test.
+- `cargo test -p araphor-analysis checkpoint --lib`: 3 tests; 3 ignored.
+- `cargo test -p araphor-analysis declared_detector_retains_details --lib`: 1 test.
+- `cargo test -p araphor-analysis support_keeps_native_state --lib`: 1 test.
+- `cargo test -p araphor-analysis baseline --lib`: 11 tests; 3 ignored.
+
+The worktree also contains unfinished finding delta changes. These checks
+cover the worktree, while the staged patch contains only the State change.
+The full workspace procedure and matched backlog workload remain open.
+
+`cargo test -p araphor-analysis graph_restart_keeps_frontier --lib` failed
+after 54.49 seconds on this worktree. Analysis rejected full branch output
+because the unstaged builtin delta work returned changed findings only. The
+staged State patch still returns complete findings. An isolated recovery run
+of the staged patch did not run. This failure does not qualify recovery.

@@ -68,6 +68,11 @@ Kubernetes subject keys use typed binary identity fields. The Analysis owner
 checks the same fields. This removes JSON text from these identities. It does
 not make package output or Graph membership incremental.
 
+Graph checkpoint state now uses the existing native Arrow state row. The
+builtin, custom detector example, and Analysis owner use one typed state
+contract. Generic managed attempt envelopes still use JSON storage. The
+Graph contribution and relationship work remains open.
+
 ## Intended end state
 
 For the same four Graph result cuts, reduce logical Graph columns and headers

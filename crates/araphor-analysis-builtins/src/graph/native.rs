@@ -156,6 +156,29 @@ impl Progress {
     }
 }
 
+impl GraphPackageStateV1 {
+    pub(super) fn from_marker(value: &str) -> sdk::Result<Self> {
+        views::StateRow {
+            tag: value.into(),
+            declared: None,
+        }
+        .try_into()
+    }
+
+    pub fn port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<views::StateRow>("state", &PORT)
+    }
+
+    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        encode(Self::port(), rows, views::StateRow::from)
+    }
+
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        decode::<views::StateRow, Self>(Self::port(), data, TryInto::try_into)
+    }
+}
+
 impl Metadata {
     pub fn port() -> sdk::Port {
         static PORT: OnceLock<sdk::Port> = OnceLock::new();

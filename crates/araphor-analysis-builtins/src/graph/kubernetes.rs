@@ -63,7 +63,7 @@ impl Computation {
                 missing,
             )?;
         }
-        self.state.value = self
+        self.state = self
             .facts
             .iter()
             .rev()

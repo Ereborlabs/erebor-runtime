@@ -196,15 +196,8 @@ fn kubernetes_retains_missing_proof() -> TestResult {
     );
     assert_eq!(rows[0].state, FindingStateV1::CoverageInsufficient);
     let state = output.checkpoint.ok_or("checkpoint")?;
-    let rows: Vec<State> = Rows::decode(
-        &detector.descriptor().exports[0]
-            .checkpoint
-            .as_ref()
-            .ok_or("checkpoint descriptor")?
-            .datasets[0],
-        &state.datasets[0],
-    )?;
-    assert_eq!(rows[0].value, "REMOTE_ADMISSION");
+    let rows = GraphPackageStateV1::decode(&state.datasets[0])?;
+    assert_eq!(rows, [GraphPackageStateV1::RemoteAdmission]);
     Ok(())
 }
 
@@ -487,7 +480,7 @@ fn authority_publication(
         .clone();
     let prior_subjects = computation.subjects.clone();
     let expected_facts = computation.facts.clone();
-    let expected_state = computation.state.value.clone();
+    let expected_state = computation.state.clone();
     let output = computation.output(&package)?;
     package.validate_output(&fixture.evaluation, &output)?;
     let subjects = Subject::decode(&output.datasets[0])?;
@@ -544,16 +537,12 @@ fn authority_publication(
     }));
     let checkpoint = output.checkpoint.ok_or("checkpoint")?;
     assert_eq!(checkpoint.version, 1);
-    let states: Vec<State> = Rows::decode(
-        &model
-            .checkpoint
-            .as_ref()
-            .ok_or("checkpoint descriptor")?
-            .datasets[0],
-        &checkpoint.datasets[0],
-    )?;
+    let states = GraphPackageStateV1::decode(&checkpoint.datasets[0])?;
     assert_eq!(states.len(), 1);
-    assert_eq!(states[0].value, expected_state);
+    assert_eq!(
+        states[0],
+        GraphPackageStateV1::from_marker(&expected_state)?
+    );
     Ok(())
 }
 
@@ -577,17 +566,31 @@ fn empty_inputs_retain_state() -> TestResult {
         assert_eq!(metadata[0].package.accepted_cursor_watermark, 0);
         assert_eq!(metadata[0].package.observed_boottime_watermark_ns, 0);
         assert_eq!(serde_json::to_value(&metadata[0].package.state)?, state);
-        let package = detector.descriptor();
-        let spec = package.exports[0]
-            .checkpoint
-            .as_ref()
-            .ok_or("checkpoint declaration")?;
         let checkpoint = output.checkpoint.as_ref().ok_or("checkpoint")?;
-        let states: Vec<State> = Rows::decode(&spec.datasets[0], &checkpoint.datasets[0])?;
+        let states = GraphPackageStateV1::decode(&checkpoint.datasets[0])?;
         assert_eq!(states.len(), 1);
-        assert_eq!(states[0].value, state);
+        assert_eq!(states[0], GraphPackageStateV1::from_marker(state)?);
         assert!(output.evidence.is_empty());
         assert!(output.reasons.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn checkpoint_requires_one_state() -> TestResult {
+    let detector = Detector::Process;
+    let fixture = fixture(detector, &[record()], &[])?;
+    let output = detector.evaluate(&fixture.evaluation)?;
+    for states in [
+        Vec::new(),
+        vec![GraphPackageStateV1::Waiting, GraphPackageStateV1::Waiting],
+    ] {
+        let mut evaluation = fixture.evaluation.clone();
+        let mut checkpoint = output.checkpoint.clone().ok_or("checkpoint")?;
+        checkpoint.datasets[0] = GraphPackageStateV1::encode(&states)?;
+        evaluation.checkpoint = Some(checkpoint);
+        evaluation.previous_outputs = output.datasets.clone();
+        assert!(detector.evaluate(&evaluation).is_err());
     }
     Ok(())
 }

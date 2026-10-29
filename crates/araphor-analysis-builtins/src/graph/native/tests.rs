@@ -501,6 +501,12 @@ fn resolved_rows_roundtrip() -> sdk::Result<()> {
         GraphPackageStateV1::Declared("WAITING".into()),
         GraphPackageStateV1::Declared("custom".into()),
     ] {
+        assert_eq!(
+            GraphPackageStateV1::decode(&GraphPackageStateV1::encode(std::slice::from_ref(
+                &state
+            ))?)?,
+            [state.clone()]
+        );
         let metadata = Metadata {
             record_ids: vec![],
             facts: vec![],
@@ -510,6 +516,30 @@ fn resolved_rows_roundtrip() -> sdk::Result<()> {
             Metadata::decode(&Metadata::encode(std::slice::from_ref(&metadata))?)?,
             vec![metadata]
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn native_state_rejects_invalid_rows() -> Result<(), Box<dyn std::error::Error>> {
+    for (tag, declared) in [
+        ("UNKNOWN", None),
+        ("DECLARED", None),
+        ("WAITING", Some("custom")),
+        ("NATIVE_EFFECT", Some("custom")),
+    ] {
+        let batch = serde_arrow::to_record_batch(
+            GraphPackageStateV1::port().schema.fields(),
+            &[views::StateRow {
+                tag: tag.into(),
+                declared: declared.map(str::to_owned),
+            }],
+        )?;
+        assert!(GraphPackageStateV1::decode(&sdk::Dataset {
+            name: "state".into(),
+            batches: vec![batch],
+        })
+        .is_err());
     }
     Ok(())
 }
