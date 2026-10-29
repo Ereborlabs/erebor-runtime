@@ -5,8 +5,8 @@ use snafu::ResultExt as _;
 
 use super::{GraphHeader, GraphRows};
 use crate::{
-    AnalysisDatabaseSnafu, AnalysisReadControl, DiscoveryRecordIdV1, EvidenceIntakeIdentityV1,
-    GraphInvalidSnafu, GraphSnapshotV1, Result, StorePositionV1,
+    AnalysisDatabaseSnafu, AnalysisReadControl, DiscoveryRecordIdV1, GraphInvalidSnafu,
+    GraphSnapshotV1, Result, StorePositionV1,
 };
 
 pub(in crate::analysis) type GraphInputs = (
@@ -51,26 +51,16 @@ impl GraphRows {
                 operation: "insert graph version",
             })?;
         let key = graph.scope.identity.key();
-        let source: Option<(String, Vec<u8>)> = writer
+        let valid: bool = writer
             .query_row(
-                "SELECT identity_json, tenant_id FROM source_receipts WHERE stream_key = ?",
-                params![key.as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                "SELECT EXISTS(SELECT 1 FROM source_receipts
+                 WHERE stream_key = ? AND tenant_id = ?)",
+                params![key.as_slice(), graph.scope.identity.tenant_id.as_slice()],
+                |row| row.get(0),
             )
-            .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read graph source identity",
             })?;
-        let valid = source
-            .and_then(|(json, tenant)| {
-                serde_json::from_str::<EvidenceIntakeIdentityV1>(&json)
-                    .ok()
-                    .map(|source| {
-                        source == graph.scope.identity
-                            && tenant.as_slice() == source.tenant_id.as_slice()
-                    })
-            })
-            .unwrap_or(false);
         if !valid {
             return GraphInvalidSnafu {
                 field: "graph evidence source",
@@ -466,21 +456,17 @@ impl GraphRows {
         if let Some(control) = control {
             control.check()?;
         }
-        let receipt: Option<String> = reader
+        let receipt: bool = reader
             .query_row(
-                "SELECT identity_json FROM source_receipts WHERE stream_key = ? AND tenant_id = ?",
+                "SELECT EXISTS(SELECT 1 FROM source_receipts
+                 WHERE stream_key = ? AND tenant_id = ?)",
                 params![key.as_slice(), source.tenant_id.as_slice()],
                 |row| row.get(0),
             )
-            .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read retained graph source",
             })?;
-        if receipt
-            .and_then(|json| serde_json::from_str::<EvidenceIntakeIdentityV1>(&json).ok())
-            .as_ref()
-            != Some(source)
-        {
+        if !receipt {
             return GraphInvalidSnafu {
                 field: "graph evidence source",
             }

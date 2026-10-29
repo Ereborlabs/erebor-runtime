@@ -15,6 +15,49 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 use fixture::CommitFixture;
 
 #[test]
+fn graph_source_requires_native_identity() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let graph = &fixture.snapshot;
+    let source = &graph.scope.identity;
+    let mut wrong_boot = source.clone();
+    wrong_boot.node_boot_id[0] ^= 1;
+    let mut wrong_label = source.clone();
+    wrong_label.label_epoch += 1;
+    let mut wrong_epoch = source.clone();
+    wrong_epoch.source_epoch += 1;
+    let cases = [
+        None,
+        Some((source.key(), [9; 16])),
+        Some((wrong_boot.key(), source.tenant_id)),
+        Some((wrong_label.key(), source.tenant_id)),
+        Some((wrong_epoch.key(), source.tenant_id)),
+    ];
+    for receipt in cases {
+        let writer = Connection::open_in_memory()?;
+        writer.execute_batch(
+            "CREATE TABLE analysis_results (result_id VARCHAR, commit_revision UBIGINT);
+             CREATE TABLE source_receipts (stream_key BLOB, tenant_id BLOB);",
+        )?;
+        writer.execute_batch(&GraphRows::schema())?;
+        writer.execute("INSERT INTO analysis_results VALUES ('version', 1)", [])?;
+        if let Some((key, tenant)) = receipt {
+            writer.execute(
+                "INSERT INTO source_receipts VALUES (?, ?)",
+                params![key, tenant.as_slice()],
+            )?;
+        }
+        assert!(matches!(
+            GraphRows::insert_inputs(graph, &writer, "version"),
+            Err(crate::Error::GraphInvalid {
+                field: "graph evidence source",
+                ..
+            })
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn native_rows_integrity() -> TestResult {
     let fixture = CommitFixture::new()?;
     let graph = &fixture.snapshot;
@@ -72,6 +115,17 @@ fn native_rows_integrity() -> TestResult {
         serde_json::to_vec(&GraphRows::read(&writer, "version", &header)?)?,
         serde_json::to_vec(graph)?
     );
+    {
+        let transaction = writer.transaction()?;
+        transaction.execute("DELETE FROM source_receipts", [])?;
+        assert!(matches!(
+            GraphRows::load_inputs(&transaction, "version", &header, None),
+            Err(crate::Error::GraphInvalid {
+                field: "graph evidence source",
+                ..
+            })
+        ));
+    }
     {
         let transaction = writer.transaction()?;
         let other = "versión";
