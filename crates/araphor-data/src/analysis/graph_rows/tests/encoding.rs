@@ -56,6 +56,7 @@ fn native_header_encoding_roundtrip() -> TestResult {
     let mut metadata = snapshot.clone();
     metadata.graph.subjects.clear();
     metadata.graph.edges.clear();
+    metadata.graph.branches.clear();
     metadata.findings.clear();
     metadata.input_manifest.evidence.clear();
     metadata.input_positions.clear();
@@ -67,6 +68,8 @@ fn native_header_encoding_roundtrip() -> TestResult {
     assert_eq!(header.notice, (7, 1));
     assert_eq!(header.evidence_count, 1);
     assert_eq!(header.position_count, 1);
+    assert_eq!(header.branch_count, 1);
+    assert!(!header.branches_loaded);
     let mut decoder = minicbor::Decoder::new(&encoded);
     assert_eq!(decoder.array()?, Some(5));
     let mut fields = [0u32; 4];
@@ -104,8 +107,8 @@ fn native_header_encoding_bounds() -> TestResult {
     }
     let metadata = decoder.bytes()?;
     let mut duplicate = metadata.to_vec();
-    assert_eq!(duplicate[0], 0x8d);
-    duplicate[0] = 0x8e;
+    assert_eq!(duplicate[0], 0x8e);
+    duplicate[0] = 0x8f;
     duplicate.extend(rmp_serde::to_vec(&"evidence_count")?);
     duplicate.extend(rmp_serde::to_vec(&1u32)?);
     for damaged in [
@@ -215,6 +218,7 @@ fn native_header_metadata_current_format() -> TestResult {
     assert!(metadata.get("findings").is_none());
     assert!(metadata["graph"].get("subjects").is_none());
     assert!(metadata["graph"].get("edges").is_none());
+    assert!(metadata["graph"].get("branches").is_none());
     assert!(metadata["graph"].get("revision").is_none());
     assert!(metadata["input_manifest"].get("evidence").is_none());
     assert!(metadata.get("input_positions").is_none());
@@ -223,6 +227,7 @@ fn native_header_metadata_current_format() -> TestResult {
         snapshot.input_manifest.evidence.len()
     );
     assert_eq!(metadata["position_count"], snapshot.input_positions.len());
+    assert_eq!(metadata["branch_count"], snapshot.graph.branches.len());
     assert_eq!(decoder.position(), encoded.len());
     assert_eq!(
         GraphHeader::decode(&encoded)?.evidence_count,
@@ -313,8 +318,10 @@ fn native_header_metadata_rejection() -> TestResult {
             "/position_count",
             serde_json::json!(u64::from(u32::MAX) + 1),
         ),
+        ("/branch_count", serde_json::json!(u64::from(u32::MAX) + 1)),
         ("/evidence_count", serde_json::json!(-1)),
         ("/position_count", serde_json::json!("1")),
+        ("/branch_count", serde_json::json!(-1)),
         ("/schema_version", serde_json::json!(2)),
         ("/scope/method_version", serde_json::json!(2)),
         ("/scope/identity/source_epoch", serde_json::json!(0)),
@@ -348,6 +355,7 @@ fn native_header_metadata_rejection() -> TestResult {
         ("/input_manifest", "evidence"),
         ("/graph", "subjects"),
         ("/graph", "edges"),
+        ("/graph", "branches"),
         ("/graph", "revision"),
     ] {
         let mut damaged = metadata.clone();

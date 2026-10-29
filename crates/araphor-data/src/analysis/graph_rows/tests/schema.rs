@@ -52,6 +52,8 @@ fn native_schema_reopen() -> TestResult {
         "ALTER TABLE graph_subject_values ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_edge_properties ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_edge_values ADD COLUMN extra INTEGER",
+        "ALTER TABLE graph_branch_values ADD COLUMN extra INTEGER",
+        "ALTER TABLE graph_branch_membership ADD COLUMN extra INTEGER",
         "DROP VIEW graph_edge_values_expanded",
         "DROP VIEW graph_relationships",
         "DROP VIEW graph_findings",
@@ -89,6 +91,11 @@ fn shared_corruption_rejects_reopen() -> TestResult {
             (SELECT value_hash FROM graph_edge_values LIMIT 1)",
         "UPDATE graph_evidence SET source_ref = source_ref + 1",
         "UPDATE graph_sources SET tenant_id = 'wrong'::BLOB",
+        "UPDATE graph_branch_values SET tenant_id = 'wrong'::BLOB",
+        "UPDATE graph_branch_values SET body = body || from_hex('00')",
+        "INSERT INTO graph_branch_values
+         SELECT branch_id + 999999, tenant_id, value_hash, from_hex('c1')
+         FROM graph_branch_values LIMIT 1",
         "INSERT INTO graph_evidence_membership
          SELECT 999999, evidence_id, valid_from, valid_to
          FROM graph_evidence_membership LIMIT 1",
@@ -100,6 +107,9 @@ fn shared_corruption_rejects_reopen() -> TestResult {
         "INSERT INTO graph_edge_membership
          SELECT 999999, edge_id, valid_from, valid_to
          FROM graph_edge_membership LIMIT 1",
+        "INSERT INTO graph_branch_membership
+         SELECT 999999, ordinal, branch_id, valid_from, valid_to
+         FROM graph_branch_membership LIMIT 1",
         "INSERT INTO graph_finding_membership
          SELECT 999999, value_id, valid_from, valid_to
          FROM graph_finding_membership LIMIT 1",

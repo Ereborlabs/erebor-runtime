@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use super::AnalysisReadControl;
 use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, GraphSnapshotV1, GraphSubjectKeyV1, Result};
 
+mod branches;
 mod calls;
 mod evidence;
 mod findings;
@@ -117,6 +118,13 @@ impl GraphRows {
             &findings,
             crate::analysis::MAX_ANALYSIS_PAGE_RECORDS,
         )?;
+        Self::insert_branches(
+            writer,
+            snapshot.scope.identity.tenant_id,
+            lineage,
+            revision,
+            &snapshot.graph.branches,
+        )?;
         Ok(GraphValueIds {
             evidence,
             subjects,
@@ -139,6 +147,25 @@ impl GraphRows {
         header: &GraphHeader,
         control: Option<&AnalysisReadControl>,
     ) -> Result<GraphSnapshotV1> {
+        let hydrated = if header.branches_loaded {
+            None
+        } else {
+            Some(
+                Self::read_header_control(
+                    writer,
+                    header.snapshot.scope.identity.tenant_id,
+                    result_id,
+                    control,
+                )?
+                .ok_or_else(|| {
+                    GraphInvalidSnafu {
+                        field: "graph header result",
+                    }
+                    .build()
+                })?,
+            )
+        };
+        let header = hydrated.as_ref().unwrap_or(header);
         let mut snapshot = header.snapshot.clone();
         if snapshot.input_manifest.evidence.len() != header.evidence_count
             || snapshot.input_positions.len() != header.position_count

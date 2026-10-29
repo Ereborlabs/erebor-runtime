@@ -176,6 +176,8 @@ fn context_failure_rolls_back() -> TestResult {
             "graph_edge_properties",
             "graph_edge_values",
             "graph_edge_membership",
+            "graph_branch_values",
+            "graph_branch_membership",
             "graph_findings",
             "graph_finding_values",
             "graph_finding_membership",

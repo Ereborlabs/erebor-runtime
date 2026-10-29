@@ -58,6 +58,8 @@ fn graph_appender_constraint_rollback() -> TestResult {
         "graph_edge_properties",
         "graph_edge_values",
         "graph_edge_membership",
+        "graph_branch_values",
+        "graph_branch_membership",
         "graph_findings",
         "graph_finding_values",
         "graph_finding_membership",
@@ -96,6 +98,115 @@ fn graph_appender_constraint_rollback() -> TestResult {
             .store
             .commit_graph(&fixture.request, true, || Ok(()))?,
         receipt
+    );
+    Ok(())
+}
+
+#[test]
+fn graph_branch_appender_failure_rolls_back_public_commit() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    assert!(!fixture.snapshot.graph.branches.is_empty());
+    let (_, remainder) = GraphRows::SCHEMA
+        .split_once("CREATE TABLE graph_branch_membership ")
+        .ok_or("branch membership schema")?;
+    let (table, _) = remainder.split_once(';').ok_or("branch table end")?;
+    let rejecting = table.replace(
+        "CHECK (valid_to IS NULL OR valid_to > valid_from)",
+        "CHECK (false)",
+    );
+    assert_ne!(rejecting, table);
+    fixture.store.fault_write(
+        &format!(
+            "DROP TABLE graph_branch_membership;
+             CREATE TABLE graph_branch_membership {rejecting};"
+        ),
+        &[],
+    )?;
+    let before = fixture.store.meta()?;
+    let usage = fixture
+        .store
+        .witness_usage(fixture.request.scope.identity.tenant_id, 10)?;
+    let mut request = fixture.request.clone();
+    request.body.clear();
+    assert!(matches!(
+        fixture.store.commit_graph_snapshot(
+            request.clone(),
+            CanonicalGraph::new(fixture.snapshot.clone())?,
+            &[],
+            &[],
+            &[],
+            true,
+            || Ok(())
+        ),
+        Err(crate::Error::AnalysisDatabase {
+            operation: "flush graph branch membership",
+            ..
+        })
+    ));
+    assert_eq!(fixture.store.meta()?, before);
+    assert_eq!(
+        fixture
+            .store
+            .witness_usage(fixture.request.scope.identity.tenant_id, 10)?,
+        usage
+    );
+    assert!(fixture
+        .store
+        .read_result(
+            fixture.request.scope.identity.tenant_id,
+            &fixture.request.result_id
+        )?
+        .is_none());
+    let writer = fixture.store.writer_access()?;
+    for table in [
+        "graph_versions",
+        "graph_evidence",
+        "graph_subject_values",
+        "graph_edge_values",
+        "graph_finding_values",
+        "graph_branch_values",
+        "graph_branch_membership",
+        "evidence_refs",
+    ] {
+        let count: u64 =
+            writer
+                .get()?
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })?;
+        assert_eq!(count, 0, "retained rows in {table}");
+    }
+    drop(writer);
+    assert_eq!(
+        fixture
+            .store
+            .processor_health(&fixture.request.scope)?
+            .ok_or("processor health")?
+            .consumed_cursor,
+        0
+    );
+    fixture.store.fault_write(
+        &format!(
+            "DROP TABLE graph_branch_membership;
+             CREATE TABLE graph_branch_membership {table};"
+        ),
+        &[],
+    )?;
+    fixture.store.commit_graph_snapshot(
+        request,
+        CanonicalGraph::new(fixture.snapshot.clone())?,
+        &[],
+        &[],
+        &[],
+        true,
+        || Ok(()),
+    )?;
+    assert_eq!(
+        fixture.store.graph_result(
+            fixture.request.scope.identity.tenant_id,
+            &fixture.request.result_id
+        )?,
+        Some(fixture.snapshot.clone())
     );
     Ok(())
 }
@@ -163,6 +274,8 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
         "graph_edge_properties",
         "graph_edge_values",
         "graph_edge_membership",
+        "graph_branch_values",
+        "graph_branch_membership",
         "graph_findings",
         "evidence_refs",
         "context_refs",

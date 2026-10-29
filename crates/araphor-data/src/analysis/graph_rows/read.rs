@@ -55,6 +55,9 @@ impl GraphRows {
         let (evidence, positions) = Self::load_inputs(writer, result_id, &header, control)?;
         header.snapshot.input_manifest.evidence = evidence;
         header.snapshot.input_positions = positions;
+        header.snapshot.graph.branches =
+            Self::read_branches(writer, result_id, tenant, header.branch_count, control)?;
+        header.branches_loaded = true;
         header.snapshot.validate()?;
         Self::check_shape(writer, result_id, &header)?;
         Ok(Some(header))

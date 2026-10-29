@@ -2,7 +2,7 @@ use minicbor::{Decoder, Encoder};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisContextKeyV1, GraphBranchV1, GraphCoverageKeyV1, GraphFactV1, GraphInvalidSnafu,
+    AnalysisContextKeyV1, GraphCoverageKeyV1, GraphFactV1, GraphInvalidSnafu,
     GraphPackageCheckpointV1, GraphRevisionV1, GraphSnapshotV1, GraphVersionV1, ProcessorScopeV1,
     Result,
 };
@@ -12,6 +12,8 @@ pub(in crate::analysis) struct GraphHeader {
     pub(in crate::analysis) subject_count: usize,
     pub(in crate::analysis) edge_count: usize,
     pub(in crate::analysis) finding_count: usize,
+    pub(in crate::analysis) branch_count: usize,
+    pub(in crate::analysis) branches_loaded: bool,
     pub(in crate::analysis) evidence_count: usize,
     pub(in crate::analysis) position_count: usize,
     pub(in crate::analysis) notice: (u64, u64),
@@ -74,6 +76,7 @@ impl GraphHeader {
         }
         let evidence_count = usize::try_from(decoded.evidence_count).map_err(Self::error)?;
         let position_count = usize::try_from(decoded.position_count).map_err(Self::error)?;
+        let branch_count = usize::try_from(decoded.branch_count).map_err(Self::error)?;
         let snapshot = GraphSnapshotV1::from(decoded);
         snapshot.validate()?;
         Ok(Self {
@@ -91,6 +94,8 @@ impl GraphHeader {
             subject_count,
             edge_count,
             finding_count,
+            branch_count,
+            branches_loaded: false,
             evidence_count,
             position_count,
         })
@@ -152,6 +157,7 @@ pub(super) struct HeaderMetadata {
     last_cursor: u64,
     input_manifest: RevisionMetadata,
     graph: GraphMetadata,
+    branch_count: u32,
     packages: Vec<GraphPackageCheckpointV1>,
     missing_ranges: Vec<(u64, u64)>,
     evidence_count: u32,
@@ -164,7 +170,6 @@ pub(super) struct HeaderMetadata {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct GraphMetadata {
-    branches: Vec<GraphBranchV1>,
     facts: Vec<GraphFactV1>,
 }
 
@@ -191,9 +196,10 @@ impl TryFrom<&GraphSnapshotV1> for HeaderMetadata {
                 missing_ranges: snapshot.input_manifest.missing_ranges.clone(),
             },
             graph: GraphMetadata {
-                branches: snapshot.graph.branches.clone(),
                 facts: snapshot.graph.facts.clone(),
             },
+            branch_count: u32::try_from(snapshot.graph.branches.len())
+                .map_err(GraphHeader::error)?,
             packages: snapshot.packages.clone(),
             missing_ranges: snapshot.missing_ranges.clone(),
             evidence_count: u32::try_from(snapshot.input_manifest.evidence.len())
@@ -223,7 +229,7 @@ impl From<HeaderMetadata> for GraphSnapshotV1 {
             graph: GraphVersionV1 {
                 subjects: Vec::new(),
                 edges: Vec::new(),
-                branches: metadata.graph.branches,
+                branches: Vec::new(),
                 facts: metadata.graph.facts,
             },
             findings: Vec::new(),

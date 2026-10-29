@@ -166,6 +166,7 @@ impl AnalysisStore {
         use super::graph_rows::GraphRows;
         araphor_graph::FindingRows::validate(writer)?;
         GraphRows::validate_edge_values(writer)?;
+        GraphRows::validate_branches(writer)?;
         for query in [
             "SELECT EXISTS(SELECT 1 FROM graph_versions v
                 LEFT JOIN analysis_results r USING (result_id)

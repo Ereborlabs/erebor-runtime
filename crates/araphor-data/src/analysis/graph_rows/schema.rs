@@ -53,6 +53,17 @@ impl GraphRows {
             AND m.valid_from <= v.commit_revision
             AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
         JOIN graph_subject_values s USING (subject_id);
+    CREATE TABLE graph_branch_values (
+        branch_id UBIGINT PRIMARY KEY,
+        tenant_id BLOB NOT NULL,
+        value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32),
+        body BLOB NOT NULL);
+    CREATE INDEX graph_branch_hash ON graph_branch_values (value_hash);
+    CREATE TABLE graph_branch_membership (
+        lineage_id UBIGINT NOT NULL, ordinal UINTEGER NOT NULL,
+        branch_id UBIGINT NOT NULL, valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (lineage_id, ordinal, valid_from),
+        CHECK (valid_to IS NULL OR valid_to > valid_from));
     CREATE TABLE graph_edge_properties (
         property_ref UBIGINT PRIMARY KEY,
         property_hash BLOB NOT NULL CHECK (octet_length(property_hash) = 32),

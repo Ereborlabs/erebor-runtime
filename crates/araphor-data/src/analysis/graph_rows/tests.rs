@@ -1,6 +1,7 @@
 use super::*;
 
 mod atomic;
+mod branches;
 
 mod bounds;
 mod defaults;

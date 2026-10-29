@@ -260,6 +260,15 @@ Arrow reasons, reopen, hash reuse, and damaged values. The 49 focused Data
 Graph row tests passed. This change has no matched four-cut size or backlog
 time result yet. The 90% target and deadline remain **Not done**.
 
+Shared branch values are **Done** as a storage encoding. Data stores each
+distinct branch once for a tenant. Ordered validity membership selects exact
+branches for each Graph result, including repeated values. Graph headers keep
+the branch count. Reopen checks every stored branch value, reference, tenant,
+and membership interval. The 52 focused Data Graph row tests and the Graph
+extraction test passed. The Analysis Graph restart test passed. The matched
+four-cut size, backlog time, and incremental package computation remain
+**Not done**.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42
