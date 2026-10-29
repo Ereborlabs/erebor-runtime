@@ -115,11 +115,14 @@ impl GraphRows {
         valid_from UBIGINT NOT NULL, valid_to UBIGINT,
         PRIMARY KEY (scope_id, value_id, valid_from),
         CHECK (valid_to IS NULL OR valid_to > valid_from));
-    CREATE TABLE graph_call_progress (
-        scope_id UBIGINT NOT NULL, evidence_id UBIGINT NOT NULL,
+    CREATE TABLE graph_progress_values (
+        value_ref UBIGINT PRIMARY KEY, evidence_id UBIGINT NOT NULL,
         digest BLOB NOT NULL CHECK (octet_length(digest) = 32),
-        state VARCHAR, valid_from UBIGINT NOT NULL, valid_to UBIGINT,
-        PRIMARY KEY (scope_id, evidence_id, valid_from),
+        state VARCHAR);
+    CREATE TABLE graph_call_progress (
+        scope_id UBIGINT NOT NULL, value_ref UBIGINT NOT NULL,
+        valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (scope_id, value_ref, valid_from),
         CHECK (valid_to IS NULL OR valid_to > valid_from));
     CREATE VIEW graph_relationships AS
         WITH evidence_ordinals AS (

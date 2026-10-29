@@ -198,11 +198,11 @@ async fn graph_call_progress_flush_failure_rolls_back() -> TestResult {
         },
     )?;
     let retained = store.retained_counts(fixture.source.tenant_id)?;
+    let progress = store.graph_progress_counts()?;
     let table = "CREATE TABLE graph_call_progress (
-        scope_id UBIGINT NOT NULL, evidence_id UBIGINT NOT NULL,
-        digest BLOB NOT NULL CHECK (octet_length(digest) = 32),
-        state VARCHAR, valid_from UBIGINT NOT NULL, valid_to UBIGINT,
-        PRIMARY KEY (scope_id, evidence_id, valid_from),
+        scope_id UBIGINT NOT NULL, value_ref UBIGINT NOT NULL,
+        valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (scope_id, value_ref, valid_from),
         CHECK (valid_to IS NULL OR valid_to > valid_from)";
     store.fault_write(
         &format!(
@@ -225,6 +225,7 @@ async fn graph_call_progress_flush_failure_rolls_back() -> TestResult {
         "{failed:?}"
     );
     assert_eq!(store.retained_counts(fixture.source.tenant_id)?, retained);
+    assert_eq!(store.graph_progress_counts()?, progress);
     assert_eq!(store.processor_result(&scope)?, Some(head.clone()));
     assert_eq!(
         store
@@ -256,6 +257,7 @@ async fn graph_call_progress_flush_failure_rolls_back() -> TestResult {
         .await?;
     assert_eq!(retried.results.len(), 3);
     assert!(retried.commit_revision > first.commit_revision);
+    assert!(store.graph_progress_counts()?.0 > progress.0);
     assert_eq!(
         store
             .processor_health(&scope)?
@@ -436,7 +438,11 @@ async fn graph_call_reopen_rejects_corruption() -> TestResult {
         ("scope pin", "UPDATE graph_call_scopes SET image_digest = 'wrong' WHERE scope_id = (SELECT min(scope_id) FROM graph_call_scopes)"),
         ("membership count", "UPDATE graph_call_versions SET subject_count = subject_count + 1 WHERE result_id = (SELECT min(result_id) FROM graph_call_versions)"),
         ("anchor", "UPDATE graph_call_subjects SET anchor_fact = X'00' WHERE rowid = (SELECT min(rowid) FROM graph_call_subjects)"),
-        ("orphan", "INSERT INTO graph_call_progress SELECT (SELECT max(scope_id) + 1 FROM graph_call_scopes), evidence_id, digest, state, valid_from, valid_to FROM graph_call_progress LIMIT 1"),
+        ("orphan", "INSERT INTO graph_call_progress SELECT (SELECT max(scope_id) + 1 FROM graph_call_scopes), value_ref, valid_from, valid_to FROM graph_call_progress LIMIT 1"),
+        ("progress value", "INSERT INTO graph_call_progress SELECT scope_id, (SELECT max(value_ref) + 1 FROM graph_progress_values), valid_from, valid_to FROM graph_call_progress LIMIT 1"),
+        ("duplicate progress", "INSERT INTO graph_progress_values SELECT (SELECT max(value_ref) + 1 FROM graph_progress_values), evidence_id, digest, state FROM graph_progress_values LIMIT 1"),
+        ("progress overlap", "INSERT INTO graph_progress_values SELECT (SELECT max(value_ref) + 1 FROM graph_progress_values), v.evidence_id, v.digest, 'overlap-' || CAST((SELECT max(value_ref) + 1 FROM graph_progress_values) AS VARCHAR) FROM graph_call_progress m JOIN graph_progress_values v USING (value_ref) LIMIT 1;
+            INSERT INTO graph_call_progress SELECT m.scope_id, (SELECT max(value_ref) FROM graph_progress_values), m.valid_from, m.valid_to FROM graph_call_progress m JOIN graph_progress_values v USING (value_ref) WHERE v.evidence_id = (SELECT evidence_id FROM graph_progress_values WHERE value_ref = (SELECT max(value_ref) FROM graph_progress_values)) LIMIT 1"),
         ("overlap", "INSERT INTO graph_call_subjects SELECT m.scope_id, m.subject_id, m.anchor_record_id, m.anchor_fact, (SELECT max(v.commit_revision) FROM graph_call_versions v WHERE v.scope_id = m.scope_id), NULL FROM graph_call_subjects m WHERE m.valid_to IS NULL AND m.valid_from < (SELECT max(v.commit_revision) FROM graph_call_versions v WHERE v.scope_id = m.scope_id) LIMIT 1"),
         ("base", "UPDATE graph_call_versions SET base_result_id = NULL WHERE base_result_id IS NOT NULL"),
     ] {

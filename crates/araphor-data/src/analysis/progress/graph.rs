@@ -185,6 +185,7 @@ impl AnalysisStore {
                         "graph_call_subjects",
                         "graph_call_edges",
                         "graph_call_findings",
+                        "graph_progress_values",
                         "graph_call_progress",
                     ]);
                 }

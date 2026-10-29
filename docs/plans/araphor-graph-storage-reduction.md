@@ -197,6 +197,26 @@ property rows projects a saving of at least 167,554 logical bytes. Together
 with source references, the projected Graph total is at most 1,382,711 bytes.
 The 90% target, actual four-cut size, and backlog deadline remain open.
 
+The unchanged backlog test on the edge-property commit failed after 134.59
+seconds and used 1,099,644 KiB of peak resident memory. The two expected
+Graph cuts and the target finding were committed. The target notification did
+not arrive before the test deadline. This run did not save a four-cut database,
+so it does not measure the new Graph size.
+
+Shared native call progress values are **Done** as a storage encoding. Data
+stores each exact evidence ID, digest, and optional state once. Each package
+call stores a versioned reference. Reopen checks reject a missing value,
+foreign tenant, duplicate value, or two active values for the same record.
+The earlier four-cut store had 4,776 progress membership rows and 1,731
+distinct values. At those row counts, the new layout projects 237,727 logical
+bytes instead of 307,471, a saving of 69,744 bytes. Combined with the source
+and edge-property changes, the projected Graph total is at most 1,312,967
+bytes. That estimate exceeds the target by 213,872 bytes. It uses prior row
+counts, not a measurement of the new database. The 49 focused Data Graph
+row tests, three Analysis call rollback and corruption tests, and Analysis
+restart test passed. Format and diff checks passed. The 90% target, package
+output duplication, and backlog deadline remain **Not done**.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42

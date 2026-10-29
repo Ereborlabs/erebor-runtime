@@ -63,4 +63,19 @@ impl AnalysisStore {
                 })
         })
     }
+
+    pub fn graph_progress_counts(&self) -> Result<(u64, u64)> {
+        self.read_snapshot(|reader| {
+            reader
+                .query_row(
+                    "SELECT (SELECT count(*) FROM graph_progress_values),
+                    (SELECT count(*) FROM graph_call_progress)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read Graph progress row counts fixture",
+                })
+        })
+    }
 }

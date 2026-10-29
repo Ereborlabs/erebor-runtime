@@ -252,10 +252,12 @@ impl GraphCallRows {
         let mut progress_rows = Vec::new();
         let mut statement = reader
             .prepare(
-                "SELECT evidence_id, digest, state FROM graph_call_progress
-             WHERE scope_id = ? AND valid_from <= ?
-                 AND (valid_to IS NULL OR valid_to > ?)
-             ORDER BY evidence_id",
+                "SELECT m.value_ref, v.evidence_id, v.digest, v.state
+             FROM graph_call_progress m
+             LEFT JOIN graph_progress_values v USING (value_ref)
+             WHERE m.scope_id = ? AND m.valid_from <= ?
+                 AND (m.valid_to IS NULL OR m.valid_to > ?)
+             ORDER BY v.evidence_id",
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare Graph call progress",
@@ -269,14 +271,15 @@ impl GraphCallRows {
             operation: "advance Graph call progress",
         })? {
             control.check()?;
-            let id: u64 = GraphRows::column(row, 0)?;
-            let digest: Vec<u8> = GraphRows::column(row, 1)?;
-            let state: Option<String> = GraphRows::column(row, 2)?;
+            let value_ref: u64 = GraphRows::column(row, 0)?;
+            let id: u64 = GraphRows::column(row, 1)?;
+            let digest: Vec<u8> = GraphRows::column(row, 2)?;
+            let state: Option<String> = GraphRows::column(row, 3)?;
             if digest.len() != 32 {
                 return Err(Code::Invalid.error("Graph call progress digest"));
             }
             evidence_ids.insert(id);
-            progress_rows.push((id, digest, state));
+            progress_rows.push((value_ref, id, digest, state));
         }
         drop(rows);
         drop(statement);
@@ -399,7 +402,7 @@ impl GraphCallRows {
         if !finding_rows.is_empty() {
             return Err(Code::Invalid.error("Graph call finding count"));
         }
-        for (id, digest, marker) in progress_rows {
+        for (value_ref, id, digest, marker) in progress_rows {
             let record = evidence
                 .get(&id)
                 .cloned()
@@ -412,7 +415,11 @@ impl GraphCallRows {
                 digest: digest.into(),
                 state: marker,
             };
-            if state.progress.insert(record, (id, progress)).is_some() {
+            if state
+                .progress
+                .insert(record, (value_ref, progress))
+                .is_some()
+            {
                 return Err(Code::Invalid.error("Graph call progress key"));
             }
         }

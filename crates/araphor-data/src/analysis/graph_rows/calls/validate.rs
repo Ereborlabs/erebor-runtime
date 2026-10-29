@@ -47,20 +47,14 @@ impl GraphCallRows {
             ("graph_call_subjects", "subject_id", "graph_subject_values"),
             ("graph_call_edges", "edge_id", "graph_edge_values"),
             ("graph_call_findings", "value_id", "graph_finding_values"),
-            ("graph_call_progress", "evidence_id", "graph_evidence"),
         ] {
-            let anchor = if table == "graph_call_progress" {
-                "m.evidence_id"
-            } else {
-                "m.anchor_record_id"
-            };
             let invalid: bool = reader
                 .query_row(
                     &format!(
                         "SELECT EXISTS (SELECT 1 FROM {table} m
                     LEFT JOIN graph_call_scopes s USING (scope_id)
                     LEFT JOIN {value} v ON v.{key} = m.{key}
-                    LEFT JOIN graph_evidence anchor ON anchor.evidence_id = {anchor}
+                    LEFT JOIN graph_evidence anchor ON anchor.evidence_id = m.anchor_record_id
                     LEFT JOIN graph_call_versions opened ON opened.scope_id = m.scope_id
                         AND opened.commit_revision = m.valid_from
                     LEFT JOIN graph_call_versions closed ON closed.scope_id = m.scope_id
@@ -104,6 +98,63 @@ impl GraphCallRows {
             if overlap {
                 return AnalysisStore::reject_path(root, "Graph call row intervals overlap");
             }
+        }
+        let invalid: bool = reader
+            .query_row(
+                "SELECT EXISTS (
+                    SELECT 1 FROM graph_progress_values v
+                    LEFT JOIN graph_evidence e USING (evidence_id)
+                    WHERE e.evidence_id IS NULL OR octet_length(v.digest) <> 32
+                    UNION ALL
+                    SELECT 1 FROM graph_progress_values
+                    GROUP BY evidence_id, digest, state HAVING count(*) > 1
+                    UNION ALL
+                    SELECT 1 FROM graph_call_progress m
+                    LEFT JOIN graph_call_scopes s USING (scope_id)
+                    LEFT JOIN graph_progress_values v USING (value_ref)
+                    LEFT JOIN graph_evidence e ON e.evidence_id = v.evidence_id
+                    LEFT JOIN graph_sources source USING (source_ref)
+                    LEFT JOIN graph_call_versions opened ON opened.scope_id = m.scope_id
+                        AND opened.commit_revision = m.valid_from
+                    LEFT JOIN graph_call_versions closed ON closed.scope_id = m.scope_id
+                        AND closed.commit_revision = m.valid_to
+                    WHERE s.scope_id IS NULL OR v.value_ref IS NULL
+                        OR source.source_ref IS NULL OR source.tenant_id <> s.tenant_id
+                        OR opened.result_id IS NULL
+                        OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
+                        OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from)
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "validate Graph progress values",
+            })?;
+        if invalid {
+            return AnalysisStore::reject_path(root, "a Graph progress value is invalid");
+        }
+        let overlap: bool = reader
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM (
+                    SELECT m.scope_id, v.evidence_id, m.valid_from,
+                        lag(m.valid_from) OVER (
+                            PARTITION BY m.scope_id, v.evidence_id
+                            ORDER BY m.valid_from) AS prior_from,
+                        lag(m.valid_to) OVER (
+                            PARTITION BY m.scope_id, v.evidence_id
+                            ORDER BY m.valid_from) AS prior_to
+                    FROM graph_call_progress m
+                    JOIN graph_progress_values v USING (value_ref)
+                ) ranges WHERE prior_from IS NOT NULL
+                    AND (prior_to IS NULL OR prior_to > valid_from))",
+                [],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "validate Graph progress intervals",
+            })?;
+        if overlap {
+            return AnalysisStore::reject_path(root, "Graph progress intervals overlap");
         }
         Ok(())
     }

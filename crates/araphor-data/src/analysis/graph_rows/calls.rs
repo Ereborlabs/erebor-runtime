@@ -22,6 +22,8 @@ use crate::{
 mod read;
 mod validate;
 
+type ProgressValue = (u64, Vec<u8>, Option<String>);
+
 #[derive(Clone, Debug)]
 pub(in crate::analysis) struct GraphCallState {
     pub scope: u64,
@@ -490,37 +492,41 @@ impl GraphCallRows {
             Self::close(
                 writer,
                 "graph_call_progress",
-                "evidence_id",
+                "value_ref",
                 scope,
                 old.unwrap().0,
                 revision,
             )?;
             progress_count -= 1;
         }
+        let mut requested = BTreeSet::new();
+        let mut records = BTreeSet::new();
+        for row in Progress::decode(dataset("progress")?).context(AnalysisContractSnafu)? {
+            if row.digest.len() != 32
+                || !basis.positions.contains_key(&row.record)
+                || (prior.is_some_and(|prior| prior.progress.contains_key(&row.record))
+                    && !removed.contains(&row.record))
+                || !records.insert(row.record.clone())
+            {
+                return Err(Code::Invalid.error("Graph call progress addition"));
+            }
+            let id = Self::record_id(&row.record, graph, ids)?;
+            let value = (id, row.digest.to_vec(), row.state.clone());
+            requested.insert(value);
+        }
+        let values = Self::progress_values(writer, &requested)?;
         let mut insert_progress =
             writer
                 .appender("graph_call_progress")
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare Graph call progress",
                 })?;
-        for row in Progress::decode(dataset("progress")?).context(AnalysisContractSnafu)? {
-            if row.digest.len() != 32
-                || !basis.positions.contains_key(&row.record)
-                || (prior.is_some_and(|prior| prior.progress.contains_key(&row.record))
-                    && !removed.contains(&row.record))
-            {
-                return Err(Code::Invalid.error("Graph call progress addition"));
-            }
-            let id = Self::record_id(&row.record, graph, ids)?;
+        for value in requested {
+            let value_ref = *values
+                .get(&value)
+                .ok_or_else(|| Code::Invalid.error("Graph call progress value"))?;
             insert_progress
-                .append_row(params![
-                    scope,
-                    id,
-                    row.digest.as_ref(),
-                    row.state,
-                    revision,
-                    None::<u64>
-                ])
+                .append_row(params![scope, value_ref, revision, None::<u64>])
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert Graph call progress",
                 })?;
@@ -541,6 +547,128 @@ impl GraphCallRows {
             return Err(Code::Invalid.error("Graph call result version"));
         }
         Ok(())
+    }
+
+    fn progress_values(
+        writer: &Connection,
+        requested: &BTreeSet<ProgressValue>,
+    ) -> Result<BTreeMap<ProgressValue, u64>> {
+        if requested.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        writer
+            .execute_batch(
+                "CREATE TEMPORARY TABLE temp.main.graph_progress_requested (
+                    evidence_id UBIGINT NOT NULL, digest BLOB NOT NULL, state VARCHAR)",
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "create Graph progress lookup",
+            })?;
+        let lookup = (|| -> Result<BTreeMap<ProgressValue, u64>> {
+            let mut appender = writer
+                .appender_to_catalog_and_db("graph_progress_requested", "temp", "main")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare Graph progress lookup",
+                })?;
+            for (evidence_id, digest, state) in requested {
+                appender
+                    .append_row(params![evidence_id, digest.as_slice(), state.as_deref()])
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "append Graph progress lookup",
+                    })?;
+            }
+            appender.flush().context(AnalysisDatabaseSnafu {
+                operation: "flush Graph progress lookup",
+            })?;
+            drop(appender);
+            let mut statement = writer
+                .prepare(
+                    "SELECT v.value_ref, v.evidence_id, v.digest, v.state
+                     FROM graph_progress_values v
+                     JOIN temp.main.graph_progress_requested q
+                         ON v.evidence_id = q.evidence_id AND v.digest = q.digest
+                         AND v.state IS NOT DISTINCT FROM q.state",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare shared Graph progress values",
+                })?;
+            let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
+                operation: "read shared Graph progress values",
+            })?;
+            let mut values = BTreeMap::new();
+            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                operation: "advance shared Graph progress values",
+            })? {
+                let value_ref: u64 = row.get(0).context(AnalysisDatabaseSnafu {
+                    operation: "decode Graph progress value ID",
+                })?;
+                let value: ProgressValue = (
+                    row.get(1).context(AnalysisDatabaseSnafu {
+                        operation: "decode Graph progress evidence",
+                    })?,
+                    row.get(2).context(AnalysisDatabaseSnafu {
+                        operation: "decode Graph progress digest",
+                    })?,
+                    row.get(3).context(AnalysisDatabaseSnafu {
+                        operation: "decode Graph progress state",
+                    })?,
+                );
+                if values.insert(value, value_ref).is_some() {
+                    return Err(Code::Invalid.error("duplicate Graph progress value"));
+                }
+            }
+            Ok(values)
+        })();
+        let cleanup = writer
+            .execute_batch("DROP TABLE temp.main.graph_progress_requested")
+            .context(AnalysisDatabaseSnafu {
+                operation: "drop Graph progress lookup",
+            });
+        let mut values = lookup?;
+        cleanup?;
+        let missing = requested
+            .iter()
+            .filter(|value| !values.contains_key(*value))
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return Ok(values);
+        }
+        let mut next: u64 = writer
+            .query_row(
+                "SELECT coalesce(max(value_ref), 0) FROM graph_progress_values",
+                [],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read next Graph progress value ID",
+            })?;
+        let mut appender =
+            writer
+                .appender("graph_progress_values")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare Graph progress value insert",
+                })?;
+        for value in missing {
+            next = next
+                .checked_add(1)
+                .ok_or_else(|| Code::Limit.error("Graph progress value ID"))?;
+            appender
+                .append_row(params![
+                    next,
+                    value.0,
+                    value.1.as_slice(),
+                    value.2.as_deref()
+                ])
+                .context(AnalysisDatabaseSnafu {
+                    operation: "insert Graph progress value",
+                })?;
+            values.insert(value.clone(), next);
+        }
+        appender.flush().context(AnalysisDatabaseSnafu {
+            operation: "flush Graph progress values",
+        })?;
+        drop(appender);
+        Ok(values)
     }
 
     fn record_id(
@@ -708,6 +836,35 @@ impl GraphCallRows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_values_reuse_exact_state() {
+        let writer = Connection::open_in_memory().unwrap();
+        writer
+            .execute_batch(
+                "CREATE TABLE graph_progress_values (
+                value_ref UBIGINT PRIMARY KEY, evidence_id UBIGINT NOT NULL,
+                digest BLOB NOT NULL, state VARCHAR)",
+            )
+            .unwrap();
+        let values = BTreeSet::from([
+            (4, vec![7; 32], None),
+            (4, vec![7; 32], Some(String::new())),
+            (4, vec![7; 32], Some("saved".into())),
+        ]);
+        let first = GraphCallRows::progress_values(&writer, &values).unwrap();
+        assert_eq!(first.len(), 3);
+        assert_eq!(
+            GraphCallRows::progress_values(&writer, &values).unwrap(),
+            first
+        );
+        let count: u64 = writer
+            .query_row("SELECT count(*) FROM graph_progress_values", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 3);
+    }
 
     #[test]
     fn native_state_charges_owned_keys_and_progress() {
