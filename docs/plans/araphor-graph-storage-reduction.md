@@ -217,6 +217,41 @@ row tests, three Analysis call rollback and corruption tests, and Analysis
 restart test passed. Format and diff checks passed. The 90% target, package
 output duplication, and backlog deadline remain **Not done**.
 
+The next unchanged 1,592-event backlog run failed its 90-second observation
+deadline. A Data backup taken after that failure contained exactly four Graph
+cuts. Their logical Graph columns and headers used **1,312,327 bytes**. This is
+88.1% less than the original 10,990,951-byte four-cut baseline, but 213,232
+bytes above the 1,099,095-byte target. The probe summed each native column's
+payload and charged each nullable interval endpoint as eight bytes. It
+reproduced the earlier 1,653,551-byte diagnostic exactly before measuring
+this backup. The four result IDs and revisions were:
+
+| Result ID | Revision | Header bytes |
+| --- | ---: | ---: |
+| `graph:e0825b4c-abba-470e-a45f-2ec5ca7030f6` | 44 | 2,420 |
+| `graph:64a6a988-23a8-4798-9ac9-6e6e2f0356f7` | 50 | 63,297 |
+| `graph:5f97e30b-e2c2-4473-9788-587cbb895527` | 80 | 63,863 |
+| `graph:8c24d54a-fe68-4558-a583-430640d164e1` | 89 | 6,663 |
+
+Edge values used 292,424 logical bytes and shared edge properties used 584.
+Finding values used 214,702. Call progress values and memberships used
+237,727. Call-edge membership used 132,920. Graph headers used 136,243. The
+database file used 97,267,712 bytes, with 259 used blocks and 114 free blocks.
+Saved managed Arrow payloads used 12,007,688 bytes: 4,208,928 input,
+6,908,032 output, 577,840 selected,
+303,576 reason, and 9,312 checkpoint. Three OCI artifacts used 15,241,216
+bytes. These totals have different owners and must not be added to the Graph
+numerator.
+
+The test took 193.47 seconds including a 72.905-second backup and a
+0.069-second copy of the completed database. Time excluding backup and copy
+was about 120.5 seconds, including setup, observation, diagnostics, and
+teardown. Peak resident memory was 1,066,580 KiB for the whole run, including
+backup. The observed Graph contained the target finding, but Follow had not
+delivered its notification at the deadline. The database measures the four
+committed cuts at backup time, after that deadline. The benchmark result
+remains **Not done**.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42
