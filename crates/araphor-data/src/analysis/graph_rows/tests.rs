@@ -11,6 +11,7 @@ mod guards;
 mod headers;
 mod packages;
 mod schema;
+mod unchanged;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 use fixture::CommitFixture;

@@ -6,13 +6,75 @@ use snafu::ResultExt as _;
 
 use super::super::graph_rows::GraphHeader;
 use super::super::AnalysisStore;
-use super::model::{Attempt, ManagedDestination, Step};
+use super::model::{Attempt, ManagedAttempt, ManagedDestination, ManagedReceipt, Step};
 use crate::{
-    AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, PackageErrorCodeV1 as Code, Result,
-    GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
+    AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, GraphSnapshotV1, PackageErrorCodeV1 as Code,
+    Result, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
 };
 
 impl AnalysisStore {
+    pub(in crate::analysis) fn managed_graph_base(
+        reader: &Connection,
+        attempt: &ManagedAttempt,
+        graph: &GraphSnapshotV1,
+    ) -> Result<Option<ManagedReceipt>> {
+        let captured = &attempt.0.capture;
+        if captured.completed == 0
+            || captured.rebuild
+            || captured.generation != captured.expected_generation
+            || graph.previous_result_id.is_none()
+        {
+            return Ok(None);
+        }
+        let key: Option<String> = reader
+            .query_row(
+                "SELECT attempt_id FROM managed_attempts
+                 WHERE tenant_id = ? AND instance_id = ?
+                    AND generation = ? AND completed = ?",
+                params![
+                    captured.tenant.as_slice(),
+                    captured.instance,
+                    captured.generation,
+                    captured.completed
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read prior managed Graph publication",
+            })?;
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        let Some(prior) =
+            Self::managed_attempt_from(reader, captured.tenant, &captured.instance, &key)?
+        else {
+            return Ok(None);
+        };
+        let Some(receipt) = prior.receipt else {
+            return Ok(None);
+        };
+        if prior.terminal.is_some()
+            || prior.capture.generation != captured.generation
+            || receipt.commit_revision != captured.completed
+            || receipt.graph.as_ref().is_none_or(|reference| {
+                graph.previous_result_id.as_ref() != Some(&reference.result_id)
+            })
+        {
+            return Ok(None);
+        }
+        let (step, _, revision) =
+            Self::managed_step_header(reader, captured.tenant, &receipt.selected.result_id)?;
+        Self::validate_selected_header(
+            reader,
+            captured.tenant,
+            &receipt.selected.result_id,
+            &step,
+            revision,
+        )?;
+        Ok(Some(receipt))
+    }
+
     pub(super) fn check_graph_publication(
         reader: &Connection,
         tenant: [u8; 16],

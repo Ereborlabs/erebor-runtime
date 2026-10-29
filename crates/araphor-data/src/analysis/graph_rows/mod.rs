@@ -3,13 +3,14 @@ use araphor_graph::{FindingRefs, FindingRows};
 use duckdb::{
     params,
     types::{FromSql, FromSqlError, FromSqlResult, ValueRef},
-    Connection, Row,
+    Connection, OptionalExt as _, Row,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use snafu::ResultExt as _;
 use std::collections::BTreeMap;
 
 use super::AnalysisReadControl;
+use super::PackageResultRefV1;
 use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, GraphSnapshotV1, GraphSubjectKeyV1, Result};
 
 mod branches;
@@ -63,74 +64,154 @@ impl GraphRows {
         GraphHeader::encode(snapshot)
     }
 
+    #[cfg(test)]
     pub(super) fn insert(
         snapshot: &GraphSnapshotV1,
         writer: &Connection,
         result_id: &str,
     ) -> Result<GraphValueIds> {
+        Self::insert_with_reuse(snapshot, writer, result_id, None)
+    }
+
+    pub(super) fn insert_with_reuse(
+        snapshot: &GraphSnapshotV1,
+        writer: &Connection,
+        result_id: &str,
+        unchanged: Option<&PackageResultRefV1>,
+    ) -> Result<GraphValueIds> {
+        if let Some(previous) = unchanged {
+            Self::check_unchanged_findings(writer, snapshot, previous)?;
+        }
         let (lineage, revision, evidence) = Self::insert_inputs(snapshot, writer, result_id)?;
         let subjects = Self::insert_subjects(writer, &snapshot.graph.subjects, lineage, revision)?;
         let edges =
             Self::insert_edge_values(writer, snapshot, &subjects, &evidence, lineage, revision)?;
-        let findings = snapshot
-            .findings
-            .iter()
-            .map(|finding| {
-                let subject = *subjects.get(&finding.subject_id).ok_or_else(|| {
-                    GraphInvalidSnafu {
-                        field: "graph finding subject reference",
-                    }
-                    .build()
-                })?;
-                let evidence = finding
-                    .evidence
-                    .iter()
-                    .map(|record| {
-                        if record.stream != snapshot.scope.identity {
-                            return GraphInvalidSnafu {
-                                field: "graph finding evidence source",
-                            }
-                            .fail();
+        let findings = if unchanged.is_some() {
+            BTreeMap::new()
+        } else {
+            let references = snapshot
+                .findings
+                .iter()
+                .map(|finding| {
+                    let subject = *subjects.get(&finding.subject_id).ok_or_else(|| {
+                        GraphInvalidSnafu {
+                            field: "graph finding subject reference",
                         }
-                        evidence
-                            .get(&(record.cpu_id, record.durable_cursor))
-                            .copied()
-                            .ok_or_else(|| {
-                                GraphInvalidSnafu {
-                                    field: "graph finding evidence reference",
+                        .build()
+                    })?;
+                    let evidence = finding
+                        .evidence
+                        .iter()
+                        .map(|record| {
+                            if record.stream != snapshot.scope.identity {
+                                return GraphInvalidSnafu {
+                                    field: "graph finding evidence source",
                                 }
-                                .build()
-                            })
+                                .fail();
+                            }
+                            evidence
+                                .get(&(record.cpu_id, record.durable_cursor))
+                                .copied()
+                                .ok_or_else(|| {
+                                    GraphInvalidSnafu {
+                                        field: "graph finding evidence reference",
+                                    }
+                                    .build()
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(FindingRefs {
+                        finding,
+                        subject,
+                        evidence,
                     })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(FindingRefs {
-                    finding,
-                    subject,
-                    evidence,
                 })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let findings = FindingRows::apply(
-            writer,
-            snapshot.scope.identity.tenant_id,
-            lineage,
-            revision,
-            &findings,
-            crate::analysis::MAX_ANALYSIS_PAGE_RECORDS,
-        )?;
-        Self::insert_branches(
-            writer,
-            snapshot.scope.identity.tenant_id,
-            lineage,
-            revision,
-            &snapshot.graph.branches,
-        )?;
+                .collect::<Result<Vec<_>>>()?;
+            let findings = FindingRows::apply(
+                writer,
+                snapshot.scope.identity.tenant_id,
+                lineage,
+                revision,
+                &references,
+                crate::analysis::MAX_ANALYSIS_PAGE_RECORDS,
+            )?;
+            Self::insert_branches(
+                writer,
+                snapshot.scope.identity.tenant_id,
+                lineage,
+                revision,
+                &snapshot.graph.branches,
+            )?;
+            findings
+        };
         Ok(GraphValueIds {
             evidence,
             subjects,
             edges,
             findings,
         })
+    }
+
+    fn check_unchanged_findings(
+        writer: &Connection,
+        snapshot: &GraphSnapshotV1,
+        previous: &PackageResultRefV1,
+    ) -> Result<()> {
+        if snapshot.previous_result_id.as_deref() != Some(&previous.result_id)
+            || previous.commit_revision == 0
+        {
+            return GraphInvalidSnafu {
+                field: "graph unchanged finding base",
+            }
+            .fail();
+        }
+        let prior: Option<(Vec<u8>, Vec<u8>, u64, u64, u64)> = writer
+            .query_row(
+                "SELECT r.body, r.stream_key, r.method_version, r.first_cursor,
+                    v.commit_revision FROM analysis_results r
+                    JOIN graph_versions v USING (result_id)
+                 WHERE r.result_id = ? AND r.tenant_id = ?
+                    AND r.commit_revision = ? AND v.commit_revision = r.commit_revision",
+                params![
+                    previous.result_id,
+                    snapshot.scope.identity.tenant_id.as_slice(),
+                    previous.commit_revision
+                ],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read unchanged Graph finding base",
+            })?;
+        let Some((body, stream, method, first, revision)) = prior else {
+            return GraphInvalidSnafu {
+                field: "graph unchanged finding base",
+            }
+            .fail();
+        };
+        let header = GraphHeader::decode(&body)?;
+        header.check_index(snapshot.scope.identity.tenant_id, &stream, method, first)?;
+        if stream != snapshot.scope.identity.key()
+            || revision != previous.commit_revision
+            || method != snapshot.scope.method_version
+            || first != snapshot.first_cursor
+            || header.finding_count != snapshot.findings.len()
+            || header.branch_count != snapshot.graph.branches.len()
+        {
+            return GraphInvalidSnafu {
+                field: "graph unchanged finding counts",
+            }
+            .fail();
+        }
+        Ok(())
     }
 
     pub(super) fn read(

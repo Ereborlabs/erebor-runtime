@@ -299,6 +299,20 @@ profile version tests passed on 2026-10-29. This binds the next incremental
 write to a proven base. Incremental computation and the 100-fold speed target
 remain **Not done**.
 
+Unchanged finding and branch retention is **Done** for managed Graph Evaluate
+calls that keep the same supported package pins and publish no finding changes.
+Data checks the prior selected receipt and Graph result before it writes. It
+keeps the existing finding and branch membership intervals open while new
+inputs, subjects, and edges use the current writer. A direct Data test checked
+the value IDs, open intervals, both Graph versions, and file reopen. A real
+managed Graph update published a new result with three inputs and nine edges;
+the temporary writer trace confirmed that the three old findings and branches
+skipped their writers. The trace was removed. The matching Analysis test passed
+again on final source in 115.09 seconds. These runs did not measure a stage or
+end-to-end speed gain.
+Changed findings, changed calls, rebuilds, and other Graph commits still use
+the complete writer. The 100-fold target remains **Not done**.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42

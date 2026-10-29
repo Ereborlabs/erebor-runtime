@@ -1,11 +1,100 @@
 use super::{AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisStore, ResultHead};
 use crate::{
-    FindingStateV1, GraphBranchStateV1, GraphCauseV1, GraphPackageStateV1, GraphSnapshotV1,
-    ManagedCommit, ManagedDestination, ManagedGraphOperation, ManagedReceipt,
+    AnalysisContractSnafu, FindingStateV1, GraphBranchStateV1, GraphCauseV1, GraphPackageStateV1,
+    GraphSnapshotV1, ManagedCommit, ManagedDestination, ManagedGraphOperation, ManagedReceipt,
     PackageErrorCodeV1 as Code, Result, TemporalCoverageV1,
 };
+use araphor_analysis_builtins::graph::{FindingChange, FindingRemoval};
+use duckdb::Connection;
+use snafu::ResultExt as _;
 
 impl AnalysisStore {
+    fn unchanged_graph_findings(
+        &self,
+        writer: &Connection,
+        managed: &ManagedCommit<'_>,
+        graph: &GraphSnapshotV1,
+    ) -> Result<Option<super::super::PackageResultRefV1>> {
+        let spec = &managed.attempt.instance().spec;
+        if managed.attempt.request().rebuild
+            || managed.attempt.switches_version()
+            || !matches!(
+                &spec.destination,
+                ManagedDestination::Graph {
+                    operation: ManagedGraphOperation::Evaluate,
+                    ..
+                }
+            )
+            || spec.manifest.calls.len() != managed.returns.len()
+        {
+            return Ok(None);
+        }
+        let Some(base) = Self::managed_graph_base(writer, managed.attempt, graph)? else {
+            return Ok(None);
+        };
+        if base.results.len() != spec.manifest.calls.len() {
+            return Ok(None);
+        }
+        for returned in managed.returns {
+            let Some(prior) = base.results.get(&returned.call) else {
+                return Ok(None);
+            };
+            if managed.attempt.prior_result(returned.call) != Some(prior) {
+                return Ok(None);
+            }
+            let pin = spec
+                .manifest
+                .calls
+                .get(&returned.call)
+                .ok_or_else(|| Code::Invalid.error("managed Graph call pin"))?;
+            let descriptor = Self::managed_contract(writer, spec.tenant, pin)?;
+            let model = descriptor
+                .exports
+                .iter()
+                .find(|model| model.name == pin.export)
+                .ok_or_else(|| Code::Missing.error("managed Graph export"))?;
+            if !araphor_analysis_builtins::graph::Detector::supports(model) {
+                return Ok(None);
+            }
+            if let Some(retained) = returned.retained {
+                if retained != prior {
+                    return Ok(None);
+                }
+                continue;
+            }
+            let Some(native) = managed.attempt.native_prior(returned.call) else {
+                return Ok(None);
+            };
+            if native.revision != prior.commit_revision
+                || returned.evaluation.checkpoint.is_none()
+                || !model
+                    .checkpoint
+                    .as_ref()
+                    .is_some_and(|checkpoint| checkpoint.resume_input_changes)
+            {
+                return Ok(None);
+            }
+            let dataset = |name: &str| {
+                returned
+                    .output
+                    .datasets
+                    .iter()
+                    .find(|dataset| dataset.name == name)
+                    .ok_or_else(|| Code::Invalid.error("managed Graph finding dataset"))
+            };
+            if !FindingChange::decode(dataset("findings")?)
+                .context(AnalysisContractSnafu)?
+                .is_empty()
+                || !FindingRemoval::decode(dataset("finding_removals")?)
+                    .context(AnalysisContractSnafu)?
+                    .is_empty()
+            {
+                return Ok(None);
+            }
+        }
+        Ok(base.graph)
+    }
+
     pub fn commit_managed_graph(
         &self,
         managed: &ManagedCommit<'_>,
@@ -93,6 +182,7 @@ impl AnalysisStore {
         let mut graph_receipt = None;
         let project =
             |transaction: &duckdb::Transaction<'_>, revision: u64, receipt: &ManagedReceipt| {
+                let unchanged = self.unchanged_graph_findings(transaction, managed, &graph)?;
                 let notice = if managed.attempt.follows_graph() {
                     managed.attempt.captured_revision()
                 } else {
@@ -104,7 +194,7 @@ impl AnalysisStore {
                     ResultHead::Unchecked,
                     packet.advance,
                     None,
-                    Some((&graph, notice)),
+                    Some((&graph, notice, unchanged.as_ref())),
                     &packet.contexts,
                     &packet.proofs,
                     &packet.sources,

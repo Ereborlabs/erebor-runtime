@@ -1059,7 +1059,7 @@ impl AnalysisStore {
         ))
     }
 
-    fn managed_step_header(
+    pub(super) fn managed_step_header(
         reader: &Connection,
         tenant: [u8; 16],
         id: &str,

@@ -708,7 +708,7 @@ impl AnalysisStore {
             previous.map_or(ResultHead::Unchecked, ResultHead::Working),
             advance,
             profile,
-            graph.map(|graph| (graph, graph.context_notice_revision)),
+            graph.map(|graph| (graph, graph.context_notice_revision, None)),
             contexts,
             proofs,
             sources,
@@ -756,13 +756,20 @@ impl AnalysisStore {
         expected: ResultHead<'_>,
         advance: bool,
         profile: Option<&crate::DiscoveryProfileV1>,
-        graph: Option<(&crate::GraphSnapshotV1, u64)>,
+        graph: Option<(
+            &crate::GraphSnapshotV1,
+            u64,
+            Option<&super::PackageResultRefV1>,
+        )>,
         contexts: &[super::AnalysisContextVersionV1],
         proofs: &[AnalysisContextRefV1],
         sources: &[(String, u64)],
         captured_prefix: bool,
     ) -> Result<ProgressWrite> {
-        let (graph, notice) = graph.map_or((None, 0), |(graph, notice)| (Some(graph), notice));
+        let (graph, notice, unchanged) = graph
+            .map_or((None, 0, None), |(graph, notice, unchanged)| {
+                (Some(graph), notice, unchanged)
+            });
         let previous = match expected {
             ResultHead::Working(revision) => Some(revision),
             _ => None,
@@ -1304,7 +1311,14 @@ impl AnalysisStore {
                 })?;
         }
         let graph_ids = graph
-            .map(|graph| super::graph_rows::GraphRows::insert(graph, transaction, &input.result_id))
+            .map(|graph| {
+                super::graph_rows::GraphRows::insert_with_reuse(
+                    graph,
+                    transaction,
+                    &input.result_id,
+                    unchanged,
+                )
+            })
             .transpose()?;
         Self::insert_references(
             transaction,
