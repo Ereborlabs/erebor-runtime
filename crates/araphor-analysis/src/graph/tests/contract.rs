@@ -58,30 +58,26 @@ fn descriptor_preserves_owners() -> TestResult {
                 .collect::<Vec<_>>(),
             [
                 "subjects",
+                "subject_removals",
                 "relationships",
+                "relationship_removals",
                 "findings",
-                "branches",
-                "metadata"
+                "finding_removals",
+                "progress",
+                "progress_removals",
             ]
         );
-        for (port, kind) in model.outputs.iter().zip([
-            sdk::OutputKind::Subjects,
-            sdk::OutputKind::Relationships,
-            sdk::OutputKind::Findings,
-        ]) {
-            assert_eq!(port.kind, kind);
-        }
+        assert_eq!(model.outputs[0].kind, sdk::OutputKind::Subjects);
+        assert_eq!(model.outputs[2].kind, sdk::OutputKind::Relationships);
+        assert_eq!(model.outputs[4].kind, sdk::OutputKind::Findings);
         let subject = &model.outputs[0].schema;
-        assert_eq!(subject.fields().len(), 3);
-        assert_eq!(
-            subject.field(0),
-            &sdk::Field::new("record", sdk::DataType::UInt32, false)
-        );
-        assert_eq!(
-            subject.field(1),
-            &sdk::Field::new("context", sdk::DataType::UInt32, true)
-        );
-        let key = subject.field(2);
+        assert_eq!(subject.fields().len(), 2);
+        assert_eq!(subject.field(0).name(), "anchor");
+        assert!(matches!(
+            subject.field(0).data_type(),
+            sdk::DataType::Struct(_)
+        ));
+        let key = subject.field(1);
         assert_eq!(key.name(), "key");
         assert!(!key.is_nullable());
         let sdk::DataType::Struct(fields) = key.data_type() else {
@@ -140,7 +136,7 @@ fn descriptor_preserves_owners() -> TestResult {
                 .ok_or("checkpoint")?
                 .datasets
                 .len(),
-            2
+            1
         );
         assert!(
             model
@@ -169,7 +165,7 @@ fn support_requires_exact_ports() -> TestResult {
             0 => altered.inputs.swap(0, 1),
             1 => altered.inputs[0].port.name = "other".into(),
             2 => altered.outputs.reverse(),
-            3 => altered.outputs[2].evidence_required = false,
+            3 => altered.outputs[4].evidence_required = false,
             4 => altered.checkpoint = None,
             5 => altered.checkpoint.as_mut().ok_or("checkpoint")?.version += 1,
             6 => {

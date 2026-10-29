@@ -53,11 +53,7 @@ fn insertions_rebind_native_rows() -> TestResult {
         let evaluation = input(detector, &current, &current_facts, 100)?;
         let (output, work) = continued(detector, &evaluation, &prior)?;
         assert_eq!(work, 1);
-        assert_eq!(
-            Metadata::decode(&output.datasets[4])?[0].facts,
-            current_facts
-        );
-        let subjects = Subject::decode(&output.datasets[0])?;
+        let subjects = SubjectChange::decode(&output.datasets[0])?;
         assert_eq!(
             subjects.len(),
             if matches!(detector, Detector::Process) {
@@ -66,17 +62,25 @@ fn insertions_rebind_native_rows() -> TestResult {
                 2
             }
         );
-        assert!(subjects.iter().all(|subject| subject.record == 0));
+        assert!(subjects
+            .iter()
+            .all(|subject| subject.anchor.record == current[0].id));
         if matches!(detector, Detector::Process) {
-            assert!(Finding::decode(&output.datasets[2])?
+            let expected = Anchor::from_positions(
+                1,
+                Some(3),
+                &current.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+                &current_facts,
+            )?;
+            assert!(FindingChange::decode(&output.datasets[4])?
                 .iter()
-                .any(|finding| finding.record == 1 && finding.context == Some(3)));
+                .any(|finding| finding.anchor == expected));
         } else {
-            assert!(Relationship::decode(&output.datasets[1])?
+            assert!(RelationshipChange::decode(&output.datasets[2])?
                 .iter()
-                .any(|edge| edge.record == 1 && edge.fact == Some(1)));
+                .any(|edge| edge.anchor.record == current[1].id && edge.anchor.fact.is_some()));
             assert_eq!(
-                Metadata::decode(&output.datasets[4])?[0].package.state,
+                package_state(&output)?,
                 GraphPackageStateV1::KubernetesObject
             );
         }
@@ -117,18 +121,8 @@ fn inserted_state_keeps_last() -> TestResult {
         &prior,
     )?;
     assert_eq!(work, 1);
-    assert_eq!(
-        Metadata::decode(&output.datasets[4])?[0].package.state,
-        GraphPackageStateV1::NativeEffect
-    );
-    let checkpoint = output.checkpoint.as_ref().ok_or("checkpoint")?;
-    let progress = Progress::decode(
-        checkpoint
-            .datasets
-            .iter()
-            .find(|data| data.name == "progress")
-            .ok_or("progress")?,
-    )?;
+    assert_eq!(package_state(&output)?, GraphPackageStateV1::NativeEffect);
+    let progress = Progress::decode(&output.datasets[6])?;
     assert_eq!(
         progress
             .iter()
@@ -140,9 +134,10 @@ fn inserted_state_keeps_last() -> TestResult {
             Some("NATIVE_EFFECT")
         ]
     );
-    assert!(Finding::decode(&output.datasets[2])?
+    assert!(FindingChange::decode(&output.datasets[4])?
         .iter()
-        .any(|finding| finding.record == 1 && finding.reason_code == "HF-PROC-001.CONTRADICTION"));
+        .any(|finding| finding.anchor.record == current[1].id
+            && finding.reason_code == "HF-PROC-001.CONTRADICTION"));
     Ok(())
 }
 
@@ -151,7 +146,7 @@ fn restricted_fact_updates_findings() -> TestResult {
     let detector = Detector::Process;
     let old = records(2);
     let prior = detector.evaluate(&input(detector, &old, &[], 100)?)?;
-    let previous = Finding::decode(&prior.datasets[2])?;
+    let previous = FindingChange::decode(&prior.datasets[4])?;
     assert!(previous
         .iter()
         .all(|finding| finding.sensitivity == ContextSensitivityV1::Tenant));
@@ -163,7 +158,7 @@ fn restricted_fact_updates_findings() -> TestResult {
         &prior,
     )?;
     assert_eq!(work, 1);
-    let findings = Finding::decode(&output.datasets[2])?;
+    let findings = FindingChange::decode(&output.datasets[4])?;
     for old in previous {
         let current = findings
             .iter()
@@ -224,16 +219,19 @@ fn changed_inputs_rebuild_selectively() -> TestResult {
         )?;
         assert_eq!(
             work,
-            if case == 4 { 0 } else { current.len() },
+            if case == 3 || case == 4 {
+                0
+            } else {
+                current.len()
+            },
             "fallback {case}"
         );
     }
     let empty = input(detector, &[], &[], 100)?;
     let (output, work) = continued(detector, &empty, &prior)?;
     assert_eq!(work, 0);
-    assert!(Metadata::decode(&output.datasets[4])?[0]
-        .record_ids
-        .is_empty());
+    assert!(SubjectChange::decode(&output.datasets[0])?.is_empty());
+    assert!(Progress::decode(&output.datasets[6])?.is_empty());
     let (_, work) = continued(detector, &input(detector, &old, &facts, 100)?, &output)?;
     assert_eq!(work, old.len());
     Ok(())
@@ -297,9 +295,9 @@ fn expired_authority_support_disappears() -> TestResult {
         }
     }
     let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
-    assert!(Relationship::decode(&prior.datasets[1])?
+    assert!(RelationshipChange::decode(&prior.datasets[2])?
         .iter()
-        .any(|edge| edge.edge.key.edge_type == GraphEdgeTypeV1::CredentialAuthority));
+        .any(|edge| edge.key.edge_type == GraphEdgeTypeV1::CredentialAuthority));
     for removed in [1, 2] {
         let mut current = old.clone();
         current.remove(removed);
@@ -320,10 +318,10 @@ fn expired_authority_support_disappears() -> TestResult {
             &prior,
         )?;
         assert!(work < current.len(), "removed {removed}: {work}");
-        assert!(Relationship::decode(&output.datasets[1])?
+        assert!(RelationshipChange::decode(&output.datasets[2])?
             .iter()
-            .all(|edge| edge.edge.key.edge_type != GraphEdgeTypeV1::CredentialAuthority));
-        assert!(Subject::decode(&output.datasets[0])?
+            .all(|edge| edge.key.edge_type != GraphEdgeTypeV1::CredentialAuthority));
+        assert!(SubjectChange::decode(&output.datasets[0])?
             .iter()
             .all(|subject| !matches!(
                 subject.key.authority,
@@ -354,26 +352,30 @@ fn surviving_parent_reanchors_process() -> TestResult {
     )];
     let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
     assert_eq!(
-        Subject::decode(&prior.datasets[0])?
+        SubjectChange::decode(&prior.datasets[0])?
             .iter()
             .find(|subject| subject.key == parent)
             .ok_or("old process")?
-            .context,
+            .anchor
+            .fact,
         None,
     );
     let mut remaining = facts[0].clone();
     remaining.record = 0;
     let (output, work) = continued(
         detector,
-        &input(detector, &old[1..], &[remaining], 100)?,
+        &input(detector, &old[1..], &[remaining.clone()], 100)?,
         &prior,
     )?;
     assert_eq!(work, 0);
-    let subject = Subject::decode(&output.datasets[0])?
+    let subject = SubjectChange::decode(&output.datasets[0])?
         .into_iter()
         .find(|subject| subject.key == parent)
         .ok_or("reanchored process")?;
-    assert_eq!((subject.record, subject.context), (0, Some(0)));
+    assert_eq!(
+        subject.anchor,
+        Anchor::from_positions(0, Some(0), &[old[1].id.clone()], &[remaining])?
+    );
     Ok(())
 }
 
@@ -392,21 +394,15 @@ fn expired_state_and_sensitivity() -> TestResult {
         &[retained.clone(), restricted],
         100,
     )?)?;
-    assert_eq!(
-        Metadata::decode(&prior.datasets[4])?[0].package.state,
-        GraphPackageStateV1::NativeEffect
-    );
+    assert_eq!(package_state(&prior)?, GraphPackageStateV1::NativeEffect);
     let (output, work) = continued(
         detector,
         &input(detector, &old[..1], &[retained], 100)?,
         &prior,
     )?;
     assert_eq!(work, 0);
-    assert_eq!(
-        Metadata::decode(&output.datasets[4])?[0].package.state,
-        GraphPackageStateV1::Waiting
-    );
-    assert!(Finding::decode(&output.datasets[2])?
+    assert_eq!(package_state(&output)?, GraphPackageStateV1::Waiting);
+    assert!(FindingChange::decode(&output.datasets[4])?
         .iter()
         .all(|finding| finding.sensitivity == ContextSensitivityV1::Tenant));
     Ok(())
@@ -417,14 +413,9 @@ fn incompatible_progress_rebuilds() -> TestResult {
     let detector = Detector::Process;
     let current = input(detector, &records(2), &[], 100)?;
     let prior = detector.evaluate(&current)?;
-    for case in 0..4 {
+    for case in 0..5 {
         let mut saved = prior.clone();
-        let checkpoint = saved.checkpoint.as_mut().ok_or("checkpoint")?;
-        let dataset = checkpoint
-            .datasets
-            .iter_mut()
-            .find(|data| data.name == "progress")
-            .ok_or("progress")?;
+        let dataset = &mut saved.datasets[6];
         let mut progress = Progress::decode(dataset)?;
         match case {
             0 => {
@@ -437,29 +428,30 @@ fn incompatible_progress_rebuilds() -> TestResult {
                 progress[0].digest = digest.into();
             }
             3 => progress[0].state = Some("DIRECT_PIVOT".into()),
+            4 => progress[1].record = progress[0].record.clone(),
             _ => return Err("progress fixture".into()),
         }
         *dataset = Progress::encode(&progress)?;
         let mut admitted = current.clone();
         admitted.checkpoint = saved.checkpoint.clone();
-        admitted.previous_outputs = saved.datasets.clone();
+        admitted.previous_outputs = normalized_prior(&saved)?;
         detector.descriptor().check_evaluation(&admitted)?;
-        assert_eq!(
-            continued(detector, &current, &saved)?.1,
-            2,
-            "progress {case}"
-        );
+        if matches!(case, 1 | 3 | 4) {
+            assert!(detector.evaluate(&admitted).is_err(), "progress {case}");
+        } else {
+            assert_eq!(
+                continued(detector, &current, &saved)?.1,
+                if case == 0 { 1 } else { 2 },
+                "progress {case}"
+            );
+        }
     }
     let mut invalid = current;
-    invalid.previous_outputs = prior.datasets;
+    invalid.previous_outputs = normalized_prior(&prior)?;
     invalid.checkpoint = prior.checkpoint;
     detector.descriptor().check_evaluation(&invalid)?;
     let checkpoint = invalid.checkpoint.as_mut().ok_or("checkpoint")?;
-    let dataset = checkpoint
-        .datasets
-        .iter_mut()
-        .find(|data| data.name == "progress")
-        .ok_or("progress")?;
+    let dataset = checkpoint.datasets.first_mut().ok_or("state")?;
     dataset.batches = Manifest::encode(&[Manifest { window_ns: 100 }])?.batches;
     assert!(detector.descriptor().check_evaluation(&invalid).is_err());
     Ok(())

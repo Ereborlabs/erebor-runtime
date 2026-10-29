@@ -144,15 +144,28 @@ impl Manifest {
 }
 
 impl Progress {
-    pub(super) fn port() -> sdk::Port {
+    pub fn port() -> sdk::Port {
         static PORT: OnceLock<sdk::Port> = OnceLock::new();
-        port::<Self>("progress", &PORT)
+        port::<views::ProgressRow>("progress", &PORT)
     }
-    pub(super) fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
-        encode(Self::port(), rows, Clone::clone)
+    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        encode(Self::port(), rows, views::ProgressRow::from)
     }
-    pub(super) fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
-        decode::<Self, Self>(Self::port(), data, Ok)
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        decode::<views::ProgressRow, Self>(Self::port(), data, TryInto::try_into)
+    }
+}
+
+impl ProgressRemoval {
+    pub fn port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<views::ProgressRemovalRow>("progress_removals", &PORT)
+    }
+    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        encode(Self::port(), rows, views::ProgressRemovalRow::from)
+    }
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        decode::<views::ProgressRemovalRow, Self>(Self::port(), data, TryInto::try_into)
     }
 }
 
@@ -231,16 +244,85 @@ impl Finding {
     }
 }
 
-impl GraphBranchV1 {
+impl FindingRemoval {
     pub fn port() -> sdk::Port {
         static PORT: OnceLock<sdk::Port> = OnceLock::new();
-        port::<views::BranchRow>("branches", &PORT)
+        port::<Self>("finding_removals", &PORT)
     }
     pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
-        encode(Self::port(), rows, views::BranchRow::from)
+        encode(Self::port(), rows, Clone::clone)
     }
     pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
-        decode::<views::BranchRow, Self>(Self::port(), data, TryInto::try_into)
+        decode::<Self, Self>(Self::port(), data, Ok)
+    }
+}
+
+impl SubjectChange {
+    pub fn port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<views::SubjectChangeRow>("subjects", &PORT)
+    }
+    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        encode(Self::port(), rows, views::SubjectChangeRow::from)
+    }
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        decode::<views::SubjectChangeRow, Self>(Self::port(), data, TryInto::try_into)
+    }
+}
+
+impl SubjectRemoval {
+    pub fn port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<views::SubjectRemovalRow>("subject_removals", &PORT)
+    }
+    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        encode(Self::port(), rows, views::SubjectRemovalRow::from)
+    }
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        decode::<views::SubjectRemovalRow, Self>(Self::port(), data, TryInto::try_into)
+    }
+}
+
+impl RelationshipChange {
+    pub fn port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<views::RelationshipChangeRow>("relationships", &PORT)
+    }
+    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        encode(Self::port(), rows, views::RelationshipChangeRow::from)
+    }
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        decode::<views::RelationshipChangeRow, Self>(Self::port(), data, TryInto::try_into)
+    }
+}
+
+impl RelationshipRemoval {
+    pub fn port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<views::RelationshipRemovalRow>("relationship_removals", &PORT)
+    }
+    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        encode(Self::port(), rows, views::RelationshipRemovalRow::from)
+    }
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        decode::<views::RelationshipRemovalRow, Self>(Self::port(), data, TryInto::try_into)
+    }
+}
+
+impl FindingChange {
+    pub fn port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<views::FindingChangeRow>("findings", &PORT)
+    }
+    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        let views = rows
+            .iter()
+            .map(views::FindingChangeRow::try_from)
+            .collect::<sdk::Result<Vec<_>>>()?;
+        encode(Self::port(), &views, Clone::clone)
+    }
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        decode::<views::FindingChangeRow, Self>(Self::port(), data, TryInto::try_into)
     }
 }
 

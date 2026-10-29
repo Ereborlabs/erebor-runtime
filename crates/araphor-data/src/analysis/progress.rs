@@ -158,6 +158,8 @@ pub(in crate::analysis) struct ProgressWrite {
     pub(in crate::analysis) receipt: AnalysisResultReceiptV1,
     pub(in crate::analysis) relations: Vec<&'static str>,
     pub(in crate::analysis) commit: bool,
+    pub(in crate::analysis) graph_ids: Option<super::graph_rows::GraphValueIds>,
+    pub(in crate::analysis) graph_result: Option<super::PackageResultRefV1>,
 }
 
 #[derive(Default)]
@@ -988,6 +990,11 @@ impl AnalysisStore {
                     },
                     relations: Vec::new(),
                     commit: false,
+                    graph_ids: None,
+                    graph_result: graph.map(|_| super::PackageResultRefV1 {
+                        result_id: input.result_id.clone(),
+                        commit_revision: revision,
+                    }),
                 });
             }
             if tenant != input.scope.identity.tenant_id
@@ -1217,6 +1224,11 @@ impl AnalysisStore {
                         },
                         relations: Vec::new(),
                         commit: true,
+                        graph_ids: None,
+                        graph_result: Some(super::PackageResultRefV1 {
+                            result_id: previous.into(),
+                            commit_revision: retained_revision,
+                        }),
                     });
                 }
             }
@@ -1291,9 +1303,9 @@ impl AnalysisStore {
                     operation: "insert analysis result",
                 })?;
         }
-        if let Some(graph) = graph {
-            super::graph_rows::GraphRows::insert(graph, transaction, &input.result_id)?;
-        }
+        let graph_ids = graph
+            .map(|graph| super::graph_rows::GraphRows::insert(graph, transaction, &input.result_id))
+            .transpose()?;
         Self::insert_references(
             transaction,
             &input.result_id,
@@ -1354,6 +1366,11 @@ impl AnalysisStore {
             },
             relations,
             commit: true,
+            graph_ids,
+            graph_result: graph.map(|_| super::PackageResultRefV1 {
+                result_id: input.result_id.clone(),
+                commit_revision: revision,
+            }),
         })
     }
 }

@@ -4,16 +4,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use araphor_analysis_builtins::graph as algorithm;
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
-    AnalysisContractSnafu, ContextSensitivityV1, DeclaredFindingReasonV1, DiscoveryCoverageStateV1,
-    DiscoveryRecordIdV1, DiscoveryRecordV1, FindingReasonV1, FindingStateV1, FindingV1,
-    GraphBranchStateV1, GraphBranchV1, GraphCauseV1, GraphEdgeKeyV1, GraphEdgeTypeV1, GraphEdgeV1,
-    GraphEffectV1, GraphFactV1, GraphFactValueV1, GraphInvalidSnafu, GraphPackageCheckpointV1,
-    GraphPackageStateV1, GraphPhysicalResultV1, GraphReplayInputV1, GraphRevisionV1,
-    GraphSnapshotV1, GraphSubjectAuthorityV1, GraphSubjectKeyV1, GraphSubjectKindV1, GraphValidate,
-    GraphVersionV1, LocalSubjectBindingV1, OperationResultAuthorityV1,
-    PolicyObservationProvenanceV1, PolicyProvenanceStateV1, ProcessorScopeV1, ProofIntegrityV1,
-    ProofQualityV1, Result, TemporalCoverageV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
-    GRAPH_WINDOW_NS,
+    AnalysisContractSnafu, ContextSensitivityV1, DiscoveryCoverageStateV1, DiscoveryRecordIdV1,
+    DiscoveryRecordV1, FindingReasonV1, FindingStateV1, FindingV1, GraphBranchStateV1,
+    GraphCauseV1, GraphEdgeKeyV1, GraphEdgeTypeV1, GraphEdgeV1, GraphEffectV1, GraphFactV1,
+    GraphFactValueV1, GraphInvalidSnafu, GraphPackageCheckpointV1, GraphPackageStateV1,
+    GraphPhysicalResultV1, GraphReplayInputV1, GraphRevisionV1, GraphSnapshotV1,
+    GraphSubjectAuthorityV1, GraphSubjectKeyV1, GraphSubjectKindV1, GraphValidate, GraphVersionV1,
+    LocalSubjectBindingV1, OperationResultAuthorityV1, PolicyObservationProvenanceV1,
+    PolicyProvenanceStateV1, ProcessorScopeV1, ProofIntegrityV1, ProofQualityV1, Result,
+    TemporalCoverageV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, GRAPH_WINDOW_NS,
 };
 #[cfg(test)]
 use araphor_data::{EvidenceRecord, GRAPH_WITNESS_TTL_NS};
@@ -42,7 +41,6 @@ pub struct Graph<'a> {
     revision: GraphRevisionV1,
     subjects: BTreeMap<GraphSubjectKeyV1, u32>,
     edges: BTreeMap<GraphEdgeKeyV1, GraphEdgeV1>,
-    branches: Vec<GraphBranchV1>,
     findings: BTreeMap<String, FindingV1>,
     facts: Vec<GraphFactV1>,
     packages: Vec<GraphPackageCheckpointV1>,
@@ -54,8 +52,19 @@ impl<'a> Graph<'a> {
         Self::from_input(Cow::Borrowed(input))
     }
 
-    fn from_input(input: Cow<'a, GraphReplayInputV1>) -> Result<Self> {
+    fn from_input(mut input: Cow<'a, GraphReplayInputV1>) -> Result<Self> {
         input.validate()?;
+        if input
+            .records
+            .windows(2)
+            .any(|rows| rows[0].id >= rows[1].id)
+            || input
+                .facts
+                .windows(2)
+                .any(|rows| rows[0].key >= rows[1].key)
+        {
+            input = Cow::Owned(input.normalized()?);
+        }
         let revision = input.manifest();
         revision.validate(input.source.tenant_id)?;
         let facts = input
@@ -70,7 +79,6 @@ impl<'a> Graph<'a> {
             revision,
             subjects: BTreeMap::new(),
             edges: BTreeMap::new(),
-            branches: Vec::new(),
             findings: BTreeMap::new(),
             facts,
             packages: Vec::new(),
@@ -119,7 +127,13 @@ impl<'a> Graph<'a> {
                 .build()
             })?;
         self.check_inputs(model, evaluation)?;
-        self.apply_output(package, evaluation, result.output())?;
+        self.apply_output(
+            package,
+            evaluation,
+            result.output(),
+            result.retained().is_some(),
+            result.graph_prior(),
+        )?;
         Ok(self)
     }
 }

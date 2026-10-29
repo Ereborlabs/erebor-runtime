@@ -60,12 +60,16 @@ fn input_binding_preserves_order() -> TestResult {
 }
 
 #[test]
-fn input_requires_canonical_manifest() -> TestResult {
+fn input_normalizes_record_order() -> TestResult {
     let mut input = credential_input()?;
     input.records.reverse();
-    assert!(Graph::new(&input).is_err());
-    let input = input.normalized()?;
-    Graph::new(&input)?;
+    let normalized = input.normalized()?;
+    let left = Graph::new(&input)?;
+    let right = Graph::new(&normalized)?;
+    for (actual, expected) in left.projection()?.iter().zip(right.projection()?) {
+        assert_eq!(actual.name, expected.name);
+        assert_eq!(actual.batches, expected.batches);
+    }
     Ok(())
 }
 
@@ -103,34 +107,13 @@ async fn result_requires_exact_image() -> TestResult {
         )?;
     }
     let expected = algorithm::Detector::Process.evaluate(&evaluation)?;
-    let checkpoint = model.checkpoint.as_ref().ok_or("checkpoint declaration")?;
     let mut returns = Vec::new();
     for revision in ["1", "2"] {
         let mut descriptor = package.clone();
         descriptor.revision = revision.into();
-        let mut returned = expected.clone();
-        let metadata = returned
-            .datasets
-            .iter_mut()
-            .find(|data| data.name == "metadata")
-            .ok_or("metadata")?;
-        let mut rows = algorithm::Metadata::decode(metadata)?;
-        for row in &mut rows {
-            row.package = GraphPackageCheckpointV1::from_package(
-                &descriptor,
-                &descriptor.exports[0],
-                row.package.state.clone(),
-                row.package.accepted_cursor_watermark,
-                row.package.observed_boottime_watermark_ns,
-            );
-        }
-        *metadata = algorithm::Metadata::encode(&rows)?;
+        let returned = expected.clone();
         let prior_checkpoint = returned.checkpoint.clone().ok_or("complete checkpoint")?;
-        let prior_outputs = if checkpoint.resume_input_changes {
-            returned.datasets.clone()
-        } else {
-            Vec::new()
-        };
+        let prior_outputs = super::execution::normalized_prior(&returned, &descriptor.id)?;
         let sql = super::execution::Fixture::sql(&returned)?;
         let bundle = PackageBundleV1 {
             schema_version: 1,

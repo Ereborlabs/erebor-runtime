@@ -467,11 +467,9 @@ impl Fixture {
         Self::stored(target, records, directory, store)
     }
 
-    fn sql(package: &sdk::Package, model: &sdk::Model) -> TestResult<araphor_package::SqlModelV1> {
-        use araphor_analysis_builtins::graph as algorithm;
-        use datafusion::sql::sqlparser::ast::{Ident, Value};
+    fn sql(model: &sdk::Model) -> TestResult<araphor_package::SqlModelV1> {
         let mut program = araphor_package::SqlModelV1::default();
-        for port in model.outputs.iter().filter(|port| port.name != "metadata") {
+        for port in &model.outputs {
             let empty = sdk::RecordBatch::new_empty(Arc::new(port.schema.clone()));
             program.outputs.insert(
                 port.name.clone(),
@@ -479,59 +477,9 @@ impl Fixture {
                     .map_err(|error| error.to_string())?,
             );
         }
-        let metadata = algorithm::Metadata::encode(&[algorithm::Metadata {
-            record_ids: Vec::new(),
-            facts: Vec::new(),
-            package: araphor_data::GraphPackageCheckpointV1::from_package(
-                package,
-                model,
-                araphor_data::GraphPackageStateV1::Waiting,
-                0,
-                0,
-            ),
-        }])?;
-        let values = metadata.batches[0]
-            .column_by_name("package")
-            .and_then(|array| {
-                array
-                    .as_any()
-                    .downcast_ref::<sdk::arrow_array::StructArray>()
-            })
-            .ok_or("native package metadata Struct")?;
-        let mut fields = Vec::new();
-        for (field, column) in values.fields().iter().zip(values.columns()) {
-            fields.push(Value::SingleQuotedString(field.name().clone()).to_string());
-            fields.push(match field.name().as_str() {
-                "accepted_cursor_watermark" => "coalesce((SELECT id.durable_cursor FROM records ORDER BY __row_index DESC LIMIT 1), arrow_cast(0, 'UInt64'))".into(),
-                "observed_boottime_watermark_ns" => "(SELECT coalesce(max(observed_boottime_ns), arrow_cast(0, 'UInt64')) FROM records)".into(),
-                _ => crate::graph::tests::execution::Fixture::literal(column.as_ref(), 0)
-                    .map_err(|error| error.to_string())?,
-            });
-        }
-        let fact_fields = model
-            .inputs
-            .iter()
-            .find(|input| input.port.name == "facts")
-            .ok_or("native facts input")?
-            .port
-            .schema
-            .fields()
-            .iter()
-            .flat_map(|field| {
-                [
-                    Value::SingleQuotedString(field.name().clone()).to_string(),
-                    Ident::with_quote('"', field.name()).to_string(),
-                ]
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        program.outputs.insert("metadata".into(), format!(
-            "SELECT (SELECT coalesce(array_agg(id ORDER BY __row_index), make_array()) FROM records) AS record_ids, (SELECT coalesce(array_agg(named_struct({fact_fields}) ORDER BY __row_index), make_array()) FROM facts) AS facts, named_struct({}) AS package",
-            fields.join(", "),
-        ));
         program.checkpoint.insert(
             "state".into(),
-            r#"SELECT CAST('{"value":"WAITING"}' AS BYTEA) AS value"#.into(),
+            "SELECT 'WAITING' AS tag, CAST(NULL AS VARCHAR) AS declared".into(),
         );
         if let Some(checkpoint) = &model.checkpoint {
             for port in checkpoint.datasets.iter().skip(1) {
@@ -624,7 +572,7 @@ impl Fixture {
                         let package = detector.descriptor();
                         PackageImplementationV1::Sql {
                             export: "detect".into(),
-                            program: Self::sql(&package, &package.exports[0])?,
+                            program: Self::sql(&package.exports[0])?,
                         }
                     }
                 }],

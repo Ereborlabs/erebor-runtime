@@ -69,7 +69,7 @@ fn derive(input: &GraphReplayInputV1) -> Result<GraphSnapshotV1> {
             .evaluate(&evaluation)
             .context(AnalysisContractSnafu)?;
         graph.check_inputs(&package.exports[0], &evaluation)?;
-        graph.apply_output(&package, &evaluation, &output)?;
+        graph.apply_output(&package, &evaluation, &output, false, None)?;
     }
     graph.finish()
 }
@@ -90,25 +90,16 @@ fn computation(
 }
 
 #[test]
-fn checkpoint_state_matches_metadata() -> TestResult {
+fn checkpoint_requires_one_state() -> TestResult {
     let input = input()?;
     let (mut owner, evaluation, mut output) = computation(&input)?;
-    let state = algorithm::Metadata::decode(&output.datasets[4])?[0]
-        .package
-        .state
-        .clone();
-    let wrong = if state == GraphPackageStateV1::Waiting {
-        GraphPackageStateV1::NativeEffect
-    } else {
-        GraphPackageStateV1::Waiting
-    };
     let checkpoint = output.checkpoint.as_mut().ok_or("checkpoint")?;
-    checkpoint.datasets[0] = GraphPackageStateV1::encode(&[wrong])?;
+    checkpoint.datasets[0] = GraphPackageStateV1::encode(&[])?;
     let package = algorithm::Detector::Credentials.descriptor();
     assert!(matches!(
-        owner.apply_output(&package, &evaluation, &output),
+        owner.apply_output(&package, &evaluation, &output, false, None),
         Err(araphor_data::Error::GraphInvalid {
-            field: "graph package checkpoint state",
+            field: "graph checkpoint rows",
             ..
         })
     ));
@@ -143,6 +134,8 @@ fn candidate_reason_matches_contract() -> TestResult {
         &algorithm::Detector::Credentials.descriptor(),
         &evaluation,
         &output,
+        false,
+        None,
     )?;
     let expected = derive(&input)?;
     let findings: Vec<_> = expected
@@ -159,18 +152,25 @@ fn candidate_requires_host_validation() -> TestResult {
     let input = input()?;
     let (mut owner, evaluation, mut output) = computation(&input)?;
     let package = algorithm::Detector::Credentials.descriptor();
-    let mut subjects = algorithm::Subject::decode(&output.datasets[0])?;
-    subjects.first_mut().ok_or("subject candidate")?.record = u32::MAX;
-    output.datasets[0] = algorithm::Subject::encode(&subjects)?;
+    let mut subjects = algorithm::SubjectChange::decode(&output.datasets[0])?;
+    subjects
+        .first_mut()
+        .ok_or("subject candidate")?
+        .anchor
+        .record
+        .durable_cursor = u64::MAX;
+    output.datasets[0] = algorithm::SubjectChange::encode(&subjects)?;
     package.validate_output(&evaluation, &output)?;
     assert!(matches!(
         owner.apply_output(
             &algorithm::Detector::Credentials.descriptor(),
             &evaluation,
-            &output
+            &output,
+            false,
+            None
         ),
         Err(araphor_data::Error::GraphInvalid {
-            field: "graph output record",
+            field: "graph anchor record",
             ..
         })
     ));
@@ -210,7 +210,9 @@ fn candidate_reason_is_exact() -> TestResult {
             owner.apply_output(
                 &algorithm::Detector::Credentials.descriptor(),
                 &evaluation,
-                &altered
+                &altered,
+                false,
+                None
             ),
             Err(araphor_data::Error::GraphInvalid {
                 field: "graph candidate reason",
@@ -232,7 +234,9 @@ fn candidate_evidence_is_exact() -> TestResult {
         owner.apply_output(
             &algorithm::Detector::Credentials.descriptor(),
             &evaluation,
-            &output
+            &output,
+            false,
+            None
         ),
         Err(araphor_data::Error::GraphInvalid {
             field: "graph candidate evidence",
@@ -247,41 +251,26 @@ fn resolved_output_preserves_authority() -> TestResult {
     let input = input()?;
     let (_, evaluation, output) = computation(&input)?;
     let package = algorithm::Detector::Credentials.descriptor();
-    for field in [
-        "graph effect evidence",
-        "graph policy provenance authority",
-        "graph branch authority",
-    ] {
+    for field in ["graph effect evidence", "graph policy provenance authority"] {
         let mut altered = output.clone();
-        if field == "graph branch authority" {
-            let data = altered
-                .datasets
-                .iter_mut()
-                .find(|data| data.name == "branches")
-                .ok_or("branches")?;
-            let mut rows = algorithm::Branch::decode(data)?;
-            rows.first_mut().ok_or("branch")?.state = GraphBranchStateV1::TerminalVerified;
-            *data = algorithm::Branch::encode(&rows)?;
+        let data = altered
+            .datasets
+            .iter_mut()
+            .find(|data| data.name == "findings")
+            .ok_or("findings")?;
+        let mut rows = algorithm::FindingChange::decode(data)?;
+        let finding = rows.first_mut().ok_or("finding")?;
+        if field == "graph effect evidence" {
+            assert!(!finding.effects.is_empty());
+            finding.effects.clear();
         } else {
-            let data = altered
-                .datasets
-                .iter_mut()
-                .find(|data| data.name == "findings")
-                .ok_or("findings")?;
-            let mut rows = algorithm::Finding::decode(data)?;
-            let finding = rows.first_mut().ok_or("finding")?;
-            if field == "graph effect evidence" {
-                assert!(!finding.effects.is_empty());
-                finding.effects.clear();
-            } else {
-                assert!(!finding.policy_provenance.is_empty());
-                finding.policy_provenance.clear();
-            }
-            *data = algorithm::Finding::encode(&rows)?;
+            assert!(!finding.policy_provenance.is_empty());
+            finding.policy_provenance.clear();
         }
+        *data = algorithm::FindingChange::encode(&rows)?;
         package.validate_output(&evaluation, &altered)?;
         let mut owner = Graph::new(&input)?;
-        let result = owner.apply_output(&package, &evaluation, &altered);
+        let result = owner.apply_output(&package, &evaluation, &altered, false, None);
         assert!(
             matches!(&result, Err(araphor_data::Error::GraphInvalid { field: actual, .. }) if *actual == field),
             "{field}: {result:?}"
@@ -302,23 +291,22 @@ fn candidate_rejects_authority_upgrade() -> TestResult {
     }
     let (mut owner, evaluation, mut output) = computation(&input)?;
     let package = algorithm::Detector::Credentials.descriptor();
-    let port = &package.exports[0].outputs[1];
     let data = output
         .datasets
         .iter_mut()
-        .find(|data| data.name == port.name)
+        .find(|data| data.name == "relationships")
         .ok_or("relationships")?;
-    let mut edges = algorithm::Relationship::decode(data)?;
+    let mut edges = algorithm::RelationshipChange::decode(data)?;
     let edge = edges
         .iter_mut()
-        .find(|edge| edge.edge.key.edge_type == GraphEdgeTypeV1::CredentialAuthority)
+        .find(|edge| edge.key.edge_type == GraphEdgeTypeV1::CredentialAuthority)
         .ok_or("authority edge")?;
-    assert!(edge.edge.key.cause == GraphCauseV1::Contextual);
-    edge.edge.key.cause = GraphCauseV1::Direct;
-    *data = algorithm::Relationship::encode(&edges)?;
+    assert!(edge.key.cause == GraphCauseV1::Contextual);
+    edge.key.cause = GraphCauseV1::Direct;
+    *data = algorithm::RelationshipChange::encode(&edges)?;
     package.validate_output(&evaluation, &output)?;
     assert!(matches!(
-        owner.apply_output(&package, &evaluation, &output),
+        owner.apply_output(&package, &evaluation, &output, false, None),
         Err(araphor_data::Error::GraphInvalid {
             field: "graph direct cause proof",
             ..
@@ -341,13 +329,13 @@ fn resolved_output_keeps_provenance_limits() -> TestResult {
     let input = input.normalized()?;
     let (mut owner, evaluation, mut output) = computation(&input)?;
     let package = algorithm::Detector::Credentials.descriptor();
-    owner.apply_output(&package, &evaluation, &output)?;
+    owner.apply_output(&package, &evaluation, &output, false, None)?;
     let data = output
         .datasets
         .iter_mut()
         .find(|data| data.name == "findings")
         .ok_or("findings")?;
-    let mut findings = algorithm::Finding::decode(data)?;
+    let mut findings = algorithm::FindingChange::decode(data)?;
     let finding = findings.first_mut().ok_or("finding")?;
     assert!(finding
         .limits
@@ -356,39 +344,22 @@ fn resolved_output_keeps_provenance_limits() -> TestResult {
     finding
         .limits
         .retain(|limit| limit != "POLICY_PROVENANCE_MISSING");
-    *data = algorithm::Finding::encode(&findings)?;
-    let indices = input
-        .records
-        .iter()
-        .enumerate()
-        .map(|(index, record)| (&record.id, index as u32))
-        .collect();
+    *data = algorithm::FindingChange::encode(&findings)?;
     for reason in &mut output.reasons {
-        let finding = findings
-            .get(reason.output.row as usize)
-            .ok_or("reason finding")?;
-        reason.details =
-            algorithm::ReasonDetails::encode(&[algorithm::ReasonDetails::from_finding(
-                finding, &indices,
-            )?])?
+        let mut details = algorithm::ReasonDetails::decode(&sdk::Dataset {
+            name: algorithm::ReasonDetails::port().name,
+            batches: vec![reason.details.clone()],
+        })?;
+        details[0]
+            .limits
+            .retain(|limit| limit != "POLICY_PROVENANCE_MISSING");
+        reason.details = algorithm::ReasonDetails::encode(&details)?
             .batches
             .remove(0);
     }
-    let branches = findings
-        .iter()
-        .map(|finding| {
-            let reason = FindingReasonV1::from_analysis_code(&package.id, &finding.reason_code)?;
-            Ok(GraphBranchV1::from_finding(finding, &reason))
-        })
-        .collect::<TestResult<Vec<_>>>()?;
-    *output
-        .datasets
-        .iter_mut()
-        .find(|data| data.name == "branches")
-        .ok_or("branches")? = algorithm::Branch::encode(&branches)?;
     package.validate_output(&evaluation, &output)?;
     let mut owner = Graph::new(&input)?;
-    let result = owner.apply_output(&package, &evaluation, &output);
+    let result = owner.apply_output(&package, &evaluation, &output, false, None);
     assert!(
         matches!(
             &result,
@@ -409,43 +380,29 @@ fn candidate_rejects_missing_coverage() -> TestResult {
     input.coverage[0].gap_reasons = vec!["HOST_GAP".into()];
     let (mut owner, evaluation, mut output) = computation(&input)?;
     let package = algorithm::Detector::Credentials.descriptor();
-    let port = &package.exports[0].outputs[2];
     let data = output
         .datasets
         .iter_mut()
-        .find(|data| data.name == port.name)
+        .find(|data| data.name == "findings")
         .ok_or("findings")?;
-    let mut findings = algorithm::Finding::decode(data)?;
+    let mut findings = algorithm::FindingChange::decode(data)?;
     for finding in &mut findings {
         finding.state = FindingStateV1::Confirmed;
     }
-    *data = algorithm::Finding::encode(&findings)?;
-    let metadata = algorithm::Metadata::decode(
-        output
-            .datasets
-            .iter()
-            .find(|data| data.name == "metadata")
-            .ok_or("metadata")?,
-    )?
-    .remove(0);
-    let indices = metadata
-        .record_ids
-        .iter()
-        .enumerate()
-        .map(|(index, id)| (id, index as u32))
-        .collect();
+    *data = algorithm::FindingChange::encode(&findings)?;
     for reason in &mut output.reasons {
-        let finding = findings
-            .get(reason.output.row as usize)
-            .ok_or("finding detail")?;
-        let details = algorithm::ReasonDetails::from_finding(finding, &indices)?;
-        reason.details = algorithm::ReasonDetails::encode(&[details])?
+        let mut details = algorithm::ReasonDetails::decode(&sdk::Dataset {
+            name: algorithm::ReasonDetails::port().name,
+            batches: vec![reason.details.clone()],
+        })?;
+        details[0].confirmed = true;
+        reason.details = algorithm::ReasonDetails::encode(&details)?
             .batches
             .remove(0);
     }
     package.validate_output(&evaluation, &output)?;
     assert!(matches!(
-        owner.apply_output(&package, &evaluation, &output),
+        owner.apply_output(&package, &evaluation, &output, false, None),
         Err(araphor_data::Error::GraphInvalid {
             field: "graph confirmed finding proof",
             ..
@@ -487,51 +444,27 @@ fn declared_reason(package_id: &str, reason: &str) -> TestResult {
         .datasets
         .retain(|data| data.name == state);
     assert!(Graph::supports(model));
-    let port = &model.outputs[2];
     let data = output
         .datasets
         .iter_mut()
-        .find(|data| data.name == port.name)
+        .find(|data| data.name == "findings")
         .ok_or("findings")?;
-    let mut findings = algorithm::Finding::decode(data)?;
+    let mut findings = algorithm::FindingChange::decode(data)?;
     for finding in &mut findings {
         finding.reason_code = code.clone();
         finding.package_id = package_id.into();
-        finding.finding_id = FindingV1::identity(
-            package_id,
-            &input.records[finding.record as usize].id,
-            &finding.subject_id,
-        )?;
+        finding.finding_id =
+            FindingV1::identity(package_id, &finding.anchor.record, &finding.subject_id)?;
     }
-    *data = algorithm::Finding::encode(&findings)?;
+    *data = algorithm::FindingChange::encode(&findings)?;
     for data in &mut output.datasets {
         match data.name.as_str() {
-            "metadata" => {
-                let mut rows = algorithm::Metadata::decode(data)?;
-                for row in &mut rows {
-                    row.package = GraphPackageCheckpointV1::from_package(
-                        &package,
-                        &package.exports[0],
-                        row.package.state.clone(),
-                        input.records.last().ok_or("last record")?.id.durable_cursor,
-                        input
-                            .records
-                            .iter()
-                            .map(|record| record.decode().map(|wire| wire.observed_boottime_ns))
-                            .collect::<Result<Vec<_>>>()?
-                            .into_iter()
-                            .max()
-                            .unwrap_or(0),
-                    );
-                }
-                *data = algorithm::Metadata::encode(&rows)?;
-            }
             "relationships" => {
-                let mut rows = algorithm::Relationship::decode(data)?;
+                let mut rows = algorithm::RelationshipChange::decode(data)?;
                 for row in &mut rows {
-                    row.edge.key.package_id = package_id.into();
+                    row.key.package_id = package_id.into();
                 }
-                *data = algorithm::Relationship::encode(&rows)?;
+                *data = algorithm::RelationshipChange::encode(&rows)?;
             }
             _ => {}
         }
@@ -543,26 +476,8 @@ fn declared_reason(package_id: &str, reason: &str) -> TestResult {
             vec![Arc::new(UInt64Array::from(vec![3]))],
         )?;
     }
-    let branches = findings
-        .iter()
-        .enumerate()
-        .map(|(row, finding)| {
-            let reason = output
-                .reasons
-                .iter()
-                .find(|reason| reason.output.row == row as u64)
-                .ok_or("declared finding reason")?;
-            let reason = FindingReasonV1::Declared(DeclaredFindingReasonV1::from_value(reason)?);
-            Ok(GraphBranchV1::from_finding(finding, &reason))
-        })
-        .collect::<TestResult<Vec<_>>>()?;
-    *output
-        .datasets
-        .iter_mut()
-        .find(|data| data.name == "branches")
-        .ok_or("branches")? = algorithm::Branch::encode(&branches)?;
     package.validate_output(&evaluation, &output)?;
-    owner.apply_output(&package, &evaluation, &output)?;
+    owner.apply_output(&package, &evaluation, &output, false, None)?;
     let snapshot = owner.finish()?;
     assert!(!snapshot.findings.is_empty());
     for finding in snapshot.findings {

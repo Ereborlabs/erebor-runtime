@@ -799,6 +799,379 @@ impl TryFrom<MetadataRow> for Metadata {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct ProgressRow {
+    pub record: RecordIdRow,
+    pub digest: ByteBuf,
+    pub state: Option<String>,
+}
+impl From<&super::super::Progress> for ProgressRow {
+    fn from(value: &super::super::Progress) -> Self {
+        Self {
+            record: RecordIdRow::from(&value.record),
+            digest: value.digest.clone(),
+            state: value.state.clone(),
+        }
+    }
+}
+impl TryFrom<ProgressRow> for super::super::Progress {
+    type Error = sdk::Error;
+    fn try_from(value: ProgressRow) -> sdk::Result<Self> {
+        Ok(Self {
+            record: value.record.try_into()?,
+            digest: value.digest,
+            state: value.state,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProgressRemovalRow {
+    record: RecordIdRow,
+}
+impl From<&ProgressRemoval> for ProgressRemovalRow {
+    fn from(value: &ProgressRemoval) -> Self {
+        Self {
+            record: RecordIdRow::from(&value.record),
+        }
+    }
+}
+impl TryFrom<ProgressRemovalRow> for ProgressRemoval {
+    type Error = sdk::Error;
+    fn try_from(value: ProgressRemovalRow) -> sdk::Result<Self> {
+        Ok(Self {
+            record: value.record.try_into()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FactAnchorRow {
+    record: RecordIdRow,
+    key: ContextKeyRow,
+    sensitivity: ContextSensitivityV1,
+    value: FactValueRow,
+}
+impl From<&FactAnchor> for FactAnchorRow {
+    fn from(value: &FactAnchor) -> Self {
+        Self {
+            record: RecordIdRow::from(&value.record),
+            key: ContextKeyRow::from(&value.key),
+            sensitivity: value.sensitivity,
+            value: FactValueRow::from(&value.value),
+        }
+    }
+}
+impl TryFrom<FactAnchorRow> for FactAnchor {
+    type Error = sdk::Error;
+    fn try_from(value: FactAnchorRow) -> sdk::Result<Self> {
+        Ok(Self {
+            record: value.record.try_into()?,
+            key: value.key.try_into()?,
+            sensitivity: value.sensitivity,
+            value: value.value.try_into()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AnchorRow {
+    record: RecordIdRow,
+    fact: Option<FactAnchorRow>,
+}
+impl From<&Anchor> for AnchorRow {
+    fn from(value: &Anchor) -> Self {
+        Self {
+            record: RecordIdRow::from(&value.record),
+            fact: value.fact.as_ref().map(FactAnchorRow::from),
+        }
+    }
+}
+impl TryFrom<AnchorRow> for Anchor {
+    type Error = sdk::Error;
+    fn try_from(value: AnchorRow) -> sdk::Result<Self> {
+        Ok(Self {
+            record: value.record.try_into()?,
+            fact: value.fact.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SubjectChangeRow {
+    anchor: AnchorRow,
+    key: SubjectKeyRow,
+}
+impl From<&SubjectChange> for SubjectChangeRow {
+    fn from(value: &SubjectChange) -> Self {
+        Self {
+            anchor: AnchorRow::from(&value.anchor),
+            key: SubjectKeyRow::from(&value.key),
+        }
+    }
+}
+impl TryFrom<SubjectChangeRow> for SubjectChange {
+    type Error = sdk::Error;
+    fn try_from(value: SubjectChangeRow) -> sdk::Result<Self> {
+        Ok(Self {
+            anchor: value.anchor.try_into()?,
+            key: value.key.try_into()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SubjectRemovalRow {
+    key: SubjectKeyRow,
+}
+impl From<&SubjectRemoval> for SubjectRemovalRow {
+    fn from(value: &SubjectRemoval) -> Self {
+        Self {
+            key: SubjectKeyRow::from(&value.key),
+        }
+    }
+}
+impl TryFrom<SubjectRemovalRow> for SubjectRemoval {
+    type Error = sdk::Error;
+    fn try_from(value: SubjectRemovalRow) -> sdk::Result<Self> {
+        Ok(Self {
+            key: value.key.try_into()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RelationshipIdentityRow {
+    from: SubjectKeyRow,
+    to: SubjectKeyRow,
+    edge_type: GraphEdgeTypeV1,
+    package_id: String,
+    evidence: Vec<RecordIdRow>,
+    cause: GraphCauseV1,
+}
+impl From<&RelationshipIdentity> for RelationshipIdentityRow {
+    fn from(value: &RelationshipIdentity) -> Self {
+        Self {
+            from: SubjectKeyRow::from(&value.from),
+            to: SubjectKeyRow::from(&value.to),
+            edge_type: value.edge_type,
+            package_id: value.package_id.clone(),
+            evidence: value.evidence.iter().map(RecordIdRow::from).collect(),
+            cause: value.cause,
+        }
+    }
+}
+impl TryFrom<RelationshipIdentityRow> for RelationshipIdentity {
+    type Error = sdk::Error;
+    fn try_from(value: RelationshipIdentityRow) -> sdk::Result<Self> {
+        Ok(Self {
+            from: value.from.try_into()?,
+            to: value.to.try_into()?,
+            edge_type: value.edge_type,
+            package_id: value.package_id,
+            evidence: value
+                .evidence
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<sdk::Result<_>>()?,
+            cause: value.cause,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RelationshipChangeRow {
+    anchor: AnchorRow,
+    key: RelationshipIdentityRow,
+    proof_quality: ProofRow,
+    required_coverage_interval_ids: Vec<ByteBuf>,
+    first_boottime_ns: u64,
+    last_boottime_ns: u64,
+}
+impl From<&RelationshipChange> for RelationshipChangeRow {
+    fn from(value: &RelationshipChange) -> Self {
+        Self {
+            anchor: AnchorRow::from(&value.anchor),
+            key: RelationshipIdentityRow::from(&value.key),
+            proof_quality: ProofRow::from(&value.proof_quality),
+            required_coverage_interval_ids: value
+                .required_coverage_interval_ids
+                .iter()
+                .map(|id| ByteBuf::from(id.to_vec()))
+                .collect(),
+            first_boottime_ns: value.first_boottime_ns,
+            last_boottime_ns: value.last_boottime_ns,
+        }
+    }
+}
+impl TryFrom<RelationshipChangeRow> for RelationshipChange {
+    type Error = sdk::Error;
+    fn try_from(value: RelationshipChangeRow) -> sdk::Result<Self> {
+        Ok(Self {
+            anchor: value.anchor.try_into()?,
+            key: value.key.try_into()?,
+            proof_quality: value.proof_quality.try_into()?,
+            required_coverage_interval_ids: value
+                .required_coverage_interval_ids
+                .into_iter()
+                .map(id)
+                .collect::<sdk::Result<_>>()?,
+            first_boottime_ns: value.first_boottime_ns,
+            last_boottime_ns: value.last_boottime_ns,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RelationshipRemovalRow {
+    key: RelationshipIdentityRow,
+}
+impl From<&RelationshipRemoval> for RelationshipRemovalRow {
+    fn from(value: &RelationshipRemoval) -> Self {
+        Self {
+            key: RelationshipIdentityRow::from(&value.key),
+        }
+    }
+}
+impl TryFrom<RelationshipRemovalRow> for RelationshipRemoval {
+    type Error = sdk::Error;
+    fn try_from(value: RelationshipRemovalRow) -> sdk::Result<Self> {
+        Ok(Self {
+            key: value.key.try_into()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FindingChangeRow {
+    anchor: AnchorRow,
+    prior_reason: Option<ByteBuf>,
+    tenant_id: ByteBuf,
+    finding_id: String,
+    package_id: String,
+    package_version: u64,
+    subject_id: SubjectKeyRow,
+    state: FindingStateV1,
+    window_start_utc_ns: i64,
+    window_end_utc_ns: i64,
+    evidence: Vec<RecordIdRow>,
+    required_coverage_interval_ids: Vec<ByteBuf>,
+    policy_provenance: Vec<PolicyRow>,
+    effects: Vec<EffectRow>,
+    reason_code: String,
+    severity: FindingSeverityV1,
+    sensitivity: ContextSensitivityV1,
+    required_action: Option<String>,
+    limits: Vec<String>,
+}
+impl TryFrom<&FindingChange> for FindingChangeRow {
+    type Error = sdk::Error;
+    fn try_from(value: &FindingChange) -> sdk::Result<Self> {
+        Ok(Self {
+            anchor: AnchorRow::from(&value.anchor),
+            prior_reason: value
+                .prior_reason
+                .as_ref()
+                .map(|reason| {
+                    let canonical = serde_value::to_value(reason)
+                        .map_err(|_| invalid("graph native prior reason"))?;
+                    rmp_serde::to_vec(&canonical)
+                        .map(ByteBuf::from)
+                        .map_err(|_| invalid("graph native prior reason"))
+                })
+                .transpose()?,
+            tenant_id: ByteBuf::from(value.tenant_id.to_vec()),
+            finding_id: value.finding_id.clone(),
+            package_id: value.package_id.clone(),
+            package_version: value.package_version,
+            subject_id: SubjectKeyRow::from(&value.subject_id),
+            state: value.state,
+            window_start_utc_ns: value.window_start_utc_ns,
+            window_end_utc_ns: value.window_end_utc_ns,
+            evidence: value.evidence.iter().map(RecordIdRow::from).collect(),
+            required_coverage_interval_ids: value
+                .required_coverage_interval_ids
+                .iter()
+                .map(|id| ByteBuf::from(id.to_vec()))
+                .collect(),
+            policy_provenance: value
+                .policy_provenance
+                .iter()
+                .map(PolicyRow::from)
+                .collect(),
+            effects: value.effects.iter().map(EffectRow::from).collect(),
+            reason_code: value.reason_code.clone(),
+            severity: value.severity,
+            sensitivity: value.sensitivity,
+            required_action: value.required_action.clone(),
+            limits: value.limits.clone(),
+        })
+    }
+}
+impl TryFrom<FindingChangeRow> for FindingChange {
+    type Error = sdk::Error;
+    fn try_from(value: FindingChangeRow) -> sdk::Result<Self> {
+        Ok(Self {
+            anchor: value.anchor.try_into()?,
+            prior_reason: value
+                .prior_reason
+                .map(|reason| {
+                    let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(&reason));
+                    let value = FindingReasonV1::deserialize(&mut decoder)
+                        .map_err(|_| invalid("graph native prior reason"))?;
+                    if decoder.position() != reason.len() as u64 {
+                        return Err(invalid("graph native prior reason"));
+                    }
+                    Ok(value)
+                })
+                .transpose()?,
+            tenant_id: id(value.tenant_id)?,
+            finding_id: value.finding_id,
+            package_id: value.package_id,
+            package_version: value.package_version,
+            subject_id: value.subject_id.try_into()?,
+            state: value.state,
+            window_start_utc_ns: value.window_start_utc_ns,
+            window_end_utc_ns: value.window_end_utc_ns,
+            evidence: value
+                .evidence
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<sdk::Result<_>>()?,
+            required_coverage_interval_ids: value
+                .required_coverage_interval_ids
+                .into_iter()
+                .map(id)
+                .collect::<sdk::Result<_>>()?,
+            policy_provenance: value
+                .policy_provenance
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<sdk::Result<_>>()?,
+            effects: value
+                .effects
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<sdk::Result<_>>()?,
+            reason_code: value.reason_code,
+            severity: value.severity,
+            sensitivity: value.sensitivity,
+            required_action: value.required_action,
+            limits: value.limits,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SubjectRow {
     pub record: u32,
     pub context: Option<u32>,
@@ -942,43 +1315,6 @@ impl TryFrom<FindingRow> for Finding {
             sensitivity: v.sensitivity,
             required_action: v.required_action,
             limits: v.limits,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct BranchRow {
-    pub package_id: String,
-    pub seed: SubjectKeyRow,
-    pub evidence: Vec<RecordIdRow>,
-    pub state: GraphBranchStateV1,
-    pub missing_fields: Vec<String>,
-}
-impl From<&GraphBranchV1> for BranchRow {
-    fn from(v: &GraphBranchV1) -> Self {
-        Self {
-            package_id: v.package_id.clone(),
-            seed: SubjectKeyRow::from(&v.seed),
-            evidence: v.evidence.iter().map(RecordIdRow::from).collect(),
-            state: v.state,
-            missing_fields: v.missing_fields.clone(),
-        }
-    }
-}
-impl TryFrom<BranchRow> for GraphBranchV1 {
-    type Error = sdk::Error;
-    fn try_from(v: BranchRow) -> sdk::Result<Self> {
-        Ok(Self {
-            package_id: v.package_id,
-            seed: v.seed.try_into()?,
-            evidence: v
-                .evidence
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<sdk::Result<_>>()?,
-            state: v.state,
-            missing_fields: v.missing_fields,
         })
     }
 }

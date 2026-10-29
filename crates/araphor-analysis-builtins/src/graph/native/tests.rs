@@ -10,7 +10,11 @@ fn native_ports_use_fields() -> sdk::Result<()> {
         Subject::port(),
         Relationship::port(),
         Finding::port(),
-        Branch::port(),
+        SubjectChange::port(),
+        SubjectRemoval::port(),
+        RelationshipChange::port(),
+        RelationshipRemoval::port(),
+        FindingChange::port(),
     ];
     assert_eq!(
         Fact::port()
@@ -54,7 +58,60 @@ fn native_ports_use_fields() -> sdk::Result<()> {
     assert!(Subject::decode(&Subject::encode(&[])?)?.is_empty());
     assert!(Relationship::decode(&Relationship::encode(&[])?)?.is_empty());
     assert!(Finding::decode(&Finding::encode(&[])?)?.is_empty());
-    assert!(Branch::decode(&Branch::encode(&[])?)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn stable_contribution_rows_roundtrip() -> sdk::Result<()> {
+    let records = vec![record(7, 11)];
+    let facts = facts();
+    let anchor = Anchor::from_positions(0, Some(0), &records, &facts)?;
+    let subject = SubjectChange {
+        anchor: anchor.clone(),
+        key: native_subject(),
+    };
+    assert_eq!(
+        SubjectChange::decode(&SubjectChange::encode(std::slice::from_ref(&subject))?)?,
+        vec![subject.clone()]
+    );
+    let subject_removal = SubjectRemoval {
+        key: subject.key.clone(),
+    };
+    assert_eq!(
+        SubjectRemoval::decode(&SubjectRemoval::encode(std::slice::from_ref(
+            &subject_removal,
+        ))?)?,
+        vec![subject_removal]
+    );
+    let key = RelationshipIdentity {
+        from: subject.key.clone(),
+        to: subject.key,
+        edge_type: GraphEdgeTypeV1::TaskInProcess,
+        package_id: "HF-PROC-001".into(),
+        evidence: records,
+        cause: GraphCauseV1::Direct,
+    };
+    let relationship = RelationshipChange {
+        anchor,
+        key: key.clone(),
+        proof_quality: proof(),
+        required_coverage_interval_ids: vec![[3; 16]],
+        first_boottime_ns: 1,
+        last_boottime_ns: 2,
+    };
+    assert_eq!(
+        RelationshipChange::decode(&RelationshipChange::encode(std::slice::from_ref(
+            &relationship,
+        ))?)?,
+        vec![relationship]
+    );
+    let removal = RelationshipRemoval { key };
+    assert_eq!(
+        RelationshipRemoval::decode(&RelationshipRemoval::encode(std::slice::from_ref(
+            &removal
+        ))?)?,
+        vec![removal]
+    );
     Ok(())
 }
 
@@ -423,6 +480,47 @@ fn resolved_rows_roundtrip() -> sdk::Result<()> {
         finding.clone(),
         "HF-PROC-001.UNEXPECTED_EFFECT".into(),
     );
+    let change = FindingChange::from_local(
+        row.clone(),
+        Anchor::from_positions(0, Some(1), &evidence, &facts())?,
+    );
+    assert_eq!(
+        FindingChange::decode(&FindingChange::encode(std::slice::from_ref(&change))?)?,
+        vec![change.clone()]
+    );
+    let mut first = std::collections::HashMap::new();
+    first.insert("z".into(), "last".into());
+    first.insert("a".into(), "first".into());
+    let mut reordered = std::collections::HashMap::new();
+    reordered.insert("a".into(), "first".into());
+    reordered.insert("z".into(), "last".into());
+    let code = change.reason_code.clone();
+    let declared = |field, schema| {
+        FindingReasonV1::Declared(DeclaredFindingReasonV1 {
+            code: code.clone(),
+            schema: sdk::Schema::new(vec![sdk::Field::new(
+                "detail",
+                sdk::DataType::UInt64,
+                false,
+            )
+            .with_metadata(field)])
+            .with_metadata(schema),
+            ipc: vec![1, 2, 3],
+        })
+    };
+    let mut one = change.clone();
+    one.prior_reason = Some(declared(first.clone(), reordered.clone()));
+    let mut two = change;
+    two.prior_reason = Some(declared(reordered, first));
+    assert_eq!(one, two);
+    assert_eq!(
+        FindingChange::encode(&[one.clone()])?.batches,
+        FindingChange::encode(&[two])?.batches,
+    );
+    assert_eq!(
+        FindingChange::decode(&FindingChange::encode(&[one.clone()])?)?,
+        [one]
+    );
     let decoded = Finding::decode(&Finding::encode(std::slice::from_ref(&row))?)?.remove(0);
     assert_eq!(decoded, row);
     assert_eq!(
@@ -462,25 +560,6 @@ fn resolved_rows_roundtrip() -> sdk::Result<()> {
         assert_eq!(
             Finding::decode(&Finding::encode(std::slice::from_ref(&row))?)?,
             vec![row]
-        );
-    }
-    for state in [
-        GraphBranchStateV1::Open,
-        GraphBranchStateV1::TerminalVerified,
-        GraphBranchStateV1::ContextualOnly,
-        GraphBranchStateV1::OutsideAuthority,
-        GraphBranchStateV1::CoverageUnknown,
-    ] {
-        let branch = Branch {
-            package_id: "HF-PROC-001".into(),
-            seed: native_subject(),
-            evidence: evidence.clone(),
-            state,
-            missing_fields: vec!["missing".into()],
-        };
-        assert_eq!(
-            Branch::decode(&Branch::encode(std::slice::from_ref(&branch))?)?,
-            vec![branch]
         );
     }
     for state in [

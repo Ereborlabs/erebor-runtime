@@ -378,6 +378,8 @@ pub struct ManagedPrior {
     pub checkpoint: Option<sdk::Checkpoint>,
     pub retained: Option<std::sync::Arc<RetainedCall>>,
     pub reusable: bool,
+    pub(in crate::analysis) native_graph: bool,
+    pub(in crate::analysis) native: Option<crate::analysis::graph_rows::GraphCallState>,
 }
 
 #[derive(Clone, Debug)]
@@ -406,6 +408,19 @@ impl RetainedCall {
 }
 
 impl ManagedPrior {
+    pub fn graph_prior(&self) -> Result<Option<Vec<sdk::Dataset>>> {
+        if self.native_graph {
+            Ok(Some(
+                self.native
+                    .as_ref()
+                    .ok_or_else(|| Code::Missing.error("Graph call native prior"))?
+                    .outputs()?,
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn state(
         &self,
         model: &sdk::Model,
@@ -459,11 +474,21 @@ impl ManagedPrior {
             return Ok((None, Vec::new()));
         }
         let previous = if continuation {
-            let retained = self
-                .retained
-                .as_ref()
-                .ok_or_else(|| Code::Invalid.error("managed prior outputs"))?;
-            let datasets = &retained.output.datasets;
+            let datasets = if self.native_graph {
+                return self
+                    .native
+                    .as_ref()
+                    .ok_or_else(|| Code::Missing.error("Graph call native prior"))?
+                    .outputs()
+                    .map(|datasets| (Some(checkpoint.clone()), datasets));
+            } else {
+                &self
+                    .retained
+                    .as_ref()
+                    .ok_or_else(|| Code::Invalid.error("managed prior outputs"))?
+                    .output
+                    .datasets
+            };
             if datasets.len() != model.outputs.len()
                 || datasets
                     .iter()
@@ -702,6 +727,17 @@ pub struct ManagedAttempt(
 );
 
 impl ManagedAttempt {
+    pub(in crate::analysis) fn native_prior(
+        &self,
+        call: u64,
+    ) -> Option<&crate::analysis::graph_rows::GraphCallState> {
+        self.3.get(&call).and_then(|prior| prior.native.as_ref())
+    }
+
+    pub(in crate::analysis) fn prior_result(&self, call: u64) -> Option<&PackageResultRefV1> {
+        self.0.capture.prior.get(&call).and_then(Option::as_ref)
+    }
+
     pub(in crate::analysis) fn follows_graph(&self) -> bool {
         self.0.capture.follows_graph(&self.1.spec)
     }

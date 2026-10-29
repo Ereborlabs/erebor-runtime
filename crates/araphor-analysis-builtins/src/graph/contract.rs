@@ -151,23 +151,26 @@ impl Detector {
 
     fn build_descriptor(self) -> sdk::Package {
         let inputs = Self::inputs().to_vec();
-        let mut findings = Finding::port();
+        let mut findings = FindingChange::port();
         findings.kind = sdk::OutputKind::Findings;
         findings.evidence_required = true;
         let details = ReasonDetails::port().schema;
-        let mut subjects = Subject::port();
+        let mut subjects = SubjectChange::port();
         subjects.kind = sdk::OutputKind::Subjects;
-        let mut relationships = Relationship::port();
+        let mut relationships = RelationshipChange::port();
         relationships.kind = sdk::OutputKind::Relationships;
         let mut model = sdk::Model::new(
             "detect",
             inputs,
             vec![
                 subjects,
+                SubjectRemoval::port(),
                 relationships,
+                RelationshipRemoval::port(),
                 findings,
-                GraphBranchV1::port(),
-                Metadata::port(),
+                FindingRemoval::port(),
+                Progress::port(),
+                ProgressRemoval::port(),
             ],
         );
         model.reasons = self
@@ -181,7 +184,7 @@ impl Detector {
         model.checkpoint = Some(sdk::CheckpointSpec {
             resume_input_changes: true,
             version: 1,
-            datasets: vec![GraphPackageStateV1::port(), Progress::port()],
+            datasets: vec![GraphPackageStateV1::port()],
         });
         sdk::Package::new(self.id(), "1", vec![model])
     }
@@ -199,7 +202,6 @@ impl Detector {
                 "graph package",
             ));
         }
-        let package = checked.package();
         let evaluation = checked.evaluation();
         let model = checked.model();
         if let Some(checkpoint) = &evaluation.checkpoint {
@@ -231,7 +233,7 @@ impl Detector {
         }
         let mut computation = Computation::new(records, facts, manifests.remove(0), self)?;
         computation.update(evaluation)?;
-        computation.output(package)
+        computation.output()
     }
 
     fn reasons(self) -> &'static [&'static str] {

@@ -109,8 +109,78 @@ pub(super) fn findings(
 ) -> sdk::Result<(Vec<Finding>, sdk::Output)> {
     let package = detector.descriptor();
     let report = package.test(fixture, |evaluation| detector.evaluate(evaluation))?;
-    let rows = Finding::decode(&report.output.datasets[2])?;
+    let records = Observation::decode(&fixture.evaluation.input("records")?.data)?;
+    let facts = Fact::decode(&fixture.evaluation.input("facts")?.data)?;
+    let rows = FindingChange::decode(&report.output.datasets[4])?
+        .into_iter()
+        .map(|change| {
+            let record = records
+                .iter()
+                .position(|row| row.id == change.anchor.record)
+                .ok_or_else(|| super::Computation::invalid("graph test record anchor"))?
+                as u32;
+            let context = change
+                .anchor
+                .fact
+                .as_ref()
+                .map(|anchor| {
+                    facts
+                        .iter()
+                        .position(|fact| {
+                            records.get(fact.record as usize).map(|row| &row.id)
+                                == Some(&anchor.record)
+                                && fact.key == anchor.key
+                                && fact.sensitivity == anchor.sensitivity
+                                && fact.value == anchor.value
+                        })
+                        .ok_or_else(|| super::Computation::invalid("graph test fact anchor"))
+                })
+                .transpose()?
+                .map(|index| index as u32);
+            Ok(change.local(record, context))
+        })
+        .collect::<sdk::Result<Vec<_>>>()?;
     Ok((rows, report.output))
+}
+
+pub(super) fn normalized_prior(output: &sdk::Output) -> sdk::Result<Vec<sdk::Dataset>> {
+    for name in [
+        "subject_removals",
+        "relationship_removals",
+        "finding_removals",
+        "progress_removals",
+    ] {
+        let data = output
+            .datasets
+            .iter()
+            .find(|data| data.name == name)
+            .ok_or_else(|| super::Computation::invalid("graph test output"))?;
+        let empty = match name {
+            "subject_removals" => SubjectRemoval::decode(data)?.is_empty(),
+            "relationship_removals" => RelationshipRemoval::decode(data)?.is_empty(),
+            "finding_removals" => FindingRemoval::decode(data)?.is_empty(),
+            _ => ProgressRemoval::decode(data)?.is_empty(),
+        };
+        if !empty {
+            return Err(super::Computation::invalid(
+                "graph test expected full output",
+            ));
+        }
+    }
+    let mut datasets = output.datasets.clone();
+    let findings = datasets
+        .iter_mut()
+        .find(|data| data.name == "findings")
+        .ok_or_else(|| super::Computation::invalid("graph test findings"))?;
+    let mut rows = FindingChange::decode(findings)?;
+    for row in &mut rows {
+        row.prior_reason = Some(FindingReasonV1::from_analysis_code(
+            &row.package_id,
+            &row.reason_code,
+        )?);
+    }
+    *findings = FindingChange::encode(&rows)?;
+    Ok(datasets)
 }
 
 pub(super) fn identity(cursor: u64) -> crate::discovery::DiscoveryRecordIdV1 {

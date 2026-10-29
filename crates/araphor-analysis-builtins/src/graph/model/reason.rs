@@ -1,8 +1,50 @@
 use araphor_analysis_sdk as sdk;
+use std::collections::BTreeMap;
 
-use super::{DeclaredFindingReasonV1, FindingReasonV1, FindingV1};
+use super::{DeclaredFindingReasonV1, Finding, FindingReasonV1, FindingV1};
+use crate::discovery::DiscoveryRecordIdV1;
+use crate::graph::ReasonDetails;
 
 impl FindingReasonV1 {
+    pub fn from_output(
+        package_id: &str,
+        finding: &Finding,
+        records: &BTreeMap<&DiscoveryRecordIdV1, u32>,
+        value: &sdk::ReasonValue,
+    ) -> sdk::Result<Self> {
+        if value.code != finding.reason_code
+            || value
+                .code
+                .strip_prefix(&format!("{package_id}."))
+                .is_none_or(str::is_empty)
+        {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Invalid,
+                "graph candidate reason",
+            ));
+        }
+        if let Some(known) = FindingV1::PACKAGES
+            .contains(&package_id)
+            .then(|| Self::from_analysis_code(package_id, &value.code).ok())
+            .flatten()
+            .filter(|_| value.details.schema().as_ref() == &ReasonDetails::port().schema)
+        {
+            let details = ReasonDetails::decode(&sdk::Dataset {
+                name: ReasonDetails::port().name,
+                batches: vec![value.details.clone()],
+            })?;
+            if details != [ReasonDetails::from_finding(finding, records)?] {
+                return Err(sdk::Error::contract(
+                    sdk::ErrorCode::Invalid,
+                    "graph candidate reason",
+                ));
+            }
+            Ok(known)
+        } else {
+            Ok(Self::Declared(DeclaredFindingReasonV1::from_value(value)?))
+        }
+    }
+
     pub fn analysis_code(&self, package_id: &str) -> sdk::Result<String> {
         if let Self::Declared(reason) = self {
             reason.validate(package_id)?;

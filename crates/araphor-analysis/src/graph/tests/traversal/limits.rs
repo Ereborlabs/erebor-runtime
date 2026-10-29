@@ -80,32 +80,37 @@ async fn traversal_input_caps() -> TestResult {
         .query(exact, "SELECT COUNT(*) FROM relationships")
         .await?;
     assert_eq!(TraversalFixture::count(&complete.1)?, 9);
-    for limits in [
-        Limits {
-            scan_bytes: 1,
-            ..Default::default()
-        },
-        Limits {
-            input_bytes: 1_024,
-            ..Default::default()
-        },
-    ] {
-        let error = fixture
-            .selected(
-                TraversalFixture::request(8),
-                AnalysisSelectionV1::new(source().tenant_id, vec![source()]),
-                limits,
-                Arc::new(AnalysisReadControl::default()),
-                "SELECT COUNT(*) FROM relationships",
-            )
-            .await
-            .err()
-            .ok_or("traversal input cap")?;
-        assert!(matches!(
-            TraversalFixture::data_error(error.as_ref()),
-            Some(araphor_data::Error::AnalysisInputTooLarge { .. })
-        ));
-    }
+    let (snapshot, _) = fixture
+        .selected(
+            TraversalFixture::request(8),
+            AnalysisSelectionV1::new(source().tenant_id, vec![source()]),
+            Limits {
+                scan_bytes: 1,
+                ..Default::default()
+            },
+            Arc::new(AnalysisReadControl::default()),
+            "SELECT COUNT(*) FROM relationships",
+        )
+        .await?;
+    assert_eq!(snapshot.page.extraction.scanned_bytes, 0);
+    let error = fixture
+        .selected(
+            TraversalFixture::request(8),
+            AnalysisSelectionV1::new(source().tenant_id, vec![source()]),
+            Limits {
+                input_bytes: 1_024,
+                ..Default::default()
+            },
+            Arc::new(AnalysisReadControl::default()),
+            "SELECT COUNT(*) FROM relationships",
+        )
+        .await
+        .err()
+        .ok_or("traversal input cap")?;
+    assert!(matches!(
+        TraversalFixture::data_error(error.as_ref()),
+        Some(araphor_data::Error::AnalysisInputTooLarge { .. })
+    ));
     Ok(())
 }
 

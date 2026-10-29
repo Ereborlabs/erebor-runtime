@@ -1,5 +1,4 @@
 use super::*;
-use crate::Rows;
 use erebor_interceptor_abi::{EffectPhysicalResultV1, KernelEffectFamilyV1};
 
 mod fixture;
@@ -63,7 +62,7 @@ fn detector_declarations_stay_independent() {
 }
 
 #[test]
-fn record_index_keeps_fact_ordinals() -> TestResult {
+fn record_anchor_keeps_fact_identity() -> TestResult {
     let detector = Detector::Process;
     let parent = FactValue::NativeParent {
         parent: subject(GraphSubjectKindV1::Task, 2_u64.to_be_bytes().to_vec()),
@@ -77,22 +76,23 @@ fn record_index_keeps_fact_ordinals() -> TestResult {
             fact(1, parent.clone()),
             fact(0, parent.clone()),
             fact(2, context(ContextClass::InMemory)),
-            fact(1, parent),
+            fact(1, parent.clone()),
         ],
     )?;
     let (findings, output) = findings(detector, &fixture)?;
-    let edges = Relationship::decode(&output.datasets[1])?;
+    let edges = RelationshipChange::decode(&output.datasets[2])?;
     assert_eq!(
         edges
             .iter()
-            .filter_map(|edge| edge.fact.map(|fact| (edge.record, fact)))
+            .filter_map(|edge| edge
+                .anchor
+                .fact
+                .as_ref()
+                .map(|fact| (edge.anchor.record.clone(), fact.value.clone())))
             .collect::<Vec<_>>(),
-        [(0, 1), (1, 0)]
+        [(identity(0), parent.clone()), (identity(1), parent),]
     );
-    let metadata = Metadata::decode(&output.datasets[4])?.remove(0);
-    assert_eq!(metadata.facts.len(), 4);
-    assert_eq!(metadata.facts[0].value, metadata.facts[3].value);
-    assert_eq!(metadata.facts[0].record, metadata.facts[3].record);
+    assert_eq!(Fact::decode(&fixture.evaluation.inputs[1].data)?.len(), 4);
     assert_eq!(
         findings
             .iter()
@@ -113,10 +113,15 @@ fn process_replay_checkpoint() -> TestResult {
     assert_eq!(first[0].state, FindingStateV1::Confirmed);
     assert_eq!(first[0].evidence, [identity(0)]);
     fixture.evaluation.inputs.reverse();
-    fixture.evaluation.checkpoint = output.checkpoint;
-    fixture.evaluation.previous_outputs = output.datasets;
-    let (replay, _) = findings(detector, &fixture)?;
-    assert_eq!(serde_json::to_value(first)?, serde_json::to_value(replay)?);
+    fixture.evaluation.checkpoint = output.checkpoint.clone();
+    fixture.evaluation.previous_outputs = normalized_prior(&output)?;
+    let (replay, output) = findings(detector, &fixture)?;
+    assert!(replay.is_empty());
+    assert!(FindingRemoval::decode(&output.datasets[5])?.is_empty());
+    assert_eq!(
+        FindingChange::decode(&fixture.evaluation.previous_outputs[4])?[0].finding_id,
+        first[0].finding_id
+    );
     Ok(())
 }
 
@@ -471,7 +476,6 @@ fn authority_publication(
     expected_edges: Vec<Relationship>,
 ) -> TestResult {
     let package = Detector::Credentials.descriptor();
-    let model = &package.exports[0];
     let expected_finding = computation
         .findings
         .values()
@@ -481,44 +485,91 @@ fn authority_publication(
     let prior_subjects = computation.subjects.clone();
     let expected_facts = computation.facts.clone();
     let expected_state = computation.state.clone();
-    let output = computation.output(&package)?;
+    let output = computation.output()?;
     package.validate_output(&fixture.evaluation, &output)?;
-    let subjects = Subject::decode(&output.datasets[0])?;
-    let edges = Relationship::decode(&output.datasets[1])?;
-    assert_eq!(edges.len(), expected_edges.len());
-    for (mut actual, expected) in edges.into_iter().zip(expected_edges) {
-        for (actual, expected) in [
-            (actual.edge.key.from, expected.edge.key.from),
-            (actual.edge.key.to, expected.edge.key.to),
-        ] {
-            assert_eq!(
-                subjects[actual as usize].key,
-                prior_subjects[expected as usize].key
-            );
-        }
-        actual.edge.key.from = expected.edge.key.from;
-        actual.edge.key.to = expected.edge.key.to;
-        assert_eq!(actual, expected);
-    }
-    let findings = Finding::decode(&output.datasets[2])?;
-    assert_eq!(findings, [expected_finding]);
+    let record_ids = Observation::decode(&fixture.evaluation.inputs[0].data)?
+        .into_iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    let subjects = SubjectChange::decode(&output.datasets[0])?;
+    assert_eq!(subjects.len(), prior_subjects.len());
+    let mut expected_subjects = prior_subjects
+        .iter()
+        .map(|subject| {
+            Ok(SubjectChange {
+                anchor: Anchor::from_positions(
+                    subject.record,
+                    subject.context,
+                    &record_ids,
+                    &expected_facts,
+                )?,
+                key: subject.key.clone(),
+            })
+        })
+        .collect::<sdk::Result<Vec<_>>>()?;
+    expected_subjects.sort_by(|left, right| left.key.cmp(&right.key));
+    assert_eq!(subjects, expected_subjects);
+    let keys = prior_subjects
+        .iter()
+        .map(|subject| subject.key.clone())
+        .collect::<Vec<_>>();
+    let mut expected_changes = expected_edges
+        .into_iter()
+        .map(|edge| {
+            Ok(RelationshipChange {
+                anchor: Anchor::from_positions(
+                    edge.record,
+                    edge.fact,
+                    &record_ids,
+                    &expected_facts,
+                )?,
+                key: RelationshipIdentity::from_keys(&edge.edge.key, &keys, &record_ids)?,
+                proof_quality: edge.edge.proof_quality,
+                required_coverage_interval_ids: edge.edge.required_coverage_interval_ids,
+                first_boottime_ns: edge.edge.first_boottime_ns,
+                last_boottime_ns: edge.edge.last_boottime_ns,
+            })
+        })
+        .collect::<sdk::Result<Vec<_>>>()?;
+    expected_changes.sort_by(|left, right| left.key.cmp(&right.key));
+    assert_eq!(
+        RelationshipChange::decode(&output.datasets[2])?,
+        expected_changes
+    );
+    let findings = FindingChange::decode(&output.datasets[4])?;
+    assert_eq!(
+        findings,
+        [FindingChange::from_local(
+            expected_finding.clone(),
+            Anchor::from_positions(
+                expected_finding.record,
+                expected_finding.context,
+                &record_ids,
+                &expected_facts
+            )?,
+        )]
+    );
     assert_eq!(output.reasons.len(), 1);
     assert_eq!(output.reasons[0].code, findings[0].reason_code);
     let details = ReasonDetails::decode(&sdk::Dataset {
-        name: model.outputs[2].name.clone(),
+        name: ReasonDetails::port().name,
         batches: vec![output.reasons[0].details.clone()],
     })?;
-    let metadata = Metadata::decode(&output.datasets[4])?.remove(0);
-    assert_eq!(metadata.facts, expected_facts);
-    let record_rows = metadata
-        .record_ids
+    assert_eq!(
+        Fact::decode(&fixture.evaluation.inputs[1].data)?,
+        expected_facts
+    );
+    let record_rows = record_ids
         .iter()
         .enumerate()
         .map(|(row, id)| (id, row as u32))
         .collect();
     assert_eq!(
         details,
-        [ReasonDetails::from_finding(&findings[0], &record_rows)?]
+        [ReasonDetails::from_finding(
+            &expected_finding,
+            &record_rows
+        )?]
     );
     assert_eq!(
         output
@@ -555,17 +606,14 @@ fn empty_inputs_retain_state() -> TestResult {
     ] {
         let fixture = fixture(detector, &[], &[])?;
         let output = detector.evaluate(&fixture.evaluation)?;
-        assert!(Subject::decode(&output.datasets[0])?.is_empty());
-        assert!(Relationship::decode(&output.datasets[1])?.is_empty());
-        assert!(Finding::decode(&output.datasets[2])?.is_empty());
-        assert!(GraphBranchV1::decode(&output.datasets[3])?.is_empty());
-        let metadata = Metadata::decode(&output.datasets[4])?;
-        assert_eq!(metadata.len(), 1);
-        assert!(metadata[0].record_ids.is_empty());
-        assert!(metadata[0].facts.is_empty());
-        assert_eq!(metadata[0].package.accepted_cursor_watermark, 0);
-        assert_eq!(metadata[0].package.observed_boottime_watermark_ns, 0);
-        assert_eq!(serde_json::to_value(&metadata[0].package.state)?, state);
+        assert!(SubjectChange::decode(&output.datasets[0])?.is_empty());
+        assert!(SubjectRemoval::decode(&output.datasets[1])?.is_empty());
+        assert!(RelationshipChange::decode(&output.datasets[2])?.is_empty());
+        assert!(RelationshipRemoval::decode(&output.datasets[3])?.is_empty());
+        assert!(FindingChange::decode(&output.datasets[4])?.is_empty());
+        assert!(FindingRemoval::decode(&output.datasets[5])?.is_empty());
+        assert!(Progress::decode(&output.datasets[6])?.is_empty());
+        assert!(ProgressRemoval::decode(&output.datasets[7])?.is_empty());
         let checkpoint = output.checkpoint.as_ref().ok_or("checkpoint")?;
         let states = GraphPackageStateV1::decode(&checkpoint.datasets[0])?;
         assert_eq!(states.len(), 1);
@@ -589,7 +637,7 @@ fn checkpoint_requires_one_state() -> TestResult {
         let mut checkpoint = output.checkpoint.clone().ok_or("checkpoint")?;
         checkpoint.datasets[0] = GraphPackageStateV1::encode(&states)?;
         evaluation.checkpoint = Some(checkpoint);
-        evaluation.previous_outputs = output.datasets.clone();
+        evaluation.previous_outputs = normalized_prior(&output)?;
         assert!(detector.evaluate(&evaluation).is_err());
     }
     Ok(())

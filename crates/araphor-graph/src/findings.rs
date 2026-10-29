@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -80,7 +80,7 @@ impl FindingRows {
         revision: u64,
         findings: &[FindingRefs<'_>],
         batch_rows: usize,
-    ) -> Result<()> {
+    ) -> Result<BTreeMap<String, u64>> {
         if batch_rows == 0 {
             return InvalidSnafu {
                 field: "graph finding batch size",
@@ -98,6 +98,7 @@ impl FindingRows {
             })?;
         let mut selected = BTreeSet::new();
         let mut names = BTreeSet::new();
+        let mut values = BTreeMap::new();
         let mut added = Vec::new();
         let mut candidates = writer
             .prepare(
@@ -169,6 +170,7 @@ impl FindingRows {
                 }
                 .fail();
             }
+            values.insert(finding.finding_id.clone(), id);
         }
         drop(candidates);
         if !added.is_empty() {
@@ -251,7 +253,7 @@ impl FindingRows {
         appender.flush().context(DatabaseSnafu {
             operation: "flush graph finding membership",
         })?;
-        Ok(())
+        Ok(values)
     }
 
     fn value_hash(references: &FindingRefs<'_>) -> Result<[u8; 32]> {

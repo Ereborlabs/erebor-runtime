@@ -963,7 +963,7 @@ fn extra(fixture: &Fixture, id: &str) -> TestResult {
                 .ok_or("extra Graph export")?;
             Ok(PackageImplementationV1::Sql {
                 export: export.into(),
-                program: Fixture::sql(&descriptor, model)?,
+                program: Fixture::sql(model)?,
             })
         })
         .collect::<TestResult<Vec<_>>>()?;

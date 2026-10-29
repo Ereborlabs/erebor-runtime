@@ -20,7 +20,7 @@ pub use model::*;
 pub const GRAPH_WINDOW_NS: u64 = 300_000_000_000;
 pub const GRAPH_WITNESS_TTL_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
-use incremental::Progress;
+pub use incremental::{Progress, ProgressRemoval};
 use GraphContextActionV1 as ContextClass;
 use GraphFactValueV1 as FactValue;
 use GraphReadPathV1 as ReadPath;
@@ -43,6 +43,10 @@ struct Computation {
     subject_indices: BTreeMap<GraphSubjectKeyV1, u32>,
     edges: BTreeMap<GraphEdgeKeyV1, Relationship>,
     findings: BTreeMap<String, Finding>,
+    prior_findings: BTreeMap<String, (FindingV1, FindingAnchor)>,
+    prior_subjects: BTreeMap<GraphSubjectKeyV1, SubjectChange>,
+    prior_edges: BTreeMap<RelationshipIdentity, RelationshipChange>,
+    prior_progress: BTreeMap<crate::discovery::DiscoveryRecordIdV1, Progress>,
     state: String,
     progress: Vec<Progress>,
     #[cfg(test)]
@@ -65,21 +69,43 @@ impl Computation {
                 return Err(Self::invalid("graph record identity"));
             }
         }
+        let mut fact_rows: Vec<Vec<usize>> = vec![Vec::new(); records.len()];
+        let mut fact_ids = Vec::with_capacity(facts.len());
+        for (index, fact) in facts.iter().enumerate() {
+            let rows = fact_rows
+                .get_mut(fact.record as usize)
+                .ok_or_else(|| Self::invalid("graph record reference"))?;
+            fact_ids.push(
+                rows.iter()
+                    .copied()
+                    .find(|&previous| facts[previous].value == fact.value)
+                    .unwrap_or(index),
+            );
+            rows.push(index);
+        }
         let progress = records
             .iter()
-            .map(|record| Progress::new(record, manifest.window_ns))
+            .zip(&fact_rows)
+            .map(|(record, rows)| {
+                let basis = rows.iter().map(|&index| &facts[index]).collect::<Vec<_>>();
+                Progress::new(record, manifest.window_ns, &basis)
+            })
             .collect::<sdk::Result<_>>()?;
-        let mut computation = Self {
-            fact_rows: vec![Vec::new(); records.len()],
+        let computation = Self {
+            fact_rows,
             records,
             facts,
-            fact_ids: Vec::new(),
+            fact_ids,
             manifest,
             detector,
             subjects: Vec::new(),
             subject_indices: BTreeMap::new(),
             edges: BTreeMap::new(),
             findings: BTreeMap::new(),
+            prior_findings: BTreeMap::new(),
+            prior_subjects: BTreeMap::new(),
+            prior_edges: BTreeMap::new(),
+            prior_progress: BTreeMap::new(),
             progress,
             #[cfg(test)]
             work: 0,
@@ -89,17 +115,6 @@ impl Computation {
             }
             .into(),
         };
-        for (index, fact) in computation.facts.iter().enumerate() {
-            computation.record(fact.record)?;
-            let rows = &mut computation.fact_rows[fact.record as usize];
-            computation.fact_ids.push(
-                rows.iter()
-                    .copied()
-                    .find(|&previous| computation.facts[previous].value == fact.value)
-                    .unwrap_or(index),
-            );
-            rows.push(index);
-        }
         Ok(computation)
     }
 

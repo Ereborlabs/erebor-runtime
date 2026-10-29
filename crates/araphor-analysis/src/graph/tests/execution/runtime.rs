@@ -271,8 +271,13 @@ impl Fixture {
     pub(in crate::graph::tests) fn sql(output: &sdk::Output) -> TestResult<SqlModelV1> {
         let mut sql = SqlModelV1::default();
         for data in &output.datasets {
-            sql.outputs
-                .insert(data.name.clone(), Self::rows(&data.batches)?);
+            sql.outputs.insert(
+                data.name.clone(),
+                format!(
+                    "SELECT * FROM ({}) AS rows WHERE NOT EXISTS (SELECT 1 FROM prior_state)",
+                    Self::rows(&data.batches)?
+                ),
+            );
         }
         if let Some(checkpoint) = &output.checkpoint {
             for data in &checkpoint.datasets {
@@ -295,7 +300,7 @@ impl Fixture {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            sql.evidence = Some(format!("SELECT * FROM (VALUES {rows}) AS links(output_dataset, output_row, input_dataset, input_row)"));
+            sql.evidence = Some(format!("SELECT * FROM (VALUES {rows}) AS links(output_dataset, output_row, input_dataset, input_row) WHERE NOT EXISTS (SELECT 1 FROM prior_state)"));
         }
         let mut reasons = BTreeMap::<_, (sdk::arrow_schema::SchemaRef, Vec<String>)>::new();
         for reason in &output.reasons {
@@ -321,7 +326,7 @@ impl Fixture {
                 output,
                 code,
                 sql: format!(
-                    "SELECT * FROM (VALUES {}) AS details({columns})",
+                    "SELECT * FROM (VALUES {}) AS details({columns}) WHERE NOT EXISTS (SELECT 1 FROM prior_state)",
                     rows.join(", ")
                 ),
             });

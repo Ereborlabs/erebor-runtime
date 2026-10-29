@@ -26,6 +26,17 @@ fn records(count: usize) -> Vec<Observation> {
         .collect()
 }
 
+fn package_state(output: &sdk::Output) -> sdk::Result<GraphPackageStateV1> {
+    let checkpoint = output
+        .checkpoint
+        .as_ref()
+        .ok_or_else(|| Computation::invalid("graph test checkpoint"))?;
+    GraphPackageStateV1::decode(&checkpoint.datasets[0])?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Computation::invalid("graph test state"))
+}
+
 fn measured(detector: Detector, evaluation: &sdk::Evaluation) -> sdk::Result<(sdk::Output, usize)> {
     let package = detector.descriptor();
     let mut work = 0;
@@ -39,7 +50,7 @@ fn measured(detector: Detector, evaluation: &sdk::Evaluation) -> sdk::Result<(sd
         )?;
         computation.update(evaluation)?;
         work = computation.work;
-        computation.output(&package)
+        computation.output()
     })?;
     Ok((output, work))
 }
@@ -58,22 +69,101 @@ fn continued(
     if let Some(checkpoint) = &mut resumed.checkpoint {
         checkpoint.datasets.reverse();
     }
-    resumed.previous_outputs = prior.datasets.clone();
+    resumed.previous_outputs = normalized_prior(prior)?;
     resumed.previous_outputs.reverse();
     let actual = detector.evaluate(&resumed)?;
     let (counted, work) = measured(detector, &resumed)?;
     let package = detector.descriptor();
-    assert_eq!(
-        sdk::wire::Output::encode(&package, &resumed, &actual)?,
-        sdk::wire::Output::encode(&package, &complete, &expected)?,
-        "complete and continued {detector:?} output"
+    let same = |left: &sdk::Dataset, right: &sdk::Dataset| {
+        left.name == right.name && left.batches == right.batches
+    };
+    assert!(
+        matches!(
+            (actual.checkpoint.as_ref(), expected.checkpoint.as_ref()),
+            (Some(left), Some(right))
+                if left.version == right.version
+                    && left.datasets.len() == right.datasets.len()
+                    && left.datasets.iter().zip(&right.datasets).all(|(left, right)| same(left, right))
+        ),
+        "checkpoint"
     );
-    assert_eq!(
-        sdk::wire::Output::encode(&package, &resumed, &counted)?,
-        sdk::wire::Output::encode(&package, &resumed, &actual)?,
+    assert!(
+        sdk::wire::Output::encode(&package, &resumed, &counted)?
+            == sdk::wire::Output::encode(&package, &resumed, &actual)?,
         "counted and public {detector:?} execution"
     );
-    Ok((actual, work))
+    let mut subjects = SubjectChange::decode(&prior.datasets[0])?
+        .into_iter()
+        .map(|row| (row.key.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+    for row in SubjectRemoval::decode(&actual.datasets[1])? {
+        assert!(subjects.remove(&row.key).is_some());
+    }
+    for row in SubjectChange::decode(&actual.datasets[0])? {
+        assert!(subjects.insert(row.key.clone(), row).is_none());
+    }
+    assert_eq!(
+        subjects,
+        SubjectChange::decode(&expected.datasets[0])?
+            .into_iter()
+            .map(|row| (row.key.clone(), row))
+            .collect()
+    );
+    let mut edges = RelationshipChange::decode(&prior.datasets[2])?
+        .into_iter()
+        .map(|row| (row.key.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+    for row in RelationshipRemoval::decode(&actual.datasets[3])? {
+        assert!(edges.remove(&row.key).is_some());
+    }
+    for row in RelationshipChange::decode(&actual.datasets[2])? {
+        assert!(edges.insert(row.key.clone(), row).is_none());
+    }
+    assert_eq!(
+        edges,
+        RelationshipChange::decode(&expected.datasets[2])?
+            .into_iter()
+            .map(|row| (row.key.clone(), row))
+            .collect()
+    );
+    let mut findings = FindingChange::decode(&prior.datasets[4])?
+        .into_iter()
+        .map(|row| (row.finding_id.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+    for row in FindingRemoval::decode(&actual.datasets[5])? {
+        assert!(findings.remove(&row.finding_id).is_some());
+    }
+    for row in FindingChange::decode(&actual.datasets[4])? {
+        assert!(findings.insert(row.finding_id.clone(), row).is_none());
+    }
+    for row in findings.values_mut() {
+        row.prior_reason = None;
+    }
+    assert_eq!(
+        findings,
+        FindingChange::decode(&expected.datasets[4])?
+            .into_iter()
+            .map(|row| (row.finding_id.clone(), row))
+            .collect()
+    );
+    let mut progress = Progress::decode(&prior.datasets[6])?
+        .into_iter()
+        .map(|row| (row.record.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+    for row in ProgressRemoval::decode(&actual.datasets[7])? {
+        assert!(progress.remove(&row.record).is_some());
+    }
+    for row in Progress::decode(&actual.datasets[6])? {
+        assert!(progress.insert(row.record.clone(), row).is_none());
+    }
+    assert_eq!(
+        progress,
+        Progress::decode(&expected.datasets[6])?
+            .into_iter()
+            .map(|row| (row.record.clone(), row))
+            .collect()
+    );
+    Ok((expected, work))
 }
 
 fn credential_input() -> sdk::Result<(Vec<Observation>, Vec<Fact>)> {
@@ -82,6 +172,33 @@ fn credential_input() -> sdk::Result<(Vec<Observation>, Vec<Fact>)> {
         Observation::decode(&fixture.evaluation.input("records")?.data)?,
         Fact::decode(&fixture.evaluation.input("facts")?.data)?,
     ))
+}
+
+#[test]
+fn finding_delta_tracks_stable_anchor() -> TestResult {
+    let detector = Detector::Process;
+    let input = input(
+        detector,
+        &records(2),
+        &[fact(0, context(ContextClass::OutsideAuthority))],
+        100,
+    )?;
+    let output = detector.evaluate(&input)?;
+    let finding = FindingChange::decode(&output.datasets[4])?
+        .into_iter()
+        .find(|finding| finding.anchor.fact.is_some())
+        .ok_or("context finding")?;
+    let original = finding.anchor;
+    let ids = Observation::decode(&input.inputs[0].data)?
+        .into_iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    let mut facts = Fact::decode(&input.inputs[1].data)?;
+    assert_eq!(original, Anchor::from_positions(0, Some(0), &ids, &facts)?);
+    assert_ne!(original, Anchor::from_positions(1, Some(0), &ids, &facts)?);
+    facts[0].key.owner_revision += 1;
+    assert_ne!(original, Anchor::from_positions(0, Some(0), &ids, &facts)?);
+    Ok(())
 }
 
 #[test]
@@ -96,13 +213,13 @@ fn late_authority_updates_seed() -> TestResult {
     let first = input(detector, &records[..1], &first_facts, 100)?;
     let prior = detector.evaluate(&first)?;
     assert_eq!(
-        Finding::decode(&prior.datasets[2])?[0].reason_code,
+        FindingChange::decode(&prior.datasets[4])?[0].reason_code,
         "HF-DW-001.MISSING_AUTHORITY_PROOF"
     );
     let current = input(detector, &records, &facts, 100)?;
     let (output, work) = continued(detector, &current, &prior)?;
     assert_eq!(work, 3);
-    let findings = Finding::decode(&output.datasets[2])?;
+    let findings = FindingChange::decode(&output.datasets[4])?;
     assert_eq!(findings[0].state, FindingStateV1::Confirmed);
     assert_eq!(findings[0].evidence.len(), 3);
     assert_eq!(continued(detector, &current, &output)?.1, 0);
@@ -129,7 +246,7 @@ fn contextual_authority_needs_no_network() -> TestResult {
     let (output, work) = continued(detector, &input(detector, &records, &facts, 100)?, &prior)?;
     assert_eq!(work, 2);
     assert_eq!(
-        Finding::decode(&output.datasets[2])?[0].reason_code,
+        FindingChange::decode(&output.datasets[4])?[0].reason_code,
         "HF-DW-001.CONTEXTUAL_CREDENTIAL_PIVOT"
     );
     Ok(())
@@ -166,10 +283,10 @@ fn retained_state_survives_update() -> TestResult {
     )?;
     assert_eq!(work, 3);
     assert_eq!(
-        Metadata::decode(&output.datasets[4])?[0].package.state,
+        package_state(&output)?,
         GraphPackageStateV1::CoverageInsufficient
     );
-    assert!(Finding::decode(&output.datasets[2])?
+    assert!(FindingChange::decode(&output.datasets[4])?
         .iter()
         .any(|finding| finding.state == FindingStateV1::Confirmed));
     Ok(())
@@ -185,7 +302,7 @@ fn new_network_promotes_authority() -> TestResult {
     old_facts[1].record = 1;
     let prior = detector.evaluate(&input(detector, &old_records, &old_facts, 100)?)?;
     assert_eq!(
-        Finding::decode(&prior.datasets[2])?[0].reason_code,
+        FindingChange::decode(&prior.datasets[4])?[0].reason_code,
         "HF-DW-001.CONTEXTUAL_CREDENTIAL_PIVOT"
     );
     let mut current = input(detector, &records, &facts, 100)?;
@@ -196,7 +313,7 @@ fn new_network_promotes_authority() -> TestResult {
     let (output, work) = continued(detector, &current, &prior)?;
     assert_eq!(work, 2);
     assert_eq!(
-        Finding::decode(&output.datasets[2])?[0].state,
+        FindingChange::decode(&output.datasets[4])?[0].state,
         FindingStateV1::Confirmed
     );
     Ok(())
@@ -237,15 +354,15 @@ fn shared_edges_update_seeds() -> TestResult {
         selected.push(policy);
     }
     let prior = detector.evaluate(&input(detector, &records, &selected, 100)?)?;
-    let edges = Relationship::decode(&prior.datasets[1])?;
+    let edges = RelationshipChange::decode(&prior.datasets[2])?;
     assert_eq!(
         edges
             .iter()
-            .filter(|edge| edge.edge.key.evidence == [0, 1, 2])
+            .filter(|edge| edge.key.evidence == [identity(0), identity(1), identity(2)])
             .count(),
         1
     );
-    assert_eq!(Finding::decode(&prior.datasets[2])?.len(), 2);
+    assert_eq!(FindingChange::decode(&prior.datasets[4])?.len(), 2);
     let remaining = records[1..].to_vec();
     let remaining_facts = selected
         .iter()
@@ -263,9 +380,9 @@ fn shared_edges_update_seeds() -> TestResult {
     )?;
     assert_eq!(work, 1);
     assert_eq!(
-        Relationship::decode(&expired.datasets[1])?
+        RelationshipChange::decode(&expired.datasets[2])?
             .iter()
-            .filter(|edge| edge.edge.key.evidence == [0, 1])
+            .filter(|edge| edge.key.evidence == [identity(1), identity(2)])
             .count(),
         1
     );
@@ -284,14 +401,14 @@ fn shared_edges_update_seeds() -> TestResult {
         &prior,
     )?;
     assert_eq!(work, 3);
-    let findings = Finding::decode(&output.datasets[2])?;
+    let findings = FindingChange::decode(&output.datasets[4])?;
     assert_eq!(findings.len(), 2);
     assert!(findings
         .iter()
         .all(|finding| finding.reason_code == "HF-DW-001.CONTRADICTION"));
-    assert!(Relationship::decode(&output.datasets[1])?
+    assert!(RelationshipChange::decode(&output.datasets[2])?
         .iter()
-        .all(|edge| edge.edge.key.cause == GraphCauseV1::Contradicted));
+        .all(|edge| edge.key.cause == GraphCauseV1::Contradicted));
     Ok(())
 }
 
@@ -311,13 +428,10 @@ fn suppressed_finding_keeps_state() -> TestResult {
     facts.push(unreviewed);
     let prior = detector.evaluate(&input(detector, &records, &facts, 100)?)?;
     assert_eq!(
-        Finding::decode(&prior.datasets[2])?[0].state,
+        FindingChange::decode(&prior.datasets[4])?[0].state,
         FindingStateV1::Confirmed
     );
-    assert_eq!(
-        Metadata::decode(&prior.datasets[4])?[0].package.state,
-        GraphPackageStateV1::ContextualPivot
-    );
+    assert_eq!(package_state(&prior)?, GraphPackageStateV1::ContextualPivot);
     let mut added = record();
     added.id = identity(3);
     added.observed_boottime_ns = 1_000;
@@ -362,12 +476,19 @@ fn merged_edge_keeps_anchor() -> TestResult {
         &prior,
     )?;
     assert_eq!(work, 2);
-    let edges = Relationship::decode(&output.datasets[1])?;
+    let edges = RelationshipChange::decode(&output.datasets[2])?;
     assert_eq!(edges.len(), 1);
     let edge = &edges[0];
-    assert_eq!(edge.edge.key.evidence, [0, 1, 2]);
-    assert_eq!(edge.edge.key.cause, GraphCauseV1::Contradicted);
-    assert_eq!(edge.fact, Some(4));
+    assert_eq!(edge.key.evidence, [identity(0), identity(1), identity(2)]);
+    assert_eq!(edge.key.cause, GraphCauseV1::Contradicted);
+    let ids = records
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        edge.anchor,
+        Anchor::from_positions(0, Some(4), &ids, &selected)?
+    );
     let FactValue::AuthorityUse {
         mut proof_quality, ..
     } = selected[4].value
@@ -375,6 +496,6 @@ fn merged_edge_keeps_anchor() -> TestResult {
         return Err("authority fixture".into());
     };
     proof_quality.operation_result_authority = OperationResultAuthorityV1::Unknown;
-    assert_eq!(edge.edge.proof_quality, proof_quality);
+    assert_eq!(edge.proof_quality, proof_quality);
     Ok(())
 }

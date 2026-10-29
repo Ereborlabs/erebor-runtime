@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use duckdb::{params, Connection};
+use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::super::AnalysisStore;
@@ -421,6 +421,7 @@ impl AnalysisStore {
         {
             return Self::reject_path(root, "the managed heads differ from completed attempts");
         }
+        crate::analysis::graph_rows::GraphCallRows::validate(reader, root)?;
         let mut statement = reader.prepare("SELECT tenant_id, result_id, processor_id, commit_revision FROM analysis_results WHERE processor_id IN ('managed-package-v1', 'managed-definition-v1')")
             .context(AnalysisDatabaseSnafu { operation: "prepare complete managed recovery" })?;
         let rows = statement
@@ -455,9 +456,61 @@ impl AnalysisStore {
                         .ok_or_else(|| {
                             crate::PackageErrorCodeV1::Missing.error("managed evaluation attempt")
                         })?;
-                owner.grant = attempt.capture.grant;
+                let evaluated = Self::managed_version_from(
+                    reader,
+                    tenant,
+                    &record.instance,
+                    attempt.capture.generation,
+                )?;
+                owner.spec = evaluated.clone();
+                owner.generation = attempt.capture.generation;
+                owner.grant = attempt.capture.grant.clone();
                 let control = crate::AnalysisReadControl::default();
-                Self::saved_evaluation_from(reader, &owner, &id, &control)?.decode(&control)?;
+                let evaluation =
+                    Self::saved_evaluation_from(reader, &owner, &id, &control)?.decode(&control)?;
+                let descriptor = Self::managed_contract(reader, tenant, &record.declaration)?;
+                let native = matches!(&evaluated.destination,
+                    super::ManagedDestination::Graph { calls, .. } if calls.contains(&record.call))
+                    && descriptor
+                        .exports
+                        .iter()
+                        .find(|model| model.name == record.declaration.export)
+                        .is_some_and(araphor_analysis_builtins::graph::Detector::supports);
+                let base: Option<Option<String>> = reader
+                    .query_row(
+                        "SELECT base_result_id FROM graph_call_versions WHERE result_id = ?",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "validate Graph call result binding",
+                    })?;
+                if native {
+                    let base = base.ok_or_else(|| {
+                        crate::PackageErrorCodeV1::Missing.error("Graph call native version")
+                    })?;
+                    let expected = attempt
+                        .capture
+                        .prior
+                        .get(&record.call)
+                        .and_then(Option::as_ref)
+                        .map(|reference| reference.result_id.as_str());
+                    if base.as_deref() != expected {
+                        return Self::reject_path(root, "the Graph call base result differs");
+                    }
+                    crate::analysis::graph_rows::GraphCallRows::load(
+                        reader,
+                        &evaluated,
+                        record.call,
+                        &id,
+                        revision,
+                        &evaluation,
+                        &control,
+                    )?;
+                } else if base.is_some() {
+                    return Self::reject_path(root, "a generic call has a native Graph version");
+                }
             } else {
                 let (step, packet, _) = Self::managed_step_from(reader, tenant, &id)?;
                 let (_, schema) =

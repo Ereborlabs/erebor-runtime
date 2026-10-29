@@ -63,6 +63,7 @@ pub struct CallResult {
     output: sdk::Output,
     origin: Origin,
     retained: Option<araphor_data::analysis::PackageResultRefV1>,
+    graph_prior: Option<Vec<sdk::Dataset>>,
     _input: Arc<MemoryReservation>,
     _output: Arc<MemoryReservation>,
 }
@@ -218,6 +219,10 @@ impl CallResult {
 
     pub fn retained(&self) -> Option<&araphor_data::analysis::PackageResultRefV1> {
         self.retained.as_ref()
+    }
+
+    pub fn graph_prior(&self) -> Option<&[sdk::Dataset]> {
+        self.graph_prior.as_deref()
     }
 }
 
@@ -846,6 +851,27 @@ impl PackageExec {
             result_id: prior.result.clone(),
             commit_revision: prior.revision,
         });
+        let graph_prior = retained
+            .filter(|_| evaluation.previous_outputs.is_empty())
+            .map(|prior| prior.graph_prior().map_err(external))
+            .transpose()?
+            .flatten();
+        if let Some(datasets) = &graph_prior {
+            for batch in datasets.iter().flat_map(|data| &data.batches) {
+                owner.memory.retain_input(batch, &input)?;
+            }
+            let allocated = datasets
+                .iter()
+                .map(sdk::Dataset::allocated_bytes)
+                .sum::<usize>();
+            let buffers = datasets
+                .iter()
+                .flat_map(|data| &data.batches)
+                .flat_map(sdk::RecordBatch::columns)
+                .map(|array| array.get_buffer_memory_size())
+                .sum::<usize>();
+            input.try_grow(allocated.saturating_sub(buffers))?;
+        }
         // Keep admission until retained output replaces the exchange reservation.
         let (_admission, output, output_memory) = if let Some(prior) = retained {
             let checked = self
@@ -904,6 +930,7 @@ impl PackageExec {
             output,
             origin: Origin::new(&self.call),
             retained: reference,
+            graph_prior,
             _input: input,
             _output: output_memory,
         })

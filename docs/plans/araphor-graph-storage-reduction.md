@@ -118,6 +118,24 @@ The installed OCI package artifacts total 14,852,608 logical bytes in the
 latest run. A 90% reduction of the entire database file is a separate goal.
 Graph-only changes cannot prove that result.
 
+On 2026-10-29, the unchanged 1,592-event backlog test reached only the
+cursor-940 and cursor-639 Graph results before its deadline. The two results
+used an estimated 1,568,619 logical Graph bytes, including headers and native
+call rows. Saved managed Arrow payloads used 8,637,250 bytes; output payloads
+used 5,924,480 of those bytes. The backup database file used 77,344,768 bytes,
+with 219 used blocks and 76 free blocks. Installed OCI artifacts used
+15,241,216 bytes. Peak resident memory was 1,018,028 KiB. The test failed;
+its 183.09-second wall time includes the diagnostic backup. This two-result
+run does not measure the four-result target.
+
+Native per-call subject, edge, finding, and progress membership is **Done**
+as a storage and recovery slice. Data restores the exact prior call state for
+replay and reopen. The 47 focused Data Graph row tests passed. The Analysis
+retained-call test passed after direct store reopen, and the six Graph call
+corruption cases passed. Public GraphSnapshot assembly, saved raw managed
+output, and generic JSON result envelopes remain. The four-result size target
+and backlog deadline are **Not done**.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42

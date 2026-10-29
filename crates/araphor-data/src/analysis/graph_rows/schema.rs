@@ -70,6 +70,42 @@ impl GraphRows {
         valid_from UBIGINT NOT NULL, valid_to UBIGINT,
         PRIMARY KEY (lineage_id, edge_id, valid_from),
         CHECK (valid_to IS NULL OR valid_to > valid_from));
+    CREATE TABLE graph_call_scopes (
+        scope_id UBIGINT PRIMARY KEY, tenant_id BLOB NOT NULL,
+        instance_id VARCHAR NOT NULL, call_id UBIGINT NOT NULL,
+        package_id VARCHAR NOT NULL, package_revision VARCHAR NOT NULL,
+        image_digest VARCHAR NOT NULL, created_revision UBIGINT NOT NULL);
+    CREATE TABLE graph_call_versions (
+        result_id VARCHAR PRIMARY KEY, scope_id UBIGINT NOT NULL,
+        commit_revision UBIGINT NOT NULL, base_result_id VARCHAR,
+        subject_count UBIGINT NOT NULL, edge_count UBIGINT NOT NULL,
+        finding_count UBIGINT NOT NULL, progress_count UBIGINT NOT NULL,
+        UNIQUE (scope_id, commit_revision));
+    CREATE TABLE graph_call_subjects (
+        scope_id UBIGINT NOT NULL, subject_id UBIGINT NOT NULL,
+        anchor_record_id UBIGINT NOT NULL, anchor_fact BLOB,
+        valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (scope_id, subject_id, valid_from),
+        CHECK (valid_to IS NULL OR valid_to > valid_from));
+    CREATE TABLE graph_call_edges (
+        scope_id UBIGINT NOT NULL, edge_id UBIGINT NOT NULL,
+        anchor_record_id UBIGINT NOT NULL, anchor_fact BLOB,
+        valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (scope_id, edge_id, valid_from),
+        CHECK (valid_to IS NULL OR valid_to > valid_from));
+    CREATE TABLE graph_call_findings (
+        scope_id UBIGINT NOT NULL, value_id UBIGINT NOT NULL,
+        anchor_record_id UBIGINT NOT NULL, anchor_fact BLOB,
+        reason_code VARCHAR NOT NULL,
+        valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (scope_id, value_id, valid_from),
+        CHECK (valid_to IS NULL OR valid_to > valid_from));
+    CREATE TABLE graph_call_progress (
+        scope_id UBIGINT NOT NULL, evidence_id UBIGINT NOT NULL,
+        digest BLOB NOT NULL CHECK (octet_length(digest) = 32),
+        state VARCHAR, valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (scope_id, evidence_id, valid_from),
+        CHECK (valid_to IS NULL OR valid_to > valid_from));
     CREATE VIEW graph_relationships AS
         WITH evidence_ordinals AS (
             SELECT v.result_id, e.evidence_id,
@@ -166,25 +202,13 @@ impl GraphRows {
                 kind := 'column', name := column_name, data_type := data_type,
                 nullable := is_nullable, ordinal := ordinal_position))::VARCHAR
             FROM information_schema.columns
-            WHERE table_schema = 'main'
-                AND table_name IN ('graph_versions', 'graph_evidence',
-                    'graph_evidence_membership', 'graph_input_positions',
-                    'graph_subject_values', 'graph_subject_membership',
-                    'graph_subjects', 'graph_edge_values', 'graph_edge_membership',
-                    'graph_relationships', 'graph_findings',
-                    'graph_finding_values', 'graph_finding_membership')
+            WHERE table_schema = 'main' AND starts_with(table_name, 'graph_')
             UNION ALL
             SELECT table_name, to_json(struct_pack(
                 kind := constraint_type, column_names := constraint_column_names,
                 expression := constraint_text))::VARCHAR
             FROM duckdb_constraints()
-            WHERE schema_name = 'main'
-                AND table_name IN ('graph_versions', 'graph_evidence',
-                    'graph_evidence_membership', 'graph_input_positions',
-                    'graph_subject_values', 'graph_subject_membership',
-                    'graph_subjects', 'graph_edge_values', 'graph_edge_membership',
-                    'graph_relationships', 'graph_findings',
-                    'graph_finding_values', 'graph_finding_membership')
+            WHERE schema_name = 'main' AND starts_with(table_name, 'graph_')
             UNION ALL
             -- DuckDB quotes this cast until the database is reopened.
             SELECT view_name,
@@ -196,8 +220,7 @@ impl GraphRows {
                     || '[]', 'AS UINTEGER[]'),
                     'CROSS JOIN unnest(', ', unnest(')
             FROM duckdb_views()
-            WHERE schema_name = 'main' AND view_name IN
-                ('graph_subjects', 'graph_relationships', 'graph_findings')
+            WHERE schema_name = 'main' AND starts_with(view_name, 'graph_')
             ORDER BY 1, 2",
             )
             .context(AnalysisDatabaseSnafu {

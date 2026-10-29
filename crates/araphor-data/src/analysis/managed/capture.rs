@@ -96,9 +96,12 @@ impl AnalysisStore {
                             .saturating_mul(2),
                     )?;
                     output.charge(payload)?;
-                    let (mut state, continuation) = Self::managed_prior_from(
+                    let (mut state, continuation, native) = Self::managed_prior_from(
                         reader, &instance, *call, &id, revision, output, control,
                     )?;
+                    state.native_graph = native
+                        && matches!(&instance.spec.destination,
+                            ManagedDestination::Graph { calls, .. } if calls.contains(call));
                     // The decoded state owns its buffers; the IPC payload has been released.
                     output.input_bytes -= payload;
                     state.reusable = reuse
@@ -118,6 +121,22 @@ impl AnalysisStore {
                         let saved = Self::saved_inputs_from(reader, &instance, &id, control)?;
                         output.charge(saved.decoding_bytes(control)?)?;
                         let mut evaluation = saved.decode(control)?;
+                        if state.native_graph {
+                            state.native = Some(crate::analysis::graph_rows::GraphCallRows::load(
+                                reader,
+                                &instance.spec,
+                                *call,
+                                &id,
+                                revision,
+                                &evaluation,
+                                control,
+                            )?);
+                        }
+                        let native_bytes = state.native.as_ref().map_or(
+                            0,
+                            crate::analysis::graph_rows::GraphCallState::allocated_bytes,
+                        );
+                        output.charge(native_bytes)?;
                         evaluation.checkpoint = None;
                         evaluation.previous_outputs.clear();
                         let (record, packet, saved) =
@@ -150,6 +169,7 @@ impl AnalysisStore {
                             revision,
                         )?;
                         output.input_bytes = before;
+                        output.charge(native_bytes)?;
                         output.charge(evaluation.allocated_bytes())?;
                         output.charge(returned.allocated_bytes())?;
                         output.charge(
@@ -213,7 +233,7 @@ impl AnalysisStore {
         revision: u64,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
-    ) -> Result<(ManagedPrior, bool)> {
+    ) -> Result<(ManagedPrior, bool, bool)> {
         let tenant = instance.spec.tenant;
         let declaration = instance
             .spec
@@ -295,6 +315,7 @@ impl AnalysisStore {
             .checkpoint
             .as_ref()
             .is_some_and(|spec| spec.resume_input_changes);
+        let native = araphor_analysis_builtins::graph::Detector::supports(model);
         Ok((
             ManagedPrior {
                 revision,
@@ -304,8 +325,11 @@ impl AnalysisStore {
                 checkpoint,
                 retained: None,
                 reusable: false,
+                native_graph: false,
+                native: None,
             },
             continuation,
+            native,
         ))
     }
 }

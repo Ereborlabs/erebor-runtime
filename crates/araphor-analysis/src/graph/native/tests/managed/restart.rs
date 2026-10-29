@@ -154,6 +154,188 @@ async fn graph_restart_keeps_frontier() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn retained_noncontinuing_graph_call_uses_native_prior() -> TestResult {
+    let fixture = Fixture::target(Target::Wasm)?;
+    let artifact = PackageArtifactV1 {
+        descriptor: araphor_detector_example::BurstDetector::package(),
+        implementations: vec![PackageImplementationV1::Wasm {
+            exports: vec!["detect".into()],
+            artifact: araphor_analysis_builtins::components::DETECTOR.to_vec(),
+        }],
+        fixtures: Vec::new(),
+    };
+    fixture.query.store().install_package_image(
+        fixture.source.tenant_id,
+        &PackageBundle::try_from(PackageBundleV1 {
+            schema_version: 1,
+            root: artifact.reference(),
+            artifacts: vec![artifact],
+        })?,
+        || Ok(()),
+    )?;
+    let calls = araphor_data::FindingV1::PACKAGES
+        .iter()
+        .map(|id| {
+            format!(
+                "SELECT * FROM \"{id}\".\"1\".detect('subjects', records => \
+                (SELECT * FROM records), facts => (SELECT * FROM facts), \
+                manifest => (SELECT * FROM manifest))"
+            )
+        })
+        .chain(std::iter::once(
+            "SELECT * FROM \"example-burst\".\"1\".detect('subjects', \
+                records => (SELECT * FROM records), facts => (SELECT * FROM facts), \
+                manifest => (SELECT * FROM manifest), threshold => 2)"
+                .into(),
+        ))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+    let prepared = fixture.prepare_sql("*", "", calls).await?;
+    let grant = prepared.grant.clone();
+    let definition = prepared.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(prepared);
+    let job = GraphPublication::admit(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.facts.clone(),
+        grant,
+        "retained-burst".into(),
+        fixture.source.clone(),
+        "SELECT * FROM events".into(),
+        definition,
+        &fixture.control,
+    )
+    .await?;
+    let first = job.run(request("burst-first")?, &fixture.control).await?;
+    assert_eq!(first.results.len(), 4);
+    let burst = job
+        .admitted()
+        .spec
+        .manifest
+        .calls
+        .iter()
+        .find(|(_, call)| call.package.package_id == "example-burst")
+        .map(|(id, _)| *id)
+        .ok_or("example Graph call")?;
+    let scope = fixture.graph_scope();
+    let head = fixture
+        .query
+        .store()
+        .processor_result(&scope)?
+        .ok_or("first burst Graph")?;
+    let original = fixture
+        .query
+        .store()
+        .graph_result(fixture.source.tenant_id, &head.result_id)?
+        .ok_or("first burst snapshot")?;
+    assert!(original
+        .findings
+        .iter()
+        .any(|finding| finding.package_id == "example-burst"));
+    let second = job.run(request("burst-second")?, &fixture.control).await?;
+    assert_eq!(second.results.len(), first.results.len());
+    let fresh = second.results.get(&burst).ok_or("fresh example call")?;
+    assert_ne!(Some(fresh), first.results.get(&burst));
+    assert_eq!(
+        fixture.query.store().processor_result(&scope)?,
+        Some(head.clone())
+    );
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .graph_result(fixture.source.tenant_id, &head.result_id,)?,
+        Some(original.clone())
+    );
+    drop(job);
+    let Fixture {
+        query,
+        control,
+        source,
+        _graph,
+        _directory,
+        ..
+    } = fixture;
+    drop(_graph);
+    drop(query);
+    let reopened = AnalysisStore::open(_directory.path().join("data"))?;
+    assert_eq!(reopened.processor_result(&scope)?, Some(head.clone()));
+    assert_eq!(
+        reopened.graph_result(source.tenant_id, &head.result_id,)?,
+        Some(original)
+    );
+    let resumed = reopened.managed_resume(source.tenant_id, "retained-burst", &control)?;
+    let saved = reopened.managed_evaluation(&resumed.instance, &fresh.result_id, &control)?;
+    assert_eq!(saved.export, "detect");
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_call_reopen_rejects_corruption() -> TestResult {
+    let fixture = Fixture::target(Target::Wasm)?;
+    let publication = fixture.prepare("").await?;
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let job = GraphPublication::admit(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.facts.clone(),
+        grant,
+        "graph-call-recovery".into(),
+        fixture.source.clone(),
+        "SELECT * FROM events".into(),
+        definition,
+        &fixture.control,
+    )
+    .await?;
+    let first = job
+        .run(request("graph-call-first")?, &fixture.control)
+        .await?;
+    assert_eq!(first.results.len(), 3);
+    let record = fixture
+        .records
+        .last()
+        .ok_or("Graph recovery record")?
+        .clone();
+    fixture.query.store().accept_validated_batch(
+        fixture.source.clone(),
+        ValidatedEvidenceBatchV1 {
+            cpu_id: record.id.cpu_id,
+            first_cursor: 4,
+            last_cursor: 4,
+            intake_utc_ns: 4,
+            frame_ends: vec![record.wire_record.len()],
+            framed_records: record.wire_record.into(),
+        },
+    )?;
+    let second = job
+        .run(request("graph-call-second")?, &fixture.control)
+        .await?;
+    assert_eq!(second.results.len(), 3);
+    let store = fixture.query.store();
+    let backup = fixture._directory.path().join("data/backups/graph-call");
+    store.backup(&backup)?;
+    for (name, sql) in [
+        ("scope pin", "UPDATE graph_call_scopes SET image_digest = 'wrong' WHERE scope_id = (SELECT min(scope_id) FROM graph_call_scopes)"),
+        ("membership count", "UPDATE graph_call_versions SET subject_count = subject_count + 1 WHERE result_id = (SELECT min(result_id) FROM graph_call_versions)"),
+        ("anchor", "UPDATE graph_call_subjects SET anchor_fact = X'00' WHERE rowid = (SELECT min(rowid) FROM graph_call_subjects)"),
+        ("orphan", "INSERT INTO graph_call_progress SELECT (SELECT max(scope_id) + 1 FROM graph_call_scopes), evidence_id, digest, state, valid_from, valid_to FROM graph_call_progress LIMIT 1"),
+        ("overlap", "INSERT INTO graph_call_subjects SELECT m.scope_id, m.subject_id, m.anchor_record_id, m.anchor_fact, (SELECT max(v.commit_revision) FROM graph_call_versions v WHERE v.scope_id = m.scope_id), NULL FROM graph_call_subjects m WHERE m.valid_to IS NULL AND m.valid_from < (SELECT max(v.commit_revision) FROM graph_call_versions v WHERE v.scope_id = m.scope_id) LIMIT 1"),
+        ("base", "UPDATE graph_call_versions SET base_result_id = NULL WHERE base_result_id IS NOT NULL"),
+    ] {
+        let root = fixture._directory.path().join(format!("graph-call-{name}"));
+        let restored = AnalysisStore::restore(&backup, &root)?;
+        restored.fault_write(sql, &[])?;
+        drop(restored);
+        assert!(AnalysisStore::open(&root).is_err(), "{name}");
+    }
+    Ok(())
+}
+
 fn graph_cut(
     store: &AnalysisStore,
     source: &EvidenceIntakeIdentityV1,
@@ -663,19 +845,10 @@ async fn managed_graph_crashes() -> TestResult {
                 suspended: false,
             };
             assert_eq!(attempt.terminal(), Some(&terminal));
-            let bytes = serde_json::to_vec(&terminal)?
-                .len()
-                .checked_sub(b"null".len())
-                .ok_or("startup terminal charge")?;
             let mut expected = prior.clone();
             expected["meta"][3] = serde_json::json!(terminal.revision);
             expected["witnesses"]["read_revision"] = serde_json::json!(terminal.revision);
             expected["attempt"][3] = serde_json::to_value(&terminal)?;
-            expected["retained"][0] = serde_json::json!(prior["retained"][0]
-                .as_u64()
-                .ok_or("pending logical charge")?
-                .checked_add(u64::try_from(bytes)?)
-                .ok_or("startup logical charge")?);
             assert_eq!(
                 managed_cut(&store, &source, ID, Some(&input.id), input.time_utc_ns)?,
                 expected

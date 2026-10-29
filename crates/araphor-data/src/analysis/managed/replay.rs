@@ -21,6 +21,8 @@ pub(super) struct SavedEvaluation {
         sdk::wire::Output,
         Option<Box<SavedEvaluation>>,
     )>,
+    native_prior: Option<crate::analysis::graph_rows::GraphCallState>,
+    native_graph: bool,
     rebuild: bool,
 }
 
@@ -241,6 +243,67 @@ impl AnalysisStore {
         } else {
             None
         };
+        let evaluated_spec = Self::managed_version_from(
+            reader,
+            instance.spec.tenant,
+            &instance.spec.id,
+            attempt.capture.generation,
+        )?;
+        let prior_spec = prior
+            .as_ref()
+            .filter(|_| continuation)
+            .map(|(_, _, _, saved)| {
+                let generation = saved
+                    .as_ref()
+                    .ok_or_else(|| Code::Missing.error("Graph call saved input"))?
+                    .generation;
+                Self::managed_version_from(
+                    reader,
+                    instance.spec.tenant,
+                    &instance.spec.id,
+                    generation,
+                )
+            })
+            .transpose()?;
+        let native_graph = continuation
+            && prior.is_some()
+            && matches!(
+                &evaluated_spec.destination,
+                super::ManagedDestination::Graph { calls, .. } if calls.contains(&record.call)
+            )
+            && descriptor
+                .exports
+                .iter()
+                .find(|model| model.name == record.declaration.export)
+                .is_some_and(araphor_analysis_builtins::graph::Detector::supports);
+        let native_prior = if native_graph {
+            if !prior_spec.as_ref().is_some_and(|spec| {
+                matches!(&spec.destination,
+                    super::ManagedDestination::Graph { calls, .. } if calls.contains(&record.call))
+            }) {
+                return Err(Code::Invalid.error("Graph call prior destination"));
+            }
+            let (reference, _, _, saved) = prior
+                .as_ref()
+                .ok_or_else(|| Code::Missing.error("Graph call native prior"))?;
+            let evaluation = saved
+                .as_ref()
+                .ok_or_else(|| Code::Missing.error("Graph call saved input"))?
+                .inputs_only(control)?;
+            Some(crate::analysis::graph_rows::GraphCallRows::load(
+                reader,
+                prior_spec
+                    .as_ref()
+                    .ok_or_else(|| Code::Missing.error("Graph call saved spec"))?,
+                record.call,
+                &reference.result_id,
+                reference.commit_revision,
+                &evaluation,
+                control,
+            )?)
+        } else {
+            None
+        };
         Ok(SavedEvaluation {
             call: record.call,
             generation: attempt.capture.generation,
@@ -255,6 +318,8 @@ impl AnalysisStore {
             },
             inputs: record.inputs,
             prior,
+            native_prior,
+            native_graph,
             rebuild: attempt.request.rebuild,
         })
     }
@@ -317,6 +382,39 @@ impl AnalysisStore {
 }
 
 impl SavedEvaluation {
+    fn inputs_only(&self, control: &AnalysisReadControl) -> Result<sdk::Evaluation> {
+        let mut evaluation = self
+            .packet
+            .decode(&self.descriptor)
+            .context(crate::AnalysisContractSnafu)?;
+        for ((shape, input), packet) in self
+            .inputs
+            .iter()
+            .zip(&mut evaluation.inputs)
+            .zip(&self.packet.inputs)
+        {
+            control.check()?;
+            if shape.batches == 0 {
+                if packet
+                    .data
+                    .batch_count()
+                    .context(crate::AnalysisContractSnafu)?
+                    != 0
+                {
+                    return Err(Code::Invalid.error("saved evaluation input shape"));
+                }
+                input.data.batches.clear();
+            }
+            if input.data.name != shape.name
+                || input.data.rows() != shape.rows
+                || input.data.batches.len() != shape.batches
+            {
+                return Err(Code::Invalid.error("saved evaluation input shape"));
+            }
+        }
+        Ok(evaluation)
+    }
+
     pub(super) fn decoding_bytes(&self, control: &AnalysisReadControl) -> Result<usize> {
         let mut bytes = self
             .descriptor
@@ -403,6 +501,9 @@ impl SavedEvaluation {
                 }
             }
         }
+        if let Some(native) = &self.native_prior {
+            bytes = bytes.saturating_add(native.allocated_bytes());
+        }
         Ok(bytes)
     }
 
@@ -414,35 +515,7 @@ impl SavedEvaluation {
             .iter()
             .find(|model| model.name == self.packet.export_name)
             .ok_or_else(|| Code::Missing.error("saved evaluation model"))?;
-        let mut evaluation = self
-            .packet
-            .decode(&self.descriptor)
-            .context(crate::AnalysisContractSnafu)?;
-        for ((shape, input), packet) in self
-            .inputs
-            .iter()
-            .zip(&mut evaluation.inputs)
-            .zip(&self.packet.inputs)
-        {
-            control.check()?;
-            if shape.batches == 0 {
-                if packet
-                    .data
-                    .batch_count()
-                    .context(crate::AnalysisContractSnafu)?
-                    != 0
-                {
-                    return Err(Code::Invalid.error("saved evaluation input shape"));
-                }
-                input.data.batches.clear();
-            }
-            if input.data.name != shape.name
-                || input.data.rows() != shape.rows
-                || input.data.batches.len() != shape.batches
-            {
-                return Err(Code::Invalid.error("saved evaluation input shape"));
-            }
-        }
+        let mut evaluation = self.inputs_only(control)?;
         if let Some((reference, record, packet, saved)) = self.prior {
             if record.parameters.is_some() == model.parameters.fields().is_empty() {
                 return Err(Code::Invalid.error("managed evaluation prior parameters"));
@@ -487,6 +560,8 @@ impl SavedEvaluation {
                 checkpoint,
                 retained,
                 reusable: false,
+                native_graph: self.native_graph,
+                native: self.native_prior,
             };
             (evaluation.checkpoint, evaluation.previous_outputs) = prior.state(
                 model,

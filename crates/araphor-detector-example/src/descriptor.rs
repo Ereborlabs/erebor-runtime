@@ -12,11 +12,11 @@ impl BurstDetector {
 
     fn build_package() -> sdk::Package {
         let inputs = Detector::inputs().to_vec();
-        let mut subjects = Subject::port();
+        let mut subjects = SubjectChange::port();
         subjects.kind = sdk::OutputKind::Subjects;
-        let mut relationships = Relationship::port();
+        let mut relationships = RelationshipChange::port();
         relationships.kind = sdk::OutputKind::Relationships;
-        let mut findings = Finding::port();
+        let mut findings = FindingChange::port();
         findings.kind = sdk::OutputKind::Findings;
         findings.evidence_required = true;
         let mut model = sdk::Model::new(
@@ -24,10 +24,13 @@ impl BurstDetector {
             inputs,
             vec![
                 subjects,
+                SubjectRemoval::port(),
                 relationships,
+                RelationshipRemoval::port(),
                 findings,
-                GraphBranchV1::port(),
-                Metadata::port(),
+                FindingRemoval::port(),
+                Progress::port(),
+                ProgressRemoval::port(),
             ],
         );
         model.parameters = sdk::Schema::new(vec![sdk::Field::new(

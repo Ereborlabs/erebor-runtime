@@ -1,4 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+use araphor_analysis_builtins::{
+    discovery::DiscoveryRecordIdV1,
+    graph::{Anchor, RelationshipChange, RelationshipIdentity},
+};
 
 use duckdb::arrow::array::{Array as _, UInt64Array};
 use duckdb::{params, Connection, Row};
@@ -8,19 +13,19 @@ use snafu::ResultExt as _;
 
 use super::GraphRows;
 use crate::{
-    AnalysisDatabaseSnafu, GraphCauseV1, GraphEdgeTypeV1, GraphEdgeV1, GraphInvalidSnafu,
-    GraphSnapshotV1, GraphSubjectKeyV1, ProofQualityV1, Result,
+    AnalysisContractSnafu, AnalysisDatabaseSnafu, GraphCauseV1, GraphEdgeTypeV1, GraphEdgeV1,
+    GraphInvalidSnafu, GraphSnapshotV1, GraphSubjectKeyV1, ProofQualityV1, Result,
 };
 
 mod arrays;
 
 #[derive(PartialEq, Serialize)]
-struct StoredEdge {
-    from: u64,
-    to: u64,
+pub(in crate::analysis::graph_rows) struct StoredEdge {
+    pub(in crate::analysis::graph_rows) from: u64,
+    pub(in crate::analysis::graph_rows) to: u64,
     edge_type: GraphEdgeTypeV1,
     package_id: String,
-    evidence: Vec<u64>,
+    pub(in crate::analysis::graph_rows) evidence: Vec<u64>,
     cause: GraphCauseV1,
     proof_quality: ProofQualityV1,
     coverage: Vec<[u8; 16]>,
@@ -95,7 +100,7 @@ impl StoredEdge {
         Ok(digest.finalize().into())
     }
 
-    fn from_row(row: &Row<'_>) -> Result<Self> {
+    pub(in crate::analysis::graph_rows) fn from_row(row: &Row<'_>) -> Result<Self> {
         let refs = GraphRows::list_column(row, 6)?;
         let refs = refs
             .as_any()
@@ -144,6 +149,58 @@ impl StoredEdge {
         }
         Ok(stored)
     }
+
+    pub(in crate::analysis::graph_rows) fn into_change(
+        self,
+        anchor: Anchor,
+        subjects: &BTreeMap<u64, GraphSubjectKeyV1>,
+        evidence: &BTreeMap<u64, DiscoveryRecordIdV1>,
+    ) -> Result<RelationshipChange> {
+        let key = self.identity(subjects, evidence)?;
+        Ok(RelationshipChange {
+            anchor,
+            key,
+            proof_quality: self.proof_quality,
+            required_coverage_interval_ids: self.coverage,
+            first_boottime_ns: self.first,
+            last_boottime_ns: self.last,
+        })
+    }
+
+    pub(in crate::analysis::graph_rows) fn identity(
+        &self,
+        subjects: &BTreeMap<u64, GraphSubjectKeyV1>,
+        evidence: &BTreeMap<u64, DiscoveryRecordIdV1>,
+    ) -> Result<RelationshipIdentity> {
+        let subject = |id: u64| {
+            subjects.get(&id).cloned().ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "Graph call edge subject",
+                }
+                .build()
+            })
+        };
+        let evidence = self
+            .evidence
+            .iter()
+            .map(|id| {
+                evidence.get(id).cloned().ok_or_else(|| {
+                    GraphInvalidSnafu {
+                        field: "Graph call edge evidence",
+                    }
+                    .build()
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(RelationshipIdentity {
+            from: subject(self.from)?,
+            to: subject(self.to)?,
+            edge_type: self.edge_type,
+            package_id: self.package_id.clone(),
+            evidence,
+            cause: self.cause,
+        })
+    }
 }
 
 impl GraphRows {
@@ -186,7 +243,7 @@ impl GraphRows {
         evidence: &std::collections::BTreeMap<(u32, u64), u64>,
         lineage: u64,
         revision: u64,
-    ) -> Result<()> {
+    ) -> Result<BTreeMap<RelationshipIdentity, u64>> {
         let mut next: u64 = writer
             .query_row(
                 "SELECT coalesce(max(edge_id), 0) FROM graph_edge_values",
@@ -210,6 +267,7 @@ impl GraphRows {
                 operation: "prepare graph edge value lookup",
             })?;
         let mut selected = BTreeSet::new();
+        let mut values = BTreeMap::new();
         let mut added = Vec::new();
         for edge in &graph.graph.edges {
             let value = StoredEdge::new(edge, graph, subjects, evidence)?;
@@ -250,6 +308,18 @@ impl GraphRows {
             if !selected.insert(id) {
                 return GraphInvalidSnafu {
                     field: "duplicate graph edge membership",
+                }
+                .fail();
+            }
+            let key = RelationshipIdentity::from_keys(
+                &edge.key,
+                &graph.graph.subjects,
+                &graph.input_manifest.evidence,
+            )
+            .context(AnalysisContractSnafu)?;
+            if values.insert(key, id).is_some() {
+                return GraphInvalidSnafu {
+                    field: "duplicate stable graph edge identity",
                 }
                 .fail();
             }
@@ -326,6 +396,6 @@ impl GraphRows {
         appender.flush().context(AnalysisDatabaseSnafu {
             operation: "flush graph edge membership",
         })?;
-        Ok(())
+        Ok(values)
     }
 }

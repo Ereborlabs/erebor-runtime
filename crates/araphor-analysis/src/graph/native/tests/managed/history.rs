@@ -229,13 +229,24 @@ async fn failed_graph_disables_reuse() -> TestResult {
             false,
         )?;
         assert!(checkpoint.is_some());
-        assert_eq!(previous_outputs.len(), 5);
+        assert_eq!(previous_outputs.len(), model.outputs.len());
+        let findings = previous_outputs
+            .iter()
+            .find(|data| data.name == "findings")
+            .ok_or("normalized Graph findings")?;
+        assert!(
+            araphor_analysis_builtins::graph::FindingChange::decode(findings)?
+                .iter()
+                .all(|finding| finding.prior_reason.is_some())
+        );
         evaluation.checkpoint = checkpoint;
         evaluation.previous_outputs = previous_outputs;
         let actual = descriptor.check_evaluation(&evaluation)?.encode()?;
         let expected = sdk::wire::Output::encode_model(&retained.output, model)?;
         assert_eq!(actual.checkpoint, expected.checkpoint);
-        assert_eq!(actual.previous_outputs, expected.datasets);
+        let delta = Detector::from_id(&descriptor.id)?.evaluate(&evaluation)?;
+        assert!(delta.datasets.iter().all(|data| data.rows() == 0));
+        assert!(delta.reasons.is_empty());
     }
     store.stop_managed(&failed, || Ok(()))?;
     Ok(())

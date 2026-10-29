@@ -93,13 +93,13 @@ impl AnalysisStore {
         let mut graph_receipt = None;
         let receipt = self.commit_managed_projection(
             managed,
-            |transaction, revision, _| {
+            |transaction, revision, receipt| {
                 let notice = if managed.attempt.follows_graph() {
                     managed.attempt.captured_revision()
                 } else {
                     revision
                 };
-                let write = self.progress_rows(
+                let mut write = self.progress_rows(
                     transaction,
                     &input,
                     ResultHead::Unchecked,
@@ -111,6 +111,83 @@ impl AnalysisStore {
                     &packet.sources,
                     managed.attempt.follows_graph(),
                 )?;
+                if *operation == ManagedGraphOperation::Evaluate {
+                    let mut ids = write.graph_ids.take();
+                    for returned in managed.returns {
+                        if returned.retained.is_some() {
+                            continue;
+                        }
+                        let pin = spec
+                            .manifest
+                            .calls
+                            .get(&returned.call)
+                            .ok_or_else(|| Code::Invalid.error("managed Graph call pin"))?;
+                        let descriptor = Self::managed_contract(transaction, spec.tenant, pin)?;
+                        let model = descriptor
+                            .exports
+                            .iter()
+                            .find(|model| model.name == pin.export)
+                            .ok_or_else(|| Code::Missing.error("managed Graph export"))?;
+                        if !araphor_analysis_builtins::graph::Detector::supports(model) {
+                            continue;
+                        }
+                        if ids.is_none() {
+                            let result = write
+                                .graph_result
+                                .as_ref()
+                                .ok_or_else(|| Code::Invalid.error("managed Graph result"))?;
+                            ids = Some(crate::analysis::graph_rows::GraphRows::retained_ids(
+                                transaction,
+                                result,
+                                &graph,
+                            )?);
+                        }
+                        let ids = ids
+                            .as_ref()
+                            .ok_or_else(|| Code::Invalid.error("managed Graph native values"))?;
+                        let result = receipt
+                            .results
+                            .get(&returned.call)
+                            .ok_or_else(|| Code::Invalid.error("managed Graph call result"))?;
+                        let base = managed.attempt.prior_result(returned.call);
+                        let rebuild = managed.attempt.request().rebuild
+                            || returned.evaluation.checkpoint.is_none()
+                            || !model
+                                .checkpoint
+                                .as_ref()
+                                .is_some_and(|checkpoint| checkpoint.resume_input_changes);
+                        let scope = crate::analysis::graph_rows::GraphCallRows::bind(
+                            transaction,
+                            spec,
+                            returned.call,
+                            result,
+                            base,
+                            rebuild,
+                        )?;
+                        crate::analysis::graph_rows::GraphCallRows::apply_delta(
+                            transaction,
+                            scope,
+                            revision,
+                            &graph,
+                            returned.evaluation,
+                            returned.output,
+                            ids,
+                            if rebuild {
+                                None
+                            } else {
+                                managed.attempt.native_prior(returned.call)
+                            },
+                        )?;
+                    }
+                    write.relations.extend([
+                        "graph_call_scopes",
+                        "graph_call_versions",
+                        "graph_call_subjects",
+                        "graph_call_edges",
+                        "graph_call_findings",
+                        "graph_call_progress",
+                    ]);
+                }
                 graph_receipt = Some(write.receipt);
                 Ok(write.relations)
             },

@@ -125,6 +125,10 @@ impl wire::Output {
 
 pub(crate) struct Memory;
 
+pub fn schema_allocated_bytes(schema: &Schema) -> usize {
+    Memory::schema_heap(schema)
+}
+
 impl Memory {
     fn model(model: &Model) -> usize {
         let mut bytes = model

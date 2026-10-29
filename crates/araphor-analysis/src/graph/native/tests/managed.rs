@@ -12,7 +12,7 @@ async fn graph_conversion_failure_finishes() -> TestResult {
     let fixture = Fixture::target(Target::Sql)?;
     let mut descriptor = Detector::Process.descriptor();
     descriptor.revision = "conversion".into();
-    let mut program = Fixture::sql(&descriptor, &descriptor.exports[0])?;
+    let mut program = Fixture::sql(&descriptor.exports[0])?;
     let key = araphor_data::GraphSubjectKeyV1 {
         tenant_id: fixture.source.tenant_id,
         authority: araphor_data::GraphSubjectAuthorityV1::Native {

@@ -27,6 +27,7 @@ pub use bindings::InterfaceDeclarations;
 pub use error::{Error, ErrorCode, Result};
 pub use evaluation::*;
 pub use fixture::{Fixture, FixtureReport};
+pub use memory::schema_allocated_bytes;
 pub use model::*;
 pub use validation::{CheckedEvaluation, Guest};
 

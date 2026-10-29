@@ -46,7 +46,6 @@ impl sdk::Guest for BurstDetector {
         }
         let mut output = sdk::Output::default();
         let mut findings = Vec::new();
-        let mut branches = Vec::new();
         for rows in groups
             .into_values()
             .filter(|rows| rows.len() as u64 >= threshold)
@@ -69,7 +68,6 @@ impl sdk::Guest for BurstDetector {
                 &facts,
             )?;
             let finding = Finding::from_finding(rows[0], None, value, reason.code.clone());
-            branches.push(GraphBranchV1::from_finding(&finding, &declared));
             findings.push(finding);
             for record in rows {
                 output.evidence.push(sdk::EvidenceLink {
@@ -82,42 +80,42 @@ impl sdk::Guest for BurstDetector {
             }
             output.reasons.push(reason);
         }
+        let record_ids = records
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>();
         let subjects = findings
             .iter()
             .map(|finding| {
-                (
+                Ok((
                     finding.subject_id.clone(),
-                    Subject {
-                        record: finding.record,
-                        context: None,
+                    SubjectChange {
+                        anchor: Anchor::from_positions(finding.record, None, &record_ids, &facts)?,
                         key: finding.subject_id.clone(),
                     },
-                )
+                ))
             })
-            .collect::<BTreeMap<_, _>>()
+            .collect::<sdk::Result<BTreeMap<_, _>>>()?
             .into_values()
             .collect::<Vec<_>>();
+        let findings = findings
+            .into_iter()
+            .map(|finding| {
+                let anchor =
+                    Anchor::from_positions(finding.record, finding.context, &record_ids, &facts)?;
+                Ok(FindingChange::from_local(finding, anchor))
+            })
+            .collect::<sdk::Result<Vec<_>>>()?;
         let state = records.len().to_string();
         output.datasets = vec![
-            Subject::encode(&subjects)?,
-            Relationship::encode(&[])?,
-            Finding::encode(&findings)?,
-            GraphBranchV1::encode(&branches)?,
-            Metadata::encode(&[Metadata {
-                record_ids: records.iter().map(|record| record.id.clone()).collect(),
-                facts,
-                package: GraphPackageCheckpointV1::from_package(
-                    checked.package(),
-                    model,
-                    GraphPackageStateV1::Declared(state.clone()),
-                    records.last().map_or(0, |record| record.id.durable_cursor),
-                    records
-                        .iter()
-                        .map(|record| record.observed_boottime_ns)
-                        .max()
-                        .unwrap_or(0),
-                ),
-            }])?,
+            SubjectChange::encode(&subjects)?,
+            SubjectRemoval::encode(&[])?,
+            RelationshipChange::encode(&[])?,
+            RelationshipRemoval::encode(&[])?,
+            FindingChange::encode(&findings)?,
+            FindingRemoval::encode(&[])?,
+            Progress::encode(&[])?,
+            ProgressRemoval::encode(&[])?,
         ];
         let spec = model.checkpoint.as_ref().ok_or_else(|| {
             sdk::Error::contract(sdk::ErrorCode::Invalid, "checkpoint declaration")

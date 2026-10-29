@@ -1,3 +1,4 @@
+use araphor_analysis_builtins::graph::RelationshipIdentity;
 use araphor_graph::{FindingRefs, FindingRows};
 use duckdb::{
     params,
@@ -6,14 +7,17 @@ use duckdb::{
 };
 use serde::{de::DeserializeOwned, Serialize};
 use snafu::ResultExt as _;
+use std::collections::BTreeMap;
 
 use super::AnalysisReadControl;
-use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, GraphSnapshotV1, Result};
+use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, GraphSnapshotV1, GraphSubjectKeyV1, Result};
 
+mod calls;
 mod evidence;
 mod findings;
 mod header;
 mod headers;
+mod ids;
 mod read;
 mod relationships;
 mod schema;
@@ -21,9 +25,17 @@ mod subjects;
 #[cfg(test)]
 pub(in crate::analysis) mod tests;
 
+pub(in crate::analysis) use calls::{GraphCallRows, GraphCallState};
 pub(super) use header::GraphHeader;
 
 pub(super) struct GraphRows;
+
+pub(in crate::analysis) struct GraphValueIds {
+    pub evidence: BTreeMap<(u32, u64), u64>,
+    pub subjects: BTreeMap<GraphSubjectKeyV1, u64>,
+    pub edges: BTreeMap<RelationshipIdentity, u64>,
+    pub findings: BTreeMap<String, u64>,
+}
 
 pub struct CanonicalGraph {
     snapshot: GraphSnapshotV1,
@@ -54,10 +66,11 @@ impl GraphRows {
         snapshot: &GraphSnapshotV1,
         writer: &Connection,
         result_id: &str,
-    ) -> Result<()> {
+    ) -> Result<GraphValueIds> {
         let (lineage, revision, evidence) = Self::insert_inputs(snapshot, writer, result_id)?;
         let subjects = Self::insert_subjects(writer, &snapshot.graph.subjects, lineage, revision)?;
-        Self::insert_edge_values(writer, snapshot, &subjects, &evidence, lineage, revision)?;
+        let edges =
+            Self::insert_edge_values(writer, snapshot, &subjects, &evidence, lineage, revision)?;
         let findings = snapshot
             .findings
             .iter()
@@ -96,7 +109,7 @@ impl GraphRows {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        FindingRows::apply(
+        let findings = FindingRows::apply(
             writer,
             snapshot.scope.identity.tenant_id,
             lineage,
@@ -104,7 +117,12 @@ impl GraphRows {
             &findings,
             crate::analysis::MAX_ANALYSIS_PAGE_RECORDS,
         )?;
-        Ok(())
+        Ok(GraphValueIds {
+            evidence,
+            subjects,
+            edges,
+            findings,
+        })
     }
 
     pub(super) fn read(

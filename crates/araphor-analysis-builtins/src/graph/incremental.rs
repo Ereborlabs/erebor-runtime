@@ -5,18 +5,30 @@ use sha2::{Digest, Sha256};
 use super::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct Progress {
-    pub(super) digest: ByteBuf,
-    pub(super) state: Option<String>,
+pub struct Progress {
+    pub record: crate::discovery::DiscoveryRecordIdV1,
+    pub digest: ByteBuf,
+    pub state: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressRemoval {
+    pub record: crate::discovery::DiscoveryRecordIdV1,
 }
 
 impl Progress {
-    pub(super) fn new(record: &Observation, window: u64) -> sdk::Result<Self> {
+    pub(super) fn new(record: &Observation, window: u64, facts: &[&Fact]) -> sdk::Result<Self> {
         let mut digest = Sha256::new();
-        (record, window)
+        let basis = facts
+            .iter()
+            .map(|fact| (&fact.key, fact.sensitivity, &fact.value))
+            .collect::<Vec<_>>();
+        (record, window, basis)
             .serialize(&mut rmp_serde::Serializer::new(&mut digest))
             .map_err(|_| Computation::invalid("graph progress identity"))?;
         Ok(Self {
+            record: record.id.clone(),
             digest: digest.finalize().to_vec().into(),
             state: None,
         })
@@ -54,20 +66,15 @@ impl Computation {
     }
 
     fn resume(&mut self, evaluation: &sdk::Evaluation) -> sdk::Result<Option<Vec<bool>>> {
-        let Some(checkpoint) = &evaluation.checkpoint else {
+        let Some(_) = &evaluation.checkpoint else {
+            if !evaluation.previous_outputs.is_empty() {
+                return Err(Self::invalid("graph previous output without checkpoint"));
+            }
             return Ok(None);
         };
         if evaluation.previous_outputs.is_empty() {
-            return Ok(None);
+            return Err(Self::invalid("graph checkpoint without previous output"));
         }
-        let Some(progress) = checkpoint
-            .datasets
-            .iter()
-            .find(|data| data.name == "progress")
-        else {
-            return Ok(None);
-        };
-        let progress = Progress::decode(progress)?;
         let dataset = |name: &str| {
             evaluation
                 .previous_outputs
@@ -75,328 +82,372 @@ impl Computation {
                 .find(|data| data.name == name)
                 .ok_or_else(|| Self::invalid("graph previous output"))
         };
-        let mut metadata = Metadata::decode(dataset("metadata")?)?;
-        if metadata.len() != 1 {
-            return Ok(None);
-        }
-        let metadata = metadata.remove(0);
-        if metadata.record_ids.is_empty()
-            || metadata.package.package_id != self.detector.id()
-            || progress.len() != metadata.record_ids.len()
+        if !SubjectRemoval::decode(dataset("subject_removals")?)?.is_empty()
+            || !RelationshipRemoval::decode(dataset("relationship_removals")?)?.is_empty()
+            || !FindingRemoval::decode(dataset("finding_removals")?)?.is_empty()
+            || !ProgressRemoval::decode(dataset("progress_removals")?)?.is_empty()
         {
-            return Ok(None);
+            return Err(Self::invalid("graph previous normalized output"));
         }
-        let subjects = Subject::decode(dataset("subjects")?)?;
-        let edges = Relationship::decode(dataset("relationships")?)?;
-        let findings = Finding::decode(dataset("findings")?)?;
-
-        let restored = (|| {
-            let current: BTreeMap<_, _> = self
+        let previous = Progress::decode(dataset("progress")?)?;
+        for row in previous {
+            if row.digest.len() != 32
+                || !row.compatible(self.detector)
+                || self
+                    .prior_progress
+                    .insert(row.record.clone(), row)
+                    .is_some()
+            {
+                return Err(Self::invalid("graph previous progress identity"));
+            }
+        }
+        for row in SubjectChange::decode(dataset("subjects")?)? {
+            if self.prior_subjects.insert(row.key.clone(), row).is_some() {
+                return Err(Self::invalid("graph previous subject identity"));
+            }
+        }
+        for row in RelationshipChange::decode(dataset("relationships")?)? {
+            if row.key.evidence.windows(2).any(|pair| pair[0] >= pair[1])
+                || self.prior_edges.insert(row.key.clone(), row).is_some()
+            {
+                return Err(Self::invalid("graph previous relationship identity"));
+            }
+        }
+        let previous_findings = FindingChange::decode(dataset("findings")?)?;
+        for row in &previous_findings {
+            let reason = row
+                .prior_reason
+                .clone()
+                .ok_or_else(|| Self::invalid("graph previous finding reason"))?;
+            let expected = FindingReasonV1::from_analysis_code(&row.package_id, &row.reason_code)?;
+            if reason != expected
+                || self
+                    .prior_findings
+                    .insert(
+                        row.finding_id.clone(),
+                        (row.clone().into_finding(reason), row.anchor.clone()),
+                    )
+                    .is_some()
+            {
+                return Err(Self::invalid("graph previous finding identity"));
+            }
+        }
+        let current = self
+            .records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| {
+                u32::try_from(index)
+                    .map(|index| (record.id.clone(), index))
+                    .map_err(|_| Self::invalid("graph record count"))
+            })
+            .collect::<sdk::Result<BTreeMap<_, _>>>()?;
+        let mut affected = vec![true; self.records.len()];
+        for (id, previous) in &self.prior_progress {
+            if let Some(&row) = current.get(id) {
+                if previous.digest != self.progress[row as usize].digest {
+                    return Ok(None);
+                }
+            }
+        }
+        for (id, previous) in &self.prior_progress {
+            if let Some(&row) = current.get(id) {
+                affected[row as usize] = false;
+                self.progress[row as usize].state = previous.state.clone();
+            }
+        }
+        if matches!(self.detector, Detector::Credentials) {
+            let triggers = self
                 .records
                 .iter()
                 .enumerate()
-                .map(|(row, record)| (&record.id, row as u32))
-                .collect();
-            let records = metadata
-                .record_ids
-                .iter()
-                .map(|id| current.get(id).copied())
+                .filter(|(row, value)| {
+                    affected[*row]
+                        && (value.network()
+                            || self.facts(*row as u32).any(|(_, fact)| {
+                                matches!(
+                                    fact.value,
+                                    FactValue::AuthorityUse { .. } | FactValue::Channel { .. }
+                                )
+                            }))
+                })
+                .map(|(_, value)| value)
                 .collect::<Vec<_>>();
-            let mut last = None;
-            for row in records.iter().copied().flatten() {
-                if last.is_some_and(|prior| prior >= row) {
-                    return None;
-                }
-                last = Some(row);
-            }
-            for (old, row) in progress.iter().zip(&records) {
-                if !old.compatible(self.detector)
-                    || row.is_some_and(|row| old.digest != self.progress[row as usize].digest)
-                {
-                    return None;
-                }
-            }
-            let mut prior_facts = vec![Vec::new(); records.len()];
-            for (index, fact) in metadata.facts.iter().enumerate() {
-                prior_facts.get_mut(fact.record as usize)?.push(index);
-            }
-            let mut facts = vec![None; metadata.facts.len()];
-            for (old, row) in records.iter().copied().enumerate() {
-                let Some(row) = row else { continue };
-                let prior = &prior_facts[old];
-                let selected = &self.fact_rows[row as usize];
-                if prior.len() != selected.len() {
-                    return None;
-                }
-                for (&before, &after) in prior.iter().zip(selected) {
-                    let prior = &metadata.facts[before];
-                    let current = &self.facts[after];
-                    if prior.key != current.key
-                        || prior.sensitivity != current.sensitivity
-                        || prior.value != current.value
-                    {
-                        return None;
-                    }
-                    facts[before] = Some(after as u32);
-                }
-            }
-
-            let record = |row: u32| records.get(row as usize).copied().flatten();
-            let context = |index: Option<u32>| match index {
-                Some(index) => facts.get(index as usize).copied().flatten().map(Some),
-                None => Some(None),
-            };
-            let mut affected = vec![true; self.records.len()];
-            for row in records.iter().copied().flatten() {
-                affected[row as usize] = false;
-            }
-            if matches!(self.detector, Detector::Credentials) {
-                let triggers = self
-                    .records
-                    .iter()
-                    .enumerate()
-                    .filter(|(row, value)| {
-                        affected[*row]
-                            && (value.network()
-                                || self.facts(*row as u32).any(|(_, fact)| {
-                                    matches!(
-                                        fact.value,
-                                        FactValue::AuthorityUse { .. } | FactValue::Channel { .. }
-                                    )
-                                }))
-                    })
-                    .map(|(_, value)| value)
-                    .collect::<Vec<_>>();
-                for row in records.iter().copied().flatten() {
-                    if self
-                        .facts(row)
-                        .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
-                        && triggers
-                            .iter()
-                            .any(|later| self.bounded(&self.records[row as usize], later))
-                    {
-                        affected[row as usize] = true;
-                    }
-                }
-            }
-
-            if records.iter().any(Option::is_none) {
-                for edge in &edges {
-                    let stale = record(edge.record).is_none()
-                        || context(edge.fact).is_none()
-                        || edge
-                            .edge
-                            .key
-                            .evidence
-                            .iter()
-                            .any(|&row| record(row).is_none());
-                    if stale {
-                        for old in std::iter::once(edge.record)
-                            .chain(edge.edge.key.evidence.iter().copied())
-                        {
-                            if let Some(row) = record(old) {
-                                if !matches!(self.detector, Detector::Credentials)
-                                    || self.facts(row).any(|(_, fact)| {
-                                        matches!(fact.value, FactValue::Credential { .. })
-                                    })
-                                {
-                                    affected[row as usize] = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                for finding in &findings {
-                    let stale = record(finding.record).is_none()
-                        || context(finding.context).is_none()
-                        || finding.evidence.iter().any(|id| !current.contains_key(id))
-                        || finding
-                            .effects
-                            .iter()
-                            .any(|effect| !current.contains_key(&effect.evidence))
-                        || finding
-                            .policy_provenance
-                            .iter()
-                            .flat_map(|value| &value.observations)
-                            .any(|id| !current.contains_key(id));
-                    if stale {
-                        if let Some(row) = record(finding.record) {
-                            affected[row as usize] = true;
-                        }
-                        for id in finding
-                            .evidence
-                            .iter()
-                            .chain(finding.effects.iter().map(|effect| &effect.evidence))
-                            .chain(
-                                finding
-                                    .policy_provenance
-                                    .iter()
-                                    .flat_map(|value| &value.observations),
-                            )
-                        {
-                            if let Some(&row) = current.get(id) {
-                                if !matches!(self.detector, Detector::Credentials)
-                                    || self.facts(row).any(|(_, fact)| {
-                                        matches!(fact.value, FactValue::Credential { .. })
-                                    })
-                                {
-                                    affected[row as usize] = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if matches!(self.detector, Detector::Credentials) {
-                let times = self
-                    .records
-                    .iter()
-                    .enumerate()
-                    .filter(|(row, _)| {
-                        affected[*row]
-                            && self
-                                .facts(*row as u32)
-                                .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
-                    })
-                    .map(|(_, value)| value.observed_boottime_ns)
-                    .collect::<BTreeSet<_>>();
-                for (row, value) in self.records.iter().enumerate() {
-                    if times.contains(&value.observed_boottime_ns)
-                        && self
-                            .facts(row as u32)
-                            .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
-                    {
-                        affected[row] = true;
-                    }
-                }
-            }
-
-            let mut kept_subjects: Vec<Subject> = Vec::new();
-            let mut subject_rows = BTreeMap::new();
-            let mut add_subject = |key: GraphSubjectKeyV1, row, fact| {
-                if let Some(&index) = subject_rows.get(&key) {
-                    let subject: &mut Subject = &mut kept_subjects[index as usize];
-                    if (row, fact) < (subject.record, subject.context) {
-                        subject.record = row;
-                        subject.context = fact;
-                    }
-                    return Some(index);
-                }
-                let index = u32::try_from(kept_subjects.len()).ok()?;
-                subject_rows.insert(key.clone(), index);
-                kept_subjects.push(Subject {
-                    key,
-                    record: row,
-                    context: fact,
-                });
-                Some(index)
-            };
-            let mut kept_edges = Vec::new();
-            for mut edge in edges {
-                let Some(row) = record(edge.record) else {
-                    continue;
-                };
-                if affected[row as usize] {
-                    continue;
-                }
-                edge.record = row;
-                edge.fact = context(edge.fact)?;
-                let fact_anchor = edge
-                    .fact
-                    .map(|index| (self.facts[index as usize].record, Some(index)));
-                let local_anchor = (row, None);
-                let from_anchor = if edge.edge.key.edge_type == GraphEdgeTypeV1::NativeParent {
-                    fact_anchor?
-                } else {
-                    local_anchor
-                };
-                let to_anchor = if matches!(
-                    edge.edge.key.edge_type,
-                    GraphEdgeTypeV1::NativeParent
-                        | GraphEdgeTypeV1::CredentialAuthority
-                        | GraphEdgeTypeV1::KubernetesExpansion
-                ) {
-                    fact_anchor?
-                } else {
-                    local_anchor
-                };
-                edge.edge.key.from = add_subject(
-                    subjects.get(edge.edge.key.from as usize)?.key.clone(),
-                    from_anchor.0,
-                    from_anchor.1,
-                )?;
-                edge.edge.key.to = add_subject(
-                    subjects.get(edge.edge.key.to as usize)?.key.clone(),
-                    to_anchor.0,
-                    to_anchor.1,
-                )?;
-                edge.edge.key.evidence = edge
-                    .edge
-                    .key
-                    .evidence
-                    .iter()
-                    .map(|&old| record(old))
-                    .collect::<Option<Vec<_>>>()?;
-                Self::canonical(&mut edge.edge.key.evidence);
-                kept_edges.push(edge);
-            }
-            let mut kept_findings = Vec::new();
-            for mut finding in findings {
-                let Some(row) = record(finding.record) else {
-                    continue;
-                };
-                if affected[row as usize] {
-                    continue;
-                }
-                finding.record = row;
-                finding.context = context(finding.context)?;
-                if finding.evidence.iter().any(|id| !current.contains_key(id))
-                    || finding
-                        .effects
+            for row in 0..self.records.len() {
+                if self
+                    .facts(row as u32)
+                    .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
+                    && triggers
                         .iter()
-                        .any(|effect| !current.contains_key(&effect.evidence))
-                    || finding
-                        .policy_provenance
-                        .iter()
-                        .flat_map(|value| &value.observations)
-                        .any(|id| !current.contains_key(id))
+                        .any(|later| self.bounded(&self.records[row], later))
                 {
-                    return None;
+                    affected[row] = true;
                 }
-                add_subject(finding.subject_id.clone(), row, finding.context)?;
-                kept_findings.push(finding);
-            }
-            if matches!(self.detector, Detector::Process) {
-                for (row, value) in self.records.iter().enumerate() {
-                    if !affected[row] {
-                        add_subject(value.task_subject(), row as u32, None)?;
-                    }
-                }
-            }
-            Some((records, affected, kept_subjects, kept_edges, kept_findings))
-        })();
-        let Some((records, affected, subjects, edges, findings)) = restored else {
-            return Ok(None);
-        };
-        for (old, row) in progress.into_iter().zip(records) {
-            if let Some(row) = row {
-                self.progress[row as usize].state = old.state;
             }
         }
-        self.subject_indices = subjects
-            .iter()
-            .enumerate()
-            .map(|(index, subject)| (subject.key.clone(), index as u32))
-            .collect();
-        self.subjects = subjects;
-        self.edges = edges
-            .into_iter()
-            .map(|edge| (edge.edge.key.clone(), edge))
-            .collect();
-        self.findings = findings
-            .into_iter()
-            .map(|finding| (finding.finding_id.clone(), finding))
-            .collect();
+        let relevant = |row: u32| {
+            !matches!(self.detector, Detector::Credentials)
+                || self
+                    .facts(row)
+                    .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
+        };
+        for edge in self.prior_edges.values() {
+            let stale = self.local_anchor(&edge.anchor, &current).is_none()
+                || edge.key.evidence.iter().any(|id| !current.contains_key(id));
+            if stale {
+                for id in std::iter::once(&edge.anchor.record).chain(&edge.key.evidence) {
+                    if let Some(&row) = current.get(id) {
+                        if relevant(row) {
+                            affected[row as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+        for finding in &previous_findings {
+            let stale = self.local_anchor(&finding.anchor, &current).is_none()
+                || finding.evidence.iter().any(|id| !current.contains_key(id))
+                || finding
+                    .effects
+                    .iter()
+                    .any(|effect| !current.contains_key(&effect.evidence))
+                || finding
+                    .policy_provenance
+                    .iter()
+                    .flat_map(|value| &value.observations)
+                    .any(|id| !current.contains_key(id));
+            if stale {
+                for id in std::iter::once(&finding.anchor.record)
+                    .chain(&finding.evidence)
+                    .chain(finding.effects.iter().map(|effect| &effect.evidence))
+                    .chain(
+                        finding
+                            .policy_provenance
+                            .iter()
+                            .flat_map(|value| &value.observations),
+                    )
+                {
+                    if let Some(&row) = current.get(id) {
+                        if relevant(row) {
+                            affected[row as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+        if matches!(self.detector, Detector::Credentials) {
+            let times = self
+                .records
+                .iter()
+                .enumerate()
+                .filter(|(row, _)| {
+                    affected[*row]
+                        && self
+                            .facts(*row as u32)
+                            .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
+                })
+                .map(|(_, value)| value.observed_boottime_ns)
+                .collect::<BTreeSet<_>>();
+            for (row, value) in self.records.iter().enumerate() {
+                if times.contains(&value.observed_boottime_ns)
+                    && self
+                        .facts(row as u32)
+                        .any(|(_, fact)| matches!(fact.value, FactValue::Credential { .. }))
+                {
+                    affected[row] = true;
+                }
+            }
+        }
+        let mut support = BTreeMap::<GraphSubjectKeyV1, (u32, Option<u32>)>::new();
+        let mut needed = BTreeSet::new();
+        let mut retain = |key: &GraphSubjectKeyV1, anchor: (u32, Option<u32>)| {
+            support
+                .entry(key.clone())
+                .and_modify(|old| {
+                    if anchor < *old {
+                        *old = anchor;
+                    }
+                })
+                .or_insert(anchor);
+        };
+        for subject in self.prior_subjects.values() {
+            if let Some(anchor) = self.local_anchor(&subject.anchor, &current) {
+                if !affected[anchor.0 as usize] {
+                    retain(&subject.key, anchor);
+                }
+            }
+        }
+        for edge in self.prior_edges.values() {
+            let Some((row, fact)) = self.local_anchor(&edge.anchor, &current) else {
+                continue;
+            };
+            if affected[row as usize]
+                || edge.key.evidence.iter().any(|id| {
+                    current
+                        .get(id)
+                        .is_none_or(|&index| affected[index as usize])
+                })
+            {
+                continue;
+            }
+            let fact_row = edge
+                .anchor
+                .fact
+                .as_ref()
+                .and_then(|anchor| current.get(&anchor.record))
+                .copied()
+                .unwrap_or(row);
+            let (from, to) = match edge.key.edge_type {
+                GraphEdgeTypeV1::TaskInProcess
+                | GraphEdgeTypeV1::TaskInExecutionSet
+                | GraphEdgeTypeV1::NativeEffect => ((row, None), (row, None)),
+                GraphEdgeTypeV1::NativeParent => ((fact_row, fact), (fact_row, fact)),
+                GraphEdgeTypeV1::CredentialAuthority | GraphEdgeTypeV1::KubernetesExpansion => {
+                    ((row, None), (fact_row, fact))
+                }
+            };
+            needed.insert(edge.key.from.clone());
+            needed.insert(edge.key.to.clone());
+            retain(&edge.key.from, from);
+            retain(&edge.key.to, to);
+        }
+        for finding in &previous_findings {
+            let Some(anchor) = self.local_anchor(&finding.anchor, &current) else {
+                continue;
+            };
+            if !affected[anchor.0 as usize]
+                && finding.evidence.iter().all(|id| {
+                    current
+                        .get(id)
+                        .is_some_and(|&index| !affected[index as usize])
+                })
+            {
+                needed.insert(finding.subject_id.clone());
+                retain(&finding.subject_id, anchor);
+            }
+        }
+        support.retain(|key, _| needed.contains(key));
+        for (key, (row, context)) in support {
+            if !self.prior_subjects.contains_key(&key) {
+                return Err(Self::invalid("graph previous subject reference"));
+            }
+            let index = u32::try_from(self.subjects.len())
+                .map_err(|_| Self::invalid("graph subject count"))?;
+            self.subject_indices.insert(key.clone(), index);
+            self.subjects.push(Subject {
+                record: row,
+                context,
+                key,
+            });
+        }
+        for edge in self.prior_edges.values() {
+            let Some((row, fact)) = self.local_anchor(&edge.anchor, &current) else {
+                continue;
+            };
+            if affected[row as usize] {
+                continue;
+            }
+            let Some(&from) = self.subject_indices.get(&edge.key.from) else {
+                continue;
+            };
+            let Some(&to) = self.subject_indices.get(&edge.key.to) else {
+                continue;
+            };
+            let Some(evidence) = edge
+                .key
+                .evidence
+                .iter()
+                .map(|id| current.get(id).copied())
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            if evidence.iter().any(|&index| affected[index as usize]) {
+                continue;
+            }
+            let value = Relationship {
+                record: row,
+                fact,
+                edge: GraphEdgeV1 {
+                    key: GraphEdgeKeyV1 {
+                        from,
+                        to,
+                        edge_type: edge.key.edge_type,
+                        package_id: edge.key.package_id.clone(),
+                        evidence,
+                        cause: edge.key.cause,
+                    },
+                    proof_quality: edge.proof_quality,
+                    required_coverage_interval_ids: edge.required_coverage_interval_ids.clone(),
+                    first_boottime_ns: edge.first_boottime_ns,
+                    last_boottime_ns: edge.last_boottime_ns,
+                },
+            };
+            if self.edges.insert(value.edge.key.clone(), value).is_some() {
+                return Err(Self::invalid("graph previous relationship identity"));
+            }
+        }
+        for finding in previous_findings {
+            let Some((row, context)) = self.local_anchor(&finding.anchor, &current) else {
+                continue;
+            };
+            if affected[row as usize]
+                || finding.evidence.iter().any(|id| !current.contains_key(id))
+                || finding
+                    .effects
+                    .iter()
+                    .any(|effect| !current.contains_key(&effect.evidence))
+                || finding
+                    .policy_provenance
+                    .iter()
+                    .flat_map(|value| &value.observations)
+                    .any(|id| !current.contains_key(id))
+                || !self.subject_indices.contains_key(&finding.subject_id)
+            {
+                continue;
+            }
+            let value = self
+                .prior_findings
+                .get(&finding.finding_id)
+                .ok_or_else(|| Self::invalid("graph previous finding"))?
+                .0
+                .clone();
+            let value = Finding::from_finding(row, context, value, finding.reason_code);
+            if self
+                .findings
+                .insert(value.finding_id.clone(), value)
+                .is_some()
+            {
+                return Err(Self::invalid("graph previous finding identity"));
+            }
+        }
         Ok(Some(affected))
+    }
+
+    fn local_anchor(
+        &self,
+        anchor: &Anchor,
+        current: &BTreeMap<crate::discovery::DiscoveryRecordIdV1, u32>,
+    ) -> Option<(u32, Option<u32>)> {
+        let row = *current.get(&anchor.record)?;
+        let fact = match anchor.fact.as_ref() {
+            Some(anchor) => {
+                let fact_record = *current.get(&anchor.record)?;
+                let index = self
+                    .fact_rows
+                    .get(fact_record as usize)?
+                    .iter()
+                    .copied()
+                    .find(|&index| {
+                        let fact = &self.facts[index];
+                        fact.key == anchor.key
+                            && fact.sensitivity == anchor.sensitivity
+                            && fact.value == anchor.value
+                    })?;
+                Some(u32::try_from(index).ok()?)
+            }
+            None => None,
+        };
+        Some((row, fact))
     }
 }

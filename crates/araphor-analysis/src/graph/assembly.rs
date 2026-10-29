@@ -20,8 +20,13 @@ impl Graph<'_> {
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<GraphSnapshotV1> {
-        self.branches.sort_by(|left, right| {
+    pub fn finish(self) -> Result<GraphSnapshotV1> {
+        let mut branches: Vec<_> = self
+            .findings
+            .values()
+            .map(algorithm::GraphBranchV1::from_value)
+            .collect();
+        branches.sort_by(|left, right| {
             (
                 &left.package_id,
                 &left.seed,
@@ -35,7 +40,7 @@ impl Graph<'_> {
                     &right.missing_fields,
                 ))
         });
-        self.branches.dedup();
+        branches.dedup();
         let first = self
             .input
             .records
@@ -93,7 +98,7 @@ impl Graph<'_> {
             graph: GraphVersionV1 {
                 subjects,
                 edges,
-                branches: self.branches,
+                branches,
                 facts: self.facts,
             },
             findings: self.findings.into_values().collect(),

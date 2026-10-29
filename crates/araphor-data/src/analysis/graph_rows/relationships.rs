@@ -14,6 +14,7 @@ use duckdb::{
 use serde::de::DeserializeOwned;
 
 mod native;
+pub(super) use native::StoredEdge;
 use snafu::ResultExt as _;
 
 const COLUMNS: &str = "ordinal, from_subject_id, to_subject_id, edge_type,

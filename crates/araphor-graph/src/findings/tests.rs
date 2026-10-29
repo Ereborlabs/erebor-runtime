@@ -1,5 +1,6 @@
 use araphor_analysis_builtins::graph::{
-    DeclaredFindingReasonV1, FindingReasonV1, FindingSeverityV1, FindingStateV1, FindingV1,
+    Anchor, DeclaredFindingReasonV1, Finding as LocalFinding, FindingChange, FindingReasonV1,
+    FindingSeverityV1, FindingStateV1, FindingV1,
 };
 use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection};
@@ -144,7 +145,7 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
     let mut second = HashMap::new();
     second.insert("a".into(), "first".into());
     second.insert("z".into(), "last".into());
-    let reason = |metadata| {
+    let reason = |field_metadata, schema_metadata| {
         FindingReasonV1::Declared(DeclaredFindingReasonV1 {
             code: "HF-PROC-001.EXACT".into(),
             schema: sdk::Schema::new(vec![sdk::Field::new(
@@ -152,13 +153,14 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
                 sdk::DataType::UInt64,
                 false,
             )
-            .with_metadata(metadata)]),
+            .with_metadata(field_metadata)])
+            .with_metadata(schema_metadata),
             ipc: vec![1, 2, 3],
         })
     };
-    finding.reason = reason(first);
+    finding.reason = reason(first.clone(), first);
     let mut reordered = finding.clone();
-    reordered.reason = reason(second);
+    reordered.reason = reason(second.clone(), second);
     assert_eq!(finding, reordered);
     let evidence = vec![9; finding.evidence.len()];
     let refs = FindingRefs {
@@ -192,7 +194,9 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
         })?
     );
 
-    let mut writer = Connection::open_in_memory()?;
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("findings.duckdb");
+    let writer = Connection::open(&path)?;
     writer.execute_batch("CREATE TABLE graph_versions (
         result_id VARCHAR PRIMARY KEY, lineage_id UBIGINT NOT NULL, commit_revision UBIGINT NOT NULL);
         INSERT INTO graph_versions VALUES ('first', 1, 1), ('same', 1, 2), ('changed', 1, 3)")?;
@@ -224,10 +228,13 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
         |row| row.get(0),
     )?;
     assert_eq!(count, 2);
+    drop(writer);
+    let mut writer = Connection::open(&path)?;
     let mut statement = writer.prepare(&format!(
         "SELECT {} FROM graph_findings WHERE result_id = ?",
         FindingRows::COLUMNS
     ))?;
+    let mut reopened = None;
     for (id, expected) in [
         ("first", &finding),
         ("same", &finding),
@@ -241,8 +248,30 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
             ))
         })??;
         assert_eq!(&actual, expected);
+        if id == "first" {
+            reopened = Some(actual);
+        }
     }
     drop(statement);
+    let normalized = |value: FindingV1| -> std::result::Result<_, Box<dyn std::error::Error>> {
+        let record = value
+            .evidence
+            .first()
+            .cloned()
+            .ok_or("finding test evidence")?;
+        let reason = value.reason.clone();
+        let code = FindingRows::reason_label(&reason)?;
+        let mut row = FindingChange::from_local(
+            LocalFinding::from_finding(0, None, value, code),
+            Anchor { record, fact: None },
+        );
+        row.prior_reason = Some(reason);
+        Ok(FindingChange::encode(&[row])?)
+    };
+    assert_eq!(
+        normalized(finding.clone())?.batches,
+        normalized(reopened.ok_or("reopened finding")?)?.batches,
+    );
     {
         let transaction = writer.transaction()?;
         transaction.execute(

@@ -6,6 +6,8 @@ impl Graph<'_> {
         package: &sdk::Package,
         evaluation: &sdk::Evaluation,
         output: &sdk::Output,
+        retained: bool,
+        host_prior: Option<&[sdk::Dataset]>,
     ) -> Result<()> {
         let model = package
             .exports
@@ -17,9 +19,8 @@ impl Graph<'_> {
                 }
                 .build()
             })?;
-        let dataset = |name: &str| {
-            output
-                .datasets
+        fn dataset<'a>(datasets: &'a [sdk::Dataset], name: &str) -> Result<&'a sdk::Dataset> {
+            datasets
                 .iter()
                 .find(|data| data.name == name)
                 .ok_or_else(|| {
@@ -28,32 +29,287 @@ impl Graph<'_> {
                     }
                     .build()
                 })
-        };
-        let mut metadata =
-            algorithm::Metadata::decode(dataset("metadata")?).context(AnalysisContractSnafu)?;
-        Self::require(metadata.len() == 1, "graph metadata count")?;
-        let metadata = metadata.remove(0);
-        Self::require(
-            metadata
-                .record_ids
+        }
+        let checkpoint = output.checkpoint.as_ref().ok_or_else(|| {
+            GraphInvalidSnafu {
+                field: "graph checkpoint output",
+            }
+            .build()
+        })?;
+        let declaration = model.checkpoint.as_ref().ok_or_else(|| {
+            GraphInvalidSnafu {
+                field: "graph checkpoint declaration",
+            }
+            .build()
+        })?;
+        let state = &declaration.datasets[0];
+        let state = checkpoint
+            .datasets
+            .iter()
+            .find(|data| data.name == state.name)
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph checkpoint state",
+                }
+                .build()
+            })?;
+        let states = GraphPackageStateV1::decode(state).context(AnalysisContractSnafu)?;
+        Self::require(states.len() == 1, "graph checkpoint rows")?;
+        if let GraphPackageStateV1::Declared(value) = &states[0] {
+            Self::require(!value.is_empty(), "graph declared checkpoint state")?;
+        }
+
+        let previous = host_prior.unwrap_or(&evaluation.previous_outputs);
+        Self::require(!retained || !previous.is_empty(), "retained Graph prior")?;
+        let mut subjects = BTreeMap::new();
+        let mut edges = BTreeMap::new();
+        let mut findings = BTreeMap::new();
+        if !previous.is_empty() {
+            Self::require(
+                algorithm::SubjectRemoval::decode(dataset(previous, "subject_removals")?)
+                    .context(AnalysisContractSnafu)?
+                    .is_empty()
+                    && algorithm::RelationshipRemoval::decode(dataset(
+                        previous,
+                        "relationship_removals",
+                    )?)
+                    .context(AnalysisContractSnafu)?
+                    .is_empty()
+                    && algorithm::FindingRemoval::decode(dataset(previous, "finding_removals")?)
+                        .context(AnalysisContractSnafu)?
+                        .is_empty()
+                    && algorithm::ProgressRemoval::decode(dataset(previous, "progress_removals")?)
+                        .context(AnalysisContractSnafu)?
+                        .is_empty(),
+                "graph previous normalized output",
+            )?;
+            for row in algorithm::SubjectChange::decode(dataset(previous, "subjects")?)
+                .context(AnalysisContractSnafu)?
+            {
+                Self::require(
+                    subjects.insert(row.key.clone(), row).is_none(),
+                    "graph prior subject identity",
+                )?;
+            }
+            for row in algorithm::RelationshipChange::decode(dataset(previous, "relationships")?)
+                .context(AnalysisContractSnafu)?
+            {
+                Self::require(
+                    edges.insert(row.key.clone(), row).is_none(),
+                    "graph prior relationship identity",
+                )?;
+            }
+            for row in algorithm::FindingChange::decode(dataset(previous, "findings")?)
+                .context(AnalysisContractSnafu)?
+            {
+                Self::require(
+                    row.prior_reason.is_some()
+                        && findings.insert(row.finding_id.clone(), row).is_none(),
+                    "graph prior finding identity",
+                )?;
+            }
+        }
+
+        let indices = self
+            .input
+            .records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| {
+                u32::try_from(index)
+                    .map(|index| (record.id.clone(), index))
+                    .map_err(|_| {
+                        GraphInvalidSnafu {
+                            field: "graph output evidence",
+                        }
+                        .build()
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        if !retained {
+            let mut removed = BTreeSet::new();
+            for row in
+                algorithm::SubjectRemoval::decode(dataset(&output.datasets, "subject_removals")?)
+                    .context(AnalysisContractSnafu)?
+            {
+                Self::require(
+                    removed.insert(row.key.clone()) && subjects.remove(&row.key).is_some(),
+                    "graph subject removal",
+                )?;
+            }
+            for row in algorithm::SubjectChange::decode(dataset(&output.datasets, "subjects")?)
+                .context(AnalysisContractSnafu)?
+            {
+                Self::require(
+                    subjects.insert(row.key.clone(), row).is_none(),
+                    "graph subject addition",
+                )?;
+            }
+            let mut removed = BTreeSet::new();
+            for row in algorithm::RelationshipRemoval::decode(dataset(
+                &output.datasets,
+                "relationship_removals",
+            )?)
+            .context(AnalysisContractSnafu)?
+            {
+                Self::require(
+                    removed.insert(row.key.clone()) && edges.remove(&row.key).is_some(),
+                    "graph relationship removal",
+                )?;
+            }
+            for row in
+                algorithm::RelationshipChange::decode(dataset(&output.datasets, "relationships")?)
+                    .context(AnalysisContractSnafu)?
+            {
+                Self::require(
+                    row.key.package_id == package.id
+                        && edges.insert(row.key.clone(), row).is_none(),
+                    "graph relationship addition",
+                )?;
+            }
+
+            let additions =
+                algorithm::FindingChange::decode(dataset(&output.datasets, "findings")?)
+                    .context(AnalysisContractSnafu)?;
+            let local = additions
                 .iter()
-                .eq(self.input.records.iter().map(|record| &record.id))
-                && metadata.facts.len() == self.facts.len()
-                && metadata
-                    .facts
-                    .iter()
-                    .zip(self.facts.iter().zip(&self.input.facts))
-                    .all(|(actual, (fact, context))| {
-                        self.input
-                            .records
-                            .get(actual.record as usize)
-                            .is_some_and(|record| record.id == fact.record_id)
-                            && actual.key == context.key
-                            && actual.sensitivity == context.sensitivity
-                            && actual.value == fact.value
-                    }),
-            "graph output metadata",
-        )?;
+                .map(|row| {
+                    Self::require(row.prior_reason.is_none(), "graph untrusted prior reason")?;
+                    let (record, context) = self.positions(&row.anchor)?;
+                    Ok(row.local(record, context))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let index_refs = indices.iter().map(|(id, &row)| (id, row)).collect();
+            Self::finding_evidence(&local, &index_refs, &output.evidence)?;
+            let reasons = Self::finding_reasons(package, &local, &index_refs, &output.reasons)?;
+            let mut removed = BTreeSet::new();
+            for row in
+                algorithm::FindingRemoval::decode(dataset(&output.datasets, "finding_removals")?)
+                    .context(AnalysisContractSnafu)?
+            {
+                Self::require(
+                    removed.insert(row.finding_id.clone())
+                        && findings.remove(&row.finding_id).is_some(),
+                    "graph finding removal",
+                )?;
+            }
+            for (mut row, reason) in additions.into_iter().zip(reasons) {
+                Self::require(
+                    row.package_id == package.id
+                        && row.package_version == 1
+                        && row.tenant_id == self.input.source.tenant_id,
+                    "graph finding package",
+                )?;
+                row.prior_reason = Some(reason);
+                Self::require(
+                    findings.insert(row.finding_id.clone(), row).is_none(),
+                    "graph finding addition",
+                )?;
+            }
+        }
+
+        let mut local_subjects = Vec::new();
+        let mut subject_indices = BTreeMap::new();
+        let mut merged = Vec::new();
+        for (key, row) in subjects {
+            let (record, context) = self.positions(&row.anchor)?;
+            let local = algorithm::Subject {
+                record,
+                context,
+                key: key.clone(),
+            };
+            self.validate_subject(&local)?;
+            let index = u32::try_from(local_subjects.len()).map_err(|_| {
+                GraphInvalidSnafu {
+                    field: "graph subject count",
+                }
+                .build()
+            })?;
+            subject_indices.insert(key.clone(), index);
+            merged.push(self.insert_subject(key)?);
+            local_subjects.push(local);
+        }
+        for (_, row) in edges {
+            let (record, fact) = self.positions(&row.anchor)?;
+            let from = *subject_indices.get(&row.key.from).ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph edge endpoint",
+                }
+                .build()
+            })?;
+            let to = *subject_indices.get(&row.key.to).ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph edge endpoint",
+                }
+                .build()
+            })?;
+            Self::require(
+                row.key.evidence.windows(2).all(|pair| pair[0] < pair[1]),
+                "graph edge evidence identity",
+            )?;
+            let mut evidence = row
+                .key
+                .evidence
+                .iter()
+                .map(|id| {
+                    indices.get(id).copied().ok_or_else(|| {
+                        GraphInvalidSnafu {
+                            field: "graph edge evidence",
+                        }
+                        .build()
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            evidence.sort_unstable();
+            evidence.dedup();
+            let local = algorithm::Relationship {
+                record,
+                fact,
+                edge: GraphEdgeV1 {
+                    key: GraphEdgeKeyV1 {
+                        from,
+                        to,
+                        edge_type: row.key.edge_type,
+                        package_id: row.key.package_id,
+                        evidence,
+                        cause: row.key.cause,
+                    },
+                    proof_quality: row.proof_quality,
+                    required_coverage_interval_ids: row.required_coverage_interval_ids,
+                    first_boottime_ns: row.first_boottime_ns,
+                    last_boottime_ns: row.last_boottime_ns,
+                },
+            };
+            self.validate_edge(&local, &local_subjects)?;
+            let mut edge = local.edge;
+            edge.key.from = merged[from as usize];
+            edge.key.to = merged[to as usize];
+            self.insert_edge(edge)?;
+        }
+        for (_, row) in findings {
+            Self::require(
+                row.package_id == package.id
+                    && row.package_version == 1
+                    && row.tenant_id == self.input.source.tenant_id,
+                "graph finding package",
+            )?;
+            let (record, context) = self.positions(&row.anchor)?;
+            let reason = row.prior_reason.clone().ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph prior finding reason",
+                }
+                .build()
+            })?;
+            let finding = row.into_finding(reason);
+            self.validate_finding(record, context, &finding)?;
+            Self::require(
+                self.findings
+                    .get(&finding.finding_id)
+                    .is_none_or(|prior| prior == &finding),
+                "conflicting finding value",
+            )?;
+            self.findings.insert(finding.finding_id.clone(), finding);
+        }
         let accepted = self
             .input
             .records
@@ -68,142 +324,53 @@ impl Graph<'_> {
             .into_iter()
             .max()
             .unwrap_or(0);
-        Self::require(
-            metadata.package
-                == GraphPackageCheckpointV1::from_package(
-                    package,
-                    model,
-                    metadata.package.state.clone(),
-                    accepted,
-                    observed,
-                ),
-            "graph package metadata",
-        )?;
-        if let GraphPackageStateV1::Declared(value) = &metadata.package.state {
-            Self::require(
-                !value.is_empty() && value.len() <= 128,
-                "graph declared checkpoint state",
-            )?;
-        }
-        let declaration = model.checkpoint.as_ref().ok_or_else(|| {
-            GraphInvalidSnafu {
-                field: "graph checkpoint declaration",
-            }
-            .build()
-        })?;
-        let checkpoint = output.checkpoint.as_ref().ok_or_else(|| {
-            GraphInvalidSnafu {
-                field: "graph checkpoint output",
-            }
-            .build()
-        })?;
-        let state = &declaration.datasets[0];
-        let data = checkpoint
-            .datasets
-            .iter()
-            .find(|data| data.name == state.name)
+        self.packages.push(GraphPackageCheckpointV1::from_package(
+            package,
+            model,
+            states[0].clone(),
+            accepted,
+            observed,
+        ));
+        Ok(())
+    }
+
+    fn positions(&self, anchor: &algorithm::Anchor) -> Result<(u32, Option<u32>)> {
+        let record = self
+            .input
+            .records
+            .binary_search_by(|row| row.id.cmp(&anchor.record))
+            .ok()
+            .and_then(|index| u32::try_from(index).ok())
             .ok_or_else(|| {
                 GraphInvalidSnafu {
-                    field: "graph checkpoint state",
+                    field: "graph anchor record",
                 }
                 .build()
             })?;
-        let states = GraphPackageStateV1::decode(data).context(AnalysisContractSnafu)?;
-        Self::require(states.len() == 1, "graph checkpoint rows")?;
-        Self::require(
-            states[0] == metadata.package.state,
-            "graph package checkpoint state",
-        )?;
-
-        let subjects =
-            algorithm::Subject::decode(dataset("subjects")?).context(AnalysisContractSnafu)?;
-        let mut mapping = Vec::with_capacity(subjects.len());
-        for subject in &subjects {
-            self.validate_subject(subject)?;
-            mapping.push(self.insert_subject(subject.key.clone())?);
-        }
-        for row in algorithm::Relationship::decode(dataset("relationships")?)
-            .context(AnalysisContractSnafu)?
-        {
-            Self::require(row.edge.key.package_id == package.id, "graph edge package")?;
-            self.validate_edge(&row, &subjects)?;
-            let mut edge = row.edge;
-            edge.key.from = mapping[edge.key.from as usize];
-            edge.key.to = mapping[edge.key.to as usize];
-            edge.key.evidence = edge
-                .key
-                .evidence
-                .iter()
-                .map(|index| {
-                    self.revision
-                        .evidence
-                        .binary_search(&metadata.record_ids[*index as usize])
-                        .ok()
-                        .and_then(|index| u32::try_from(index).ok())
-                        .ok_or_else(|| {
-                            GraphInvalidSnafu {
-                                field: "graph output evidence",
-                            }
-                            .build()
-                        })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            edge.key.evidence.sort_unstable();
-            edge.key.evidence.dedup();
-            self.insert_edge(edge)?;
-        }
-        let findings =
-            algorithm::Finding::decode(dataset("findings")?).context(AnalysisContractSnafu)?;
-        let indices = metadata
-            .record_ids
-            .iter()
-            .enumerate()
-            .map(|(index, id)| {
-                u32::try_from(index).map(|index| (id, index)).map_err(|_| {
-                    GraphInvalidSnafu {
-                        field: "graph output evidence",
-                    }
-                    .build()
-                })
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?;
-        Self::finding_evidence(&findings, &indices, &output.evidence)?;
-        let reasons = Self::finding_reasons(package, &findings, &indices, &output.reasons)?;
-        let mut expected_branches = Vec::new();
-        for (row, reason) in findings.into_iter().zip(reasons) {
-            expected_branches.push(GraphBranchV1::from_finding(&row, &reason));
-            Self::require(
-                row.package_id == package.id
-                    && row.package_version == 1
-                    && row.tenant_id == self.input.source.tenant_id,
-                "graph finding package",
-            )?;
-            let record = row.record;
-            let context = row.context;
-            let finding = row.into_finding(reason);
-            self.validate_finding(record, context, &finding)?;
-            Self::require(
-                self.findings
-                    .get(&finding.finding_id)
-                    .is_none_or(|prior| prior == &finding),
-                "conflicting finding value",
-            )?;
-            self.findings.insert(finding.finding_id.clone(), finding);
-        }
-        let branches =
-            algorithm::Branch::decode(dataset("branches")?).context(AnalysisContractSnafu)?;
-        Self::require(
-            branches
-                .iter()
-                .all(|branch| expected_branches.contains(branch))
-                && expected_branches
-                    .iter()
-                    .all(|branch| branches.contains(branch)),
-            "graph branch authority",
-        )?;
-        self.branches.extend(branches);
-        self.packages.push(metadata.package);
-        Ok(())
+        let context = match &anchor.fact {
+            Some(fact) => {
+                let index = self
+                    .input
+                    .facts
+                    .binary_search_by(|source| source.key.cmp(&fact.key))
+                    .ok()
+                    .filter(|&index| {
+                        self.facts[index].record_id == fact.record
+                            && self.input.facts[index].sensitivity == fact.sensitivity
+                            && self.facts[index].value == fact.value
+                    })
+                    .and_then(|index| u32::try_from(index).ok())
+                    .ok_or_else(|| {
+                        GraphInvalidSnafu {
+                            field: "graph anchor fact",
+                        }
+                        .build()
+                    })?;
+                Some(index)
+            }
+            None => None,
+        };
+        Ok((record, context))
     }
 
     fn finding_evidence(
@@ -259,37 +426,12 @@ impl Graph<'_> {
                     }
                     .build()
                 })?;
-                Self::require(
-                    reason.code == finding.reason_code
-                        && reason
-                            .code
-                            .strip_prefix(&format!("{}.", package.id))
-                            .is_some_and(|value| !value.is_empty()),
-                    "graph candidate reason",
-                )?;
-                if let Some(known) = FindingV1::PACKAGES
-                    .contains(&package.id.as_str())
-                    .then(|| FindingReasonV1::from_analysis_code(&package.id, &reason.code).ok())
-                    .flatten()
-                    .filter(|_| {
-                        reason.details.schema().as_ref() == &algorithm::ReasonDetails::port().schema
-                    })
-                {
-                    let details = algorithm::ReasonDetails::decode(&sdk::Dataset {
-                        name: algorithm::ReasonDetails::port().name,
-                        batches: vec![reason.details.clone()],
-                    })
-                    .context(AnalysisContractSnafu)?;
-                    let expected = algorithm::ReasonDetails::from_finding(finding, indices)
-                        .context(AnalysisContractSnafu)?;
-                    Self::require(details == [expected], "graph candidate reason")?;
-                    Ok(known)
-                } else {
-                    Ok(FindingReasonV1::Declared(
-                        DeclaredFindingReasonV1::from_value(reason)
-                            .context(AnalysisContractSnafu)?,
-                    ))
-                }
+                FindingReasonV1::from_output(&package.id, finding, indices, reason).map_err(|_| {
+                    GraphInvalidSnafu {
+                        field: "graph candidate reason",
+                    }
+                    .build()
+                })
             })
             .collect()
     }

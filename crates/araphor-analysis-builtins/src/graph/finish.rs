@@ -70,23 +70,82 @@ impl GraphPackageCheckpointV1 {
 }
 
 impl Computation {
-    pub(super) fn output(mut self, package: &sdk::Package) -> sdk::Result<sdk::Output> {
-        let mut remap = vec![0; self.subjects.len()];
-        self.subjects
-            .sort_by(|left, right| left.key.cmp(&right.key));
-        for (index, subject) in self.subjects.iter().enumerate() {
-            remap[self.subject_indices[&subject.key] as usize] = index as u32;
+    pub(super) fn output(mut self) -> sdk::Result<sdk::Output> {
+        let record_ids = self
+            .records
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>();
+        let subject_keys = self
+            .subjects
+            .iter()
+            .map(|subject| subject.key.clone())
+            .collect::<Vec<_>>();
+        let mut subjects = BTreeMap::new();
+        for subject in self.subjects {
+            let anchor =
+                Anchor::from_positions(subject.record, subject.context, &record_ids, &self.facts)?;
+            let key = subject.key.clone();
+            if subjects
+                .insert(key.clone(), SubjectChange { anchor, key })
+                .is_some()
+            {
+                return Err(Self::invalid("graph subject identity"));
+            }
         }
-        let mut edges: Vec<_> = self
-            .edges
-            .into_values()
-            .map(|mut row| {
-                row.edge.key.from = remap[row.edge.key.from as usize];
-                row.edge.key.to = remap[row.edge.key.to as usize];
-                row
-            })
-            .collect();
-        edges.sort_by(|left, right| left.edge.key.cmp(&right.edge.key));
+        let mut subject_additions = Vec::new();
+        let mut subject_removals = Vec::new();
+        for (key, current) in subjects {
+            match self.prior_subjects.remove(&key) {
+                Some(old) if old == current => {}
+                Some(_) => {
+                    subject_removals.push(SubjectRemoval { key });
+                    subject_additions.push(current);
+                }
+                None => subject_additions.push(current),
+            }
+        }
+        subject_removals.extend(
+            self.prior_subjects
+                .into_keys()
+                .map(|key| SubjectRemoval { key }),
+        );
+        subject_removals.sort_by(|left, right| left.key.cmp(&right.key));
+
+        let mut edges = BTreeMap::new();
+        for row in self.edges.into_values() {
+            let key = RelationshipIdentity::from_keys(&row.edge.key, &subject_keys, &record_ids)?;
+            let change = RelationshipChange {
+                anchor: Anchor::from_positions(row.record, row.fact, &record_ids, &self.facts)?,
+                key: key.clone(),
+                proof_quality: row.edge.proof_quality,
+                required_coverage_interval_ids: row.edge.required_coverage_interval_ids,
+                first_boottime_ns: row.edge.first_boottime_ns,
+                last_boottime_ns: row.edge.last_boottime_ns,
+            };
+            if edges.insert(key, change).is_some() {
+                return Err(Self::invalid("graph relationship identity"));
+            }
+        }
+        let mut edge_additions = Vec::new();
+        let mut edge_removals = Vec::new();
+        for (key, current) in edges {
+            match self.prior_edges.remove(&key) {
+                Some(old) if old == current => {}
+                Some(_) => {
+                    edge_removals.push(RelationshipRemoval { key });
+                    edge_additions.push(current);
+                }
+                None => edge_additions.push(current),
+            }
+        }
+        edge_removals.extend(
+            self.prior_edges
+                .into_keys()
+                .map(|key| RelationshipRemoval { key }),
+        );
+        edge_removals.sort_by(|left, right| left.key.cmp(&right.key));
+
         let sensitivity = if self
             .facts
             .iter()
@@ -104,68 +163,78 @@ impl Computation {
                 finding
             })
             .collect();
-        let mut branches: Vec<_> = findings
-            .iter()
-            .map(|finding| {
-                let reason =
-                    FindingReasonV1::from_analysis_code(&finding.package_id, &finding.reason_code)?;
-                Ok(GraphBranchV1::from_finding(finding, &reason))
-            })
-            .collect::<sdk::Result<_>>()?;
-        branches.sort_by(|left, right| {
-            (
-                &left.package_id,
-                &left.seed,
-                &left.evidence,
-                &left.missing_fields,
-            )
-                .cmp(&(
-                    &right.package_id,
-                    &right.seed,
-                    &right.evidence,
-                    &right.missing_fields,
-                ))
-        });
-        branches.dedup();
         let state = GraphPackageStateV1::from_marker(&self.state)?;
-        let metadata = Metadata {
-            record_ids: self
-                .records
-                .iter()
-                .map(|record| record.id.clone())
-                .collect(),
-            facts: self.facts,
-            package: GraphPackageCheckpointV1::from_package(
-                package,
-                &package.exports[0],
-                state,
-                self.records
-                    .last()
-                    .map_or(0, |record| record.id.durable_cursor),
-                self.records
-                    .iter()
-                    .map(|record| record.observed_boottime_ns)
-                    .max()
-                    .unwrap_or(0),
-            ),
-        };
+        let mut prior = std::mem::take(&mut self.prior_findings);
+        let mut removed = Vec::new();
+        let mut changed = Vec::new();
+        let mut finding_additions = Vec::new();
+        for finding in &findings {
+            let reason =
+                FindingReasonV1::from_analysis_code(&finding.package_id, &finding.reason_code)?;
+            let current = finding.clone().into_finding(reason);
+            let anchor =
+                Anchor::from_positions(finding.record, finding.context, &record_ids, &self.facts)?;
+            match prior.remove(&finding.finding_id) {
+                Some(old) if old.0 == current && old.1 == anchor => {}
+                Some(_) => {
+                    removed.push(FindingRemoval {
+                        finding_id: finding.finding_id.clone(),
+                    });
+                    changed.push(finding.clone());
+                    finding_additions.push(FindingChange::from_local(finding.clone(), anchor));
+                }
+                None => {
+                    changed.push(finding.clone());
+                    finding_additions.push(FindingChange::from_local(finding.clone(), anchor));
+                }
+            }
+        }
+        removed.extend(
+            prior
+                .into_keys()
+                .map(|finding_id| FindingRemoval { finding_id }),
+        );
+        removed.sort_by(|left, right| left.finding_id.cmp(&right.finding_id));
+        let mut progress_additions = Vec::new();
+        let mut progress_removals = Vec::new();
+        for progress in self.progress {
+            match self.prior_progress.remove(&progress.record) {
+                Some(old) if old == progress => {}
+                Some(_) => {
+                    progress_removals.push(ProgressRemoval {
+                        record: progress.record.clone(),
+                    });
+                    progress_additions.push(progress);
+                }
+                None => progress_additions.push(progress),
+            }
+        }
+        progress_removals.extend(
+            self.prior_progress
+                .into_keys()
+                .map(|record| ProgressRemoval { record }),
+        );
+        progress_additions.sort_by(|left, right| left.record.cmp(&right.record));
+        progress_removals.sort_by(|left, right| left.record.cmp(&right.record));
         let mut output = sdk::Output {
             datasets: vec![
-                Subject::encode(&self.subjects)?,
-                Relationship::encode(&edges)?,
-                Finding::encode(&findings)?,
-                GraphBranchV1::encode(&branches)?,
-                Metadata::encode(std::slice::from_ref(&metadata))?,
+                SubjectChange::encode(&subject_additions)?,
+                SubjectRemoval::encode(&subject_removals)?,
+                RelationshipChange::encode(&edge_additions)?,
+                RelationshipRemoval::encode(&edge_removals)?,
+                FindingChange::encode(&finding_additions)?,
+                FindingRemoval::encode(&removed)?,
+                Progress::encode(&progress_additions)?,
+                ProgressRemoval::encode(&progress_removals)?,
             ],
             ..Default::default()
         };
-        let record_rows = metadata
-            .record_ids
+        let record_rows = record_ids
             .iter()
             .enumerate()
             .map(|(row, id)| (id, row as u32))
             .collect();
-        for (row, finding) in findings.iter().enumerate() {
+        for (row, finding) in changed.iter().enumerate() {
             let reference = sdk::RowRef {
                 dataset: "findings".into(),
                 row: row as u64,
@@ -188,10 +257,7 @@ impl Computation {
         }
         output.checkpoint = Some(sdk::Checkpoint {
             version: 1,
-            datasets: vec![
-                GraphPackageStateV1::encode(std::slice::from_ref(&metadata.package.state))?,
-                Progress::encode(&self.progress)?,
-            ],
+            datasets: vec![GraphPackageStateV1::encode(&[state])?],
         });
         Ok(output)
     }
@@ -204,13 +270,39 @@ impl Computation {
 
 impl GraphBranchV1 {
     pub fn from_finding(finding: &Finding, reason: &FindingReasonV1) -> Self {
+        Self::from_parts(
+            &finding.package_id,
+            &finding.subject_id,
+            &finding.evidence,
+            &finding.limits,
+            reason,
+        )
+    }
+
+    pub fn from_value(finding: &FindingV1) -> Self {
+        Self::from_parts(
+            &finding.package_id,
+            &finding.subject_id,
+            &finding.evidence,
+            &finding.limits,
+            &finding.reason,
+        )
+    }
+
+    fn from_parts(
+        package_id: &str,
+        subject_id: &GraphSubjectKeyV1,
+        evidence: &[crate::discovery::DiscoveryRecordIdV1],
+        limits: &[String],
+        reason: &FindingReasonV1,
+    ) -> Self {
         Self {
-            package_id: finding.package_id.clone(),
-            seed: finding.subject_id.clone(),
-            evidence: finding.evidence.clone(),
+            package_id: package_id.into(),
+            seed: subject_id.clone(),
+            evidence: evidence.to_vec(),
             state: if matches!(reason, FindingReasonV1::OutsideAuthority) {
                 GraphBranchStateV1::OutsideAuthority
-            } else if finding.limits.iter().any(|limit| {
+            } else if limits.iter().any(|limit| {
                 limit.contains("COVERAGE")
                     || limit.contains("MISSING")
                     || limit.contains("UNAVAILABLE")
@@ -221,7 +313,7 @@ impl GraphBranchV1 {
             } else {
                 GraphBranchStateV1::Open
             },
-            missing_fields: finding.limits.clone(),
+            missing_fields: limits.to_vec(),
         }
     }
 }

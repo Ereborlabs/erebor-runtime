@@ -138,6 +138,7 @@ dependencies = [
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
  "araphor-data",
+ "araphor-detector-example",
  "araphor-discovery-definition",
  "araphor-package",
  "araphor-query",
@@ -168,6 +169,7 @@ dependencies = [
  "rmp-serde",
  "schemars 1.2.2",
  "serde",
+ "serde-value",
  "serde_arrow",
  "serde_bytes",
  "serde_json",
@@ -347,6 +349,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "snafu",
+ "tempfile",
 ]
 
 [[package]]
