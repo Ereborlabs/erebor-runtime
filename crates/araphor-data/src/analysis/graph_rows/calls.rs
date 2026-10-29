@@ -250,11 +250,12 @@ impl GraphCallRows {
             )?;
             subject_count -= 1;
         }
-        let mut insert_subject = writer
-            .prepare_cached("INSERT INTO graph_call_subjects VALUES (?, ?, ?, ?, ?, NULL)")
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare Graph call subject",
-            })?;
+        let mut insert_subject =
+            writer
+                .appender("graph_call_subjects")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare Graph call subject",
+                })?;
         for row in SubjectChange::decode(dataset("subjects")?).context(AnalysisContractSnafu)? {
             if prior.is_some_and(|prior| prior.subjects.contains_key(&row.key))
                 && !removed.contains(&row.key)
@@ -270,7 +271,7 @@ impl GraphCallRows {
                 .ok_or_else(|| Code::Invalid.error("Graph call subject value"))?;
             let (record, fact) = Self::anchor(&row.anchor, &basis, graph, ids)?;
             insert_subject
-                .execute(params![scope, id, record, fact, revision])
+                .append_row(params![scope, id, record, fact, revision, None::<u64>])
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert Graph call subject",
                 })?;
@@ -278,16 +279,24 @@ impl GraphCallRows {
                 .checked_add(1)
                 .ok_or_else(|| Code::Limit.error("Graph call subject count"))?;
         }
+        insert_subject.flush().context(AnalysisDatabaseSnafu {
+            operation: "flush Graph call subjects",
+        })?;
+        drop(insert_subject);
+        let additions =
+            RelationshipChange::decode(dataset("relationships")?).context(AnalysisContractSnafu)?;
         let mut edges = BTreeMap::new();
-        for edge in &graph.graph.edges {
-            let key = RelationshipIdentity::from_keys(
-                &edge.key,
-                &graph.graph.subjects,
-                &graph.input_manifest.evidence,
-            )
-            .context(AnalysisContractSnafu)?;
-            if edges.insert(key, edge).is_some() {
-                return Err(Code::Invalid.error("Graph call edge identity"));
+        if !additions.is_empty() {
+            for edge in &graph.graph.edges {
+                let key = RelationshipIdentity::from_keys(
+                    &edge.key,
+                    &graph.graph.subjects,
+                    &graph.input_manifest.evidence,
+                )
+                .context(AnalysisContractSnafu)?;
+                if edges.insert(key, edge).is_some() {
+                    return Err(Code::Invalid.error("Graph call edge identity"));
+                }
             }
         }
         let mut removed = BTreeSet::new();
@@ -308,14 +317,13 @@ impl GraphCallRows {
             )?;
             edge_count -= 1;
         }
-        let mut insert_edge = writer
-            .prepare_cached("INSERT INTO graph_call_edges VALUES (?, ?, ?, ?, ?, NULL)")
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare Graph call edge",
-            })?;
-        for row in
-            RelationshipChange::decode(dataset("relationships")?).context(AnalysisContractSnafu)?
-        {
+        let mut insert_edge =
+            writer
+                .appender("graph_call_edges")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare Graph call edge",
+                })?;
+        for row in additions {
             if prior.is_some_and(|prior| prior.edges.contains_key(&row.key))
                 && !removed.contains(&row.key)
             {
@@ -342,7 +350,7 @@ impl GraphCallRows {
                 .ok_or_else(|| Code::Invalid.error("Graph call edge value"))?;
             let (record, fact) = Self::anchor(&row.anchor, &basis, graph, ids)?;
             insert_edge
-                .execute(params![scope, id, record, fact, revision])
+                .append_row(params![scope, id, record, fact, revision, None::<u64>])
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert Graph call edge",
                 })?;
@@ -350,11 +358,21 @@ impl GraphCallRows {
                 .checked_add(1)
                 .ok_or_else(|| Code::Limit.error("Graph call edge count"))?;
         }
-        let findings = graph
-            .findings
-            .iter()
-            .map(|row| (&row.finding_id, row))
-            .collect::<BTreeMap<_, _>>();
+        insert_edge.flush().context(AnalysisDatabaseSnafu {
+            operation: "flush Graph call edges",
+        })?;
+        drop(insert_edge);
+        let additions =
+            FindingChange::decode(dataset("findings")?).context(AnalysisContractSnafu)?;
+        let findings = if additions.is_empty() {
+            BTreeMap::new()
+        } else {
+            graph
+                .findings
+                .iter()
+                .map(|row| (&row.finding_id, row))
+                .collect::<BTreeMap<_, _>>()
+        };
         let mut removed = BTreeSet::new();
         for row in
             FindingRemoval::decode(dataset("finding_removals")?).context(AnalysisContractSnafu)?
@@ -373,8 +391,6 @@ impl GraphCallRows {
             )?;
             finding_count -= 1;
         }
-        let additions =
-            FindingChange::decode(dataset("findings")?).context(AnalysisContractSnafu)?;
         let mut reasons = BTreeMap::new();
         for reason in &output.reasons {
             if reason.output.dataset != "findings"
@@ -387,11 +403,12 @@ impl GraphCallRows {
             return Err(Code::Invalid.error("Graph call finding reason"));
         }
         let indices = basis.positions.iter().map(|(id, row)| (id, *row)).collect();
-        let mut insert_finding = writer
-            .prepare_cached("INSERT INTO graph_call_findings VALUES (?, ?, ?, ?, ?, ?, NULL)")
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare Graph call finding",
-            })?;
+        let mut insert_finding =
+            writer
+                .appender("graph_call_findings")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare Graph call finding",
+                })?;
         for (index, row) in additions.into_iter().enumerate() {
             if row.prior_reason.is_some()
                 || (prior.is_some_and(|prior| prior.findings.contains_key(&row.finding_id))
@@ -442,7 +459,15 @@ impl GraphCallRows {
                 .ok_or_else(|| Code::Invalid.error("Graph call finding value"))?;
             let (record, fact) = Self::anchor(&row.anchor, &basis, graph, ids)?;
             insert_finding
-                .execute(params![scope, id, record, fact, row.reason_code, revision])
+                .append_row(params![
+                    scope,
+                    id,
+                    record,
+                    fact,
+                    row.reason_code,
+                    revision,
+                    None::<u64>
+                ])
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert Graph call finding",
                 })?;
@@ -450,6 +475,10 @@ impl GraphCallRows {
                 .checked_add(1)
                 .ok_or_else(|| Code::Limit.error("Graph call finding count"))?;
         }
+        insert_finding.flush().context(AnalysisDatabaseSnafu {
+            operation: "flush Graph call findings",
+        })?;
+        drop(insert_finding);
         let mut removed = BTreeSet::new();
         for row in
             ProgressRemoval::decode(dataset("progress_removals")?).context(AnalysisContractSnafu)?
@@ -468,11 +497,12 @@ impl GraphCallRows {
             )?;
             progress_count -= 1;
         }
-        let mut insert_progress = writer
-            .prepare_cached("INSERT INTO graph_call_progress VALUES (?, ?, ?, ?, ?, NULL)")
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare Graph call progress",
-            })?;
+        let mut insert_progress =
+            writer
+                .appender("graph_call_progress")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare Graph call progress",
+                })?;
         for row in Progress::decode(dataset("progress")?).context(AnalysisContractSnafu)? {
             if row.digest.len() != 32
                 || !basis.positions.contains_key(&row.record)
@@ -483,7 +513,14 @@ impl GraphCallRows {
             }
             let id = Self::record_id(&row.record, graph, ids)?;
             insert_progress
-                .execute(params![scope, id, row.digest.as_ref(), row.state, revision])
+                .append_row(params![
+                    scope,
+                    id,
+                    row.digest.as_ref(),
+                    row.state,
+                    revision,
+                    None::<u64>
+                ])
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert Graph call progress",
                 })?;
@@ -491,6 +528,10 @@ impl GraphCallRows {
                 .checked_add(1)
                 .ok_or_else(|| Code::Limit.error("Graph call progress count"))?;
         }
+        insert_progress.flush().context(AnalysisDatabaseSnafu {
+            operation: "flush Graph call progress",
+        })?;
+        drop(insert_progress);
         let changed = writer.execute(
             "UPDATE graph_call_versions SET subject_count = ?, edge_count = ?, finding_count = ?,
                 progress_count = ? WHERE scope_id = ? AND commit_revision = ?",

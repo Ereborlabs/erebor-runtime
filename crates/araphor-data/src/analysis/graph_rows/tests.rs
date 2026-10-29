@@ -641,6 +641,133 @@ fn earlier_keys_keep_edge_membership() -> TestResult {
 }
 
 #[test]
+fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
+    let fixture = CommitFixture::new()?;
+    let mut first = fixture.snapshot.clone();
+    let edge = first.graph.edges[0].clone();
+    first.graph.edges = (0..=crate::analysis::MAX_ANALYSIS_PAGE_RECORDS)
+        .map(|index| {
+            let mut edge = edge.clone();
+            edge.key.package_id = format!("HF-PROC-001:{index:03}");
+            edge
+        })
+        .collect();
+    first
+        .graph
+        .edges
+        .sort_by(|left, right| left.key.cmp(&right.key));
+    first.graph.branches.clear();
+    first.graph.facts.clear();
+    first.findings.clear();
+    first.validate()?;
+
+    let mut second = first.clone();
+    second.previous_result_id = Some("first".into());
+    let mut added = edge;
+    added.key.package_id = "HF-PROC-001:257".into();
+    second.graph.edges.push(added);
+    second
+        .graph
+        .edges
+        .sort_by(|left, right| left.key.cmp(&right.key));
+    second.validate()?;
+
+    let writer = Connection::open_in_memory()?;
+    writer.execute_batch(
+        "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
+            tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
+            method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
+            coverage_revision UBIGINT, commit_revision UBIGINT);
+         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB)",
+    )?;
+    writer.execute_batch(&GraphRows::schema())?;
+    writer.execute(
+        "INSERT INTO source_receipts VALUES (?, ?)",
+        params![
+            first.scope.identity.key(),
+            first.scope.identity.tenant_id.as_slice()
+        ],
+    )?;
+    let mut second_ids = None;
+    for (id, revision, graph) in [("first", 1, &first), ("second", 2, &second)] {
+        writer.execute(
+            "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                id,
+                graph.scope.identity.tenant_id.as_slice(),
+                crate::GRAPH_PROCESSOR,
+                GraphRows::encode(graph)?,
+                graph.scope.identity.key(),
+                graph.scope.method_version,
+                graph.first_cursor,
+                graph.context_notice_revision,
+                fixture.request.coverage_revision,
+                revision
+            ],
+        )?;
+        let ids = GraphRows::insert(graph, &writer, id)?;
+        if id == "second" {
+            second_ids = Some(ids);
+        }
+        let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, id)?
+            .ok_or("missing graph version")?;
+        assert_eq!(GraphRows::read(&writer, id, &header)?, *graph);
+    }
+    let counts: (u64, u64) = writer.query_row(
+        "SELECT (SELECT count(*)::UBIGINT FROM graph_edge_values),
+            (SELECT count(*)::UBIGINT FROM graph_edge_membership)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(counts, (258, 258));
+    let ids = second_ids.ok_or("missing second graph IDs")?;
+    let (lineage, revision): (u64, u64) = writer.query_row(
+        "SELECT lineage_id, commit_revision FROM graph_versions WHERE result_id = 'second'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let edge_id: u64 = writer.query_row(
+        "SELECT edge_id FROM graph_edge_values ORDER BY edge_id LIMIT 1",
+        [],
+        |row| row.get(0),
+    )?;
+    writer.execute(
+        "UPDATE graph_edge_values SET last_boottime_ns = last_boottime_ns + 1 WHERE edge_id = ?",
+        params![edge_id],
+    )?;
+    assert!(matches!(
+        GraphRows::insert_edge_values(
+            &writer,
+            &second,
+            &ids.subjects,
+            &ids.evidence,
+            lineage,
+            revision
+        ),
+        Err(crate::Error::GraphInvalid {
+            field: "duplicate graph edge value",
+            ..
+        })
+    ));
+    writer.execute(
+        "UPDATE graph_edge_values SET last_boottime_ns = last_boottime_ns - 1 WHERE edge_id = ?",
+        params![edge_id],
+    )?;
+    assert_eq!(
+        GraphRows::insert_edge_values(
+            &writer,
+            &second,
+            &ids.subjects,
+            &ids.evidence,
+            lineage,
+            revision
+        )?,
+        ids.edges
+    );
+    Ok(())
+}
+
+#[test]
 fn native_borrowed_columns() -> TestResult {
     let writer = Connection::open_in_memory()?;
     let kind = crate::GraphEdgeTypeV1::NativeEffect;

@@ -61,8 +61,7 @@ values, historical subject membership, and shared finding values are
 implemented. Finding rows use native subject and evidence IDs. The Graph
 header and complex finding fields use typed MessagePack. Shared relationship
 values and historical membership are implemented. Branches and package
-contributions remain open. The 90% target has not been measured on the
-changed store.
+contributions remain open. The changed store has not met the 90% target.
 
 Builtin Graph finding IDs now hash typed binary identity fields. Provider and
 Kubernetes subject keys use typed binary identity fields. The Analysis owner
@@ -135,6 +134,46 @@ retained-call test passed after direct store reopen, and the six Graph call
 corruption cases passed. Public GraphSnapshot assembly, saved raw managed
 output, and generic JSON result envelopes remain. The four-result size target
 and backlog deadline are **Not done**.
+
+The later four-cut diagnostic used 1,653,551 logical Graph bytes. The old
+four-cut value was 10,990,951 bytes. This is about 85% less, and it remains
+554,456 bytes above the 90% target. The same diagnostic saved 12,061,622
+managed Arrow bytes, used a 97,792,000-byte DuckDB backup with 257 used
+blocks and 116 free blocks, and retained 15,241,216 OCI artifact bytes.
+These measures have different owners and must not be added to the Graph
+numerator. The backlog test still reached its 90-second observation deadline.
+Both expected Graph cuts and the target finding were committed, but the
+target notification had not reached the subscription.
+
+The first 256-hash-page trial reduced the 1,880-edge write stage from 5.86
+seconds to 0.49 seconds. It was replaced because DuckDB scanned all stored
+edge values once per page. The current lookup appends deduplicated hashes to
+one temporary relation, joins candidates once, compares complete typed
+values, and removes the temporary relation. On the saved four-cut database,
+the candidate lookup took 39 ms for 1,880 hashes, including table creation
+and append. DuckDB planned one sequential scan and one hash join; the lookup
+is not indexed or fully incremental. Appending rows for the three Graph calls
+reduced their combined write stage from 9.89 seconds to 0.19 seconds. These
+are measured stages from separate runs, not an end-to-end speedup claim.
+Measure the one-scan cost on a larger history before treating lookup scaling
+as complete.
+
+The one-scan source passed 48 focused Data Graph row tests and the Analysis
+call-state rollback and restart tests. The backlog case still failed: it took
+135.86 seconds, with 1,089,852 KiB peak resident memory. Both Graph cuts and
+the target finding existed, but the target notification was absent at the
+deadline. This run does not prove an end-to-end speedup.
+
+The four-cut store has 4,776 call-progress rows and 1,592 distinct digests.
+Its edge values use 461,202 logical bytes, call progress uses 307,471 bytes,
+finding values use 214,702 bytes, and call-edge membership uses 132,920
+bytes. Exact duplicate managed Arrow payloads account for 2,871,272 input
+bytes, 1,521,552 output bytes, and 163,344 selected bytes. Preserve each
+call's exact progress and replay output while removing these repeated values.
+All 3,323 edge values share one proof value, package ID, and cause; coverage
+has two distinct values. Two Graph headers each repeat the same 60,872-byte
+list of 138 branches. Finding policy and effect values are unique across the
+139 findings, so sharing those complete fields would not reduce this case.
 
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976

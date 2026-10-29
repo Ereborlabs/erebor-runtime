@@ -155,6 +155,119 @@ async fn graph_restart_keeps_frontier() -> TestResult {
 }
 
 #[tokio::test]
+async fn graph_call_progress_flush_failure_rolls_back() -> TestResult {
+    let fixture = Fixture::target(Target::Wasm)?;
+    let publication = fixture.prepare("").await?;
+    let grant = publication.grant.clone();
+    let definition = publication.prepared.resolved().clone();
+    fixture.admit_definition(&grant, &definition)?;
+    drop(publication);
+    let job = GraphPublication::admit(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.facts.clone(),
+        grant,
+        "graph-progress-flush".into(),
+        fixture.source.clone(),
+        "SELECT * FROM events".into(),
+        definition,
+        &fixture.control,
+    )
+    .await?;
+    let first = job
+        .run(request("progress-first")?, &fixture.control)
+        .await?;
+    let store = fixture.query.store();
+    let scope = fixture.graph_scope();
+    let head = store
+        .processor_result(&scope)?
+        .ok_or("first Graph result")?;
+    let graph = store
+        .graph_result(fixture.source.tenant_id, &head.result_id)?
+        .ok_or("first Graph snapshot")?;
+    let record = fixture.records.last().ok_or("Graph record")?.clone();
+    store.accept_validated_batch(
+        fixture.source.clone(),
+        ValidatedEvidenceBatchV1 {
+            cpu_id: record.id.cpu_id,
+            first_cursor: 4,
+            last_cursor: 4,
+            intake_utc_ns: 4,
+            frame_ends: vec![record.wire_record.len()],
+            framed_records: record.wire_record.into(),
+        },
+    )?;
+    let retained = store.retained_counts(fixture.source.tenant_id)?;
+    let table = "CREATE TABLE graph_call_progress (
+        scope_id UBIGINT NOT NULL, evidence_id UBIGINT NOT NULL,
+        digest BLOB NOT NULL CHECK (octet_length(digest) = 32),
+        state VARCHAR, valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+        PRIMARY KEY (scope_id, evidence_id, valid_from),
+        CHECK (valid_to IS NULL OR valid_to > valid_from)";
+    store.fault_write(
+        &format!(
+            "CREATE TABLE graph_call_progress_saved AS SELECT * FROM graph_call_progress;
+             DROP TABLE graph_call_progress;
+             {table}, CHECK (valid_from <= {}));
+             INSERT INTO graph_call_progress SELECT * FROM graph_call_progress_saved;",
+            first.commit_revision
+        ),
+        &[],
+    )?;
+    let second = request("progress-second")?;
+    let failed = job
+        .run(second, &fixture.control)
+        .await
+        .err()
+        .ok_or("Graph call progress flush unexpectedly succeeded")?;
+    assert!(
+        format!("{failed:?}").contains("flush Graph call progress"),
+        "{failed:?}"
+    );
+    assert_eq!(store.retained_counts(fixture.source.tenant_id)?, retained);
+    assert_eq!(store.processor_result(&scope)?, Some(head.clone()));
+    assert_eq!(
+        store
+            .managed_resume(
+                fixture.source.tenant_id,
+                "graph-progress-flush",
+                &fixture.control
+            )?
+            .instance
+            .progress,
+        first.commit_revision
+    );
+    assert_eq!(
+        store.graph_result(fixture.source.tenant_id, &head.result_id)?,
+        Some(graph)
+    );
+    store.verify_state()?;
+    store.fault_write(
+        &format!(
+            "DROP TABLE graph_call_progress;
+             {table});
+             INSERT INTO graph_call_progress SELECT * FROM graph_call_progress_saved;
+             DROP TABLE graph_call_progress_saved;"
+        ),
+        &[],
+    )?;
+    let retried = job
+        .run(request("progress-retry")?, &fixture.control)
+        .await?;
+    assert_eq!(retried.results.len(), 3);
+    assert!(retried.commit_revision > first.commit_revision);
+    assert_eq!(
+        store
+            .processor_health(&scope)?
+            .ok_or("Graph progress")?
+            .consumed_cursor,
+        4
+    );
+    store.verify_state()?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn retained_noncontinuing_graph_call_uses_native_prior() -> TestResult {
     let fixture = Fixture::target(Target::Wasm)?;
     let artifact = PackageArtifactV1 {
