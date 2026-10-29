@@ -13,7 +13,9 @@ pub(super) struct Progress {
 impl Progress {
     pub(super) fn new(record: &Observation, window: u64) -> sdk::Result<Self> {
         let mut digest = Sha256::new();
-        serde_json::to_writer(&mut digest, &(record, window)).map_err(Computation::json_error)?;
+        (record, window)
+            .serialize(&mut rmp_serde::Serializer::new(&mut digest))
+            .map_err(|_| Computation::invalid("graph progress identity"))?;
         Ok(Self {
             digest: digest.finalize().to_vec().into(),
             state: None,

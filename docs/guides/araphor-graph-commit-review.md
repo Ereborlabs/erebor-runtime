@@ -825,3 +825,29 @@ damaged referenced rows, and rollback. The batch test checks that an unrelated
 damaged subject does not break a selected finding. The header test checks nonempty
 typed metadata and malformed bytes. No BPF program or ABI changes in this
 change. The full workspace procedure and matched backlog case remain open.
+
+## Binary Graph identities
+
+[FindingV1::identity](../../crates/araphor-analysis-builtins/src/graph/finding.rs) A builtin Graph finding names its package, source record, and subject
+  -> The builtin writes typed MessagePack to SHA-256 and uses the digest as the finding ID
+  -> [Graph::validate_finding](../../crates/araphor-analysis/src/graph/authority.rs) Analysis computes the same ID before it accepts the finding
+
+[GraphSubjectKeyV1::provider_identity](../../crates/araphor-analysis-builtins/src/graph/model/domain.rs) A provider observation names a request, principal, and operation
+  -> [Computation::subject](../../crates/araphor-analysis-builtins/src/graph/edges.rs) The builtin stores typed binary key bytes
+  -> [Graph::authority_matches](../../crates/araphor-analysis/src/graph/authority.rs) Analysis checks the same key bytes
+
+[GraphSubjectKeyV1::kubernetes_identity](../../crates/araphor-analysis-builtins/src/graph/model/domain.rs) A Kubernetes observation names an object and version
+  -> The builtin stores typed binary key bytes
+  -> Analysis checks the same key bytes
+
+[Progress::new](../../crates/araphor-analysis-builtins/src/graph/incremental.rs) The builtin hashes each observation and window with typed MessagePack. These identities do not store JSON text. Package contribution membership and shared relationships are still open.
+
+Focused checks on this source passed:
+
+- `cargo test -p araphor-analysis-builtins graph --lib`: 32 tests.
+- `cargo test -p araphor-analysis baseline --lib`: 11 tests; 3 ignored.
+- `cargo test -p araphor-analysis declared_detector_retains_details --lib`: 1 test.
+- `cargo fmt --check -p araphor-analysis-builtins -p araphor-analysis`: passed.
+
+The full workspace procedure and the matched backlog workload did not run
+on this source. The overall storage target is Not done.

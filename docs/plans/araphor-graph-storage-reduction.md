@@ -63,6 +63,11 @@ header and complex finding fields use typed MessagePack. Shared
 relationships, branches, and package contributions remain open. The 90%
 target has not been measured on the changed store.
 
+Builtin Graph finding IDs now hash typed binary identity fields. Provider and
+Kubernetes subject keys use typed binary identity fields. The Analysis owner
+checks the same fields. This removes JSON text from these identities. It does
+not make package output or Graph membership incremental.
+
 ## Intended end state
 
 For the same four Graph result cuts, reduce logical Graph columns and headers

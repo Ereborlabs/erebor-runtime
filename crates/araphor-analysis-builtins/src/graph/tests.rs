@@ -9,6 +9,40 @@ use fixture::*;
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn graph_identities_use_stable_binary_keys() -> TestResult {
+    let source = identity(0);
+    let key = subject(GraphSubjectKindV1::Task, 3_u64.to_be_bytes().to_vec());
+    let first = FindingV1::identity("HF-PROC-001", &source, &key)?;
+    assert_eq!(first, FindingV1::identity("HF-PROC-001", &source, &key)?);
+    assert_eq!(first.len(), 64);
+    assert_ne!(
+        first,
+        FindingV1::identity("HF-PROC-001", &identity(1), &key)?
+    );
+    assert_ne!(
+        first,
+        FindingV1::identity(
+            "HF-PROC-001",
+            &source,
+            &subject(GraphSubjectKindV1::Task, 4_u64.to_be_bytes().to_vec())
+        )?
+    );
+    assert_ne!(
+        GraphSubjectKeyV1::provider_identity(&None, "principal", "read")?,
+        GraphSubjectKeyV1::provider_identity(&Some(String::new()), "principal", "read")?
+    );
+    assert_ne!(
+        GraphSubjectKeyV1::kubernetes_identity("object", &Some("1".into()))?,
+        GraphSubjectKeyV1::kubernetes_identity("object", &Some("2".into()))?
+    );
+    assert_ne!(
+        GraphSubjectKeyV1::kubernetes_identity("object", &None)?,
+        GraphSubjectKeyV1::kubernetes_identity("object", &Some(String::new()))?
+    );
+    Ok(())
+}
+
+#[test]
 fn detector_declarations_stay_independent() {
     for detector in [
         Detector::Process,

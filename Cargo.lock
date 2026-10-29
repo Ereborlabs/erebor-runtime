@@ -165,6 +165,7 @@ dependencies = [
  "araphor-analysis-sdk",
  "araphor-component-build",
  "erebor-interceptor-abi",
+ "rmp-serde",
  "schemars 1.2.2",
  "serde",
  "serde_arrow",

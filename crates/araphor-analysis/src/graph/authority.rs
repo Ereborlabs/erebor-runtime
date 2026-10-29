@@ -87,8 +87,8 @@ impl Graph<'_> {
                     GraphSubjectKindV1::ProviderObject
                 }
             && key.identity
-                == serde_json::to_vec(&(request_id, principal_id, operation_id))
-                    .context(GraphEncodingSnafu)?)
+                == GraphSubjectKeyV1::provider_identity(request_id, principal_id, operation_id)
+                    .context(AnalysisContractSnafu)?)
     }
 
     fn kubernetes_matches(&self, fact: &GraphFactV1, key: &GraphSubjectKeyV1) -> Result<bool> {
@@ -102,8 +102,8 @@ impl Graph<'_> {
             && matches!(&key.authority, GraphSubjectAuthorityV1::Kubernetes { cluster_id } if cluster_id == &stage.cluster_id)
             && key.kind == GraphSubjectKindV1::KubernetesObject
             && key.identity
-                == serde_json::to_vec(&(uid, &stage.resource_version))
-                    .context(GraphEncodingSnafu)?)
+                == GraphSubjectKeyV1::kubernetes_identity(uid, &stage.resource_version)
+                    .context(AnalysisContractSnafu)?)
     }
 
     fn raw_subject(&self, value: &algorithm::Observation, key: &GraphSubjectKeyV1) -> bool {
@@ -593,8 +593,8 @@ impl Graph<'_> {
         Self::require(finding.sensitivity == floor, "graph finding disclosure")?;
         Self::require(
             finding.finding_id
-                == serde_json::to_string(&(&finding.package_id, &record.id, &finding.subject_id))
-                    .context(GraphEncodingSnafu)?,
+                == FindingV1::identity(&finding.package_id, &record.id, &finding.subject_id)
+                    .context(AnalysisContractSnafu)?,
             "graph finding identity",
         )?;
         let context_only = matches!(

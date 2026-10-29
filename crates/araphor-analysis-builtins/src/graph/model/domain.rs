@@ -235,6 +235,23 @@ pub enum GraphFactValueV1 {
 }
 
 impl GraphSubjectKeyV1 {
+    pub fn provider_identity(
+        request: &Option<String>,
+        principal: &str,
+        operation: &str,
+    ) -> super::super::sdk::Result<Vec<u8>> {
+        rmp_serde::to_vec(&(request, principal, operation))
+            .map_err(|_| super::super::Computation::invalid("graph provider identity"))
+    }
+
+    pub fn kubernetes_identity(
+        uid: &str,
+        version: &Option<String>,
+    ) -> super::super::sdk::Result<Vec<u8>> {
+        rmp_serde::to_vec(&(uid, version))
+            .map_err(|_| super::super::Computation::invalid("graph Kubernetes identity"))
+    }
+
     pub fn native(
         source: &EvidenceIntakeIdentityV1,
         kind: GraphSubjectKindV1,

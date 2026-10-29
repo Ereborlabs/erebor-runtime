@@ -56,7 +56,7 @@
             }
           }
         ],
-        "finding_id": "[\"HF-PROC-001\",{\"stream\":{\"tenant_id\":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],\"node_id\":\"node\",\"node_boot_id\":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],\"label_epoch\":1,\"source_id\":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],\"source_epoch\":1},\"cpu_id\":0,\"durable_cursor\":1},{\"tenant_id\":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],\"authority\":{\"authority\":\"NATIVE\",\"node_id\":\"node\",\"node_boot_id\":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],\"label_epoch\":1},\"kind\":\"TASK\",\"identity\":[0,0,0,0,0,0,0,9]}]",
+        "finding_id": "81a967dca5050fc7d990ee3161c4ece7d9fabeec92d7f70ac906fe5c9ffba22e",
         "limits": [
           "NATIVE_ANCESTRY_UNAVAILABLE",
           "POLICY_PROVENANCE_MISSING",
@@ -477,7 +477,7 @@
             }
           }
         ],
-        "finding_id": "[\"HF-PROC-001\",{\"stream\":{\"tenant_id\":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],\"node_id\":\"node\",\"node_boot_id\":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],\"label_epoch\":1,\"source_id\":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],\"source_epoch\":1},\"cpu_id\":0,\"durable_cursor\":1},{\"tenant_id\":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],\"authority\":{\"authority\":\"EXTERNAL\",\"authority_id\":\"unresolved-native-observation\"},\"kind\":\"EXTERNAL\",\"identity\":[0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,4,110,111,100,101,0,0,0,0,0,0,0,1]}]",
+        "finding_id": "fc178abfbdfc75e3e27e946dfb3b9c81e209fcb3814a092d9fdfd082549d74ec",
         "limits": [
           "NATIVE_ANCESTRY_UNAVAILABLE",
           "POLICY_PROVENANCE_MISSING"
@@ -854,7 +854,7 @@
             }
           }
         ],
-        "finding_id": "[\"HF-PROC-001\",{\"stream\":{\"tenant_id\":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],\"node_id\":\"node\",\"node_boot_id\":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],\"label_epoch\":1,\"source_id\":[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],\"source_epoch\":1},\"cpu_id\":0,\"durable_cursor\":1},{\"tenant_id\":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],\"authority\":{\"authority\":\"NATIVE\",\"node_id\":\"node\",\"node_boot_id\":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],\"label_epoch\":1},\"kind\":\"TASK\",\"identity\":[0,0,0,0,0,0,0,9]}]",
+        "finding_id": "81a967dca5050fc7d990ee3161c4ece7d9fabeec92d7f70ac906fe5c9ffba22e",
         "limits": [
           "NATIVE_ANCESTRY_UNAVAILABLE",
           "POLICY_PROVENANCE_MISSING"

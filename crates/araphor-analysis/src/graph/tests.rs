@@ -471,11 +471,11 @@ fn declared_reason(package_id: &str, reason: &str) -> TestResult {
     for finding in &mut findings {
         finding.reason_code = code.clone();
         finding.package_id = package_id.into();
-        finding.finding_id = serde_json::to_string(&(
+        finding.finding_id = FindingV1::identity(
             package_id,
             &input.records[finding.record as usize].id,
             &finding.subject_id,
-        ))?;
+        )?;
     }
     *data = algorithm::Finding::encode(&findings)?;
     for data in &mut output.datasets {

@@ -1,4 +1,6 @@
 use super::*;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 impl Computation {
     pub(super) fn finding(
@@ -151,8 +153,7 @@ impl FindingV1 {
         provenance.dedup();
         limits.sort();
         limits.dedup();
-        let finding_id = serde_json::to_string(&(package, &seed.id, &subject))
-            .map_err(Computation::json_error)?;
+        let finding_id = Self::identity(package, &seed.id, &subject)?;
         Ok(Self {
             tenant_id: seed.id.stream.tenant_id,
             finding_id,
@@ -202,5 +203,17 @@ impl FindingV1 {
             limits,
             reason,
         })
+    }
+
+    pub fn identity(
+        package: &str,
+        record: &crate::discovery::DiscoveryRecordIdV1,
+        subject: &GraphSubjectKeyV1,
+    ) -> sdk::Result<String> {
+        let mut digest = Sha256::new();
+        (package, record, subject)
+            .serialize(&mut rmp_serde::Serializer::new(&mut digest))
+            .map_err(|_| Computation::invalid("graph finding identity"))?;
+        Ok(format!("{:x}", digest.finalize()))
     }
 }

@@ -154,8 +154,11 @@ impl Computation {
                         } else {
                             GraphSubjectKindV1::ProviderObject
                         },
-                        identity: serde_json::to_vec(&(request_id, principal_id, operation_id))
-                            .map_err(Self::json_error)?,
+                        identity: GraphSubjectKeyV1::provider_identity(
+                            request_id,
+                            principal_id,
+                            operation_id,
+                        )?,
                     },
                     GraphEdgeTypeV1::CredentialAuthority,
                     *proof_quality,
@@ -177,13 +180,12 @@ impl Computation {
                             cluster_id: stage.cluster_id.clone(),
                         },
                         kind: GraphSubjectKindV1::KubernetesObject,
-                        identity: serde_json::to_vec(&(
-                            stage.object_uid.as_ref().ok_or_else(|| {
+                        identity: GraphSubjectKeyV1::kubernetes_identity(
+                            stage.object_uid.as_deref().ok_or_else(|| {
                                 Self::invalid("graph Kubernetes object selection")
                             })?,
                             &stage.resource_version,
-                        ))
-                        .map_err(Self::json_error)?,
+                        )?,
                     },
                     GraphEdgeTypeV1::KubernetesExpansion,
                     stage.proof_quality,
