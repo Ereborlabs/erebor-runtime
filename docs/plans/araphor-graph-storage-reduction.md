@@ -269,6 +269,18 @@ extraction test passed. The Analysis Graph restart test passed. The matched
 four-cut size, backlog time, and incremental package computation remain
 **Not done**.
 
+Current finding head batching is **Done** for notification routing. One Data
+snapshot selects the heads for a batch of finding IDs. A stale reference with
+a different current result fails before its per-row route. Current, absent,
+and invalid references still use the existing route check. The focused Data
+finding test and 14 Analysis notification tests passed. In matched quiet
+backlog runs, the case failed after 139.54 seconds before this change and
+140.31 seconds after it. These results do not show a backlog speed gain. The
+three-record Graph update still spent 1.31 seconds in native Graph insertion,
+about 0.13 seconds in Analysis Graph application, and about 0.3 seconds per
+package call in input collection. Incremental Graph computation and the
+backlog deadline remain **Not done**.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42

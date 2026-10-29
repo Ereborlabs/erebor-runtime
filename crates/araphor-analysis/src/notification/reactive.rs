@@ -90,6 +90,21 @@ impl NotificationRouter {
                 work.push((reference, key));
             }
         }
+        let ids = work
+            .iter()
+            .filter_map(|(reference, _)| reference.as_ref())
+            .filter(|reference| {
+                NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
+                    && NotificationGrantV1::identifier(&reference.result_id, usize::MAX)
+            })
+            .map(|reference| reference.finding_id.clone())
+            .collect::<Vec<_>>();
+        let heads = if ids.is_empty() {
+            None
+        } else {
+            check()?;
+            self.store.notification_finding_heads(tenant, &ids).ok()
+        };
         erebor_telemetry::debug!(
             tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
             rows = work.len(), routed_items = 0usize, handled_states = 0usize,
@@ -120,7 +135,22 @@ impl NotificationRouter {
                         continue;
                     }
                 } else {
-                    let result = self.route_states(tenant, &reference, now);
+                    let result =
+                        if NotificationGrantV1::identifier(&reference.result_id, usize::MAX)
+                            && heads
+                                .as_ref()
+                                .and_then(|heads| heads.get(&reference.finding_id))
+                                .is_some_and(|result| result != &reference.result_id)
+                        {
+                            Err(NotificationSnafu {
+                                code: NotificationErrorCodeV1::Conflict,
+                                field: "current finding reference",
+                            }
+                            .build()
+                            .into())
+                        } else {
+                            self.route_states(tenant, &reference, now)
+                        };
                     routed.insert(identity, result.is_ok());
                     match result {
                         Ok((count, values)) => {

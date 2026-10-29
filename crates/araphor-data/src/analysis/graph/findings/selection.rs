@@ -1,8 +1,36 @@
 use super::*;
+use std::sync::LazyLock;
 
 impl AnalysisStore {
     pub(super) fn finding_selection() -> &'static str {
-        "WITH heads AS (
+        static SQL: LazyLock<String> = LazyLock::new(|| {
+            format!(
+                "{} SELECT result_id, finding_id
+                 FROM current_findings
+                 WHERE (? IS NULL OR finding_id > ?) AND (? IS NULL OR finding_id = ?)
+                 ORDER BY finding_id LIMIT ?",
+                AnalysisStore::current_findings("")
+            )
+        });
+        SQL.as_str()
+    }
+
+    pub(super) fn finding_heads_selection(count: usize) -> String {
+        let filter = format!(
+            "WHERE finding.finding_id IN ({})",
+            std::iter::repeat_n("?", count)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        format!(
+            "{} SELECT result_id, finding_id FROM current_findings ORDER BY finding_id",
+            Self::current_findings(&filter)
+        )
+    }
+
+    fn current_findings(filter: &str) -> String {
+        format!(
+            "WITH heads AS (
             SELECT result_id, commit_revision FROM main.analysis_results
             WHERE tenant_id = ? AND processor_id = ? AND method_version = ?
                 AND stream_key IS NOT NULL
@@ -12,14 +40,12 @@ impl AnalysisStore {
          ), current_findings AS (
             SELECT finding.result_id, finding.finding_id
             FROM graph_findings finding JOIN heads USING (result_id)
+            {filter}
             QUALIFY ROW_NUMBER() OVER (
                 PARTITION BY finding_id
                 ORDER BY commit_revision DESC, finding.result_id DESC) = 1
-         )
-         SELECT result_id, finding_id
-         FROM current_findings
-         WHERE (? IS NULL OR finding_id > ?) AND (? IS NULL OR finding_id = ?)
-         ORDER BY finding_id LIMIT ?"
+         )"
+        )
     }
 
     pub(super) fn finding_query(count: usize) -> String {

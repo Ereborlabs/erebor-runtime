@@ -497,3 +497,135 @@ async fn native_notification_progress() -> TestResult {
         .is_some_and(NotificationSinkResultV1::accepted));
     Ok(())
 }
+
+#[tokio::test]
+async fn stale_batch_keeps_current_and_ready_work() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
+    let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
+    let engine = Engine::new(store.clone(), Limits::default())?;
+    let sink = Sink::default();
+    configure(&router)?;
+    commit_finding_at(&store, finding(1, FindingSeverityV1::High), 1, 1)?;
+    commit_finding_at(&store, finding(2, FindingSeverityV1::High), 2, 2)?;
+    assert_eq!(route(&router, 100)?, 1);
+    let update = capture(
+        &engine,
+        "SELECT finding_id, result_id, notification_id FROM (
+            SELECT 'finding:exact-process-key' AS finding_id, 'graph-test-1' AS result_id,
+                notification_id, 0 AS step FROM notifications WHERE delivery_ready
+            UNION ALL SELECT 'finding:exact-process-key', 'graph-test-1',
+                arrow_cast(NULL, 'Binary'), 1
+            UNION ALL SELECT 'finding:missing', 'graph-test-2',
+                arrow_cast(NULL, 'Binary'), 2
+            UNION ALL SELECT '', 'graph-test-2', arrow_cast(NULL, 'Binary'), 3
+            UNION ALL SELECT 'finding:exact-process-key', '', arrow_cast(NULL, 'Binary'), 4
+            UNION ALL SELECT NULL AS finding_id, NULL AS result_id, notification_id, 5
+                FROM notifications WHERE delivery_ready
+            UNION ALL SELECT 'finding:exact-process-key', 'graph-test-2',
+                arrow_cast(NULL, 'Binary'), 6
+         ) ORDER BY step",
+        100,
+    )
+    .await?;
+    let result = router.consume(&update, &sink)?;
+    assert_eq!(result.routed.len(), 5);
+    assert!(matches!(
+        &result.routed[0].1,
+        Err(crate::Error::Data {
+            source: araphor_data::Error::Notification {
+                code: NotificationErrorCodeV1::Conflict,
+                field: "current finding reference",
+                ..
+            }
+        })
+    ));
+    assert!(matches!(
+        &result.routed[1].1,
+        Err(crate::Error::Data {
+            source: araphor_data::Error::Notification {
+                code: NotificationErrorCodeV1::Denied,
+                field: "current finding scope",
+                ..
+            }
+        })
+    ));
+    assert!(matches!(
+        &result.routed[2].1,
+        Err(crate::Error::Data {
+            source: araphor_data::Error::Notification {
+                code: NotificationErrorCodeV1::Invalid,
+                field: "finding reference",
+                ..
+            }
+        })
+    ));
+    assert!(matches!(
+        &result.routed[3].1,
+        Err(crate::Error::Data {
+            source: araphor_data::Error::Notification {
+                code: NotificationErrorCodeV1::Invalid,
+                field: "finding reference",
+                ..
+            }
+        })
+    ));
+    assert!(result.routed[4].1.is_ok());
+    assert_eq!(result.delivered.len(), 1);
+    assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_head_change_after_preflight_stays_checked() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
+    let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
+    let engine = Engine::new(store.clone(), Limits::default())?;
+    configure(&router)?;
+    commit_finding_at(&store, finding(1, FindingSeverityV1::High), 1, 1)?;
+    let update = capture(
+        &engine,
+        "SELECT 'finding:exact-process-key' AS finding_id, 'graph-test-1' AS result_id,
+            arrow_cast(NULL, 'Binary') AS notification_id",
+        100,
+    )
+    .await?;
+    let checks = std::cell::Cell::new(0);
+    let effects = std::cell::Cell::new(0);
+    let result = router.consume_rows(
+        [1; 16],
+        100,
+        update.batches.as_deref().ok_or("notification rows")?,
+        &|| {
+            let count = checks.get();
+            checks.set(count + 1);
+            if count == 1 {
+                commit_finding_at(&store, finding(2, FindingSeverityV1::High), 2, 2)?;
+            }
+            Ok(())
+        },
+        &mut |_| {
+            effects.set(effects.get() + 1);
+            Ok(NotificationSinkResultV1::Accepted {
+                receipt: "accepted".into(),
+            })
+        },
+    )?;
+    assert!(checks.get() >= 2);
+    assert_eq!(effects.get(), 0);
+    assert_eq!(result.routed.len(), 1);
+    assert!(matches!(
+        &result.routed[0].1,
+        Err(crate::Error::Data {
+            source: araphor_data::Error::Notification {
+                code: NotificationErrorCodeV1::Conflict,
+                field: "current finding reference",
+                ..
+            }
+        })
+    ));
+    Ok(())
+}

@@ -1,5 +1,6 @@
-use duckdb::{params, OptionalExt as _};
+use duckdb::{params, params_from_iter, types::Value, OptionalExt as _};
 use snafu::ResultExt as _;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::graph_rows::GraphHeader;
 use super::*;
@@ -17,6 +18,66 @@ struct FindingKey {
 }
 
 impl AnalysisStore {
+    pub fn notification_finding_heads(
+        &self,
+        tenant: [u8; 16],
+        finding_ids: &[String],
+    ) -> Result<BTreeMap<String, String>> {
+        NotificationErrorCodeV1::Invalid.require(tenant != [0; 16], "finding reference")?;
+        let ids = finding_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        for id in &ids {
+            NotificationErrorCodeV1::Invalid.require(
+                NotificationGrantV1::identifier(id, usize::MAX),
+                "finding reference",
+            )?;
+        }
+        if ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let ids = ids.into_iter().collect::<Vec<_>>();
+        self.read_snapshot(|snapshot| {
+            let mut heads = BTreeMap::new();
+            for chunk in ids.chunks(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS) {
+                let mut values = vec![
+                    Value::Blob(tenant.to_vec()),
+                    Value::Text(GRAPH_PROCESSOR.into()),
+                    Value::UBigInt(u64::from(GRAPH_SCHEMA_VERSION)),
+                ];
+                values.extend(chunk.iter().map(|id| Value::Text((*id).into())));
+                let mut statement = snapshot
+                    .prepare(&Self::finding_heads_selection(chunk.len()))
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "prepare current finding heads",
+                    })?;
+                let mut rows = statement.query(params_from_iter(values.iter())).context(
+                    AnalysisDatabaseSnafu {
+                        operation: "select current finding heads",
+                    },
+                )?;
+                while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                    operation: "read current finding heads",
+                })? {
+                    let result: String = row.get(0).context(AnalysisDatabaseSnafu {
+                        operation: "decode current finding result",
+                    })?;
+                    let finding: String = row.get(1).context(AnalysisDatabaseSnafu {
+                        operation: "decode current finding identity",
+                    })?;
+                    if heads.insert(finding, result).is_some() {
+                        return Err(GraphInvalidSnafu {
+                            field: "duplicate current finding",
+                        }
+                        .build());
+                    }
+                }
+            }
+            Ok(heads)
+        })
+    }
+
     fn selected_finding_keys(
         &self,
         snapshot: &duckdb::Connection,

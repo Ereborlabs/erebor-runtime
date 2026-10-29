@@ -494,6 +494,23 @@ fn notification_finding_checks_current() -> std::result::Result<(), Box<dyn std:
         result_id: fixture.request.result_id.clone(),
         finding_id: finding.finding_id.clone(),
     };
+    let ids = vec![
+        original.finding_id.clone(),
+        "absent-finding".into(),
+        original.finding_id.clone(),
+    ];
+    assert_eq!(
+        fixture.store.notification_finding_heads(tenant, &ids)?,
+        [(original.finding_id.clone(), original.result_id.clone())].into()
+    );
+    assert!(fixture
+        .store
+        .notification_finding_heads(tenant, &[])?
+        .is_empty());
+    assert!(fixture
+        .store
+        .notification_finding_heads([9; 16], &ids)?
+        .is_empty());
     assert_eq!(
         fixture.store.notification_finding(tenant, &original)?,
         (finding.clone(), fixture.snapshot.input_manifest.clone())
@@ -578,6 +595,10 @@ fn notification_finding_checks_current() -> std::result::Result<(), Box<dyn std:
         finding_id: finding.finding_id.clone(),
     };
     assert_eq!(
+        fixture.store.notification_finding_heads(tenant, &ids)?,
+        [(current.finding_id.clone(), current.result_id.clone())].into()
+    );
+    assert_eq!(
         fixture.store.notification_finding(tenant, &current)?,
         (updated, fixture.snapshot.input_manifest.clone())
     );
@@ -608,6 +629,10 @@ fn notification_finding_checks_current() -> std::result::Result<(), Box<dyn std:
         "UPDATE analysis_results SET body = 'invalid'::BLOB WHERE result_id = ?",
         params![&current.result_id],
     )?;
+    assert_eq!(
+        fixture.store.notification_finding_heads(tenant, &ids)?,
+        [(current.finding_id.clone(), current.result_id.clone())].into()
+    );
     let corrupt_current = fixture.store.notification_finding(tenant, &current);
     let corrupt_stale = fixture.store.notification_finding(tenant, &original);
     fixture.store.fault_write(
@@ -645,6 +670,10 @@ fn notification_finding_checks_current() -> std::result::Result<(), Box<dyn std:
     empty.body = serde_json::to_vec(&snapshot)?;
     let third = fixture.store.commit_graph(&empty, false, || Ok(()))?;
     assert!(third.commit_revision > second.commit_revision);
+    assert!(fixture
+        .store
+        .notification_finding_heads(tenant, &ids)?
+        .is_empty());
     assert_eq!(
         fixture.store.graph_result(tenant, &empty.result_id)?,
         Some(snapshot)
