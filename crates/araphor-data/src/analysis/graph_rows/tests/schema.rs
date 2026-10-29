@@ -81,6 +81,8 @@ fn native_schema_reopen() -> TestResult {
 fn shared_corruption_rejects_reopen() -> TestResult {
     for fault in [
         "UPDATE graph_subject_values SET authority_rank = 3 WHERE authority_rank = 0",
+        "UPDATE graph_evidence SET source_ref = source_ref + 1",
+        "UPDATE graph_sources SET tenant_id = 'wrong'::BLOB",
         "INSERT INTO graph_evidence_membership
          SELECT 999999, evidence_id, valid_from, valid_to
          FROM graph_evidence_membership LIMIT 1",

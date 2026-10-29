@@ -195,12 +195,13 @@ impl GraphRows {
             values.extend(chunk.iter().map(|id| Value::UBigInt(*id)));
             let mut statement = writer
                 .prepare(&format!(
-                    "SELECT e.evidence_id, e.stream_key, e.cpu_id, e.durable_cursor
+                    "SELECT e.evidence_id, s.stream_key, s.tenant_id, e.cpu_id, e.durable_cursor
                  FROM graph_versions v
                  JOIN graph_evidence_membership m ON m.lineage_id = v.lineage_id
                     AND m.valid_from <= v.commit_revision
                     AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
                  JOIN graph_evidence e USING (evidence_id)
+                 JOIN graph_sources s USING (source_ref)
                  WHERE v.result_id = ? AND e.evidence_id IN ({filter})"
                 ))
                 .context(AnalysisDatabaseSnafu {
@@ -219,7 +220,10 @@ impl GraphRows {
                 }
                 let id: u64 = Self::column(row, 0)?;
                 let stored: Vec<u8> = Self::column(row, 1)?;
-                if stored != key {
+                let tenant: Vec<u8> = Self::column(row, 2)?;
+                if stored != key
+                    || tenant.as_slice() != header.snapshot.scope.identity.tenant_id.as_slice()
+                {
                     return GraphInvalidSnafu {
                         field: "graph finding evidence source",
                     }
@@ -227,8 +231,8 @@ impl GraphRows {
                 }
                 let record = DiscoveryRecordIdV1 {
                     stream: header.snapshot.scope.identity.clone(),
-                    cpu_id: Self::column(row, 2)?,
-                    durable_cursor: Self::column(row, 3)?,
+                    cpu_id: Self::column(row, 3)?,
+                    durable_cursor: Self::column(row, 4)?,
                 };
                 if record.validate().is_err() || evidence.insert(id, record).is_some() {
                     return GraphInvalidSnafu {

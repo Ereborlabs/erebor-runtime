@@ -175,6 +175,16 @@ has two distinct values. Two Graph headers each repeat the same 60,872-byte
 list of 138 branches. Finding policy and effect values are unique across the
 139 findings, so sharing those complete fields would not reduce this case.
 
+Native source references are **Done** as a storage encoding. Data stores each
+Graph source key and tenant once and uses a numeric source reference in each
+evidence row. Historical reads, selected findings, retained calls, and reopen
+checks reject missing or foreign sources. The 48 focused Data Graph row tests
+and the Analysis restart test passed. On the prior four-cut row counts, this
+layout would save 103,286 logical bytes: 1,592 copies of a 73-byte key become
+8-byte references, with two 97-byte source rows. The projected Graph total is
+1,550,265 bytes, still 451,170 bytes above the target. This is a calculation,
+not a new four-cut database measurement. The backlog result remains open.
+
 The integrated run used a 76,034,048-byte DuckDB file and 10,657,552 bytes
 of saved managed Arrow payloads. The earlier compact run used 59,518,976
 and 6,302,800 bytes, respectively. The integrated case failed after 124.42

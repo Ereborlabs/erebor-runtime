@@ -449,8 +449,9 @@ impl GraphCallRows {
                 .join(", ");
             let mut statement = reader
                 .prepare(&format!(
-                    "SELECT evidence_id, stream_key, cpu_id, durable_cursor FROM graph_evidence
-                 WHERE evidence_id IN ({placeholders})"
+                    "SELECT e.evidence_id, s.stream_key, s.tenant_id, e.cpu_id, e.durable_cursor
+                 FROM graph_evidence e JOIN graph_sources s USING (source_ref)
+                 WHERE e.evidence_id IN ({placeholders})"
                 ))
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare Graph call evidence",
@@ -466,13 +467,14 @@ impl GraphCallRows {
                 control.check()?;
                 let id: u64 = GraphRows::column(row, 0)?;
                 let key: Vec<u8> = GraphRows::column(row, 1)?;
-                if key != expected_key {
+                let tenant: Vec<u8> = GraphRows::column(row, 2)?;
+                if key != expected_key || tenant.as_slice() != source.tenant_id.as_slice() {
                     return Err(Code::Invalid.error("Graph call evidence source"));
                 }
                 let record = DiscoveryRecordIdV1 {
                     stream: source.clone(),
-                    cpu_id: GraphRows::column(row, 2)?,
-                    durable_cursor: GraphRows::column(row, 3)?,
+                    cpu_id: GraphRows::column(row, 3)?,
+                    durable_cursor: GraphRows::column(row, 4)?,
                 };
                 if known.insert(id, record).is_some() {
                     return Err(Code::Invalid.error("Graph call evidence identity"));

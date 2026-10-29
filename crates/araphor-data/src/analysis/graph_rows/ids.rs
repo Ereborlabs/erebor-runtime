@@ -37,8 +37,9 @@ impl GraphRows {
         let mut evidence_by_id = BTreeMap::new();
         let mut statement = writer
             .prepare(
-                "SELECT e.evidence_id, e.stream_key, e.cpu_id, e.durable_cursor
+                "SELECT e.evidence_id, s.stream_key, s.tenant_id, e.cpu_id, e.durable_cursor
              FROM graph_evidence_membership m JOIN graph_evidence e USING (evidence_id)
+             JOIN graph_sources s USING (source_ref)
              WHERE m.lineage_id = ? AND m.valid_from <= ?
                  AND (m.valid_to IS NULL OR m.valid_to > ?)",
             )
@@ -56,9 +57,11 @@ impl GraphRows {
         })? {
             let id: u64 = Self::column(row, 0)?;
             let key: Vec<u8> = Self::column(row, 1)?;
-            let cpu: u32 = Self::column(row, 2)?;
-            let cursor: u64 = Self::column(row, 3)?;
+            let tenant: Vec<u8> = Self::column(row, 2)?;
+            let cpu: u32 = Self::column(row, 3)?;
+            let cursor: u64 = Self::column(row, 4)?;
             if key != source_key
+                || tenant.as_slice() != graph.scope.identity.tenant_id.as_slice()
                 || evidence.insert((cpu, cursor), id).is_some()
                 || evidence_by_id
                     .insert(

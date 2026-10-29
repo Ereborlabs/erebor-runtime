@@ -285,9 +285,33 @@ fn native_rows_integrity() -> TestResult {
             [],
             |row| row.get(0),
         )?;
-        transaction.execute(
-            "UPDATE graph_evidence SET stream_key = 'wrong'::BLOB WHERE evidence_id = ?",
+        let source_ref: u64 = transaction.query_row(
+            "SELECT source_ref FROM graph_evidence WHERE evidence_id = ?",
             params![unrelated],
+            |row| row.get(0),
+        )?;
+        let wrong_ref = source_ref + 1;
+        let mut wrong_source = graph.scope.identity.clone();
+        wrong_source.node_boot_id[0] ^= 1;
+        transaction.execute(
+            "INSERT INTO source_receipts VALUES (?, ?, ?)",
+            params![
+                wrong_source.key(),
+                serde_json::to_string(&wrong_source)?,
+                wrong_source.tenant_id.as_slice()
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO graph_sources VALUES (?, ?, ?)",
+            params![
+                wrong_ref,
+                wrong_source.key(),
+                wrong_source.tenant_id.as_slice()
+            ],
+        )?;
+        transaction.execute(
+            "UPDATE graph_evidence SET source_ref = ? WHERE evidence_id = ?",
+            params![wrong_ref, unrelated],
         )?;
         assert_eq!(
             GraphRows::read_finding(
@@ -300,8 +324,8 @@ fn native_rows_integrity() -> TestResult {
             Some(finding.clone())
         );
         transaction.execute(
-            "UPDATE graph_evidence SET stream_key = ? WHERE evidence_id = ?",
-            params![graph.scope.identity.key(), unrelated],
+            "UPDATE graph_evidence SET source_ref = ? WHERE evidence_id = ?",
+            params![source_ref, unrelated],
         )?;
         let referenced: u64 = transaction.query_row(
             "SELECT list_extract(evidence_refs, 1)::UBIGINT FROM graph_findings
@@ -310,8 +334,8 @@ fn native_rows_integrity() -> TestResult {
             |row| row.get(0),
         )?;
         transaction.execute(
-            "UPDATE graph_evidence SET stream_key = 'wrong'::BLOB WHERE evidence_id = ?",
-            params![referenced],
+            "UPDATE graph_evidence SET source_ref = ? WHERE evidence_id = ?",
+            params![wrong_ref, referenced],
         )?;
         assert!(GraphRows::read_finding(
             &transaction,
@@ -322,8 +346,32 @@ fn native_rows_integrity() -> TestResult {
         )
         .is_err());
         transaction.execute(
-            "UPDATE graph_evidence SET stream_key = ? WHERE evidence_id = ?",
-            params![graph.scope.identity.key(), referenced],
+            "UPDATE graph_evidence SET source_ref = ? WHERE evidence_id = ?",
+            params![source_ref, referenced],
+        )?;
+        transaction.execute(
+            "UPDATE graph_evidence SET source_ref = ? WHERE evidence_id = ?",
+            params![wrong_ref + 1, referenced],
+        )?;
+        assert!(GraphRows::read_finding(
+            &transaction,
+            other,
+            &finding.finding_id,
+            &other_header,
+            None,
+        )
+        .is_err());
+        transaction.execute(
+            "UPDATE graph_evidence SET source_ref = ? WHERE evidence_id = ?",
+            params![source_ref, referenced],
+        )?;
+        transaction.execute(
+            "DELETE FROM graph_sources WHERE source_ref = ?",
+            params![wrong_ref],
+        )?;
+        transaction.execute(
+            "DELETE FROM source_receipts WHERE stream_key = ?",
+            params![wrong_source.key()],
         )?;
         let reentry: u64 = transaction.query_row(
             "SELECT count(*)::UBIGINT FROM graph_evidence_membership
@@ -380,6 +428,11 @@ fn native_rows_integrity() -> TestResult {
                 row.get(0)
             })?;
         assert_eq!(evidence_rows, 2);
+        let source_rows: u64 =
+            transaction.query_row("SELECT count(*)::UBIGINT FROM graph_sources", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(source_rows, 1);
         let subject_rows: u64 = transaction.query_row(
             "SELECT count(*)::UBIGINT FROM graph_subject_values",
             [],

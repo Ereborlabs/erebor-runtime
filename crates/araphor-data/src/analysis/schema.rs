@@ -171,11 +171,15 @@ impl AnalysisStore {
                 LEFT JOIN analysis_results r USING (result_id)
                 WHERE r.result_id IS NULL OR r.processor_id <> 'graph-findings'
                     OR v.commit_revision <> r.commit_revision OR v.lineage_id > v.commit_revision)",
+            "SELECT EXISTS(SELECT 1 FROM graph_sources s
+                LEFT JOIN source_receipts r USING (stream_key)
+                WHERE r.stream_key IS NULL OR r.tenant_id <> s.tenant_id)",
             "SELECT EXISTS(SELECT 1 FROM graph_evidence e
-                LEFT JOIN source_receipts s USING (stream_key)
-                WHERE s.stream_key IS NULL OR e.durable_cursor = 0)",
+                LEFT JOIN graph_sources s USING (source_ref)
+                WHERE s.source_ref IS NULL OR e.durable_cursor = 0)",
             "SELECT EXISTS(SELECT 1 FROM graph_evidence_membership m
                 LEFT JOIN graph_evidence e USING (evidence_id)
+                LEFT JOIN graph_sources s USING (source_ref)
                 LEFT JOIN graph_versions origin
                     ON origin.lineage_id = m.lineage_id
                     AND origin.commit_revision = m.lineage_id
@@ -187,11 +191,13 @@ impl AnalysisStore {
                     ON closed.lineage_id = m.lineage_id
                     AND closed.commit_revision = m.valid_to
                 WHERE e.evidence_id IS NULL OR origin.result_id IS NULL
-                    OR r.stream_key <> e.stream_key OR opened.result_id IS NULL
+                    OR s.source_ref IS NULL OR r.stream_key <> s.stream_key
+                    OR r.tenant_id <> s.tenant_id OR opened.result_id IS NULL
                     OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
                     OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from))",
             "SELECT EXISTS(SELECT 1 FROM graph_input_positions p
                 LEFT JOIN graph_evidence e USING (evidence_id)
+                LEFT JOIN graph_sources s USING (source_ref)
                 LEFT JOIN graph_versions origin
                     ON origin.lineage_id = p.lineage_id
                     AND origin.commit_revision = p.lineage_id
@@ -203,7 +209,8 @@ impl AnalysisStore {
                     ON closed.lineage_id = p.lineage_id
                     AND closed.commit_revision = p.valid_to
                 WHERE e.evidence_id IS NULL OR origin.result_id IS NULL
-                    OR r.stream_key <> e.stream_key OR opened.result_id IS NULL
+                    OR s.source_ref IS NULL OR r.stream_key <> s.stream_key
+                    OR r.tenant_id <> s.tenant_id OR opened.result_id IS NULL
                     OR (p.valid_to IS NOT NULL AND closed.result_id IS NULL)
                     OR p.commit_revision = 0
                     OR (p.valid_to IS NOT NULL AND p.valid_to <= p.valid_from))",
@@ -258,7 +265,9 @@ impl AnalysisStore {
                     OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from)
                     OR EXISTS(SELECT 1 FROM unnest(e.evidence_refs) refs(evidence_id)
                         JOIN graph_evidence record USING (evidence_id)
-                        WHERE record.stream_key <> r.stream_key))",
+                        JOIN graph_sources s ON s.source_ref = record.source_ref
+                        WHERE s.stream_key <> r.stream_key
+                            OR s.tenant_id <> r.tenant_id))",
             "SELECT EXISTS(SELECT 1 FROM (
                 SELECT m.lineage_id, m.edge_id, m.valid_from, m.valid_to,
                     lag(m.valid_to) OVER (PARTITION BY m.lineage_id, m.edge_id

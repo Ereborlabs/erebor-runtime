@@ -67,6 +67,58 @@ impl GraphRows {
             }
             .fail();
         }
+        let source_ref = match writer
+            .query_row(
+                "SELECT source_ref, tenant_id FROM graph_sources WHERE stream_key = ?",
+                params![key.as_slice()],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read graph source reference",
+            })? {
+            Some((id, tenant))
+                if tenant.as_slice() == graph.scope.identity.tenant_id.as_slice() =>
+            {
+                id
+            }
+            Some(_) => {
+                return GraphInvalidSnafu {
+                    field: "graph evidence source",
+                }
+                .fail();
+            }
+            None => {
+                let next: u64 = writer
+                    .query_row(
+                        "SELECT coalesce(max(source_ref), 0) FROM graph_sources",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read next graph source reference",
+                    })?;
+                let id = next.checked_add(1).ok_or_else(|| {
+                    GraphInvalidSnafu {
+                        field: "graph source reference",
+                    }
+                    .build()
+                })?;
+                writer
+                    .execute(
+                        "INSERT INTO graph_sources VALUES (?, ?, ?)",
+                        params![
+                            id,
+                            key.as_slice(),
+                            graph.scope.identity.tenant_id.as_slice()
+                        ],
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "insert graph source reference",
+                    })?;
+                id
+            }
+        };
         let mut existing = BTreeMap::new();
         for selected in graph
             .input_manifest
@@ -77,7 +129,7 @@ impl GraphRows {
                 .collect::<Vec<_>>()
                 .join(", ");
             let mut parameters = Vec::with_capacity(1 + selected.len() * 2);
-            parameters.push(Value::Blob(key.clone()));
+            parameters.push(Value::UBigInt(source_ref));
             for record in selected {
                 parameters.push(Value::UInt(record.cpu_id));
                 parameters.push(Value::UBigInt(record.durable_cursor));
@@ -85,7 +137,7 @@ impl GraphRows {
             let mut statement = writer
                 .prepare(&format!(
                     "SELECT evidence_id, cpu_id, durable_cursor FROM graph_evidence
-                     WHERE stream_key = ? AND (cpu_id, durable_cursor) IN ({placeholders})"
+                     WHERE source_ref = ? AND (cpu_id, durable_cursor) IN ({placeholders})"
                 ))
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare shared graph evidence",
@@ -159,7 +211,7 @@ impl GraphRows {
                     appender
                         .append_row(params![
                             next,
-                            key.as_slice(),
+                            source_ref,
                             record.cpu_id,
                             record.durable_cursor
                         ])
@@ -424,7 +476,7 @@ impl GraphRows {
             .context(AnalysisDatabaseSnafu {
                 operation: "read native graph lineage",
             })?;
-        if origin != Some((tenant, key.clone(), method, first)) {
+        if origin != Some((tenant.clone(), key.clone(), method, first)) {
             return GraphInvalidSnafu {
                 field: "graph version lineage",
             }
@@ -488,16 +540,23 @@ impl GraphRows {
             .prepare(
                 "SELECT e.cpu_id, e.durable_cursor
                  FROM graph_evidence_membership m JOIN graph_evidence e USING (evidence_id)
+                 JOIN graph_sources s USING (source_ref)
                  WHERE m.lineage_id = ? AND m.valid_from <= ?
                     AND (m.valid_to IS NULL OR m.valid_to > ?)
-                    AND e.stream_key = ?
+                    AND s.stream_key = ? AND s.tenant_id = ?
                  ORDER BY e.cpu_id, e.durable_cursor",
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare native graph evidence read",
             })?;
         let mut rows = statement
-            .query(params![lineage, revision, revision, key.as_slice()])
+            .query(params![
+                lineage,
+                revision,
+                revision,
+                key.as_slice(),
+                tenant.as_slice()
+            ])
             .context(AnalysisDatabaseSnafu {
                 operation: "read native graph evidence",
             })?;
@@ -544,16 +603,23 @@ impl GraphRows {
                 "SELECT p.rank, e.cpu_id, e.durable_cursor,
                     p.commit_revision, p.ordinal
                  FROM graph_input_positions p JOIN graph_evidence e USING (evidence_id)
+                 JOIN graph_sources s USING (source_ref)
                  WHERE p.lineage_id = ? AND p.valid_from <= ?
                     AND (p.valid_to IS NULL OR p.valid_to > ?)
-                    AND e.stream_key = ?
+                    AND s.stream_key = ? AND s.tenant_id = ?
                  ORDER BY p.rank",
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare native graph positions read",
             })?;
         let mut rows = statement
-            .query(params![lineage, revision, revision, key.as_slice()])
+            .query(params![
+                lineage,
+                revision,
+                revision,
+                key.as_slice(),
+                tenant.as_slice()
+            ])
             .context(AnalysisDatabaseSnafu {
                 operation: "read native graph positions",
             })?;

@@ -11,10 +11,13 @@ impl GraphRows {
         result_id VARCHAR PRIMARY KEY, lineage_id UBIGINT NOT NULL,
         commit_revision UBIGINT NOT NULL,
         UNIQUE (lineage_id, commit_revision));
+    CREATE TABLE graph_sources (
+        source_ref UBIGINT PRIMARY KEY, stream_key BLOB NOT NULL UNIQUE,
+        tenant_id BLOB NOT NULL);
     CREATE TABLE graph_evidence (
-        evidence_id UBIGINT PRIMARY KEY, stream_key BLOB NOT NULL,
+        evidence_id UBIGINT PRIMARY KEY, source_ref UBIGINT NOT NULL,
         cpu_id UINTEGER NOT NULL, durable_cursor UBIGINT NOT NULL,
-        UNIQUE (stream_key, cpu_id, durable_cursor));
+        UNIQUE (source_ref, cpu_id, durable_cursor));
     CREATE TABLE graph_evidence_membership (
         lineage_id UBIGINT NOT NULL, evidence_id UBIGINT NOT NULL,
         valid_from UBIGINT NOT NULL, valid_to UBIGINT,
