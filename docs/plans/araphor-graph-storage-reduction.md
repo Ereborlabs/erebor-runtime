@@ -618,3 +618,13 @@ The 61 native Graph row tests, 16 reactive notification tests, focused Graph
 traversal projection test, and acknowledgement-retention test passed. The
 repository Rust CI gate is running on the final source. The 100-fold speed
 target is **Not done**.
+
+## Measured execution costs and proposed replacement
+
+The [reactive execution latency plan](araphor-reactive-execution-latency.md)
+records the later 121.13-second incident trace at `2d7d4164b9c2`. It separates
+subscription queueing, snapshot reads, package execution, native DuckDB work,
+and notification transactions. It also proposes retained change execution,
+atomic writes, and a batch outbox. The native Graph payload reduction remains
+proved by the earlier storage result. Millisecond execution remains **Not
+done**. The new replacement and storage candidates require approval.
