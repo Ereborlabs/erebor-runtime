@@ -64,6 +64,15 @@ before it uses native append state.
   -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data rolls back membership, result, checkpoint, and progress together
   -> [AnalysisStore::capture_managed](../../crates/araphor-data/src/analysis/managed/capture.rs) a retry reads only the last committed state
 
+[AnalysisStore::capture_managed](../../crates/araphor-data/src/analysis/managed/capture.rs) A managed Graph call resumes
+  -> [AnalysisStore::verified_package_from](../../crates/araphor-data/src/analysis/context/provenance.rs) Data reads stored hashes from the captured database cut and decodes the OCI artifact on a cold lookup
+  -> [PackageProof::from_artifact](../../crates/araphor-data/src/analysis/context/provenance.rs) Data checks each Wasm export in the decoded artifact
+  -> [AnalysisStore::verified_native_graph_call](../../crates/araphor-data/src/analysis/context/provenance.rs) Data checks the exact call artifact identity and builtin resume support
+  -> [GraphRows::stage_managed](../../crates/araphor-data/src/analysis/graph_rows/publication.rs) Data selects the model, excludes retained results, and checks the current proof and hashes again in the separate commit transaction
+
+[AnalysisStore::verified_package_from](../../crates/araphor-data/src/analysis/context/provenance.rs) A stored package revision is missing or its hashes change
+  -> [AnalysisStore::verified_native_graph_call](../../crates/araphor-data/src/analysis/context/provenance.rs) Data rejects the call before it publishes a new Graph result
+
 ## Ownership and data flow
 
 `araphor-analysis-builtins` owns the detector computation and its change
@@ -103,6 +112,11 @@ result read maps stable IDs to the public ordinals. A Graph header uses a CBOR
 envelope with typed MessagePack metadata. Managed state uses MessagePack. The
 store does not use JSON for these rows.
 
+`AnalysisStore` owns the in-memory package proof cache. A proof contains the
+current stored hashes and the exact identity of each Wasm export. Context
+validation and Graph call validation share the proof. Data does not persist
+the cache. Reopen validates a package again before it uses the package call.
+
 ## Verification route
 
 [Graph row tests](../../crates/araphor-data/src/analysis/graph_rows/tests.rs)
@@ -129,3 +143,12 @@ with `error: linking with cc failed: exit status: 1`. The host had zero free
 space. The full workspace test result is **Blocked**. The 100-fold computation
 speed target is not proved.
 This rewrite adds no BPF program or external application binary interface.
+
+The package proof tests in
+[provenance.rs](../../crates/araphor-data/src/analysis/context/provenance.rs)
+check a fresh lookup, store-level reuse, changed stored bytes, an unqualified
+Native export, an ambiguous executable export, and reopen. The fixed incident
+case made 18 extra OCI decodes in the baseline Graph classifier and zero in
+the instrumented cache run. One warm whole test took 104.25 seconds before
+the cache and 103.06 seconds after it. The four Graph stages took 3.78 and
+3.79 seconds. These runs do not prove a Graph-stage or end-to-end speed gain.

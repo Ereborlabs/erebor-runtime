@@ -228,8 +228,8 @@ async fn native_retirement_rejects_captured() -> TestResult {
             expected_cursor: 1,
             cutoff_cursor: 2,
         })?;
-        let before = fixture.store.meta()?;
-        let health = fixture.store.processor_health(&fixture.scope())?;
+        let mut expected = fixture.store.meta()?;
+        let mut expected_health = fixture.store.processor_health(&fixture.scope())?;
         release
             .send(())
             .map_err(|_| "retirement gate receiver closed")?;
@@ -238,8 +238,16 @@ async fn native_retirement_rejects_captured() -> TestResult {
             format!("{error:?}").contains("AnalysisConflict"),
             "{error:?}"
         );
-        assert_eq!(fixture.store.meta()?, before);
-        assert_eq!(fixture.store.processor_health(&fixture.scope())?, health);
+        expected.commit_revision += 1;
+        assert_eq!(fixture.store.meta()?, expected);
+        expected_health
+            .as_mut()
+            .ok_or("retired processor health")?
+            .read_revision = expected.commit_revision;
+        assert_eq!(
+            fixture.store.processor_health(&fixture.scope())?,
+            expected_health
+        );
         assert_eq!(fixture.profile()?, Some(profile.clone()));
         error
     };
@@ -263,6 +271,13 @@ async fn native_retirement_rejects_captured() -> TestResult {
             &control,
         )?
         .ok_or("captured retirement attempt")?;
+    assert_eq!(
+        attempt
+            .terminal()
+            .ok_or("captured retirement terminal")?
+            .exit,
+        ManagedExit::Failed(Code::Conflict)
+    );
     assert!(attempt.receipt().is_none());
     assert!(fixture
         .store

@@ -592,6 +592,7 @@ impl AnalysisStore {
         }
         let staged = match &graph_write {
             GraphWrite::Managed { commit, producers } => Some(GraphRows::stage_managed(
+                self,
                 transaction,
                 metadata,
                 commit,

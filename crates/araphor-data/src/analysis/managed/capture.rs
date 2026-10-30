@@ -4,6 +4,7 @@ use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
+use super::super::context::VerifiedPackages;
 use super::super::{AnalysisExtractionV1, AnalysisSelectionV1, AnalysisStore, PackageResultRefV1};
 use super::model::*;
 use crate::{AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result};
@@ -69,6 +70,7 @@ impl AnalysisStore {
         }
         let mut prior = BTreeMap::new();
         let mut states = BTreeMap::new();
+        let mut verified = VerifiedPackages::default();
         for call in instance.spec.manifest.calls.keys() {
             control.check()?;
             let compatible = instance.spec.same_call(&current.spec, *call);
@@ -103,10 +105,11 @@ impl AnalysisStore {
                         && matches!(&instance.spec.destination,
                             ManagedDestination::Graph { calls, .. } if calls.contains(call));
                     state.sparse_resume = state.native_graph
-                        && Self::native_graph_call(
+                        && self.verified_native_graph_call(
                             reader,
                             instance.spec.tenant,
                             &instance.spec.manifest.calls[call],
+                            &mut verified,
                         )?;
                     // The decoded state owns its buffers; the IPC payload has been released.
                     output.input_bytes -= payload;

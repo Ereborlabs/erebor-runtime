@@ -566,3 +566,25 @@ missed the same deadline. Native finding-key and context-head reads removed
 repeated payload and per-route lookups without changing the save, deliver, then next
 notification order. Measure the Graph computation and notification transaction
 cost separately before claiming a speed factor.
+
+## Shared package proof result
+
+**Package proof reuse: Done. 100-fold speed target: Not done.** Data keeps one
+in-memory proof for each tenant and installed package revision. The proof
+contains the current hashes of the stored descriptor, OCI artifact, and
+dependency list. It records the exact identity and builtin Graph support of
+each Wasm export. A managed capture or new Graph producer reads the current
+hashes before it uses the proof. A changed or missing revision fails. A cold
+lookup decodes the OCI artifact and checks that the selected Wasm export has
+one executable implementation. Context validation uses the same proof.
+Store reopen starts with an empty proof cache.
+
+In the unchanged 1,592-event incident case, the warm baseline made 18 extra
+OCI decodes in Graph classification. Those qualification checks took 6.69
+seconds, including 6.33 seconds to decode OCI artifacts.
+The instrumented cache run made zero extra OCI decodes in that classifier.
+Context admission still decodes and validates package bundles. One warm whole
+test took 104.25 seconds before this change and 103.06 seconds after it. Four
+Graph stages took 3.78 and 3.79 seconds in those runs. These measurements do
+not prove a Graph-stage or end-to-end speed gain. The 100-fold speed target
+remains **Not done**.

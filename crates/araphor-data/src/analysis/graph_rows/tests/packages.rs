@@ -25,7 +25,7 @@ fn graph_appender_constraint_rollback() -> TestResult {
     );
     assert_ne!(rejecting, table);
     fixture.store.fault_write(
-        &format!("DROP VIEW graph_findings; DROP TABLE graph_finding_values; {rejecting} {view}"),
+        &format!("DROP VIEW graph_finding_keys; DROP VIEW graph_findings; DROP TABLE graph_finding_values; {rejecting} {view}"),
         &[],
     )?;
     let before = fixture.store.meta()?;
@@ -93,7 +93,7 @@ fn graph_appender_constraint_rollback() -> TestResult {
     );
     fixture.store.fault_write(
         &format!(
-            "DROP VIEW graph_findings; DROP TABLE graph_finding_values;
+            "DROP VIEW graph_finding_keys; DROP VIEW graph_findings; DROP TABLE graph_finding_values;
                  {table} CREATE INDEX graph_finding_hash
                  ON graph_finding_values (value_hash); {view}"
         ),

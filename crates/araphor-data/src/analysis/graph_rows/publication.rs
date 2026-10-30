@@ -10,11 +10,12 @@ pub(in crate::analysis) struct ProducerChanges {
 
 impl GraphRows {
     pub(in crate::analysis) fn stage_managed(
+        store: &super::super::AnalysisStore,
         writer: &Connection,
         metadata: &GraphManifest,
         commit: &ManagedCommit<'_>,
         producers: &[(u64, PackageResultRefV1)],
-        verified: &super::super::context::VerifiedPackages,
+        verified: &mut super::super::context::VerifiedPackages,
     ) -> Result<ProducerChanges> {
         metadata.validate()?;
         let source = Self::source_id(writer, &metadata.scope.identity)?;
@@ -137,14 +138,12 @@ impl GraphRows {
                     reference.commit_revision,
                     storage_prior.map(|prior| prior.result_id.as_str()),
                 )?;
-                let native = match verified.native_graph(spec.tenant, &spec.manifest.calls[call])? {
-                    Some(native) => native,
-                    None => super::super::AnalysisStore::native_graph_call(
-                        writer,
-                        spec.tenant,
-                        &spec.manifest.calls[call],
-                    )?,
-                };
+                let native = store.verified_native_graph_call(
+                    writer,
+                    spec.tenant,
+                    &spec.manifest.calls[call],
+                    verified,
+                )?;
                 let sparse = basis == InputBasis::Progress;
                 if sparse {
                     let checkpoint = returned
