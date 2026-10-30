@@ -98,6 +98,7 @@ impl Capture<'_> {
             &mut self,
             obligation: &NotificationObligationV1,
             finding: Option<&FindingV1>,
+            finding_value_id: Option<u64>,
             commit_revision: u64,
             retry_utc_ns: Option<u64>,
             budget: &mut ReadBudget<'_>,
@@ -105,6 +106,12 @@ impl Capture<'_> {
         schema notification_fields;
         row(self, "notifications", budget);
         setup {
+            if finding.is_some()
+                && self.read.projects_field("notifications", "finding_value_id")
+                && finding_value_id.is_none()
+            {
+                return Err(invalid("the notification finding value is absent"));
+            }
             let acknowledgement = obligation.deadline_utc_ns.filter(|deadline| {
                 self.read.requests.contains_key("notifications")
                     && *deadline > self.read.now
@@ -132,6 +139,7 @@ impl Capture<'_> {
             kind => Utf8(false):Some(if obligation.finding.is_some(){"finding"}else{"unconfirmed_concern"}),
             finding_id => Utf8(true):obligation.finding.as_ref().map(|value|value.finding_id.as_str()),
             finding_result_id => Utf8(true):obligation.finding.as_ref().map(|value|value.result_id.as_str()),
+            finding_value_id => UInt64(true):finding_value_id,
             finding_available => Boolean(false):Some(finding.is_some()),
             package_id => Utf8(false):Some(&obligation.package_id),
             required_action => Utf8(true):obligation.required_action.as_deref(),

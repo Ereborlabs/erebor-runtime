@@ -226,6 +226,10 @@ impl AnalysisStore {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The Graph read keeps its projection and scope checks explicit."
+    )]
     pub(super) fn graph_input(
         &self,
         snapshot: &Connection,
@@ -234,6 +238,7 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         complete: bool,
         findings: bool,
+        finding_value_ids: bool,
     ) -> Result<GraphHeader> {
         control.check()?;
         let selected = if complete || findings {
@@ -244,10 +249,25 @@ impl AnalysisStore {
         let mut header =
             selected.ok_or_else(|| self.state_error("the selected graph header is absent"))?;
         if complete {
-            header.snapshot = GraphRows::read_control(snapshot, result_id, &header, Some(control))?;
+            let (graph, ids) = GraphRows::read_control_with_ids(
+                snapshot,
+                result_id,
+                &header,
+                Some(control),
+                finding_value_ids,
+            )?;
+            header.snapshot = graph;
+            header.finding_value_ids = ids;
         } else if findings {
-            header.snapshot.findings =
-                GraphRows::read_findings(snapshot, result_id, &header, Some(control))?;
+            if finding_value_ids {
+                let (findings, ids) =
+                    GraphRows::read_findings_with_ids(snapshot, result_id, &header, Some(control))?;
+                header.snapshot.findings = findings;
+                header.finding_value_ids = ids;
+            } else {
+                header.snapshot.findings =
+                    GraphRows::read_findings(snapshot, result_id, &header, Some(control))?;
+            }
             if header.derive_branches {
                 header.snapshot.graph.branches = GraphRows::branches(&header.snapshot.findings);
             }

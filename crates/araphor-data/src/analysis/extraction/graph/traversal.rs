@@ -7,6 +7,10 @@ use crate::{GraphTraversalReceiptV1, GraphTraversalV1};
 mod versions;
 
 impl AnalysisStore {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The Graph read keeps its projection and scope checks explicit."
+    )]
     pub(in crate::analysis::extraction) fn traverse_graphs(
         &self,
         snapshot: &Connection,
@@ -15,8 +19,10 @@ impl AnalysisStore {
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
         capture: &mut super::super::tables::Capture<'_>,
+        finding_value_ids: bool,
     ) -> Result<()> {
-        let (ids, versions) = self.traversal_versions(snapshot, selection, output, control)?;
+        let (ids, versions) =
+            self.traversal_versions(snapshot, selection, output, control, finding_value_ids)?;
         for (id, version) in ids.iter().zip(&versions) {
             output.reference_result(id, version.revision, AnalysisReferenceOriginV1::Graph)?;
         }
@@ -98,6 +104,7 @@ impl AnalysisStore {
             capture.graph(
                 id,
                 &graph,
+                &header.finding_value_ids,
                 graph.graph.subjects.len(),
                 graph.graph.edges.len(),
                 version.revision,

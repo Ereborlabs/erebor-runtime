@@ -2,6 +2,7 @@ use super::*;
 
 pub(in crate::analysis) struct GraphHeader {
     pub snapshot: GraphSnapshotV1,
+    pub finding_value_ids: BTreeMap<String, u64>,
     pub subject_count: usize,
     pub edge_count: usize,
     pub finding_count: usize,
@@ -93,6 +94,7 @@ impl GraphHeader {
         );
         Ok(Self {
             snapshot: payload.metadata.snapshot(),
+            finding_value_ids: BTreeMap::new(),
             subject_count: decoded.0,
             edge_count: decoded.1,
             finding_count: decoded.2,

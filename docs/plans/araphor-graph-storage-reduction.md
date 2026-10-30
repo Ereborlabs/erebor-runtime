@@ -588,3 +588,33 @@ test took 104.25 seconds before this change and 103.06 seconds after it. Four
 Graph stages took 3.78 and 3.79 seconds in those runs. These measurements do
 not prove a Graph-stage or end-to-end speed gain. The 100-fold speed target
 remains **Not done**.
+
+## Per-finding notification routing result
+
+**Unchanged-finding routing: Done. Millisecond delivery: Not done.** A new
+Graph result can select the same stored finding value after unrelated source
+input arrives. Data exposes that validated value ID to the native DataFusion
+`findings` and `notifications` tables. The notification query and the public
+router keep the prior obligation when the finding value is unchanged. When the
+Graph input revision is unchanged, equal or lower priority and sensitivity do
+not reopen a finding revision. Notification state does not store another ID.
+
+The same 1,592-event debug test passed before and after this change. One
+instrumented run took 96.30 seconds before and 89.33 seconds after, including
+setup and shutdown. The target event's evidence and coverage acknowledgements
+preceded finding visibility by 10.314 and 8.691 seconds. Failed notification
+state became visible 51.839 and 44.623 seconds after those acknowledgements.
+The test uses an unavailable notification sink. It does not measure successful
+external delivery or production release-build latency.
+
+The last notification batch processed 139 states in 36.218 seconds before
+this change and 131 states in 33.860 seconds after it. Its measured routing
+time was 12.592 then 10.899 seconds; state processing was 22.436 then
+21.810 seconds. These are single runs, so the difference is an observation,
+not a stable speed claim. The remaining serial notification work and the
+8.691-second acknowledgement-to-finding gap still miss the required latency.
+
+The 61 native Graph row tests, 16 reactive notification tests, focused Graph
+traversal projection test, and acknowledgement-retention test passed. The
+repository Rust CI gate is running on the final source. The 100-fold speed
+target is **Not done**.

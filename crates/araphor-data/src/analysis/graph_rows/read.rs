@@ -326,6 +326,16 @@ impl GraphRows {
         header: &GraphHeader,
         control: Option<&AnalysisReadControl>,
     ) -> Result<GraphSnapshotV1> {
+        Self::read_control_with_ids(reader, result, header, control, false).map(|(graph, _)| graph)
+    }
+
+    pub(in crate::analysis) fn read_control_with_ids(
+        reader: &Connection,
+        result: &str,
+        header: &GraphHeader,
+        control: Option<&AnalysisReadControl>,
+        include_ids: bool,
+    ) -> Result<(GraphSnapshotV1, BTreeMap<String, u64>)> {
         let completed = if header.complete {
             None
         } else {
@@ -346,7 +356,9 @@ impl GraphRows {
         graph.input_positions = positions;
         graph.graph.subjects = Self::read_subjects(reader, result, header.subject_count, control)?;
         graph.graph.edges = Self::read_edges(reader, result, header.edge_count, control)?;
-        graph.findings = Self::read_findings(reader, result, header, control)?;
+        let (findings, finding_value_ids) =
+            Self::read_findings_selected(reader, result, header, control, include_ids)?;
+        graph.findings = findings;
         Self::check_union(reader, result)?;
         if header.derive_branches {
             graph.graph.branches = Self::branches(&graph.findings);
@@ -381,7 +393,7 @@ impl GraphRows {
         {
             return Err(Self::invalid("graph expiry values"));
         }
-        Ok(graph)
+        Ok((graph, finding_value_ids))
     }
 
     pub(in crate::analysis) fn read_subjects(
@@ -473,6 +485,26 @@ impl GraphRows {
         header: &GraphHeader,
         control: Option<&AnalysisReadControl>,
     ) -> Result<Vec<FindingV1>> {
+        Self::read_findings_selected(reader, result, header, control, false)
+            .map(|(findings, _)| findings)
+    }
+
+    pub(in crate::analysis) fn read_findings_with_ids(
+        reader: &Connection,
+        result: &str,
+        header: &GraphHeader,
+        control: Option<&AnalysisReadControl>,
+    ) -> Result<(Vec<FindingV1>, BTreeMap<String, u64>)> {
+        Self::read_findings_selected(reader, result, header, control, true)
+    }
+
+    fn read_findings_selected(
+        reader: &Connection,
+        result: &str,
+        header: &GraphHeader,
+        control: Option<&AnalysisReadControl>,
+        include_ids: bool,
+    ) -> Result<(Vec<FindingV1>, BTreeMap<String, u64>)> {
         Self::check(control)?;
         let mut subjects = BTreeMap::new();
         let mut statement=reader.prepare("SELECT DISTINCT s.subject_id,s.tenant_id,s.authority_rank,s.authority_text,s.authority_boot,s.authority_epoch,s.subject_kind,s.identity FROM graph_findings f JOIN graph_subjects s ON s.result_id=f.result_id AND s.subject_id=f.subject_ref WHERE f.result_id=?").context(AnalysisDatabaseSnafu {operation:"prepare finding subjects"})?;
@@ -522,9 +554,10 @@ impl GraphRows {
         drop(rows);
         drop(statement);
         let columns = araphor_graph::FindingRows::COLUMNS;
+        let value_id = if include_ids { ",value_id" } else { "" };
         let mut statement = reader
             .prepare(&format!(
-                "SELECT {columns} FROM graph_findings WHERE result_id=? ORDER BY ordinal"
+                "SELECT {columns}{value_id} FROM graph_findings WHERE result_id=? ORDER BY ordinal"
             ))
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare Graph findings",
@@ -535,6 +568,7 @@ impl GraphRows {
                 operation: "read Graph findings",
             })?;
         let mut findings = Vec::new();
+        let mut finding_value_ids = BTreeMap::new();
         while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
             operation: "advance Graph findings",
         })? {
@@ -565,12 +599,19 @@ impl GraphRows {
             {
                 return Err(Self::invalid("duplicate graph finding"));
             }
+            if include_ids
+                && finding_value_ids
+                    .insert(finding.finding_id.clone(), Self::column(row, 18)?)
+                    .is_some()
+            {
+                return Err(Self::invalid("duplicate graph finding value"));
+            }
             findings.push(finding);
         }
         if findings.len() != header.finding_count {
             return Err(Self::invalid("graph finding row counts"));
         }
-        Ok(findings)
+        Ok((findings, finding_value_ids))
     }
 
     pub(in crate::analysis) fn read_finding_keys(
@@ -580,6 +621,21 @@ impl GraphRows {
         ids: &[String],
         control: Option<&AnalysisReadControl>,
     ) -> Result<BTreeMap<String, FindingV1>> {
+        Ok(
+            Self::read_finding_keys_with_ids(reader, result, header, ids, control)?
+                .into_iter()
+                .map(|(key, (_, finding))| (key, finding))
+                .collect(),
+        )
+    }
+
+    pub(in crate::analysis) fn read_finding_keys_with_ids(
+        reader: &Connection,
+        result: &str,
+        header: &GraphHeader,
+        ids: &[String],
+        control: Option<&AnalysisReadControl>,
+    ) -> Result<BTreeMap<String, (u64, FindingV1)>> {
         Self::check(control)?;
         let wanted = ids.iter().collect::<BTreeSet<_>>();
         if wanted.is_empty() {
@@ -697,7 +753,7 @@ impl GraphRows {
                 return Err(Self::invalid("graph finding member identity"));
             }
             if findings
-                .insert(finding.finding_id.clone(), finding)
+                .insert(finding.finding_id.clone(), (Self::column(row, 0)?, finding))
                 .is_some()
             {
                 return Err(Self::invalid("duplicate graph finding identity"));
@@ -714,9 +770,26 @@ impl GraphRows {
         control: Option<&AnalysisReadControl>,
     ) -> Result<Option<FindingV1>> {
         Ok(
-            Self::read_finding_keys(reader, result, header, &[finding.to_owned()], control)?
-                .remove(finding),
+            Self::read_finding_with_id(reader, result, finding, header, control)?
+                .map(|(_, finding)| finding),
         )
+    }
+
+    pub(in crate::analysis) fn read_finding_with_id(
+        reader: &Connection,
+        result: &str,
+        finding: &str,
+        header: &GraphHeader,
+        control: Option<&AnalysisReadControl>,
+    ) -> Result<Option<(u64, FindingV1)>> {
+        Ok(Self::read_finding_keys_with_ids(
+            reader,
+            result,
+            header,
+            &[finding.to_owned()],
+            control,
+        )?
+        .remove(finding))
     }
 
     fn check_finding_value(finding: &FindingV1, header: &GraphHeader) -> Result<()> {

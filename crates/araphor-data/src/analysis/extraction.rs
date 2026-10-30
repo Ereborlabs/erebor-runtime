@@ -1965,7 +1965,15 @@ impl AnalysisStore {
                     discovery_enabled, &mut output.sink(control))?;
             }
             if let Some(request) = &selection.graph_traversal {
-                self.traverse_graphs(snapshot, selection, request, &mut output, control, &mut capture)?;
+                self.traverse_graphs(
+                    snapshot,
+                    selection,
+                    request,
+                    &mut output,
+                    control,
+                    &mut capture,
+                    read.projects_field("findings", "finding_value_id"),
+                )?;
             }
             let complete_graph = read.projects_field("graph_manifest", "snapshot");
             let graph_contexts = read.projects_field("graph_manifest", "context_refs");
@@ -1986,7 +1994,15 @@ impl AnalysisStore {
                     .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
                 let subjects = read.projected("graph_subjects").is_some();
                 let edges = read.projected("relationships").is_some();
-                let header = self.graph_input(snapshot, selection.tenant_id, id, control, complete_graph, graph_findings)?;
+                let header = self.graph_input(
+                    snapshot,
+                    selection.tenant_id,
+                    id,
+                    control,
+                    complete_graph,
+                    graph_findings,
+                    read.projects_field("findings", "finding_value_id"),
+                )?;
                 let mut graph = header.snapshot;
                 if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
                 if !selection.permits_graph(&graph) { continue; }
@@ -2009,7 +2025,8 @@ impl AnalysisStore {
                     self.graph_contexts(snapshot, selection.tenant_id, id, &mut output, control)?
                 } else { Vec::new() };
                 output.reference_result(id, revision, AnalysisReferenceOriginV1::Graph)?;
-                capture.graph(id, &graph, header.subject_count, header.edge_count,
+                capture.graph(id, &graph, &header.finding_value_ids,
+                    header.subject_count, header.edge_count,
                     revision, sensitivity, None, None, &contexts, header.notice, header.expired,
                     &mut output.sink(control))?;
             }
@@ -2025,6 +2042,7 @@ impl AnalysisStore {
                 let obligation = crate::NotificationObligationV1::try_from(&context)?;
                 let mut parent = None;
                 let mut point_finding = None;
+                let mut finding_value_id = None;
                 let finding = if let Some(reference) = &obligation.finding {
                     if selection.binding_ids.is_empty() && !capture.needs_manifest(&reference.result_id) {
                         let indexed: Option<IndexedNotificationGraph> = snapshot
@@ -2054,12 +2072,16 @@ impl AnalysisStore {
                                 return self.reject("the expired Graph package state differs");
                             }
                             output.reference_result(&reference.result_id, graph_revision, AnalysisReferenceOriginV1::Notification)?;
-                            if read.projects_field("notifications", "finding_available") {
+                            if read.projects_field("notifications", "finding_available")
+                                || read.projects_field("notifications", "finding_value_id")
+                            {
                                 let header = super::graph_rows::GraphRows::read_finding_header(
                                     snapshot, selection.tenant_id, &reference.result_id)?
                                     .ok_or_else(|| self.state_error("the notification Graph header is absent"))?;
-                                point_finding = super::graph_rows::GraphRows::read_finding(
+                                let selected = super::graph_rows::GraphRows::read_finding_with_id(
                                     snapshot, &reference.result_id, &reference.finding_id, &header, Some(control))?;
+                                finding_value_id = selected.as_ref().map(|(id, _)| *id);
+                                point_finding = selected.map(|(_, finding)| finding);
                             }
                             point_finding.as_ref()
                         } else if unscoped_notifications { None } else { continue }
@@ -2079,7 +2101,8 @@ impl AnalysisStore {
                             if let Some((source_key, graph_revision)) = metadata {
                                 let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
                                 let header = self.graph_input(snapshot, selection.tenant_id,
-                                    &reference.result_id, control, complete_graph, true)?;
+                                    &reference.result_id, control, complete_graph, true,
+                                    read.projects_field("notifications", "finding_value_id"))?;
                                 let graph = &header.snapshot;
                                 if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
                                 if !selection.permits_graph(graph) { continue; }
@@ -2095,7 +2118,12 @@ impl AnalysisStore {
                         let (_, graph_revision, header) = &graphs[index];
                         parent = Some(index);
                         output.reference_result(&reference.result_id, *graph_revision, AnalysisReferenceOriginV1::Notification)?;
-                        header.snapshot.findings.iter().find(|finding| finding.finding_id == reference.finding_id)
+                        let finding = header.snapshot.findings.iter()
+                            .find(|finding| finding.finding_id == reference.finding_id);
+                        if read.projects_field("notifications", "finding_value_id") {
+                            finding_value_id = header.finding_value_ids.get(&reference.finding_id).copied();
+                        }
+                        finding
                     } else { None }
                     }
                 } else if unscoped_notifications { None } else { continue; };
@@ -2151,7 +2179,7 @@ impl AnalysisStore {
                         retry_utc_ns = Some(retry_utc_ns.map_or(deadline, |old: u64| old.min(deadline)));
                     }
                 }
-                capture.notification(&obligation, finding, revision, retry_utc_ns,
+                capture.notification(&obligation, finding, finding_value_id, revision, retry_utc_ns,
                     &mut output.sink(control))?;
             }
             for id in &selection.results {

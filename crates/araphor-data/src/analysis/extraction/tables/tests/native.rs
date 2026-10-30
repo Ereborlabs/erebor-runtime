@@ -1750,6 +1750,40 @@ fn graph_snapshot_deadline() -> TestResult {
     assert_eq!(body, expected_body.as_slice());
     assert_ne!(body, graph.encode_native()?.as_slice());
     assert_eq!(GraphSnapshotV1::decode_native(body)?, expected);
+    assert!(!fixture.snapshot.findings.is_empty());
+    let with_ids = read(&fixture.store, &traversal, &["findings"], deadline - 1)?;
+    let finding_schema = &AnalysisStore::table_schemas()["findings"];
+    let without_id = BTreeMap::from([(
+        "findings".into(),
+        Some(
+            (0..finding_schema.fields().len())
+                .filter(|index| finding_schema.field(*index).name() != "finding_value_id")
+                .collect(),
+        ),
+    )]);
+    let without_ids = fixture.store.read_tables(
+        &traversal,
+        AnalysisTableRead {
+            requests: &without_id,
+            event_ranges: None,
+            inputs: None,
+            mode: AnalysisReadModeV1::Complete,
+            now: deadline - 1,
+        },
+        AnalysisExtractLimits::default(),
+        &AnalysisReadControl::default(),
+    )?;
+    let finding_ids = |page: &AnalysisPositionPageV1| -> std::result::Result<Vec<String>, Box<dyn std::error::Error>> {
+        let mut ids = Vec::new();
+        for batch in page.tables.get("findings").into_iter().flatten() {
+            for id in column::<StringArray>(batch, "finding_id")?.iter() {
+                ids.push(id.ok_or("finding ID is null")?.to_owned());
+            }
+        }
+        Ok(ids)
+    };
+    assert_eq!(finding_ids(&with_ids)?, finding_ids(&without_ids)?);
+    assert!(finding_ids(&with_ids)?.is_empty());
     assert_eq!(page.extraction.witnesses, fixture.request.witnesses);
     assert!(page.extraction.references.iter().any(|reference| reference
         .result()

@@ -69,6 +69,39 @@ fn revise_finding(store: &AnalysisStore, result_id: &str, next: FindingV1, now: 
 }
 
 #[tokio::test]
+async fn native_unrelated_graph_input_keeps_finding_state() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+    let _graph = store.lease_graph(vec![araphor_data::AnalysisSelectionV1::tenant([1; 16])])?;
+    let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
+    let engine = Engine::new(store.clone(), Limits::default())?;
+    let sink = Sink::default();
+    configure(&router)?;
+    let initial = finding(1, FindingSeverityV1::High);
+    commit_finding(&store, initial.clone(), 1)?;
+    assert_eq!(route(&router, 100)?, 1);
+    let update = capture(&engine, NotificationRouter::SQL, 100).await?;
+    assert_eq!(router.consume(&update, &sink)?.delivered.len(), 1);
+    let human = grant(NotificationPrincipalV1::Human);
+    let state = router.obligations(&human, 100)?.remove(0);
+    router.acknowledge(&human, state.key, state.finding_revision, [6; 16], 101)?;
+    let prior = router.obligations(&human, 101)?.remove(0);
+    let calls = sink.calls.lock().map_err(|_| "sink lock")?.len();
+
+    commit_finding_at(&store, initial, 2, 150)?;
+    assert_ne!(manifest(1), manifest(2));
+    let before = store.meta()?.commit_revision;
+    assert_eq!(route(&router, 150)?, 0);
+    let update = capture(&engine, NotificationRouter::SQL, 150).await?;
+    let unchanged = router.consume(&update, &sink)?;
+    assert!(unchanged.routed.is_empty() && unchanged.delivered.is_empty());
+    assert_eq!(router.obligations(&human, 150)?.remove(0), prior);
+    assert_eq!(store.meta()?.commit_revision, before);
+    assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?.len(), calls);
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_action_changes() -> TestResult {
     for matched in [true, false] {
         let directory = tempfile::tempdir()?;

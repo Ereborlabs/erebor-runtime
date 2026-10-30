@@ -115,7 +115,9 @@ impl NotificationRouter {
                     &reference.result_id,
                     &reference.finding_id,
                 )?
-                .is_none_or(|(_, prior)| &prior != revision),
+                .is_none_or(|(prior, prior_revision)| {
+                    &prior_revision != revision && &prior != finding
+                }),
             None => true,
         };
         let source = NotificationPriorityV1::from(finding.severity);

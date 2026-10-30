@@ -13,6 +13,7 @@ impl AnalysisStore {
         selection: &AnalysisSelectionV1,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
+        finding_value_ids: bool,
     ) -> Result<(Vec<String>, Vec<TraversalVersion>)> {
         let mut ids = Vec::new();
         let mut versions = Vec::new();
@@ -22,8 +23,14 @@ impl AnalysisStore {
             selection.graphs.as_slice(),
             control,
             |id, mut header, revision, _| {
-                let sensitivity =
-                    self.traversal_scope(snapshot, selection, id, &mut header, control)?;
+                let sensitivity = self.traversal_scope(
+                    snapshot,
+                    selection,
+                    id,
+                    &mut header,
+                    control,
+                    finding_value_ids,
+                )?;
                 if selection.permits_graph(&header.snapshot)
                     && (selection.binding_ids.is_empty()
                         || header.snapshot.findings.iter().all(|finding| {
@@ -57,6 +64,7 @@ impl AnalysisStore {
         id: &str,
         header: &mut GraphHeader,
         control: &AnalysisReadControl,
+        finding_value_ids: bool,
     ) -> Result<crate::ContextSensitivityV1> {
         control.check()?;
         if !selection
@@ -66,7 +74,7 @@ impl AnalysisStore {
         {
             return crate::AnalysisReadDeniedSnafu.fail();
         }
-        self.traversal_findings(snapshot, selection, id, header, control)?;
+        self.traversal_findings(snapshot, selection, id, header, control, finding_value_ids)?;
         self.graph_sensitivity(snapshot, &header.snapshot.input_manifest, control)
     }
 
@@ -77,10 +85,18 @@ impl AnalysisStore {
         id: &str,
         header: &mut GraphHeader,
         control: &AnalysisReadControl,
+        finding_value_ids: bool,
     ) -> Result<()> {
         if !selection.binding_ids.is_empty() {
-            header.snapshot.findings =
-                GraphRows::read_findings(snapshot, id, header, Some(control))?;
+            if finding_value_ids {
+                let (findings, ids) =
+                    GraphRows::read_findings_with_ids(snapshot, id, header, Some(control))?;
+                header.snapshot.findings = findings;
+                header.finding_value_ids = ids;
+            } else {
+                header.snapshot.findings =
+                    GraphRows::read_findings(snapshot, id, header, Some(control))?;
+            }
             if header.snapshot.findings.len() != header.finding_count {
                 return self.reject("the traversal graph finding count differs");
             }

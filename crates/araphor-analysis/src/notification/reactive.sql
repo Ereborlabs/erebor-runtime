@@ -31,10 +31,18 @@ WITH current_findings AS (
             AND prior_manifest.graph_result_id = pair.prior_result_id
     WHERE current_manifest.graph_revision = prior_manifest.graph_revision
 ), matching_states AS (
-    SELECT state.*, revision.current_result_id
-    FROM current_states state JOIN same_revisions revision
+    SELECT state.*, finding.graph_result_id AS current_result_id
+    FROM current_states state JOIN current_findings finding
+        ON finding.tenant_id = state.tenant_id
+            AND finding.finding_id = state.finding_id
+    LEFT JOIN same_revisions revision
         ON revision.tenant_id = state.tenant_id
             AND revision.prior_result_id = state.finding_result_id
+            AND revision.current_result_id = finding.graph_result_id
+    WHERE state.finding_available AND (
+        finding.finding_value_id = state.finding_value_id
+        OR revision.current_result_id IS NOT NULL
+    )
 ), current_routes AS (
     SELECT * FROM notification_routes
     QUALIFY DENSE_RANK() OVER (

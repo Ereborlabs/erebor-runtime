@@ -153,6 +153,7 @@ impl Capture<'_> {
         &mut self,
         result_id: &str,
         graph: &GraphSnapshotV1,
+        finding_value_ids: &BTreeMap<String, u64>,
         subject_count: usize,
         relationship_count: usize,
         commit_revision: u64,
@@ -214,6 +215,7 @@ impl Capture<'_> {
                 sensitivity,
                 &source_key,
                 finding,
+                finding_value_ids.get(&finding.finding_id).copied(),
                 budget,
             )? {
                 return Ok(false);
@@ -340,8 +342,9 @@ impl Capture<'_> {
     graph_row! {
         finding_row, finding_fields, "findings";
         self, budget, graph, result_id, commit_revision, sensitivity, source_key;
-        finding: &crate::FindingV1;
+        finding: &crate::FindingV1, finding_value_id: Option<u64>;
         finding_id => Utf8(false): Some(finding.finding_id.as_str()),
+        finding_value_id => UInt64(false): Some(finding_value_id.ok_or_else(|| invalid("the Graph finding value is absent"))?),
         package_id => Utf8(false): Some(finding.package_id.as_str()),
         package_version => UInt64(false): Some(finding.package_version),
         subject_id => Json(false): Some(&finding.subject_id),

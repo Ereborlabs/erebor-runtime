@@ -281,6 +281,10 @@ async fn native_notification_retry_deadline() -> TestResult {
         2
     );
     let key = failed.delivered[0].0;
+    let pending = router.state(key)?;
+    commit_finding_at(&store, finding(1, FindingSeverityV1::High), 2, 105)?;
+    assert_eq!(route(&router, 109)?, 0);
+    assert_eq!(router.state(key)?, pending);
     let before = store.meta()?.commit_revision;
     let update = capture(&engine, NotificationRouter::SQL, 109).await?;
     assert_eq!(update.snapshot.next_change, Some(110));
@@ -298,6 +302,7 @@ async fn native_notification_retry_deadline() -> TestResult {
         1
     );
     assert_eq!(retried.delivered[0].0, key);
+    assert_eq!(router.state(key)?.finding, pending.finding);
     assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?.len(), 3);
     let update = capture(&engine, NotificationRouter::SQL, 111).await?;
     assert_eq!(update.snapshot.next_change, Some(120));
