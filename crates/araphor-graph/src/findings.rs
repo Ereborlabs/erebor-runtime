@@ -258,7 +258,7 @@ impl FindingRows {
 
     fn value_hash(references: &FindingRefs<'_>) -> Result<[u8; 32]> {
         let value =
-            serde_value::to_value(&(references.finding, references.subject, &references.evidence))
+            serde_value::to_value((references.finding, references.subject, &references.evidence))
                 .map_err(|_| {
                     InvalidSnafu {
                         field: "graph finding canonical value",
