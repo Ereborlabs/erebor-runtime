@@ -47,6 +47,7 @@ async fn empty_gate_keeps_history() -> TestResult {
             data.read_managed_tables(
                 &grant.selection,
                 &araphor_data::ManagedRead {
+                    execution: None,
                     instance: current,
                     expected: None,
                     completed: None,
@@ -176,6 +177,7 @@ async fn failed_graph_disables_reuse() -> TestResult {
         store.read_managed_tables(
             &grant.selection,
             &araphor_data::ManagedRead {
+                execution: None,
                 instance,
                 expected: None,
                 completed: Some(resume.completed),
@@ -248,10 +250,21 @@ async fn failed_graph_disables_reuse() -> TestResult {
             .all(|data| data.rows() == 0));
         evaluation.checkpoint = checkpoint;
         evaluation.previous_outputs = previous_outputs;
-        let actual = descriptor.check_evaluation(&evaluation)?.encode()?;
+        let encoded = descriptor.check_evaluation(&evaluation)?.encode()?;
+        let resumed = encoded.decode(&descriptor)?;
+        assert_eq!(
+            araphor_analysis_builtins::graph::Resume::basis(
+                resumed
+                    .checkpoint
+                    .as_ref()
+                    .ok_or("decoded Graph checkpoint")?
+            )?,
+            araphor_analysis_builtins::graph::ResumeBasis::Progress
+        );
         let expected = sdk::wire::Output::encode_model(&retained.output, model)?;
+        let delta = Detector::from_id(&descriptor.id)?.evaluate(&resumed)?;
+        let actual = sdk::wire::Output::encode_model(&delta, model)?;
         assert_eq!(actual.checkpoint, expected.checkpoint);
-        let delta = Detector::from_id(&descriptor.id)?.evaluate(&evaluation)?;
         assert!(delta.datasets.iter().all(|data| data.rows() == 0));
         assert!(delta.reasons.is_empty());
     }

@@ -4,9 +4,11 @@ Replace repeated source capture, saved-state reconstruction, and per-row
 transactions with one retained DataFusion subscription and atomic writes of
 changes. This plan records the measured costs and proposes the replacement.
 
-**Measurement record: Done. Redesign approval: Not given. Implementation:
-Not done.** The user requested this record and proposals. This file does not
-approve a storage engine change, an SDK change, or implementation.
+**Measurement record: Done. Proposal 1: Approved; implementation in progress.
+Proposals 2 through 6: Not approved; implementation Not done.** The user
+approved retained execution state and change inputs, measurement with the
+existing workload, and commits. This approval does not include the other
+proposals or a storage engine change.
 
 The parent designs are [component ownership](araphor-component-redesign.md),
 [packages and jobs](araphor-package-jobs.md), and
@@ -337,6 +339,76 @@ progress verification over unchanged input, and builtin-only resume paths.
 **Required proof:** append, late input, proof change, window expiry, exact
 replay, restart, and native/Wasm behavior remain correct.
 
+#### Retained-state result
+
+**Retained committed state: Done. Change-only package inputs: Not done.
+Proposal 1: Not done.** This result covers the working tree based on
+`80e0a0b`. The [source review guide](../guides/araphor-retained-execution-review.md)
+links the owners and lifetime rules.
+
+Each managed subscription owns one opaque `ManagedExecution`. Data retains
+the last committed call inputs, output, checkpoint, and checked Graph
+progress. Data checks the current instance, exact call heads, store identity,
+recovery epoch, and current package bytes before reuse. A mismatch uses the
+existing cold read. Data prepares the candidate in the publication
+transaction and promotes the candidate only after COMMIT succeeds. Failed
+publication leaves the last committed state unchanged.
+
+The retained evaluation omits its previous checkpoint and previous outputs.
+This rule prevents a chain of earlier evaluations. The retained state holds
+no source snapshot, task context, database connection, or exchange permit.
+Existing Arrow reservations retain their buffer charges. Analysis accounts
+for retained metadata through its memory owner. Failure of an enabled
+optional reservation drops the cache after a successful durable commit.
+
+The existing incident workload ran twice with temporary probes and a
+300-second diagnostic observation cap. The final run removed duplicate
+package validation from retained candidate preparation. All 41 affected
+source files were restored from exact copies after measurement.
+The measurement precedes one mechanical change that groups the retention
+argument in the existing `OutputMode`. The final Data tests and clippy cover
+that grouping.
+
+| Measurement | Earlier baseline | Final retained-state run |
+| --- | ---: | ---: |
+| Complete instrumented test | 121.13 s | 143.55 s |
+| Observation interval | 84.48 s | 101.36 s |
+| Cursor 950 signal to Graph commit | 13,746 ms | 13,661 ms |
+| Restore three saved calls | 1,475 ms; 105 SELECT statements | About 300–475 ms on warm reads; 12 SELECT statements |
+| Prepare retained candidate | Not present | At most 0.295 ms; no DuckDB calls |
+| Graph computations | 3 | 5 |
+| Guest calls | 9 | 15 |
+
+The state read is faster. The complete test is slower. These separate runs
+do not establish a causal speed factor. The final observation exceeds the
+original 90-second cap. Thus this diagnostic run does not qualify the
+unmodified incident acceptance test. Complete input selection, encoding,
+Graph publication, and notification work remain. No overall speed gain or
+millisecond execution is claimed.
+
+Focused verification used these existing production-owner tests:
+
+- Five Data tests passed with the `execution` filter. These tests cover
+  failed commit, retry, current package bytes, changed heads, recovery epoch,
+  reopen, and tentative-progress cleanup.
+- Four serial Graph cases passed: failed-Graph reuse, restart frontier,
+  version-flush rollback, and managed rechecks. The empty-history and
+  conversion-failure cases also passed separately.
+- Clippy passed for Data, Query, and Analysis tests with warnings denied.
+- The exhaustive Graph corruption sweep was stopped before completion. Its
+  cases remain unchanged. No complete corruption-sweep pass is claimed.
+- Full workspace CI was not run. The user requested relevant tests only.
+
+Two existing Graph fixtures required corrections. The conversion fixture
+now uses the declared two-column `SubjectChange` schema and still requires
+the same terminal failure and absent receipt. The failed-Graph fixture now
+compares the produced Complete checkpoint with the saved Complete checkpoint.
+It also checks that the resumed Progress checkpoint survives wire decoding.
+
+Local measurement files are in `/tmp/araphor-retain-final-20261030/`:
+`run.log`, `detail.txt`, `summary.txt`, `scopes.csv`, and `api.csv`.
+The source contains no diagnostic probes or changed observation cap.
+
 ### 2. Replace attempt-first publication with one atomic change commit
 
 An invocation prepares output in memory. Data performs one final authority
@@ -551,5 +623,6 @@ The probe patch passed `git apply --check` after exact source restoration.
 The current code does not contain the probes. No release result or measured
 speed factor is claimed for the proposed replacement.
 
-**Recorded measurements: Done. Millisecond execution: Not done. Proposed
-replacement: Not approved and not implemented.**
+**Recorded measurements: Done. Retained committed state: Done. Proposal 1:
+Approved and Not done. Millisecond execution: Not done. Proposals 2 through
+6: Not approved and Not done.**

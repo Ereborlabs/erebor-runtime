@@ -1,4 +1,5 @@
 use super::codec::ManagedCodec;
+use super::execution::ManagedExecution;
 use std::collections::{BTreeMap, BTreeSet};
 
 use araphor_analysis_sdk as sdk;
@@ -329,6 +330,7 @@ pub struct ManagedMember {
 
 #[derive(Clone, Debug)]
 pub struct ManagedRead {
+    pub execution: Option<std::sync::Arc<ManagedExecution>>,
     pub instance: ManagedInstance,
     pub expected: Option<ManagedInstance>,
     pub rebuild: bool,
@@ -381,7 +383,8 @@ pub struct ManagedPrior {
     pub reusable: bool,
     pub(in crate::analysis) native_graph: bool,
     pub(in crate::analysis) sparse_resume: bool,
-    pub(in crate::analysis) native: Option<crate::analysis::graph_rows::GraphCallState>,
+    pub(in crate::analysis) native:
+        Option<std::sync::Arc<crate::analysis::graph_rows::GraphCallState>>,
 }
 
 #[derive(Clone, Debug)]
@@ -622,9 +625,10 @@ impl Capture {
 
 #[derive(Clone, Debug)]
 pub struct ManagedCapture {
+    pub(super) execution: Option<std::sync::Arc<ManagedExecution>>,
     pub(super) instance: ManagedInstance,
     pub(super) contract: Capture,
-    pub(super) prior: BTreeMap<u64, ManagedPrior>,
+    pub(super) prior: BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
     pub(super) bytes: usize,
 }
 
@@ -637,7 +641,7 @@ impl ManagedCapture {
         &self.instance
     }
     pub fn prior(&self, call: u64) -> Option<&ManagedPrior> {
-        self.prior.get(&call)
+        self.prior.get(&call).map(std::sync::Arc::as_ref)
     }
     pub fn revision(&self) -> u64 {
         self.contract.revision
@@ -784,10 +788,14 @@ pub struct ManagedAttempt(
     pub(super) Attempt,
     pub(super) ManagedInstance,
     pub(super) Option<tokio::sync::watch::Receiver<u64>>,
-    pub(super) BTreeMap<u64, ManagedPrior>,
+    pub(super) BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
+    pub(super) Option<std::sync::Arc<super::execution::Retention>>,
 );
 
 impl ManagedAttempt {
+    pub(in crate::analysis) fn retention(&self) -> Option<&super::execution::Retention> {
+        self.4.as_deref()
+    }
     pub(in crate::analysis) fn prior_result(&self, call: u64) -> Option<&PackageResultRefV1> {
         self.0.capture.prior.get(&call).and_then(Option::as_ref)
     }

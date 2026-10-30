@@ -79,6 +79,12 @@ impl Instance {
             .allocation_bytes()
             .ok_or_else(|| Code::Limit.error("managed admission metadata"))?;
         let state = Arc::new(Mutex::new(sink::Step {
+            retained: Some(
+                self.session
+                    .memory()
+                    .reserve_input(0)
+                    .map_err(|source| araphor_query::Error::Sql { source })?,
+            ),
             completed: resume.completed,
             admission: Some(ManagedResume {
                 instance: resume.instance,
@@ -426,6 +432,7 @@ impl ManagedPublication for sink::Publication {
                                 ..Default::default()
                             },
                             ManagedRead {
+                                execution: None,
                                 expected: None,
                                 instance: current.clone(),
                                 rebuild: request.rebuild,
@@ -448,6 +455,7 @@ impl ManagedPublication for sink::Publication {
                                 ..Default::default()
                             },
                             ManagedRead {
+                                execution: None,
                                 instance: self.owner.admitted.clone(),
                                 expected: Some(expected.clone()),
                                 rebuild: *rebuild,
@@ -490,6 +498,7 @@ impl ManagedPublication for sink::Publication {
                 Ok((
                     invocation,
                     ManagedRead {
+                        execution: Some(Arc::clone(&state.execution)),
                         expected: None,
                         instance: current,
                         rebuild: false,

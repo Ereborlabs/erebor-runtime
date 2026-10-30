@@ -503,6 +503,7 @@ impl AnalysisStore {
                 instance,
                 None,
                 std::collections::BTreeMap::new(),
+                None,
             )))
         })
     }

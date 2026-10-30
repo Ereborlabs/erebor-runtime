@@ -647,7 +647,7 @@ impl SavedEvaluation {
                 reusable: false,
                 native_graph: self.native_graph,
                 sparse_resume: self.input_basis == InputBasis::Progress,
-                native: self.native_prior,
+                native: self.native_prior.map(std::sync::Arc::new),
             };
             if self.input_basis != InputBasis::None {
                 (evaluation.checkpoint, evaluation.previous_outputs) = prior.state_sparse(

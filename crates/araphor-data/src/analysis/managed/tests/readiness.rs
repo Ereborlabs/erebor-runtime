@@ -129,6 +129,7 @@ fn completion_fences_capture() -> TestResult {
     let requests = AnalysisTableRequests::new();
     let before = store.meta()?;
     let selected = ManagedRead {
+        execution: None,
         follow: false,
         expected: None,
         instance: resumed.instance.clone(),

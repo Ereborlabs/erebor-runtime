@@ -82,6 +82,7 @@ impl AnalysisStore {
                 captured.instance.clone(),
                 None,
                 BTreeMap::new(),
+                None,
             ));
         }
         if request.frontier.is_some() {
@@ -127,6 +128,11 @@ impl AnalysisStore {
             captured.instance.clone(),
             Some(self.revision.subscribe()),
             captured.prior.clone(),
+            captured.execution.as_ref().map(|execution| {
+                std::sync::Arc::new(super::execution::Retention::new(std::sync::Arc::clone(
+                    execution,
+                )))
+            }),
         ))
     }
 
@@ -172,8 +178,13 @@ impl AnalysisStore {
                 operation: "begin managed publication",
             })?;
         let revision = self.package_next(&transaction)?;
+        let _progress = input
+            .attempt
+            .retention()
+            .map(super::execution::Retention::pending);
         let (receipt, projected) =
             self.managed_commit_rows(&transaction, input, revision, project)?;
+        let retained = self.retain_managed(&transaction, input, &receipt)?;
         let mut relations = Self::MANAGED_RELATIONS.to_vec();
         relations.extend(projected);
         relations.sort_unstable();
@@ -188,6 +199,9 @@ impl AnalysisStore {
         #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("managed.before");
         self.commit_metadata(transaction, "commit complete managed step")?;
+        if let Some((owner, state)) = retained {
+            owner.promote(state);
+        }
         #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("managed.after");
         self.revision.send_replace(revision);

@@ -194,6 +194,17 @@ impl AnalysisStore {
         Ok(proof)
     }
 
+    pub(in crate::analysis) fn verify_package_revision(
+        &self,
+        reader: &Connection,
+        tenant: [u8; 16],
+        key: &PackageRefV1,
+        verified: &mut VerifiedPackages,
+    ) -> Result<()> {
+        self.verified_package_from(reader, tenant, key, verified)
+            .map(|_| ())
+    }
+
     pub(in crate::analysis) fn verified_native_graph_call(
         &self,
         reader: &Connection,

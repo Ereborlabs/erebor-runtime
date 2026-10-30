@@ -29,6 +29,7 @@ impl ManagedPublication for Sink {
         Ok((
             Invocation::default(),
             ManagedRead {
+                execution: None,
                 follow: !self.state.finite.load(Ordering::SeqCst),
                 expected: None,
                 instance,

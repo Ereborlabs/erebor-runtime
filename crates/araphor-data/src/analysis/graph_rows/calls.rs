@@ -2,13 +2,14 @@ use super::history::Member;
 use super::*;
 use crate::{AnalysisContractSnafu, DiscoveryRecordIdV1, GraphValidate as _, ManagedSpec};
 
-pub(super) struct OutputMode {
+pub(super) struct OutputMode<'a> {
     pub(super) sparse: bool,
     pub(super) full: bool,
     pub(super) native_progress: bool,
+    pub(super) retained: Option<(&'a super::super::managed::Retention, u64)>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(in crate::analysis) struct GraphCallState {
     pub subjects: BTreeMap<GraphSubjectKeyV1, (u64, SubjectChange)>,
     pub edges: BTreeMap<RelationshipIdentity, (u64, RelationshipChange)>,
@@ -202,7 +203,7 @@ impl GraphRows {
         metadata: &GraphManifest,
         returned: &crate::ManagedReturn<'_>,
         pin: &crate::ManagedCall,
-        mode: OutputMode,
+        mode: OutputMode<'_>,
     ) -> Result<()> {
         let evaluation = returned.evaluation;
         let output = returned.output;
@@ -419,6 +420,9 @@ impl GraphRows {
             full: mode.full,
         }
         .apply(members, removals, progress_plan.root.as_deref())?;
+        if let (Some((retained, call)), Some(progress)) = (mode.retained, progress_plan.next) {
+            retained.progress(call, progress);
+        }
         Ok(())
     }
 

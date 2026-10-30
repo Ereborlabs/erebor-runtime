@@ -402,6 +402,7 @@ async fn retained_alias_rejects_managed() -> TestResult {
             &prepared,
             invocation(),
             araphor_data::ManagedRead {
+                execution: None,
                 expected: None,
                 instance: source.admitted().clone(),
                 rebuild: false,

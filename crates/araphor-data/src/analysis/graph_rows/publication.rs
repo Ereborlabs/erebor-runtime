@@ -171,6 +171,7 @@ impl GraphRows {
                         sparse,
                         full,
                         native_progress: native,
+                        retained: commit.attempt.retention().map(|retention| (retention, *call)),
                     },
                 )?;
                 touched.extend(Self::output_keys(returned.output)?);

@@ -189,6 +189,7 @@ fn read(graph: &CommitFixture, mode: &ManagedRead) -> TestResult<ManagedCapture>
 
 fn mode(fixture: &Fixture, follow: bool) -> ManagedRead {
     ManagedRead {
+        execution: None,
         instance: fixture.instance.clone(),
         expected: None,
         rebuild: false,
@@ -785,6 +786,7 @@ fn graph_follow_requires_mode() -> TestResult {
     let error = read(
         &graph,
         &ManagedRead {
+            execution: None,
             instance: stopped,
             ..valid
         },

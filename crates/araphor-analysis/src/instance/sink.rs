@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{DFSchema, DataFusionError, Result};
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
+use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::{dml::InsertOp, Expr, TableType};
 use datafusion::physical_plan::{
@@ -25,6 +26,8 @@ use super::Instance;
 
 #[derive(Default)]
 pub(super) struct Step {
+    pub(super) execution: Arc<araphor_data::ManagedExecution>,
+    pub(super) retained: Option<MemoryReservation>,
     pub(super) completed: u64,
     pub(super) admission: Option<ManagedResume>,
     pub(super) attempt: Option<Arc<ManagedAttempt>>,
@@ -454,6 +457,15 @@ impl DataSink for Publication {
                         };
                         let revision = receipt.commit_revision;
                         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                        if let Some(retained) = &state.retained {
+                            if retained
+                                .try_resize(state.execution.metadata_bytes())
+                                .is_err()
+                            {
+                                state.execution.clear();
+                                retained.free();
+                            }
+                        }
                         state.attempt = None;
                         state.completed = receipt.commit_revision;
                         if let Some(admission) = &mut state.admission {

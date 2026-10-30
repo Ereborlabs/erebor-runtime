@@ -5,6 +5,7 @@ pub(super) struct ProgressPlan {
     pub additions: Vec<Progress>,
     pub removals: Vec<DiscoveryRecordIdV1>,
     pub root: Option<Vec<u8>>,
+    pub next: Option<BTreeMap<DiscoveryRecordIdV1, Progress>>,
 }
 
 impl GraphRows {
@@ -32,6 +33,7 @@ impl GraphRows {
                 additions,
                 removals,
                 root: None,
+                next: None,
             });
         };
         if full && !removals.is_empty() {
@@ -89,14 +91,15 @@ impl GraphRows {
             .map(|(record, _)| record.clone())
             .collect();
         let additions = actual
-            .into_iter()
-            .filter(|(record, row)| row.state.is_some() && prior.get(record) != Some(row))
-            .map(|(_, row)| row)
+            .iter()
+            .filter(|(record, row)| row.state.is_some() && prior.get(*record) != Some(*row))
+            .map(|(_, row)| row.clone())
             .collect();
         Ok(ProgressPlan {
             additions,
             removals,
             root: Some(root),
+            next: Some(actual),
         })
     }
 

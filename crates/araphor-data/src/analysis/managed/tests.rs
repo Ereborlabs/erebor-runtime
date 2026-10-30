@@ -18,6 +18,7 @@ use crate::{
 };
 
 mod destination;
+mod execution;
 mod guards;
 mod health;
 mod history;
@@ -168,6 +169,15 @@ impl Fixture {
     }
 
     fn capture(&self, store: &AnalysisStore, rebuild: bool) -> TestResult<ManagedCapture> {
+        self.capture_execution(store, rebuild, None)
+    }
+
+    fn capture_execution(
+        &self,
+        store: &AnalysisStore,
+        rebuild: bool,
+        execution: Option<Arc<ManagedExecution>>,
+    ) -> TestResult<ManagedCapture> {
         let instance = store
             .managed_instance(
                 [1; 16],
@@ -179,6 +189,7 @@ impl Fixture {
         let page = store.read_managed_tables(
             &instance.grant.selection,
             &ManagedRead {
+                execution,
                 follow: false,
                 expected: None,
                 instance: instance.clone(),
@@ -1045,6 +1056,7 @@ fn managed_sql_checks_authority() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                execution: None,
                 follow: false,
                 expected: None,
                 instance,
@@ -1650,6 +1662,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
             .read_managed_tables(
                 &grant.selection,
                 &ManagedRead {
+                    execution: None,
                     follow: false,
                     expected: None,
                     instance,
@@ -1880,6 +1893,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                execution: None,
                 follow: false,
                 expected: None,
                 instance,
@@ -1913,6 +1927,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                execution: None,
                 follow: false,
                 expected: None,
                 instance,
@@ -1976,6 +1991,7 @@ fn managed_witness_lifetime_check() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                execution: None,
                 follow: false,
                 expected: None,
                 instance: fixture.instance.clone(),

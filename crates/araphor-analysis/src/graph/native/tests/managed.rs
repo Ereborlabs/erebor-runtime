@@ -24,10 +24,19 @@ async fn graph_conversion_failure_finishes() -> TestResult {
         identity: 1u64.to_be_bytes().to_vec(),
     };
     araphor_data::GraphValidate::validate(&key)?;
-    let subjects = araphor_analysis_builtins::graph::Subject::encode(&[
-        araphor_analysis_builtins::graph::Subject {
-            record: u32::MAX,
-            context: None,
+    let mut absent = fixture
+        .records
+        .first()
+        .ok_or("Graph fixture record")?
+        .id
+        .clone();
+    absent.durable_cursor = u64::MAX;
+    let subjects = araphor_analysis_builtins::graph::SubjectChange::encode(&[
+        araphor_analysis_builtins::graph::SubjectChange {
+            anchor: araphor_analysis_builtins::graph::Anchor {
+                record: absent,
+                fact: None,
+            },
             key,
         },
     ])?;
@@ -100,7 +109,7 @@ async fn graph_conversion_failure_finishes() -> TestResult {
         if matches!(
             error.downcast_ref::<araphor_data::Error>(),
             Some(araphor_data::Error::GraphInvalid {
-                field: "graph output record",
+                field: "graph anchor record",
                 ..
             })
         ) {
@@ -1103,6 +1112,7 @@ async fn managed_expiry_reads_history() -> TestResult {
     selection.select_graphs(araphor_data::Selection::All, None)?;
     selection.contexts = araphor_data::Selection::Exact(Vec::new());
     let managed = araphor_data::ManagedRead {
+        execution: None,
         instance: instance.admitted().clone(),
         expected: None,
         completed: None,
@@ -1250,6 +1260,7 @@ async fn managed_expiry_reads_history() -> TestResult {
     let ordinary = fixture.query.store().read_managed_tables(
         &selection,
         &araphor_data::ManagedRead {
+            execution: None,
             instance: ordinary.admitted().clone(),
             expected: None,
             completed: None,

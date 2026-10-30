@@ -71,6 +71,11 @@ impl AnalysisStore {
         let mut prior = BTreeMap::new();
         let mut states = BTreeMap::new();
         let mut verified = VerifiedPackages::default();
+        let retained = request
+            .execution
+            .as_ref()
+            .map(|execution| execution.calls(request, &output.meta))
+            .unwrap_or_default();
         for call in instance.spec.manifest.calls.keys() {
             control.check()?;
             let compatible = instance.spec.same_call(&current.spec, *call);
@@ -86,6 +91,46 @@ impl AnalysisStore {
             let (revision, id) = saved.filter(|_| compatible).unwrap_or((0, None));
             let reference = if let Some(id) = id {
                 if !request.rebuild {
+                    if let Some(state) = retained
+                        .get(call)
+                        .filter(|state| state.revision == revision && state.result == id)
+                    {
+                        let declaration = &instance.spec.manifest.calls[call];
+                        if state.sparse_resume {
+                            if !self.verified_native_graph_call(
+                                reader,
+                                instance.spec.tenant,
+                                declaration,
+                                &mut verified,
+                            )? {
+                                return Err(Code::Invalid.error("retained Graph capability"));
+                            }
+                        } else {
+                            self.verify_package_revision(
+                                reader,
+                                instance.spec.tenant,
+                                &declaration.package,
+                                &mut verified,
+                            )?;
+                        }
+                        let mut state = std::sync::Arc::clone(state);
+                        std::sync::Arc::make_mut(&mut state).reusable = reuse
+                            && matches!(&instance.spec.destination, ManagedDestination::Graph { calls, .. } if calls.contains(call))
+                            && matches!(
+                                instance.spec.manifest.calls[call].target.as_str(),
+                                "wasm" | "native"
+                            );
+                        output.charge(state.allocated_bytes())?;
+                        prior.insert(*call, state);
+                        states.insert(
+                            *call,
+                            Some(PackageResultRefV1 {
+                                result_id: id,
+                                commit_revision: revision,
+                            }),
+                        );
+                        continue;
+                    }
                     let (metadata, payload): (u64, u64) = reader.query_row("SELECT octet_length(request_meta) + octet_length(body),
                     (SELECT COALESCE(SUM(octet_length(ipc)), 0) FROM managed_arrow WHERE result_id = ? AND role IN ('parameters', 'checkpoint'))
                     FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND commit_revision = ?",
@@ -140,7 +185,7 @@ impl AnalysisStore {
                         output.charge(saved.decoding_bytes(control)?)?;
                         let mut evaluation = saved.inputs_only(control)?;
                         if state.native_graph {
-                            state.native = Some(if state.sparse_resume {
+                            state.native = Some(std::sync::Arc::new(if state.sparse_resume {
                                 crate::analysis::graph_rows::GraphCallRows::load_progress(
                                     reader,
                                     &instance.spec,
@@ -162,12 +207,12 @@ impl AnalysisStore {
                                     control,
                                     Some(state.sparse_resume),
                                 )?
-                            });
+                            }));
                         }
-                        let native_bytes = state.native.as_ref().map_or(
-                            0,
-                            crate::analysis::graph_rows::GraphCallState::allocated_bytes,
-                        );
+                        let native_bytes = state
+                            .native
+                            .as_ref()
+                            .map_or(0, |state| state.allocated_bytes());
                         output.charge(native_bytes)?;
                         evaluation.checkpoint = None;
                         evaluation.previous_outputs.clear();
@@ -212,7 +257,7 @@ impl AnalysisStore {
                             output: returned,
                         }));
                     }
-                    prior.insert(*call, state);
+                    prior.insert(*call, std::sync::Arc::new(state));
                 }
                 Some(PackageResultRefV1 {
                     result_id: id,
@@ -227,6 +272,7 @@ impl AnalysisStore {
             states.insert(*call, reference);
         }
         Ok(ManagedCapture {
+            execution: request.execution.clone(),
             contract: Capture {
                 tenant: instance.spec.tenant,
                 instance: instance.spec.id.clone(),

@@ -23,6 +23,9 @@ tree contains only named, no-clobber copies selected during triage.
 - [Performance simplification review](guides/araphor-performance-simplification-review.md)
   gives the source route and verification limits for the approved repeated-work
   changes.
+- [Retained execution state review](guides/araphor-retained-execution-review.md)
+  gives the current saved-state reuse flow, commit checks, and remaining input
+  work.
 
 ## Important Status Rule
 

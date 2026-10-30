@@ -360,6 +360,7 @@ async fn host_recovers_failed_frontier() -> TestResult {
                         &selection,
                         &tables,
                         &ManagedRead {
+                            execution: None,
                             instance: failed.instance.clone(),
                             expected: None,
                             rebuild: false,
