@@ -47,7 +47,7 @@ fn current_reads_check_storage() -> TestResult {
     };
     assert_eq!(state, reference.commit_revision);
     assert_eq!(head.as_deref(), Some(reference.result_id.as_str()));
-    let mut wrong: ManagedSpec = serde_json::from_slice(&spec)?;
+    let mut wrong: ManagedSpec = ManagedCodec::decode(&spec)?;
     wrong
         .manifest
         .calls
@@ -55,7 +55,7 @@ fn current_reads_check_storage() -> TestResult {
         .ok_or("saved call absent")?
         .package
         .revision = "wrong".into();
-    let changed = serde_json::to_vec(&wrong)?;
+    let changed = ManagedCodec::encode(&wrong)?;
     for fault in ["revision", "state", "head", "result", "owner"] {
         {
             let mut writer = saved.store.writer()?;
@@ -241,12 +241,12 @@ fn retained_record_checks_identity() -> TestResult {
         params![selection.tenant_id.as_slice(), reference.result_id],
         |row| row.get(0),
     )?;
-    let mut record: model::Record = serde_json::from_slice(&metadata)?;
+    let mut record: model::Record = ManagedCodec::decode(&metadata)?;
     record.instance = "absent-instance".into();
     saved.store.writer()?.get_mut()?.execute(
         "UPDATE analysis_results SET request_meta = ? WHERE tenant_id = ? AND result_id = ?",
         params![
-            serde_json::to_vec(&record)?,
+            ManagedCodec::encode(&record)?,
             selection.tenant_id.as_slice(),
             reference.result_id
         ],

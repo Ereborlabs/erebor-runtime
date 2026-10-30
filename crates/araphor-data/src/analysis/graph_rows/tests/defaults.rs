@@ -425,7 +425,7 @@ fn native_subject_order() -> TestResult {
     let fixture = CommitFixture::new()?;
     let reader = Connection::open_in_memory()?;
     reader.execute_batch(&GraphRows::schema())?;
-    reader.execute("INSERT INTO graph_versions VALUES ('first', 1, 1)", [])?;
+    NativeRows::bind(&reader, "first", 1, 1)?;
     let base = fixture.snapshot.graph.subjects[0].clone();
     let mut process = base.clone();
     process.kind = crate::GraphSubjectKindV1::Process;
@@ -443,19 +443,19 @@ fn native_subject_order() -> TestResult {
     };
     let mut subjects = vec![external, process, kubernetes, provider, base.clone()];
     subjects.sort();
-    GraphRows::insert_subjects(&reader, &subjects, 1, 1)?;
+    NativeRows::subjects(&reader, &subjects, 1, 1)?;
     assert_eq!(
         GraphRows::read_subjects(&reader, "first", subjects.len(), None)?,
         subjects
     );
-    reader.execute("INSERT INTO graph_versions VALUES ('second', 1, 2)", [])?;
+    NativeRows::bind(&reader, "second", 1, 2)?;
     let mut earlier = base;
     if let crate::GraphSubjectAuthorityV1::Native { node_id, .. } = &mut earlier.authority {
         *node_id = "0".into();
     }
     subjects.push(earlier);
     subjects.sort();
-    GraphRows::insert_subjects(&reader, &subjects, 1, 2)?;
+    NativeRows::subjects(&reader, &subjects, 1, 2)?;
     assert_eq!(
         GraphRows::read_subjects(&reader, "second", subjects.len(), None)?,
         subjects
@@ -464,10 +464,10 @@ fn native_subject_order() -> TestResult {
         GraphRows::read_subjects(&reader, "first", subjects.len() - 1, None)?,
         subjects[1..]
     );
-    reader.execute("INSERT INTO graph_versions VALUES ('third', 1, 3)", [])?;
-    GraphRows::insert_subjects(&reader, &subjects[1..], 1, 3)?;
-    reader.execute("INSERT INTO graph_versions VALUES ('fourth', 1, 4)", [])?;
-    GraphRows::insert_subjects(&reader, &subjects, 1, 4)?;
+    NativeRows::bind(&reader, "third", 1, 3)?;
+    NativeRows::subjects(&reader, &subjects[1..], 1, 3)?;
+    NativeRows::bind(&reader, "fourth", 1, 4)?;
+    NativeRows::subjects(&reader, &subjects, 1, 4)?;
     assert_eq!(
         GraphRows::read_subjects(&reader, "third", subjects.len() - 1, None)?,
         subjects[1..]
@@ -483,7 +483,7 @@ fn native_subject_order() -> TestResult {
     )?;
     assert_eq!(values, subjects.len() as u64);
     let memberships: u64 = reader.query_row(
-        "SELECT count(*)::UBIGINT FROM graph_subject_membership",
+        "SELECT count(*)::UBIGINT FROM graph_producer_members WHERE member_kind=2",
         [],
         |row| row.get(0),
     )?;

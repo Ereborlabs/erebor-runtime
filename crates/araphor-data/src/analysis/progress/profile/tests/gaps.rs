@@ -221,11 +221,7 @@ fn profile_rejects_gap_proof() -> TestResult {
             ResultHead::Current(Some(&wrong_head)),
             true,
             Some(&fixture.profile),
-            None,
             &[],
-            &[],
-            &[],
-            false,
         ),
         Err(crate::Error::AnalysisConflict { .. })
     ));

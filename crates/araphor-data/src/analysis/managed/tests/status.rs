@@ -282,7 +282,7 @@ fn attempted_failure_uses_history() -> TestResult {
                 operation: "read rolled back failure",
             })
     })?;
-    let saved: super::super::status::Failure = serde_json::from_slice(&bytes)?;
+    let saved: super::super::status::Failure = ManagedCodec::decode(&bytes)?;
     assert_eq!(saved.code, Code::Denied);
     assert_eq!(saved.progress, stopped.progress);
     assert_eq!(saved.revision, stopped.lifecycle);
@@ -430,7 +430,7 @@ fn failure_recovery_rejects_corruption() -> TestResult {
             _ => {
                 writer.get_mut()?.execute(
                     "UPDATE managed_instances SET failure = ?",
-                    params![serde_json::to_vec(&failure)?],
+                    params![ManagedCodec::encode(&failure)?],
                 )?;
             }
         }
@@ -485,19 +485,25 @@ fn terminal_status_recovery_checks_fact() -> TestResult {
                 .get_mut()?
                 .execute("DELETE FROM managed_attempts", [])?;
         } else if fault == 5 {
-            let mut value = serde_json::to_value(&failure)?;
-            value
-                .as_object_mut()
-                .ok_or("failure object")?
-                .remove("origin");
+            #[derive(serde::Serialize)]
+            struct MissingOrigin {
+                code: Code,
+                progress: u64,
+                revision: u64,
+            }
+            let value = MissingOrigin {
+                code: failure.code,
+                progress: failure.progress,
+                revision: failure.revision,
+            };
             writer.get_mut()?.execute(
                 "UPDATE managed_instances SET failure = ?",
-                params![serde_json::to_vec(&value)?],
+                params![ManagedCodec::encode(&value)?],
             )?;
         } else {
             writer.get_mut()?.execute(
                 "UPDATE managed_instances SET failure = ?",
-                params![serde_json::to_vec(&failure)?],
+                params![ManagedCodec::encode(&failure)?],
             )?;
         }
         drop(writer);
@@ -553,7 +559,7 @@ fn admission_failure_keeps_intent() -> TestResult {
         ).context(crate::AnalysisDatabaseSnafu { operation: "read admission failure proof" })
         })?;
     assert_eq!(attempts, 2);
-    let failure: super::super::status::Failure = serde_json::from_slice(&bytes)?;
+    let failure: super::super::status::Failure = ManagedCodec::decode(&bytes)?;
     assert!(failure.origin == super::super::status::FailureOrigin::Admission);
     assert_eq!(failure.code, Code::Limit);
     assert_eq!(failure.progress, prior.commit_revision);

@@ -155,7 +155,7 @@ async fn graph_restart_keeps_frontier() -> TestResult {
 }
 
 #[tokio::test]
-async fn graph_call_progress_flush_failure_rolls_back() -> TestResult {
+async fn graph_call_version_flush_failure_rolls_back() -> TestResult {
     let fixture = Fixture::target(Target::Wasm)?;
     let publication = fixture.prepare("").await?;
     let grant = publication.grant.clone();
@@ -198,19 +198,22 @@ async fn graph_call_progress_flush_failure_rolls_back() -> TestResult {
         },
     )?;
     let retained = store.retained_counts(fixture.source.tenant_id)?;
-    let progress = store.graph_progress_counts()?;
-    let table = "CREATE TABLE graph_call_progress (
-        scope_id UBIGINT NOT NULL, value_ref UBIGINT NOT NULL,
-        valid_from UBIGINT NOT NULL, valid_to UBIGINT,
-        PRIMARY KEY (scope_id, value_ref, valid_from),
-        CHECK (valid_to IS NULL OR valid_to > valid_from)";
+    let counts = store.graph_call_counts()?;
+    let table = "CREATE TABLE graph_producer_versions (
+        result_id VARCHAR PRIMARY KEY, scope_id UBIGINT NOT NULL,
+        commit_revision UBIGINT NOT NULL, base_result_id VARCHAR,
+        subject_count UBIGINT NOT NULL, edge_count UBIGINT NOT NULL,
+        finding_count UBIGINT NOT NULL, progress_count UBIGINT NOT NULL,
+        derived_progress_digest BLOB,
+        CHECK (derived_progress_digest IS NULL OR octet_length(derived_progress_digest) = 32),
+        UNIQUE (scope_id, commit_revision)";
     store.fault_write(
         &format!(
-            "CREATE TABLE graph_call_progress_saved AS SELECT * FROM graph_call_progress;
-             DROP TABLE graph_call_progress;
-             {table}, CHECK (valid_from <= {}));
-             INSERT INTO graph_call_progress SELECT * FROM graph_call_progress_saved;",
-            first.commit_revision
+            "CREATE TABLE graph_producer_versions_saved AS SELECT * FROM graph_producer_versions;
+             DROP TABLE graph_producer_versions;
+             {table}, CHECK (commit_revision <= {}));
+             INSERT INTO graph_producer_versions SELECT * FROM graph_producer_versions_saved;",
+            head.commit_revision
         ),
         &[],
     )?;
@@ -219,13 +222,13 @@ async fn graph_call_progress_flush_failure_rolls_back() -> TestResult {
         .run(second, &fixture.control)
         .await
         .err()
-        .ok_or("Graph call progress flush unexpectedly succeeded")?;
+        .ok_or("Graph call version flush unexpectedly succeeded")?;
     assert!(
-        format!("{failed:?}").contains("flush Graph call progress"),
+        format!("{failed:?}").contains("insert Graph producer version"),
         "{failed:?}"
     );
     assert_eq!(store.retained_counts(fixture.source.tenant_id)?, retained);
-    assert_eq!(store.graph_progress_counts()?, progress);
+    assert_eq!(store.graph_call_counts()?, counts);
     assert_eq!(store.processor_result(&scope)?, Some(head.clone()));
     assert_eq!(
         store
@@ -245,10 +248,10 @@ async fn graph_call_progress_flush_failure_rolls_back() -> TestResult {
     store.verify_state()?;
     store.fault_write(
         &format!(
-            "DROP TABLE graph_call_progress;
+            "DROP TABLE graph_producer_versions;
              {table});
-             INSERT INTO graph_call_progress SELECT * FROM graph_call_progress_saved;
-             DROP TABLE graph_call_progress_saved;"
+             INSERT INTO graph_producer_versions SELECT * FROM graph_producer_versions_saved;
+             DROP TABLE graph_producer_versions_saved;"
         ),
         &[],
     )?;
@@ -257,7 +260,14 @@ async fn graph_call_progress_flush_failure_rolls_back() -> TestResult {
         .await?;
     assert_eq!(retried.results.len(), 3);
     assert!(retried.commit_revision > first.commit_revision);
-    assert!(store.graph_progress_counts()?.0 > progress.0);
+    let retried_counts = store.graph_call_counts()?;
+    assert_eq!(retried_counts.0, counts.0 + 1);
+    assert_eq!(retried_counts.1, counts.1 + 1);
+    assert!(retried_counts.2 > counts.2);
+    assert_eq!(
+        retried_counts.3,
+        counts.3 + retried.results.len() as u64 + 1
+    );
     assert_eq!(
         store
             .processor_health(&scope)?
@@ -435,16 +445,18 @@ async fn graph_call_reopen_rejects_corruption() -> TestResult {
     let backup = fixture._directory.path().join("data/backups/graph-call");
     store.backup(&backup)?;
     for (name, sql) in [
-        ("scope pin", "UPDATE graph_call_scopes SET image_digest = 'wrong' WHERE scope_id = (SELECT min(scope_id) FROM graph_call_scopes)"),
-        ("membership count", "UPDATE graph_call_versions SET subject_count = subject_count + 1 WHERE result_id = (SELECT min(result_id) FROM graph_call_versions)"),
-        ("anchor", "UPDATE graph_call_subjects SET anchor_fact = X'00' WHERE rowid = (SELECT min(rowid) FROM graph_call_subjects)"),
-        ("orphan", "INSERT INTO graph_call_progress SELECT (SELECT max(scope_id) + 1 FROM graph_call_scopes), value_ref, valid_from, valid_to FROM graph_call_progress LIMIT 1"),
-        ("progress value", "INSERT INTO graph_call_progress SELECT scope_id, (SELECT max(value_ref) + 1 FROM graph_progress_values), valid_from, valid_to FROM graph_call_progress LIMIT 1"),
-        ("duplicate progress", "INSERT INTO graph_progress_values SELECT (SELECT max(value_ref) + 1 FROM graph_progress_values), evidence_id, digest, state FROM graph_progress_values LIMIT 1"),
-        ("progress overlap", "INSERT INTO graph_progress_values SELECT (SELECT max(value_ref) + 1 FROM graph_progress_values), v.evidence_id, v.digest, 'overlap-' || CAST((SELECT max(value_ref) + 1 FROM graph_progress_values) AS VARCHAR) FROM graph_call_progress m JOIN graph_progress_values v USING (value_ref) LIMIT 1;
-            INSERT INTO graph_call_progress SELECT m.scope_id, (SELECT max(value_ref) FROM graph_progress_values), m.valid_from, m.valid_to FROM graph_call_progress m JOIN graph_progress_values v USING (value_ref) WHERE v.evidence_id = (SELECT evidence_id FROM graph_progress_values WHERE value_ref = (SELECT max(value_ref) FROM graph_progress_values)) LIMIT 1"),
-        ("overlap", "INSERT INTO graph_call_subjects SELECT m.scope_id, m.subject_id, m.anchor_record_id, m.anchor_fact, (SELECT max(v.commit_revision) FROM graph_call_versions v WHERE v.scope_id = m.scope_id), NULL FROM graph_call_subjects m WHERE m.valid_to IS NULL AND m.valid_from < (SELECT max(v.commit_revision) FROM graph_call_versions v WHERE v.scope_id = m.scope_id) LIMIT 1"),
-        ("base", "UPDATE graph_call_versions SET base_result_id = NULL WHERE base_result_id IS NOT NULL"),
+        ("scope pin", "UPDATE graph_producer_scopes SET image_digest = 'wrong' WHERE scope_id = (SELECT min(scope_id) FROM graph_producer_scopes WHERE producer_kind = 0)"),
+        ("scope source", "UPDATE graph_producer_scopes SET source_ref = (SELECT max(source_ref) + 1 FROM graph_sources) WHERE scope_id = (SELECT min(scope_id) FROM graph_producer_scopes WHERE producer_kind = 0)"),
+        ("membership count", "UPDATE graph_producer_versions SET subject_count = subject_count + 1 WHERE result_id = (SELECT min(result_id) FROM graph_producer_versions v JOIN graph_producer_scopes s USING (scope_id) WHERE s.producer_kind = 0)"),
+        ("anchor", "UPDATE graph_producer_members SET anchor_fact = X'00' WHERE rowid = (SELECT min(rowid) FROM graph_producer_members WHERE member_kind = 2)"),
+        ("orphan", "UPDATE graph_producer_members SET scope_id = (SELECT max(scope_id) + 1 FROM graph_producer_scopes) WHERE rowid = (SELECT min(rowid) FROM graph_producer_members WHERE member_kind = 5)"),
+        ("progress value", "UPDATE graph_producer_members SET value_ref = (SELECT max(value_ref) + 1 FROM graph_progress_values) WHERE rowid = (SELECT min(rowid) FROM graph_producer_members WHERE member_kind = 5)"),
+        ("progress overlap", "INSERT INTO graph_producer_members SELECT m.scope_id, m.member_kind, m.member_key, m.value_ref, m.anchor_record_id, m.anchor_fact, m.reason_code, m.ordinal, (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id), NULL FROM graph_producer_members m WHERE m.member_kind = 5 AND m.valid_to IS NULL AND m.valid_from < (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id) LIMIT 1"),
+        ("overlap", "INSERT INTO graph_producer_members SELECT m.scope_id, m.member_kind, m.member_key, m.value_ref, m.anchor_record_id, m.anchor_fact, m.reason_code, m.ordinal, (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id), NULL FROM graph_producer_members m WHERE m.member_kind = 2 AND m.valid_to IS NULL AND m.valid_from < (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id) LIMIT 1"),
+        ("base", "UPDATE graph_producer_versions SET base_result_id = NULL WHERE base_result_id IS NOT NULL"),
+        ("producer version", "UPDATE graph_result_producers SET producer_result_id = 'absent' WHERE rowid = (SELECT min(rowid) FROM graph_result_producers)"),
+        ("missing producer", "DELETE FROM graph_result_producers WHERE rowid = (SELECT min(rowid) FROM graph_result_producers)"),
+        ("wrong producer cut", "UPDATE graph_result_producers AS p SET producer_result_id = v.base_result_id FROM graph_producer_versions v WHERE v.result_id = p.producer_result_id AND v.base_result_id IS NOT NULL AND p.rowid = (SELECT min(binding.rowid) FROM graph_result_producers binding JOIN graph_producer_versions prior ON prior.result_id = binding.producer_result_id WHERE prior.base_result_id IS NOT NULL)"),
     ] {
         let root = fixture._directory.path().join(format!("graph-call-{name}"));
         let restored = AnalysisStore::restore(&backup, &root)?;
@@ -452,6 +464,39 @@ async fn graph_call_reopen_rejects_corruption() -> TestResult {
         drop(restored);
         assert!(AnalysisStore::open(&root).is_err(), "{name}");
     }
+    let root = fixture
+        ._directory
+        .path()
+        .join("graph-call-duplicate-progress");
+    let restored = AnalysisStore::restore(&backup, &root)?;
+    assert!(restored.fault_write(
+        "INSERT INTO graph_progress_values SELECT (SELECT max(value_ref) + 1 FROM graph_progress_values), evidence_id, digest, state FROM graph_progress_values LIMIT 1",
+        &[],
+    ).is_err());
+    let first_result = first.results.values().next().ok_or("first Graph call")?;
+    let other_result = first
+        .results
+        .values()
+        .find(|result| *result != first_result)
+        .ok_or("other Graph call")?;
+    let root = fixture._directory.path().join("graph-call-fresh-base");
+    let restored = AnalysisStore::restore(&backup, &root)?;
+    restored.fault_write(
+        "UPDATE graph_producer_versions SET base_result_id = ? WHERE result_id = ?",
+        &[&other_result.result_id, &first_result.result_id],
+    )?;
+    assert!(restored
+        .managed_evaluation(job.admitted(), &first_result.result_id, &fixture.control)
+        .is_err());
+    let root = fixture._directory.path().join("graph-call-continued-base");
+    let restored = AnalysisStore::restore(&backup, &root)?;
+    restored.fault_write(
+        "UPDATE graph_producer_versions SET base_result_id = NULL WHERE base_result_id IS NOT NULL",
+        &[],
+    )?;
+    assert!(second.results.values().any(|result| restored
+        .managed_evaluation(job.admitted(), &result.result_id, &fixture.control)
+        .is_err()));
     Ok(())
 }
 
@@ -753,7 +798,7 @@ async fn managed_rechecks_keep_heads() -> TestResult {
         valid_from_utc_ns: None,
         valid_until_utc_ns: None,
         sensitivity: araphor_data::ContextSensitivityV1::Tenant,
-        body: serde_json::to_vec(&fact)?,
+        body: fact.encode_context()?,
     };
     facts
         .supplied
@@ -868,6 +913,15 @@ async fn managed_graph_crashes() -> TestResult {
         let job = fixture
             .managed_graph(&grant, &definition, ID, "SELECT * FROM events")
             .await?;
+        let mut package_contexts = job
+            .graph_owner()
+            .ok_or("Graph crash owner")?
+            .packages
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        package_contexts.sort_by(|left, right| left.key.cmp(&right.key));
+        package_contexts.dedup();
         let original = job.admitted().clone();
         let before = fixture.query.store().meta()?;
         let domain = graph_cut(fixture.query.store(), &fixture.source)?;
@@ -1042,9 +1096,23 @@ async fn managed_graph_crashes() -> TestResult {
                 store.package_evidence(source.tenant_id, std::slice::from_ref(&head.result_id))?;
             assert_eq!(witnesses.len(), 3);
             assert_eq!(contexts.len(), 6);
-            assert!(contexts
+            assert!(package_contexts
                 .iter()
-                .all(|reference| reference.commit_revision == receipt.commit_revision));
+                .all(|reference| reference.commit_revision < receipt.commit_revision));
+            let mut expected_contexts = package_contexts.clone();
+            expected_contexts.extend(graph.input_manifest.context.iter().cloned().map(|key| {
+                araphor_data::AnalysisContextRefV1 {
+                    key,
+                    commit_revision: receipt.commit_revision,
+                }
+            }));
+            expected_contexts.sort_by(|left, right| {
+                left.key
+                    .cmp(&right.key)
+                    .then(left.commit_revision.cmp(&right.commit_revision))
+            });
+            expected_contexts.dedup();
+            assert_eq!(contexts, expected_contexts);
             assert_eq!(
                 contexts
                     .iter()
@@ -1259,21 +1327,13 @@ async fn running_graph_reopens() -> TestResult {
         .is_empty());
     let mut reopened = managed_cut(&store, &source, ID, None, 1)?;
     assert_eq!(reopened["meta"][3].as_u64(), Some(completion));
-    assert!(
-        reopened["retained"][0]
-            .as_u64()
-            .ok_or("startup Host logical charge")?
-            > prior["retained"][0]
-                .as_u64()
-                .ok_or("pending Host logical charge")?
-    );
+    assert_eq!(reopened["retained"], prior["retained"]);
     assert_eq!(
         reopened["witnesses"]["read_revision"].as_u64(),
         Some(completion)
     );
     reopened["witnesses"]["read_revision"] = prior["witnesses"]["read_revision"].clone();
     reopened["meta"][3] = prior["meta"][3].clone();
-    reopened["retained"][0] = prior["retained"][0].clone();
     assert_eq!(reopened, prior);
     store.verify_state()?;
     let fixture = Fixture::stored(Target::Wasm, records, _directory, store)?;

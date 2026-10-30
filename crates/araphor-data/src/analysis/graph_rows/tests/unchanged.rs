@@ -12,15 +12,16 @@ fn unchanged_findings_reuse_values_and_membership() -> TestResult {
             method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
             coverage_revision UBIGINT, commit_revision UBIGINT);
          CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY,
-            identity_json VARCHAR, tenant_id BLOB)",
+            identity_json VARCHAR, tenant_id BLOB, cpu_id UINTEGER)",
     )?;
     writer.execute_batch(&GraphRows::schema())?;
     writer.execute(
-        "INSERT INTO source_receipts VALUES (?, ?, ?)",
+        "INSERT INTO source_receipts VALUES (?, ?, ?, ?)",
         params![
             first.scope.identity.key(),
             serde_json::to_string(&first.scope.identity)?,
-            first.scope.identity.tenant_id.as_slice()
+            first.scope.identity.tenant_id.as_slice(),
+            first.input_manifest.evidence[0].cpu_id
         ],
     )?;
     let insert_result = |writer: &Connection, id: &str, revision: u64, graph: &GraphSnapshotV1| {
@@ -42,16 +43,16 @@ fn unchanged_findings_reuse_values_and_membership() -> TestResult {
         Ok::<_, Box<dyn std::error::Error>>(())
     };
     insert_result(&writer, "first", 1, &first)?;
-    GraphRows::insert(&first, &writer, "first")?;
+    NativeRows::insert(&first, &writer, "first")?;
     let finding: (u64, u64, Option<u64>) = writer.query_row(
-        "SELECT value_id, valid_from, valid_to FROM graph_finding_membership",
+        "SELECT value_ref, valid_from, valid_to FROM graph_producer_members WHERE member_kind=4",
         [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
     let branches = {
         let mut statement = writer.prepare(
-            "SELECT ordinal, branch_id, valid_from, valid_to
-             FROM graph_branch_membership ORDER BY ordinal",
+            "SELECT ordinal, value_ref, valid_from, valid_to
+             FROM graph_producer_members WHERE member_kind=6 ORDER BY ordinal",
         )?;
         statement
             .query_map([], |row| {
@@ -87,15 +88,15 @@ fn unchanged_findings_reuse_values_and_membership() -> TestResult {
         commit_revision: 1,
     };
     assert!(matches!(
-        GraphRows::insert_with_reuse(&next, &writer, "next", Some(&wrong)),
+        NativeRows::insert_with_reuse(&next, &writer, "next", Some(&wrong)),
         Err(crate::Error::GraphInvalid {
             field: "graph unchanged finding base",
             ..
         })
     ));
-    GraphRows::insert_with_reuse(&next, &writer, "next", Some(&reference))?;
+    NativeRows::insert_with_reuse(&next, &writer, "next", Some(&reference))?;
     let current_finding: (u64, u64, Option<u64>) = writer.query_row(
-        "SELECT value_id, valid_from, valid_to FROM graph_finding_membership",
+        "SELECT value_ref, valid_from, valid_to FROM graph_producer_members WHERE member_kind=4",
         [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
@@ -104,8 +105,8 @@ fn unchanged_findings_reuse_values_and_membership() -> TestResult {
     assert_eq!(finding.2, None);
     let current_branches = {
         let mut statement = writer.prepare(
-            "SELECT ordinal, branch_id, valid_from, valid_to
-             FROM graph_branch_membership ORDER BY ordinal",
+            "SELECT ordinal, value_ref, valid_from, valid_to
+             FROM graph_producer_members WHERE member_kind=6 ORDER BY ordinal",
         )?;
         statement
             .query_map([], |row| {

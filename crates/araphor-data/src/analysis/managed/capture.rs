@@ -102,6 +102,12 @@ impl AnalysisStore {
                     state.native_graph = native
                         && matches!(&instance.spec.destination,
                             ManagedDestination::Graph { calls, .. } if calls.contains(call));
+                    state.sparse_resume = state.native_graph
+                        && Self::native_graph_call(
+                            reader,
+                            instance.spec.tenant,
+                            &instance.spec.manifest.calls[call],
+                        )?;
                     // The decoded state owns its buffers; the IPC payload has been released.
                     output.input_bytes -= payload;
                     state.reusable = reuse
@@ -118,19 +124,42 @@ impl AnalysisStore {
                         ).context(AnalysisDatabaseSnafu { operation: "bound retained Graph call" })?;
                         let before = output.input_bytes;
                         output.charge(usize::try_from(payload).unwrap_or(usize::MAX))?;
-                        let saved = Self::saved_inputs_from(reader, &instance, &id, control)?;
+                        let saved = Self::saved_inputs_from(
+                            reader,
+                            &instance,
+                            &id,
+                            control,
+                            state.native_graph.then_some((
+                                &instance.spec.manifest.calls[call],
+                                state.sparse_resume,
+                            )),
+                        )?;
                         output.charge(saved.decoding_bytes(control)?)?;
-                        let mut evaluation = saved.decode(control)?;
+                        let mut evaluation = saved.inputs_only(control)?;
                         if state.native_graph {
-                            state.native = Some(crate::analysis::graph_rows::GraphCallRows::load(
-                                reader,
-                                &instance.spec,
-                                *call,
-                                &id,
-                                revision,
-                                &evaluation,
-                                control,
-                            )?);
+                            state.native = Some(if state.sparse_resume {
+                                crate::analysis::graph_rows::GraphCallRows::load_progress(
+                                    reader,
+                                    &instance.spec,
+                                    *call,
+                                    &id,
+                                    revision,
+                                    &evaluation,
+                                    control,
+                                    Some(state.sparse_resume),
+                                )?
+                            } else {
+                                crate::analysis::graph_rows::GraphCallRows::load(
+                                    reader,
+                                    &instance.spec,
+                                    *call,
+                                    &id,
+                                    revision,
+                                    &evaluation,
+                                    control,
+                                    Some(state.sparse_resume),
+                                )?
+                            });
                         }
                         let native_bytes = state.native.as_ref().map_or(
                             0,
@@ -326,11 +355,41 @@ impl AnalysisStore {
                 retained: None,
                 reusable: false,
                 native_graph: false,
+                sparse_resume: false,
                 native: None,
             },
             continuation,
             native,
         ))
+    }
+
+    pub(in crate::analysis) fn native_graph_call(
+        reader: &Connection,
+        tenant: [u8; 16],
+        declaration: &ManagedCall,
+    ) -> Result<bool> {
+        if declaration.target != "wasm" {
+            return Ok(false);
+        }
+        let package = Self::package_from(
+            reader,
+            tenant,
+            &declaration.package.package_id,
+            &declaration.package.revision,
+        )?
+        .ok_or_else(|| Code::Missing.error("Graph built in package"))?;
+        let artifact = package.decode_artifact()?;
+        Ok(match artifact.implementation(&declaration.export)? {
+            crate::PackageImplementationV1::Wasm {
+                artifact: component,
+                ..
+            } => araphor_analysis_builtins::graph::Detector::supports_resume(
+                &artifact.descriptor,
+                &declaration.export,
+                component,
+            ),
+            _ => false,
+        })
     }
 }
 

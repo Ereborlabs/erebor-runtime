@@ -18,6 +18,56 @@ pub struct ProgressRemoval {
 }
 
 impl Progress {
+    pub fn from_evaluation(evaluation: &sdk::Evaluation) -> sdk::Result<Vec<Self>> {
+        let records = Observation::decode(&evaluation.input("records")?.data)?;
+        let facts = Fact::decode(&evaluation.input("facts")?.data)?;
+        let manifests = Manifest::decode(&evaluation.input("manifest")?.data)?;
+        let [manifest] = manifests.as_slice() else {
+            return Err(Computation::invalid("graph progress manifest"));
+        };
+        let mut ids = BTreeSet::new();
+        let mut positions = BTreeSet::new();
+        let source = records.first().map(|record| &record.id.stream);
+        for record in &records {
+            if source != Some(&record.id.stream)
+                || !ids.insert(&record.id)
+                || record.position.commit_revision == 0
+                || !positions.insert(record.position)
+            {
+                return Err(Computation::invalid("graph progress record"));
+            }
+        }
+        let mut by_record = vec![Vec::new(); records.len()];
+        for fact in &facts {
+            let row = by_record
+                .get_mut(fact.record as usize)
+                .ok_or_else(|| Computation::invalid("graph progress fact"))?;
+            row.push(fact);
+        }
+        records
+            .iter()
+            .zip(by_record)
+            .map(|(record, facts)| Self::new(record, manifest.window_ns, &facts))
+            .collect()
+    }
+
+    pub fn output_digest(rows: &[Self]) -> sdk::Result<[u8; 32]> {
+        let mut ordered = BTreeMap::new();
+        for row in rows {
+            if row.digest.len() != 32 || ordered.insert(&row.record, row).is_some() {
+                return Err(Computation::invalid("graph progress output"));
+            }
+        }
+        let mut digest = Sha256::new();
+        ordered
+            .values()
+            .copied()
+            .collect::<Vec<_>>()
+            .serialize(&mut rmp_serde::Serializer::new(&mut digest).with_struct_map())
+            .map_err(|_| Computation::invalid("graph progress output"))?;
+        Ok(digest.finalize().into())
+    }
+
     pub(super) fn new(record: &Observation, window: u64, facts: &[&Fact]) -> sdk::Result<Self> {
         let mut digest = Sha256::new();
         let basis = facts
@@ -34,7 +84,7 @@ impl Progress {
         })
     }
 
-    fn compatible(&self, detector: Detector) -> bool {
+    pub fn compatible(&self, detector: Detector) -> bool {
         self.digest.len() == 32
             && matches!(
                 (detector, self.state.as_deref()),
@@ -66,7 +116,7 @@ impl Computation {
     }
 
     fn resume(&mut self, evaluation: &sdk::Evaluation) -> sdk::Result<Option<Vec<bool>>> {
-        let Some(_) = &evaluation.checkpoint else {
+        let Some(checkpoint) = &evaluation.checkpoint else {
             if !evaluation.previous_outputs.is_empty() {
                 return Err(Self::invalid("graph previous output without checkpoint"));
             }
@@ -74,6 +124,9 @@ impl Computation {
         };
         if evaluation.previous_outputs.is_empty() {
             return Err(Self::invalid("graph checkpoint without previous output"));
+        }
+        if Resume::basis(checkpoint)? == ResumeBasis::Progress {
+            return self.resume_progress(&evaluation.previous_outputs);
         }
         let dataset = |name: &str| {
             evaluation
@@ -412,6 +465,52 @@ impl Computation {
                 .is_some()
             {
                 return Err(Self::invalid("graph previous finding identity"));
+            }
+        }
+        Ok(Some(affected))
+    }
+
+    fn resume_progress(&mut self, previous: &[sdk::Dataset]) -> sdk::Result<Option<Vec<bool>>> {
+        if previous.len() != self.detector.descriptor().exports[0].outputs.len()
+            || previous.iter().any(|data| {
+                data.name != "progress" && data.batches.iter().any(|batch| batch.num_rows() != 0)
+            })
+        {
+            return Err(Self::invalid("graph progress basis output"));
+        }
+        let progress = previous
+            .iter()
+            .find(|data| data.name == "progress")
+            .ok_or_else(|| Self::invalid("graph progress basis output"))
+            .and_then(Progress::decode)?;
+        if !Resume::append_eligible(
+            self.detector,
+            &self.records,
+            &self.facts,
+            &self.manifest,
+            &progress,
+        )? {
+            return Err(Self::invalid("graph progress basis changed"));
+        }
+        let mut affected = vec![true; self.records.len()];
+        let current = self
+            .records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (&record.id, index))
+            .collect::<BTreeMap<_, _>>();
+        for row in progress {
+            let index = *current
+                .get(&row.record)
+                .ok_or_else(|| Self::invalid("graph progress basis record"))?;
+            affected[index] = false;
+            self.progress[index].state = row.state.clone();
+            if self
+                .prior_progress
+                .insert(row.record.clone(), row)
+                .is_some()
+            {
+                return Err(Self::invalid("graph progress basis identity"));
             }
         }
         Ok(Some(affected))

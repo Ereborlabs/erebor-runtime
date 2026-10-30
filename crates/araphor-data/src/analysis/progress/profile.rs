@@ -104,7 +104,7 @@ impl AnalysisStore {
         let mut profile_receipt = None;
         let receipt = self.commit_managed_projection(
             managed,
-            |transaction, _, publication| {
+            |transaction, _, publication, _, _| {
                 let declaration = &managed.attempt.instance().spec.manifest.calls[call];
                 let descriptor =
                     Self::managed_contract(transaction, source.tenant_id, declaration)?;
@@ -348,11 +348,7 @@ impl AnalysisStore {
             ResultHead::Current(packet.head.as_ref()),
             !historical || packet.head == packet.previous,
             Some(&packet.profile.profile),
-            None,
             &packet.profile.contexts,
-            &[],
-            &[],
-            false,
         )
         .map(|write| Some((write, origin)))
     }
@@ -385,10 +381,7 @@ impl AnalysisStore {
             previous,
             true,
             Some(&prepared.profile),
-            None,
             &prepared.contexts,
-            &[],
-            &[],
             &mut check,
         )
     }
@@ -424,10 +417,7 @@ impl AnalysisStore {
             None,
             false,
             Some(&prepared.profile),
-            None,
             &prepared.contexts,
-            &[],
-            &[],
             &mut check,
         )
     }

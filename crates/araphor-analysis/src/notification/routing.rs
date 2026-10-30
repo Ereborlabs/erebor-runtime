@@ -69,7 +69,7 @@ impl NotificationRouter {
         now: u64,
     ) -> Result<usize> {
         let _guard = self.lock()?;
-        self.route_states(tenant, reference, now)
+        self.route_states(tenant, reference, now, None)
             .map(|(count, _)| count)
     }
 
@@ -79,9 +79,32 @@ impl NotificationRouter {
         tenant: [u8; 16],
         reference: &NotificationFindingRefV1,
         now: u64,
+        batch: Option<&FindingBatch>,
     ) -> Result<(usize, Vec<NotificationObligationV1>)> {
         NotificationErrorCodeV1::Invalid.require(now > 0, "finding reference")?;
-        let (finding, revision) = self.store.notification_finding(tenant, reference)?;
+        let (finding, revision) = if let Some((revision, finding)) = batch
+            .and_then(|batch| batch.get(&reference.result_id))
+            .and_then(|(revision, findings)| {
+                findings
+                    .get(&reference.finding_id)
+                    .map(|finding| (revision, finding))
+            }) {
+            let live = self
+                .store
+                .notification_finding_heads(tenant, std::slice::from_ref(&reference.finding_id))?;
+            let current = live.get(&reference.finding_id).ok_or_else(|| {
+                NotificationSnafu {
+                    code: NotificationErrorCodeV1::Denied,
+                    field: "current finding scope",
+                }
+                .build()
+            })?;
+            NotificationErrorCodeV1::Conflict
+                .require(current == &reference.result_id, "current finding reference")?;
+            (finding.clone(), revision.clone())
+        } else {
+            self.store.notification_finding(tenant, reference)?
+        };
         let routes = self.routes(tenant)?;
         self.schedule(&finding, &revision, &reference.result_id, &routes, now)
     }

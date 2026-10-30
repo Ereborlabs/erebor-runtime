@@ -17,7 +17,9 @@ use datafusion::common::{DFSchema, DataFusionError, Result, ScalarValue, Statist
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::interval_arithmetic::Interval;
-use datafusion::logical_expr::{utils::conjunction, Expr, TableProviderFilterPushDown, TableType};
+use datafusion::logical_expr::{
+    utils::conjunction, Expr, Operator, TableProviderFilterPushDown, TableType,
+};
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{analyze, AnalysisContext, EquivalenceProperties, ExprBoundaries};
 use datafusion::physical_plan::coop::cooperative;
@@ -88,6 +90,7 @@ pub(crate) struct ScanBounds {
     pub(crate) events: Option<Vec<(u64, u64)>>,
     pub(crate) windows: Vec<WindowBound>,
     pub(crate) packages: BTreeSet<usize>,
+    pub(crate) context_owners: Option<BTreeSet<String>>,
 }
 
 #[derive(Default)]
@@ -111,6 +114,7 @@ struct SourceScan<'a> {
     complete: bool,
     window: Option<crate::follow::Window>,
     moving: bool,
+    context_seen: bool,
 }
 
 impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
@@ -172,6 +176,29 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
                     .get_or_insert_with(BTreeSet::new)
                     .extend(source.indices.iter().copied());
                 SourceSnapshot::extend_bounds(&mut self.bounds.fields, &source.bounds)?;
+                if matches!(
+                    name,
+                    "context_versions"
+                        | "context"
+                        | "targets"
+                        | "compiled_policies"
+                        | "notification_routes"
+                ) {
+                    let owners = (name == "context_versions")
+                        .then(|| source.context_owners.clone())
+                        .flatten();
+                    if self.context_seen {
+                        self.bounds.context_owners = match (&self.bounds.context_owners, owners) {
+                            (Some(previous), Some(next)) => {
+                                Some(previous.union(&next).cloned().collect())
+                            }
+                            _ => None,
+                        };
+                    } else {
+                        self.bounds.context_owners = owners;
+                        self.context_seen = true;
+                    }
+                }
                 if name == "events" {
                     frame.events = true;
                     self.scanned = true;
@@ -268,6 +295,7 @@ impl SourceSnapshot {
             complete: false,
             window: run.and_then(|run| run.window.clone()),
             moving: run.is_some_and(|run| run.follow || run.managed.is_some()),
+            context_seen: false,
         };
         for plan in plans {
             plan.visit(&mut scan)?;
@@ -504,6 +532,41 @@ pub(crate) struct RetainedSource {
 }
 
 impl SourceProvider {
+    fn context_owner_filter(expression: &Expr) -> Option<BTreeSet<String>> {
+        let owner = |expression: &Expr| matches!(expression, Expr::Column(column) if column.name == "owner_id");
+        let literal = |expression: &Expr| match expression {
+            Expr::Literal(ScalarValue::Utf8(Some(value)), _) => Some(value.clone()),
+            _ => None,
+        };
+        match expression {
+            Expr::InList(list) if !list.negated && owner(&list.expr) => {
+                list.list.iter().map(literal).collect()
+            }
+            Expr::BinaryExpr(binary) if binary.op == Operator::Eq => owner(&binary.left)
+                .then(|| literal(&binary.right))
+                .flatten()
+                .or_else(|| {
+                    owner(&binary.right)
+                        .then(|| literal(&binary.left))
+                        .flatten()
+                })
+                .map(|value| BTreeSet::from([value])),
+            Expr::BinaryExpr(binary) if binary.op == Operator::Or => {
+                let left = Self::context_owner_filter(&binary.left)?;
+                let right = Self::context_owner_filter(&binary.right)?;
+                Some(left.union(&right).cloned().collect())
+            }
+            _ => None,
+        }
+    }
+
+    fn context_owners(filters: &[Expr]) -> Option<BTreeSet<String>> {
+        filters
+            .iter()
+            .filter_map(Self::context_owner_filter)
+            .reduce(|left, right| left.intersection(&right).cloned().collect())
+    }
+
     pub fn local(name: &str, schema: SchemaRef) -> Arc<dyn TableProvider> {
         Arc::new(Self {
             origin: SourceOrigin::Local(name.to_owned()),
@@ -629,14 +692,19 @@ impl TableProvider for SourceProvider {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![
-            if self.origin.durable() == Some("events") {
-                TableProviderFilterPushDown::Inexact
-            } else {
-                TableProviderFilterPushDown::Unsupported
-            };
-            filters.len()
-        ])
+        Ok(filters
+            .iter()
+            .map(|filter| {
+                if self.origin.durable() == Some("events")
+                    || (self.origin.durable() == Some("context_versions")
+                        && Self::context_owner_filter(filter).is_some())
+                {
+                    TableProviderFilterPushDown::Inexact
+                } else {
+                    TableProviderFilterPushDown::Unsupported
+                }
+            })
+            .collect())
     }
 
     async fn scan(
@@ -680,6 +748,9 @@ impl TableProvider for SourceProvider {
             } else {
                 BTreeMap::new()
             },
+            context_owners: (self.origin.durable() == Some("context_versions"))
+                .then(|| Self::context_owners(filters))
+                .flatten(),
             fetch: limit,
         }))
     }
@@ -691,6 +762,7 @@ pub(crate) struct SourceData {
     schema: SchemaRef,
     indices: Vec<usize>,
     bounds: BTreeMap<&'static str, Interval>,
+    context_owners: Option<BTreeSet<String>>,
     fetch: Option<usize>,
 }
 

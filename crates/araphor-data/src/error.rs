@@ -23,6 +23,18 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Managed encoding failed: {source}"))]
+    ManagedEncoding {
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Managed decoding failed: {source}"))]
+    ManagedDecoding {
+        source: rmp_serde::decode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Package context encoding failed: {source}"))]
     PackageContextEncode {
         source: rmp_serde::encode::Error,
@@ -299,6 +311,8 @@ impl Error {
                     | crate::PackageErrorCodeV1::Limit
             ),
             Self::PackageEncoding { .. }
+            | Self::ManagedEncoding { .. }
+            | Self::ManagedDecoding { .. }
             | Self::PackageContextEncode { .. }
             | Self::PackageContextDecode { .. }
             | Self::PackageArrow { .. } => true,
@@ -407,6 +421,8 @@ impl ErrorExt for Error {
                 crate::PackageErrorCodeV1::Incomplete => StatusCode::Unavailable,
             },
             Self::PackageEncoding { .. }
+            | Self::ManagedEncoding { .. }
+            | Self::ManagedDecoding { .. }
             | Self::PackageContextEncode { .. }
             | Self::PackageContextDecode { .. }
             | Self::PackageArrow { .. } => StatusCode::InvalidArguments,
@@ -566,6 +582,10 @@ mod package_tests {
             source: serde_json::from_str::<bool>("invalid")
                 .err()
                 .ok_or("JSON accepted")?,
+            location: snafu::location!(),
+        });
+        semantic.push(Error::ManagedDecoding {
+            source: rmp_serde::decode::Error::Syntax("invalid stored row".into()),
             location: snafu::location!(),
         });
         semantic.push(Error::PackageArrow {

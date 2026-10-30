@@ -144,7 +144,7 @@ pub(in crate::graph) fn fact(
         valid_from_utc_ns: None,
         valid_until_utc_ns: None,
         sensitivity: ContextSensitivityV1::Tenant,
-        body: serde_json::to_vec(&fact).map_err(|_| {
+        body: fact.encode_context().map_err(|_| {
             GraphInvalidSnafu {
                 field: "fixture fact",
             }
@@ -215,7 +215,7 @@ pub(in crate::graph) fn activation(record: &DiscoveryRecordV1) -> Result<Analysi
         valid_from_utc_ns: None,
         valid_until_utc_ns: None,
         sensitivity: ContextSensitivityV1::Tenant,
-        body: serde_json::to_vec(&fact).map_err(|_| {
+        body: fact.encode_context().map_err(|_| {
             GraphInvalidSnafu {
                 field: "activation fixture",
             }

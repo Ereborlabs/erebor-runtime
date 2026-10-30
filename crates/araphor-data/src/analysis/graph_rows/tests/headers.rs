@@ -75,8 +75,8 @@ fn native_header_batch_integrity() -> TestResult {
     ));
     let mutations = [
         "UPDATE analysis_results SET body = 'invalid'::BLOB WHERE result_id = ?".to_owned(),
-        "DELETE FROM graph_subject_membership WHERE lineage_id =
-            (SELECT lineage_id FROM graph_versions WHERE result_id = ?)"
+        "DELETE FROM graph_producer_members WHERE member_kind=2 AND scope_id IN
+            (SELECT v.scope_id FROM graph_result_producers b JOIN graph_producer_versions v ON v.result_id=b.producer_result_id WHERE b.result_id=?)"
             .to_owned(),
     ];
     let mut writer = fixture.store.writer_access()?;
@@ -128,26 +128,27 @@ fn native_header_shape_rejects_missing_values_and_duplicate_subjects() -> TestRe
     }
     let transaction = writer.get_mut()?.transaction()?;
     let (lineage, first, last): (u64, u64, u64) = transaction.query_row(
-        "SELECT m.lineage_id, min(m.subject_id), max(m.subject_id)
-         FROM graph_subject_membership m
-         JOIN graph_versions v ON v.lineage_id = m.lineage_id
-         WHERE v.result_id = ? GROUP BY m.lineage_id",
+        "SELECT m.scope_id,min(m.value_ref),max(m.value_ref)
+         FROM graph_producer_members m JOIN graph_producer_versions v USING(scope_id)
+         JOIN graph_result_producers b ON b.producer_result_id=v.result_id
+         WHERE b.result_id=? AND m.member_kind=2 AND m.valid_from<=v.commit_revision
+             AND (m.valid_to IS NULL OR m.valid_to>v.commit_revision) GROUP BY m.scope_id",
         params![result],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
     assert_ne!(first, last);
     transaction.execute(
-        "DELETE FROM graph_subject_membership WHERE lineage_id = ? AND subject_id = ?",
+        "DELETE FROM graph_producer_members WHERE member_kind=2 AND scope_id=? AND value_ref=?",
         params![lineage, last],
     )?;
     transaction.execute(
-        "INSERT INTO graph_subject_membership VALUES (?, ?, 0, NULL)",
+        "INSERT INTO graph_producer_members VALUES (?,2,from_hex('00'),?,NULL,NULL,NULL,0,0,NULL)",
         params![lineage, first],
     )?;
     assert!(matches!(
-        GraphRows::stored_shape(&transaction, result),
+        GraphRows::read_header(&transaction, tenant, result),
         Err(crate::Error::GraphInvalid {
-            field: "duplicate graph subject membership",
+            field: "graph row counts",
             ..
         })
     ));

@@ -1,9 +1,11 @@
+use super::codec::ManagedCodec;
 use std::collections::BTreeMap;
 
 use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, Transaction};
 use snafu::ResultExt as _;
 
+use super::super::context::VerifiedPackages;
 use super::super::{AnalysisStore, PackageResultRefV1};
 use super::model::*;
 use crate::{
@@ -100,7 +102,7 @@ impl AnalysisStore {
             receipt: None,
             terminal: None,
         };
-        let bytes = serde_json::to_vec(&attempt).context(crate::PackageEncodingSnafu)?;
+        let bytes = ManagedCodec::encode(&attempt).context(crate::ManagedEncodingSnafu)?;
         transaction
             .execute(
                 "INSERT INTO managed_attempts VALUES (?, ?, ?, ?, ?, 0)",
@@ -147,7 +149,7 @@ impl AnalysisStore {
         if input.attempt.1.spec.destination != ManagedDestination::Selected {
             return Err(Code::Invalid.error("managed selected destination"));
         }
-        self.commit_managed_projection(input, |_, _, _| Ok((Vec::new(), None)), check)
+        self.commit_managed_projection(input, |_, _, _, _, _| Ok((Vec::new(), None)), check)
     }
 
     pub(in crate::analysis) fn commit_managed_projection(
@@ -157,6 +159,8 @@ impl AnalysisStore {
             &Transaction<'_>,
             u64,
             &ManagedReceipt,
+            (&[crate::AnalysisWitnessV1], &[u64]),
+            &mut VerifiedPackages,
         ) -> Result<(Vec<&'static str>, Option<PackageResultRefV1>)>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<ManagedReceipt> {
@@ -202,6 +206,8 @@ impl AnalysisStore {
             &Transaction<'_>,
             u64,
             &ManagedReceipt,
+            (&[crate::AnalysisWitnessV1], &[u64]),
+            &mut VerifiedPackages,
         ) -> Result<(Vec<&'static str>, Option<PackageResultRefV1>)>,
     ) -> Result<(ManagedReceipt, Vec<&'static str>)> {
         if input.now_utc_ns < input.attempt.request().time_utc_ns {
@@ -227,8 +233,12 @@ impl AnalysisStore {
         self.check_managed_claim(input.attempt)?;
         let (packets, mut step, selected, mut receipt) =
             self.prepare_managed(transaction, &attempt, input, revision)?;
-        self.check_managed_capture(transaction, &attempt.capture, input.now_utc_ns)?;
+        let mut verified =
+            self.check_managed_capture(transaction, &attempt.capture, input.now_utc_ns)?;
         let segments = self.resolve_witnesses(&attempt.capture.witnesses, revision - 1)?;
+        if segments.len() != attempt.capture.witnesses.len() {
+            return Err(Code::Invalid.error("managed witness segments"));
+        }
         if attempt.capture.generation != attempt.capture.expected_generation {
             transaction
                 .execute(
@@ -258,7 +268,13 @@ impl AnalysisStore {
         for packet in packets {
             self.insert_managed(transaction, spec, packet, revision, &segments)?;
         }
-        let (projected, graph) = project(transaction, revision, &receipt)?;
+        let (projected, graph) = project(
+            transaction,
+            revision,
+            &receipt,
+            (&attempt.capture.witnesses, &segments),
+            &mut verified,
+        )?;
         if let Some(reference) = &graph {
             let ManagedDestination::Graph { source, .. } = &spec.destination else {
                 return Err(Code::Invalid.error("managed Graph publication destination"));
@@ -295,7 +311,7 @@ impl AnalysisStore {
             })?;
         attempt.receipt = Some(receipt.clone());
         transaction.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ?",
-            params![serde_json::to_vec(&attempt).context(crate::PackageEncodingSnafu)?, revision, spec.tenant.as_slice(), spec.id, attempt.request.id])
+            params![ManagedCodec::encode(&attempt).context(crate::ManagedEncodingSnafu)?, revision, spec.tenant.as_slice(), spec.id, attempt.request.id])
             .context(AnalysisDatabaseSnafu { operation: "complete managed attempt" })?;
         Ok((receipt, projected))
     }
@@ -316,7 +332,8 @@ impl AnalysisStore {
         reader: &Connection,
         capture: &Capture,
         now: u64,
-    ) -> Result<()> {
+    ) -> Result<VerifiedPackages> {
+        let mut verified = VerifiedPackages::default();
         let instance = Self::managed_instance_from(reader, capture.tenant, &capture.instance)?
             .ok_or_else(|| Code::Missing.error("managed capture instance"))?;
         let spec = Self::managed_version_from(
@@ -385,7 +402,7 @@ impl AnalysisStore {
         Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, &control)?;
         for reference in &capture.contexts {
             if self
-                .read_context_cached_from(reader, &self.root, &reference.key)?
+                .read_context_verified_from(reader, &self.root, &reference.key, &mut verified)?
                 .is_none_or(|(_, revision)| revision != reference.commit_revision)
             {
                 return crate::AnalysisConflictSnafu.fail();
@@ -410,7 +427,7 @@ impl AnalysisStore {
         }) {
             return Err(Code::Incomplete.error("managed witness lifetime"));
         }
-        Ok(())
+        Ok(verified)
     }
 
     fn prepare_managed(
@@ -491,16 +508,33 @@ impl AnalysisStore {
             let checked = descriptor
                 .check_evaluation(evaluation)
                 .context(crate::AnalysisContractSnafu)?;
+            let sparse = input
+                .attempt
+                .3
+                .get(&returned.call)
+                .is_some_and(|prior| prior.sparse_resume)
+                && evaluation.checkpoint.as_ref().is_some_and(|checkpoint| {
+                    matches!(
+                        araphor_analysis_builtins::graph::Resume::basis(checkpoint),
+                        Ok(araphor_analysis_builtins::graph::ResumeBasis::Progress)
+                    )
+                });
+            let input_basis = match (&evaluation.checkpoint, sparse) {
+                (None, _) => InputBasis::None,
+                (Some(_), true) => InputBasis::Progress,
+                (Some(_), false) => InputBasis::Complete,
+            };
             let expected = input
                 .attempt
                 .3
                 .get(&returned.call)
                 .map(|prior| {
-                    prior.state(
+                    prior.state_sparse(
                         checked.model(),
                         &evaluation.inputs,
                         evaluation.parameters.as_ref(),
                         attempt.request.rebuild,
+                        sparse,
                     )
                 })
                 .transpose()?
@@ -606,6 +640,7 @@ impl AnalysisStore {
                 attempt: attempt.request.id.clone(),
                 declaration: declaration.clone(),
                 context,
+                input_basis,
                 parameters,
                 inputs: input_shapes,
                 dependencies,
@@ -713,7 +748,7 @@ impl AnalysisStore {
             )?;
         }
         transaction.execute("INSERT INTO analysis_results (result_id, tenant_id, processor_id, body, request_meta, commit_revision) VALUES (?, ?, 'managed-package-v1', ?, ?, ?)",
-            params![packet.id, spec.tenant.as_slice(), serde_json::to_vec(&packet.output).context(crate::PackageEncodingSnafu)?, serde_json::to_vec(&packet.record).context(crate::PackageEncodingSnafu)?, revision])
+            params![packet.id, spec.tenant.as_slice(), ManagedCodec::encode(&packet.output).context(crate::ManagedEncodingSnafu)?, ManagedCodec::encode(&packet.record).context(crate::ManagedEncodingSnafu)?, revision])
             .context(AnalysisDatabaseSnafu { operation: "insert complete managed result" })?;
         Self::insert_managed_edges(
             transaction,
@@ -744,7 +779,7 @@ impl AnalysisStore {
     ) -> Result<()> {
         Self::insert_managed_arrow(transaction, id, "selected", 0, &mut selected.arrow_ipc)?;
         transaction.execute("INSERT INTO analysis_results (result_id, tenant_id, processor_id, body, request_meta, commit_revision) VALUES (?, ?, 'managed-definition-v1', ?, ?, ?)",
-            params![id, spec.tenant.as_slice(), serde_json::to_vec(&selected).context(crate::PackageEncodingSnafu)?, serde_json::to_vec(&step).context(crate::PackageEncodingSnafu)?, revision])
+            params![id, spec.tenant.as_slice(), ManagedCodec::encode(&selected).context(crate::ManagedEncodingSnafu)?, ManagedCodec::encode(&step).context(crate::ManagedEncodingSnafu)?, revision])
             .context(AnalysisDatabaseSnafu { operation: "insert selected managed relation" })?;
         Self::insert_managed_edges(transaction, spec.tenant, id, &step.dependencies)
     }

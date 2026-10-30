@@ -5,6 +5,8 @@ use snafu::ResultExt as _;
 
 use super::*;
 
+type StoredContextRow = (Vec<u8>, String, Vec<u8>, Vec<u8>, u64, ContextRow);
+
 impl AnalysisStore {
     pub fn context_tenant_page(
         &self,
@@ -95,9 +97,19 @@ impl AnalysisStore {
         root: &Path,
         key: &AnalysisContextKeyV1,
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
+        self.read_context_verified_from(connection, root, key, &mut VerifiedPackages::default())
+    }
+
+    pub(in crate::analysis) fn read_context_verified_from(
+        &self,
+        connection: &Connection,
+        root: &Path,
+        key: &AnalysisContextKeyV1,
+        verified: &mut VerifiedPackages,
+    ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         Self::read_context_row_from(connection, root, key)?
             .map(|result| {
-                self.check_cached_provenance(connection, &result.0)?;
+                self.check_cached_provenance_with(connection, &result.0, verified)?;
                 Ok(result)
             })
             .transpose()
@@ -109,7 +121,7 @@ impl AnalysisStore {
         key: &AnalysisContextKeyV1,
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         let version_key = super::version_key(key)?;
-        let stored: Option<(Vec<u8>, String, Vec<u8>, Vec<u8>, u64, ContextRow)> = connection
+        let stored: Option<StoredContextRow> = connection
             .prepare_cached(
                 "SELECT tenant_id, owner_id, entity_key, lifetime_key, owner_revision,
                     valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision

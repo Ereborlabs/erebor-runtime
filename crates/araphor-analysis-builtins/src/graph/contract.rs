@@ -89,6 +89,19 @@ impl ReasonDetails {
 }
 
 impl Detector {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn supports_resume(package: &sdk::Package, export: &str, component: &[u8]) -> bool {
+        let Ok(detector) = Self::from_id(&package.id) else {
+            return false;
+        };
+        let expected = match detector {
+            Self::Process => crate::components::PROCESS,
+            Self::Credentials => crate::components::CREDENTIALS,
+            Self::Kubernetes => crate::components::KUBERNETES,
+        };
+        export == "detect" && package == &detector.descriptor() && component == expected
+    }
+
     pub fn supports(model: &sdk::Model) -> bool {
         let expected = Self::Process.descriptor();
         let expected = &expected.exports[0];
@@ -184,7 +197,7 @@ impl Detector {
         model.checkpoint = Some(sdk::CheckpointSpec {
             resume_input_changes: true,
             version: 1,
-            datasets: vec![GraphPackageStateV1::port()],
+            datasets: vec![GraphPackageStateV1::port(), Resume::port()],
         });
         sdk::Package::new(self.id(), "1", vec![model])
     }

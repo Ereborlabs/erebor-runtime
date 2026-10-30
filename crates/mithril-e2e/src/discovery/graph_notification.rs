@@ -770,6 +770,7 @@ impl GraphNotificationQualification {
         let authority = Arc::new(ConfiguredNotificationAuthority::new(
             store.clone(),
             &grants,
+            None,
         )?);
         let router = NotificationRouter::new(data, authority)?;
         router.route(graph, now)?;
@@ -871,6 +872,7 @@ impl GraphNotificationQualification {
         let authority = Arc::new(ConfiguredNotificationAuthority::new(
             store.clone(),
             &grants,
+            None,
         )?);
         let router = NotificationRouter::new(data.clone(), authority)?;
         let before: NotificationObligationV1 =

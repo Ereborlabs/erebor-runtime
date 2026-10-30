@@ -1,7 +1,20 @@
 use super::*;
-use crate::analysis::graph_rows::{tests::fixture::CommitFixture, CanonicalGraph, GraphRows};
+use crate::analysis::graph_rows::{
+    tests::fixture::CommitFixture, CanonicalGraph, GraphCallState, GraphRows,
+};
 
 fn fixture() -> TestResult<(CommitFixture, Fixture)> {
+    fixture_with_unused_call(false)
+}
+
+fn fixture_with_unused_call(unused_call: bool) -> TestResult<(CommitFixture, Fixture)> {
+    fixture_with_calls(unused_call, true)
+}
+
+fn fixture_with_calls(
+    unused_call: bool,
+    graph_producer: bool,
+) -> TestResult<(CommitFixture, Fixture)> {
     let graph = CommitFixture::new()?;
     let source = graph.snapshot.scope.identity.clone();
     let mut fixture = Fixture::admit_scope(
@@ -13,10 +26,61 @@ fn fixture() -> TestResult<(CommitFixture, Fixture)> {
     spec.id = "graph-prefix".into();
     spec.destination = ManagedDestination::Graph {
         source,
-        calls: BTreeSet::from([10, 11]),
+        calls: if graph_producer {
+            BTreeSet::from([10, 11, 13])
+        } else {
+            BTreeSet::from([10, 11])
+        },
         operation: ManagedGraphOperation::Evaluate,
         events_sql: "SELECT * FROM events".into(),
     };
+    let descriptor = araphor_analysis_builtins::graph::Detector::Process.descriptor();
+    let export = descriptor.exports[0].name.clone();
+    let artifact = PackageArtifactV1 {
+        descriptor,
+        implementations: vec![PackageImplementationV1::Sql {
+            export: export.clone(),
+            program: SqlModelV1::default(),
+        }],
+        fixtures: Vec::new(),
+    };
+    let image = crate::PackageBundle::try_from(PackageBundleV1 {
+        schema_version: 1,
+        root: artifact.reference(),
+        artifacts: vec![artifact],
+    })?;
+    graph
+        .store
+        .install_package_image(spec.tenant, &image, || Ok(()))?;
+    let pin = ImagePin {
+        image: image.bundle().root.clone(),
+        digest: image.digest().into(),
+    };
+    let mut call = spec.manifest.calls[&10].clone();
+    call.image = pin.clone();
+    call.package = image.bundle().root.clone();
+    call.export = export;
+    call.arguments.clear();
+    call.target = "sql".into();
+    call.artifact = None;
+    call.dependencies.clear();
+    if graph_producer {
+        spec.manifest.calls.insert(13, call.clone());
+    }
+    if unused_call {
+        spec.manifest.calls.insert(12, call);
+    }
+    let mut images = spec.definition.images.clone();
+    images.push(pin);
+    spec.definition = ResolvedDefinition::new(
+        spec.definition.definition.clone(),
+        spec.definition.sql.clone(),
+        images,
+    )?;
+    spec.manifest.definition = spec.definition.digest()?;
+    graph
+        .store
+        .admit_definition(spec.tenant, &spec.definition, || Ok(()))?;
     fixture.instance = graph
         .store
         .admit_managed(&spec, &fixture.instance.grant, || Ok(()))?;
@@ -28,6 +92,76 @@ fn fixture() -> TestResult<(CommitFixture, Fixture)> {
         || Ok(()),
     )?;
     Ok((graph, fixture))
+}
+
+#[test]
+fn graph_reopen_uses_selected_call_subset() -> TestResult {
+    let (graph, fixture) = fixture_with_unused_call(true)?;
+    let captured = read(&graph, &mode(&fixture, true))?;
+    let attempt = graph
+        .store
+        .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
+    let receipt = publish(&graph, &fixture, &captured, &attempt, None)?;
+    assert_eq!(receipt.results.len(), 3);
+    assert!(receipt.results.contains_key(&13));
+    assert!(!receipt.results.contains_key(&12));
+    let root = graph._directory.path().join("analysis");
+    let CommitFixture {
+        store,
+        _graph,
+        _directory,
+        ..
+    } = graph;
+    drop(_graph);
+    drop(store);
+    let reopened = AnalysisStore::open(&root)?;
+    let saved = reopened
+        .managed_attempt(
+            fixture.instance.spec.tenant,
+            &fixture.instance.spec.id,
+            &attempt.request().id,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("reopened managed Graph attempt")?;
+    assert_eq!(saved.receipt(), Some(&receipt));
+    Ok(())
+}
+
+#[test]
+fn graph_publication_requires_a_graph_producer() -> TestResult {
+    let (graph, fixture) = fixture_with_calls(false, false)?;
+    let captured = read(&graph, &mode(&fixture, true))?;
+    let attempt = graph
+        .store
+        .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
+    let before = fixture.commit_state(&graph.store)?;
+    let error = publish(&graph, &fixture, &captured, &attempt, None)
+        .err()
+        .ok_or("Graph publication without a producer succeeded")?;
+    assert!(matches!(
+        error.downcast_ref::<crate::Error>(),
+        Some(crate::Error::GraphInvalid {
+            field: "graph producer is absent",
+            ..
+        })
+    ));
+    assert_eq!(fixture.commit_state(&graph.store)?, before);
+    assert!(graph
+        .store
+        .processor_result(&graph.snapshot.scope)?
+        .is_none());
+    assert!(graph
+        .store
+        .managed_attempt(
+            fixture.instance.spec.tenant,
+            &fixture.instance.spec.id,
+            &attempt.request().id,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("registered managed attempt absent")?
+        .receipt()
+        .is_none());
+    Ok(())
 }
 
 fn read(graph: &CommitFixture, mode: &ManagedRead) -> TestResult<ManagedCapture> {
@@ -100,6 +234,65 @@ fn input(graph: &CommitFixture) -> ManagedRequest {
     input
 }
 
+fn empty_dataset(port: &sdk::Port) -> sdk::Dataset {
+    sdk::Dataset {
+        name: port.name.clone(),
+        batches: vec![sdk::RecordBatch::new_empty(Arc::new(port.schema.clone()))],
+    }
+}
+
+fn graph_evaluation(request: &ManagedRequest) -> TestResult<sdk::Evaluation> {
+    let inputs = araphor_analysis_builtins::graph::Detector::inputs()
+        .iter()
+        .map(|port| sdk::Input {
+            data: empty_dataset(port),
+            revision: sdk::Revision {
+                owner: "fixture".into(),
+                id: format!("graph-{}", port.name),
+                window: None,
+            },
+            coverage: sdk::Coverage {
+                state: sdk::CoverageState::Complete,
+                limits: Vec::new(),
+            },
+        })
+        .collect();
+    Ok(sdk::Evaluation {
+        export: "detect".into(),
+        inputs,
+        parameters: None,
+        checkpoint: None,
+        previous_outputs: Vec::new(),
+        context: sdk::EvaluationContext {
+            id: request.id.clone(),
+            time_utc_ns: request.time_utc_ns as i64,
+            seed: request.seed,
+        },
+    })
+}
+
+fn graph_output() -> TestResult<sdk::Output> {
+    let model = &araphor_analysis_builtins::graph::Detector::Process
+        .descriptor()
+        .exports[0];
+    let state = GraphCallState {
+        subjects: BTreeMap::new(),
+        edges: BTreeMap::new(),
+        findings: BTreeMap::new(),
+        progress: BTreeMap::new(),
+    };
+    let checkpoint = model.checkpoint.as_ref().ok_or("Graph checkpoint absent")?;
+    Ok(sdk::Output {
+        datasets: state.outputs()?,
+        evidence: Vec::new(),
+        reasons: Vec::new(),
+        checkpoint: Some(sdk::Checkpoint {
+            version: checkpoint.version,
+            datasets: checkpoint.datasets.iter().map(empty_dataset).collect(),
+        }),
+    })
+}
+
 fn publish(
     graph: &CommitFixture,
     fixture: &Fixture,
@@ -107,17 +300,23 @@ fn publish(
     attempt: &ManagedAttempt,
     source_revision: Option<u64>,
 ) -> TestResult<ManagedReceipt> {
-    let evaluations = [
+    let mut evaluations = vec![
         fixture.evaluation(attempt.request(), 10, Some(captured))?,
         fixture.evaluation(attempt.request(), 11, Some(captured))?,
     ];
-    let outputs = [fixture.output(2)?, fixture.output(3)?];
+    let mut outputs = vec![fixture.output(2)?, fixture.output(3)?];
+    let mut calls = vec![10, 11];
+    if fixture.instance.spec.manifest.calls.contains_key(&13) {
+        evaluations.push(graph_evaluation(attempt.request())?);
+        outputs.push(graph_output()?);
+        calls.push(13);
+    }
     let returns = evaluations
         .iter()
         .zip(&outputs)
-        .enumerate()
-        .map(|(index, (evaluation, output))| ManagedReturn {
-            call: 10 + index as u64,
+        .zip(calls)
+        .map(|((evaluation, output), call)| ManagedReturn {
+            call,
             evaluation,
             output,
             retained: None,
@@ -144,11 +343,12 @@ fn publish(
         },
         Some(crate::analysis::graph::GraphCommit {
             request,
-            graph: CanonicalGraph::new(graph.snapshot.clone())?,
+            metadata: crate::analysis::graph::GraphManifest::from_snapshot(&graph.snapshot),
             contexts: Vec::new(),
             proofs: Vec::new(),
             sources,
             advance: true,
+            expire: false,
         }),
         || Ok(()),
     )?;
@@ -182,7 +382,7 @@ fn graph_follow_retains_prefix() -> TestResult {
                 fixture.current(&graph.store)?.progress,
                 receipt.commit_revision
             );
-            assert_eq!(receipt.results.len(), 2);
+            assert_eq!(receipt.results.len(), 3);
             assert_eq!(
                 receipt.graph,
                 Some(crate::analysis::PackageResultRefV1 {
@@ -247,6 +447,17 @@ fn graph_empty_step_has_no_publication() -> TestResult {
     let attempt = graph
         .store
         .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
+    let mut selection = fixture.instance.grant.selection.clone();
+    selection.select_graphs(crate::Selection::All, None)?;
+    let tables = AnalysisTableRequests::from([
+        ("events".into(), None),
+        ("graph_manifest".into(), None),
+        ("graph_state".into(), None),
+    ]);
+    let control = AnalysisReadControl::default();
+    let before = graph
+        .store
+        .dependency_revision_for(&selection, &tables, &control)?;
     let selected = sdk::Dataset {
         name: "selected".into(),
         batches: Vec::new(),
@@ -266,6 +477,11 @@ fn graph_empty_step_has_no_publication() -> TestResult {
     assert!(receipt.results.is_empty());
     assert!(receipt.graph.is_none());
     assert!(graph_result.is_none());
+    let after = graph
+        .store
+        .dependency_revision_for(&selection, &tables, &control)?;
+    assert!(after.0.commit_revision > before.0.commit_revision);
+    assert_eq!(after.1, before.1);
     assert!(matches!(
         graph.store.managed_query_output(
             &fixture.instance.grant.selection,
@@ -396,7 +612,7 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
                     params![receipt.selected.result_id],
                     |row| row.get(0),
                 )?;
-                let mut step: model::Step = serde_json::from_slice(&metadata)?;
+                let mut step: model::Step = ManagedCodec::decode(&metadata)?;
                 *step
                     .dependencies
                     .iter_mut()
@@ -406,7 +622,7 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
                     .sort_by(|left, right| left.result_id.cmp(&right.result_id));
                 writer.execute(
                     "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
-                    params![serde_json::to_vec(&step)?, receipt.selected.result_id],
+                    params![ManagedCodec::encode(&step)?, receipt.selected.result_id],
                 )?;
                 writer.execute(
                     "UPDATE managed_edges SET dependency_id = ?, commit_revision = ?
@@ -425,13 +641,13 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
                     params![fixture.instance.spec.id, attempt.request().id],
                     |row| row.get(0),
                 )?;
-                let mut saved: model::Attempt = serde_json::from_slice(&metadata)?;
+                let mut saved: model::Attempt = ManagedCodec::decode(&metadata)?;
                 saved.receipt.as_mut().ok_or("saved Graph receipt")?.graph = Some(later);
                 writer.execute(
                     "UPDATE managed_attempts SET contract = ?
                      WHERE instance_id = ? AND attempt_id = ?",
                     params![
-                        serde_json::to_vec(&saved)?,
+                        ManagedCodec::encode(&saved)?,
                         fixture.instance.spec.id,
                         attempt.request().id
                     ],

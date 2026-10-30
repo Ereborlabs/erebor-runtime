@@ -222,23 +222,30 @@ async fn failed_graph_disables_reuse() -> TestResult {
             .find(|model| model.name == retained.evaluation.export)
             .ok_or("retained Graph model")?;
         let mut evaluation = retained.evaluation.clone();
-        let (checkpoint, previous_outputs) = prior.state(
+        let (checkpoint, previous_outputs) = prior.state_sparse(
             model,
             &evaluation.inputs,
             evaluation.parameters.as_ref(),
             false,
+            true,
         )?;
         assert!(checkpoint.is_some());
         assert_eq!(previous_outputs.len(), model.outputs.len());
-        let findings = previous_outputs
-            .iter()
-            .find(|data| data.name == "findings")
-            .ok_or("normalized Graph findings")?;
-        assert!(
-            araphor_analysis_builtins::graph::FindingChange::decode(findings)?
-                .iter()
-                .all(|finding| finding.prior_reason.is_some())
+        assert_eq!(
+            araphor_analysis_builtins::graph::Resume::basis(
+                checkpoint.as_ref().ok_or("Graph checkpoint")?
+            )?,
+            araphor_analysis_builtins::graph::ResumeBasis::Progress
         );
+        let progress = previous_outputs
+            .iter()
+            .find(|data| data.name == "progress")
+            .ok_or("normalized Graph progress")?;
+        assert!(!araphor_analysis_builtins::graph::Progress::decode(progress)?.is_empty());
+        assert!(previous_outputs
+            .iter()
+            .filter(|data| data.name != "progress")
+            .all(|data| data.rows() == 0));
         evaluation.checkpoint = checkpoint;
         evaluation.previous_outputs = previous_outputs;
         let actual = descriptor.check_evaluation(&evaluation)?.encode()?;

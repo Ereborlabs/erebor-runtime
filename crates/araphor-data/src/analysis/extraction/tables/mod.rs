@@ -104,7 +104,7 @@ impl<'a> Capture<'a> {
             || self.read.inputs.is_some()
             || self.scope.tenant_id != source.tenant_id
             || self.scope.sources.as_slice() != std::slice::from_ref(source)
-            || !self.read.projects_field("graph_manifest", "snapshot")
+            || !self.read.projects_field("graph_manifest", "metadata")
             || !self.read.projects_field("graph_manifest", "context_refs")
             || !self.read.requests.contains_key("graph_state")
             || self

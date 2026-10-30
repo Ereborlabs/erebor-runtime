@@ -18,7 +18,6 @@ const SCOPE: &str = "qualified-context";
 pub(super) struct ContextComponent {
     execution: InstalledAnalysis,
     tenant: [u8; 16],
-    limits: sdk::Limits,
 }
 
 struct Authority {
@@ -42,7 +41,6 @@ impl ContextComponent {
             ]),
         );
         let model = sdk::Model::new("echo-inputs", vec![port.clone()], vec![port, metadata]);
-        let limits = model.limits;
         let descriptor = sdk::Package::new("context-fixture", "1", vec![model]);
         let artifact = PackageArtifactV1 {
             descriptor,
@@ -85,7 +83,6 @@ impl ContextComponent {
         Ok(Self {
             execution: InstalledAnalysis::new(owner, SCOPE)?,
             tenant,
-            limits,
         })
     }
 
@@ -99,7 +96,6 @@ impl ContextComponent {
                 id: input.revision.id.clone(),
                 time_utc_ns: 3000,
                 seed: Some(7),
-                limits: self.limits,
             },
             checkpoint: None,
         };

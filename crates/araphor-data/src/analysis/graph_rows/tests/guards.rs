@@ -67,14 +67,21 @@ fn graph_authority_rolls_back() -> TestResult {
         let writer = fixture.store.writer_access()?;
         for table in [
             "analysis_results",
-            "graph_subjects",
-            "graph_relationships",
-            "graph_edge_properties",
+            "graph_sources",
+            "graph_evidence",
+            "graph_producer_scopes",
+            "graph_producer_versions",
+            "graph_producer_members",
+            "graph_result_producers",
+            "graph_versions",
+            "graph_subject_values",
             "graph_edge_values",
-            "graph_edge_membership",
-            "graph_findings",
+            "graph_edge_properties",
+            "graph_progress_values",
+            "graph_position_values",
+            "graph_branch_values",
+            "graph_fact_values",
             "graph_finding_values",
-            "graph_finding_membership",
             "evidence_refs",
             "context_refs",
         ] {
@@ -126,6 +133,19 @@ fn graph_retry_checks_authority() -> TestResult {
             .commit_graph(&fixture.request, true, || Ok(()))?,
         receipt
     );
+    let mut changed_expected = fixture.request.clone();
+    changed_expected.expected_cursor = changed_expected.consumed_cursor;
+    let mut changed_coverage = fixture.request.clone();
+    changed_coverage.coverage_revision += 1;
+    let mut changed_time = fixture.request.clone();
+    changed_time.created_utc_ns += 1;
+    for changed in [changed_expected, changed_coverage, changed_time] {
+        assert!(matches!(
+            fixture.store.commit_graph(&changed, true, || Ok(())),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        assert_eq!(fixture.store.meta()?, before);
+    }
     Ok(())
 }
 

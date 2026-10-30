@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, Weak};
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use araphor_analysis_builtins::graph::Detector;
@@ -18,22 +19,27 @@ use datafusion::datasource::view::ViewTable;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::{Extension, LogicalPlan};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::sql::sqlparser::ast::Statement;
 use tokio::sync::OnceCell;
 
 use crate::{Graph, Result};
 
 mod capture;
 mod commit;
-pub(crate) use commit::GraphConversion;
 mod managed;
 mod node;
 mod program;
+pub(crate) use commit::GraphConversion;
 
 #[cfg(test)]
 mod tests;
 
 pub trait GraphFacts: Send + Sync {
+    /// List every context owner used for proof input or saved Graph facts.
+    /// Return None to read all context owners.
+    fn context_owners(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+
     fn facts(
         &self,
         contexts: &[sdk::RecordBatch],
@@ -49,6 +55,8 @@ pub struct GraphPublication {
     prepared: PreparedDefinition,
     feedback: bool,
     calls: BTreeMap<u64, PackageCall>,
+    packages: BTreeMap<u64, AnalysisContextRefV1>,
+    sparse: BTreeSet<u64>,
     projection: Arc<Projection>,
 }
 
@@ -76,9 +84,12 @@ struct Capture {
     positions: Vec<(araphor_data::DiscoveryRecordIdV1, StorePositionV1)>,
     heads: Vec<Head>,
     proofs: Vec<AnalysisContextRefV1>,
+    fact_refs: Vec<AnalysisContextRefV1>,
+    contexts: Vec<AnalysisContextVersionV1>,
     consumed: u64,
     accepted: u64,
     coverage_revision: u64,
+    recheck: bool,
     now: u64,
     inputs: Vec<sdk::Input>,
     _memory: MemoryReservation,
@@ -89,7 +100,7 @@ struct Head {
     first: u64,
     deadline: u64,
     coverage: u64,
-    packages: std::collections::BTreeSet<araphor_data::AnalysisContextKeyV1>,
+    packages: BTreeSet<araphor_data::AnalysisContextKeyV1>,
     reusable: bool,
 }
 
@@ -121,6 +132,10 @@ impl GraphPublication {
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Graph preparation binds the admitted inputs, package definition, and authority."
+    )]
     async fn prepare_on(
         mut session: Session,
         authority: Arc<dyn PackageAuthorization>,
@@ -129,11 +144,14 @@ impl GraphPublication {
         feedback: bool,
         definition: DefinitionRef<'_>,
         facts: Arc<dyn GraphFacts>,
-        compile_inputs: bool,
+        compile: bool,
     ) -> Result<Self> {
         let mut selection = session.selection().clone();
         selection.sources = grant.selection.sources.clone();
         if selection != grant.selection
+            || !grant.selection.binding_ids.is_empty()
+            || grant.selection.graph_traversal().is_some()
+            || !grant.selection.contexts.is_all()
             || (!grant.selection.sources.is_all()
                 && (session.selection().sources.is_all()
                     || session
@@ -142,9 +160,6 @@ impl GraphPublication {
                         .as_slice()
                         .iter()
                         .any(|source| !grant.selection.sources.as_slice().contains(source))))
-            || !grant.selection.binding_ids.is_empty()
-            || grant.selection.graph_traversal().is_some()
-            || !grant.selection.contexts.is_all()
         {
             return Err(Code::Denied.error("complete graph source scope").into());
         }
@@ -160,58 +175,74 @@ impl GraphPublication {
         })
         .await?;
         let query = Arc::clone(session.engine());
-        let mut range_session = session.clone();
-        range_session.register_table(
-            "__graph_selected_events",
-            Arc::new(ViewTable::new(events.clone(), None)),
-        )?;
         let coverage = query
             .prepare("SELECT * FROM graph_coverage", Vec::new())
             .await?
             .0;
-        range_session.register_table(
-            "__graph_captured_coverage",
+        let mut ranges = session.clone();
+        ranges.register_table(
+            "__graph_events",
+            Arc::new(ViewTable::new(events.clone(), None)),
+        )?;
+        ranges.register_table(
+            "__graph_coverage",
             Arc::new(ViewTable::new(coverage.clone(), None)),
         )?;
-        let Statement::Query(ranges) = crate::package::builtin::query(
-            araphor_analysis_builtins::discovery::sql::COVERAGE_RANGES_SQL,
-        )
-        .map_err(|source| araphor_query::Error::Sql { source })?
+        let datafusion::sql::sqlparser::ast::Statement::Query(ranges_sql) =
+            crate::package::builtin::query(
+                araphor_analysis_builtins::discovery::sql::COVERAGE_RANGES_SQL,
+            )
+            .map_err(|source| araphor_query::Error::Sql { source })?
         else {
             return Err(Code::Invalid.error("native coverage view").into());
         };
-        let sql = format!("WITH events AS (SELECT * FROM __graph_selected_events), coverage AS (SELECT * FROM __graph_captured_coverage)
+        let range_sql = format!("WITH events AS (SELECT * FROM __graph_events), coverage AS (SELECT * FROM __graph_coverage)
             SELECT named_struct('tenant_id', tenant_id, 'node_id', node_id, 'node_boot_id', node_boot_id,
                 'label_epoch', label_epoch, 'source_id', source_id, 'source_epoch', source_epoch) AS stream,
                 cpu_id, first_cursor, last_cursor, expected_records, coverage_revision, coverage_interval_id,
-                state, gap_reasons FROM ({}) AS qualified", ranges);
-        let ranges = range_session
+                state, gap_reasons FROM ({ranges_sql}) AS qualified");
+        let ranges = ranges
             .prepare_definition(&Definition {
                 name: "graph-coverage".into(),
                 description: String::new(),
                 labels: Default::default(),
                 program: Program::Sql {
-                    source: Source::Inline { inline: sql },
+                    source: Source::Inline { inline: range_sql },
                 },
             })
             .await?;
         let mut children = vec![events];
-        for sql in [
-            "SELECT * FROM context_versions",
-            "SELECT * FROM graph_state",
-            "SELECT tenant_id, source_key, graph_result_id, commit_revision, graph_revision,
-                graph_sensitivity, first_cursor, last_cursor, previous_result_id,
-                context_notice_revision, witness_deadline_utc_ns, subject_count,
-                relationship_count, max_hops, hop_boundary, context_refs,
-                notice_coverage_revision FROM graph_manifest
-                QUALIFY ROW_NUMBER() OVER (PARTITION BY tenant_id, source_key, first_cursor
-                ORDER BY commit_revision DESC) = 1",
-        ] {
-            children.push(query.prepare(sql, Vec::new()).await?.0);
-        }
-        children.insert(2, ranges.plan.clone());
+        let contexts = query
+            .prepare("SELECT * FROM context_versions", Vec::new())
+            .await?
+            .0;
+        let contexts = match facts.context_owners() {
+            Some(owners) if !owners.is_empty() => {
+                use datafusion::logical_expr::{col, lit, LogicalPlanBuilder};
+                LogicalPlanBuilder::from(contexts)
+                    .filter(
+                        col("owner_id")
+                            .in_list(owners.iter().map(|owner| lit(*owner)).collect(), false),
+                    )
+                    .and_then(LogicalPlanBuilder::build)
+                    .map_err(|source| araphor_query::Error::Sql { source })?
+            }
+            _ => contexts,
+        };
+        children.push(contexts);
+        children.push(ranges.plan);
+        children.push(
+            query
+                .prepare("SELECT * FROM graph_state", Vec::new())
+                .await?
+                .0,
+        );
+        children.push(query.prepare("SELECT tenant_id, source_key, graph_result_id, commit_revision, graph_revision,
+            first_cursor, last_cursor, witness_deadline_utc_ns, context_refs, notice_coverage_revision
+            FROM graph_manifest QUALIFY ROW_NUMBER() OVER (PARTITION BY tenant_id, source_key,
+            first_cursor ORDER BY commit_revision DESC) = 1", Vec::new()).await?.0);
         children.push(coverage);
-        let prepared_inputs = if compile_inputs {
+        let prepared_inputs = if compile {
             session.prepare_reusable_inputs(&children).await?
         } else {
             None
@@ -224,35 +255,36 @@ impl GraphPublication {
             limits: query.limits().clone(),
             prepared: prepared_inputs,
             #[cfg(test)]
-            projections: std::sync::atomic::AtomicUsize::new(0),
+            projections: Default::default(),
             #[cfg(test)]
-            observed: Mutex::new(None),
+            observed: Default::default(),
         });
-        for index in 0..projection.ports.len() {
+        for (index, port) in projection.ports.iter().enumerate() {
             let source = Arc::new(node::Port {
                 owner: Arc::clone(&projection),
                 index,
             });
-            let port = if projection.prepared.is_some() {
+            let schema = Arc::new(port.schema.clone());
+            let provider = if projection.prepared.is_some() {
                 araphor_query::sources::SourcePort::prepared(
-                    projection.ports[index].name.clone(),
-                    Arc::new(projection.ports[index].schema.clone()),
+                    port.name.clone(),
+                    schema,
                     &children,
                     source,
                 )?
             } else {
                 araphor_query::sources::SourcePort::new(
-                    projection.ports[index].name.clone(),
-                    Arc::new(projection.ports[index].schema.clone()),
+                    port.name.clone(),
+                    schema,
                     children.clone(),
                     source,
                 )?
             };
             session.register_table(
-                &projection.ports[index].name,
+                &port.name,
                 Arc::new(ViewTable::new(
                     LogicalPlan::Extension(Extension {
-                        node: Arc::new(port),
+                        node: Arc::new(provider),
                     }),
                     None,
                 )),
@@ -263,33 +295,29 @@ impl GraphPublication {
             DefinitionRef::Retained(definition) => session.prepare_resolved(definition).await?,
         };
         let mut calls = BTreeMap::new();
-        let mut foreign = false;
         PackageCall::any(&prepared.plan, &mut |call| {
-            if !prepared.images().any(|bundle| {
-                bundle.bundle().root == call.image().image
-                    && bundle.digest() == call.image().digest.as_str()
+            if !prepared.images().any(|image| {
+                image.bundle().root == call.image().image && image.digest() == call.image().digest
             }) {
-                foreign = true;
-                return Ok(false);
+                return Err(Projection::external(
+                    Code::Denied.error("graph call image admission"),
+                ));
             }
-            if let Some(previous) = calls.insert(call.id(), call.clone()) {
-                if !previous.same_call(call) {
-                    return Err(Projection::invalid("graph call identity"));
-                }
+            if calls
+                .insert(call.id(), call.clone())
+                .is_some_and(|previous| !previous.same_call(call))
+            {
+                return Err(Projection::invalid("graph call identity"));
             }
             Ok(false)
         })
         .map_err(|source| araphor_query::Error::Sql { source })?;
-        if foreign {
-            return Err(Code::Denied.error("graph call image admission").into());
-        }
-        let mut supported = std::collections::BTreeSet::new();
+        let mut supported = BTreeSet::new();
         for call in calls.values().filter(|call| {
             call.descriptor()
                 .exports
                 .iter()
-                .find(|model| model.name == call.export())
-                .is_some_and(Graph::supports)
+                .any(|model| model.name == call.export() && Graph::supports(model))
         }) {
             if !supported.insert(call.package().package_id.as_str()) {
                 return Err(Code::Invalid.error("multiple graph detector calls").into());
@@ -297,65 +325,128 @@ impl GraphPublication {
         }
         if araphor_data::FindingV1::PACKAGES
             .iter()
-            .any(|id| !supported.contains(*id))
+            .any(|id| !supported.contains(id))
         {
             return Err(Code::Invalid.error("required graph detector call").into());
         }
-        let check = Arc::clone(&authority);
-        let stage = Arc::clone(session.control());
-        let granted = grant.clone();
-        let prepared =
-            araphor_query::execution::Engine::blocking(Arc::clone(&stage), (), move || {
-                granted.remaining()?;
-                check.check(&granted, PackageActionV1::Run)?;
-                for bundle in prepared.images() {
-                    check.admit(&granted, bundle)?;
-                }
-                stage.check()?;
-                Ok(prepared)
-            })
-            .await?;
-        let packages = calls
-            .values()
-            .map(|call| {
-                let bundle = prepared
+        let mut sparse = BTreeMap::new();
+        let values = calls
+            .iter()
+            .map(|(&id, call)| {
+                let image = prepared
                     .images()
-                    .find(|bundle| {
-                        bundle.bundle().root == call.image().image
-                            && bundle.digest() == call.image().digest.as_str()
+                    .find(|image| {
+                        image.bundle().root == call.image().image
+                            && image.digest() == call.image().digest
                     })
                     .ok_or_else(|| Code::Denied.error("graph image attribution"))?;
-                Ok(araphor_data::AnalysisContextVersionV1::from_package(
-                    bundle,
-                    grant.selection.tenant_id,
-                    call.package(),
-                    call.export(),
-                    call.output(),
-                )?
-                .key)
+                let artifact = image
+                    .bundle()
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.reference() == *call.package())
+                    .ok_or_else(|| Code::Denied.error("graph package attribution"))?;
+                if let araphor_data::PackageImplementationV1::Wasm {
+                    artifact: component,
+                    ..
+                } = artifact
+                    .implementation(call.export())
+                    .map_err(araphor_data::Error::from)?
+                {
+                    if Detector::supports_resume(call.descriptor(), call.export(), component) {
+                        sparse.insert(id, call.clone());
+                    }
+                }
+                Ok((
+                    id,
+                    AnalysisContextVersionV1::from_package(
+                        image,
+                        grant.selection.tenant_id,
+                        call.package(),
+                        call.export(),
+                        call.output(),
+                    )?,
+                ))
             })
-            .collect::<araphor_data::Result<std::collections::BTreeSet<_>>>()?;
-        let selected = Arc::downgrade(&projection);
+            .collect::<araphor_data::Result<BTreeMap<_, _>>>()?;
+        let checked = Arc::clone(&authority);
+        let stage = Arc::clone(session.control());
+        let granted = grant.clone();
+        let store = Arc::clone(session.engine().store());
+        let (prepared, packages) =
+            araphor_query::execution::Engine::blocking(Arc::clone(&stage), (), move || {
+                let images = prepared.images().collect::<Vec<_>>();
+                let mut grants = vec![(&granted, PackageActionV1::Run, None)];
+                grants.extend(
+                    images
+                        .iter()
+                        .map(|image| (&granted, PackageActionV1::Run, Some(*image))),
+                );
+                let contexts = values.values().cloned().collect::<Vec<_>>();
+                let mut references = None;
+                checked.commit_many(&grants, &mut || {
+                    references = Some(store.intern_contexts_guarded(&contexts, || {
+                        granted.remaining()?;
+                        stage.check()
+                    })?);
+                    Ok(())
+                })?;
+                let references =
+                    references.ok_or_else(|| Code::Incomplete.error("graph package references"))?;
+                if references.len() != values.len()
+                    || references
+                        .iter()
+                        .zip(values.values())
+                        .any(|(reference, value)| reference.key != value.key)
+                {
+                    return Err(Code::Conflict.error("graph package references").into());
+                }
+                let packages = values
+                    .into_keys()
+                    .zip(references)
+                    .collect::<BTreeMap<_, _>>();
+                Ok((prepared, packages))
+            })
+            .await?;
+        let package_keys = packages
+            .values()
+            .map(|reference| reference.key.clone())
+            .collect::<BTreeSet<_>>();
+        let sparse_ids = sparse.keys().copied().collect();
+        let weak = Arc::downgrade(&projection);
         session.set_context_init(move |config| {
             let run = Arc::new(GraphRun {
-                projection: selected.clone(),
+                projection: weak.clone(),
                 captured: OnceCell::new(),
             });
             config.set_extension(Arc::clone(&run));
-            let packages = packages.clone();
+            let checked = Arc::clone(&run);
+            let sparse = sparse.clone();
+            config.set_extension(Arc::new(araphor_query::definition::CallSparse::new(
+                move |call| {
+                    sparse
+                        .get(&call.id())
+                        .is_some_and(|expected| expected.same_call(call))
+                        && checked
+                            .captured
+                            .get()
+                            .and_then(|value| value.as_ref().ok())
+                            .is_some()
+                },
+            )));
+            let packages = package_keys.clone();
             config.set_extension(Arc::new(araphor_query::definition::CallReuse::new(
                 move |call| {
                     call.descriptor()
                         .exports
                         .iter()
-                        .find(|model| model.name == call.export())
-                        .is_some_and(Graph::supports)
+                        .any(|model| model.name == call.export() && Graph::supports(model))
                         && run
                             .captured
                             .get()
-                            .and_then(|captured| captured.as_ref().ok())
-                            .is_some_and(|captured| {
-                                captured
+                            .and_then(|value| value.as_ref().ok())
+                            .is_some_and(|capture| {
+                                capture
                                     .heads
                                     .iter()
                                     .any(|head| head.reusable && head.packages == packages)
@@ -370,32 +461,30 @@ impl GraphPublication {
             prepared,
             feedback,
             calls,
+            packages,
+            sparse: sparse_ids,
             projection,
         })
     }
 }
 
 impl Projection {
+    fn external(source: impl std::error::Error + Send + Sync + 'static) -> DataFusionError {
+        DataFusionError::External(Box::new(source))
+    }
+    fn invalid(field: &'static str) -> DataFusionError {
+        Self::external(araphor_data::GraphInvalidSnafu { field }.build())
+    }
     fn check_deadline(deadline: u64) -> araphor_data::Result<()> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
             .ok()
-            .and_then(|time| u64::try_from(time.as_nanos()).ok())
+            .and_then(|value| u64::try_from(value.as_nanos()).ok())
             .ok_or_else(|| Code::Incomplete.error("graph publication time"))?;
         if now >= deadline {
             return Err(Code::Incomplete.error("graph witness expired"));
         }
         Ok(())
-    }
-
-    fn external(source: impl std::error::Error + Send + Sync + 'static) -> DataFusionError {
-        DataFusionError::External(Box::new(source))
-    }
-    fn invalid(field: &'static str) -> DataFusionError {
-        Self::external(araphor_data::Error::GraphInvalid {
-            field,
-            location: snafu::location!(),
-        })
     }
 }
 

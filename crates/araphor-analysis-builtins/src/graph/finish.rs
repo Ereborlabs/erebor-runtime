@@ -257,7 +257,10 @@ impl Computation {
         }
         output.checkpoint = Some(sdk::Checkpoint {
             version: 1,
-            datasets: vec![GraphPackageStateV1::encode(&[state])?],
+            datasets: vec![
+                GraphPackageStateV1::encode(&[state])?,
+                Resume::encode(ResumeBasis::Complete)?,
+            ],
         });
         Ok(output)
     }

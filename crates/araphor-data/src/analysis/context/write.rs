@@ -46,6 +46,22 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the committed context reference is absent"))
     }
 
+    pub fn intern_contexts_guarded(
+        &self,
+        inputs: &[AnalysisContextVersionV1],
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<AnalysisContextRefV1>> {
+        if inputs.iter().any(|input| {
+            !matches!(
+                input.key.owner_id.as_str(),
+                "discovery-facts-v1" | "discovery-source-v1" | "native-package-v1"
+            )
+        }) {
+            return self.reject("the qualified context owner is invalid");
+        }
+        self.commit_context_values(inputs, true, None, &mut check)
+    }
+
     fn commit_context_value(
         &self,
         input: &AnalysisContextVersionV1,
@@ -137,27 +153,38 @@ impl AnalysisStore {
             let imported = (key.owner_id == "discovery-context-v1")
                 .then(|| crate::DiscoveryContextRevisionV1::try_from(input))
                 .transpose()?;
-            if !intern {
-                if let Some((stored, commit_revision)) =
-                    Self::read_context_row_from(writer, &self.root, key)?
-                {
-                    if stored == *input {
-                        self.check_cached_provenance(writer, &stored)?;
-                        references.push(AnalysisContextRefV1 {
-                            key: key.clone(),
-                            commit_revision,
-                        });
-                        continue;
-                    }
+            let stored = if intern {
+                None
+            } else {
+                Self::read_context_row_from(writer, &self.root, key)?
+            };
+            if let Some((saved, commit_revision)) = &stored {
+                if saved == input {
+                    self.check_cached_provenance(writer, saved)?;
+                    references.push(AnalysisContextRefV1 {
+                        key: key.clone(),
+                        commit_revision: *commit_revision,
+                    });
+                    continue;
                 }
             }
             Self::validate_context_packages(writer, input)?;
-            if let Some(reference) = self.context_retry(writer, input, intern)? {
-                references.push(reference);
-                continue;
+            if intern {
+                if let Some(reference) = self.context_retry(writer, input, true)? {
+                    references.push(reference);
+                    continue;
+                }
+            } else if let Some((saved, _)) = stored {
+                self.check_cached_provenance(writer, &saved)?;
+                return AnalysisConflictSnafu.fail();
             }
             self.storage.check_context(input.body.len() as u64)?;
-            self.context_expected(writer, key, expected)?;
+            let notification_prior = if notification.is_some() {
+                self.notification_head_revision(writer, key)?
+            } else {
+                None
+            };
+            self.context_expected(writer, key, expected, notification_prior)?;
             if let Some(imported) = imported {
                 self.context_import(writer, key, &imported)?;
             }
@@ -199,7 +226,7 @@ impl AnalysisStore {
                     operation: "insert context version",
                 })?;
             if let Some(keys) = &notification {
-                self.write_notification_head(writer, input, current, keys)?;
+                self.write_notification_head(writer, input, current, keys, notification_prior)?;
             }
             references.push(AnalysisContextRefV1 {
                 key: key.clone(),
@@ -267,10 +294,11 @@ impl AnalysisStore {
         reader: &Connection,
         key: &AnalysisContextKeyV1,
         expected: Option<u64>,
+        notification_prior: Option<u64>,
     ) -> Result<()> {
         if let Some(expected) = expected {
             let latest: Option<u64> = if key.owner_id == crate::NOTIFICATION_STATE_OWNER {
-                self.notification_head_revision(reader, key)?
+                notification_prior
             } else {
                 reader
                     .prepare_cached(

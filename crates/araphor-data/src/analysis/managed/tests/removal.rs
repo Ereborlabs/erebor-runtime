@@ -349,11 +349,11 @@ fn recovery_rejects_scope_changes() -> TestResult {
                 "version" => {
                     writer.execute(
                         "UPDATE managed_versions SET scope = ? WHERE generation = ?",
-                        params![serde_json::to_vec(&grant.selection)?, original.generation],
+                        params![ManagedCodec::encode(&grant.selection)?, original.generation],
                     )?;
                 }
                 "captured" => {
-                    let mut saved: model::Attempt = serde_json::from_slice(&writer.query_row(
+                    let mut saved: model::Attempt = ManagedCodec::decode(&writer.query_row(
                         "SELECT contract FROM managed_attempts WHERE attempt_id = 'scope-a'",
                         [],
                         |row| row.get::<_, Vec<u8>>(0),
@@ -361,7 +361,7 @@ fn recovery_rejects_scope_changes() -> TestResult {
                     saved.capture.grant = grant;
                     writer.execute(
                         "UPDATE managed_attempts SET contract = ? WHERE attempt_id = 'scope-a'",
-                        params![serde_json::to_vec(&saved)?],
+                        params![ManagedCodec::encode(&saved)?],
                     )?;
                 }
                 _ => {

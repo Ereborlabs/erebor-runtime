@@ -415,7 +415,7 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
         valid_from_utc_ns: None,
         valid_until_utc_ns: None,
         sensitivity: araphor_data::ContextSensitivityV1::Tenant,
-        body: serde_json::to_vec(&fact)?,
+        body: fact.encode_context()?,
     };
     let (_, entries) = Fixture::observe_guests(Arc::clone(&fixture.query), async {
         fixture

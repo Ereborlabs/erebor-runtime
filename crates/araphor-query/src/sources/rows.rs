@@ -22,6 +22,7 @@ mod tests;
 
 pub(crate) struct CapturedRequests {
     tables: AnalysisTableRequests,
+    context_owners: Option<BTreeSet<String>>,
     _memory: MemoryReservation,
 }
 
@@ -30,7 +31,14 @@ impl CapturedRequests {
         &self.tables
     }
 
-    fn allocation_bytes(tables: &AnalysisTableRequests) -> Option<usize> {
+    pub(crate) fn context_owners(&self) -> Option<&BTreeSet<String>> {
+        self.context_owners.as_ref()
+    }
+
+    fn allocation_bytes(
+        tables: &AnalysisTableRequests,
+        context_owners: Option<&BTreeSet<String>>,
+    ) -> Option<usize> {
         tables
             .iter()
             .try_fold(size_of::<Self>(), |bytes, (name, columns)| {
@@ -40,6 +48,15 @@ impl CapturedRequests {
                     .checked_add(columns.as_ref().map_or(Some(0), |columns| {
                         columns.len().checked_mul(size_of::<usize>())
                     })?)
+            })
+            .and_then(|bytes| {
+                context_owners.map_or(Some(bytes), |owners| {
+                    owners.iter().try_fold(bytes, |bytes, owner| {
+                        bytes
+                            .checked_add(size_of::<String>())?
+                            .checked_add(owner.capacity())
+                    })
+                })
             })
     }
 }
@@ -557,13 +574,26 @@ impl SourceSnapshot {
             Some(managed) => {
                 let captured = self
                     .store
-                    .read_managed_tables(&selection, managed, read, limits, control)
+                    .read_managed_tables_filtered(
+                        &selection,
+                        managed,
+                        read,
+                        limits,
+                        control,
+                        bounds.context_owners.as_ref(),
+                    )
                     .map_err(data_error)?;
                 (captured.page, Some(captured.state))
             }
             None => (
                 self.store
-                    .read_tables(&selection, read, limits, control)
+                    .read_tables_filtered(
+                        &selection,
+                        read,
+                        limits,
+                        control,
+                        bounds.context_owners.as_ref(),
+                    )
                     .map_err(data_error)?,
                 None,
             ),
@@ -799,7 +829,9 @@ impl SourceSnapshot {
                 })
         });
         let retained = removed.saturating_add(source_bytes);
-        let request_bytes = CapturedRequests::allocation_bytes(requests).ok_or_else(overflow)?;
+        let request_bytes =
+            CapturedRequests::allocation_bytes(requests, bounds.context_owners.as_ref())
+                .ok_or_else(overflow)?;
         let total = metadata
             .checked_add(retained)
             .and_then(|bytes| bytes.checked_add(request_bytes))
@@ -827,6 +859,7 @@ impl SourceSnapshot {
         control.check().map_err(Self::data_error)?;
         let requests = Arc::new(CapturedRequests {
             tables: requests.clone(),
+            context_owners: bounds.context_owners.clone(),
             _memory: reservation.split(request_bytes),
         });
         let receipt = Arc::new(ArrowSnapshot {

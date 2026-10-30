@@ -31,8 +31,7 @@ async fn follows_wal_backlog() -> Result<()> {
                 .replace_kubernetes_workload_inventory(vec![prepared.workload])?);
             let credential = tls.path().join("paired-token");
             fs::write(&credential, b"fixture-access")?;
-            let tenant = EvidenceIdV1::new(1, 2).to_be_bytes();
-            let (client, query) = fixture.client(&tls, &auth, &credential, tenant).await?;
+            let (client, query) = fixture.client(&tls, &auth, &credential, EvidenceIdV1::new(1, 2).to_be_bytes()).await?;
             let tested: Result<()> = async {
                 let mut trust = TrustCache::load(&tls.path().join("paired-trust"))?;
                 let registration = OutagePolicyFixture::registration([7; 16], false);
@@ -49,20 +48,23 @@ async fn follows_wal_backlog() -> Result<()> {
                 let ack = OutagePolicyFixture::active_acknowledgement(&delivered, 8, at);
                 assert_eq!(node.acknowledge_policy(ack).await?.rollout_state, "ACTIVE");
                 let (input, source) = input::backlog(&tls, &mut node).await?;
+                let (background, background_source) = input::busy_backlog(&tls, &mut node).await?;
                 let observed = Incident::subscribe(&client, 7, 0).await?;
                 input.set_discovery_context(Some(Arc::new(prepared.catalog)));
-                let uploaded =
-                    input::append_reads(&tls, &mut node, &input, &source, prepared.raw).await?;
-                let denied = mithril_control::EvidenceRecord::try_from(uploaded[0].as_slice())?;
-                let context = denied.decision_context.as_ref().ok_or("runtime context")?;
-                let catalog = mithril_control::EvidenceDecisionCatalogV1::from_context(context)?
-                    .ok_or("runtime catalog")?;
-                let proof = catalog.runtime_binding.as_ref().ok_or("runtime proof")?;
-                assert_eq!(
-                    (&proof.container_id, catalog.binding_id),
-                    (&container, prepared.raw.binding_id)
-                );
-                let observed = observed.wait(&client).await?;
+                let (ready, gate) = tokio::sync::oneshot::channel();
+                let mut ready = Some(ready);
+                let consume = observed.wait_until(&client, |state| {
+                    if state.background_ready(&background_source, 639) {
+                        if let Some(ready) = ready.take() { let _sent = ready.send(()); }
+                    }
+                    state.background_ready(&background_source, 642)
+                });
+                let (observed, uploaded) = tokio::try_join!(consume, async {
+                    gate.await?;
+                    input::append_reads(&tls, &mut node, &input, &source, prepared.raw,
+                        &background, &background_source).await
+                })?;
+                input::check_runtime(&uploaded[0], &container, prepared.raw.binding_id)?;
                 for ((record, bytes), cursor) in
                     observed.records.iter().zip(uploaded).zip([941, 950])
                 {
@@ -74,9 +76,9 @@ async fn follows_wal_backlog() -> Result<()> {
                 assert_eq!(observed.graphs.len(), 1);
                 assert_eq!(observed.graphs[0].2.scope.identity, source);
                 assert_eq!(observed.graphs[0].2.last_cursor, 950);
-                let identity = observed.identity(&client).await?;
                 let mut report = serde_json::to_value(&observed)?;
-                report["identity"] = serde_json::to_value(identity)?;
+                report["identity"] = serde_json::to_value(observed.identity(&client).await?)?;
+                report["background"] = serde_json::json!({"source": background_source, "required_cursor": 642, "required_finding_count": 138});
                 println!("INCIDENT_BACKLOG={}", serde_json::to_string(&report)?);
                 Ok(())
             }
@@ -86,8 +88,7 @@ async fn follows_wal_backlog() -> Result<()> {
             tested
         }
         .await;
-        let network = server.shutdown().await;
-        let stopped = fixture.shutdown().await;
+        let (network, stopped) = tokio::join!(server.shutdown(), fixture.shutdown());
         network?;
         stopped?;
         tested

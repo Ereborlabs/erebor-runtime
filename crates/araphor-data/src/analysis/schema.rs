@@ -164,198 +164,36 @@ impl AnalysisStore {
     }
 
     fn validate_graphs(writer: &Connection, root: &Path) -> Result<()> {
-        use super::graph_rows::GraphRows;
-        araphor_graph::FindingRows::validate(writer)?;
-        GraphRows::validate_edge_values(writer)?;
-        GraphRows::validate_branches(writer)?;
-        for query in [
-            "SELECT EXISTS(SELECT 1 FROM graph_versions v
-                LEFT JOIN analysis_results r USING (result_id)
-                WHERE r.result_id IS NULL OR r.processor_id <> 'graph-findings'
-                    OR v.commit_revision <> r.commit_revision OR v.lineage_id > v.commit_revision)",
-            "SELECT EXISTS(SELECT 1 FROM graph_sources s
-                LEFT JOIN source_receipts r USING (stream_key)
-                WHERE r.stream_key IS NULL OR r.tenant_id <> s.tenant_id)",
-            "SELECT EXISTS(SELECT 1 FROM graph_evidence e
-                LEFT JOIN graph_sources s USING (source_ref)
-                WHERE s.source_ref IS NULL OR e.durable_cursor = 0)",
-            "SELECT EXISTS(SELECT 1 FROM graph_evidence_membership m
-                LEFT JOIN graph_evidence e USING (evidence_id)
-                LEFT JOIN graph_sources s USING (source_ref)
-                LEFT JOIN graph_versions origin
-                    ON origin.lineage_id = m.lineage_id
-                    AND origin.commit_revision = m.lineage_id
-                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
-                LEFT JOIN graph_versions opened
-                    ON opened.lineage_id = m.lineage_id
-                    AND opened.commit_revision = m.valid_from
-                LEFT JOIN graph_versions closed
-                    ON closed.lineage_id = m.lineage_id
-                    AND closed.commit_revision = m.valid_to
-                WHERE e.evidence_id IS NULL OR origin.result_id IS NULL
-                    OR s.source_ref IS NULL OR r.stream_key <> s.stream_key
-                    OR r.tenant_id <> s.tenant_id OR opened.result_id IS NULL
-                    OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
-                    OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from))",
-            "SELECT EXISTS(SELECT 1 FROM graph_input_positions p
-                LEFT JOIN graph_evidence e USING (evidence_id)
-                LEFT JOIN graph_sources s USING (source_ref)
-                LEFT JOIN graph_versions origin
-                    ON origin.lineage_id = p.lineage_id
-                    AND origin.commit_revision = p.lineage_id
-                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
-                LEFT JOIN graph_versions opened
-                    ON opened.lineage_id = p.lineage_id
-                    AND opened.commit_revision = p.valid_from
-                LEFT JOIN graph_versions closed
-                    ON closed.lineage_id = p.lineage_id
-                    AND closed.commit_revision = p.valid_to
-                WHERE e.evidence_id IS NULL OR origin.result_id IS NULL
-                    OR s.source_ref IS NULL OR r.stream_key <> s.stream_key
-                    OR r.tenant_id <> s.tenant_id OR opened.result_id IS NULL
-                    OR (p.valid_to IS NOT NULL AND closed.result_id IS NULL)
-                    OR p.commit_revision = 0
-                    OR (p.valid_to IS NOT NULL AND p.valid_to <= p.valid_from))",
-            "SELECT EXISTS(SELECT 1 FROM graph_subject_values s
-                WHERE octet_length(s.tenant_id) <> 16 OR octet_length(s.identity) = 0
-                    OR s.authority_rank > 3 OR s.subject_kind > 9
-                    OR s.authority_text = ''
-                    OR (s.authority_rank = 0 AND
-                        (octet_length(s.authority_boot) <> 16 OR s.authority_epoch = 0))
-                    OR (s.authority_rank <> 0 AND
-                        (octet_length(s.authority_boot) <> 0 OR s.authority_epoch <> 0)))",
-            "SELECT EXISTS(SELECT 1 FROM graph_subject_membership m
-                LEFT JOIN graph_subject_values s USING (subject_id)
-                LEFT JOIN graph_versions origin
-                    ON origin.lineage_id = m.lineage_id
-                    AND origin.commit_revision = m.lineage_id
-                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
-                LEFT JOIN graph_versions opened
-                    ON opened.lineage_id = m.lineage_id
-                    AND opened.commit_revision = m.valid_from
-                LEFT JOIN graph_versions closed
-                    ON closed.lineage_id = m.lineage_id
-                    AND closed.commit_revision = m.valid_to
-                WHERE s.subject_id IS NULL OR origin.result_id IS NULL
-                    OR r.tenant_id <> s.tenant_id OR opened.result_id IS NULL
-                    OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
-                    OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from))",
-            "SELECT EXISTS(SELECT 1 FROM graph_edge_values e
-                LEFT JOIN graph_subject_values source ON source.subject_id = e.from_ref
-                LEFT JOIN graph_subject_values target ON target.subject_id = e.to_ref
-                WHERE source.subject_id IS NULL OR target.subject_id IS NULL
-                    OR source.tenant_id <> target.tenant_id
-                    OR EXISTS(SELECT 1 FROM unnest(e.evidence_refs) refs(evidence_id)
-                        LEFT JOIN graph_evidence record USING (evidence_id)
-                        WHERE record.evidence_id IS NULL))",
-            "SELECT EXISTS(SELECT 1 FROM graph_edge_membership m
-                LEFT JOIN graph_edge_values e USING (edge_id)
-                LEFT JOIN graph_subject_values source ON source.subject_id = e.from_ref
-                LEFT JOIN graph_versions origin
-                    ON origin.lineage_id = m.lineage_id
-                    AND origin.commit_revision = m.lineage_id
-                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
-                LEFT JOIN graph_versions opened
-                    ON opened.lineage_id = m.lineage_id
-                    AND opened.commit_revision = m.valid_from
-                LEFT JOIN graph_versions closed
-                    ON closed.lineage_id = m.lineage_id
-                    AND closed.commit_revision = m.valid_to
-                WHERE e.edge_id IS NULL OR origin.result_id IS NULL
-                    OR r.tenant_id <> source.tenant_id OR opened.result_id IS NULL
-                    OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
-                    OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from)
-                    OR EXISTS(SELECT 1 FROM unnest(e.evidence_refs) refs(evidence_id)
-                        JOIN graph_evidence record USING (evidence_id)
-                        JOIN graph_sources s ON s.source_ref = record.source_ref
-                        WHERE s.stream_key <> r.stream_key
-                            OR s.tenant_id <> r.tenant_id))",
-            "SELECT EXISTS(SELECT 1 FROM (
-                SELECT m.lineage_id, m.edge_id, m.valid_from, m.valid_to,
-                    lag(m.valid_to) OVER (PARTITION BY m.lineage_id, m.edge_id
-                        ORDER BY m.valid_from) AS prior_to,
-                    lag(m.valid_from) OVER (PARTITION BY m.lineage_id, m.edge_id
-                        ORDER BY m.valid_from) AS prior_from
-                FROM graph_edge_membership m
-            ) ranges WHERE prior_from IS NOT NULL
-                AND (prior_to IS NULL OR prior_to > valid_from))",
-            "SELECT EXISTS(SELECT 1 FROM graph_finding_membership m
-                LEFT JOIN graph_finding_values f USING (value_id)
-                LEFT JOIN graph_versions origin
-                    ON origin.lineage_id = m.lineage_id
-                    AND origin.commit_revision = m.lineage_id
-                LEFT JOIN analysis_results r ON r.result_id = origin.result_id
-                LEFT JOIN graph_versions opened
-                    ON opened.lineage_id = m.lineage_id
-                    AND opened.commit_revision = m.valid_from
-                LEFT JOIN graph_versions closed
-                    ON closed.lineage_id = m.lineage_id
-                    AND closed.commit_revision = m.valid_to
-                WHERE f.value_id IS NULL OR origin.result_id IS NULL
-                    OR r.tenant_id <> f.tenant_id OR opened.result_id IS NULL
-                    OR (m.valid_to IS NOT NULL AND closed.result_id IS NULL)
-                    OR (m.valid_to IS NOT NULL AND m.valid_to <= m.valid_from))",
-        ] {
-            let invalid: bool =
-                writer
-                    .query_row(query, [], |row| row.get(0))
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "validate shared graph rows",
-                    })?;
-            if invalid {
-                return Self::reject_path(root, "a shared Graph row has an invalid reference");
-            }
-        }
-        for table in ["graph_subjects", "graph_relationships", "graph_findings"] {
-            let tenant = if table == "graph_relationships" {
-                ""
-            } else {
-                "AND r.tenant_id = g.tenant_id"
-            };
-            let invalid: bool = writer.query_row(&format!(
-                "SELECT EXISTS(SELECT 1 FROM {table} g LEFT JOIN analysis_results r
-                ON r.result_id = g.result_id {tenant}
-                WHERE r.result_id IS NULL OR r.processor_id <> 'graph-findings' OR r.stream_key IS NULL
-                OR r.commit_revision > COALESCE((SELECT last_changed_revision FROM relation_revisions
-                    WHERE relation_name = '{table}'), 0))"
-            ), [], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "validate native graph references" })?;
-            if invalid {
-                return Self::reject_path(root, "a native graph row has no valid result");
-            }
-        }
-        let mut after = String::new();
-        loop {
-            let next: Option<(String, Vec<u8>)> = writer
-                .query_row(
-                    "SELECT result_id, tenant_id FROM analysis_results
-                    WHERE processor_id = 'graph-findings' AND stream_key IS NOT NULL
-                        AND result_id > ? ORDER BY result_id LIMIT 1",
-                    params![after],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read graph validation result",
-                })?;
-            let Some((id, tenant)) = next else {
-                break;
-            };
+        super::graph_rows::GraphRows::validate_history(writer, root)?;
+        let mut statement = writer.prepare(
+            "SELECT result_id, tenant_id FROM analysis_results WHERE processor_id = 'graph-findings' AND stream_key IS NOT NULL ORDER BY result_id",
+        ).context(AnalysisDatabaseSnafu { operation: "prepare Graph recovery" })?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read Graph recovery",
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode Graph recovery",
+            })?;
+        for (id, tenant) in rows {
             let tenant = tenant.try_into().map_err(|_| {
-                crate::AnalysisStateSnafu {
-                    path: root,
-                    reason: "the retained graph tenant is invalid",
+                crate::GraphInvalidSnafu {
+                    field: "graph recovery tenant",
                 }
                 .build()
             })?;
-            let header = GraphRows::read_header(writer, tenant, &id)?.ok_or_else(|| {
-                crate::AnalysisStateSnafu {
-                    path: root,
-                    reason: "the retained graph header is absent",
-                }
-                .build()
-            })?;
-            GraphRows::read(writer, &id, &header)?;
-            after = id;
+            let header = super::graph_rows::GraphRows::read_header(writer, tenant, &id)?
+                .ok_or_else(|| {
+                    crate::GraphInvalidSnafu {
+                        field: "graph recovery header",
+                    }
+                    .build()
+                })?;
+            super::graph_rows::GraphRows::read(writer, &id, &header)?;
         }
         Ok(())
     }

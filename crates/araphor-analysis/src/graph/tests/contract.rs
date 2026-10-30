@@ -129,15 +129,9 @@ fn descriptor_preserves_owners() -> TestResult {
             assert_eq!(reason.details, details);
         }
         assert_eq!(model.checkpoint.as_ref().ok_or("checkpoint")?.version, 1);
-        assert_eq!(
-            model
-                .checkpoint
-                .as_ref()
-                .ok_or("checkpoint")?
-                .datasets
-                .len(),
-            1
-        );
+        let checkpoint = model.checkpoint.as_ref().ok_or("checkpoint")?;
+        assert_eq!(checkpoint.datasets.len(), 2);
+        assert_eq!(checkpoint.datasets[1].name, "graph_resume");
         assert!(
             model
                 .checkpoint

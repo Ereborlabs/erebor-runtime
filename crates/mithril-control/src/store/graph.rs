@@ -318,7 +318,7 @@ fn graph_fact(
         value,
     };
     fact.validate()?;
-    let body = serde_json::to_vec(&fact).map_err(|error| {
+    let body = fact.encode_context().map_err(|error| {
         crate::error::DiscoverySnafu {
             code: "GRAPH_CONTEXT_ENCODING",
             reason: error.to_string(),
@@ -335,6 +335,17 @@ fn graph_fact(
 }
 
 impl araphor_analysis::GraphFacts for super::context::ControlContextOwner {
+    fn context_owners(&self) -> Option<&'static [&'static str]> {
+        Some(&[
+            "mithril-control/policy-candidate",
+            "mithril-control/activation-ack",
+            "mithril-control/graph-policy",
+            "mithril-control/graph-baseline",
+            "mithril-control/graph-credential",
+            "mithril-control/policy-ack",
+        ])
+    }
+
     fn facts(
         &self,
         contexts: &[arrow_array::RecordBatch],

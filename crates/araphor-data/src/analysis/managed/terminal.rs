@@ -1,3 +1,4 @@
+use super::codec::ManagedCodec;
 use duckdb::{params, Transaction};
 use snafu::ResultExt as _;
 
@@ -86,7 +87,7 @@ impl AnalysisStore {
         if let Some(failure) = &failure {
             let changed = transaction.execute(
                 "UPDATE managed_instances SET failure = ?, running = CASE WHEN ? THEN false ELSE running END, lifecycle = CASE WHEN ? THEN ? ELSE lifecycle END WHERE tenant_id = ? AND instance_id = ? AND generation = ? AND lifecycle = ? AND progress = ? AND running = ?",
-                params![serde_json::to_vec(failure).context(crate::PackageEncodingSnafu)?, suspended, suspended, revision, spec.tenant.as_slice(), spec.id, instance.generation, instance.lifecycle, instance.progress, instance.running],
+                params![ManagedCodec::encode(failure).context(crate::ManagedEncodingSnafu)?, suspended, suspended, revision, spec.tenant.as_slice(), spec.id, instance.generation, instance.lifecycle, instance.progress, instance.running],
             ).context(AnalysisDatabaseSnafu { operation: "record managed failure" })?;
             if changed != 1 {
                 return crate::AnalysisConflictSnafu.fail();
@@ -131,7 +132,7 @@ impl AnalysisStore {
         attempt.terminal = Some(terminal.clone());
         let changed = transaction.execute(
             "UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ? AND completed = 0",
-            params![serde_json::to_vec(attempt).context(crate::PackageEncodingSnafu)?, revision,
+            params![ManagedCodec::encode(attempt).context(crate::ManagedEncodingSnafu)?, revision,
                 attempt.capture.tenant.as_slice(), attempt.capture.instance, attempt.request.id],
         ).context(AnalysisDatabaseSnafu { operation: "finish known managed attempt" })?;
         if changed != 1 {

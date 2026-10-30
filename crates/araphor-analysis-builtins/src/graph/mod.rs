@@ -13,6 +13,7 @@ mod native;
 mod observation;
 mod policy;
 mod process;
+mod resume;
 
 pub use contract::ReasonDetails;
 pub use model::*;
@@ -21,6 +22,7 @@ pub const GRAPH_WINDOW_NS: u64 = 300_000_000_000;
 pub const GRAPH_WITNESS_TTL_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
 pub use incremental::{Progress, ProgressRemoval};
+pub use resume::{Resume, ResumeBasis};
 use GraphContextActionV1 as ContextClass;
 use GraphFactValueV1 as FactValue;
 use GraphReadPathV1 as ReadPath;

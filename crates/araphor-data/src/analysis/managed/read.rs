@@ -1,3 +1,4 @@
+use super::codec::ManagedCodec;
 use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
@@ -25,8 +26,8 @@ impl AnalysisStore {
         if grant.selection.tenant_id != spec.tenant {
             return Err(Code::Invalid.error("managed instance grant"));
         }
-        let bytes = serde_json::to_vec(spec).context(crate::PackageEncodingSnafu)?;
-        let grant_bytes = serde_json::to_vec(grant).context(crate::PackageEncodingSnafu)?;
+        let bytes = ManagedCodec::encode(spec).context(crate::ManagedEncodingSnafu)?;
+        let grant_bytes = ManagedCodec::encode(grant).context(crate::ManagedEncodingSnafu)?;
         let mut writer = self.writer()?;
         let transaction = writer
             .get_mut()?
@@ -52,7 +53,7 @@ impl AnalysisStore {
                     spec.id,
                     revision,
                     bytes,
-                    serde_json::to_vec(&grant.selection).context(crate::PackageEncodingSnafu)?
+                    ManagedCodec::encode(&grant.selection).context(crate::ManagedEncodingSnafu)?
                 ],
             )
             .context(AnalysisDatabaseSnafu {
@@ -131,7 +132,7 @@ impl AnalysisStore {
             params![tenant.as_slice(), id, generation], |row| row.get(0),
         ).context(AnalysisDatabaseSnafu { operation: "read immutable managed version" })?;
         let spec: ManagedSpec =
-            serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
+            ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
         spec.validate()?;
         if spec.tenant != tenant || spec.id != id {
             return Err(Code::Invalid.error("managed version key"));
@@ -150,7 +151,7 @@ impl AnalysisStore {
             params![tenant.as_slice(), id, generation], |row| row.get(0),
         ).context(AnalysisDatabaseSnafu { operation: "read immutable managed scope" })?;
         let scope: crate::AnalysisSelectionV1 =
-            serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
+            ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
         if !scope.valid() || scope.tenant_id != tenant {
             return Err(Code::Invalid.error("managed version scope"));
         }
@@ -211,8 +212,8 @@ impl AnalysisStore {
         ),
     ) -> Result<ManagedInstance> {
         let spec: ManagedSpec =
-            serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
-        let grant = serde_json::from_slice(&grant).context(crate::PackageEncodingSnafu)?;
+            ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
+        let grant = ManagedCodec::decode(&grant).context(crate::ManagedDecodingSnafu)?;
         if spec.tenant != tenant || spec.id != id {
             return Err(Code::Invalid.error("managed instance key"));
         }
@@ -325,8 +326,7 @@ impl AnalysisStore {
                     "SELECT contract FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND completed = ?",
                     params![tenant.as_slice(), id, completed], |row| row.get(0),
                 ).context(AnalysisDatabaseSnafu { operation: "read managed terminal frontier" })?;
-                let attempt: Attempt = serde_json::from_slice(&bytes)
-                    .context(crate::PackageEncodingSnafu)?;
+                let attempt: Attempt = ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
                 let terminal = attempt.terminal.as_ref().filter(|terminal|
                     terminal.instance == id && terminal.attempt == attempt.request.id
                         && terminal.revision == completed && attempt.receipt.is_none())
@@ -358,8 +358,7 @@ impl AnalysisStore {
                     "SELECT contract FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND completed = ?",
                     params![tenant.as_slice(), id, instance.progress], |row| row.get(0),
                 ).context(AnalysisDatabaseSnafu { operation: "read managed committed frontier" })?;
-                let attempt: Attempt = serde_json::from_slice(&bytes)
-                    .context(crate::PackageEncodingSnafu)?;
+                let attempt: Attempt = ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
                 if attempt.capture.tenant != tenant || attempt.capture.instance != id
                     || attempt.capture.generation != instance.generation
                     || attempt.receipt.as_ref().is_none_or(|receipt| {
@@ -784,9 +783,9 @@ impl AnalysisStore {
             params![tenant.as_slice(), id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .context(AnalysisDatabaseSnafu { operation: "read complete managed result" })?;
         let record: Record =
-            serde_json::from_slice(&metadata).context(crate::PackageEncodingSnafu)?;
+            ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
         let output: sdk::wire::Output =
-            serde_json::from_slice(&body).context(crate::PackageEncodingSnafu)?;
+            ManagedCodec::decode(&body).context(crate::ManagedDecodingSnafu)?;
         if Self::managed_edges(reader, tenant, id)? != record.dependencies {
             return Err(Code::Invalid.error("managed result edges"));
         }
@@ -801,6 +800,14 @@ impl AnalysisStore {
             return Err(Code::Missing.error("managed input payload"));
         }
         Ok((record, output, revision))
+    }
+
+    pub(in crate::analysis) fn managed_input_basis(
+        reader: &Connection,
+        tenant: [u8; 16],
+        id: &str,
+    ) -> Result<InputBasis> {
+        Ok(Self::managed_header_from(reader, tenant, id)?.0.input_basis)
     }
 
     fn retained_call_from(
@@ -934,7 +941,7 @@ impl AnalysisStore {
                 }
                 let metadata: Vec<u8> = reader.query_row("SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![spec.tenant.as_slice(), id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "read managed freshness metadata" })?;
                 let record: Record =
-                    serde_json::from_slice(&metadata).context(crate::PackageEncodingSnafu)?;
+                    ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
                 match self.retained_call_from(reader, spec, &record, &id, revision)? {
                     Some(attested) => attested,
                     None => {
@@ -945,7 +952,7 @@ impl AnalysisStore {
             } else if processor == "managed-definition-v1" {
                 let metadata: Vec<u8> = reader.query_row("SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![spec.tenant.as_slice(), id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "read managed selected freshness" })?;
                 let step: Step =
-                    serde_json::from_slice(&metadata).context(crate::PackageEncodingSnafu)?;
+                    ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
                 let current = Self::managed_instance_from(reader, spec.tenant, &step.instance)?;
                 if step.instance != spec.id
                     || current.is_none_or(|instance| instance.progress != revision)
@@ -1069,9 +1076,9 @@ impl AnalysisStore {
             "SELECT request_meta, body, commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-definition-v1'",
             params![tenant.as_slice(), id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .context(AnalysisDatabaseSnafu { operation: "read managed selected relation" })?;
-        let step: Step = serde_json::from_slice(&metadata).context(crate::PackageEncodingSnafu)?;
+        let step: Step = ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
         let packet: sdk::wire::Dataset =
-            serde_json::from_slice(&body).context(crate::PackageEncodingSnafu)?;
+            ManagedCodec::decode(&body).context(crate::ManagedDecodingSnafu)?;
         if !packet.arrow_ipc.is_empty() {
             return Err(Code::Invalid.error("managed selected header"));
         }
@@ -1105,11 +1112,10 @@ impl AnalysisStore {
     )> {
         if processor == "managed-package-v1" {
             let record: Record =
-                serde_json::from_slice(metadata).context(crate::PackageEncodingSnafu)?;
+                ManagedCodec::decode(metadata).context(crate::ManagedDecodingSnafu)?;
             Ok((record.witnesses, record.contexts))
         } else {
-            let step: Step =
-                serde_json::from_slice(metadata).context(crate::PackageEncodingSnafu)?;
+            let step: Step = ManagedCodec::decode(metadata).context(crate::ManagedDecodingSnafu)?;
             Ok((step.witnesses, step.contexts))
         }
     }

@@ -1,24 +1,168 @@
 use duckdb::{params, Connection, OptionalExt as _};
+use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::*;
-use crate::{AnalysisConflictSnafu, GraphSnapshotV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION};
-
-use super::graph_rows::GraphRows;
+use crate::{GraphSnapshotV1, GraphValidate as _, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION};
 
 mod findings;
 mod interest;
-pub use interest::GraphLease;
 pub(super) mod traversal;
 mod windows;
+pub use interest::GraphLease;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphManifest {
+    pub schema_version: u32,
+    pub scope: ProcessorScopeV1,
+    pub first_cursor: u64,
+    pub last_cursor: u64,
+    pub input_manifest: crate::GraphRevisionV1,
+    pub facts: Vec<crate::GraphFactV1>,
+    pub packages: Vec<crate::GraphPackageCheckpointV1>,
+    pub missing_ranges: Vec<(u64, u64)>,
+    pub input_positions: Vec<(crate::DiscoveryRecordIdV1, crate::StorePositionV1)>,
+    pub previous_result_id: Option<String>,
+    pub context_notice_revision: u64,
+    pub witness_deadline_utc_ns: u64,
+}
 
 pub struct GraphCommit {
     pub request: AnalysisResultCommitV1,
-    pub graph: super::graph_rows::CanonicalGraph,
+    pub metadata: GraphManifest,
     pub contexts: Vec<AnalysisContextVersionV1>,
     pub proofs: Vec<AnalysisContextRefV1>,
     pub sources: Vec<(String, u64)>,
     pub advance: bool,
+    pub expire: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(in crate::analysis) struct GraphRequestMeta {
+    pub scope: ProcessorScopeV1,
+    pub expected_cursor: u64,
+    pub consumed_cursor: u64,
+    pub coverage_revision: u64,
+    pub captured_context_revision: u64,
+    pub result_id: String,
+    pub created_utc_ns: u64,
+    pub witnesses: Vec<AnalysisWitnessV1>,
+    pub captured_context_refs: Vec<AnalysisContextRefV1>,
+    pub context_refs: Vec<AnalysisContextRefV1>,
+    pub sources: Vec<(String, u64)>,
+    pub advance: bool,
+    pub captured_prefix: bool,
+}
+
+impl GraphRequestMeta {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        rmp_serde::to_vec(self).context(crate::GraphNativeEncodingSnafu)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
+        let value = Self::deserialize(&mut decoder).context(crate::GraphNativeDecodingSnafu)?;
+        if decoder.position() != bytes.len() as u64 {
+            return crate::GraphInvalidSnafu {
+                field: "graph request metadata trailing bytes",
+            }
+            .fail();
+        }
+        Ok(value)
+    }
+}
+
+impl GraphManifest {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        self.serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
+            .map_err(|_| {
+                crate::GraphInvalidSnafu {
+                    field: "graph metadata encoding",
+                }
+                .build()
+            })?;
+        Ok(bytes)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
+        let value = Self::deserialize(&mut decoder).map_err(|_| {
+            crate::GraphInvalidSnafu {
+                field: "graph metadata encoding",
+            }
+            .build()
+        })?;
+        if decoder.position() != bytes.len() as u64 {
+            return crate::GraphInvalidSnafu {
+                field: "graph metadata trailing bytes",
+            }
+            .fail();
+        }
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn from_snapshot(graph: &GraphSnapshotV1) -> Self {
+        Self {
+            schema_version: graph.schema_version,
+            scope: graph.scope.clone(),
+            first_cursor: graph.first_cursor,
+            last_cursor: graph.last_cursor,
+            input_manifest: graph.input_manifest.clone(),
+            facts: graph.graph.facts.clone(),
+            packages: graph.packages.clone(),
+            missing_ranges: graph.missing_ranges.clone(),
+            input_positions: graph.input_positions.clone(),
+            previous_result_id: graph.previous_result_id.clone(),
+            context_notice_revision: graph.context_notice_revision,
+            witness_deadline_utc_ns: graph.witness_deadline_utc_ns,
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        self.snapshot().validate()?;
+        for fact in &self.facts {
+            fact.validate()?;
+            if fact.record_id.stream != self.scope.identity
+                || self
+                    .input_manifest
+                    .evidence
+                    .binary_search(&fact.record_id)
+                    .is_err()
+            {
+                return Err(crate::GraphInvalidSnafu {
+                    field: "graph fact evidence",
+                }
+                .build());
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::analysis) fn snapshot(&self) -> GraphSnapshotV1 {
+        GraphSnapshotV1 {
+            schema_version: self.schema_version,
+            scope: self.scope.clone(),
+            first_cursor: self.first_cursor,
+            last_cursor: self.last_cursor,
+            input_manifest: self.input_manifest.clone(),
+            graph: crate::GraphVersionV1 {
+                subjects: Vec::new(),
+                edges: Vec::new(),
+                branches: Vec::new(),
+                facts: self.facts.clone(),
+            },
+            findings: Vec::new(),
+            packages: self.packages.clone(),
+            missing_ranges: self.missing_ranges.clone(),
+            input_positions: self.input_positions.clone(),
+            previous_result_id: self.previous_result_id.clone(),
+            context_notice_revision: self.context_notice_revision,
+            witness_deadline_utc_ns: self.witness_deadline_utc_ns,
+        }
+    }
 }
 
 impl AnalysisStore {
@@ -39,171 +183,17 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub fn register_graph(&self, identity: &EvidenceIntakeIdentityV1) -> Result<()> {
-        let mut writer = self.writer_access()?;
-        if !self.graph_registration_required(writer.get()?, identity)? {
-            return Ok(());
-        }
-        let floor = Self::read_receipt_from(writer.get()?, &self.root, identity, &identity.key())?
-            .map_or(0, |receipt| receipt.retained_floor);
-        self.register_graph_locked(writer.get_mut()?, identity, floor, || Ok(()))
-    }
-
-    pub fn register_graph_guarded(
+    pub fn graph_result(
         &self,
-        identity: &EvidenceIntakeIdentityV1,
-        captured: u64,
-        check: impl FnOnce() -> Result<()>,
-    ) -> Result<bool> {
-        let mut writer = self.writer_access()?;
-        match self.graph_registration_from(writer.get()?, identity)? {
-            Some((class, false, _)) if class == "required" => {
-                check()?;
-                return Ok(true);
-            }
-            Some((class, true, revision)) if class == "required" && revision > captured => {
-                check()?;
-                return Ok(false);
-            }
-            Some(_) => return AnalysisConflictSnafu.fail(),
-            None => {}
-        }
-        let floor = Self::read_receipt_from(writer.get()?, &self.root, identity, &identity.key())?
-            .map_or(0, |receipt| receipt.retained_floor);
-        self.register_graph_locked(writer.get_mut()?, identity, floor, check)?;
-        Ok(true)
-    }
-
-    pub(super) fn register_graph_locked(
-        &self,
-        writer: &mut Connection,
-        identity: &EvidenceIntakeIdentityV1,
-        floor: u64,
-        check: impl FnOnce() -> Result<()>,
-    ) -> Result<()> {
-        let key = identity.key();
-        let start = floor
-            .checked_add(1)
-            .ok_or_else(|| self.state_error("the graph start cursor is exhausted"))?;
-        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin required graph registration",
-        })?;
-        let revision = Self::read_meta_from(&transaction, &self.root)?
-            .commit_revision
-            .checked_add(1)
-            .ok_or_else(|| self.state_error("the graph registration revision is exhausted"))?;
-        transaction.execute(
-            "INSERT INTO processor_progress VALUES (?, ?, ?, ?, 'required', ?, ?, 0, 0, ?, ?, false, '', '', 0, 0, '')",
-            params![GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, identity.tenant_id.as_slice(), key.as_slice(), floor, floor, start, floor],
-        ).context(AnalysisDatabaseSnafu { operation: "register required graph processor" })?;
-        self.check_revision_limits(&transaction, identity.tenant_id)?;
-        Self::record_revision(&transaction, revision, &["processor_progress"])?;
-        check()?;
-        self.commit_metadata(transaction, "commit required graph registration")?;
-        self.revision.send_replace(revision);
-        Ok(())
-    }
-
-    pub(super) fn graph_registration_required(
-        &self,
-        writer: &Connection,
-        identity: &EvidenceIntakeIdentityV1,
-    ) -> Result<bool> {
-        match self.graph_registration_from(writer, identity)? {
-            Some((class, false, _)) if class == "required" => Ok(false),
-            Some(_) => AnalysisConflictSnafu.fail(),
-            None => Ok(true),
-        }
-    }
-
-    fn graph_registration_from(
-        &self,
-        writer: &Connection,
-        identity: &EvidenceIntakeIdentityV1,
-    ) -> Result<Option<(String, bool, u64)>> {
-        if !identity.valid() {
-            return self.reject("the graph source identity is invalid");
-        }
-        writer
-            .query_row(
-                "SELECT class, retired, retirement_revision FROM processor_progress
-             WHERE processor_id = ? AND method_version = ?
-                AND tenant_id = ? AND stream_key = ?",
-                params![
-                    GRAPH_PROCESSOR,
-                    GRAPH_SCHEMA_VERSION,
-                    identity.tenant_id.as_slice(),
-                    identity.key().as_slice()
-                ],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read required graph registration",
-            })
-    }
-
-    pub fn graph_coverage_versions(
-        &self,
-        source: &EvidenceIntakeIdentityV1,
-        frozen: &std::collections::BTreeSet<u64>,
-    ) -> Result<Vec<(u64, Vec<u8>)>> {
-        self.read_snapshot(|snapshot| {
-            self.graph_coverage_from(snapshot, source, frozen, |_, _| Ok(()))
+        tenant: [u8; 16],
+        result_id: &str,
+    ) -> Result<Option<GraphSnapshotV1>> {
+        self.check_graph_read(tenant, &[Some(result_id)], "graph result reference")?;
+        self.read_snapshot(|reader| {
+            super::graph_rows::GraphRows::read_header(reader, tenant, result_id)?
+                .map(|header| super::graph_rows::GraphRows::read(reader, result_id, &header))
+                .transpose()
         })
-    }
-
-    pub(in crate::analysis) fn graph_coverage_from(
-        &self,
-        snapshot: &Connection,
-        source: &EvidenceIntakeIdentityV1,
-        frozen: &std::collections::BTreeSet<u64>,
-        preflight: impl FnOnce(usize, usize) -> Result<()>,
-    ) -> Result<Vec<(u64, Vec<u8>)>> {
-        let selected =
-            serde_json::to_string(frozen).context(crate::JsonSnafu { path: &self.root })?;
-        let select = "FROM coverage WHERE tenant_id = ? AND stream_key = ?
-            AND (revision = (SELECT max(revision) FROM coverage WHERE tenant_id = ? AND stream_key = ?)
-                OR revision IN (SELECT unnest(CAST(? AS UBIGINT[]))))";
-        let key = source.key();
-        let (count, bytes): (usize, usize) = snapshot.query_row(
-            &format!("SELECT count(*)::UBIGINT, coalesce(sum(octet_length(report)), 0)::UBIGINT {select}"),
-            params![source.tenant_id.as_slice(), key.as_slice(), source.tenant_id.as_slice(), key.as_slice(), selected],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "bound captured graph coverage" })?;
-        preflight(count, bytes)?;
-        let mut statement = snapshot
-            .prepare(&format!(
-                "SELECT revision, report {select} ORDER BY revision"
-            ))
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare captured graph coverage",
-            })?;
-        let rows = statement
-            .query_map(
-                params![
-                    source.tenant_id.as_slice(),
-                    key.as_slice(),
-                    source.tenant_id.as_slice(),
-                    key.as_slice(),
-                    selected
-                ],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read captured graph coverage",
-            })?
-            .collect::<std::result::Result<Vec<(u64, Vec<u8>)>, _>>()
-            .context(AnalysisDatabaseSnafu {
-                operation: "decode captured graph coverage",
-            })?;
-        if frozen.iter().any(|revision| {
-            rows.binary_search_by_key(revision, |(revision, _)| *revision)
-                .is_err()
-        }) {
-            return self.reject("the frozen graph coverage is absent");
-        }
-        Ok(rows)
     }
 
     pub fn graph_snapshot(
@@ -211,37 +201,30 @@ impl AnalysisStore {
         source: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<GraphSnapshotV1>> {
         if !source.valid() {
-            return self.reject("the graph snapshot source is invalid");
+            return self.reject("the Graph source is invalid");
         }
-        self.read_snapshot(|snapshot| {
-            let id: Option<String> = snapshot
-                .query_row(
-                    "SELECT r.result_id FROM processor_progress p JOIN analysis_results r
-                   ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id
-                     AND r.processor_id = p.processor_id
-                 WHERE p.processor_id = ? AND p.method_version = ?
-                   AND p.tenant_id = ? AND p.stream_key = ?",
-                    params![
-                        GRAPH_PROCESSOR,
-                        GRAPH_SCHEMA_VERSION,
-                        source.tenant_id.as_slice(),
-                        source.key().as_slice()
-                    ],
-                    |row| row.get(0),
-                )
-                .optional()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read current graph reference",
-                })?;
-            let Some(id) = id else {
-                return Ok(None);
-            };
-            let header = GraphRows::read_header(snapshot, source.tenant_id, &id)?
-                .ok_or_else(|| self.state_error("the current graph header is absent"))?;
-            if header.snapshot.scope.identity != *source {
-                return self.reject("the current graph source differs from its progress");
-            }
-            GraphRows::read(snapshot, &id, &header).map(Some)
+        self.read_snapshot(|reader| {
+            let id: Option<String> = reader.query_row(
+                "SELECT result_id FROM processor_progress WHERE tenant_id = ? AND stream_key = ?
+                 AND processor_id = ? AND method_version = ? AND result_id <> ''",
+                params![source.tenant_id.as_slice(),source.key(),GRAPH_PROCESSOR,GRAPH_SCHEMA_VERSION], |row|row.get(0),
+            ).optional().context(AnalysisDatabaseSnafu {operation:"select Graph head"})?;
+            id.map(|id| self.selected_graph_header(reader, source.tenant_id, Some(source), &id)
+                .and_then(|header| super::graph_rows::GraphRows::read(reader,&id,&header))).transpose()
+        })
+    }
+
+    pub fn graph_source(
+        &self,
+        tenant: [u8; 16],
+        result_id: &str,
+    ) -> Result<Option<EvidenceIntakeIdentityV1>> {
+        self.check_graph_read(tenant, &[Some(result_id)], "graph result reference")?;
+        self.read_snapshot(|reader| {
+            Ok(
+                super::graph_rows::GraphRows::read_header(reader, tenant, result_id)?
+                    .map(|header| header.snapshot.scope.identity),
+            )
         })
     }
 
@@ -253,36 +236,70 @@ impl AnalysisStore {
         after: Option<&str>,
         current: bool,
     ) -> Result<Vec<(String, GraphSnapshotV1, u64)>> {
-        self.read_snapshot(|snapshot| {
-            self.graph_page(snapshot, tenant, source, after, current, None)
-                .map(|(values, _)| values)
+        self.check_graph_read(tenant, &[after], "graph page scope")?;
+        self.read_snapshot(|reader| {
+            self.graph_page(reader, tenant, source, after, current, None)
+                .map(|(rows, _)| rows)
         })
     }
 
-    pub fn graph_source(
+    pub fn graph_coverage_versions(
         &self,
-        tenant: [u8; 16],
-        result_id: &str,
-    ) -> Result<Option<EvidenceIntakeIdentityV1>> {
-        self.check_graph_read(tenant, &[Some(result_id)], "graph result reference")?;
-        self.read_snapshot(|snapshot| {
-            Ok(GraphRows::read_header(snapshot, tenant, result_id)?
-                .map(|header| header.snapshot.scope.identity))
-        })
+        source: &EvidenceIntakeIdentityV1,
+        frozen: &std::collections::BTreeSet<u64>,
+    ) -> Result<Vec<(u64, Vec<u8>)>> {
+        self.read_snapshot(|reader| self.graph_coverage_from(reader, source, frozen, |_, _| Ok(())))
     }
 
-    pub fn graph_result(
+    pub(in crate::analysis) fn graph_coverage_from(
         &self,
-        tenant: [u8; 16],
-        result_id: &str,
-    ) -> Result<Option<GraphSnapshotV1>> {
-        self.check_graph_read(tenant, &[Some(result_id)], "graph result reference")?;
-        self.read_snapshot(|snapshot| {
-            let Some(header) = GraphRows::read_header(snapshot, tenant, result_id)? else {
-                return Ok(None);
-            };
-            let graph = GraphRows::read(snapshot, result_id, &header)?;
-            Ok(Some(graph))
-        })
+        reader: &Connection,
+        source: &EvidenceIntakeIdentityV1,
+        frozen: &std::collections::BTreeSet<u64>,
+        preflight: impl FnOnce(usize, usize) -> Result<()>,
+    ) -> Result<Vec<(u64, Vec<u8>)>> {
+        let placeholders = std::iter::repeat_n("?", frozen.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let filter = if frozen.is_empty() {
+            String::new()
+        } else {
+            format!(" OR revision IN ({placeholders})")
+        };
+        let query = format!("SELECT revision,report FROM coverage WHERE tenant_id = ? AND stream_key = ? AND
+            (revision = (SELECT max(revision) FROM coverage WHERE tenant_id = ? AND stream_key = ?){filter}) ORDER BY revision");
+        let mut values = vec![
+            duckdb::types::Value::Blob(source.tenant_id.to_vec()),
+            duckdb::types::Value::Blob(source.key()),
+            duckdb::types::Value::Blob(source.tenant_id.to_vec()),
+            duckdb::types::Value::Blob(source.key()),
+        ];
+        values.extend(
+            frozen
+                .iter()
+                .map(|&value| duckdb::types::Value::UBigInt(value)),
+        );
+        let mut statement = reader.prepare(&query).context(AnalysisDatabaseSnafu {
+            operation: "prepare Graph coverage",
+        })?;
+        let rows = statement
+            .query_map(duckdb::params_from_iter(values.iter()), |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read Graph coverage",
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode Graph coverage",
+            })?;
+        preflight(rows.len(), rows.iter().map(|(_, bytes)| bytes.len()).sum())?;
+        if frozen
+            .iter()
+            .any(|wanted| !rows.iter().any(|(revision, _)| revision == wanted))
+        {
+            return self.reject("the frozen Graph coverage is absent");
+        }
+        Ok(rows)
     }
 }

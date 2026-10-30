@@ -629,7 +629,7 @@ fn lifecycle_recovery_rejects_corruption() -> TestResult {
                     writer.execute("ALTER TABLE managed_instances DROP COLUMN lifecycle", [])?;
                 }
                 _ => {
-                    let mut saved: model::Attempt = serde_json::from_slice(&writer.query_row(
+                    let mut saved: model::Attempt = ManagedCodec::decode(&writer.query_row(
                         "SELECT contract FROM managed_attempts WHERE attempt_id = ?",
                         params![input.id],
                         |row| row.get::<_, Vec<u8>>(0),
@@ -641,7 +641,7 @@ fn lifecycle_recovery_rejects_corruption() -> TestResult {
                     }
                     writer.execute(
                         "UPDATE managed_attempts SET contract = ? WHERE attempt_id = ?",
-                        params![serde_json::to_vec(&saved)?, input.id],
+                        params![ManagedCodec::encode(&saved)?, input.id],
                     )?;
                 }
             }

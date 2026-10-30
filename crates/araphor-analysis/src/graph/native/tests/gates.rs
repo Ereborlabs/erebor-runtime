@@ -17,11 +17,11 @@ fn native_projection_requires_admission() -> TestResult {
         .map(|record| record.id.clone())
         .collect::<Vec<_>>();
     for context in &mut input.facts {
-        let mut fact: araphor_data::GraphFactV1 = serde_json::from_slice(&context.body)?;
+        let mut fact = araphor_data::GraphFactV1::decode_context(&context.body)?;
         if let araphor_data::GraphFactValueV1::Policy(policy) = &mut fact.value {
             policy.observations = ids.clone();
             policy.limits = vec!["NATIVE_NESTED_LIMIT".repeat(256)];
-            context.body = serde_json::to_vec(&fact)?;
+            context.body = fact.encode_context()?;
         }
     }
     let input = input.normalized()?;
@@ -267,7 +267,7 @@ async fn payload(
     let mut expected = expected;
     expected.input_positions = captured.positions.clone();
     let expected = expected.normalized()?;
-    let revision = InputRevision::of(&(
+    let revision = InputRevision::of_native(&(
         &expected.source,
         &expected.records,
         &expected.input_positions,
@@ -292,7 +292,7 @@ async fn payload(
         assert_eq!(
             input.revision.window,
             Some(sdk::SourceWindow {
-                source: serde_json::to_vec(&fixture.source)?,
+                source: fixture.source.exact_key(),
                 start_utc_ns: fixture.times.0,
                 end_utc_ns: fixture.times.1,
             })

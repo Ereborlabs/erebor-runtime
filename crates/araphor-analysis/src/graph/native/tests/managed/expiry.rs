@@ -861,29 +861,21 @@ async fn expiry_query_clock() -> TestResult {
                 .downcast_ref::<sdk::arrow_array::UInt64Array>()
         })
         .ok_or("Query expiry head revision")?;
-    let snapshot = batch
-        .column_by_name("snapshot")
+    let metadata = batch
+        .column_by_name("metadata")
         .and_then(|array| {
             array
                 .as_any()
                 .downcast_ref::<sdk::arrow_array::BinaryArray>()
         })
-        .ok_or("Query expiry snapshot")?;
-    let contexts = batch
-        .column_by_name("context_refs")
-        .and_then(|array| {
-            array
-                .as_any()
-                .downcast_ref::<sdk::arrow_array::BinaryArray>()
-        })
-        .ok_or("Query expiry context references")?;
+        .ok_or("Query expiry metadata")?;
     assert_eq!(id.value(0), original.result_id);
     assert_eq!(revision.value(0), original.commit_revision);
     assert_eq!(
-        serde_json::from_slice::<araphor_data::GraphSnapshotV1>(snapshot.value(0))?,
-        previous
+        araphor_data::GraphManifest::decode(metadata.value(0))?.encode()?,
+        araphor_data::GraphManifest::from_snapshot(&previous).encode()?
     );
-    let mut contexts = serde_json::from_slice::<Vec<AnalysisContextRefV1>>(contexts.value(0))?;
+    let mut contexts: Vec<AnalysisContextRefV1> = Projection::value(batch, "context_refs", 0)?;
     contexts.sort_by(|left, right| left.key.cmp(&right.key));
     assert_eq!(contexts, references.1);
     assert_eq!(fixture.query.store().meta()?, before);

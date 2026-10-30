@@ -19,89 +19,124 @@ impl Incident {
             .records
             .keys()
             .map(|record| record.stream.clone())
+            .chain(self.graphs.keys().cloned())
             .collect::<std::collections::BTreeSet<_>>();
         let mut reads: Vec<BoxFuture<'_, ()>> = Vec::new();
+        let mut finding_ids = std::collections::BTreeSet::new();
         for source in sources {
-            let query = source.clone();
-            reads.push(async move {
-                let source = query;
-                output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
-                    "source": source, "read": "graph_state", "started": true,
-                }));
-                match client.query(wire::QueryRequest {
+            let mut queries = vec![(
+                "graph_state",
+                None,
+                vec!["contiguous_cursor", "coverage_revision", "consumed_cursor",
+                    "current_result_id", "processor_present", "retired"],
+                wire::QueryRequest {
                     sql: "SELECT contiguous_cursor, coverage_revision, consumed_cursor, current_result_id, processor_present, retired FROM graph_state WHERE source_key = $1".into(),
                     parameters: vec![wire::QueryValue {
                         kind: Some(Kind::Binary(source.key())),
                     }],
                     follow: false,
                     ..Default::default()
-                }).await {
-                    Ok(mut stream) => {
-                        output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
-                            "source": source, "read": "graph_state", "opened": true,
-                            "columns": ["contiguous_cursor", "coverage_revision", "consumed_cursor",
-                                "current_result_id", "processor_present", "retired"],
-                        }));
-                        loop {
-                            let frame = match stream.message().await {
-                                Ok(Some(frame)) => frame,
-                                Ok(None) => {
-                                    output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
-                                        "source": source, "read": "graph_state", "eof": true,
-                                    }));
-                                    break;
-                                }
-                                Err(error) => {
-                                    output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
-                                        "source": source, "read": "graph_state", "error": error.to_string(),
-                                    }));
-                                    break;
-                                }
-                            };
-                            let terminal = matches!(
-                                &frame.payload,
-                                Some(Payload::Error(_) | Payload::Terminal(_))
-                            );
-                            let value = match frame.payload {
-                                Some(Payload::Rows(rows)) => json!({
-                                    "limited": rows.limited,
-                                    "rows": rows.rows.into_iter().map(|row| {
-                                        row.values.into_iter().map(|value| match value.kind {
-                                            Some(Kind::Null(_)) => Value::Null,
-                                            Some(Kind::Unsigned(value)) => json!(value),
-                                            Some(Kind::Text(value)) => json!(value),
-                                            Some(Kind::Boolean(value)) => json!(value),
-                                            None => json!({"missing": true}),
-                                            _ => json!({"error": "unexpected graph_state value"}),
-                                        }).collect::<Vec<_>>()
-                                    }).collect::<Vec<_>>(),
-                                }),
-                                Some(Payload::Checkpoint(_)) => json!({"checkpoint": true}),
-                                Some(Payload::Error(error)) => json!({
-                                    "error": {"code": error.code, "reason": error.reason},
-                                }),
-                                Some(Payload::Terminal(terminal)) => json!({"terminal": terminal.reason}),
-                                Some(Payload::Metadata(_)) => json!({"metadata": true}),
-                                Some(Payload::Health(_)) => json!({"health": true}),
-                                None => json!({"missing_payload": true}),
-                            };
+                },
+            )];
+            if let Some((_, _, graph)) = self.graphs.get(&source) {
+                for finding in &graph.findings {
+                    if !finding
+                        .effects
+                        .iter()
+                        .any(|effect| self.records.contains_key(&effect.evidence))
+                        || !finding_ids.insert(finding.finding_id.clone())
+                    {
+                        continue;
+                    }
+                    queries.push((
+                        "notifications",
+                        Some(finding.finding_id.clone()),
+                        vec!["notification_revision", "finding_result_id", "route_id",
+                            "deadline_utc_ns", "failure"],
+                        wire::QueryRequest {
+                            sql: "SELECT notification_revision, finding_result_id, route_id, deadline_utc_ns, failure FROM notifications WHERE finding_id = $1 ORDER BY notification_revision DESC".into(),
+                            parameters: vec![wire::QueryValue {
+                                kind: Some(Kind::Text(finding.finding_id.clone())),
+                            }],
+                            follow: false,
+                            ..Default::default()
+                        },
+                    ));
+                }
+            }
+            for (read, finding_id, columns, request) in queries {
+                let source = source.clone();
+                reads.push(async move {
+                    output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                        "source": source, "read": read, "finding_id": finding_id, "started": true,
+                    }));
+                    match client.query(request).await {
+                        Ok(mut stream) => {
                             output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
-                                "source": source, "read": "graph_state",
-                                "read_revision": frame.read_revision, "operation": frame.operation,
-                                "frame": value,
+                                "source": source, "read": read, "finding_id": finding_id, "opened": true,
+                                "columns": columns,
                             }));
-                            if terminal {
-                                break;
+                            loop {
+                                let frame = match stream.message().await {
+                                    Ok(Some(frame)) => frame,
+                                    Ok(None) => {
+                                        output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                                            "source": source, "read": read, "finding_id": finding_id, "eof": true,
+                                        }));
+                                        break;
+                                    }
+                                    Err(error) => {
+                                        output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                                            "source": source, "read": read, "finding_id": finding_id, "error": error.to_string(),
+                                        }));
+                                        break;
+                                    }
+                                };
+                                let terminal = matches!(
+                                    &frame.payload,
+                                    Some(Payload::Error(_) | Payload::Terminal(_))
+                                );
+                                let value = match frame.payload {
+                                    Some(Payload::Rows(rows)) => json!({
+                                        "limited": rows.limited,
+                                        "rows": rows.rows.into_iter().map(|row| {
+                                            row.values.into_iter().map(|value| match value.kind {
+                                                Some(Kind::Null(_)) => Value::Null,
+                                                Some(Kind::Unsigned(value)) => json!(value),
+                                                Some(Kind::Text(value)) => json!(value),
+                                                Some(Kind::Boolean(value)) => json!(value),
+                                                None => json!({"missing": true}),
+                                                _ => json!({"error": "unexpected progress value"}),
+                                            }).collect::<Vec<_>>()
+                                        }).collect::<Vec<_>>(),
+                                    }),
+                                    Some(Payload::Checkpoint(_)) => json!({"checkpoint": true}),
+                                    Some(Payload::Error(error)) => json!({
+                                        "error": {"code": error.code, "reason": error.reason},
+                                    }),
+                                    Some(Payload::Terminal(terminal)) => json!({"terminal": terminal.reason}),
+                                    Some(Payload::Metadata(_)) => json!({"metadata": true}),
+                                    Some(Payload::Health(_)) => json!({"health": true}),
+                                    None => json!({"missing_payload": true}),
+                                };
+                                output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                                    "source": source, "read": read, "finding_id": finding_id,
+                                    "read_revision": frame.read_revision, "operation": frame.operation,
+                                    "frame": value,
+                                }));
+                                if terminal {
+                                    break;
+                                }
                             }
                         }
+                        Err(error) => {
+                            output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
+                                "source": source, "read": read, "finding_id": finding_id, "error": error.to_string(),
+                            }));
+                        }
                     }
-                    Err(error) => {
-                        output.lock().unwrap_or_else(PoisonError::into_inner).push(json!({
-                            "source": source, "read": "graph_state", "error": error.to_string(),
-                        }));
-                    }
-                }
-            }.boxed());
+                }.boxed());
+            }
             for operation in [
                 ManagedGraphOperation::Evaluate,
                 ManagedGraphOperation::Expire,

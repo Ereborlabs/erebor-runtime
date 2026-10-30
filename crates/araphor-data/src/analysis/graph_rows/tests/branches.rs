@@ -1,5 +1,5 @@
 use super::*;
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 #[test]
 fn branch_values_keep_history_order_and_duplicates() -> TestResult {
@@ -37,13 +37,10 @@ fn branch_values_keep_history_order_and_duplicates() -> TestResult {
         ("independent", 2, 6, vec![branch.clone()]),
     ];
     for (id, lineage, revision, branches) in &versions {
-        writer.execute(
-            "INSERT INTO graph_versions VALUES (?, ?, ?)",
-            params![id, lineage, revision],
-        )?;
-        GraphRows::insert_branches(&writer, tenant, *lineage, *revision, branches)?;
+        NativeRows::bind(&writer, id, *lineage, *revision)?;
+        NativeRows::branches(&writer, tenant, *lineage, *revision, branches)?;
         assert_eq!(
-            GraphRows::read_branches(&writer, id, tenant, branches.len(), None)?,
+            NativeRows::read_branches(&writer, id, tenant, branches.len(), None)?,
             *branches,
             "{id}"
         );
@@ -58,18 +55,15 @@ fn branch_values_keep_history_order_and_duplicates() -> TestResult {
     let mut writer = Connection::open(&path)?;
     for (id, _, _, branches) in &versions {
         assert_eq!(
-            GraphRows::read_branches(&writer, id, tenant, branches.len(), None)?,
+            NativeRows::read_branches(&writer, id, tenant, branches.len(), None)?,
             *branches,
             "reopened {id}"
         );
     }
     {
         let transaction = writer.transaction()?;
-        transaction.execute(
-            "INSERT INTO graph_versions VALUES ('rolled-back', 1, 7)",
-            [],
-        )?;
-        GraphRows::insert_branches(&transaction, tenant, 1, 7, &[])?;
+        NativeRows::bind(&transaction, "rolled-back", 1, 7)?;
+        NativeRows::branches(&transaction, tenant, 1, 7, &[])?;
     }
     assert_eq!(
         writer.query_row::<u64, _, _>(
@@ -82,15 +76,15 @@ fn branch_values_keep_history_order_and_duplicates() -> TestResult {
     {
         let transaction = writer.transaction()?;
         transaction.execute(
-            "INSERT INTO graph_branch_membership VALUES (1, 0, 1, 4, NULL)",
+            "INSERT INTO graph_producer_members VALUES (1,6,from_hex('0000'),1,NULL,NULL,NULL,0,4,NULL)",
             [],
         )?;
-        assert!(GraphRows::read_branches(&transaction, "empty", tenant, 0, None).is_err());
+        assert!(NativeRows::read_branches(&transaction, "empty", tenant, 0, None).is_err());
     }
     {
         let transaction = writer.transaction()?;
         transaction.execute("DELETE FROM graph_branch_values WHERE branch_id = 1", [])?;
-        assert!(GraphRows::read_branches(&transaction, "first", tenant, 3, None).is_err());
+        assert!(NativeRows::read_branches(&transaction, "first", tenant, 3, None).is_err());
     }
     {
         let transaction = writer.transaction()?;
@@ -105,7 +99,7 @@ fn branch_values_keep_history_order_and_duplicates() -> TestResult {
             "UPDATE graph_branch_values SET body = ?, value_hash = ? WHERE branch_id = 1",
             params![body, hash.as_slice()],
         )?;
-        assert!(GraphRows::read_branches(&transaction, "first", tenant, 3, None).is_err());
+        assert!(NativeRows::read_branches(&transaction, "first", tenant, 3, None).is_err());
     }
     Ok(())
 }

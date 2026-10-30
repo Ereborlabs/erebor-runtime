@@ -1,4 +1,5 @@
 mod capture;
+mod codec;
 mod commit;
 mod history;
 mod input;
@@ -14,6 +15,7 @@ mod version;
 
 pub use input::ManagedInputRef;
 pub use lifecycle::ManagedLease;
+pub(in crate::analysis) use model::InputBasis;
 pub use model::*;
 
 #[cfg(test)]

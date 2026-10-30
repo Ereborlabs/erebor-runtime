@@ -49,6 +49,7 @@ impl Fixture {
         auth: Arc<ClientAuth>,
         client: ClientGrpcConfig,
     ) -> Result<Self> {
+        erebor_telemetry::init_test_logging();
         let service = ClientGrpcOwner::new(control.clone(), auth.clone(), client)?;
         let (stop, _) = tokio::sync::watch::channel(false);
         Ok(Self {

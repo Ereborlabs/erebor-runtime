@@ -58,7 +58,7 @@ fn notification_restart_keeps_state() -> crate::platform::TestResult<()> {
     let graph = GraphAndFindingOwner::new(data.clone(), inputs, execution)?;
     assert_eq!(graph.snapshot(&source)?, Some(snapshot));
     let store = ControlStore::open(root.path().join("notification-control"))?;
-    let authority = Arc::new(ConfiguredNotificationAuthority::new(store, &grants)?);
+    let authority = Arc::new(ConfiguredNotificationAuthority::new(store, &grants, None)?);
     let router = NotificationRouter::new(data, authority)?;
     assert_eq!(router.obligations(&grants[1], now + 11)?, before);
     router.route_finding(&graph, tenant, &reference, now + 11)?;

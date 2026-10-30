@@ -19,6 +19,13 @@ pub(crate) mod tests;
 pub use reactive::NotificationUpdate;
 
 type Effect<'a> = dyn FnMut(&NotificationDeliveryV1) -> Result<NotificationSinkResultV1> + 'a;
+type FindingBatch = std::collections::BTreeMap<
+    String,
+    (
+        GraphRevisionV1,
+        std::collections::BTreeMap<String, FindingV1>,
+    ),
+>;
 
 pub struct NotificationRouter {
     store: Arc<AnalysisStore>,

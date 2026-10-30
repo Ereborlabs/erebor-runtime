@@ -1,3 +1,4 @@
+use super::codec::ManagedCodec;
 use duckdb::{params, Connection, OptionalExt as _};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
@@ -32,7 +33,7 @@ impl Failure {
         head: u64,
     ) -> Result<Option<Self>> {
         let failure: Option<Self> = bytes
-            .map(|bytes| serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu))
+            .map(|bytes| ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu))
             .transpose()?;
         if failure.as_ref().is_some_and(|failure| {
             failure.progress > instance.progress
@@ -144,7 +145,7 @@ impl AnalysisStore {
         match (failure.origin, bytes) {
             (FailureOrigin::Attempt, Some(bytes)) => {
                 let attempt: Attempt =
-                    serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
+                    ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
                 if attempt.terminal.is_none_or(|terminal| {
                     terminal.exit != ManagedExit::Failed(failure.code)
                         || terminal.revision != failure.revision
@@ -173,7 +174,7 @@ impl AnalysisStore {
                 params![instance.spec.tenant.as_slice(), instance.spec.id, failure.progress], |row| row.get(0),
             ).context(AnalysisDatabaseSnafu { operation: "read managed failure progress" })?;
             let attempt: Attempt =
-                serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
+                ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
             if attempt
                 .receipt
                 .as_ref()

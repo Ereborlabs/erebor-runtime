@@ -54,7 +54,8 @@ confirms that a result should reference changed Graph facts, not rewrite every
 fact. A chain of result deltas would make an old or recent result read earlier
 layers. Our interval membership lets Data select one result revision directly.
 
-**Status: Not done. The user approved the direction and implementation.**
+**Status at the start of the native row rewrite: Not done.** The user approved
+the direction and implementation.
 
 Native evidence identities, historical input membership, shared subject
 values, historical subject membership, and shared finding values are
@@ -527,3 +528,41 @@ replay, and restart checks are the focused proof for this slice. Full input
 capture, reconstruction of complete current contributions, and the writer's
 complete active finding scan remain. The 100-fold speed target and the matched
 backlog deadline are **Not done**.
+
+## Native row replacement result
+
+**Graph storage result: Done.** The old Graph publication, storage, and read
+files are removed from production. Data now stores stable native subject,
+edge, finding, evidence, and progress values once. Versioned membership
+records which values each package call and Graph result selects. Data commits
+the selected values, managed state, progress, and references in one
+transaction. Query reads selected Graph families through its DataFusion table
+provider. The public Graph snapshot is built only when a caller selects it.
+The stored Graph rows do not use JSON.
+
+The fixed 1,592-event incident workload used for this measurement series
+passed its unchanged 90-second observation deadline and assertions on the
+native row path. Its complete test took 119.79 seconds,
+including setup and shutdown. The same four Graph cuts, at revisions 40, 49,
+114, and 116, used 1,069,907 logical Graph column bytes and 11,796 header
+bytes. The total was 1,081,703 bytes, 90.16% below the old 10,990,951-byte
+path and below the 1,099,095-byte target. The complete DuckDB file was
+101,199,872 bytes. That file also contains non-Graph data, saved Arrow values,
+and package artifacts; its size is separate from the logical Graph byte count.
+
+The 66 Data Graph row tests, seven Data finding-read tests, 15 reactive
+notification tests, six native finding-row tests, detector example test, and
+context-head integrity tests passed. The notification tests keep the live
+finding and route checks, exact retry state, and both cancellation points.
+The required `CARGO_INCREMENTAL=0 bash .github/scripts/verify-rust-ci.sh`
+passed formatting, workspace check, and all-target Clippy on this source.
+`cargo test --workspace --all-targets --all-features` stopped during linking
+with `error: linking with cc failed: exit status: 1` after the host filesystem
+reached zero free space. The full workspace test result is **Blocked**.
+
+**100-fold speed result: Not done.** The passing whole-test time does not
+measure a 100-fold reduction in Graph computation. An earlier probe-free run
+missed the same deadline. Native finding-key and context-head reads removed
+repeated payload and per-route lookups without changing the save, deliver, then next
+notification order. Measure the Graph computation and notification transaction
+cost separately before claiming a speed factor.

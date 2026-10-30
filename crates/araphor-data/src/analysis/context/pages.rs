@@ -84,40 +84,65 @@ impl AnalysisStore {
         self.read_snapshot(|reader| {
             let mut statement = reader
                 .prepare_cached(
-                    "SELECT entity_key, lifetime_key, MAX(owner_revision) FROM context_versions
-                 WHERE tenant_id = ? AND owner_id = ?
-                 GROUP BY entity_key, lifetime_key ORDER BY entity_key, lifetime_key LIMIT ?",
+                    "WITH heads AS (
+                     SELECT entity_key, lifetime_key, MAX(owner_revision) AS owner_revision
+                     FROM context_versions WHERE tenant_id = ? AND owner_id = ?
+                     GROUP BY entity_key, lifetime_key
+                     ORDER BY entity_key, lifetime_key LIMIT ?
+                 ) SELECT h.entity_key, h.lifetime_key, h.owner_revision,
+                     c.valid_from_utc_ns, c.valid_until_utc_ns, c.sensitivity,
+                     c.body, c.commit_revision, c.version_key
+                 FROM heads h LEFT JOIN context_versions c
+                     ON c.tenant_id = ? AND c.owner_id = ?
+                     AND c.entity_key = h.entity_key AND c.lifetime_key = h.lifetime_key
+                     AND c.owner_revision = h.owner_revision
+                 ORDER BY h.entity_key, h.lifetime_key",
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare context heads",
                 })?;
-            let rows = statement
-                .query_map(params![tenant.as_slice(), owner, limit_value], |row| {
-                    Ok(AnalysisContextKeyV1 {
-                        tenant_id: tenant,
-                        owner_id: owner.to_owned(),
-                        entity_key: row.get(0)?,
-                        lifetime_key: row.get(1)?,
-                        owner_revision: row.get(2)?,
-                    })
-                })
+            let mut rows = statement
+                .query(params![
+                    tenant.as_slice(),
+                    owner,
+                    limit_value,
+                    tenant.as_slice(),
+                    owner
+                ])
                 .context(AnalysisDatabaseSnafu {
                     operation: "read context heads",
                 })?;
             let mut versions = Vec::new();
-            for row in rows {
-                let key = row.context(AnalysisDatabaseSnafu {
-                    operation: "decode context head",
-                })?;
+            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                operation: "advance context heads",
+            })? {
                 if versions.len() == limit {
                     return crate::AnalysisInputTooLargeSnafu {
                         resource: "context heads",
                     }
                     .fail();
                 }
-                let (version, _) = self
-                    .read_context_cached_from(reader, &self.root, &key)?
-                    .ok_or_else(|| self.state_error("the context head is absent"))?;
+                let present: Option<u64> = row.get(7).context(AnalysisDatabaseSnafu {
+                    operation: "decode context head presence",
+                })?;
+                if present.is_none() {
+                    return Err(self.state_error("the context head is absent"));
+                }
+                let (key, stored) =
+                    Self::context_row(tenant, owner, row).context(AnalysisDatabaseSnafu {
+                        operation: "decode context head",
+                    })?;
+                let index: Vec<u8> = row.get(8).context(AnalysisDatabaseSnafu {
+                    operation: "decode context head index",
+                })?;
+                if index != super::version_key(&key)? {
+                    return Self::reject_path(
+                        &self.root,
+                        "the context version index has a foreign row",
+                    );
+                }
+                let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
+                self.check_cached_provenance(reader, &version)?;
                 versions.push(version);
             }
             Ok(versions)

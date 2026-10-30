@@ -1,17 +1,5 @@
-use duckdb::{params, Connection, OptionalExt as _};
-use snafu::ResultExt as _;
-
 use super::super::graph_rows::{GraphHeader, GraphRows};
-use crate::{
-    AnalysisDatabaseSnafu, AnalysisStore, EvidenceIntakeIdentityV1, GraphSnapshotV1, Result,
-    GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
-};
-
-const GRAPH_HEADS: &str = "SELECT result_id, commit_revision, first_cursor,
-        row_number() OVER (PARTITION BY stream_key, first_cursor
-            ORDER BY commit_revision DESC) AS current_rank
-     FROM analysis_results WHERE tenant_id = ? AND processor_id = ? AND method_version = ?
-        AND stream_key IS NOT NULL AND (? IS NULL OR stream_key = ?)";
+use super::*;
 
 type GraphPage = (Vec<(String, GraphSnapshotV1, u64)>, Option<String>);
 
@@ -22,45 +10,12 @@ impl AnalysisStore {
         after: Option<u64>,
     ) -> Result<Vec<(String, GraphSnapshotV1, u64)>> {
         if !source.valid() {
-            return self.reject("the graph window source is invalid");
+            return self.reject("the Graph source is invalid");
         }
         self.read_snapshot(|reader| {
-            let query = format!(
-                "SELECT result_id, commit_revision FROM ({GRAPH_HEADS}) heads
-                 WHERE current_rank = 1 AND (? IS NULL OR first_cursor > ?)
-                 ORDER BY first_cursor LIMIT 32"
-            );
-            let key = source.key();
-            let mut statement = reader.prepare(&query).context(AnalysisDatabaseSnafu {
-                operation: "prepare graph window headers",
-            })?;
-            let rows = statement
-                .query_map(
-                    params![
-                        source.tenant_id.as_slice(),
-                        GRAPH_PROCESSOR,
-                        GRAPH_SCHEMA_VERSION,
-                        key.as_slice(),
-                        key.as_slice(),
-                        after,
-                        after
-                    ],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read graph window headers",
-                })?
-                .collect::<duckdb::Result<Vec<_>>>()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "decode graph window headers",
-                })?;
-            rows.into_iter()
-                .map(|(id, revision)| {
-                    let header =
-                        self.selected_graph_header(reader, source.tenant_id, Some(source), &id)?;
-                    Ok((id, header.snapshot, revision))
-                })
-                .collect()
+            let mut statement=reader.prepare("SELECT result_id,commit_revision FROM analysis_results WHERE tenant_id=? AND processor_id=? AND method_version=? AND stream_key=? QUALIFY row_number() OVER(PARTITION BY first_cursor ORDER BY commit_revision DESC)=1 AND (? IS NULL OR first_cursor>?) ORDER BY first_cursor LIMIT 32").context(AnalysisDatabaseSnafu {operation:"prepare Graph windows"})?;
+            let rows=statement.query_map(params![source.tenant_id.as_slice(),GRAPH_PROCESSOR,GRAPH_SCHEMA_VERSION,source.key(),after,after],|row|Ok((row.get::<_,String>(0)?,row.get::<_,u64>(1)?))).context(AnalysisDatabaseSnafu {operation:"read Graph windows"})?.collect::<duckdb::Result<Vec<_>>>().context(AnalysisDatabaseSnafu {operation:"decode Graph windows"})?;
+            rows.into_iter().map(|(id,revision)|self.selected_graph_header(reader,source.tenant_id,Some(source),&id).map(|header|(id,header.snapshot,revision))).collect()
         })
     }
 
@@ -72,7 +27,7 @@ impl AnalysisStore {
         after: Option<&str>,
     ) -> Result<GraphPage> {
         if !source.valid() || first == 0 || last < first {
-            return self.reject("the graph window range is invalid");
+            return self.reject("the Graph window is invalid");
         }
         self.read_snapshot(|reader| {
             self.graph_page(
@@ -95,50 +50,49 @@ impl AnalysisStore {
         current: bool,
         window: Option<(u64, u64)>,
     ) -> Result<GraphPage> {
-        let query = format!(
-            "SELECT result_id, commit_revision FROM ({GRAPH_HEADS}) heads
-             WHERE (? IS NULL OR result_id > ?) AND (NOT ? OR current_rank = 1)
-                AND (? IS NULL OR first_cursor <= ?)
-             ORDER BY result_id LIMIT 1"
-        );
-        let key = source.map(EvidenceIntakeIdentityV1::key);
-        let upper = window.map(|(_, last)| last);
-        let row: Option<(String, u64)> = reader
+        let source = source.map(EvidenceIntakeIdentityV1::key);
+        let mut statement=reader.prepare("SELECT result_id,commit_revision FROM (SELECT result_id,commit_revision,first_cursor,row_number() OVER(PARTITION BY stream_key,first_cursor ORDER BY commit_revision DESC) AS rank FROM analysis_results WHERE tenant_id=? AND processor_id=? AND method_version=? AND stream_key IS NOT NULL AND (? IS NULL OR stream_key=?)) WHERE (? IS NULL OR result_id>?) AND (NOT ? OR rank=1) AND (? IS NULL OR first_cursor<=?) ORDER BY result_id LIMIT 1").context(AnalysisDatabaseSnafu {operation:"prepare Graph page"})?;
+        let row: Option<(String, u64)> = statement
             .query_row(
-                &query,
                 params![
                     tenant.as_slice(),
                     GRAPH_PROCESSOR,
                     GRAPH_SCHEMA_VERSION,
-                    key.as_deref(),
-                    key.as_deref(),
+                    source.as_deref(),
+                    source.as_deref(),
                     after,
                     after,
                     current,
-                    upper,
-                    upper
+                    window.map(|(_, last)| last),
+                    window.map(|(_, last)| last)
                 ],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
-                operation: "read committed graph snapshots",
+                operation: "read Graph page",
             })?;
         let Some((id, revision)) = row else {
             return Ok((Vec::new(), None));
         };
-        let header = self.selected_graph_header(reader, tenant, source, &id)?;
-        let next = Some(id.clone());
-        if window.is_some_and(|(first, last)| {
+        let header = self.selected_graph_header(reader, tenant, None, &id)?;
+        let graph = if window.is_some_and(|(first, last)| {
             header.snapshot.first_cursor > last || header.snapshot.last_cursor < first
         }) {
-            return Ok((Vec::new(), next));
-        }
-        let graph = GraphRows::read(reader, &id, &header)?;
-        Ok((vec![(id, graph, revision)], next))
+            None
+        } else {
+            Some(GraphRows::read(reader, &id, &header)?)
+        };
+        Ok((
+            graph
+                .into_iter()
+                .map(|graph| (id.clone(), graph, revision))
+                .collect(),
+            Some(id),
+        ))
     }
 
-    fn selected_graph_header(
+    pub(super) fn selected_graph_header(
         &self,
         reader: &Connection,
         tenant: [u8; 16],
@@ -146,11 +100,9 @@ impl AnalysisStore {
         id: &str,
     ) -> Result<GraphHeader> {
         let header = GraphRows::read_header(reader, tenant, id)?
-            .ok_or_else(|| self.state_error("the committed graph header is absent"))?;
-        if header.snapshot.scope.identity.tenant_id != tenant
-            || source.is_some_and(|source| source != &header.snapshot.scope.identity)
-        {
-            return self.reject("the committed graph source differs from its index");
+            .ok_or_else(|| self.state_error("the Graph header is absent"))?;
+        if source.is_some_and(|source| source != &header.snapshot.scope.identity) {
+            return self.reject("the Graph source differs");
         }
         Ok(header)
     }

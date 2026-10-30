@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::{CanonicalEncodingSnafu, Result};
+use crate::{CanonicalEncodingSnafu, GraphNativeEncodingSnafu, Result};
+use snafu::ResultExt as _;
 
 pub struct InputRevision;
 
@@ -10,6 +11,15 @@ impl InputRevision {
         let mut hash = Sha256::new();
         hash.update(b"ARAPHOR-ANALYSIS-INPUT-V1\0");
         serde_json::to_writer(&mut hash, value)?;
+        Ok(format!("{:x}", hash.finalize()))
+    }
+
+    pub fn of_native(value: &impl Serialize) -> Result<String> {
+        let mut hash = Sha256::new();
+        hash.update(b"ARAPHOR-ANALYSIS-INPUT-NATIVE-V1\0");
+        value
+            .serialize(&mut rmp_serde::Serializer::new(&mut hash).with_struct_map())
+            .context(GraphNativeEncodingSnafu)?;
         Ok(format!("{:x}", hash.finalize()))
     }
 }
@@ -55,6 +65,23 @@ mod tests {
             first,
             InputRevision::of(&(u64::MAX, i64::MIN, [0_u8, 254]))?
         );
+        Ok(())
+    }
+
+    #[test]
+    fn native_input_revision_exactness() -> Result<(), Box<dyn std::error::Error>> {
+        let value = (u64::MAX, i64::MIN, [0_u8, 255]);
+        let first = InputRevision::of_native(&value)?;
+        assert_eq!(first, InputRevision::of_native(&value)?);
+        assert_ne!(
+            first,
+            InputRevision::of_native(&(u64::MAX - 1, i64::MIN, [0_u8, 255]))?
+        );
+        assert_ne!(
+            first,
+            InputRevision::of_native(&(u64::MAX, i64::MIN, [0_u8, 254]))?
+        );
+        assert_ne!(first, InputRevision::of(&value)?);
         Ok(())
     }
 

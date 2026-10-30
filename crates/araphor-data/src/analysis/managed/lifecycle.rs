@@ -1,3 +1,4 @@
+use super::codec::ManagedCodec;
 use std::sync::{atomic::Ordering, Arc};
 
 use duckdb::params;
@@ -63,7 +64,7 @@ impl AnalysisStore {
         let revision = self.package_next(&transaction)?;
         let changed = transaction.execute(
             "UPDATE managed_instances SET authority = ?, lifecycle = ? WHERE tenant_id = ? AND instance_id = ? AND lifecycle = ?",
-            params![serde_json::to_vec(grant).context(crate::PackageEncodingSnafu)?, revision,
+            params![ManagedCodec::encode(grant).context(crate::ManagedEncodingSnafu)?, revision,
                 expected.spec.tenant.as_slice(), expected.spec.id, expected.lifecycle],
         ).context(AnalysisDatabaseSnafu { operation: "renew managed authority" })?;
         if changed != 1 {
@@ -233,7 +234,7 @@ impl AnalysisStore {
                 progress: instance.progress,
                 revision,
             })
-            .map(|failure| serde_json::to_vec(&failure).context(crate::PackageEncodingSnafu))
+            .map(|failure| ManagedCodec::encode(&failure).context(crate::ManagedEncodingSnafu))
             .transpose()?;
         let lifecycle = if diagnostic {
             instance.lifecycle

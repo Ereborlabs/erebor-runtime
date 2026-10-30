@@ -120,49 +120,54 @@ impl AnalysisStore {
         context: &AnalysisContextVersionV1,
         commit_revision: u64,
         keys: &NotificationKeys,
+        prior: Option<u64>,
     ) -> Result<()> {
-        let prior: Option<u64> = writer
-            .query_row(
-                "SELECT owner_revision FROM notification_heads WHERE state_key = ?",
-                params![keys.state.as_slice()],
-                |row| row.get(0),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read notification head",
-            })?;
         if prior.is_some_and(|revision| revision > context.key.owner_revision) {
             return Ok(());
         }
         if prior == Some(context.key.owner_revision) {
             return self.reject("the notification head revision is duplicated");
         }
-        if prior.is_some() {
+        let changed = if let Some(prior) = prior {
             writer
-                .execute(
-                    "DELETE FROM notification_heads WHERE state_key = ?",
-                    params![keys.state.as_slice()],
+                .prepare_cached(
+                    "UPDATE notification_heads SET tenant_id=?, entity_key=?,
+                     owner_revision=?, commit_revision=?, finding_key=?, concern_key=?
+                     WHERE state_key=? AND owner_revision=?",
                 )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "replace notification head",
-                })?;
+                .and_then(|mut statement| {
+                    statement.execute(params![
+                        context.key.tenant_id.as_slice(),
+                        context.key.entity_key.as_slice(),
+                        context.key.owner_revision,
+                        commit_revision,
+                        keys.finding.as_deref(),
+                        keys.concern.as_deref(),
+                        keys.state.as_slice(),
+                        prior,
+                    ])
+                })
+        } else {
+            writer
+                .prepare_cached("INSERT INTO notification_heads VALUES (?, ?, ?, ?, ?, ?, ?)")
+                .and_then(|mut statement| {
+                    statement.execute(params![
+                        keys.state.as_slice(),
+                        context.key.tenant_id.as_slice(),
+                        context.key.entity_key.as_slice(),
+                        context.key.owner_revision,
+                        commit_revision,
+                        keys.finding.as_deref(),
+                        keys.concern.as_deref(),
+                    ])
+                })
         }
-        writer
-            .execute(
-                "INSERT INTO notification_heads VALUES (?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    keys.state.as_slice(),
-                    context.key.tenant_id.as_slice(),
-                    context.key.entity_key.as_slice(),
-                    context.key.owner_revision,
-                    commit_revision,
-                    keys.finding.as_deref(),
-                    keys.concern.as_deref(),
-                ],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "insert notification head",
-            })?;
+        .context(AnalysisDatabaseSnafu {
+            operation: "advance notification head",
+        })?;
+        if changed != 1 {
+            return self.reject("the notification head changed during the write");
+        }
         Ok(())
     }
 
@@ -173,12 +178,12 @@ impl AnalysisStore {
     ) -> Result<Option<u64>> {
         let state = NotificationKeys::state(key.tenant_id, &key.entity_key)?;
         reader
-            .query_row(
-                "SELECT owner_revision FROM notification_heads WHERE state_key = ?",
-                params![state],
-                |row| row.get(0),
-            )
-            .optional()
+            .prepare_cached("SELECT owner_revision FROM notification_heads WHERE state_key = ?")
+            .and_then(|mut statement| {
+                statement
+                    .query_row(params![state], |row| row.get(0))
+                    .optional()
+            })
             .context(AnalysisDatabaseSnafu {
                 operation: "read expected notification head",
             })

@@ -4,6 +4,8 @@ use crate::{
     GraphEdgeTypeV1, GraphPackageStateV1, GraphSnapshotV1, GraphSubjectKeyV1, GraphSubjectKindV1,
     PolicyProvenanceStateV1,
 };
+use serde_arrow::schema::{SchemaLike as _, TracingOptions};
+use std::sync::LazyLock;
 
 #[derive(serde::Serialize)]
 struct ManifestRow<'a> {
@@ -29,7 +31,45 @@ struct ManifestRow<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot: Option<&'a serde_bytes::Bytes>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    context_refs: Option<&'a serde_bytes::Bytes>,
+    metadata: Option<&'a serde_bytes::Bytes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_refs: Option<&'a [crate::AnalysisContextRefV1]>,
+}
+
+fn context_ref_field() -> sdk::Field {
+    #[derive(serde::Serialize)]
+    struct Sample<'a> {
+        context_refs: &'a [crate::AnalysisContextRefV1],
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "The schema comes from one complete internal typed sample."
+    )]
+    static FIELD: LazyLock<sdk::Field> = LazyLock::new(|| {
+        let reference = crate::AnalysisContextRefV1 {
+            key: crate::AnalysisContextKeyV1 {
+                tenant_id: [1; 16],
+                owner_id: "owner".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![2],
+                owner_revision: 1,
+            },
+            commit_revision: 1,
+        };
+        let fields = Vec::<Arc<sdk::Field>>::from_samples(
+            [Sample {
+                context_refs: &[reference],
+            }],
+            TracingOptions::default()
+                .strings_as_large_utf8(false)
+                .sequence_as_large_list(false)
+                .bytes_as_large_binary(false),
+        )
+        .expect("the context reference has a native Arrow schema");
+        fields[0].as_ref().clone()
+    });
+    FIELD.clone()
 }
 
 #[derive(serde::Serialize)]
@@ -94,7 +134,8 @@ macro_rules! graph_row {
 impl Capture<'_> {
     pub(in crate::analysis::extraction) fn graph_witnesses(&self) -> bool {
         !self.graph_expiry
-            && (self.read.projects_field("graph_manifest", "snapshot")
+            && (self.read.projects_field("graph_manifest", "metadata")
+                || self.read.projects_field("graph_manifest", "snapshot")
                 || [
                     "findings",
                     "relationships",
@@ -120,6 +161,7 @@ impl Capture<'_> {
         subject_ids: Option<&[u32]>,
         contexts: &[crate::AnalysisContextRefV1],
         notice: (u64, u64),
+        expired: bool,
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
         if !self.scope.permits_graph(graph) {
@@ -290,6 +332,7 @@ impl Capture<'_> {
             relationship_count,
             contexts,
             notice,
+            expired,
             budget,
         )
     }
@@ -588,6 +631,7 @@ impl Capture<'_> {
         relationship_count: usize,
         contexts: &[crate::AnalysisContextRefV1],
         notice: (u64, u64),
+        expired: bool,
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
         budget.check()?;
@@ -614,6 +658,7 @@ impl Capture<'_> {
             "max_hops",
             "hop_boundary",
             "snapshot",
+            "metadata",
             "context_refs",
         ];
         let schema = Arc::clone(&self.table("graph_manifest", NAMES, budget)?.schema);
@@ -622,12 +667,21 @@ impl Capture<'_> {
             .projects_field("graph_manifest", "graph_revision")
             .then_some(&graph.input_manifest);
         let snapshot = if self.read.projects_field("graph_manifest", "snapshot") {
-            json(Some(graph), budget)?
+            let bytes = graph.encode_native()?;
+            budget.charge(bytes.len())?;
+            Some(bytes)
+        } else {
+            None
+        };
+        let metadata = if self.read.projects_field("graph_manifest", "metadata") {
+            let bytes = crate::GraphManifest::from_snapshot(graph).encode()?;
+            budget.charge(bytes.len())?;
+            Some(bytes)
         } else {
             None
         };
         let contexts = if self.read.projects_field("graph_manifest", "context_refs") {
-            json(Some(contexts), budget)?
+            Some(contexts)
         } else {
             None
         };
@@ -652,13 +706,14 @@ impl Capture<'_> {
             notice_context_revision: notice.0,
             notice_coverage_revision: notice.1,
             witness_deadline_utc_ns: graph.witness_deadline_utc_ns,
-            retained_input_expired: graph.retained_input_expired(),
+            retained_input_expired: expired,
             subject_count: subject_count.try_into().map_err(|_| overflow())?,
             relationship_count: relationship_count.try_into().map_err(|_| overflow())?,
             max_hops: 0,
             hop_boundary: false,
             snapshot: snapshot.as_deref().map(serde_bytes::Bytes::new),
-            context_refs: contexts.as_deref().map(serde_bytes::Bytes::new),
+            metadata: metadata.as_deref().map(serde_bytes::Bytes::new),
+            context_refs: contexts,
         };
         let batch = if schema.fields().is_empty() {
             RecordBatch::try_new_with_options(
@@ -710,7 +765,8 @@ impl Capture<'_> {
             sdk::Field::new("max_hops", UInt32, false),
             sdk::Field::new("hop_boundary", Boolean, false),
             sdk::Field::new("snapshot", Binary, false),
-            sdk::Field::new("context_refs", Binary, false),
+            sdk::Field::new("metadata", Binary, false),
+            context_ref_field(),
         ]
     }
 }

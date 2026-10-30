@@ -1,23 +1,25 @@
-use duckdb::{params_from_iter, Connection, Row};
+use std::collections::{BTreeMap, BTreeSet};
+
+use duckdb::Connection;
 use snafu::ResultExt as _;
 
+use crate::analysis::graph_rows::GraphRows;
 use crate::{
-    AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, AnalysisReadControl, GraphInvalidSnafu,
-    GraphSubjectKeyV1, GraphTraversalV1, Result,
+    AnalysisDatabaseSnafu, AnalysisReadControl, GraphSubjectKeyV1, GraphTraversalDirectionV1,
+    GraphTraversalV1, Result,
 };
 
 pub(in crate::analysis) struct GraphWalk<'a> {
-    pub(super) reader: &'a Connection,
-    pub(super) control: &'a AnalysisReadControl,
-    pub(super) request: &'a GraphTraversalV1,
-    pub(super) result_ids: &'a [String],
-    pub(super) binding_scope: bool,
+    reader: &'a Connection,
+    control: &'a AnalysisReadControl,
+    request: &'a GraphTraversalV1,
+    results: &'a [String],
+    binding: bool,
 }
-
 pub(in crate::analysis) struct WalkRows {
-    pub(in crate::analysis) subjects: Vec<(GraphSubjectKeyV1, u32)>,
-    pub(in crate::analysis) edges: Vec<(String, u32)>,
-    pub(in crate::analysis) hop_boundary: bool,
+    pub subjects: Vec<(GraphSubjectKeyV1, u32)>,
+    pub edges: Vec<(String, u32)>,
+    pub hop_boundary: bool,
 }
 
 impl<'a> GraphWalk<'a> {
@@ -25,152 +27,121 @@ impl<'a> GraphWalk<'a> {
         reader: &'a Connection,
         control: &'a AnalysisReadControl,
         request: &'a GraphTraversalV1,
-        result_ids: &'a [String],
-        binding_scope: bool,
+        results: &'a [String],
+        binding: bool,
     ) -> Self {
         Self {
             reader,
             control,
             request,
-            result_ids,
-            binding_scope,
+            results,
+            binding,
         }
     }
 
     pub(in crate::analysis) fn run(&self) -> Result<WalkRows> {
-        self.control.check()?;
-        if self.result_ids.is_empty() {
-            return Ok(WalkRows {
-                subjects: Vec::new(),
-                edges: Vec::new(),
-                hop_boundary: false,
-            });
+        let mut subjects = BTreeMap::new();
+        let mut edges = BTreeSet::new();
+        for id in self.results {
+            for (key, _) in GraphRows::selected_subjects(
+                self.reader,
+                id,
+                &self.request.seeds,
+                self.control,
+                self.binding,
+            )? {
+                subjects.entry(key).or_insert(0);
+            }
         }
-        let (query, values) = self.query()?;
-        let mut statement = self.reader.prepare(&query).context(AnalysisDatabaseSnafu {
-            operation: "prepare native graph traversal",
-        })?;
-        let mut rows =
-            statement
-                .query(params_from_iter(values.iter()))
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read native graph traversal",
-                })?;
-        let summary = rows
-            .next()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read native traversal bounds",
-            })?
-            .ok_or_else(|| {
-                GraphInvalidSnafu {
-                    field: "graph traversal summary",
-                }
-                .build()
-            })?;
-        let (mut output, count, edges) = self.summary(summary)?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance native graph traversal",
-        })? {
+        let mut boundary = false;
+        for depth in 0..=self.request.max_hops {
             self.control.check()?;
-            output.push(row, self.request.max_hops)?;
-        }
-        if output.subjects.len() != count || output.edges.len() != edges {
-            return GraphInvalidSnafu {
-                field: "graph traversal row counts",
+            let frontier = subjects
+                .iter()
+                .filter(|(_, found)| **found == depth)
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>();
+            if frontier.is_empty() {
+                break;
             }
-            .fail();
-        }
-        self.control.check()?;
-        Ok(output)
-    }
-
-    fn summary(&self, summary: &Row<'_>) -> Result<(WalkRows, usize, usize)> {
-        if summary.get::<_, u8>(0).context(AnalysisDatabaseSnafu {
-            operation: "decode traversal summary kind",
-        })? != 0
-        {
-            return GraphInvalidSnafu {
-                field: "graph traversal summary",
-            }
-            .fail();
-        }
-        let count: u64 = summary.get(11).context(AnalysisDatabaseSnafu {
-            operation: "decode traversal subject count",
-        })?;
-        let edges: u64 = summary.get(12).context(AnalysisDatabaseSnafu {
-            operation: "decode traversal edge count",
-        })?;
-        if count > self.request.max_subjects as u64 {
-            return AnalysisInputTooLargeSnafu {
-                resource: "graph traversal subjects",
-            }
-            .fail();
-        }
-        if edges > self.request.max_relationships as u64 {
-            return AnalysisInputTooLargeSnafu {
-                resource: "graph traversal relationships",
-            }
-            .fail();
-        }
-        let mut output = WalkRows {
-            subjects: Vec::new(),
-            edges: Vec::new(),
-            hop_boundary: summary.get(13).context(AnalysisDatabaseSnafu {
-                operation: "decode traversal hop boundary",
-            })?,
-        };
-        output
-            .subjects
-            .try_reserve_exact(count as usize)
-            .map_err(Self::allocation)?;
-        output
-            .edges
-            .try_reserve_exact(edges as usize)
-            .map_err(Self::allocation)?;
-        Ok((output, count as usize, edges as usize))
-    }
-
-    fn allocation(_: std::collections::TryReserveError) -> crate::Error {
-        AnalysisInputTooLargeSnafu {
-            resource: "graph traversal rows",
-        }
-        .build()
-    }
-}
-
-impl WalkRows {
-    fn push(&mut self, row: &Row<'_>, max_hops: u32) -> Result<()> {
-        match row.get::<_, u8>(0).context(AnalysisDatabaseSnafu {
-            operation: "decode traversal row kind",
-        })? {
-            1 => {
-                let subject = crate::analysis::graph_rows::GraphRows::decode_subject(row)?;
-                let depth = row.get(8).context(AnalysisDatabaseSnafu {
-                    operation: "decode traversal depth",
-                })?;
-                if depth > max_hops {
-                    return GraphInvalidSnafu {
-                        field: "graph traversal depth",
+            for id in self.results {
+                let selected = GraphRows::selected_subjects(
+                    self.reader,
+                    id,
+                    &frontier,
+                    self.control,
+                    self.binding,
+                )?;
+                if selected.is_empty() {
+                    continue;
+                }
+                let values = std::iter::repeat_n("(?)", selected.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let direction = match self.request.direction {
+                    GraphTraversalDirectionV1::Outgoing => "e.from_subject_id=f.ordinal",
+                    GraphTraversalDirectionV1::Incoming => "e.to_subject_id=f.ordinal",
+                    GraphTraversalDirectionV1::Both => {
+                        "(e.from_subject_id=f.ordinal OR e.to_subject_id=f.ordinal)"
                     }
-                    .fail();
+                };
+                let query=format!("WITH frontier(ordinal) AS (VALUES {values}) SELECT DISTINCT s.ordinal,s.tenant_id,s.authority_rank,s.authority_text,s.authority_boot,s.authority_epoch,s.subject_kind,s.identity,e.ordinal,e.edge_type FROM frontier f JOIN graph_relationships e ON {direction} LEFT JOIN graph_subjects s ON s.result_id=e.result_id AND s.ordinal=CASE WHEN e.from_subject_id=f.ordinal THEN e.to_subject_id ELSE e.from_subject_id END WHERE e.result_id=?");
+                let mut parameters = selected
+                    .iter()
+                    .map(|(_, ordinal)| duckdb::types::Value::UInt(*ordinal))
+                    .collect::<Vec<_>>();
+                parameters.push(duckdb::types::Value::Text(id.clone()));
+                let mut statement = self.reader.prepare(&query).context(AnalysisDatabaseSnafu {
+                    operation: "prepare Graph walk frontier",
+                })?;
+                let mut rows = statement
+                    .query(duckdb::params_from_iter(parameters.iter()))
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read Graph walk frontier",
+                    })?;
+                while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                    operation: "advance Graph walk frontier",
+                })? {
+                    self.control.check()?;
+                    let kind: String = row.get(9).context(AnalysisDatabaseSnafu {
+                        operation: "decode Graph walk edge kind",
+                    })?;
+                    if !self.request.edge_types.is_empty()
+                        && !self.request.edge_types.iter().any(|wanted| {
+                            serde_plain::to_string(wanted).ok().as_deref() == Some(kind.as_str())
+                        })
+                    {
+                        continue;
+                    }
+                    let target = GraphRows::decode_subject(row)?;
+                    if depth == self.request.max_hops {
+                        boundary |= !subjects.contains_key(&target);
+                        continue;
+                    }
+                    let ordinal: u32 = row.get(8).context(AnalysisDatabaseSnafu {
+                        operation: "decode Graph walk edge",
+                    })?;
+                    edges.insert((id.clone(), ordinal));
+                    subjects.entry(target).or_insert(depth + 1);
+                    if subjects.len() > self.request.max_subjects {
+                        return crate::AnalysisInputTooLargeSnafu {
+                            resource: "graph traversal subjects",
+                        }
+                        .fail();
+                    }
+                    if edges.len() > self.request.max_relationships {
+                        return crate::AnalysisInputTooLargeSnafu {
+                            resource: "graph traversal relationships",
+                        }
+                        .fail();
+                    }
                 }
-                self.subjects.push((subject, depth));
-            }
-            2 => self.edges.push((
-                row.get(9).context(AnalysisDatabaseSnafu {
-                    operation: "decode traversal result identity",
-                })?,
-                row.get(10).context(AnalysisDatabaseSnafu {
-                    operation: "decode traversal edge ordinal",
-                })?,
-            )),
-            _ => {
-                return GraphInvalidSnafu {
-                    field: "graph traversal row kind",
-                }
-                .fail();
             }
         }
-        Ok(())
+        Ok(WalkRows {
+            subjects: subjects.into_iter().collect(),
+            edges: edges.into_iter().collect(),
+            hop_boundary: boundary,
+        })
     }
 }

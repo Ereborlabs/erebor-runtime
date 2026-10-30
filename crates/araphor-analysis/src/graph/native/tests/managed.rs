@@ -410,6 +410,47 @@ async fn managed_restores_native_inputs() -> TestResult {
     assert_eq!(graph.input_manifest.evidence.len(), 3);
     assert_eq!(graph.input_positions.len(), 3);
     assert_eq!(graph.packages.len(), 3);
+    let branch_column = AnalysisStore::table_schemas()["graph_branches"].index_of("package_id")?;
+    let branch_requests = araphor_data::AnalysisTableRequests::from([(
+        "graph_branches".into(),
+        Some([branch_column].into_iter().collect()),
+    )]);
+    let mut branch_selection =
+        AnalysisSelectionV1::new(fixture.source.tenant_id, vec![fixture.source.clone()]);
+    branch_selection.select_graphs(
+        araphor_data::Selection::Exact(vec![graph_result.result_id.clone()]),
+        None,
+    )?;
+    let branch_page = fixture.query.store().read_tables(
+        &branch_selection,
+        araphor_data::AnalysisTableRead {
+            requests: &branch_requests,
+            event_ranges: None,
+            inputs: None,
+            mode: araphor_data::AnalysisReadModeV1::Complete,
+            now: request("branch-read")?.time_utc_ns,
+        },
+        araphor_data::AnalysisExtractLimits::default(),
+        &fixture.control,
+    )?;
+    let mut read_branches = Vec::new();
+    for batch in &branch_page.tables["graph_branches"] {
+        let packages = batch
+            .column_by_name("package_id")
+            .ok_or("Graph branch package column")?
+            .as_any()
+            .downcast_ref::<sdk::arrow_array::StringArray>()
+            .ok_or("Graph branch package values")?;
+        read_branches.extend(packages.iter().map(|value| value.map(str::to_owned)));
+    }
+    let saved_branches = graph
+        .graph
+        .branches
+        .iter()
+        .map(|branch| Some(branch.package_id.clone()))
+        .collect::<Vec<_>>();
+    assert!(!saved_branches.is_empty());
+    assert_eq!(read_branches, saved_branches);
     assert_eq!(
         fixture
             .query
@@ -1073,7 +1114,7 @@ async fn managed_expiry_reads_history() -> TestResult {
         (
             "graph_manifest".into(),
             Some(std::collections::BTreeSet::from([
-                schemas["graph_manifest"].index_of("snapshot")?,
+                schemas["graph_manifest"].index_of("metadata")?,
                 schemas["graph_manifest"].index_of("context_refs")?,
             ])),
         ),
@@ -1189,7 +1230,7 @@ async fn managed_expiry_reads_history() -> TestResult {
                 labels: Default::default(),
                 program: Program::Sql {
                     source: Source::Inline {
-                        inline: "SELECT snapshot, context_refs FROM graph_manifest".into(),
+                        inline: "SELECT metadata, context_refs FROM graph_manifest".into(),
                     },
                 },
             },

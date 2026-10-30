@@ -141,16 +141,20 @@ fn assert_frontier(completed: bool) -> TestResult {
             params![input.id],
             |row| row.get(0),
         )?;
-        let mut attempt: serde_json::Value = serde_json::from_slice(&bytes)?;
-        let frontier = &mut attempt["receipt"]["frontier"];
+        let mut attempt: super::super::model::Attempt = ManagedCodec::decode(&bytes)?;
+        let frontier = attempt
+            .receipt
+            .as_mut()
+            .and_then(|receipt| receipt.frontier.as_mut())
+            .ok_or("saved frontier")?;
         if completed {
-            frontier["cursor"] = serde_json::to_value(b"foreign-cursor".as_slice())?;
+            frontier.cursor = b"foreign-cursor".to_vec();
         } else {
-            frontier["next_change"] = serde_json::json!(31);
+            frontier.next_change = Some(31);
         }
         writer.execute(
             "UPDATE managed_attempts SET contract = ? WHERE attempt_id = ?",
-            params![serde_json::to_vec(&attempt)?, input.id],
+            params![ManagedCodec::encode(&attempt)?, input.id],
         )?;
     }
     drop(store);
@@ -210,8 +214,8 @@ fn pending_frontier_settles_startup() -> TestResult {
         )?
         .ok_or("live native intent")?;
     assert_eq!(
-        serde_json::to_vec(&loaded.0)?,
-        serde_json::to_vec(&attempt.0)?
+        ManagedCodec::encode(&loaded.0)?,
+        ManagedCodec::encode(&attempt.0)?
     );
     assert!(matches!(
         store.finish_managed(&loaded, ManagedExit::Cancelled, || Ok(())),
@@ -259,7 +263,10 @@ fn pending_frontier_settles_startup() -> TestResult {
     assert_eq!(loaded.terminal(), Some(&terminal));
     let mut saved = attempt.0.clone();
     saved.terminal = Some(terminal.clone());
-    assert_eq!(serde_json::to_vec(&loaded.0)?, serde_json::to_vec(&saved)?);
+    assert_eq!(
+        ManagedCodec::encode(&loaded.0)?,
+        ManagedCodec::encode(&saved)?
+    );
     assert_eq!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
         ManagedResume {

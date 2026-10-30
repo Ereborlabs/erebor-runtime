@@ -276,10 +276,8 @@ fn graph_window_metadata() -> TestResult {
         .contains(subject)));
     store.fault_write(
         "UPDATE graph_subject_values SET subject_kind = 255 WHERE subject_id IN (
-             SELECT subject_id FROM graph_subject_membership
-                 WHERE lineage_id = (SELECT lineage_id FROM graph_versions WHERE result_id = ?)
-             EXCEPT SELECT subject_id FROM graph_subject_membership
-                 WHERE lineage_id = (SELECT lineage_id FROM graph_versions WHERE result_id = ?))",
+             SELECT value_ref FROM graph_selected_members WHERE result_id = ? AND member_kind = 2
+             EXCEPT SELECT value_ref FROM graph_selected_members WHERE result_id = ? AND member_kind = 2)",
         &[&fixture.first_request.result_id, &fixture.request.result_id],
     )?;
     assert_eq!(fixture.bounds(None)?, [(1, 1), (2, 2)]);

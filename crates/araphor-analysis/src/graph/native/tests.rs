@@ -219,8 +219,8 @@ impl GraphFacts for Facts {
                     valid_from_utc_ns: None,
                     valid_until_utc_ns: None,
                     sensitivity: araphor_data::ContextSensitivityV1::Tenant,
-                    body: serde_json::to_vec(&fact).map_err(|source| {
-                        araphor_data::Error::GraphEncoding {
+                    body: fact.encode_context().map_err(|source| {
+                        araphor_data::Error::GraphNativeEncoding {
                             source,
                             location: snafu::location!(),
                         }
@@ -246,7 +246,7 @@ impl GraphFacts for Facts {
                 .unwrap_or_else(|error| error.into_inner())
                 .iter()
                 .filter(|context| {
-                    serde_json::from_slice::<araphor_data::GraphFactV1>(&context.body)
+                    araphor_data::GraphFactV1::decode_context(&context.body)
                         .is_ok_and(|fact| records.iter().any(|record| record.id == fact.record_id))
                 })
                 .cloned(),
@@ -763,7 +763,7 @@ async fn captured_source(target: Target) -> TestResult {
         .window
         .as_ref()
         .ok_or("qualified Graph source range")?;
-    assert_eq!(range.source, serde_json::to_vec(&fixture.source)?);
+    assert_eq!(range.source, fixture.source.exact_key());
     assert_eq!((range.start_utc_ns, range.end_utc_ns), fixture.times);
     drop(captured);
     assert_eq!(first.results.len(), 3);

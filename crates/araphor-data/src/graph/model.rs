@@ -638,7 +638,7 @@ impl TryFrom<&AnalysisContextVersionV1> for GraphFactV1 {
             }
             .fail();
         }
-        let value: Self = serde_json::from_slice(&context.body).context(GraphEncodingSnafu)?;
+        let value = Self::decode_context(&context.body).context(crate::GraphNativeDecodingSnafu)?;
         value.validate()?;
         if value.record_id.stream.tenant_id != context.key.tenant_id {
             return GraphInvalidSnafu {

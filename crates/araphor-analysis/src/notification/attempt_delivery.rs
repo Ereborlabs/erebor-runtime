@@ -55,16 +55,28 @@ impl NotificationRouter {
         kind: NotificationDeliveryKindV1,
         subject: NotificationObligationV1,
         route: &ApprovedNotificationRouteV1,
+        batch: Option<&FindingBatch>,
     ) -> Result<NotificationDeliveryV1> {
         let finding = subject
             .finding
             .as_ref()
             .map(|reference| {
-                self.store.graph_finding(
-                    state.key.tenant_id,
-                    &reference.result_id,
-                    &reference.finding_id,
-                )
+                if let Some((revision, finding)) = batch
+                    .and_then(|batch| batch.get(&reference.result_id))
+                    .and_then(|(revision, findings)| {
+                        findings
+                            .get(&reference.finding_id)
+                            .map(|finding| (revision, finding))
+                    })
+                {
+                    Ok(Some((finding.clone(), revision.clone())))
+                } else {
+                    self.store.graph_finding(
+                        state.key.tenant_id,
+                        &reference.result_id,
+                        &reference.finding_id,
+                    )
+                }
             })
             .transpose()?
             .flatten()

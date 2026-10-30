@@ -64,17 +64,21 @@ impl AnalysisStore {
         })
     }
 
-    pub fn graph_progress_counts(&self) -> Result<(u64, u64)> {
+    pub fn graph_call_counts(&self) -> Result<(u64, u64, u64, u64)> {
         self.read_snapshot(|reader| {
             reader
                 .query_row(
                     "SELECT (SELECT count(*) FROM graph_progress_values),
-                    (SELECT count(*) FROM graph_call_progress)",
+                    (SELECT count(*) FROM graph_producer_members m
+                     JOIN graph_producer_scopes s USING(scope_id)
+                     WHERE s.producer_kind = 0 AND m.member_kind = 5),
+                    (SELECT coalesce(max(value_ref), 0) FROM graph_progress_values),
+                    (SELECT count(*) FROM graph_producer_versions)",
                     [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .context(AnalysisDatabaseSnafu {
-                    operation: "read Graph progress row counts fixture",
+                    operation: "read Graph call row counts fixture",
                 })
         })
     }

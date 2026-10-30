@@ -11,7 +11,7 @@ mod reads;
 mod tests;
 mod write;
 
-pub(super) use provenance::ValidatedProvenance;
+pub(super) use provenance::{ValidatedProvenance, VerifiedPackages};
 
 type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 

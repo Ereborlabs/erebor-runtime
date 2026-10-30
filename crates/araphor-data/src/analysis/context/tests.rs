@@ -267,6 +267,39 @@ fn context_value(entity: u8, revision: u64) -> AnalysisContextVersionV1 {
 }
 
 #[test]
+fn context_heads_reject_foreign_version_index() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("data"))?;
+    let context = context_value(1, 1);
+    store.commit_context(&context)?;
+    assert_eq!(
+        store.context_heads(context.key.tenant_id, &context.key.owner_id, 1)?,
+        vec![context.clone()]
+    );
+    {
+        let mut writer = store.writer()?;
+        writer.get_mut()?.execute(
+            "UPDATE context_versions SET version_key = ?
+             WHERE tenant_id = ? AND owner_id = ? AND entity_key = ?
+             AND lifetime_key = ? AND owner_revision = ?",
+            params![
+                b"foreign".as_slice(),
+                context.key.tenant_id.as_slice(),
+                context.key.owner_id,
+                context.key.entity_key,
+                context.key.lifetime_key,
+                context.key.owner_revision,
+            ],
+        )?;
+    }
+    assert!(matches!(
+        store.context_heads(context.key.tenant_id, &context.key.owner_id, 1),
+        Err(crate::Error::AnalysisState { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn context_batch_commits() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("analysis");

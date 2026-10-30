@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
@@ -120,11 +122,22 @@ impl AnalysisStore {
         tables: &AnalysisTableRequests,
         control: &AnalysisReadControl,
     ) -> Result<(AnalysisStoreMetaV1, u64)> {
+        self.dependency_revision_for_filtered(selection, tables, None, control)
+    }
+
+    pub fn dependency_revision_for_filtered(
+        &self,
+        selection: &AnalysisSelectionV1,
+        tables: &AnalysisTableRequests,
+        context_owners: Option<&BTreeSet<String>>,
+        control: &AnalysisReadControl,
+    ) -> Result<(AnalysisStoreMetaV1, u64)> {
         self.read_dependency_revision(
             selection,
             tables,
             None,
             AnalysisExtractLimits::default(),
+            context_owners,
             control,
         )
     }
@@ -137,10 +150,29 @@ impl AnalysisStore {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
     ) -> Result<(AnalysisStoreMetaV1, u64)> {
+        self.managed_dependency_revision_filtered(selection, tables, managed, limits, None, control)
+    }
+
+    pub fn managed_dependency_revision_filtered(
+        &self,
+        selection: &AnalysisSelectionV1,
+        tables: &AnalysisTableRequests,
+        managed: &ManagedRead,
+        limits: AnalysisExtractLimits,
+        context_owners: Option<&BTreeSet<String>>,
+        control: &AnalysisReadControl,
+    ) -> Result<(AnalysisStoreMetaV1, u64)> {
         if selection.tenant_id != managed.instance.spec.tenant {
             return Err(crate::PackageErrorCodeV1::Invalid.error("managed capture scope"));
         }
-        self.read_dependency_revision(selection, tables, Some(managed), limits, control)
+        self.read_dependency_revision(
+            selection,
+            tables,
+            Some(managed),
+            limits,
+            context_owners,
+            control,
+        )
     }
 
     fn read_dependency_revision(
@@ -149,6 +181,7 @@ impl AnalysisStore {
         tables: &AnalysisTableRequests,
         managed: Option<&ManagedRead>,
         limits: AnalysisExtractLimits,
+        context_owners: Option<&BTreeSet<String>>,
         control: &AnalysisReadControl,
     ) -> Result<(AnalysisStoreMetaV1, u64)> {
         control.check()?;
@@ -169,6 +202,20 @@ impl AnalysisStore {
             }
             None => false,
         };
+        let graph_results = !graph_notices
+            && !tables.is_empty()
+            && tables.keys().all(|name| {
+                matches!(
+                    name.as_str(),
+                    "graph_manifest"
+                        | "findings"
+                        | "relationships"
+                        | "graph_subjects"
+                        | "graph_branches"
+                        | "correlation_packages"
+                        | "policy_observations"
+                )
+            });
         let (coordinator, mut reader) = self.coordinated_reader(control)?;
         let all_traces = selection.traces.is_all();
         let graph_sources = (tables.contains_key("graph_state")
@@ -184,27 +231,22 @@ impl AnalysisStore {
             drop(coordinator);
             #[cfg(test)]
             control.test_snapshot()?;
-            let (selection, _) =
-                self.resolve_selection(
-                    snapshot,
-                    selection,
-                    control,
-                limits,
-                )?;
+            let (selection, _) = self.resolve_selection_filtered(
+                snapshot, selection, control, limits, context_owners,
+            )?;
             let selection = selection.as_ref();
-            let mut revision = self.selected_revision(selection, meta.commit_revision, control)?;
-            let graph = (tables.contains_key("findings") || tables.contains_key("graph_manifest"))
-                .then_some("analysis_results");
-            let notification =
-                (tables.contains_key("notifications") || tables.contains_key("notification_routes"))
-                    .then_some("context_versions");
-            if graph.is_some() || notification.is_some() {
+            let mut revision = if graph_results {
+                0
+            } else {
+                self.selected_revision(selection, meta.commit_revision, control)?
+            };
+            if tables.contains_key("notifications") || tables.contains_key("notification_routes") {
                 let changed: u64 = snapshot
                     .query_row(
                         "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT
-                         FROM relation_revisions WHERE relation_name IN (?, ?)
+                         FROM relation_revisions WHERE relation_name = 'context_versions'
                            AND last_changed_revision <= ?",
-                        params![graph, notification, meta.commit_revision],
+                        params![meta.commit_revision],
                         |row| row.get(0),
                     )
                     .context(AnalysisDatabaseSnafu {
@@ -252,6 +294,7 @@ impl AnalysisStore {
                     revision = revision.max(changed);
                 }
             }
+            if !graph_results {
             let mut sources = snapshot
                 .prepare(
                     "SELECT MAX(commit_revision) FROM (
@@ -297,6 +340,7 @@ impl AnalysisStore {
                         operation: "read source dependencies",
                     })?;
                 revision = revision.max(changed.unwrap_or(0));
+            }
             }
             let mut contexts = snapshot
                 .prepare(
@@ -512,6 +556,48 @@ mod tests {
     }
 
     #[test]
+    fn context_owner_dependency_tracks_new_matching_keys() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let selection = AnalysisSelectionV1::tenant([1; 16]);
+        let tables = AnalysisTableRequests::from([("context_versions".into(), None)]);
+        let owners = BTreeSet::from(["policy".to_owned()]);
+        let revision = |filter: Option<&BTreeSet<String>>| -> Result<u64> {
+            store
+                .dependency_revision_for_filtered(
+                    &selection,
+                    &tables,
+                    filter,
+                    &AnalysisReadControl::default(),
+                )
+                .map(|(_, revision)| revision)
+        };
+        let context = |owner: &str, entity: u8| AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                tenant_id: selection.tenant_id,
+                owner_id: owner.into(),
+                entity_key: vec![entity],
+                lifetime_key: vec![1],
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body: b"context".to_vec(),
+        };
+        assert_eq!(revision(Some(&owners))?, 0);
+        store.commit_context(&context("unrelated", 1))?;
+        assert_eq!(revision(Some(&owners))?, 0);
+        assert_eq!(revision(None)?, 1);
+        store.commit_context(&context("policy", 2))?;
+        assert_eq!(revision(Some(&owners))?, 2);
+        store.commit_context(&context("unrelated", 3))?;
+        assert_eq!(revision(Some(&owners))?, 2);
+        assert_eq!(revision(None)?, 3);
+        Ok(())
+    }
+
+    #[test]
     fn query_state_dependencies() -> TestResult {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("analysis");
@@ -650,18 +736,61 @@ mod tests {
     use crate::analysis::graph_rows::tests::fixture::CommitFixture;
 
     #[test]
+    fn graph_result_follow_ignores_raw_progress() -> TestResult {
+        let fixture = CommitFixture::new()?;
+        let source = fixture.snapshot.scope.identity.clone();
+        let mut selection = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
+        selection.select_graphs(crate::Selection::All, None)?;
+        let columns = std::collections::BTreeSet::from([AnalysisStore::table_schemas()
+            ["graph_manifest"]
+            .index_of("graph_result_id")?]);
+        let graph = AnalysisTableRequests::from([("graph_manifest".into(), Some(columns.clone()))]);
+        let mixed = AnalysisTableRequests::from([
+            ("graph_manifest".into(), Some(columns)),
+            ("events".into(), None),
+        ]);
+        let control = AnalysisReadControl::default();
+        let revision = |tables: &AnalysisTableRequests| {
+            fixture
+                .store
+                .dependency_revision_for(&selection, tables, &control)
+                .map(|(_, revision)| revision)
+        };
+        let committed = fixture
+            .store
+            .commit_graph(&fixture.request, true, || Ok(()))?
+            .commit_revision;
+        assert_eq!(revision(&graph)?, committed);
+        fixture
+            .store
+            .accept_validated_batch(source.clone(), batch(2, 11))?;
+        assert_eq!(revision(&graph)?, committed);
+        assert!(revision(&mixed)? > committed);
+        fixture.store.record_recovery_floor(&source, 4)?;
+        assert_eq!(revision(&graph)?, committed);
+        Ok(())
+    }
+
+    #[test]
     fn graph_only_commit_wakes_native_findings() -> TestResult {
         let fixture = CommitFixture::new()?;
         let tenant = fixture.snapshot.scope.identity.tenant_id;
         let mut selection = AnalysisSelectionV1::tenant(tenant);
         selection.contexts = crate::Selection::Exact(Vec::new());
         selection.traces = crate::Selection::Exact(Vec::new());
+        let mut graph_selection = selection.clone();
+        graph_selection.select_graphs(crate::Selection::All, None)?;
         let control = AnalysisReadControl::default();
         let revision = |name: &str| -> Result<u64> {
             let tables = AnalysisTableRequests::from([(name.to_owned(), None)]);
+            let selection = if matches!(name, "findings" | "graph_manifest") {
+                &graph_selection
+            } else {
+                &selection
+            };
             fixture
                 .store
-                .dependency_revision_for(&selection, &tables, &control)
+                .dependency_revision_for(selection, &tables, &control)
                 .map(|(_, revision)| revision)
         };
         let before = revision("findings")?;

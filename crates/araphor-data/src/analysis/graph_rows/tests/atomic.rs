@@ -28,7 +28,7 @@ fn proposed(
         valid_from_utc_ns: None,
         valid_until_utc_ns: None,
         sensitivity: ContextSensitivityV1::Tenant,
-        body: serde_json::to_vec(&fact)?,
+        body: fact.encode_context()?,
     };
     fixture
         .snapshot
@@ -171,16 +171,21 @@ fn context_failure_rolls_back() -> TestResult {
     {
         let writer = fixture.store.writer_access()?;
         for table in [
-            "graph_subjects",
-            "graph_relationships",
-            "graph_edge_properties",
+            "graph_sources",
+            "graph_evidence",
+            "graph_producer_scopes",
+            "graph_producer_versions",
+            "graph_producer_members",
+            "graph_result_producers",
+            "graph_versions",
+            "graph_subject_values",
             "graph_edge_values",
-            "graph_edge_membership",
+            "graph_edge_properties",
+            "graph_progress_values",
+            "graph_position_values",
             "graph_branch_values",
-            "graph_branch_membership",
-            "graph_findings",
+            "graph_fact_values",
             "graph_finding_values",
-            "graph_finding_membership",
             "evidence_refs",
             "context_refs",
         ] {

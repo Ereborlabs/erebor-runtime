@@ -158,6 +158,9 @@ impl AnalysisStore {
     ) -> Result<PackageEvidence> {
         if matches!(processor, "managed-package-v1" | "managed-definition-v1") {
             Self::managed_evidence(processor, metadata)
+        } else if processor == crate::GRAPH_PROCESSOR {
+            let request = crate::analysis::graph::GraphRequestMeta::decode(metadata)?;
+            Ok((request.witnesses, request.context_refs))
         } else {
             crate::AnalysisResultCommitV1::request_refs(metadata).context(JsonSnafu {
                 path: "<native-evidence>",

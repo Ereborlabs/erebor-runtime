@@ -55,6 +55,70 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn context_owner_filter_keeps_unrestricted_scans() {
+    let fixture = Fixture::new();
+    let owners = BTreeSet::from(["policy".to_owned(), "target".to_owned()]);
+    let filtered = fixture
+        .plan(
+            "SELECT owner_id FROM context_versions WHERE owner_id IN ('policy', 'target')",
+            Vec::new(),
+        )
+        .await;
+    let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
+    let bounds = SourceSnapshot::requests(&mut requests, &[filtered], None).unwrap();
+    assert_eq!(bounds.context_owners, Some(owners));
+
+    let filtered_union = fixture
+        .plan(
+            "SELECT owner_id FROM context_versions WHERE owner_id = 'policy' \
+             UNION ALL SELECT owner_id FROM context_versions WHERE owner_id = 'target'",
+            Vec::new(),
+        )
+        .await;
+    let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
+    let bounds = SourceSnapshot::requests(&mut requests, &[filtered_union], None).unwrap();
+    assert_eq!(
+        bounds.context_owners,
+        Some(BTreeSet::from(["policy".to_owned(), "target".to_owned()]))
+    );
+
+    let mixed_or = fixture
+        .plan(
+            "SELECT owner_id FROM context_versions WHERE owner_id = 'policy' OR owner_revision = 1",
+            Vec::new(),
+        )
+        .await;
+    let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
+    let bounds = SourceSnapshot::requests(&mut requests, &[mixed_or], None).unwrap();
+    assert_eq!(bounds.context_owners, None);
+
+    let union = fixture
+        .plan(
+            "SELECT owner_id FROM context_versions WHERE owner_id = 'policy' \
+             UNION ALL SELECT owner_id FROM context_versions",
+            Vec::new(),
+        )
+        .await;
+    let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
+    let bounds = SourceSnapshot::requests(&mut requests, &[union], None).unwrap();
+    assert_eq!(bounds.context_owners, None);
+
+    let other = fixture
+        .plan(
+            "SELECT owner_id FROM context_versions WHERE owner_id = 'policy' \
+             UNION ALL SELECT owner_id FROM context",
+            Vec::new(),
+        )
+        .await;
+    let mut requests = BTreeMap::from([
+        ("context_versions".to_owned(), None),
+        ("context".to_owned(), None),
+    ]);
+    let bounds = SourceSnapshot::requests(&mut requests, &[other], None).unwrap();
+    assert_eq!(bounds.context_owners, None);
+}
+
+#[tokio::test]
 async fn native_fixed_time_bounds() {
     let fixture = Fixture::new();
     for (field, first, last) in [

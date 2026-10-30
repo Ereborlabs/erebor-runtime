@@ -120,6 +120,50 @@ fn verify_publication(store: &AnalysisStore, receipt: &ManagedReceipt) -> TestRe
 }
 
 #[test]
+fn managed_envelopes_use_binary_storage() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let fixture = Fixture::admit(&store)?;
+    let (spec, scope, grant): (Vec<u8>, Vec<u8>, Vec<u8>) = store.read_snapshot(|reader| {
+        reader
+            .query_row(
+                "SELECT v.spec, v.scope, i.authority FROM managed_versions v
+                 JOIN managed_instances i USING (tenant_id, instance_id, generation)
+                 WHERE i.tenant_id = ? AND i.instance_id = ?",
+                params![
+                    fixture.instance.spec.tenant.as_slice(),
+                    fixture.instance.spec.id
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "read managed binary envelopes",
+            })
+    })?;
+    assert_eq!(
+        ManagedCodec::decode::<ManagedSpec>(&spec)?,
+        fixture.instance.spec
+    );
+    assert_eq!(
+        ManagedCodec::decode::<AnalysisSelectionV1>(&scope)?,
+        fixture.instance.grant.selection
+    );
+    assert_eq!(
+        ManagedCodec::decode::<PackageGrantV1>(&grant)?,
+        fixture.instance.grant
+    );
+    assert!(serde_json::from_slice::<ManagedSpec>(&spec).is_err());
+
+    let captured = fixture.capture(&store, false)?;
+    let input = request("binary-attempt");
+    let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
+    let bytes = attempt_bytes(&store, &fixture.instance.spec.id, &input.id)?;
+    assert_eq!(ManagedCodec::decode::<model::Attempt>(&bytes)?, attempt.0);
+    assert!(serde_json::from_slice::<model::Attempt>(&bytes).is_err());
+    Ok(())
+}
+
+#[test]
 fn large_contract_preserves_bytes() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
@@ -187,7 +231,7 @@ fn large_contract_preserves_bytes() -> TestResult {
             &AnalysisReadControl::default(),
         )?
         .ok_or("pending attempt absent")?;
-    assert_eq!(serde_json::to_vec(&pending.0)?, pending_bytes);
+    assert_eq!(ManagedCodec::encode(&pending.0)?, pending_bytes);
     let rows: (u64, u64) = store.read_snapshot(|reader| {
         reader.query_row(
         "SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_arrow)",

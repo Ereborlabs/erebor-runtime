@@ -129,18 +129,32 @@ async fn drains_captured_backlog() -> TestResult {
                     assert_eq!(evaluation.previous_outputs.len(), full.len());
                     for (actual, expected) in evaluation.previous_outputs.iter().zip(full) {
                         assert_eq!(actual.name, expected.name);
-                        assert_eq!(actual.batches, expected.batches);
+                        if actual.name == "progress" {
+                            assert_eq!(actual.batches, expected.batches);
+                        } else {
+                            assert!(actual.batches.iter().all(|batch| batch.num_rows() == 0));
+                        }
                     }
                     let checkpoint = evaluation.checkpoint.as_ref().ok_or("prior checkpoint")?;
                     let saved_checkpoint = output.checkpoint.as_ref().ok_or("saved checkpoint")?;
                     assert_eq!(checkpoint.version, saved_checkpoint.version);
                     assert_eq!(checkpoint.datasets.len(), saved_checkpoint.datasets.len());
-                    for (actual, expected) in
-                        checkpoint.datasets.iter().zip(&saved_checkpoint.datasets)
-                    {
-                        assert_eq!(actual.name, expected.name);
-                        assert_eq!(actual.batches, expected.batches);
-                    }
+                    assert_eq!(
+                        checkpoint.datasets[0].name,
+                        saved_checkpoint.datasets[0].name
+                    );
+                    assert_eq!(
+                        checkpoint.datasets[0].batches,
+                        saved_checkpoint.datasets[0].batches
+                    );
+                    assert_eq!(
+                        algorithm::Resume::basis(checkpoint)?,
+                        algorithm::ResumeBasis::Progress
+                    );
+                    assert_eq!(
+                        algorithm::Resume::basis(saved_checkpoint)?,
+                        algorithm::ResumeBasis::Complete
+                    );
                     let progress = evaluation
                         .previous_outputs
                         .iter()

@@ -395,6 +395,65 @@ impl AnalysisStore {
                 {
                     return Self::reject_path(root, "the managed receipt is invalid");
                 }
+                if let (
+                    crate::ManagedDestination::Graph {
+                        operation: crate::ManagedGraphOperation::Evaluate,
+                        calls,
+                        ..
+                    },
+                    Some(graph),
+                ) = (&program.destination, &receipt.graph)
+                {
+                    if graph.commit_revision == receipt.commit_revision {
+                        let mut expected = Vec::new();
+                        for call in calls {
+                            let pin = program.manifest.calls.get(call).ok_or_else(|| {
+                                crate::PackageErrorCodeV1::Missing.error("managed Graph call pin")
+                            })?;
+                            let descriptor = Self::managed_contract(reader, tenant, pin)?;
+                            let model = descriptor
+                                .exports
+                                .iter()
+                                .find(|model| model.name == pin.export)
+                                .ok_or_else(|| {
+                                    crate::PackageErrorCodeV1::Missing.error("managed Graph export")
+                                })?;
+                            if araphor_analysis_builtins::graph::Detector::supports(model) {
+                                let result = receipt.results.get(call).ok_or_else(|| {
+                                    crate::PackageErrorCodeV1::Missing
+                                        .error("managed Graph producer")
+                                })?;
+                                expected.push((*call, result.result_id.clone()));
+                            }
+                        }
+                        let mut statement = reader
+                            .prepare(
+                                "SELECT s.call_id, v.result_id
+                             FROM graph_result_producers p
+                             JOIN graph_producer_versions v ON v.result_id = p.producer_result_id
+                             JOIN graph_producer_scopes s USING (scope_id)
+                             WHERE p.result_id = ? AND s.producer_kind = 0
+                             ORDER BY s.call_id, v.result_id",
+                            )
+                            .context(AnalysisDatabaseSnafu {
+                                operation: "prepare Graph producer recovery",
+                            })?;
+                        let actual = statement
+                            .query_map(params![graph.result_id], |row| {
+                                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
+                            })
+                            .context(AnalysisDatabaseSnafu {
+                                operation: "read Graph producer recovery",
+                            })?
+                            .collect::<duckdb::Result<Vec<_>>>()
+                            .context(AnalysisDatabaseSnafu {
+                                operation: "decode Graph producer recovery",
+                            })?;
+                        if actual != expected {
+                            return Self::reject_path(root, "the published Graph producers differ");
+                        }
+                    }
+                }
                 let (step, selected, revision) =
                     Self::managed_step_from(reader, tenant, &receipt.selected.result_id)?;
                 if receipt.selected.commit_revision != receipt.commit_revision
@@ -478,7 +537,7 @@ impl AnalysisStore {
                         .is_some_and(araphor_analysis_builtins::graph::Detector::supports);
                 let base: Option<Option<String>> = reader
                     .query_row(
-                        "SELECT base_result_id FROM graph_call_versions WHERE result_id = ?",
+                        "SELECT base_result_id FROM graph_producer_versions WHERE result_id = ?",
                         params![id],
                         |row| row.get(0),
                     )
@@ -487,18 +546,9 @@ impl AnalysisStore {
                         operation: "validate Graph call result binding",
                     })?;
                 if native {
-                    let base = base.ok_or_else(|| {
+                    base.ok_or_else(|| {
                         crate::PackageErrorCodeV1::Missing.error("Graph call native version")
                     })?;
-                    let expected = attempt
-                        .capture
-                        .prior
-                        .get(&record.call)
-                        .and_then(Option::as_ref)
-                        .map(|reference| reference.result_id.as_str());
-                    if base.as_deref() != expected {
-                        return Self::reject_path(root, "the Graph call base result differs");
-                    }
                     crate::analysis::graph_rows::GraphCallRows::load(
                         reader,
                         &evaluated,
@@ -507,6 +557,7 @@ impl AnalysisStore {
                         revision,
                         &evaluation,
                         &control,
+                        None,
                     )?;
                 } else if base.is_some() {
                     return Self::reject_path(root, "a generic call has a native Graph version");

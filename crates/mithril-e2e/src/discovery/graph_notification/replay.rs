@@ -179,6 +179,7 @@ impl ReplayQualification {
         let authority = Arc::new(ConfiguredNotificationAuthority::new(
             store.clone(),
             &grants,
+            None,
         )?);
         let router = NotificationRouter::new(self.data.clone(), authority)?;
         assert_eq!(router.route(graph, self.now)?, 256);
@@ -237,6 +238,7 @@ impl ReplayQualification {
         let authority = Arc::new(ConfiguredNotificationAuthority::new(
             store.clone(),
             &grants,
+            None,
         )?);
         let router = NotificationRouter::new(data.clone(), authority)?;
         assert_eq!(router.obligations(&grants[1], now)?, prefix);
@@ -300,6 +302,7 @@ impl ReplayQualification {
         let authority = Arc::new(ConfiguredNotificationAuthority::new(
             store.clone(),
             &grants,
+            None,
         )?);
         let router = NotificationRouter::new(data.clone(), authority)?;
         let before = GraphNotificationQualification::one(&router, &grants[1], &first, now + 103)?;

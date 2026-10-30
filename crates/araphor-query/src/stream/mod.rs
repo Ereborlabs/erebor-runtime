@@ -84,10 +84,24 @@ impl Run {
                 let tables = requests
                     .as_deref()
                     .map_or_else(|| run.sources(), CapturedRequests::tables);
+                let context_owners = requests
+                    .as_deref()
+                    .and_then(CapturedRequests::context_owners);
                 match &managed {
-                    Some(managed) => store
-                        .managed_dependency_revision(&selection, tables, managed, limits, &worker),
-                    None => store.dependency_revision_for(&selection, tables, &worker),
+                    Some(managed) => store.managed_dependency_revision_filtered(
+                        &selection,
+                        tables,
+                        managed,
+                        limits,
+                        context_owners,
+                        &worker,
+                    ),
+                    None => store.dependency_revision_for_filtered(
+                        &selection,
+                        tables,
+                        context_owners,
+                        &worker,
+                    ),
                 }
                 .map_err(crate::Error::from)
             })

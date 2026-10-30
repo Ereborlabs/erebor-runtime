@@ -335,7 +335,7 @@ fn recovery_checks_terminal_contract() -> TestResult {
         let mut writer = store.writer()?;
         writer.get_mut()?.execute(
             "UPDATE managed_attempts SET contract = ?, completed = ?",
-            params![serde_json::to_vec(&saved)?, completed],
+            params![ManagedCodec::encode(&saved)?, completed],
         )?;
         drop(writer);
         drop(store);
@@ -528,7 +528,7 @@ fn startup_keeps_committed_state() -> TestResult {
         )?;
         assert_eq!(revision, before.commit_revision);
         assert_eq!(completed, 0);
-        assert_eq!(contract, serde_json::to_vec(&pending.0)?);
+        assert_eq!(contract, ManagedCodec::encode(&pending.0)?);
         drop(reader);
         let store = AnalysisStore::open(&root)?;
         let mut expected = before.clone();
@@ -737,8 +737,8 @@ fn startup_cancels_promoted_attempts() -> TestResult {
         let mut unchanged = original.0.clone();
         unchanged.terminal = Some(terminal.clone());
         assert_eq!(
-            serde_json::to_vec(&loaded.0)?,
-            serde_json::to_vec(&unchanged)?
+            ManagedCodec::encode(&loaded.0)?,
+            ManagedCodec::encode(&unchanged)?
         );
         assert_eq!(
             store.finish_managed(original, ManagedExit::Cancelled, || Ok(()))?,
@@ -862,8 +862,8 @@ fn startup_filters_generations() -> TestResult {
             )?
             .ok_or("preserved unknown intent")?;
         assert_eq!(
-            serde_json::to_vec(&loaded.0)?,
-            serde_json::to_vec(&original.0)?
+            ManagedCodec::encode(&loaded.0)?,
+            ManagedCodec::encode(&original.0)?
         );
         assert!(loaded.terminal().is_none());
         assert!(loaded.receipt().is_none());
@@ -982,8 +982,8 @@ fn startup_restores_native_intent() -> TestResult {
     let mut retained = pending.0.clone();
     retained.terminal = Some(terminal.clone());
     assert_eq!(
-        serde_json::to_vec(&recovered.0)?,
-        serde_json::to_vec(&retained)?
+        ManagedCodec::encode(&recovered.0)?,
+        ManagedCodec::encode(&retained)?
     );
     let resumed = restored.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?;
     assert_eq!(resumed.instance, current);
@@ -1063,8 +1063,8 @@ fn startup_restores_native_intent() -> TestResult {
         )?
         .ok_or("original source intent")?;
     assert_eq!(
-        serde_json::to_vec(&source_pending.0)?,
-        serde_json::to_vec(&pending.0)?
+        ManagedCodec::encode(&source_pending.0)?,
+        ManagedCodec::encode(&pending.0)?
     );
     assert!(source_pending.terminal().is_none());
     let published = fixture.publish(

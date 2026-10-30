@@ -6,6 +6,7 @@ use araphor_discovery_definition::{Definition, ImagePin, Program, ResolvedDefini
 use duckdb::params;
 use snafu::ResultExt as _;
 
+use super::codec::ManagedCodec;
 use super::*;
 use crate::analysis::{
     AnalysisExtractLimits, AnalysisReadModeV1, AnalysisSelectionV1, AnalysisStore,
@@ -1156,7 +1157,7 @@ fn managed_recovery_checks_outputs() -> TestResult {
                     )?;
                 }
                 "context" => {
-                    let mut record: model::Record = serde_json::from_slice(&writer.query_row(
+                    let mut record: model::Record = ManagedCodec::decode(&writer.query_row(
                         "SELECT request_meta FROM analysis_results WHERE result_id = ?",
                         params![id],
                         |row| row.get::<_, Vec<u8>>(0),
@@ -1164,16 +1165,15 @@ fn managed_recovery_checks_outputs() -> TestResult {
                     record.context.target = "wasm32-wasip2".into();
                     writer.execute(
                         "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
-                        params![serde_json::to_vec(&record)?, id],
+                        params![ManagedCodec::encode(&record)?, id],
                     )?;
                 }
                 _ => {
-                    let mut output: sdk::wire::Output =
-                        serde_json::from_slice(&writer.query_row(
-                            "SELECT body FROM analysis_results WHERE result_id = ?",
-                            params![id],
-                            |row| row.get::<_, Vec<u8>>(0),
-                        )?)?;
+                    let mut output: sdk::wire::Output = ManagedCodec::decode(&writer.query_row(
+                        "SELECT body FROM analysis_results WHERE result_id = ?",
+                        params![id],
+                        |row| row.get::<_, Vec<u8>>(0),
+                    )?)?;
                     if corruption == "evidence" {
                         output.evidence[0].input.row = 1;
                     } else {
@@ -1185,7 +1185,7 @@ fn managed_recovery_checks_outputs() -> TestResult {
                     }
                     writer.execute(
                         "UPDATE analysis_results SET body = ? WHERE result_id = ?",
-                        params![serde_json::to_vec(&output)?, id],
+                        params![ManagedCodec::encode(&output)?, id],
                     )?;
                 }
             }

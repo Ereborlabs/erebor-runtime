@@ -96,11 +96,50 @@ impl Incident {
         })
     }
 
-    pub(super) async fn wait(mut self, client: &AraphorClient) -> Result<Observed> {
+    pub(super) async fn wait(self, client: &AraphorClient) -> Result<Observed> {
+        self.wait_until(client, |_| true).await
+    }
+
+    pub(super) fn background_ready(&self, source: &EvidenceIntakeIdentityV1, cursor: u64) -> bool {
+        self.complete[1]
+            && self.graphs.get(source).is_some_and(|(_, _, graph)| {
+                graph.last_cursor == cursor
+                    && graph.missing_ranges.is_empty()
+                    && graph
+                        .findings
+                        .iter()
+                        .filter(|finding| finding.package_id == "HF-PROC-001")
+                        .count()
+                        == 138
+                    && graph.input_manifest.evidence.iter().any(|record| {
+                        &record.stream == source
+                            && record.cpu_id == 0
+                            && record.durable_cursor == cursor
+                    })
+                    && graph.input_manifest.coverage.iter().any(|coverage| {
+                        &coverage.source == source
+                            && coverage.cpu_id == 0
+                            && matches!(
+                                coverage.state,
+                                DiscoveryCoverageStateV1::Healthy
+                                    | DiscoveryCoverageStateV1::Closed
+                            )
+                            && coverage.gap_reasons.is_empty()
+                    })
+            })
+    }
+
+    pub(super) async fn wait_until(
+        mut self,
+        client: &AraphorClient,
+        mut ready: impl FnMut(&Self) -> bool,
+    ) -> Result<Observed> {
         let waited = tokio::time::timeout(Duration::from_secs(90), async {
             loop {
-                if let Some(observed) = self.result()? {
-                    return Ok(observed);
+                if ready(&self) {
+                    if let Some(observed) = self.result()? {
+                        return Ok(observed);
+                    }
                 }
                 let (source, frame) = {
                     let [events, graphs, notices] = &mut self.streams;
@@ -169,6 +208,25 @@ impl Incident {
                         json!({
                             "id": id, "commit_revision": revision,
                             "source": graph.scope.identity, "cursor": graph.last_cursor,
+                            "first_cursor": graph.first_cursor,
+                            "process_finding_count": graph.findings.iter()
+                                .filter(|finding| finding.package_id == "HF-PROC-001").count(),
+                            "cut_cpu0_members": graph.input_manifest.evidence.iter()
+                                .filter(|record| record.stream == graph.scope.identity
+                                    && record.cpu_id == 0
+                                    && record.durable_cursor == graph.last_cursor).count(),
+                            "cpu0_coverage_count": graph.input_manifest.coverage.iter()
+                                .filter(|coverage| coverage.source == graph.scope.identity
+                                    && coverage.cpu_id == 0).count(),
+                            "cpu0_healthy_closed_no_gaps": graph.input_manifest.coverage.iter()
+                                .any(|coverage| coverage.source == graph.scope.identity
+                                    && coverage.cpu_id == 0
+                                    && matches!(coverage.state,
+                                        DiscoveryCoverageStateV1::Healthy | DiscoveryCoverageStateV1::Closed)
+                                    && coverage.gap_reasons.is_empty()),
+                            "cpu0_coverage": graph.input_manifest.coverage.iter()
+                                .filter(|coverage| coverage.source == graph.scope.identity
+                                    && coverage.cpu_id == 0).take(8).collect::<Vec<_>>(),
                             "selected_record_count": selected.len(),
                             "selected_records": selected.iter().map(|record| {
                                 let member = graph.input_manifest.evidence.contains(&record.id);
@@ -280,11 +338,17 @@ impl Incident {
             }
             1 => {
                 assert_eq!(row.values.len(), 3);
-                let graph: GraphSnapshotV1 = serde_json::from_slice(Self::binary(&row, 1)?)?;
+                let graph = GraphSnapshotV1::decode_native(Self::binary(&row, 1)?)?;
                 graph.validate()?;
+                let result_id = Self::text(&row, 0)?;
+                let revision = Self::number(&row, 2)?;
+                erebor_telemetry::debug!("Incident receives Graph",
+                    graph_result_id = %result_id.chars().take(64).collect::<String>(),
+                    source_id = %uuid::Uuid::from_bytes(graph.scope.identity.source_id),
+                    cursor = %graph.last_cursor, publication = %revision);
                 self.graphs.insert(
                     graph.scope.identity.clone(),
-                    (Self::text(&row, 0)?.into(), Self::number(&row, 2)?, graph),
+                    (result_id.into(), revision, graph),
                 );
             }
             2 => {

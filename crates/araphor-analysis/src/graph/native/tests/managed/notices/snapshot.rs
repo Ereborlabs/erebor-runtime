@@ -67,7 +67,7 @@ async fn manifest_replacement_rebinds() -> TestResult {
     let (plan, sources) = fixture
         .query
         .prepare(
-            "SELECT graph_result_id, snapshot, commit_revision FROM graph_manifest",
+            "SELECT graph_result_id, metadata, commit_revision FROM graph_manifest",
             Vec::new(),
         )
         .await?;
@@ -158,15 +158,15 @@ async fn manifest_replacement_rebinds() -> TestResult {
                 })
                 .ok_or("Graph manifest revision")?
                 .value(0);
-            let snapshot = batch
-                .column_by_name("snapshot")
+            let metadata = batch
+                .column_by_name("metadata")
                 .and_then(|column| {
                     column
                         .as_any()
                         .downcast_ref::<sdk::arrow_array::BinaryArray>()
                 })
-                .ok_or("Graph manifest snapshot")?;
-            let graph: araphor_data::GraphSnapshotV1 = serde_json::from_slice(snapshot.value(0))?;
+                .ok_or("Graph manifest metadata")?;
+            let graph = araphor_data::GraphManifest::decode(metadata.value(0))?;
             let head = fixture
                 .query
                 .store()
@@ -205,7 +205,12 @@ async fn manifest_replacement_rebinds() -> TestResult {
                 );
             } else {
                 assert!(graph.previous_result_id.is_none());
-                original = Some((id, revision, graph));
+                let snapshot = fixture
+                    .query
+                    .store()
+                    .graph_result(fixture.source.tenant_id, &id)?
+                    .ok_or("original Graph result")?;
+                original = Some((id, revision, snapshot));
             }
             drop(update);
             if last == 3 {

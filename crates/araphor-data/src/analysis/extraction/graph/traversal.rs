@@ -106,6 +106,7 @@ impl AnalysisStore {
                 Some(&subject_ids),
                 &[],
                 header.notice,
+                header.expired,
                 &mut output.sink(control),
             )?;
         }

@@ -19,6 +19,10 @@ fn threshold_retains_evidence_and_state() -> TestResult {
             cpu_id: 0,
             durable_cursor: 1,
         },
+        position: Position {
+            commit_revision: 1,
+            ordinal: 0,
+        },
         effect: araphor_analysis_builtins::discovery::DiscoveryEffectKeyV1 {
             task_cookie: 7,
             target_task_cookie: None,
@@ -52,8 +56,10 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     };
     let mut separate = first.clone();
     separate.id.stream.node_boot_id = [9; 16];
+    separate.position.commit_revision = 2;
     let mut last = first.clone();
     last.id.durable_cursor = 3;
+    last.position.commit_revision = 3;
     let expected = vec![first.id.clone(), last.id.clone()];
     let records = [first, separate, last];
     let record_count = records.len();
@@ -104,7 +110,7 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     let other = other.check_evaluation(&evaluation)?;
     assert!(matches!(<BurstDetector as sdk::Guest>::compute(&other),
         Err(sdk::Error::Contract { code: sdk::ErrorCode::Incompatible, field, .. }) if field == "detector package"));
-    let findings = Finding::decode(&output.datasets[2])?;
+    let findings = FindingChange::decode(&output.datasets[4])?;
     assert_eq!(
         GraphPackageStateV1::decode(&output.checkpoint.as_ref().ok_or("checkpoint")?.datasets[0])?,
         [GraphPackageStateV1::Declared(record_count.to_string())]

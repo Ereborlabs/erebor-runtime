@@ -479,6 +479,7 @@ mod tests {
             schema: Arc::clone(canonical),
             indices: (0..canonical.fields().len()).collect(),
             bounds: BTreeMap::new(),
+            context_owners: None,
             fetch: None,
         };
         assert!(source.supports_changes().unwrap());

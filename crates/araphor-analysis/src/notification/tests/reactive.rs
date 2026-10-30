@@ -619,7 +619,7 @@ async fn stale_batch_checks_lifecycle_after_skipping_rows() -> TestResult {
             .into())
         },
     )?;
-    assert_eq!(checks.get(), 2);
+    assert_eq!(checks.get(), 3);
     assert_eq!(result.routed.len(), 1);
     assert!(matches!(
         &result.routed[0].1,
@@ -633,31 +633,33 @@ async fn stale_batch_checks_lifecycle_after_skipping_rows() -> TestResult {
     ));
     assert!(result.delivered.is_empty());
 
-    let final_checks = std::cell::Cell::new(0);
-    let stopped = router.consume_rows(
-        [1; 16],
-        100,
-        batches,
-        &|| {
-            final_checks.set(final_checks.get() + 1);
-            if final_checks.get() == 2 {
-                return Err(NotificationSnafu {
-                    code: NotificationErrorCodeV1::Unavailable,
-                    field: "stopped notification",
+    for stop_at in [2, 3] {
+        let final_checks = std::cell::Cell::new(0);
+        let stopped = router.consume_rows(
+            [1; 16],
+            100,
+            batches,
+            &|| {
+                final_checks.set(final_checks.get() + 1);
+                if final_checks.get() == stop_at {
+                    return Err(NotificationSnafu {
+                        code: NotificationErrorCodeV1::Unavailable,
+                        field: "stopped notification",
+                    }
+                    .build()
+                    .into());
                 }
-                .build()
-                .into());
-            }
-            Ok(())
-        },
-        &mut |_| {
-            Ok(NotificationSinkResultV1::Accepted {
-                receipt: "unexpected".into(),
-            })
-        },
-    );
-    assert!(stopped.is_err());
-    assert_eq!(final_checks.get(), 2);
+                Ok(())
+            },
+            &mut |_| {
+                Ok(NotificationSinkResultV1::Accepted {
+                    receipt: "unexpected".into(),
+                })
+            },
+        );
+        assert!(stopped.is_err());
+        assert_eq!(final_checks.get(), stop_at);
+    }
     Ok(())
 }
 

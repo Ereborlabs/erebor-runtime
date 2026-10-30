@@ -9,9 +9,11 @@ mod encoding;
 pub(in crate::analysis) mod fixture;
 mod guards;
 mod headers;
+mod native;
 mod packages;
 mod schema;
 mod unchanged;
+use native::NativeRows;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 use fixture::CommitFixture;
@@ -38,18 +40,22 @@ fn graph_source_requires_native_identity() -> TestResult {
         let writer = Connection::open_in_memory()?;
         writer.execute_batch(
             "CREATE TABLE analysis_results (result_id VARCHAR, commit_revision UBIGINT);
-             CREATE TABLE source_receipts (stream_key BLOB, tenant_id BLOB);",
+             CREATE TABLE source_receipts (stream_key BLOB, tenant_id BLOB, cpu_id UINTEGER);",
         )?;
         writer.execute_batch(&GraphRows::schema())?;
         writer.execute("INSERT INTO analysis_results VALUES ('version', 1)", [])?;
         if let Some((key, tenant)) = receipt {
             writer.execute(
-                "INSERT INTO source_receipts VALUES (?, ?)",
-                params![key, tenant.as_slice()],
+                "INSERT INTO source_receipts VALUES (?, ?, ?)",
+                params![
+                    key,
+                    tenant.as_slice(),
+                    graph.input_manifest.evidence[0].cpu_id
+                ],
             )?;
         }
         assert!(matches!(
-            GraphRows::insert_inputs(graph, &writer, "version"),
+            GraphRows::source_id(&writer, &graph.scope.identity),
             Err(crate::Error::GraphInvalid {
                 field: "graph evidence source",
                 ..
@@ -78,16 +84,17 @@ fn native_rows_integrity() -> TestResult {
         method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
         coverage_revision UBIGINT, commit_revision UBIGINT);
         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY,
-        identity_json VARCHAR, tenant_id BLOB)",
+        identity_json VARCHAR, tenant_id BLOB, cpu_id UINTEGER)",
     )?;
     writer.execute_batch(&GraphRows::schema())?;
     GraphRows::validate_tables(&writer)?;
     writer.execute(
-        "INSERT INTO source_receipts VALUES (?, ?, ?)",
+        "INSERT INTO source_receipts VALUES (?, ?, ?, ?)",
         params![
             graph.scope.identity.key(),
             serde_json::to_string(&graph.scope.identity)?,
-            graph.scope.identity.tenant_id.as_slice()
+            graph.scope.identity.tenant_id.as_slice(),
+            graph.input_manifest.evidence[0].cpu_id
         ],
     )?;
     writer.execute(
@@ -103,7 +110,7 @@ fn native_rows_integrity() -> TestResult {
             fixture.request.coverage_revision
         ],
     )?;
-    GraphRows::insert(graph, &writer, "version")?;
+    NativeRows::insert(graph, &writer, "version")?;
     let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, "version")?
         .ok_or("missing header")?;
     let cancelled = AnalysisReadControl::default();
@@ -175,7 +182,7 @@ fn native_rows_integrity() -> TestResult {
                 fixture.request.coverage_revision
             ],
         )?;
-        GraphRows::insert(&next, &transaction, other)?;
+        NativeRows::insert(&next, &transaction, other)?;
         let other_header =
             GraphRows::read_header(&transaction, graph.scope.identity.tenant_id, other)?
                 .ok_or("missing second header")?;
@@ -209,7 +216,7 @@ fn native_rows_integrity() -> TestResult {
                 fixture.request.coverage_revision
             ],
         )?;
-        GraphRows::insert(&removed, &transaction, "removed")?;
+        NativeRows::insert(&removed, &transaction, "removed")?;
         let mut reentered = next.clone();
         reentered.previous_result_id = Some("removed".into());
         reentered.validate()?;
@@ -226,7 +233,7 @@ fn native_rows_integrity() -> TestResult {
                 fixture.request.coverage_revision
             ],
         )?;
-        GraphRows::insert(&reentered, &transaction, "reentered")?;
+        NativeRows::insert(&reentered, &transaction, "reentered")?;
         for (id, expected) in [
             ("version", graph),
             (other, &next),
@@ -239,9 +246,9 @@ fn native_rows_integrity() -> TestResult {
             assert_eq!(GraphRows::read(&transaction, id, &historical)?, *expected);
         }
         transaction.execute(
-            "DELETE FROM graph_edge_membership
-             WHERE lineage_id = (SELECT lineage_id FROM graph_versions WHERE result_id = ?)
-                 AND valid_from = (SELECT commit_revision FROM graph_versions WHERE result_id = ?)",
+            "DELETE FROM graph_producer_members
+             WHERE member_kind=3 AND scope_id IN (SELECT v.scope_id FROM graph_result_producers b JOIN graph_producer_versions v ON v.result_id=b.producer_result_id WHERE b.result_id=?)
+                 AND valid_from=(SELECT commit_revision FROM graph_versions WHERE result_id=?)",
             params![other, other],
         )?;
         let seed = graph.findings[0].subject_id.clone();
@@ -296,19 +303,21 @@ fn native_rows_integrity() -> TestResult {
         let mut wrong_source = graph.scope.identity.clone();
         wrong_source.node_boot_id[0] ^= 1;
         transaction.execute(
-            "INSERT INTO source_receipts VALUES (?, ?, ?)",
+            "INSERT INTO source_receipts VALUES (?, ?, ?, ?)",
             params![
                 wrong_source.key(),
                 serde_json::to_string(&wrong_source)?,
-                wrong_source.tenant_id.as_slice()
+                wrong_source.tenant_id.as_slice(),
+                graph.input_manifest.evidence[0].cpu_id
             ],
         )?;
         transaction.execute(
-            "INSERT INTO graph_sources VALUES (?, ?, ?)",
+            "INSERT INTO graph_sources VALUES (?, ?, ?, ?)",
             params![
                 wrong_ref,
                 wrong_source.key(),
-                wrong_source.tenant_id.as_slice()
+                wrong_source.tenant_id.as_slice(),
+                GraphRows::encode_value(&wrong_source)?
             ],
         )?;
         transaction.execute(
@@ -376,8 +385,7 @@ fn native_rows_integrity() -> TestResult {
             params![wrong_source.key()],
         )?;
         let reentry: u64 = transaction.query_row(
-            "SELECT count(*)::UBIGINT FROM graph_evidence_membership
-             WHERE lineage_id = 1 AND evidence_id = 1",
+            "SELECT count(*)::UBIGINT FROM graph_producer_members WHERE member_kind=0 AND scope_id=1 AND value_ref=1",
             [],
             |row| row.get(0),
         )?;
@@ -388,7 +396,7 @@ fn native_rows_integrity() -> TestResult {
             |row| row.get(0),
         )?;
         let finding_memberships: u64 = transaction.query_row(
-            "SELECT count(*)::UBIGINT FROM graph_finding_membership",
+            "SELECT count(*)::UBIGINT FROM graph_producer_members WHERE member_kind=4",
             [],
             |row| row.get(0),
         )?;
@@ -417,7 +425,7 @@ fn native_rows_integrity() -> TestResult {
                 fixture.request.coverage_revision
             ],
         )?;
-        GraphRows::insert(&window, &transaction, "new-window")?;
+        NativeRows::insert(&window, &transaction, "new-window")?;
         let window_header =
             GraphRows::read_header(&transaction, graph.scope.identity.tenant_id, "new-window")?
                 .ok_or("missing new window")?;
@@ -454,7 +462,7 @@ fn native_rows_integrity() -> TestResult {
                 fixture.request.coverage_revision
             ],
         )?;
-        GraphRows::insert(graph, &transaction, "independent")?;
+        NativeRows::insert(graph, &transaction, "independent")?;
         let independent =
             GraphRows::read_header(&transaction, graph.scope.identity.tenant_id, "independent")?
                 .ok_or("missing independent Graph")?;
@@ -464,7 +472,7 @@ fn native_rows_integrity() -> TestResult {
         );
         let shared: (u64, u64) = transaction.query_row(
             "SELECT (SELECT count(*)::UBIGINT FROM graph_finding_values),
-                (SELECT count(*)::UBIGINT FROM graph_finding_membership)",
+                (SELECT count(*)::UBIGINT FROM graph_producer_members WHERE member_kind=4)",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -494,15 +502,15 @@ fn native_rows_integrity() -> TestResult {
         Some(graph.findings[0].clone())
     );
     for mutation in [
-        "DELETE FROM graph_subject_membership WHERE subject_id = 1",
+        "DELETE FROM graph_producer_members WHERE member_kind=2 AND value_ref=1",
         "UPDATE graph_finding_values SET severity = 'INVALID'",
-        "DELETE FROM graph_finding_membership WHERE value_id = (SELECT min(value_id) FROM graph_finding_values)",
+        "DELETE FROM graph_producer_members WHERE member_kind=4 AND value_ref = (SELECT min(value_id) FROM graph_finding_values)",
         "UPDATE graph_subject_values SET tenant_id = 'short'::BLOB WHERE subject_id = 1",
         "UPDATE graph_subject_values SET authority_rank = 255 WHERE subject_id = 1",
         "UPDATE graph_edge_values SET from_ref = 4294967295",
         "UPDATE graph_edge_values SET evidence_refs = [4294967295]::UBIGINT[]",
         "UPDATE graph_edge_values SET evidence_refs = [NULL]::UBIGINT[]",
-        "UPDATE graph_edge_values SET property_ref = 4294967295",
+        "UPDATE graph_edge_values SET to_ref=4294967295",
         "UPDATE graph_edge_properties SET proof_quality = struct_update(proof_quality, source_authority := 255::UTINYINT)",
         "UPDATE graph_edge_properties SET proof_quality = struct_update(proof_quality, source_authority := NULL::UTINYINT)",
         "UPDATE graph_edge_properties SET required_coverage_interval_ids = ['short'::BLOB]",
@@ -530,8 +538,8 @@ fn native_rows_integrity() -> TestResult {
     }
     for mutation in [
         "DELETE FROM graph_versions",
-        "UPDATE graph_evidence SET durable_cursor = 0",
-        "UPDATE graph_evidence_membership SET valid_to = valid_from",
+        "DELETE FROM graph_evidence",
+        "DELETE FROM graph_producer_members WHERE member_kind=0",
     ] {
         let transaction = writer.transaction()?;
         transaction.execute(mutation, [])?;
@@ -622,7 +630,8 @@ fn earlier_keys_keep_edge_membership() -> TestResult {
     first.graph.branches.clear();
     first.graph.facts.clear();
     first.findings.clear();
-    first.input_manifest.evidence[0].cpu_id = 1;
+    first.input_manifest.evidence[0].durable_cursor = 2;
+    first.last_cursor = 2;
     first.validate()?;
     let from = first.graph.subjects[first.graph.edges[0].key.from as usize].clone();
     let to = first.graph.subjects[first.graph.edges[0].key.to as usize].clone();
@@ -630,7 +639,7 @@ fn earlier_keys_keep_edge_membership() -> TestResult {
     let mut second = first.clone();
     second.previous_result_id = Some("first".into());
     let mut earlier = first.input_manifest.evidence[0].clone();
-    earlier.cpu_id = 0;
+    earlier.durable_cursor = 1;
     second.input_manifest.evidence.insert(0, earlier);
     let mut subject = first.graph.subjects[0].clone();
     subject.identity = vec![0];
@@ -655,14 +664,15 @@ fn earlier_keys_keep_edge_membership() -> TestResult {
             tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
             method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
             coverage_revision UBIGINT, commit_revision UBIGINT);
-         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB)",
+         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB, cpu_id UINTEGER)",
     )?;
     writer.execute_batch(&GraphRows::schema())?;
     writer.execute(
-        "INSERT INTO source_receipts VALUES (?, ?)",
+        "INSERT INTO source_receipts VALUES (?, ?, ?)",
         params![
             first.scope.identity.key(),
-            first.scope.identity.tenant_id.as_slice()
+            first.scope.identity.tenant_id.as_slice(),
+            first.input_manifest.evidence[0].cpu_id
         ],
     )?;
     for (id, revision, graph) in [("first", 1, &first), ("second", 2, &second)] {
@@ -681,14 +691,14 @@ fn earlier_keys_keep_edge_membership() -> TestResult {
                 revision
             ],
         )?;
-        GraphRows::insert(graph, &writer, id)?;
+        NativeRows::insert(graph, &writer, id)?;
         let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, id)?
             .ok_or("missing graph version")?;
         assert_eq!(GraphRows::read(&writer, id, &header)?, *graph);
     }
     let counts: (u64, u64) = writer.query_row(
         "SELECT (SELECT count(*)::UBIGINT FROM graph_edge_values),
-            (SELECT count(*)::UBIGINT FROM graph_edge_membership)",
+            (SELECT count(*)::UBIGINT FROM graph_producer_members WHERE member_kind=3)",
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
@@ -743,20 +753,21 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
         .sort_by(|left, right| left.key.cmp(&right.key));
     second.validate()?;
 
-    let writer = Connection::open_in_memory()?;
+    let mut writer = Connection::open_in_memory()?;
     writer.execute_batch(
         "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
             tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
             method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
             coverage_revision UBIGINT, commit_revision UBIGINT);
-         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB)",
+         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB, cpu_id UINTEGER)",
     )?;
     writer.execute_batch(&GraphRows::schema())?;
     writer.execute(
-        "INSERT INTO source_receipts VALUES (?, ?)",
+        "INSERT INTO source_receipts VALUES (?, ?, ?)",
         params![
             first.scope.identity.key(),
-            first.scope.identity.tenant_id.as_slice()
+            first.scope.identity.tenant_id.as_slice(),
+            first.input_manifest.evidence[0].cpu_id
         ],
     )?;
     let mut second_ids = None;
@@ -776,7 +787,7 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
                 revision
             ],
         )?;
-        let ids = GraphRows::insert(graph, &writer, id)?;
+        let ids = NativeRows::insert(graph, &writer, id)?;
         if id == "second" {
             second_ids = Some(ids);
         }
@@ -784,79 +795,49 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
             .ok_or("missing graph version")?;
         assert_eq!(GraphRows::read(&writer, id, &header)?, *graph);
     }
-    let counts: (u64, u64, u64) = writer.query_row(
+    let counts: (u64, u64) = writer.query_row(
         "SELECT (SELECT count(*)::UBIGINT FROM graph_edge_values),
-            (SELECT count(*)::UBIGINT FROM graph_edge_membership),
-            (SELECT count(*)::UBIGINT FROM graph_edge_properties)",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
-    let first_edge_count = u64::try_from(first_edge_count)?;
-    assert_eq!(
-        counts,
-        (first_edge_count + 1, first_edge_count + 1, first_edge_count)
-    );
-    let ids = second_ids.ok_or("missing second graph IDs")?;
-    let (lineage, revision): (u64, u64) = writer.query_row(
-        "SELECT lineage_id, commit_revision FROM graph_versions WHERE result_id = 'second'",
+            (SELECT count(*)::UBIGINT FROM graph_producer_members WHERE member_kind=3)",
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
+    let first_edge_count = u64::try_from(first_edge_count)?;
+    assert_eq!(counts, (first_edge_count + 1, first_edge_count + 1));
+    let ids = second_ids.ok_or("missing second graph IDs")?;
     let edge_id: u64 = writer.query_row(
         "SELECT edge_id FROM graph_edge_values ORDER BY edge_id LIMIT 1",
         [],
         |row| row.get(0),
     )?;
-    let (property_ref, other_ref): (u64, u64) = writer.query_row(
-        "SELECT property_ref,
-            (SELECT max(property_ref)::UBIGINT FROM graph_edge_properties)
-         FROM graph_edge_values WHERE edge_id = ?",
+    let package_id: String = writer.query_row(
+        "SELECT p.package_id FROM graph_edge_values e JOIN graph_edge_properties p USING(property_ref) WHERE e.edge_id = ?",
         params![edge_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| row.get(0),
     )?;
-    assert_ne!(property_ref, other_ref);
     writer.execute(
-        "UPDATE graph_edge_values SET property_ref = ? WHERE edge_id = ?",
-        params![other_ref, edge_id],
+        "UPDATE graph_edge_properties SET package_id=package_id || '-tamper' WHERE property_ref=(SELECT property_ref FROM graph_edge_values WHERE edge_id=?)",
+        params![edge_id],
     )?;
     assert!(GraphRows::validate_edge_values(&writer).is_err());
     writer.execute(
-        "UPDATE graph_edge_values SET property_ref = ? WHERE edge_id = ?",
-        params![property_ref, edge_id],
+        "UPDATE graph_edge_properties SET package_id=? WHERE property_ref=(SELECT property_ref FROM graph_edge_values WHERE edge_id=?)",
+        params![package_id, edge_id],
     )?;
-    writer.execute(
-        "UPDATE graph_edge_values SET last_boottime_ns = last_boottime_ns + 1 WHERE edge_id = ?",
-        params![edge_id],
-    )?;
-    assert!(matches!(
-        GraphRows::insert_edge_values(
-            &writer,
-            &second,
-            &ids.subjects,
-            &ids.evidence,
-            lineage,
-            revision
-        ),
-        Err(crate::Error::GraphInvalid {
-            field: "duplicate graph edge value",
-            ..
-        })
-    ));
-    writer.execute(
-        "UPDATE graph_edge_values SET last_boottime_ns = last_boottime_ns - 1 WHERE edge_id = ?",
-        params![edge_id],
-    )?;
-    assert_eq!(
-        GraphRows::insert_edge_values(
-            &writer,
-            &second,
-            &ids.subjects,
-            &ids.evidence,
-            lineage,
-            revision
-        )?,
-        ids.edges
-    );
+    {
+        let transaction = writer.transaction()?;
+        transaction.execute(
+            "UPDATE graph_edge_values SET last_boottime_ns = last_boottime_ns + 1 WHERE edge_id = ?",
+            params![edge_id],
+        )?;
+        assert!(matches!(
+            NativeRows::edges(&transaction, &second),
+            Err(crate::Error::GraphInvalid {
+                field: "duplicate graph edge value",
+                ..
+            })
+        ));
+    }
+    assert_eq!(NativeRows::edges(&writer, &second)?, ids.edges);
     Ok(())
 }
 
@@ -1010,9 +991,10 @@ fn duplicate_finding_membership_rejected() -> TestResult {
     fixture.store.fault_write(
         "INSERT INTO graph_finding_values
          SELECT value_id + 1000, * EXCLUDE (value_id) FROM graph_finding_values;
-         INSERT INTO graph_finding_membership
-         SELECT lineage_id, value_id + 1000, valid_from, valid_to
-         FROM graph_finding_membership",
+         INSERT INTO graph_producer_members
+         SELECT scope_id, member_kind, member_key, value_ref + 1000,
+            anchor_record_id, anchor_fact, reason_code, ordinal, 0, valid_to
+         FROM graph_producer_members WHERE member_kind=4",
         &[],
     )?;
     let writer = fixture.store.writer_access()?;
@@ -1172,10 +1154,8 @@ fn native_retry_rejects_corruption() -> TestResult {
                     ..
                 }
             ));
-        } else if column == "request_meta" {
-            assert!(matches!(error, crate::Error::AnalysisConflict { .. }));
         } else {
-            assert!(matches!(error, crate::Error::AnalysisState { .. }));
+            assert!(matches!(error, crate::Error::AnalysisConflict { .. }));
         }
         fixture.store.fault_write(
             "UPDATE analysis_results SET tenant_id = ?, request_meta = ?, body = ? WHERE result_id = ?",

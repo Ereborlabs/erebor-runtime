@@ -9,6 +9,41 @@ use super::{FindingRefs, FindingRows, StoredReason};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+struct FindingFixture;
+
+impl FindingFixture {
+    fn schema(writer: &Connection) -> TestResult {
+        writer.execute_batch("CREATE TABLE graph_test_members(result_id VARCHAR NOT NULL,value_ref UBIGINT NOT NULL,PRIMARY KEY(result_id,value_ref)); CREATE VIEW graph_selected_members AS SELECT result_id,4::UTINYINT AS member_kind,value_ref FROM graph_test_members")?;
+        writer.execute_batch(FindingRows::SCHEMA)?;
+        Ok(())
+    }
+
+    fn apply(
+        writer: &Connection,
+        tenant: [u8; 16],
+        lineage: u64,
+        revision: u64,
+        refs: &[FindingRefs<'_>],
+        _batch: usize,
+    ) -> TestResult {
+        assert!(refs
+            .iter()
+            .all(|reference| reference.finding.tenant_id == tenant));
+        let result: String = writer.query_row(
+            "SELECT result_id FROM graph_versions WHERE lineage_id=? AND commit_revision=?",
+            params![lineage, revision],
+            |row| row.get(0),
+        )?;
+        for value in FindingRows::intern(writer, refs)?.values() {
+            writer.execute(
+                "INSERT INTO graph_test_members VALUES(?,?)",
+                params![result, value],
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[test]
 fn finding_values_follow_versions() -> TestResult {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -22,7 +57,7 @@ fn finding_values_follow_versions() -> TestResult {
             result_id VARCHAR PRIMARY KEY, lineage_id UBIGINT NOT NULL,
             commit_revision UBIGINT NOT NULL)",
     )?;
-    writer.execute_batch(FindingRows::SCHEMA)?;
+    FindingFixture::schema(&writer)?;
     let version = |name: &str, lineage: u64, revision: u64, values: &[FindingV1]| {
         writer.execute(
             "INSERT INTO graph_versions VALUES (?, ?, ?)",
@@ -36,7 +71,7 @@ fn finding_values_follow_versions() -> TestResult {
                 evidence: (0..finding.evidence.len() as u64).collect(),
             })
             .collect::<Vec<_>>();
-        FindingRows::apply(&writer, tenant, lineage, revision, &references, 1)?;
+        FindingFixture::apply(&writer, tenant, lineage, revision, &references, 1)?;
         Ok::<_, Box<dyn std::error::Error>>(())
     };
     version("first", 1, 1, std::slice::from_ref(&finding))?;
@@ -54,11 +89,11 @@ fn finding_values_follow_versions() -> TestResult {
     FindingRows::validate(&writer)?;
     let totals: (u64, u64) = writer.query_row(
         "SELECT (SELECT count(*)::UBIGINT FROM graph_finding_values),
-            (SELECT count(*)::UBIGINT FROM graph_finding_membership)",
+            (SELECT count(*)::UBIGINT FROM graph_test_members)",
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    assert_eq!(totals, (3, 5));
+    assert_eq!(totals, (3, 8));
     for (result, expected) in [
         ("first", vec![finding.clone()]),
         ("unchanged", vec![finding.clone()]),
@@ -121,12 +156,21 @@ fn finding_values_follow_versions() -> TestResult {
         params![finding.finding_id, finding.limits.len() as u64],
         |row| row.get(0),
     )?;
-    writer.execute(
-        "INSERT INTO graph_finding_membership VALUES (1, ?, 7, NULL)",
-        params![original_id],
-    )?;
+    let columns = FindingRows::COLUMNS
+        .split_once(',')
+        .ok_or("finding columns")?
+        .1;
+    writer.execute(&format!("INSERT INTO graph_finding_values SELECT value_id+99999,{columns},value_hash FROM graph_finding_values WHERE value_id=?"),params![original_id])?;
     assert!(FindingRows::validate(&writer).is_err());
-    assert!(FindingRows::apply(&writer, tenant, 1, 9, &[], 1).is_err());
+    assert!(FindingRows::intern(
+        &writer,
+        &[FindingRefs {
+            finding: &finding,
+            subject: 17,
+            evidence: (0..finding.evidence.len() as u64).collect()
+        }]
+    )
+    .is_err());
     Ok(())
 }
 
@@ -200,9 +244,9 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
     writer.execute_batch("CREATE TABLE graph_versions (
         result_id VARCHAR PRIMARY KEY, lineage_id UBIGINT NOT NULL, commit_revision UBIGINT NOT NULL);
         INSERT INTO graph_versions VALUES ('first', 1, 1), ('same', 1, 2), ('changed', 1, 3)")?;
-    writer.execute_batch(FindingRows::SCHEMA)?;
-    FindingRows::apply(&writer, tenant, 1, 1, &[refs], 1)?;
-    FindingRows::apply(&writer, tenant, 1, 2, &[reordered_refs], 1)?;
+    FindingFixture::schema(&writer)?;
+    FindingFixture::apply(&writer, tenant, 1, 1, &[refs], 1)?;
+    FindingFixture::apply(&writer, tenant, 1, 2, &[reordered_refs], 1)?;
     let count: u64 = writer.query_row(
         "SELECT count(*)::UBIGINT FROM graph_finding_values",
         [],
@@ -221,7 +265,7 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
         "UPDATE graph_finding_values SET value_hash = ?",
         params![FindingRows::value_hash(&changed_refs)?.as_slice()],
     )?;
-    FindingRows::apply(&writer, tenant, 1, 3, &[changed_refs], 1)?;
+    FindingFixture::apply(&writer, tenant, 1, 3, &[changed_refs], 1)?;
     let count: u64 = writer.query_row(
         "SELECT count(*)::UBIGINT FROM graph_finding_values",
         [],
@@ -278,15 +322,15 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
             "INSERT INTO graph_versions VALUES ('rolled-back', 1, 4)",
             [],
         )?;
-        FindingRows::apply(&transaction, tenant, 1, 4, &[], 1)?;
+        FindingFixture::apply(&transaction, tenant, 1, 4, &[], 1)?;
     }
     assert_eq!(
         writer.query_row::<u64, _, _>(
-            "SELECT count(*)::UBIGINT FROM graph_finding_membership",
+            "SELECT count(*)::UBIGINT FROM graph_test_members",
             [],
             |row| row.get(0)
         )?,
-        2
+        3
     );
     assert_eq!(
         writer.query_row::<u64, _, _>(
@@ -345,7 +389,7 @@ fn native_labels_roundtrip() -> TestResult {
         FindingStateV1::Retracted,
         FindingStateV1::CoverageInsufficient,
     ] {
-        let label = FindingRows::state_label(state);
+        let label = FindingRows::state_label(state)?;
         let mut statement = writer.prepare("SELECT ?")?;
         let mut rows = statement.query(params![label])?;
         assert_eq!(
@@ -359,7 +403,7 @@ fn native_labels_roundtrip() -> TestResult {
         FindingSeverityV1::High,
         FindingSeverityV1::Critical,
     ] {
-        let label = FindingRows::severity_label(severity);
+        let label = FindingRows::severity_label(severity)?;
         let mut statement = writer.prepare("SELECT ?")?;
         let mut rows = statement.query(params![label])?;
         assert_eq!(
@@ -450,8 +494,8 @@ fn native_lists_preserve_values() -> TestResult {
     writer.execute_batch("CREATE TABLE graph_versions (
         result_id VARCHAR PRIMARY KEY, lineage_id UBIGINT NOT NULL, commit_revision UBIGINT NOT NULL);
         INSERT INTO graph_versions VALUES ('result', 1, 1)")?;
-    writer.execute_batch(FindingRows::SCHEMA)?;
-    FindingRows::apply(
+    FindingFixture::schema(&writer)?;
+    FindingFixture::apply(
         &writer,
         finding.tenant_id,
         1,

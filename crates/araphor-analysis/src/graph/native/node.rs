@@ -14,12 +14,13 @@ use datafusion::physical_plan::{
 };
 use futures_util::{stream, TryStreamExt as _};
 
-use super::{Capture, Projection};
+use super::Projection;
 
 pub(super) struct Port {
     pub(super) owner: Arc<Projection>,
     pub(super) index: usize,
 }
+
 impl fmt::Debug for Port {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -28,21 +29,16 @@ impl fmt::Debug for Port {
             .finish_non_exhaustive()
     }
 }
+
 impl PortSource for Port {
     fn reusable(&self) -> bool {
         true
     }
-
     fn plan(
         &self,
         slot: usize,
         inputs: &[Arc<dyn ExecutionPlan>],
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let children = if self.owner.prepared.is_some() {
-            Vec::new()
-        } else {
-            inputs.to_vec()
-        };
         let schema = Arc::new(self.owner.ports[self.index].schema.clone());
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
@@ -54,12 +50,17 @@ impl PortSource for Port {
             owner: Arc::clone(&self.owner),
             index: self.index,
             slot,
-            children,
+            children: if self.owner.prepared.is_some() {
+                Vec::new()
+            } else {
+                inputs.to_vec()
+            },
             properties,
         });
-        Ok(match &self.owner.prepared {
-            Some(prepared) => Arc::new(SourceDependenciesExec::new(port, prepared.clone())),
-            None => port,
+        Ok(if let Some(prepared) = &self.owner.prepared {
+            Arc::new(SourceDependenciesExec::new(port, prepared.clone()))
+        } else {
+            port
         })
     }
 }
@@ -81,8 +82,9 @@ impl fmt::Debug for PortExec {
             .finish_non_exhaustive()
     }
 }
+
 impl DisplayAs for PortExec {
-    fn fmt_as(&self, _: DisplayFormatType, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt_as(&self, _: DisplayFormatType, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
             "GraphPortExec: {}",
@@ -90,6 +92,7 @@ impl DisplayAs for PortExec {
         )
     }
 }
+
 impl ExecutionPlan for PortExec {
     fn name(&self) -> &str {
         "GraphPortExec"
@@ -128,7 +131,7 @@ impl ExecutionPlan for PortExec {
         }
         let plan = self.clone();
         let stream = stream::once(async move {
-            let captured: Arc<Capture> = plan.owner.capture(&plan.children, &context).await?;
+            let captured = plan.owner.capture(&plan.children, &context).await?;
             let input = &captured.inputs[plan.index];
             let source = context
                 .session_config()
@@ -143,7 +146,7 @@ impl ExecutionPlan for PortExec {
             let batches = input.data.batches.clone();
             Ok::<_, datafusion::common::DataFusionError>(stream::iter(batches.into_iter().map(
                 move |batch| {
-                    let _capture = &captured;
+                    let _held = &captured;
                     Ok(batch)
                 },
             )))

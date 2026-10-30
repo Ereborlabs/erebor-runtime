@@ -81,8 +81,8 @@ impl GraphOwner {
         if programs.is_empty() {
             return Err(Code::Invalid.error("Graph programs").into());
         }
-        for program in &programs {
-            let _remaining = program.grant.remaining()?;
+        for (index, program) in programs.iter().enumerate() {
+            program.grant.remaining()?;
             program
                 .definition
                 .validate()
@@ -90,8 +90,6 @@ impl GraphOwner {
             if program.events_sql.is_empty() {
                 return Err(Code::Invalid.error("Graph event SQL").into());
             }
-        }
-        for (index, program) in programs.iter().enumerate() {
             if programs[index + 1..]
                 .iter()
                 .any(|other| program.overlaps(other))
@@ -106,23 +104,23 @@ impl GraphOwner {
                 Arc::new(control.within(None)?),
             )
             .await?;
-        let store = Arc::clone(query.store());
         let checked = Arc::clone(&authority);
+        let store = Arc::clone(query.store());
         let retained = programs.clone();
-        let operation = Arc::new(control.within(None)?);
-        let stage = Arc::clone(&operation);
-        let lease = Engine::blocking(operation, (), move || {
+        let read = Arc::new(control.within(None)?);
+        let stage = Arc::clone(&read);
+        let interest = Engine::blocking(read, (), move || {
             let grants = retained
                 .iter()
                 .map(|program| (&program.grant, PackageActionV1::Run, None))
                 .collect::<Vec<_>>();
-            let mut lease = None;
+            let mut interest = None;
             checked.commit_many(&grants, &mut || {
                 for program in &retained {
                     program.grant.remaining()?;
                     for definition in [&program.definition, &expiry] {
                         let digest = definition.digest().map_err(araphor_data::Error::from)?;
-                        let saved = store
+                        let current = store
                             .definition(
                                 program.grant.selection.tenant_id,
                                 &definition.definition.name,
@@ -130,13 +128,13 @@ impl GraphOwner {
                                 &stage,
                             )?
                             .ok_or_else(|| Code::Missing.error("Graph admitted definition"))?;
-                        if saved != *definition {
+                        if current != *definition {
                             return Err(Code::Conflict.error("Graph admitted definition pin"));
                         }
                     }
                 }
                 stage.check()?;
-                lease = Some(
+                interest = Some(
                     store.lease_graph(
                         retained
                             .iter()
@@ -146,7 +144,7 @@ impl GraphOwner {
                 );
                 Ok(())
             })?;
-            lease.ok_or_else(|| Code::Incomplete.error("Graph interest owner").into())
+            interest.ok_or_else(|| Code::Incomplete.error("Graph interest owner").into())
         })
         .await?;
         Ok(Self {
@@ -154,7 +152,7 @@ impl GraphOwner {
             host,
             authority,
             programs,
-            interest: lease,
+            interest,
             #[cfg(test)]
             joined: Default::default(),
         })
@@ -170,14 +168,14 @@ impl GraphOwner {
     }
 
     async fn feed(&self, control: Arc<AnalysisReadControl>) -> Result<()> {
-        let mut programs = FuturesUnordered::new();
+        let mut running = FuturesUnordered::new();
         for index in 0..self.programs.len() {
             let control = Arc::clone(&control);
-            programs.push(async move { (index, self.program_feed(index, control).await) });
+            running.push(async move { (index, self.program_feed(index, control).await) });
         }
         let mut failure = None;
         let mut fatal = None;
-        while let Some((index, result)) = programs.next().await {
+        while let Some((index, result)) = running.next().await {
             let program = &self.programs[index];
             if let Err(error) = self.interest.remove(&program.grant.selection) {
                 fatal.get_or_insert(error.into());
@@ -190,21 +188,16 @@ impl GraphOwner {
                 .unwrap_or_else(|error| error.into_inner())
                 .take()
             {
-                let _joined = joined.send(index);
+                let _sent = joined.send(index);
             }
             if let Err(error) = result {
-                erebor_telemetry::warn!(error; "Graph source subscription stopped",
-                    tenant_id = %format_args!("{:?}", program.grant.selection.tenant_id),
-                    grant_revision = %program.grant.revision,
-                    principal = %program.grant.principal,
-                    authorization_id = %format_args!("{:?}", program.grant.authorization_id),
-                    definition = %program.definition.definition.name);
+                erebor_telemetry::warn!(error; "Graph source subscription stopped", grant_revision = %program.grant.revision, definition = %program.definition.definition.name);
                 failure = Some(error);
             }
         }
         match fatal.or_else(|| failure.filter(|_| control.check().is_ok())) {
             Some(error) => Err(error),
-            _ => Ok(()),
+            None => Ok(()),
         }
     }
 
@@ -239,10 +232,8 @@ impl GraphOwner {
             loop {
                 tokio::select! {
                     _ = parent.cancelled() => return Ok(()),
-                    changed = changes.changed() => {
-                        if changed.is_err() {
-                            return Err(Code::Denied.error("Graph source authority watch").into());
-                        }
+                    update = changes.changed() => {
+                        if update.is_err() { return Err(Code::Denied.error("Graph source authority watch").into()); }
                         self.check(index)?;
                     }
                 }
@@ -273,50 +264,37 @@ impl GraphOwner {
         control: &Arc<AnalysisReadControl>,
     ) -> Result<Subscription> {
         self.check(index)?;
-        let program = &self.programs[index];
-        let session = self
-            .query
-            .session(program.grant.selection.clone(), control, 0)?;
-        let (plan, sources) = self
-            .query
-            .prepare(
-                "SELECT DISTINCT named_struct('tenant_id',tenant_id,'node_id',node_id,
-             'node_boot_id',node_boot_id,'label_epoch',label_epoch,
-             'source_id',source_id,'source_epoch',source_epoch) AS source,
-             NOT coalesce(retired,false) AS active, processor_present AS present FROM graph_state",
-                Vec::new(),
-            )
-            .await?;
+        let session =
+            self.query
+                .session(self.programs[index].grant.selection.clone(), control, 0)?;
+        let (plan, sources) = self.query.prepare("SELECT DISTINCT named_struct('tenant_id', tenant_id, 'node_id', node_id,
+            'node_boot_id', node_boot_id, 'label_epoch', label_epoch, 'source_id', source_id, 'source_epoch', source_epoch) AS source,
+            NOT coalesce(retired, false) AS active, processor_present AS present FROM graph_state", Vec::new()).await?;
         Ok(session.subscribe(plan, sources, b"Graph sources", true)?)
     }
 
     async fn derive(
         &self,
         members: &mut BTreeSet<EvidenceIntakeIdentityV1>,
-        program: usize,
+        index: usize,
         update: &Update,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         if update.limited || !update.exhausted {
             return Err(Code::Incomplete.error("Graph source replacement").into());
         }
-        let states = update
-            .batches
+        let mut states = Vec::new();
+        for batch in update.batches.iter().flatten() {
+            let values: Vec<SourceState> =
+                serde_arrow::from_record_batch(batch).context(crate::error::ArrowSnafu)?;
+            states.extend(values);
+        }
+        let grant = &self.programs[index].grant;
+        if states
             .iter()
-            .flatten()
-            .map(|batch| {
-                serde_arrow::from_record_batch::<Vec<SourceState>>(batch)
-                    .context(crate::error::ArrowSnafu)
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        let granted = &self.programs[program].grant;
-        for state in &states {
-            if !granted.selection.includes_source(&state.source) {
-                return Err(Code::Conflict.error("Graph source owner").into());
-            }
+            .any(|state| !grant.selection.includes_source(&state.source))
+        {
+            return Err(Code::Conflict.error("Graph source owner").into());
         }
         let active = states
             .iter()
@@ -324,8 +302,7 @@ impl GraphOwner {
             .map(|state| state.source.clone())
             .collect::<BTreeSet<_>>();
         let removed = members
-            .iter()
-            .filter(|source| !active.contains(*source))
+            .difference(&active)
             .cloned()
             .chain(
                 states
@@ -346,10 +323,10 @@ impl GraphOwner {
                 {
                     Restored::Absent => {}
                     Restored::Removed(instance) => {
-                        Self::check_member(&instance, &source, operation, granted)?;
+                        Self::check_member(&instance, &source, operation, grant)?
                     }
                     Restored::Present(instance) => {
-                        Self::check_member(instance.admitted(), &source, operation, granted)?;
+                        Self::check_member(instance.admitted(), &source, operation, grant)?;
                         self.host
                             .stop(
                                 Arc::clone(&instance),
@@ -369,15 +346,15 @@ impl GraphOwner {
             if !state.present {
                 let store = Arc::clone(self.query.store());
                 let authority = Arc::clone(&self.authority);
-                let grant = granted.clone();
+                let grant = grant.clone();
                 let source = state.source.clone();
                 let read = Arc::new(control.within(grant.remaining()?)?);
                 let stage = Arc::clone(&read);
-                let captured = update.snapshot.page.extraction.meta.commit_revision;
+                let revision = update.snapshot.page.extraction.meta.commit_revision;
                 let registered = Engine::blocking(read, (), move || {
                     let mut registered = false;
                     authority.commit_many(&[(&grant, PackageActionV1::Run, None)], &mut || {
-                        registered = store.register_graph_guarded(&source, captured, || {
+                        registered = store.register_graph_guarded(&source, revision, || {
                             grant.remaining()?;
                             stage.check()
                         })?;
@@ -394,9 +371,7 @@ impl GraphOwner {
                 ManagedGraphOperation::Evaluate,
                 ManagedGraphOperation::Expire,
             ] {
-                let Some(instance) = self
-                    .admit(program, &state.source, operation, control)
-                    .await?
+                let Some(instance) = self.admit(index, &state.source, operation, control).await?
                 else {
                     continue;
                 };
@@ -414,12 +389,12 @@ impl GraphOwner {
 
     async fn admit(
         &self,
-        program: usize,
+        index: usize,
         source: &EvidenceIntakeIdentityV1,
         operation: ManagedGraphOperation,
         control: &AnalysisReadControl,
     ) -> Result<Option<Arc<Instance>>> {
-        let program = &self.programs[program];
+        let program = &self.programs[index];
         let id = operation.instance_id(source);
         match self.host.restore(source.tenant_id, &id, control).await? {
             Restored::Absent => {}
@@ -431,8 +406,7 @@ impl GraphOwner {
                 Self::check_member(instance.admitted(), source, operation, &program.grant)?;
                 if operation == ManagedGraphOperation::Evaluate
                     && (instance.admitted().spec.definition != program.definition
-                        || !matches!(&instance.admitted().spec.destination,
-                        ManagedDestination::Graph { events_sql, .. } if events_sql == &program.events_sql))
+                        || !matches!(&instance.admitted().spec.destination, ManagedDestination::Graph { events_sql, .. } if events_sql == &program.events_sql))
                 {
                     return Err(Code::Conflict.error("Graph running definition pin").into());
                 }
@@ -470,17 +444,15 @@ impl GraphOwner {
         if &instance.grant != grant {
             return Err(Code::Conflict.error("Graph member grant").into());
         }
-        if !matches!(&instance.spec.destination,
-            ManagedDestination::Graph { source: owned, operation: actual, .. }
-                if owned == source && *actual == operation)
+        if !matches!(&instance.spec.destination, ManagedDestination::Graph { source: owned, operation: actual, .. } if owned == source && *actual == operation)
         {
             return Err(Code::Conflict.error("Graph member destination").into());
         }
         Ok(())
     }
 
-    fn check(&self, program: usize) -> Result<()> {
-        let grant = &self.programs[program].grant;
+    fn check(&self, index: usize) -> Result<()> {
+        let grant = &self.programs[index].grant;
         grant.remaining()?;
         self.authority.check(grant, PackageActionV1::Run)?;
         Ok(())

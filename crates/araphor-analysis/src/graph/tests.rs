@@ -227,7 +227,19 @@ fn candidate_reason_is_exact() -> TestResult {
 fn candidate_evidence_is_exact() -> TestResult {
     let input = input()?;
     let (mut owner, evaluation, mut output) = computation(&input)?;
-    output.evidence.pop().ok_or("candidate evidence")?;
+    let remove = output
+        .evidence
+        .iter()
+        .position(|candidate| {
+            output
+                .evidence
+                .iter()
+                .filter(|link| link.output == candidate.output)
+                .count()
+                > 1
+        })
+        .ok_or("finding with multiple evidence links")?;
+    output.evidence.remove(remove);
     let package = algorithm::Detector::Credentials.descriptor();
     package.validate_output(&evaluation, &output)?;
     assert!(matches!(
@@ -283,10 +295,10 @@ fn resolved_output_preserves_authority() -> TestResult {
 fn candidate_rejects_authority_upgrade() -> TestResult {
     let mut input = input()?;
     for version in &mut input.facts {
-        let mut fact: GraphFactV1 = serde_json::from_slice(&version.body)?;
+        let mut fact = GraphFactV1::decode_context(&version.body)?;
         if let GraphFactValueV1::AuthorityUse { proof_quality, .. } = &mut fact.value {
             proof_quality.remote_subject_binding = RemoteSubjectBindingV1::Contextual;
-            version.body = serde_json::to_vec(&fact)?;
+            version.body = fact.encode_context()?;
         }
     }
     let (mut owner, evaluation, mut output) = computation(&input)?;
@@ -320,7 +332,7 @@ fn resolved_output_keeps_provenance_limits() -> TestResult {
     let mut input = input()?;
     let mut contexts = Vec::new();
     for context in input.facts {
-        let fact: GraphFactV1 = serde_json::from_slice(&context.body)?;
+        let fact = GraphFactV1::decode_context(&context.body)?;
         if !matches!(fact.value, GraphFactValueV1::Policy(_)) {
             contexts.push(context);
         }
@@ -345,7 +357,11 @@ fn resolved_output_keeps_provenance_limits() -> TestResult {
         .limits
         .retain(|limit| limit != "POLICY_PROVENANCE_MISSING");
     *data = algorithm::FindingChange::encode(&findings)?;
-    for reason in &mut output.reasons {
+    for reason in output
+        .reasons
+        .iter_mut()
+        .filter(|reason| reason.output.dataset == "findings" && reason.output.row == 0)
+    {
         let mut details = algorithm::ReasonDetails::decode(&sdk::Dataset {
             name: algorithm::ReasonDetails::port().name,
             batches: vec![reason.details.clone()],
@@ -458,15 +474,12 @@ fn declared_reason(package_id: &str, reason: &str) -> TestResult {
     }
     *data = algorithm::FindingChange::encode(&findings)?;
     for data in &mut output.datasets {
-        match data.name.as_str() {
-            "relationships" => {
-                let mut rows = algorithm::RelationshipChange::decode(data)?;
-                for row in &mut rows {
-                    row.key.package_id = package_id.into();
-                }
-                *data = algorithm::RelationshipChange::encode(&rows)?;
+        if data.name == "relationships" {
+            let mut rows = algorithm::RelationshipChange::decode(data)?;
+            for row in &mut rows {
+                row.key.package_id = package_id.into();
             }
-            _ => {}
+            *data = algorithm::RelationshipChange::encode(&rows)?;
         }
     }
     for value in &mut output.reasons {

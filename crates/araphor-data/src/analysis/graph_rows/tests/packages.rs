@@ -8,9 +8,13 @@ fn graph_appender_constraint_rollback() -> TestResult {
     assert!(!fixture.snapshot.graph.edges.is_empty());
     assert!(!fixture.snapshot.findings.is_empty());
     let original = araphor_graph::FindingRows::SCHEMA;
-    let (table, _) = original
-        .split_once("CREATE INDEX graph_finding_identity")
+    let (_, table) = original
+        .split_once("CREATE TABLE graph_finding_values ")
+        .ok_or("finding value table")?;
+    let (table, _) = table
+        .split_once("CREATE INDEX graph_finding_hash")
         .ok_or("finding value schema")?;
+    let table = format!("CREATE TABLE graph_finding_values {table}");
     let (_, view) = original
         .split_once("CREATE VIEW graph_findings")
         .ok_or("finding view schema")?;
@@ -53,16 +57,21 @@ fn graph_appender_constraint_rollback() -> TestResult {
         .is_none());
     let writer = fixture.store.writer_access()?;
     for table in [
-        "graph_subjects",
-        "graph_relationships",
-        "graph_edge_properties",
+        "graph_sources",
+        "graph_evidence",
+        "graph_producer_scopes",
+        "graph_producer_versions",
+        "graph_producer_members",
+        "graph_result_producers",
+        "graph_versions",
+        "graph_subject_values",
         "graph_edge_values",
-        "graph_edge_membership",
+        "graph_edge_properties",
+        "graph_progress_values",
+        "graph_position_values",
         "graph_branch_values",
-        "graph_branch_membership",
-        "graph_findings",
+        "graph_fact_values",
         "graph_finding_values",
-        "graph_finding_membership",
         "evidence_refs",
     ] {
         let count: u64 =
@@ -85,7 +94,7 @@ fn graph_appender_constraint_rollback() -> TestResult {
     fixture.store.fault_write(
         &format!(
             "DROP VIEW graph_findings; DROP TABLE graph_finding_values;
-                 {table} CREATE INDEX graph_finding_identity
+                 {table} CREATE INDEX graph_finding_hash
                  ON graph_finding_values (value_hash); {view}"
         ),
         &[],
@@ -103,22 +112,19 @@ fn graph_appender_constraint_rollback() -> TestResult {
 }
 
 #[test]
-fn graph_branch_appender_failure_rolls_back_public_commit() -> TestResult {
+fn graph_branch_value_failure_rolls_back_public_commit() -> TestResult {
     let fixture = CommitFixture::new()?;
     assert!(!fixture.snapshot.graph.branches.is_empty());
     let (_, remainder) = GraphRows::SCHEMA
-        .split_once("CREATE TABLE graph_branch_membership ")
-        .ok_or("branch membership schema")?;
+        .split_once("CREATE TABLE graph_branch_values ")
+        .ok_or("branch value schema")?;
     let (table, _) = remainder.split_once(';').ok_or("branch table end")?;
-    let rejecting = table.replace(
-        "CHECK (valid_to IS NULL OR valid_to > valid_from)",
-        "CHECK (false)",
-    );
+    let rejecting = table.replace("CHECK (octet_length(value_hash) = 32)", "CHECK (false)");
     assert_ne!(rejecting, table);
     fixture.store.fault_write(
         &format!(
-            "DROP TABLE graph_branch_membership;
-             CREATE TABLE graph_branch_membership {rejecting};"
+            "DROP TABLE graph_branch_values;
+             CREATE TABLE graph_branch_values {rejecting};"
         ),
         &[],
     )?;
@@ -139,7 +145,7 @@ fn graph_branch_appender_failure_rolls_back_public_commit() -> TestResult {
             || Ok(())
         ),
         Err(crate::Error::AnalysisDatabase {
-            operation: "flush graph branch membership",
+            operation: "intern Graph branch candidates",
             ..
         })
     ));
@@ -160,12 +166,20 @@ fn graph_branch_appender_failure_rolls_back_public_commit() -> TestResult {
     let writer = fixture.store.writer_access()?;
     for table in [
         "graph_versions",
+        "graph_sources",
         "graph_evidence",
+        "graph_producer_scopes",
+        "graph_producer_versions",
+        "graph_producer_members",
+        "graph_result_producers",
         "graph_subject_values",
         "graph_edge_values",
+        "graph_edge_properties",
         "graph_finding_values",
         "graph_branch_values",
-        "graph_branch_membership",
+        "graph_fact_values",
+        "graph_position_values",
+        "graph_progress_values",
         "evidence_refs",
     ] {
         let count: u64 =
@@ -187,8 +201,9 @@ fn graph_branch_appender_failure_rolls_back_public_commit() -> TestResult {
     );
     fixture.store.fault_write(
         &format!(
-            "DROP TABLE graph_branch_membership;
-             CREATE TABLE graph_branch_membership {table};"
+            "DROP TABLE graph_branch_values;
+             CREATE TABLE graph_branch_values {table};
+             CREATE INDEX graph_branch_hash ON graph_branch_values (value_hash);"
         ),
         &[],
     )?;
@@ -269,14 +284,21 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
     };
     assert_eq!(retained(left.get()?)?, retained(right.get()?)?);
     for table in [
-        "graph_subjects",
-        "graph_relationships",
-        "graph_edge_properties",
+        "graph_sources",
+        "graph_evidence",
+        "graph_producer_scopes",
+        "graph_producer_versions",
+        "graph_producer_members",
+        "graph_result_producers",
+        "graph_versions",
+        "graph_subject_values",
         "graph_edge_values",
-        "graph_edge_membership",
+        "graph_edge_properties",
+        "graph_progress_values",
+        "graph_position_values",
         "graph_branch_values",
-        "graph_branch_membership",
-        "graph_findings",
+        "graph_fact_values",
+        "graph_finding_values",
         "evidence_refs",
         "context_refs",
         "processor_progress",

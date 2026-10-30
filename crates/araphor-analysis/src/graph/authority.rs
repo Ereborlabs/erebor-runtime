@@ -2,14 +2,15 @@ use super::*;
 
 impl Graph<'_> {
     pub(super) fn require(valid: bool, field: &'static str) -> Result<()> {
-        if !valid {
-            return GraphInvalidSnafu { field }.fail();
+        if valid {
+            Ok(())
+        } else {
+            GraphInvalidSnafu { field }.fail()
         }
-        Ok(())
     }
 
-    pub(super) fn selected_record(&self, row: u32) -> Result<&DiscoveryRecordV1> {
-        self.input.records.get(row as usize).ok_or_else(|| {
+    fn record(&self, index: u32) -> Result<&DiscoveryRecordV1> {
+        self.input.records.get(index as usize).ok_or_else(|| {
             GraphInvalidSnafu {
                 field: "graph output record",
             }
@@ -17,8 +18,9 @@ impl Graph<'_> {
         })
     }
 
-    fn selected_fact(&self, row: Option<u32>) -> Result<&GraphFactV1> {
-        row.and_then(|row| self.facts.get(row as usize))
+    fn fact(&self, index: Option<u32>) -> Result<&GraphFactV1> {
+        index
+            .and_then(|index| self.facts.get(index as usize))
             .ok_or_else(|| {
                 GraphInvalidSnafu {
                     field: "graph output fact",
@@ -41,9 +43,7 @@ impl Graph<'_> {
         key.tenant_id == self.input.source.tenant_id
             && matches!(&key.authority,
             GraphSubjectAuthorityV1::Native { node_id, node_boot_id, label_epoch }
-                if node_id == &self.input.source.node_id
-                    && node_boot_id == &self.input.source.node_boot_id
-                    && *label_epoch == self.input.source.label_epoch)
+            if node_id == &self.input.source.node_id && node_boot_id == &self.input.source.node_boot_id && *label_epoch == self.input.source.label_epoch)
     }
 
     fn task_matches(&self, value: &algorithm::Observation, key: &GraphSubjectKeyV1) -> bool {
@@ -53,8 +53,7 @@ impl Graph<'_> {
                 && key.identity == value.effect.task_cookie.to_be_bytes()
         } else {
             key.tenant_id == value.id.stream.tenant_id
-                && matches!(&key.authority, GraphSubjectAuthorityV1::External { authority_id }
-                    if authority_id == "unresolved-native-observation")
+                && matches!(&key.authority, GraphSubjectAuthorityV1::External { authority_id } if authority_id == "unresolved-native-observation")
                 && key.kind == GraphSubjectKindV1::External
                 && key.identity
                     == value
@@ -64,6 +63,43 @@ impl Graph<'_> {
                         .into_iter()
                         .chain(value.id.durable_cursor.to_be_bytes())
                         .collect::<Vec<_>>()
+        }
+    }
+
+    fn raw_subject(&self, value: &algorithm::Observation, key: &GraphSubjectKeyV1) -> bool {
+        if self.task_matches(value, key) {
+            return true;
+        }
+        if !self.native_key(key) {
+            return false;
+        }
+        match key.kind {
+            GraphSubjectKindV1::Process => value
+                .process_instance_id
+                .is_some_and(|id| key.identity == id),
+            GraphSubjectKindV1::ExecutionSet => key.identity == value.effect.execution_set_id,
+            GraphSubjectKindV1::Socket | GraphSubjectKindV1::Artifact => {
+                let kind = if value.effect.effect_family == KernelEffectFamilyV1::Network as u32 {
+                    GraphSubjectKindV1::Socket
+                } else {
+                    GraphSubjectKindV1::Artifact
+                };
+                key.kind == kind
+                    && key.identity
+                        == value
+                            .effect
+                            .exact_object_id
+                            .iter()
+                            .copied()
+                            .chain(
+                                value
+                                    .profile_generation_ref_id
+                                    .unwrap_or_default()
+                                    .to_be_bytes(),
+                            )
+                            .collect::<Vec<_>>()
+            }
+            _ => false,
         }
     }
 
@@ -106,62 +142,28 @@ impl Graph<'_> {
                     .context(AnalysisContractSnafu)?)
     }
 
-    fn raw_subject(&self, value: &algorithm::Observation, key: &GraphSubjectKeyV1) -> bool {
-        if self.task_matches(value, key) {
-            return true;
-        }
-        if !self.native_key(key) {
-            return false;
-        }
-        match key.kind {
-            GraphSubjectKindV1::Process => value
-                .process_instance_id
-                .is_some_and(|id| key.identity == id),
-            GraphSubjectKindV1::ExecutionSet => key.identity == value.effect.execution_set_id,
-            GraphSubjectKindV1::Socket | GraphSubjectKindV1::Artifact => {
-                let kind = if value.effect.effect_family == KernelEffectFamilyV1::Network as u32 {
-                    GraphSubjectKindV1::Socket
-                } else {
-                    GraphSubjectKindV1::Artifact
-                };
-                key.kind == kind
-                    && key.identity
-                        == value
-                            .effect
-                            .exact_object_id
-                            .iter()
-                            .copied()
-                            .chain(
-                                value
-                                    .profile_generation_ref_id
-                                    .unwrap_or_default()
-                                    .to_be_bytes(),
-                            )
-                            .collect::<Vec<_>>()
-            }
-            _ => false,
-        }
-    }
-
     pub(super) fn validate_subject(&self, row: &algorithm::Subject) -> Result<()> {
         row.key.validate()?;
-        let record = self.selected_record(row.record)?;
-        let valid = if let Some(index) = row.context {
-            let fact = self.selected_fact(Some(index))?;
-            fact.record_id == record.id
-                && match &fact.value {
-                    GraphFactValueV1::Context { subject, .. } => subject == &row.key,
-                    GraphFactValueV1::NativeParent { parent, child, .. } => {
-                        parent == &row.key || child == &row.key
+        let record = self.record(row.record)?;
+        let valid = match row.context {
+            Some(index) => {
+                let fact = self.fact(Some(index))?;
+                fact.record_id == record.id
+                    && match &fact.value {
+                        GraphFactValueV1::Context { subject, .. } => subject == &row.key,
+                        GraphFactValueV1::NativeParent { parent, child, .. } => {
+                            parent == &row.key || child == &row.key
+                        }
+                        GraphFactValueV1::AuthorityUse { .. } => {
+                            self.authority_matches(fact, &row.key)?
+                        }
+                        GraphFactValueV1::Kubernetes(_) => {
+                            self.kubernetes_matches(fact, &row.key)?
+                        }
+                        _ => false,
                     }
-                    GraphFactValueV1::AuthorityUse { .. } => {
-                        self.authority_matches(fact, &row.key)?
-                    }
-                    GraphFactValueV1::Kubernetes(_) => self.kubernetes_matches(fact, &row.key)?,
-                    _ => false,
-                }
-        } else {
-            self.raw_subject(self.observation(record)?, &row.key)
+            }
+            None => self.raw_subject(self.observation(record)?, &row.key),
         };
         Self::require(valid, "graph subject authority")
     }
@@ -171,7 +173,7 @@ impl Graph<'_> {
         row: &algorithm::Relationship,
         subjects: &[algorithm::Subject],
     ) -> Result<()> {
-        let record = self.selected_record(row.record)?;
+        let record = self.record(row.record)?;
         let value = self.observation(record)?;
         let edge = &row.edge;
         Self::require(
@@ -181,7 +183,7 @@ impl Graph<'_> {
                     .key
                     .evidence
                     .iter()
-                    .all(|id| (*id as usize) < self.input.records.len()),
+                    .all(|index| (*index as usize) < self.input.records.len()),
             "graph edge evidence",
         )?;
         let from = subjects.get(edge.key.from as usize).ok_or_else(|| {
@@ -213,7 +215,7 @@ impl Graph<'_> {
                 && edge.last_boottime_ns == value.observed_boottime_ns,
             "graph edge input fields",
         )?;
-        let (valid, ceiling, direct) = match edge.key.edge_type {
+        let (valid, mut ceiling, direct) = match edge.key.edge_type {
             GraphEdgeTypeV1::TaskInProcess => (
                 self.task_matches(value, &from.key)
                     && self.native_key(&to.key)
@@ -243,7 +245,7 @@ impl Graph<'_> {
                 Self::exact(value),
             ),
             GraphEdgeTypeV1::NativeParent => {
-                let fact = self.selected_fact(row.fact)?;
+                let fact = self.fact(row.fact)?;
                 let GraphFactValueV1::NativeParent {
                     parent,
                     child,
@@ -263,7 +265,7 @@ impl Graph<'_> {
                 )
             }
             GraphEdgeTypeV1::CredentialAuthority => {
-                let fact = self.selected_fact(row.fact)?;
+                let fact = self.fact(row.fact)?;
                 let GraphFactValueV1::AuthorityUse {
                     task_cookie,
                     process_instance_id,
@@ -288,7 +290,7 @@ impl Graph<'_> {
                         .key
                         .evidence
                         .iter()
-                        .any(|id| self.input.records[*id as usize].id == fact.record_id);
+                        .any(|index| self.input.records[*index as usize].id == fact.record_id);
                 (
                     self.task_matches(value, &from.key) && self.authority_matches(fact, &to.key)?,
                     *proof_quality,
@@ -296,7 +298,7 @@ impl Graph<'_> {
                 )
             }
             GraphEdgeTypeV1::KubernetesExpansion => {
-                let fact = self.selected_fact(row.fact)?;
+                let fact = self.fact(row.fact)?;
                 let GraphFactValueV1::Kubernetes(stage) = &fact.value else {
                     return GraphInvalidSnafu {
                         field: "graph Kubernetes selection",
@@ -313,13 +315,12 @@ impl Graph<'_> {
             }
         };
         Self::require(valid, "graph edge endpoint authority")?;
-        let mut permitted = ceiling;
         if edge.key.cause == GraphCauseV1::Contradicted
             && edge.proof_quality.operation_result_authority == OperationResultAuthorityV1::Unknown
         {
-            permitted.operation_result_authority = OperationResultAuthorityV1::Unknown;
+            ceiling.operation_result_authority = OperationResultAuthorityV1::Unknown;
         }
-        Self::require(edge.proof_quality == permitted, "graph edge proof ceiling")?;
+        Self::require(edge.proof_quality == ceiling, "graph edge proof ceiling")?;
         Self::require(
             edge.key.cause != GraphCauseV1::Superseded
                 && (edge.key.cause != GraphCauseV1::Direct || direct),
@@ -328,19 +329,17 @@ impl Graph<'_> {
     }
 
     fn validate_effect(&self, effect: &GraphEffectV1) -> Result<()> {
-        let record = self
+        let index = self
             .input
             .records
-            .binary_search_by(|record| record.id.cmp(&effect.evidence))
-            .ok()
-            .map(|index| &self.input.records[index])
-            .ok_or_else(|| {
+            .binary_search_by(|row| row.id.cmp(&effect.evidence))
+            .map_err(|_| {
                 GraphInvalidSnafu {
                     field: "finding evidence",
                 }
                 .build()
             })?;
-        let value = self.observation(record)?;
+        let value = self.observation(&self.input.records[index])?;
         let physical = match value.effect.decision {
             code if code == EffectPhysicalResultV1::DeniedBeforeEffect as u32
                 && value.effect.kernel_result < 0 =>
@@ -394,13 +393,12 @@ impl Graph<'_> {
     }
 
     fn validate_provenance(&self, finding: &FindingV1) -> Result<()> {
-        let context_only = matches!(
+        if matches!(
             finding.reason,
             FindingReasonV1::OutsideAuthority
                 | FindingReasonV1::InMemoryOnly
                 | FindingReasonV1::PayloadUnobservable
-        );
-        if context_only {
+        ) {
             return Self::require(
                 finding.policy_provenance.is_empty(),
                 "graph policy provenance authority",
@@ -409,19 +407,17 @@ impl Graph<'_> {
         let mut required = BTreeSet::new();
         let mut missing = Vec::new();
         for id in &finding.evidence {
-            let record = self
+            let index = self
                 .input
                 .records
-                .binary_search_by(|record| record.id.cmp(id))
-                .ok()
-                .map(|index| &self.input.records[index])
-                .ok_or_else(|| {
+                .binary_search_by(|row| row.id.cmp(id))
+                .map_err(|_| {
                     GraphInvalidSnafu {
                         field: "finding evidence",
                     }
                     .build()
                 })?;
-            let generation = record
+            let generation = self.input.records[index]
                 .decode()?
                 .profile_generation_ref_id
                 .unwrap_or_default();
@@ -450,7 +446,7 @@ impl Graph<'_> {
                 })
                 .collect::<BTreeSet<_>>();
             let mut joined = false;
-            for policy in &policies {
+            for policy in policies {
                 if policy.state == PolicyProvenanceStateV1::Missing
                     && exact.contains(&(
                         &policy.policy_source_revision_id,
@@ -460,7 +456,7 @@ impl Graph<'_> {
                 {
                     continue;
                 }
-                required.insert(*policy);
+                required.insert(policy);
                 joined = true;
             }
             if !joined {
@@ -496,6 +492,7 @@ impl Graph<'_> {
                     .iter()
                     .all(|limit| finding.limits.contains(limit))
                     && match policy.state {
+                        PolicyProvenanceStateV1::Exact => true,
                         PolicyProvenanceStateV1::Missing => finding
                             .limits
                             .iter()
@@ -504,7 +501,6 @@ impl Graph<'_> {
                             .limits
                             .iter()
                             .any(|limit| limit == "POLICY_PROVENANCE_CONTRADICTED"),
-                        PolicyProvenanceStateV1::Exact => true,
                     }
             }) && (missing.is_empty()
                 || finding
@@ -517,22 +513,23 @@ impl Graph<'_> {
 
     pub(super) fn validate_finding(
         &self,
-        record_row: u32,
+        record: u32,
         context: Option<u32>,
         finding: &FindingV1,
     ) -> Result<()> {
-        let record = self.selected_record(record_row)?;
+        let record = self.record(record)?;
         Self::require(
             finding.evidence.contains(&record.id),
             "graph finding evidence",
         )?;
         let value = self.observation(record)?;
-        let subject = if let Some(index) = context {
-            let fact = self.selected_fact(Some(index))?;
-            fact.record_id == record.id
-                && matches!(&fact.value, GraphFactValueV1::Context { subject, .. } if subject == &finding.subject_id)
-        } else {
-            self.task_matches(value, &finding.subject_id)
+        let subject = match context {
+            Some(index) => {
+                let fact = self.fact(Some(index))?;
+                fact.record_id == record.id
+                    && matches!(&fact.value, GraphFactValueV1::Context { subject, .. } if subject == &finding.subject_id)
+            }
+            None => self.task_matches(value, &finding.subject_id),
         };
         Self::require(subject, "graph context selection")?;
         if finding.state == FindingStateV1::Confirmed {
@@ -549,7 +546,7 @@ impl Graph<'_> {
             let index = self
                 .input
                 .records
-                .binary_search_by(|record| record.id.cmp(id))
+                .binary_search_by(|row| row.id.cmp(id))
                 .map_err(|_| {
                     GraphInvalidSnafu {
                         field: "finding evidence",

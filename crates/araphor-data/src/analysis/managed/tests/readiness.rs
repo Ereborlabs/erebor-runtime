@@ -280,7 +280,7 @@ fn completion_recovery_rejects_corruption() -> TestResult {
     let mut writer = store.writer()?;
     writer.get_mut()?.execute(
         "UPDATE managed_attempts SET contract = ? WHERE attempt_id = 'corrupt'",
-        params![serde_json::to_vec(&saved)?],
+        params![ManagedCodec::encode(&saved)?],
     )?;
     drop(writer);
     drop(store);

@@ -323,7 +323,7 @@ fn evaluation(
         .collect::<araphor_data::Result<Vec<_>>>()?;
     let revision = sdk::Revision {
         owner: GRAPH_PROCESSOR.into(),
-        id: InputRevision::of(&(
+        id: InputRevision::of_native(&(
             &input.source,
             &input.records,
             &input.coverage,
@@ -332,7 +332,7 @@ fn evaluation(
             &input.missing_ranges,
         ))?,
         window: Some(sdk::SourceWindow {
-            source: serde_json::to_vec(&input.source)?,
+            source: input.source.exact_key(),
             start_utc_ns: times.iter().copied().min().unwrap_or(0),
             end_utc_ns: times.iter().copied().max().unwrap_or(0),
         }),
@@ -405,7 +405,7 @@ fn selected(detector: algorithm::Detector) -> TestResult<GraphReplayInputV1> {
                 remote_admission_id: Some("admission".into()),
                 proof_quality,
             });
-            input.facts[index].body = serde_json::to_vec(&fact)?;
+            input.facts[index].body = fact.encode_context()?;
         }
         algorithm::Detector::Credentials => {}
     }

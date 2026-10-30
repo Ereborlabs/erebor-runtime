@@ -275,7 +275,7 @@ fn operation_results_stay_separate() -> TestResult {
             completion.result = result;
             completion.byte_count = u64::try_from(result).unwrap_or(0);
         }
-        input.facts[3].body = serde_json::to_vec(&read)?;
+        input.facts[3].body = read.encode_context()?;
         let graph = derive(&input)?;
         let finding = graph
             .findings
@@ -459,7 +459,7 @@ fn policy_requires_retained_ack() -> TestResult {
             .ok_or("ACK")?
             .tenant_id = [99; 16];
     }
-    foreign.facts[0].body = serde_json::to_vec(&policy)?;
+    foreign.facts[0].body = policy.encode_context()?;
     assert!(derive(&foreign).is_err());
     let mut wrong_generation = input;
     let activation = wrong_generation
@@ -476,7 +476,7 @@ fn policy_requires_retained_ack() -> TestResult {
     if let GraphFactValueV1::Activation(activation) = &mut body.value {
         activation.profile_generation_ref_id = Some(2);
     }
-    activation.body = serde_json::to_vec(&body)?;
+    activation.body = body.encode_context()?;
     assert!(derive(&wrong_generation).is_err());
     Ok(())
 }
@@ -495,7 +495,7 @@ fn history_preserves_exact_generation() -> TestResult {
         activation.readback_digest = None;
         activation.probe_result_digest = None;
     }
-    acknowledgement.body = serde_json::to_vec(&body)?;
+    acknowledgement.body = body.encode_context()?;
     if let GraphFactValueV1::Policy(policy) = &mut previous.value {
         policy.state = PolicyProvenanceStateV1::Missing;
         policy.activation_acknowledgement = Some(acknowledgement.key.clone());
@@ -510,14 +510,14 @@ fn history_preserves_exact_generation() -> TestResult {
     if let GraphFactValueV1::Activation(activation) = &mut body.value {
         activation.state = "STAGED".into();
     }
-    acknowledgement.body = serde_json::to_vec(&body)?;
+    acknowledgement.body = body.encode_context()?;
     input.facts.push(acknowledgement.clone());
     acknowledgement.key.owner_revision = 4;
     if let GraphFactValueV1::Activation(activation) = &mut body.value {
         activation.state = "ACTIVE".into();
         activation.profile_generation_ref_id = Some(2);
     }
-    acknowledgement.body = serde_json::to_vec(&body)?;
+    acknowledgement.body = body.encode_context()?;
     input.facts.push(acknowledgement);
     let graph = derive(&input)?;
     let finding = graph
@@ -534,7 +534,7 @@ fn history_preserves_exact_generation() -> TestResult {
     if let GraphFactValueV1::Activation(activation) = &mut body.value {
         activation.state = "STALE".into();
     }
-    stale.body = serde_json::to_vec(&body)?;
+    stale.body = body.encode_context()?;
     if let GraphFactValueV1::Policy(policy) = &mut previous.value {
         policy.state = PolicyProvenanceStateV1::Contradicted;
         policy.activation_acknowledgement = Some(stale.key.clone());
@@ -573,7 +573,7 @@ fn mmap_cannot_borrow_completion() -> TestResult {
     {
         completion.path = GraphReadPathV1::Mmap;
     }
-    input.facts[3].body = serde_json::to_vec(&read)?;
+    input.facts[3].body = read.encode_context()?;
     let graph = derive(&input)?;
     assert_eq!(
         graph
@@ -592,7 +592,7 @@ fn mmap_cannot_borrow_completion() -> TestResult {
         completion.path = GraphReadPathV1::Read;
         completion.admission_record = input.records[1].id.clone();
     }
-    input.facts[3].body = serde_json::to_vec(&read)?;
+    input.facts[3].body = read.encode_context()?;
     assert!(derive(&input).is_err());
     Ok(())
 }
@@ -614,7 +614,7 @@ fn shared_principal_stays_contextual() -> TestResult {
         *credential_object_id = None;
         *socket_object_id = None;
     }
-    input.facts[5].body = serde_json::to_vec(&use_fact)?;
+    input.facts[5].body = use_fact.encode_context()?;
     let graph = derive(&input)?;
     let finding = graph
         .findings
@@ -635,7 +635,7 @@ fn shared_principal_stays_contextual() -> TestResult {
     {
         workload_binding.as_mut().ok_or("workload")?.identity = vec![8; 16];
     }
-    input.facts[5].body = serde_json::to_vec(&use_fact)?;
+    input.facts[5].body = use_fact.encode_context()?;
     assert_eq!(
         derive(&input)?
             .findings

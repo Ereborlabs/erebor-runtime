@@ -80,6 +80,18 @@ impl CallReuse {
     }
 }
 
+pub struct CallSparse {
+    allows: Arc<dyn Fn(&PackageCall) -> bool + Send + Sync>,
+}
+
+impl CallSparse {
+    pub fn new(allows: impl Fn(&PackageCall) -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            allows: Arc::new(allows),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ExecutionReceipt {
     snapshot: Arc<crate::sources::ArrowSnapshot>,
@@ -776,10 +788,20 @@ impl PackageExec {
                             .error("managed package declaration"),
                     ));
                 }
+                let sparse = context
+                    .session_config()
+                    .get_extension::<CallSparse>()
+                    .is_some_and(|gate| (gate.allows)(&self.call));
                 managed
                     .prior(self.call.id)
                     .map(|prior| {
-                        prior.state(model, &inputs, parameters.as_ref(), managed.rebuild())
+                        prior.state_sparse(
+                            model,
+                            &inputs,
+                            parameters.as_ref(),
+                            managed.rebuild(),
+                            sparse,
+                        )
                     })
                     .transpose()
                     .map_err(external)?
@@ -853,6 +875,14 @@ impl PackageExec {
         });
         let graph_prior = retained
             .filter(|_| evaluation.previous_outputs.is_empty())
+            .filter(|_| {
+                snapshot.managed().is_none_or(|managed| {
+                    !matches!(
+                        managed.instance().spec.destination,
+                        araphor_data::ManagedDestination::Graph { .. }
+                    )
+                })
+            })
             .map(|prior| prior.graph_prior().map_err(external))
             .transpose()?
             .flatten();

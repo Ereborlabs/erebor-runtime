@@ -52,7 +52,7 @@ pub use extraction::{
     AnalysisReadModeV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
     AnalysisSourceSnapshotV1, AnalysisTableRead, AnalysisTableRequests, Selection,
 };
-pub use graph::{GraphCommit, GraphLease};
+pub use graph::{GraphCommit, GraphLease, GraphManifest};
 pub use graph_rows::CanonicalGraph;
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub use managed::*;
@@ -1007,29 +1007,28 @@ impl AnalysisStore {
         revision: u64,
         relations: &[&str],
     ) -> Result<()> {
-        let names = serde_json::to_string(relations).context(JsonSnafu {
-            path: Path::new("<relation-revisions>"),
-        })?;
-        let changed = transaction
-            .prepare_cached(
-                "UPDATE relation_revisions SET last_changed_revision = ?
-                 WHERE relation_name IN (SELECT unnest(CAST(? AS VARCHAR[])))",
-            )
-            .and_then(|mut statement| statement.execute(params![revision, names]))
-            .context(AnalysisDatabaseSnafu {
-                operation: "advance relation revisions",
-            })?;
-        if changed < relations.len() {
+        if !relations.is_empty() {
+            let mut relations = relations.to_vec();
+            relations.sort_unstable();
+            relations.dedup();
+            let placeholders = std::iter::repeat_n("(?, ?)", relations.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let statement = format!(
+                "INSERT INTO relation_revisions (relation_name, last_changed_revision) \
+                 VALUES {placeholders} ON CONFLICT (relation_name) DO UPDATE \
+                 SET last_changed_revision = excluded.last_changed_revision"
+            );
+            let mut values = Vec::with_capacity(relations.len() * 2);
             for relation in relations {
-                transaction
-                    .prepare_cached(
-                        "INSERT INTO relation_revisions VALUES (?, ?) ON CONFLICT DO NOTHING",
-                    )
-                    .and_then(|mut statement| statement.execute(params![relation, revision]))
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "insert relation revision",
-                    })?;
+                values.push(duckdb::types::Value::Text((*relation).to_owned()));
+                values.push(duckdb::types::Value::UBigInt(revision));
             }
+            transaction
+                .execute(&statement, duckdb::params_from_iter(values))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "advance relation revisions",
+                })?;
         }
         transaction
             .prepare_cached("UPDATE store_meta SET commit_revision = ? WHERE singleton = true")

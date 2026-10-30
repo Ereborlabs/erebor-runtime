@@ -1,72 +1,43 @@
 use super::*;
 
 impl Graph<'_> {
-    pub(super) fn check_inputs(
-        &self,
-        model: &sdk::Model,
-        evaluation: &sdk::Evaluation,
-    ) -> Result<()> {
-        if evaluation.inputs.len() != model.inputs.len() {
-            return GraphInvalidSnafu {
-                field: "graph input count",
-            }
-            .fail();
-        }
-        for port in &model.inputs {
-            let actual = evaluation
-                .inputs
-                .iter()
-                .find(|input| input.data.name == port.port.name)
-                .ok_or_else(|| {
-                    GraphInvalidSnafu {
-                        field: "graph input binding",
-                    }
-                    .build()
-                })?;
-            let same = match port.port.name.as_str() {
-                "records" => {
-                    algorithm::Observation::decode(&actual.data).context(AnalysisContractSnafu)?
-                        == self.observations
-                }
-                "facts" => {
-                    let facts =
-                        algorithm::Fact::decode(&actual.data).context(AnalysisContractSnafu)?;
-                    facts.len() == self.facts.len()
-                        && facts
-                            .iter()
-                            .zip(self.facts.iter().zip(&self.input.facts))
-                            .all(|(actual, (fact, context))| {
-                                self.input
-                                    .records
-                                    .get(actual.record as usize)
-                                    .is_some_and(|record| record.id == fact.record_id)
-                                    && actual.key == context.key
-                                    && actual.sensitivity == context.sensitivity
-                                    && actual.value == fact.value
-                            })
-                }
-                "manifest" => {
-                    algorithm::Manifest::decode(&actual.data).context(AnalysisContractSnafu)?
-                        == [algorithm::Manifest {
-                            window_ns: GRAPH_WINDOW_NS,
-                        }]
-                }
-                _ => false,
-            };
-            if !same {
-                return GraphInvalidSnafu {
-                    field: "graph input binding",
-                }
-                .fail();
-            }
-        }
-        Ok(())
-    }
-
     pub(super) fn projection(&self) -> Result<&[sdk::Dataset; 3]> {
         if self.projection.get().is_none() {
-            let datasets = self.build_projection()?;
-            self.projection.set(datasets).map_err(|_| {
+            let facts = self
+                .facts
+                .iter()
+                .zip(&self.input.facts)
+                .map(|(fact, context)| {
+                    let record = self
+                        .input
+                        .records
+                        .binary_search_by(|row| row.id.cmp(&fact.record_id))
+                        .ok()
+                        .and_then(|index| u32::try_from(index).ok())
+                        .ok_or_else(|| {
+                            GraphInvalidSnafu {
+                                field: "graph fact record",
+                            }
+                            .build()
+                        })?;
+                    Ok(algorithm::Fact {
+                        record,
+                        key: context.key.clone(),
+                        sensitivity: context.sensitivity,
+                        value: fact.value.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let values = [
+                algorithm::Observation::encode(&self.observations)
+                    .context(AnalysisContractSnafu)?,
+                algorithm::Fact::encode(&facts).context(AnalysisContractSnafu)?,
+                algorithm::Manifest::encode(&[algorithm::Manifest {
+                    window_ns: GRAPH_WINDOW_NS,
+                }])
+                .context(AnalysisContractSnafu)?,
+            ];
+            self.projection.set(values).map_err(|_| {
                 GraphInvalidSnafu {
                     field: "graph input projection",
                 }
@@ -81,40 +52,59 @@ impl Graph<'_> {
         })
     }
 
-    pub(super) fn build_projection(&self) -> Result<[sdk::Dataset; 3]> {
-        let facts = self
-            .facts
-            .iter()
-            .zip(&self.input.facts)
-            .map(|(fact, context)| {
-                let record = self
-                    .input
-                    .records
-                    .binary_search_by(|record| record.id.cmp(&fact.record_id))
-                    .ok()
-                    .and_then(|index| u32::try_from(index).ok())
-                    .ok_or_else(|| {
-                        GraphInvalidSnafu {
-                            field: "graph fact record",
-                        }
-                        .build()
-                    })?;
-                Ok(algorithm::Fact {
-                    record,
-                    key: context.key.clone(),
-                    sensitivity: context.sensitivity,
-                    value: fact.value.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok([
-            algorithm::Observation::encode(&self.observations).context(AnalysisContractSnafu)?,
-            algorithm::Fact::encode(&facts).context(AnalysisContractSnafu)?,
-            algorithm::Manifest::encode(&[algorithm::Manifest {
-                window_ns: GRAPH_WINDOW_NS,
-            }])
-            .context(AnalysisContractSnafu)?,
-        ])
+    pub(super) fn check_inputs(
+        &self,
+        model: &sdk::Model,
+        evaluation: &sdk::Evaluation,
+    ) -> Result<()> {
+        Self::require(
+            evaluation.inputs.len() == model.inputs.len(),
+            "graph input count",
+        )?;
+        for port in &model.inputs {
+            let actual = evaluation
+                .inputs
+                .iter()
+                .find(|input| input.data.name == port.port.name)
+                .ok_or_else(|| {
+                    GraphInvalidSnafu {
+                        field: "graph input binding",
+                    }
+                    .build()
+                })?;
+            let valid = match port.port.name.as_str() {
+                "records" => {
+                    algorithm::Observation::decode(&actual.data).context(AnalysisContractSnafu)?
+                        == self.observations
+                }
+                "facts" => {
+                    let rows =
+                        algorithm::Fact::decode(&actual.data).context(AnalysisContractSnafu)?;
+                    rows.len() == self.facts.len()
+                        && rows
+                            .iter()
+                            .zip(self.facts.iter().zip(&self.input.facts))
+                            .all(|(row, (fact, context))| {
+                                self.input
+                                    .records
+                                    .get(row.record as usize)
+                                    .is_some_and(|record| record.id == fact.record_id)
+                                    && row.key == context.key
+                                    && row.sensitivity == context.sensitivity
+                                    && row.value == fact.value
+                            })
+                }
+                "manifest" => {
+                    algorithm::Manifest::decode(&actual.data).context(AnalysisContractSnafu)?
+                        == [algorithm::Manifest {
+                            window_ns: GRAPH_WINDOW_NS,
+                        }]
+                }
+                _ => false,
+            };
+            Self::require(valid, "graph input binding")?;
+        }
+        Ok(())
     }
 
     pub(super) fn qualify_record(
@@ -145,37 +135,17 @@ impl Graph<'_> {
             binding_id: context
                 .and_then(|value| value.binding_id.as_slice().try_into().ok())
                 .filter(|id| *id != [0; 16]),
-            role_id: context
-                .map(|value| value.role_id)
-                .filter(|value| *value > 0),
-            state_id: context
-                .map(|value| value.state_id)
-                .filter(|value| *value > 0),
+            role_id: context.map(|value| value.role_id).filter(|id| *id > 0),
+            state_id: context.map(|value| value.state_id).filter(|id| *id > 0),
             entry_rule_id: context
                 .map(|value| value.entry_rule_id)
-                .filter(|value| *value > 0),
+                .filter(|id| *id > 0),
             proof_quality: self.proof(record),
         })
     }
 
-    pub(super) fn observation(
-        &self,
-        record: &DiscoveryRecordV1,
-    ) -> Result<&algorithm::Observation> {
-        self.observations
-            .binary_search_by(|value| value.id.cmp(&record.id))
-            .ok()
-            .map(|index| &self.observations[index])
-            .ok_or_else(|| {
-                GraphInvalidSnafu {
-                    field: "graph output record",
-                }
-                .build()
-            })
-    }
-
     pub(super) fn proof(&self, record: &DiscoveryRecordV1) -> ProofQualityV1 {
-        let range = self
+        let ranges = self
             .input
             .coverage
             .iter()
@@ -184,17 +154,19 @@ impl Graph<'_> {
                     && range.cpu_id == record.id.cpu_id
                     && (range.first_cursor..=range.last_cursor).contains(&record.id.durable_cursor)
             })
-            .max_by_key(|range| range.coverage_revision);
-        let has_gap = self.input.coverage.iter().any(|range| {
-            range.stream == record.id.stream
-                && range.cpu_id == record.id.cpu_id
-                && (range.first_cursor..=range.last_cursor).contains(&record.id.durable_cursor)
-                && range.state == DiscoveryCoverageStateV1::Gapped
-        });
-        let temporal = if !self.input.missing_ranges.is_empty() || has_gap {
+            .collect::<Vec<_>>();
+        let temporal = if !self.input.missing_ranges.is_empty()
+            || ranges
+                .iter()
+                .any(|range| range.state == DiscoveryCoverageStateV1::Gapped)
+        {
             TemporalCoverageV1::Gapped
         } else {
-            match range.map(|range| range.state) {
+            match ranges
+                .iter()
+                .max_by_key(|range| range.coverage_revision)
+                .map(|range| range.state)
+            {
                 Some(DiscoveryCoverageStateV1::Healthy | DiscoveryCoverageStateV1::Closed) => {
                     TemporalCoverageV1::Complete
                 }
@@ -208,5 +180,59 @@ impl Graph<'_> {
             proof.local_subject_binding = LocalSubjectBindingV1::None;
         }
         proof
+    }
+
+    pub(super) fn observation(
+        &self,
+        record: &DiscoveryRecordV1,
+    ) -> Result<&algorithm::Observation> {
+        self.observations
+            .binary_search_by(|row| row.id.cmp(&record.id))
+            .ok()
+            .map(|index| &self.observations[index])
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph output record",
+                }
+                .build()
+            })
+    }
+
+    pub(super) fn positions(&self, anchor: &algorithm::Anchor) -> Result<(u32, Option<u32>)> {
+        let record = self
+            .input
+            .records
+            .binary_search_by(|row| row.id.cmp(&anchor.record))
+            .ok()
+            .and_then(|index| u32::try_from(index).ok())
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph anchor record",
+                }
+                .build()
+            })?;
+        let context = anchor
+            .fact
+            .as_ref()
+            .map(|fact| {
+                self.input
+                    .facts
+                    .binary_search_by(|row| row.key.cmp(&fact.key))
+                    .ok()
+                    .filter(|&index| {
+                        self.facts[index].record_id == fact.record
+                            && self.facts[index].value == fact.value
+                            && self.input.facts[index].sensitivity == fact.sensitivity
+                    })
+                    .and_then(|index| u32::try_from(index).ok())
+                    .ok_or_else(|| {
+                        GraphInvalidSnafu {
+                            field: "graph anchor fact",
+                        }
+                        .build()
+                    })
+            })
+            .transpose()?;
+        Ok((record, context))
     }
 }

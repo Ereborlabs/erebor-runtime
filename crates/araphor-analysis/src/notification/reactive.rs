@@ -105,6 +105,16 @@ impl NotificationRouter {
             check()?;
             self.store.notification_finding_heads(tenant, &ids).ok()
         };
+        let references = work
+            .iter()
+            .filter_map(|(reference, _)| reference.clone())
+            .collect::<Vec<_>>();
+        let findings = if references.is_empty() {
+            None
+        } else {
+            check()?;
+            self.store.graph_finding_batch(tenant, &references).ok()
+        };
         erebor_telemetry::debug!(
             tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
             rows = work.len(), routed_items = 0usize, handled_states = 0usize,
@@ -161,7 +171,7 @@ impl NotificationRouter {
                         continue;
                     }
                 } else {
-                    let result = self.route_states(tenant, &reference, now);
+                    let result = self.route_states(tenant, &reference, now, findings.as_ref());
                     routed.insert(identity, result.is_ok());
                     match result {
                         Ok((count, values)) => {
@@ -194,7 +204,7 @@ impl NotificationRouter {
             }
             for state in states {
                 if handled.insert(state.key) {
-                    self.consume_state(state, now, check, effect, &mut update)?;
+                    self.consume_state(state, now, check, effect, &mut update, findings.as_ref())?;
                 }
             }
         }
@@ -220,6 +230,7 @@ impl NotificationRouter {
         check: &dyn Fn() -> Result<()>,
         effect: &mut Effect<'_>,
         update: &mut NotificationUpdate,
+        findings: Option<&FindingBatch>,
     ) -> Result<()> {
         erebor_telemetry::trace!(
             tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = now,
@@ -239,6 +250,7 @@ impl NotificationRouter {
                 effect(delivery)
             },
             now,
+            findings,
         );
         erebor_telemetry::trace!(
             tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = now,

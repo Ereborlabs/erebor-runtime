@@ -61,7 +61,7 @@ fn graph_credential_baseline() -> TestResult {
         *credential_object_id = None;
         *socket_object_id = None;
     }
-    input.facts[5].body = serde_json::to_vec(&use_fact)?;
+    input.facts[5].body = use_fact.encode_context()?;
     let contextual = historical_baseline(&input)?;
     input.facts.remove(5);
     let missing = historical_baseline(&input)?;

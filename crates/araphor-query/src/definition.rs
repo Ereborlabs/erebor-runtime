@@ -26,7 +26,7 @@ mod tests;
 
 pub use call::PackageCall;
 pub(crate) use physical::CallContext;
-pub use physical::{CallResult, CallReuse, ExecutionReceipt, Invocation};
+pub use physical::{CallResult, CallReuse, CallSparse, ExecutionReceipt, Invocation};
 
 #[derive(Clone)]
 pub struct PreparedDefinition {

@@ -25,14 +25,16 @@ pub(super) fn events(mut denied: EffectObservationV1) -> [EffectObservationV1; 2
     [denied, allowed]
 }
 
-fn background_record(cursor: u64) -> EffectObservationV1 {
-    let mut record = super::super::input::event(cursor, false);
+fn background_record(cursor: u64, denied: bool) -> EffectObservationV1 {
+    let mut record = super::super::input::event(cursor, denied);
     record.source_cpu_id = 1;
     record.task_cookie = 8;
     record.process_instance_id = [18; 16].into();
     record.entry_instance_id = [19; 16].into();
-    record.exact_object_key_id = 0;
-    record.composite_atom_id = 0;
+    if !denied {
+        record.exact_object_key_id = 0;
+        record.composite_atom_id = 0;
+    }
     record
 }
 
@@ -46,7 +48,7 @@ pub(super) async fn background(
     let input = wal(tls, "paired-background", 3)?;
     let count = u64::try_from(araphor_data::AnalysisExtractLimits::default().page_rows + 1)?;
     for cursor in 1..=count {
-        input.record_bytes(background_record(cursor).as_bytes());
+        input.record_bytes(background_record(cursor, false).as_bytes());
     }
     assert_eq!(input.pending_evidence_records(), count);
     let (source, _) = upload_on(tls, node, &input).await?;
@@ -60,19 +62,12 @@ pub(super) async fn backlog(
     mithril_node::EffectObservationStore,
     araphor_data::EvidenceIntakeIdentityV1,
 )> {
-    use super::super::input::{upload_on, wal};
-    use zerocopy::IntoBytes as _;
+    use super::super::input::wal;
 
     let input = wal(tls, "paired-backlog", 3)?;
     let mut source = None;
     for (first, last) in [(1, 256), (257, 512), (513, 768), (769, 940)] {
-        for cursor in first..=last {
-            input.record_bytes(background_record(cursor).as_bytes());
-        }
-        assert_eq!(input.pending_evidence_records(), last - first + 1);
-        let batch = input.next_evidence_batch().ok_or("backlog prefix batch")?;
-        assert_eq!((batch.first_cursor, batch.last_cursor), (first, last));
-        let (actual, _) = upload_on(tls, node, &input).await?;
+        let actual = upload_range(tls, node, &input, first..=last, 1, 0).await?;
         if let Some(expected) = &source {
             assert_eq!(&actual, expected);
         } else {
@@ -82,12 +77,73 @@ pub(super) async fn backlog(
     Ok((input, source.ok_or("backlog source")?))
 }
 
+pub(super) async fn busy_backlog(
+    tls: &crate::control_fixture::MtlsFixture,
+    node: &mut mithril_node::ControlConnection,
+) -> super::Result<(
+    mithril_node::EffectObservationStore,
+    araphor_data::EvidenceIntakeIdentityV1,
+)> {
+    let input = super::super::input::wal(tls, "paired-busy", 3)?;
+    let mut source = None;
+    for (first, last) in [(1, 256), (257, 512), (513, 639)] {
+        let actual = upload_range(tls, node, &input, first..=last, 0, 138).await?;
+        if let Some(expected) = &source {
+            assert_eq!(&actual, expected);
+        } else {
+            source = Some(actual);
+        }
+    }
+    Ok((input, source.ok_or("background source")?))
+}
+
+async fn upload_range(
+    tls: &crate::control_fixture::MtlsFixture,
+    node: &mut mithril_node::ControlConnection,
+    input: &mithril_node::EffectObservationStore,
+    range: std::ops::RangeInclusive<u64>,
+    cpu: u32,
+    denied: u64,
+) -> super::Result<araphor_data::EvidenceIntakeIdentityV1> {
+    use zerocopy::IntoBytes as _;
+    let (first, last) = (*range.start(), *range.end());
+    for cursor in range {
+        let mut record = background_record(cursor, cursor <= denied);
+        record.source_cpu_id = cpu;
+        input.record_bytes(record.as_bytes());
+    }
+    assert_eq!(input.pending_evidence_records(), last - first + 1);
+    let batch = input.next_evidence_batch().ok_or("range batch")?;
+    assert_eq!((batch.first_cursor, batch.last_cursor), (first, last));
+    let (source, _) = super::super::input::upload_on(tls, node, input).await?;
+    Ok(source)
+}
+
+pub(super) fn check_runtime(
+    bytes: &[u8],
+    container: &str,
+    binding: mithril_control::EvidenceIdV1,
+) -> super::Result<()> {
+    let denied = mithril_control::EvidenceRecord::try_from(bytes)?;
+    let context = denied.decision_context.as_ref().ok_or("runtime context")?;
+    let catalog = mithril_control::EvidenceDecisionCatalogV1::from_context(context)?
+        .ok_or("runtime catalog")?;
+    let proof = catalog.runtime_binding.as_ref().ok_or("runtime proof")?;
+    assert_eq!(
+        (proof.container_id.as_str(), catalog.binding_id),
+        (container, binding)
+    );
+    Ok(())
+}
+
 pub(super) async fn append_reads(
     tls: &crate::control_fixture::MtlsFixture,
     node: &mut mithril_node::ControlConnection,
     input: &mithril_node::EffectObservationStore,
     source: &araphor_data::EvidenceIntakeIdentityV1,
     raw: EffectObservationV1,
+    background: &mithril_node::EffectObservationStore,
+    background_source: &araphor_data::EvidenceIntakeIdentityV1,
 ) -> super::Result<[Vec<u8>; 2]> {
     use super::super::input::upload_on;
     use zerocopy::IntoBytes as _;
@@ -104,20 +160,32 @@ pub(super) async fn append_reads(
     assert_eq!((batch.first_cursor, batch.last_cursor), (941, 941));
     let (actual, denied) = upload_on(tls, node, input).await?;
     assert_eq!(&actual, source);
+    assert_eq!(
+        &upload_range(tls, node, background, 640..=640, 0, 0).await?,
+        background_source
+    );
     for cursor in 942..950 {
-        input.record_bytes(background_record(cursor).as_bytes());
+        input.record_bytes(background_record(cursor, false).as_bytes());
     }
     assert_eq!(input.pending_evidence_records(), 8);
     let batch = input.next_evidence_batch().ok_or("backlog gap batch")?;
     assert_eq!((batch.first_cursor, batch.last_cursor), (942, 949));
     let (actual, _) = upload_on(tls, node, input).await?;
     assert_eq!(&actual, source);
+    assert_eq!(
+        &upload_range(tls, node, background, 641..=641, 0, 0).await?,
+        background_source
+    );
     input.record_bytes(allowed.as_bytes());
     assert_eq!(input.pending_evidence_records(), 1);
     let batch = input.next_evidence_batch().ok_or("backlog benign batch")?;
     assert_eq!((batch.first_cursor, batch.last_cursor), (950, 950));
     let (actual, allowed) = upload_on(tls, node, input).await?;
     assert_eq!(&actual, source);
+    assert_eq!(
+        &upload_range(tls, node, background, 642..=642, 0, 0).await?,
+        background_source
+    );
     Ok([denied, allowed])
 }
 

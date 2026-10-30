@@ -42,7 +42,11 @@ impl ReplayQualification {
         grants: &[NotificationGrantV1],
     ) -> crate::platform::TestResult<(ControlStore, NotificationRouter)> {
         let store = ControlStore::open(self.root.path().join("notification-control"))?;
-        let authority = Arc::new(ConfiguredNotificationAuthority::new(store.clone(), grants)?);
+        let authority = Arc::new(ConfiguredNotificationAuthority::new(
+            store.clone(),
+            grants,
+            None,
+        )?);
         let router = NotificationRouter::new(self.data.clone(), authority)?;
         Ok((store, router))
     }

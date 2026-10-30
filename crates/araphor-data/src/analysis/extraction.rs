@@ -20,6 +20,8 @@ use crate::{
     Result, TraceIdentityV1,
 };
 
+type IndexedNotificationGraph = (Vec<u8>, Vec<u8>, u64, u64, u64, Option<bool>);
+
 mod changes;
 mod discovery;
 mod graph;
@@ -1025,12 +1027,24 @@ impl AnalysisExtractionV1 {
 }
 
 impl AnalysisStore {
+    #[cfg(test)]
     pub(super) fn resolve_selection<'a>(
         &self,
         snapshot: &Connection,
         selection: &'a AnalysisSelectionV1,
         control: &AnalysisReadControl,
         limits: AnalysisExtractLimits,
+    ) -> Result<(Cow<'a, AnalysisSelectionV1>, usize)> {
+        self.resolve_selection_filtered(snapshot, selection, control, limits, None)
+    }
+
+    pub(super) fn resolve_selection_filtered<'a>(
+        &self,
+        snapshot: &Connection,
+        selection: &'a AnalysisSelectionV1,
+        control: &AnalysisReadControl,
+        limits: AnalysisExtractLimits,
+        context_owners: Option<&BTreeSet<String>>,
     ) -> Result<(Cow<'a, AnalysisSelectionV1>, usize)> {
         control.check()?;
         if !selection.valid() {
@@ -1053,6 +1067,7 @@ impl AnalysisStore {
         let limit = limits.input_bytes;
         if !selection.sources.is_all()
             && !selection.contexts.is_all()
+            && context_owners.is_none()
             && !selection.traces.is_all()
             && !selection.targets_only
             && !selection.profiles.is_all()
@@ -1107,6 +1122,13 @@ impl AnalysisStore {
                 .ok_or_else(|| self.state_error("the resolved context selection is not exact"))?
                 .retain(|key| key.owner_id == "mithril-control/target");
         }
+        if let Some(owners) = context_owners {
+            resolved
+                .contexts
+                .exact_mut()
+                .ok_or_else(|| self.state_error("the resolved context selection is not exact"))?
+                .retain(|key| owners.contains(&key.owner_id));
+        }
         resolved
             .sources
             .exact_mut()
@@ -1156,28 +1178,44 @@ impl AnalysisStore {
             }
         }
         if selection.contexts.is_all() {
-            let mut statement = snapshot.prepare(
+            let owner_predicate = match context_owners {
+                None => String::new(),
+                Some(owners) if owners.is_empty() => " AND FALSE".to_owned(),
+                Some(owners) => {
+                    format!(" AND owner_id IN ({})", vec!["?"; owners.len()].join(", "))
+                }
+            };
+            let sql = format!(
                 "SELECT owner_id, entity_key, lifetime_key, owner_revision FROM context_versions
                  WHERE tenant_id = ? AND (NOT ? OR owner_id = 'mithril-control/target')
-                 ORDER BY owner_id, entity_key, lifetime_key, owner_revision LIMIT ?",
-            ).context(AnalysisDatabaseSnafu { operation: "prepare tenant context keys" })?;
+                 {owner_predicate}
+                 ORDER BY owner_id, entity_key, lifetime_key, owner_revision LIMIT ?"
+            );
+            let mut parameters = vec![
+                duckdb::types::Value::Blob(selection.tenant_id.to_vec()),
+                duckdb::types::Value::Boolean(selection.targets_only),
+            ];
+            if let Some(owners) = context_owners {
+                parameters.extend(owners.iter().cloned().map(duckdb::types::Value::Text));
+            }
+            parameters.push(
+                limits
+                    .key_rows(resolved.key_count())
+                    .map_or(duckdb::types::Value::Null, duckdb::types::Value::BigInt),
+            );
+            let mut statement = snapshot.prepare(&sql).context(AnalysisDatabaseSnafu {
+                operation: "prepare tenant context keys",
+            })?;
             let rows = statement
-                .query_map(
-                    params![
-                        selection.tenant_id.as_slice(),
-                        selection.targets_only,
-                        limits.key_rows(resolved.key_count())
-                    ],
-                    |row| {
-                        Ok(AnalysisContextKeyV1 {
-                            tenant_id: selection.tenant_id,
-                            owner_id: row.get(0)?,
-                            entity_key: row.get(1)?,
-                            lifetime_key: row.get(2)?,
-                            owner_revision: row.get(3)?,
-                        })
-                    },
-                )
+                .query_map(duckdb::params_from_iter(parameters.iter()), |row| {
+                    Ok(AnalysisContextKeyV1 {
+                        tenant_id: selection.tenant_id,
+                        owner_id: row.get(0)?,
+                        entity_key: row.get(1)?,
+                        lifetime_key: row.get(2)?,
+                        owner_revision: row.get(3)?,
+                    })
+                })
                 .context(AnalysisDatabaseSnafu {
                     operation: "read tenant context keys",
                 })?;
@@ -1436,7 +1474,19 @@ impl AnalysisStore {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
     ) -> Result<AnalysisPositionPageV1> {
-        self.read_tables_inner(selection, None, read, limits, control)
+        self.read_tables_inner(selection, None, read, limits, control, None)
+            .map(|(page, _)| page)
+    }
+
+    pub fn read_tables_filtered(
+        &self,
+        selection: &AnalysisSelectionV1,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        context_owners: Option<&BTreeSet<String>>,
+    ) -> Result<AnalysisPositionPageV1> {
+        self.read_tables_inner(selection, None, read, limits, control, context_owners)
             .map(|(page, _)| page)
     }
 
@@ -1448,6 +1498,18 @@ impl AnalysisStore {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
     ) -> Result<super::ManagedPage> {
+        self.read_managed_tables_filtered(selection, managed, read, limits, control, None)
+    }
+
+    pub fn read_managed_tables_filtered(
+        &self,
+        selection: &AnalysisSelectionV1,
+        managed: &super::ManagedRead,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        context_owners: Option<&BTreeSet<String>>,
+    ) -> Result<super::ManagedPage> {
         if selection.tenant_id != managed.instance.spec.tenant
             || !matches!(
                 read.mode,
@@ -1456,8 +1518,14 @@ impl AnalysisStore {
         {
             return Err(crate::PackageErrorCodeV1::Invalid.error("managed capture scope"));
         }
-        let (page, state) =
-            self.read_tables_inner(selection, Some(managed), read, limits, control)?;
+        let (page, state) = self.read_tables_inner(
+            selection,
+            Some(managed),
+            read,
+            limits,
+            control,
+            context_owners,
+        )?;
         let state = state.ok_or_else(|| self.state_error("the managed capture is absent"))?;
         Ok(super::ManagedPage { page, state })
     }
@@ -1469,6 +1537,7 @@ impl AnalysisStore {
         read: AnalysisTableRead<'_>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
+        context_owners: Option<&BTreeSet<String>>,
     ) -> Result<(AnalysisPositionPageV1, Option<super::ManagedCapture>)> {
         control.check()?;
         let packages = read.inputs;
@@ -1558,7 +1627,7 @@ impl AnalysisStore {
             control.test_snapshot()?;
             let requested = selection;
             let (selection, key_bytes) =
-                self.resolve_selection(snapshot, selection, control, limits)?;
+                self.resolve_selection_filtered(snapshot, selection, control, limits, context_owners)?;
             let selection = selection.as_ref();
             let mut capture = tables::Capture::new(&read, selection);
             let end = StorePositionV1 {
@@ -1900,6 +1969,10 @@ impl AnalysisStore {
             }
             let complete_graph = read.projects_field("graph_manifest", "snapshot");
             let graph_contexts = read.projects_field("graph_manifest", "context_refs");
+            let graph_findings = ["findings", "policy_observations", "graph_branches"]
+                .iter()
+                .any(|name| read.projected(name).is_some())
+                || !selection.binding_ids.is_empty();
             for id in selection.graphs.as_slice().iter().filter(|_| selection.graph_traversal.is_none()) {
                 control.check()?;
                 let (key, revision): (Vec<u8>, u64) = snapshot.query_row(
@@ -1913,7 +1986,7 @@ impl AnalysisStore {
                     .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
                 let subjects = read.projected("graph_subjects").is_some();
                 let edges = read.projected("relationships").is_some();
-                let header = self.graph_input(snapshot, selection.tenant_id, id, control, complete_graph)?;
+                let header = self.graph_input(snapshot, selection.tenant_id, id, control, complete_graph, graph_findings)?;
                 let mut graph = header.snapshot;
                 if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
                 if !selection.permits_graph(&graph) { continue; }
@@ -1937,7 +2010,8 @@ impl AnalysisStore {
                 } else { Vec::new() };
                 output.reference_result(id, revision, AnalysisReferenceOriginV1::Graph)?;
                 capture.graph(id, &graph, header.subject_count, header.edge_count,
-                    revision, sensitivity, None, None, &contexts, header.notice, &mut output.sink(control))?;
+                    revision, sensitivity, None, None, &contexts, header.notice, header.expired,
+                    &mut output.sink(control))?;
             }
             self.extract_graph_coverage(snapshot, &read, &mut output, &mut capture, control)?;
             let mut routes = BTreeMap::new();
@@ -1950,7 +2024,46 @@ impl AnalysisStore {
                 output.charge(context.body.capacity().saturating_mul(2))?;
                 let obligation = crate::NotificationObligationV1::try_from(&context)?;
                 let mut parent = None;
+                let mut point_finding = None;
                 let finding = if let Some(reference) = &obligation.finding {
+                    if selection.binding_ids.is_empty() && !capture.needs_manifest(&reference.result_id) {
+                        let indexed: Option<IndexedNotificationGraph> = snapshot
+                            .query_row(
+                                "SELECT r.body,r.stream_key,r.method_version,r.first_cursor,r.commit_revision,v.expired
+                                 FROM analysis_results r LEFT JOIN graph_versions v USING(result_id)
+                                 WHERE r.tenant_id=? AND r.processor_id=? AND r.method_version=? AND r.result_id=?
+                                   AND r.stream_key IS NOT NULL",
+                                params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR,
+                                    crate::GRAPH_SCHEMA_VERSION, reference.result_id],
+                                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                            )
+                            .optional()
+                            .context(AnalysisDatabaseSnafu { operation: "read notification Graph result" })?;
+                        if let Some((body, source_key, method, first, graph_revision, expired)) = indexed {
+                            let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
+                            let header = super::graph_rows::GraphHeader::decode(&body)?;
+                            header.check_index(selection.tenant_id, &source_key, method, first)?;
+                            if header.snapshot.scope.identity != *source {
+                                return self.reject("the notification Graph source differs from its index");
+                            }
+                            if !selection.permits_graph(&header.snapshot) { continue; }
+                            let expired = expired.ok_or_else(|| self.state_error("the notification Graph version is absent"))?;
+                            if expired && header.snapshot.packages.iter().any(|package|
+                                package.state != crate::GraphPackageStateV1::CoverageInsufficient)
+                            {
+                                return self.reject("the expired Graph package state differs");
+                            }
+                            output.reference_result(&reference.result_id, graph_revision, AnalysisReferenceOriginV1::Notification)?;
+                            if read.projects_field("notifications", "finding_available") {
+                                let header = super::graph_rows::GraphRows::read_finding_header(
+                                    snapshot, selection.tenant_id, &reference.result_id)?
+                                    .ok_or_else(|| self.state_error("the notification Graph header is absent"))?;
+                                point_finding = super::graph_rows::GraphRows::read_finding(
+                                    snapshot, &reference.result_id, &reference.finding_id, &header, Some(control))?;
+                            }
+                            point_finding.as_ref()
+                        } else if unscoped_notifications { None } else { continue }
+                    } else {
                     let index = match graphs.binary_search_by(|(id, _, _)| id.cmp(&reference.result_id)) {
                         Ok(index) => Some(index),
                         Err(index) => {
@@ -1966,7 +2079,7 @@ impl AnalysisStore {
                             if let Some((source_key, graph_revision)) = metadata {
                                 let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
                                 let header = self.graph_input(snapshot, selection.tenant_id,
-                                    &reference.result_id, control, complete_graph)?;
+                                    &reference.result_id, control, complete_graph, true)?;
                                 let graph = &header.snapshot;
                                 if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
                                 if !selection.permits_graph(graph) { continue; }
@@ -1984,6 +2097,7 @@ impl AnalysisStore {
                         output.reference_result(&reference.result_id, *graph_revision, AnalysisReferenceOriginV1::Notification)?;
                         header.snapshot.findings.iter().find(|finding| finding.finding_id == reference.finding_id)
                     } else { None }
+                    }
                 } else if unscoped_notifications { None } else { continue; };
                 if !selection.binding_ids.is_empty() && finding.is_none_or(|finding| {
                     finding.effects.is_empty() || finding.effects.iter().any(|effect| {
@@ -1999,7 +2113,7 @@ impl AnalysisStore {
                         } else { Vec::new() };
                         if capture.graph_manifest(graph, id, *graph_revision, sensitivity,
                             &graph.scope.identity.key(), header.subject_count, header.edge_count,
-                            &contexts, header.notice, &mut output.sink(control))?
+                            &contexts, header.notice, header.expired, &mut output.sink(control))?
                         {
                             output.reference_result(id, *graph_revision, AnalysisReferenceOriginV1::Graph)?;
                         }
@@ -2477,6 +2591,95 @@ mod tests {
             exact.allocation_bytes(),
             size_of::<AnalysisSelectionV1>() + 8 * size_of::<EvidenceIntakeIdentityV1>()
         );
+    }
+
+    #[test]
+    fn context_owner_filter_precedes_key_limit() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let tenant = [1; 16];
+        let context = |owner: &str, entity: u8| AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                tenant_id: tenant,
+                owner_id: owner.into(),
+                entity_key: vec![entity],
+                lifetime_key: vec![1],
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body: vec![entity],
+        };
+        let unrelated = context("a-unrelated", 1);
+        let unrelated_second = context("a-unrelated", 3);
+        let policy = context("z-policy", 2);
+        store.commit_context(&unrelated)?;
+        store.commit_context(&unrelated_second)?;
+        store.commit_context(&policy)?;
+        let owners = BTreeSet::from(["z-policy".to_owned()]);
+        let control = AnalysisReadControl::default();
+        store.read_snapshot(|snapshot| {
+            let tenant_selection = AnalysisSelectionV1::tenant(tenant);
+            let (selected, _) = store.resolve_selection_filtered(
+                snapshot,
+                &tenant_selection,
+                &control,
+                AnalysisExtractLimits {
+                    keys: Some(1),
+                    ..Default::default()
+                },
+                Some(&owners),
+            )?;
+            assert_eq!(
+                selected.contexts.as_slice(),
+                std::slice::from_ref(&policy.key)
+            );
+            let mut exact = AnalysisSelectionV1::new(tenant, Vec::new());
+            exact.contexts = Selection::Exact(vec![unrelated.key.clone(), policy.key.clone()]);
+            let (selected, _) = store.resolve_selection_filtered(
+                snapshot,
+                &exact,
+                &control,
+                AnalysisExtractLimits::default(),
+                Some(&owners),
+            )?;
+            assert_eq!(
+                selected.contexts.as_slice(),
+                std::slice::from_ref(&policy.key)
+            );
+            Ok(())
+        })?;
+        let columns = BTreeSet::from([
+            AnalysisStore::table_schemas()["context_versions"].index_of("owner_id")?
+        ]);
+        let requests = AnalysisTableRequests::from([("context_versions".into(), Some(columns))]);
+        let page = store.read_tables_filtered(
+            &AnalysisSelectionV1::tenant(tenant),
+            AnalysisTableRead {
+                requests: &requests,
+                event_ranges: None,
+                inputs: None,
+                mode: AnalysisReadModeV1::Complete,
+                now: 0,
+            },
+            AnalysisExtractLimits {
+                keys: Some(1),
+                ..Default::default()
+            },
+            &control,
+            Some(&owners),
+        )?;
+        let rows = &page.tables["context_versions"];
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        let owners = rows[0]
+            .column_by_name("owner_id")
+            .ok_or("owner_id is absent")?
+            .as_any()
+            .downcast_ref::<sdk::arrow_array::StringArray>()
+            .ok_or("owner_id is not text")?;
+        assert_eq!(owners.value(0), "z-policy");
+        Ok(())
     }
 
     #[test]
@@ -4380,7 +4583,6 @@ mod tests {
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.received_from = Bound::Included(20);
         let fields = [("events", &["source_cursor"][..])];
-        let started = std::time::Instant::now();
         let recent = read(
             &store,
             &selection,
@@ -4389,7 +4591,6 @@ mod tests {
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
         )?;
-        let recent_us = started.elapsed().as_micros();
         assert_eq!(
             recent.extraction.scanned_bytes,
             store
@@ -4405,7 +4606,6 @@ mod tests {
         assert_eq!(row_count(&recent, "events"), 32);
         assert_eq!(recent.extraction.projected_bytes, 32 * 9);
         selection.received_from = Bound::Unbounded;
-        let started = std::time::Instant::now();
         let sparse = read(
             &store,
             &selection,
@@ -4414,7 +4614,6 @@ mod tests {
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
         )?;
-        let sparse_us = started.elapsed().as_micros();
         assert_eq!(
             sparse.extraction.scanned_bytes,
             store
@@ -4463,7 +4662,6 @@ mod tests {
             identity: identity.clone(),
         };
         store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
-        let started = std::time::Instant::now();
         store.commit_result(&AnalysisResultCommitV1 {
             consumed_cursor: 18 * 32,
             body: vec![1],
@@ -4477,10 +4675,7 @@ mod tests {
                 .collect(),
             ..crate::analysis::tests::result(scope, "sparse-history".into())
         })?;
-        let pin_commit_us = started.elapsed().as_micros();
-        let started = std::time::Instant::now();
         let usage = store.witness_usage(identity.tenant_id, 22)?;
-        let usage_us = started.elapsed().as_micros();
         let header_bytes = super::super::SegmentFile::encode_identity(&identity)?.len() as u64;
         assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 6);
         assert_eq!(
@@ -4498,25 +4693,6 @@ mod tests {
                 .retain(&identity, 50)?
                 .removed_records,
             0
-        );
-        eprintln!(
-            "witness_bytes={} segment_bytes={} extra_bytes={} pin_commit_us={} usage_us={}",
-            usage.referenced_bytes,
-            usage.segment_bytes,
-            usage.extra_segment_bytes,
-            pin_commit_us,
-            usage_us
-        );
-        eprintln!(
-            "history_bytes={} recent_scan={} recent_input={} recent_us={} sparse_scan={} sparse_input={} sparse_us={} debug={}",
-            72 * 1024 * 1024,
-            recent.extraction.scanned_bytes,
-            recent.extraction.input_bytes,
-            recent_us,
-            sparse.extraction.scanned_bytes,
-            sparse.extraction.input_bytes,
-            sparse_us,
-            cfg!(debug_assertions)
         );
         Ok(())
     }

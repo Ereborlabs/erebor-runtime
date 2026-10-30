@@ -1,3 +1,4 @@
+use super::codec::ManagedCodec;
 use duckdb::params;
 use snafu::ResultExt as _;
 
@@ -97,8 +98,8 @@ impl AnalysisStore {
                     spec.tenant.as_slice(),
                     spec.id,
                     revision,
-                    serde_json::to_vec(spec).context(crate::PackageEncodingSnafu)?,
-                    serde_json::to_vec(&grant.selection).context(crate::PackageEncodingSnafu)?
+                    ManagedCodec::encode(spec).context(crate::ManagedEncodingSnafu)?,
+                    ManagedCodec::encode(&grant.selection).context(crate::ManagedEncodingSnafu)?
                 ],
             )
             .context(AnalysisDatabaseSnafu {
@@ -106,7 +107,7 @@ impl AnalysisStore {
             })?;
         transaction.execute(
             "UPDATE managed_instances SET authority = ?, generation = ?, progress = 0, running = false, removed = false, lifecycle = ?, failure = NULL WHERE tenant_id = ? AND instance_id = ? AND lifecycle = ?",
-            params![serde_json::to_vec(grant).context(crate::PackageEncodingSnafu)?, revision,
+            params![ManagedCodec::encode(grant).context(crate::ManagedEncodingSnafu)?, revision,
                 revision, spec.tenant.as_slice(), spec.id, expected.lifecycle],
         ).context(AnalysisDatabaseSnafu { operation: "recreate removed managed instance" })?;
         transaction

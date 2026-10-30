@@ -157,11 +157,11 @@ fn attempt_witnesses_keep_earliest() -> TestResult {
         let saved = store
             .managed_attempt(source.tenant_id, "witnesses", &input.id, &control)?
             .ok_or("committed witness attempt")?;
-        let original = serde_json::to_vec(&saved.0)?;
+        let original = ManagedCodec::encode(&saved.0)?;
         let before = store.meta()?;
         let retried = store.register_managed_attempt(&captured, &input, || Ok(()))?;
         assert_eq!(retried.receipt(), Some(&receipt));
-        assert_eq!(serde_json::to_vec(&retried.0)?, original);
+        assert_eq!(ManagedCodec::encode(&retried.0)?, original);
         assert_eq!(store.meta()?, before);
         let mut changed = input.clone();
         changed.witness_expiry += 1;
@@ -179,7 +179,7 @@ fn attempt_witnesses_keep_earliest() -> TestResult {
         let reopened = store
             .managed_attempt(source.tenant_id, "witnesses", &input.id, &control)?
             .ok_or("reopened witness attempt")?;
-        assert_eq!(serde_json::to_vec(&reopened.0)?, original);
+        assert_eq!(ManagedCodec::encode(&reopened.0)?, original);
         for id in &ids {
             assert_eq!(
                 store.package_evidence(source.tenant_id, std::slice::from_ref(id))?,

@@ -76,20 +76,6 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
     ) -> Result<Vec<crate::AnalysisContextRefV1>> {
         control.check()?;
-        let length: u64 = snapshot
-            .query_row(
-                "SELECT octet_length(request_meta) FROM analysis_results
-             WHERE tenant_id = ? AND result_id = ? AND processor_id = ?",
-                params![tenant.as_slice(), result_id, crate::GRAPH_PROCESSOR],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "bound captured graph attribution",
-            })?;
-        let length = usize::try_from(length)
-            .map_err(|_| self.state_error("the graph attribution length is invalid"))?;
-        output.scan(length)?;
-        output.charge(length.saturating_mul(2))?;
         let metadata: Vec<u8> = snapshot
             .query_row(
                 "SELECT request_meta FROM analysis_results
@@ -100,6 +86,8 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read captured graph attribution",
             })?;
+        output.scan(metadata.len())?;
+        output.charge(metadata.len())?;
         let (_, contexts) = Self::decode_evidence(crate::GRAPH_PROCESSOR, &metadata)?;
         if contexts
             .iter()
@@ -245,21 +233,29 @@ impl AnalysisStore {
         result_id: &str,
         control: &AnalysisReadControl,
         complete: bool,
+        findings: bool,
     ) -> Result<GraphHeader> {
         control.check()?;
-        let mut header =
+        let selected = if complete || findings {
             GraphRows::read_header_control(snapshot, tenant, result_id, Some(control))?
-                .ok_or_else(|| self.state_error("the selected graph header is absent"))?;
+        } else {
+            GraphRows::read_metadata_control(snapshot, tenant, result_id, Some(control))?
+        };
+        let mut header =
+            selected.ok_or_else(|| self.state_error("the selected graph header is absent"))?;
         if complete {
             header.snapshot = GraphRows::read_control(snapshot, result_id, &header, Some(control))?;
-        } else {
+        } else if findings {
             header.snapshot.findings =
                 GraphRows::read_findings(snapshot, result_id, &header, Some(control))?;
+            if header.derive_branches {
+                header.snapshot.graph.branches = GraphRows::branches(&header.snapshot.findings);
+            }
         }
-        if header.snapshot.findings.len() != header.finding_count {
+        if (complete || findings) && header.snapshot.findings.len() != header.finding_count {
             return self.reject("the selected graph finding count differs");
         }
-        if !complete {
+        if findings && !complete {
             header.snapshot.validate()?;
         }
         Ok(header)

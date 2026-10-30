@@ -223,8 +223,7 @@ fn saved_evaluation_rejects_corruption() -> TestResult {
                         params![id],
                         |row| row.get(0),
                     )?;
-                    let mut record: super::super::model::Record =
-                        serde_json::from_slice(&metadata)?;
+                    let mut record: super::super::model::Record = ManagedCodec::decode(&metadata)?;
                     match case {
                         3 => record.inputs[0].rows += 1,
                         4 => record.inputs[0].batches = 0,
@@ -232,7 +231,7 @@ fn saved_evaluation_rejects_corruption() -> TestResult {
                     }
                     writer.execute(
                         "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
-                        params![serde_json::to_vec(&record)?, id],
+                        params![ManagedCodec::encode(&record)?, id],
                     )?;
                 }
             }
@@ -368,7 +367,7 @@ fn saved_history_rejects_corruption() -> TestResult {
                     params![id],
                     |row| row.get(0),
                 )?;
-                let mut record: super::super::model::Record = serde_json::from_slice(&metadata)?;
+                let mut record: super::super::model::Record = ManagedCodec::decode(&metadata)?;
                 if case == 0 {
                     record.context.context.time_utc_ns += 1;
                 } else {
@@ -378,7 +377,7 @@ fn saved_history_rejects_corruption() -> TestResult {
                 }
                 writer.execute(
                     "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
-                    params![serde_json::to_vec(&record)?, id],
+                    params![ManagedCodec::encode(&record)?, id],
                 )?;
             }
         }

@@ -584,12 +584,10 @@ fn resolved_rows_roundtrip() -> sdk::Result<()> {
         GraphPackageStateV1::Declared("WAITING".into()),
         GraphPackageStateV1::Declared("custom".into()),
     ] {
-        assert_eq!(
-            GraphPackageStateV1::decode(&GraphPackageStateV1::encode(std::slice::from_ref(
-                &state
-            ))?)?,
-            [state.clone()]
-        );
+        let decoded = GraphPackageStateV1::decode(&GraphPackageStateV1::encode(
+            std::slice::from_ref(&state),
+        )?)?;
+        assert_eq!(decoded.as_slice(), std::slice::from_ref(&state));
         let metadata = Metadata {
             record_ids: vec![],
             facts: vec![],

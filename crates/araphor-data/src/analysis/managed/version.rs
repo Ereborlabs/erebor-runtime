@@ -1,3 +1,4 @@
+use super::codec::ManagedCodec;
 use duckdb::{params, OptionalExt as _};
 use snafu::ResultExt as _;
 
@@ -31,7 +32,7 @@ impl AnalysisStore {
         if spec.tenant != expected.spec.tenant || spec.id != expected.spec.id {
             return Err(Code::Conflict.error("managed update identity"));
         }
-        let bytes = serde_json::to_vec(spec).context(crate::PackageEncodingSnafu)?;
+        let bytes = ManagedCodec::encode(spec).context(crate::ManagedEncodingSnafu)?;
         let mut writer = self.writer()?;
         let transaction = writer
             .get_mut()?
@@ -49,7 +50,7 @@ impl AnalysisStore {
         let saved: Option<u64> = transaction.query_row(
             "SELECT generation FROM managed_versions WHERE tenant_id = ? AND instance_id = ? AND spec = ? AND scope = ? ORDER BY generation DESC LIMIT 1",
             params![spec.tenant.as_slice(), spec.id, bytes,
-                serde_json::to_vec(&current.grant.selection).context(crate::PackageEncodingSnafu)?], |row| row.get(0),
+                ManagedCodec::encode(&current.grant.selection).context(crate::ManagedEncodingSnafu)?], |row| row.get(0),
         ).optional().context(AnalysisDatabaseSnafu { operation: "find exact managed version" })?;
         let generation = if let Some(generation) = saved {
             if generation != expected.generation {
@@ -68,8 +69,8 @@ impl AnalysisStore {
                         spec.id,
                         revision,
                         bytes,
-                        serde_json::to_vec(&current.grant.selection)
-                            .context(crate::PackageEncodingSnafu)?
+                        ManagedCodec::encode(&current.grant.selection)
+                            .context(crate::ManagedEncodingSnafu)?
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {

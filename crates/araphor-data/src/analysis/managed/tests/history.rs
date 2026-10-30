@@ -105,7 +105,7 @@ fn history_checks_stored_binding() -> TestResult {
         writer.get_mut()?.query_row("SELECT contract FROM managed_attempts WHERE tenant_id = ? AND instance_id = 'counter' AND attempt_id = 'original'", params![[1u8;16].as_slice()], |row| row.get::<_, Vec<u8>>(0))?
     };
     for case in 0..9 {
-        let mut value: Attempt = serde_json::from_slice(&original)?;
+        let mut value: Attempt = ManagedCodec::decode(&original)?;
         let mut completed = receipt.commit_revision;
         match case {
             0 => value.capture.tenant = [2; 16],
@@ -129,7 +129,7 @@ fn history_checks_stored_binding() -> TestResult {
         }
         {
             let mut writer = store.writer()?;
-            writer.get_mut()?.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = 'counter' AND attempt_id = 'original'", params![serde_json::to_vec(&value)?, completed, [1u8;16].as_slice()])?;
+            writer.get_mut()?.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = 'counter' AND attempt_id = 'original'", params![ManagedCodec::encode(&value)?, completed, [1u8;16].as_slice()])?;
         }
         assert!(
             matches!(

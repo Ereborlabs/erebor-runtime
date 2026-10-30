@@ -229,16 +229,16 @@ fn selected_rejects_corruption() -> TestResult {
                         params![receipt.selected.result_id],
                         |row| row.get(0),
                     )?;
-                    let mut step: model::Step = serde_json::from_slice(&bytes)?;
+                    let mut step: model::Step = ManagedCodec::decode(&bytes)?;
                     step.rows += 1;
                     writer.execute(
                         "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
-                        params![serde_json::to_vec(&step)?, receipt.selected.result_id],
+                        params![ManagedCodec::encode(&step)?, receipt.selected.result_id],
                     )?;
                 }
                 _ => {
                     let bytes: Vec<u8> = writer.query_row("SELECT contract FROM managed_attempts WHERE instance_id = 'counter' AND attempt_id = 'corrupt'", [], |row| row.get(0))?;
-                    let mut attempt: model::Attempt = serde_json::from_slice(&bytes)?;
+                    let mut attempt: model::Attempt = ManagedCodec::decode(&bytes)?;
                     if corruption == "receipt" {
                         attempt
                             .receipt
@@ -253,7 +253,7 @@ fn selected_rejects_corruption() -> TestResult {
                         let reference = receipt.results.remove(&10).ok_or("call result")?;
                         receipt.results.insert(99, reference);
                     }
-                    writer.execute("UPDATE managed_attempts SET contract = ? WHERE instance_id = 'counter' AND attempt_id = 'corrupt'", params![serde_json::to_vec(&attempt)?])?;
+                    writer.execute("UPDATE managed_attempts SET contract = ? WHERE instance_id = 'counter' AND attempt_id = 'corrupt'", params![ManagedCodec::encode(&attempt)?])?;
                 }
             }
         }
@@ -366,7 +366,7 @@ fn selected_rejects_call_swap() -> TestResult {
             "SELECT contract FROM managed_attempts WHERE instance_id = 'counter' AND attempt_id = 'swapped-calls'",
             [], |row| row.get(0),
         )?;
-        let mut attempt: model::Attempt = serde_json::from_slice(&bytes)?;
+        let mut attempt: model::Attempt = ManagedCodec::decode(&bytes)?;
         let saved = attempt.receipt.as_mut().ok_or("saved receipt")?;
         let first = saved.results.remove(&10).ok_or("first call")?;
         let second = saved.results.remove(&11).ok_or("second call")?;
@@ -386,7 +386,7 @@ fn selected_rejects_call_swap() -> TestResult {
         assert_eq!(edges, original);
         writer.execute(
             "UPDATE managed_attempts SET contract = ? WHERE instance_id = 'counter' AND attempt_id = 'swapped-calls'",
-            params![serde_json::to_vec(&attempt)?],
+            params![ManagedCodec::encode(&attempt)?],
         )?;
     }
     for corrupt in [false, true] {
@@ -527,13 +527,13 @@ fn latest_output_binds_receipt() -> TestResult {
             params![name],
             |row| row.get(0),
         )?;
-        let mut attempt: model::Attempt = serde_json::from_slice(&bytes)?;
+        let mut attempt: model::Attempt = ManagedCodec::decode(&bytes)?;
         let receipt = attempt.receipt.as_mut().ok_or("current receipt")?;
         assert_eq!(*receipt, receipts[1]);
         receipt.selected.result_id = receipts[0].selected.result_id.clone();
         writer.execute(
             "UPDATE managed_attempts SET contract = ? WHERE instance_id = ? AND attempt_id = 'later'",
-            params![serde_json::to_vec(&attempt)?, name],
+            params![ManagedCodec::encode(&attempt)?, name],
         )?;
     }
     assert!(matches!(

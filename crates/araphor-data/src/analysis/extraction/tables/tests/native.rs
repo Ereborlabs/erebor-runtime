@@ -434,11 +434,17 @@ fn graph_event_coverage_fields() -> TestResult {
     );
     let manifest = &page.tables["graph_manifest"][0];
     assert_eq!(
-        serde_json::from_slice::<GraphSnapshotV1>(
-            column::<BinaryArray>(manifest, "snapshot")?.value(0)
-        )?,
+        GraphSnapshotV1::decode_native(column::<BinaryArray>(manifest, "snapshot")?.value(0))?,
         *graph
     );
+    let mut damaged = column::<BinaryArray>(manifest, "snapshot")?
+        .value(0)
+        .to_vec();
+    damaged.push(0);
+    assert!(GraphSnapshotV1::decode_native(&damaged).is_err());
+    let mut invalid = graph.clone();
+    invalid.schema_version = 0;
+    assert!(GraphSnapshotV1::decode_native(&invalid.encode_native()?).is_err());
     assert_eq!(page.next_change, Some(graph.witness_deadline_utc_ns));
     assert_eq!(
         column::<UInt64Array>(manifest, "subject_count")?.value(0),
@@ -1277,6 +1283,7 @@ fn native_manifest_budget() -> TestResult {
             0,
             &[],
             (0, 0),
+            false,
             &mut output.sink(&control)
         )?);
         let batch = capture.tables["graph_manifest"]
@@ -1295,6 +1302,7 @@ fn native_manifest_budget() -> TestResult {
             0,
             &[],
             (0, 0),
+            false,
             &mut output.sink(&control)
         )?);
         assert_eq!(capture.tables["graph_manifest"].total_rows, rows);
@@ -1312,6 +1320,7 @@ fn native_manifest_budget() -> TestResult {
         0,
         &[],
         (0, 0),
+        false,
         &mut output.sink(&control),
     );
     assert!(
@@ -1354,6 +1363,7 @@ fn native_manifest_budget() -> TestResult {
         0,
         &[],
         (0, 0),
+        false,
         &mut output.sink(&control)
     )?);
     assert_eq!(capture.tables["graph_manifest"].total_rows, 1);
@@ -1691,12 +1701,10 @@ fn graph_snapshot_deadline() -> TestResult {
         );
         assert_eq!(
             column::<BinaryArray>(batch, "snapshot")?.value(0),
-            fixture.request.body.as_slice()
+            graph.encode_native()?.as_slice()
         );
         assert_eq!(
-            serde_json::from_slice::<GraphSnapshotV1>(
-                column::<BinaryArray>(batch, "snapshot")?.value(0)
-            )?,
+            GraphSnapshotV1::decode_native(column::<BinaryArray>(batch, "snapshot")?.value(0))?,
             *graph
         );
         assert_eq!(page.next_change, (now < deadline).then_some(deadline));
@@ -1738,10 +1746,10 @@ fn graph_snapshot_deadline() -> TestResult {
     expected.graph.subjects = vec![seed];
     expected.graph.edges.clear();
     expected.findings.clear();
-    let expected_body = serde_json::to_vec(&expected)?;
+    let expected_body = expected.encode_native()?;
     assert_eq!(body, expected_body.as_slice());
-    assert_ne!(body, fixture.request.body.as_slice());
-    assert_eq!(serde_json::from_slice::<GraphSnapshotV1>(body)?, expected);
+    assert_ne!(body, graph.encode_native()?.as_slice());
+    assert_eq!(GraphSnapshotV1::decode_native(body)?, expected);
     assert_eq!(page.extraction.witnesses, fixture.request.witnesses);
     assert!(page.extraction.references.iter().any(|reference| reference
         .result()

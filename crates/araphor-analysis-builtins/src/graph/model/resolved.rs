@@ -228,6 +228,16 @@ pub struct GraphFactV1 {
     pub value: GraphFactValueV1,
 }
 
+impl GraphFactV1 {
+    pub fn encode_context(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+        rmp_serde::to_vec_named(self)
+    }
+
+    pub fn decode_context(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error> {
+        rmp_serde::from_slice(bytes)
+    }
+}
+
 impl FindingV1 {
     pub const PACKAGES: [&'static str; 3] = ["HF-PROC-001", "HF-DW-001", "HF-XNODE-001"];
 }

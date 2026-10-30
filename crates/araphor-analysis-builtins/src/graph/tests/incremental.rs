@@ -37,6 +37,101 @@ fn records(count: usize) -> Vec<Observation> {
         .collect()
 }
 
+#[test]
+fn append_basis_matches_complete_continuation() -> TestResult {
+    for detector in [
+        Detector::Process,
+        Detector::Credentials,
+        Detector::Kubernetes,
+    ] {
+        let old = input(detector, &records(2), &[], 100)?;
+        let prior = detector.evaluate(&old)?;
+        let current = input(detector, &records(3), &[], 100)?;
+        let mut complete = current.clone();
+        complete.checkpoint = prior.checkpoint.clone();
+        complete.previous_outputs = normalized_prior(&prior)?;
+        let complete_result = detector.evaluate(&complete)?;
+
+        let progress = Progress::decode(&complete.previous_outputs[6])?;
+        let mut sparse = complete.clone();
+        sparse.checkpoint = Resume::for_append(
+            detector,
+            complete.checkpoint.as_ref().ok_or("checkpoint")?,
+            &current.inputs,
+            &progress,
+        )?;
+        assert!(sparse.checkpoint.is_some());
+        for dataset in &mut sparse.previous_outputs {
+            if dataset.name != "progress" {
+                dataset.batches = dataset
+                    .batches
+                    .iter()
+                    .map(|batch| batch.slice(0, 0))
+                    .collect();
+            }
+        }
+        let (sparse_result, work) = measured(detector, &sparse)?;
+        assert!(work <= 1, "{detector:?} evaluated prior records");
+        let package = detector.descriptor();
+        let sparse_wire = sdk::wire::Output::encode(&package, &sparse, &sparse_result)?;
+        let complete_wire = sdk::wire::Output::encode(&package, &sparse, &complete_result)?;
+        let subjects = |result: &sdk::Output| -> sdk::Result<BTreeSet<GraphSubjectKeyV1>> {
+            let mut keys = SubjectChange::decode(&prior.datasets[0])?
+                .into_iter()
+                .map(|row| row.key)
+                .collect::<BTreeSet<_>>();
+            for row in SubjectRemoval::decode(&result.datasets[1])? {
+                keys.remove(&row.key);
+            }
+            for row in SubjectChange::decode(&result.datasets[0])? {
+                keys.insert(row.key);
+            }
+            Ok(keys)
+        };
+        assert_eq!(subjects(&sparse_result)?, subjects(&complete_result)?);
+        for (left, right) in sparse_wire.datasets.iter().zip(&complete_wire.datasets) {
+            if left.name == "subjects" || left.name == "subject_removals" {
+                continue;
+            }
+            assert!(
+                left == right,
+                "{detector:?} {} differs: sparse {} bytes, complete {} bytes",
+                left.name,
+                left.arrow_ipc.len(),
+                right.arrow_ipc.len()
+            );
+        }
+        assert!(
+            sparse_wire.checkpoint == complete_wire.checkpoint,
+            "{detector:?} checkpoint differs"
+        );
+        assert!(
+            sparse_wire.reasons == complete_wire.reasons,
+            "{detector:?} reasons differ"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn append_basis_rebuilds_for_old_or_restricted_input() -> TestResult {
+    let detector = Detector::Process;
+    let old = input(detector, &records(2), &[], 100)?;
+    let prior = detector.evaluate(&old)?;
+    let checkpoint = prior.checkpoint.as_ref().ok_or("checkpoint")?;
+    let progress = Progress::decode(&prior.datasets[6])?;
+    let mut current = records(3);
+    current[2].position.ordinal = 0;
+    let reordered = input(detector, &current, &[], 100)?;
+    assert!(Resume::for_append(detector, checkpoint, &reordered.inputs, &progress)?.is_none());
+    current[2].position.ordinal = 2;
+    let mut restricted = fact(2, context(ContextClass::InMemory));
+    restricted.sensitivity = ContextSensitivityV1::HostRestricted;
+    let changed = input(detector, &current, &[restricted], 100)?;
+    assert!(Resume::for_append(detector, checkpoint, &changed.inputs, &progress)?.is_none());
+    Ok(())
+}
+
 fn package_state(output: &sdk::Output) -> sdk::Result<GraphPackageStateV1> {
     let checkpoint = output
         .checkpoint
