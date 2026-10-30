@@ -56,7 +56,7 @@ impl NotificationRouter {
                 lifetime_key: b"route".to_vec(),
                 owner_revision: approved.policy.revision,
             },
-            &approved,
+            approved.encode()?,
             expected,
             ContextSensitivityV1::HostRestricted,
         )

@@ -1,5 +1,4 @@
 use super::*;
-use snafu::ResultExt as _;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +30,11 @@ pub struct NotificationObligationV1 {
 }
 
 impl NotificationObligationV1 {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        super::encode_notification(self)
+    }
+
     pub fn delivery_route(
         &self,
         kind: NotificationDeliveryKindV1,
@@ -129,8 +133,7 @@ impl TryFrom<&crate::AnalysisContextVersionV1> for NotificationObligationV1 {
                 && context.key.lifetime_key == b"obligation",
             "notification context owner",
         )?;
-        let state: Self =
-            serde_json::from_slice(&context.body).context(crate::NotificationEncodingSnafu)?;
+        let state: Self = super::decode_notification(&context.body)?;
         state.validate()?;
         NotificationErrorCodeV1::Invalid.require(
             state.key.tenant_id == context.key.tenant_id

@@ -403,8 +403,24 @@ impl AnalysisStore {
                     sensitivity VARCHAR NOT NULL,
                     body BLOB NOT NULL,
                     commit_revision UBIGINT NOT NULL,
+                    version_key BLOB NOT NULL,
                     PRIMARY KEY (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
                 );
+                CREATE UNIQUE INDEX IF NOT EXISTS context_version_key_idx
+                    ON context_versions(version_key);
+                CREATE TABLE IF NOT EXISTS notification_heads (
+                    state_key BLOB PRIMARY KEY,
+                    tenant_id BLOB NOT NULL,
+                    entity_key BLOB NOT NULL,
+                    owner_revision UBIGINT NOT NULL,
+                    commit_revision UBIGINT NOT NULL,
+                    finding_key BLOB,
+                    concern_key BLOB
+                );
+                CREATE INDEX IF NOT EXISTS notification_finding_key_idx
+                    ON notification_heads(finding_key);
+                CREATE INDEX IF NOT EXISTS notification_concern_key_idx
+                    ON notification_heads(concern_key);
                 CREATE TABLE IF NOT EXISTS processor_progress (
                     processor_id VARCHAR NOT NULL,
                     method_version UBIGINT NOT NULL,

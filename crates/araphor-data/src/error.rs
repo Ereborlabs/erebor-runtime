@@ -23,6 +23,18 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Package context encoding failed: {source}"))]
+    PackageContextEncode {
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Package context decoding failed: {source}"))]
+    PackageContextDecode {
+        source: rmp_serde::decode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Package response encoding failed: {source}"))]
     PackageResponseEncode {
         source: rmp_serde::encode::Error,
@@ -47,6 +59,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Analysis key encoding failed: {source}"))]
+    AnalysisKeyEncode {
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Stored artifact is invalid"))]
     StoredArtifact {
         source: Box<Error>,
@@ -61,8 +79,14 @@ pub enum Error {
         location: Location,
     },
     #[snafu(display("Notification encoding failed: {source}"), visibility(pub))]
-    NotificationEncoding {
-        source: serde_json::Error,
+    NotificationEncode {
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Notification decoding failed: {source}"), visibility(pub))]
+    NotificationDecode {
+        source: rmp_serde::decode::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -274,7 +298,10 @@ impl Error {
                     | crate::PackageErrorCodeV1::Unsupported
                     | crate::PackageErrorCodeV1::Limit
             ),
-            Self::PackageEncoding { .. } | Self::PackageArrow { .. } => true,
+            Self::PackageEncoding { .. }
+            | Self::PackageContextEncode { .. }
+            | Self::PackageContextDecode { .. }
+            | Self::PackageArrow { .. } => true,
             Self::AnalysisContract { source, .. }
                 if !matches!(source, araphor_analysis_sdk::Error::Io { .. }) =>
             {
@@ -379,9 +406,10 @@ impl ErrorExt for Error {
                 crate::PackageErrorCodeV1::Unsupported => StatusCode::Unsupported,
                 crate::PackageErrorCodeV1::Incomplete => StatusCode::Unavailable,
             },
-            Self::PackageEncoding { .. } | Self::PackageArrow { .. } => {
-                StatusCode::InvalidArguments
-            }
+            Self::PackageEncoding { .. }
+            | Self::PackageContextEncode { .. }
+            | Self::PackageContextDecode { .. }
+            | Self::PackageArrow { .. } => StatusCode::InvalidArguments,
             Self::PackageResponseEncode { .. } => StatusCode::Internal,
             Self::PackageResponseDecode { .. } => StatusCode::InvalidArguments,
             Self::AnalysisContract { source, .. } => source.status_code(),
@@ -393,7 +421,10 @@ impl ErrorExt for Error {
                 crate::NotificationErrorCodeV1::Conflict => StatusCode::AlreadyExists,
                 crate::NotificationErrorCodeV1::Unavailable => StatusCode::Unavailable,
             },
-            Self::NotificationEncoding { .. } => StatusCode::Internal,
+            Self::NotificationEncode { .. } | Self::AnalysisKeyEncode { .. } => {
+                StatusCode::Internal
+            }
+            Self::NotificationDecode { .. } => StatusCode::IllegalState,
             Self::CanonicalEncoding { .. }
             | Self::DiscoveryInvalid { .. }
             | Self::TraceInvalid { .. }

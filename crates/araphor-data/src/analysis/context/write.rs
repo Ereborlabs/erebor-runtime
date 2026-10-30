@@ -128,9 +128,29 @@ impl AnalysisStore {
         let mut references = Vec::with_capacity(inputs.len());
         for input in inputs {
             let key = &input.key;
+            let notification = (key.owner_id == crate::NOTIFICATION_STATE_OWNER)
+                .then(|| super::super::notification::NotificationKeys::from_context(input))
+                .transpose()?;
+            if key.owner_id == crate::NOTIFICATION_ROUTE_OWNER {
+                crate::ApprovedNotificationRouteV1::try_from(input)?;
+            }
             let imported = (key.owner_id == "discovery-context-v1")
                 .then(|| crate::DiscoveryContextRevisionV1::try_from(input))
                 .transpose()?;
+            if !intern {
+                if let Some((stored, commit_revision)) =
+                    Self::read_context_row_from(writer, &self.root, key)?
+                {
+                    if stored == *input {
+                        self.check_cached_provenance(writer, &stored)?;
+                        references.push(AnalysisContextRefV1 {
+                            key: key.clone(),
+                            commit_revision,
+                        });
+                        continue;
+                    }
+                }
+            }
             Self::validate_context_packages(writer, input)?;
             if let Some(reference) = self.context_retry(writer, input, intern)? {
                 references.push(reference);
@@ -155,9 +175,10 @@ impl AnalysisStore {
                 }
             };
             let sensitivity: &'static str = input.sensitivity.into();
+            let version_key = super::version_key(key)?;
             writer
                 .prepare_cached(
-                    "INSERT INTO context_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO context_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .and_then(|mut statement| {
                     statement.execute(params![
@@ -171,11 +192,15 @@ impl AnalysisStore {
                         sensitivity,
                         input.body.as_slice(),
                         current,
+                        version_key,
                     ])
                 })
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert context version",
                 })?;
+            if let Some(keys) = &notification {
+                self.write_notification_head(writer, input, current, keys)?;
+            }
             references.push(AnalysisContextRefV1 {
                 key: key.clone(),
                 commit_revision: current,
@@ -244,25 +269,29 @@ impl AnalysisStore {
         expected: Option<u64>,
     ) -> Result<()> {
         if let Some(expected) = expected {
-            let latest: Option<u64> = reader
-                .prepare_cached(
-                    "SELECT MAX(owner_revision) FROM context_versions
-                 WHERE tenant_id = ? AND owner_id = ? AND entity_key = ? AND lifetime_key = ?",
-                )
-                .and_then(|mut statement| {
-                    statement.query_row(
-                        params![
-                            key.tenant_id.as_slice(),
-                            key.owner_id,
-                            key.entity_key.as_slice(),
-                            key.lifetime_key.as_slice()
-                        ],
-                        |row| row.get(0),
+            let latest: Option<u64> = if key.owner_id == crate::NOTIFICATION_STATE_OWNER {
+                self.notification_head_revision(reader, key)?
+            } else {
+                reader
+                    .prepare_cached(
+                        "SELECT MAX(owner_revision) FROM context_versions
+                     WHERE tenant_id = ? AND owner_id = ? AND entity_key = ? AND lifetime_key = ?",
                     )
-                })
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read expected context head",
-                })?;
+                    .and_then(|mut statement| {
+                        statement.query_row(
+                            params![
+                                key.tenant_id.as_slice(),
+                                key.owner_id,
+                                key.entity_key.as_slice(),
+                                key.lifetime_key.as_slice()
+                            ],
+                            |row| row.get(0),
+                        )
+                    })
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read expected context head",
+                    })?
+            };
             if latest.unwrap_or(0) != expected
                 || expected.checked_add(1) != Some(key.owner_revision)
             {

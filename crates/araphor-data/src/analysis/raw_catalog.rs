@@ -19,13 +19,21 @@ mod tests {
         let mut guard = store.writer.lock().map_err(|_| "writer lock poisoned")?;
         let writer = guard.as_mut().ok_or("writer closed")?;
         for tenant in [1u8, 5, 6] {
+            let version_key = super::super::context::version_key(&crate::AnalysisContextKeyV1 {
+                tenant_id: [tenant; 16],
+                owner_id: "p".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![1],
+                owner_revision: 1,
+            })?;
             writer.execute(
-                "INSERT INTO context_versions VALUES (?, 'p', ?, ?, 1, 1, NULL, 'Tenant', ?, 1)",
+                "INSERT INTO context_versions VALUES (?, 'p', ?, ?, 1, 1, NULL, 'Tenant', ?, 1, ?)",
                 params![
                     [tenant; 16].as_slice(),
                     [1u8].as_slice(),
                     [1u8].as_slice(),
-                    [1u8, 2, 3].as_slice()
+                    [1u8, 2, 3].as_slice(),
+                    version_key,
                 ],
             )?;
         }

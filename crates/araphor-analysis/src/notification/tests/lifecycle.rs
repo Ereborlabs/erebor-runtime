@@ -78,7 +78,7 @@ fn control_notification_escalation_update() -> TestResult {
 }
 
 #[test]
-fn control_notification_legacy_attempts() -> TestResult {
+fn control_notification_attempt_history_survives_reopen() -> TestResult {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("data");
     let first;
@@ -88,38 +88,15 @@ fn control_notification_legacy_attempts() -> TestResult {
         configure(&router)?;
         let human = grant(NotificationPrincipalV1::Human);
         let sink = Sink::default();
-        let mut history = Vec::new();
         let mut original = None;
         for cursor in 1..=50 {
             commit_finding(&store, finding(cursor, FindingSeverityV1::High), cursor)?;
             assert_eq!(route(&router, 100 + cursor)?, 1);
             assert_eq!(deliver(&router, &sink, 100 + cursor)?, 1);
-            let mut current = router.obligations(&human, 100 + cursor)?.remove(0);
+            let current = router.obligations(&human, 100 + cursor)?.remove(0);
             assert_eq!(current.attempts.len(), 1);
             assert_eq!(current.attempts[0].number, cursor);
-            history.push(current.attempts[0].clone());
             let _ = original.get_or_insert_with(|| current.clone());
-            if cursor == 48 {
-                current.attempts = history.clone();
-                current.attempt_sequence = 0;
-                let expected = current.revision;
-                current.revision += 1;
-                let mut body = serde_json::to_value(&current)?;
-                let _ = body
-                    .as_object_mut()
-                    .ok_or("legacy state object")?
-                    .remove("attempt_sequence");
-                store.commit_context_checked(
-                    &AnalysisContextVersionV1 {
-                        key: NotificationRouter::state_key(&current),
-                        valid_from_utc_ns: None,
-                        valid_until_utc_ns: None,
-                        sensitivity: current.sensitivity,
-                        body: serde_json::to_vec(&body)?,
-                    },
-                    expected,
-                )?;
-            }
         }
         first = original.ok_or("original obligation absent")?;
         assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?.len(), 50);

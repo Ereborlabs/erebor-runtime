@@ -687,7 +687,7 @@ fn context_notification_fields() -> TestResult {
             valid_from_utc_ns: None,
             valid_until_utc_ns: None,
             sensitivity: value.sensitivity,
-            body: serde_json::to_vec(value)?,
+            body: value.encode()?,
         })?;
     }
     let mut selection = AnalysisSelectionV1::tenant(tenant);
@@ -893,7 +893,7 @@ fn context_notification_fields() -> TestResult {
     for id in [[11; 16], [12; 16]] {
         let mut repeated = obligation.clone();
         repeated.key.notification_id = id;
-        let body = serde_json::to_vec(&repeated)?;
+        let body = repeated.encode()?;
         added_bytes += body.len();
         let context = AnalysisContextVersionV1 {
             key: AnalysisContextKeyV1 {
@@ -1026,7 +1026,7 @@ fn context_notification_fields() -> TestResult {
         valid_from_utc_ns: None,
         valid_until_utc_ns: None,
         sensitivity: missing.sensitivity,
-        body: serde_json::to_vec(&missing)?,
+        body: missing.encode()?,
     })?;
     let unscoped = read(&fixture.store, &selection, &["notifications"], 150)?;
     assert_eq!(
@@ -1136,6 +1136,42 @@ fn context_notification_fields() -> TestResult {
     }
     assert!(
         !column::<BooleanArray>(&row(&after, "notifications", 4)?, "finding_available")?.value(0)
+    );
+    let historical_key = AnalysisContextKeyV1 {
+        tenant_id: tenant,
+        owner_id: NOTIFICATION_STATE_OWNER.into(),
+        entity_key: obligation.key.notification_id.to_vec(),
+        lifetime_key: b"obligation".to_vec(),
+        owner_revision: obligation.revision,
+    };
+    let mut revised = obligation.clone();
+    revised.revision += 1;
+    revised.required_action = Some("review".into());
+    fixture.store.commit_context_checked(
+        &AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                owner_revision: revised.revision,
+                ..historical_key.clone()
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: revised.sensitivity,
+            body: revised.encode()?,
+        },
+        historical_key.owner_revision,
+    )?;
+    let current = read(&fixture.store, &selection, &["notifications"], 150)?;
+    assert_eq!(
+        column::<StringArray>(&row(&current, "notifications", 0)?, "required_action")?.value(0),
+        "review"
+    );
+    let mut historical = selection.clone();
+    historical.select_notifications(Selection::Exact(vec![historical_key]))?;
+    let prior = read(&fixture.store, &historical, &["notifications"], 150)?;
+    assert_eq!(notification_ids(&prior)?, vec![vec![7; 16]]);
+    assert_eq!(
+        column::<StringArray>(&row(&prior, "notifications", 0)?, "required_action")?.value(0),
+        "inspect"
     );
     drop((
         before,

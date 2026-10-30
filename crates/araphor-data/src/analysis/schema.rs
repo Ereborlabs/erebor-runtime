@@ -14,6 +14,7 @@ impl AnalysisStore {
         }
         Self::validate_sources(writer, root)?;
         Self::validate_contexts(writer, root)?;
+        Self::validate_notification_heads(writer, root)?;
         Self::validate_traces(writer, root)?;
         Self::validate_trace_receipts(writer, root)?;
         let checks = [
@@ -406,8 +407,18 @@ impl AnalysisStore {
                     lifetime_key,
                     owner_revision,
                 };
-                if Self::read_context_from(writer, root, &key)?.is_none() {
-                    return Self::reject_path(root, "the stored context version is absent");
+                let (context, _) =
+                    Self::read_context_from(writer, root, &key)?.ok_or_else(|| {
+                        crate::AnalysisStateSnafu {
+                            path: root,
+                            reason: "the stored context version is absent",
+                        }
+                        .build()
+                    })?;
+                if key.owner_id == crate::NOTIFICATION_STATE_OWNER {
+                    crate::NotificationObligationV1::try_from(&context)?;
+                } else if key.owner_id == crate::NOTIFICATION_ROUTE_OWNER {
+                    crate::ApprovedNotificationRouteV1::try_from(&context)?;
                 }
                 after = position;
             }
@@ -655,7 +666,8 @@ impl AnalysisStore {
             "next_segment_id FROM store_meta",
             "segment_id, stream_key, tenant_id, identity_json, cpu_id, stream_kind, state, sealed, committed_end, first_cursor, last_cursor, last_intake_utc_ns FROM segments",
             "stream_key, tenant_id, revision, report, commit_revision, ordinal FROM coverage",
-            "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision FROM context_versions",
+            "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision, version_key FROM context_versions",
+            "state_key, tenant_id, entity_key, owner_revision, commit_revision, finding_key, concern_key FROM notification_heads",
             "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision, result_id FROM processor_progress",
             "ref_id, tenant_id, stream_key, durable_cursor, expires_utc_ns, segment_id FROM evidence_refs",
             "ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision, commit_revision FROM context_refs",

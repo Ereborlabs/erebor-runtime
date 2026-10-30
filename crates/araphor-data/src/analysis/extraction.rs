@@ -1367,11 +1367,8 @@ impl AnalysisStore {
         if selection.obligations.is_all() {
             let mut statement = snapshot
                 .prepare(
-                    "SELECT entity_key, lifetime_key, owner_revision FROM context_versions
-                 WHERE tenant_id = ? AND owner_id = ?
-                 QUALIFY ROW_NUMBER() OVER (PARTITION BY entity_key, lifetime_key
-                     ORDER BY owner_revision DESC, commit_revision DESC) = 1
-                 ORDER BY entity_key, lifetime_key LIMIT ?",
+                    "SELECT entity_key, owner_revision FROM notification_heads
+                     WHERE tenant_id = ? ORDER BY entity_key LIMIT ?",
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare notification keys",
@@ -1380,7 +1377,6 @@ impl AnalysisStore {
                 .query_map(
                     params![
                         selection.tenant_id.as_slice(),
-                        crate::NOTIFICATION_STATE_OWNER,
                         limits.key_rows(resolved.key_count())
                     ],
                     |row| {
@@ -1388,8 +1384,8 @@ impl AnalysisStore {
                             tenant_id: selection.tenant_id,
                             owner_id: crate::NOTIFICATION_STATE_OWNER.into(),
                             entity_key: row.get(0)?,
-                            lifetime_key: row.get(1)?,
-                            owner_revision: row.get(2)?,
+                            lifetime_key: b"obligation".to_vec(),
+                            owner_revision: row.get(1)?,
                         })
                     },
                 )

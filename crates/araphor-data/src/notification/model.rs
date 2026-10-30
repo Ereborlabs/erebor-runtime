@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use snafu::ResultExt as _;
 
 use crate::{ContextSensitivityV1, FindingSeverityV1, GraphRevisionV1, Result};
 
@@ -14,6 +15,28 @@ pub use subject::*;
 
 pub const NOTIFICATION_ROUTE_OWNER: &str = "notification-route-v1";
 pub const NOTIFICATION_STATE_OWNER: &str = "notification-state-v1";
+
+fn encode_notification<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    value
+        .serialize(
+            &mut rmp_serde::Serializer::new(&mut bytes)
+                .with_struct_map()
+                .with_bytes(rmp_serde::config::BytesMode::ForceIterables),
+        )
+        .context(crate::NotificationEncodeSnafu)?;
+    Ok(bytes)
+}
+
+fn decode_notification<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
+    let value = T::deserialize(&mut decoder).context(crate::NotificationDecodeSnafu)?;
+    NotificationErrorCodeV1::Invalid.require(
+        decoder.position() == bytes.len() as u64,
+        "notification trailing bytes",
+    )?;
+    Ok(value)
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum NotificationErrorCodeV1 {

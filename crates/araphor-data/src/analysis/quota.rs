@@ -559,14 +559,15 @@ mod tests {
         for tenant in 1_u8..=4 {
             transaction.execute(
                 "INSERT INTO context_versions SELECT ?, 'p', 'e'::BLOB, 'l'::BLOB, i,
-                 1, NULL, 'tenant', 'b'::BLOB, 1 FROM range(1, 1025) t(i)",
-                params![[tenant; 16].as_slice()],
+                 1, NULL, 'tenant', 'b'::BLOB, 1,
+                 (HEX(?) || ':' || i::VARCHAR)::BLOB FROM range(1, 1025) t(i)",
+                params![[tenant; 16].as_slice(), [tenant; 16].as_slice()],
             )?;
             store.check_revision_limits(&transaction, [tenant; 16])?;
         }
         transaction.execute(
             "INSERT INTO context_versions VALUES (?, 'p', 'e'::BLOB, 'l'::BLOB, 1025,
-             1, NULL, 'tenant', 'b'::BLOB, 1)",
+             1, NULL, 'tenant', 'b'::BLOB, 1, 'quota-4-1025'::BLOB)",
             params![[4_u8; 16].as_slice()],
         )?;
         assert!(matches!(
@@ -670,7 +671,7 @@ mod tests {
         transaction.execute(
             "INSERT INTO context_versions SELECT ?, owner_id, entity_key, lifetime_key,
                 owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body,
-                commit_revision FROM context_versions",
+                commit_revision, ('tenant2:' || HEX(version_key))::BLOB FROM context_versions",
             params![[2u8; 16].as_slice()],
         )?;
         assert_eq!(

@@ -1,6 +1,5 @@
 use super::*;
 use araphor_data::analysis::NotificationLookup;
-use snafu::ResultExt as _;
 
 impl NotificationRouter {
     pub(super) fn state(&self, key: NotificationKeyV1) -> Result<NotificationObligationV1> {
@@ -140,8 +139,10 @@ impl NotificationRouter {
             }
             .build()
         })?;
-        state.validate()?;
-        let result = self.persist(Self::state_key(state), state, previous, state.sensitivity);
+        let result = (|| {
+            let body = state.encode()?;
+            self.persist(Self::state_key(state), body, previous, state.sensitivity)
+        })();
         if result.is_err() {
             state.revision = previous;
         }
@@ -151,11 +152,10 @@ impl NotificationRouter {
     pub(super) fn persist(
         &self,
         key: AnalysisContextKeyV1,
-        value: &impl Serialize,
+        body: Vec<u8>,
         expected: u64,
         sensitivity: ContextSensitivityV1,
     ) -> Result<()> {
-        let body = serde_json::to_vec(value).context(NotificationEncodingSnafu)?;
         self.store.commit_context_checked(
             &AnalysisContextVersionV1 {
                 key,

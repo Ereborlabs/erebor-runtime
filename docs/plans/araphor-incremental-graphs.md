@@ -453,3 +453,27 @@ cursors; five notices existed at timeout. The final panic-free lease layout
 has not been measured with that workload.
 The command-level memory peak included compilation and is not a valid runtime
 memory measure. Reader concurrency alone does not establish an end-to-end gain.
+
+### Native notification and package context rows
+
+**Typed notification and context storage: Done. Backlog deadline and 100-fold target: Not done.**
+Data now selects current notifications through a stored head index. It stores
+notification state, routes, obligations, and native package contexts as strict
+binary values. Package collection stages typed context roots in its transaction
+before it releases unused images. A failed collection rolls back that staging.
+An exact context retry checks the stored body and package provenance before it
+returns the existing revision.
+
+All eight focused package context tests passed, including a 1,025-artifact
+closure, tenant scope, corrupt bytes, restart, and collection rollback. The
+large closure test took 281.66 seconds. The focused notification tests passed;
+the one wall-clock-sensitive Analysis test passed when rerun alone.
+
+Temporary probes measured six Graph cuts on the unchanged 1,592-event backlog
+case. Context writes took 8,910 milliseconds in the earlier run and 4,229
+milliseconds after exact retry. The first insert still took 1,510 milliseconds.
+Each later cut took 517 to 565 milliseconds for three exact retries. The full
+test still failed its 90-second Follow deadline after 126.35 seconds. The
+earlier failed run took 124.61 seconds. The local saving did not establish an
+end-to-end speed gain. Stored package dependencies, Discovery image pins, and
+other paths still use JSON. The no-JSON requirement is **Not done**.

@@ -1025,6 +1025,25 @@ speed gain. Profiled Graph cuts spent about 15.7 seconds each in repeated
 DataFusion physical planning. Backlog qualification and the 100-fold target
 remain **Not done**.
 
+### Exact package context retries and collection
+
+[AnalysisStore::context_rows](../../crates/araphor-data/src/analysis/context/write.rs) compares an ordinary retry with the stored context before it validates the full package closure
+  -> [AnalysisStore::check_cached_provenance](../../crates/araphor-data/src/analysis/context/provenance.rs) checks each current package row and falls back to full validation when a row changes
+  -> [NativePackageContext](../../crates/araphor-data/src/package/provenance.rs) uses strict MessagePack with an exact-byte decode check
+
+[AnalysisStore::stage_package_context_roots](../../crates/araphor-data/src/analysis/packages/collection.rs) reads every retained native package context in the collection transaction
+  -> [AnalysisStore::release_package_rows](../../crates/araphor-data/src/analysis/packages/collection.rs) uses the staged typed roots to keep referenced packages
+  -> [AnalysisStore::drop_package_context_roots](../../crates/araphor-data/src/analysis/packages/collection.rs) clears the temporary table before a successful commit
+
+All eight focused package context tests passed. They cover a 1,025-artifact
+closure, current and historical roots, tenant scope, exact retries, corrupt
+binary data, backup and reopen, and rollback of failed staging. Temporary
+probes were removed after the unchanged backlog run. Six Graph cuts spent
+4,229 milliseconds in context writes, versus 8,910 milliseconds in the earlier
+run. The full test still failed the 90-second Follow deadline after 126.35
+seconds, versus 124.61 seconds earlier. The local change has no proven total
+speed gain. Package dependency and Discovery definition storage still use JSON.
+
 ## Native physical plan reuse
 
 [SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs) checks native logical expressions, views, and source ports before it enables plan reuse

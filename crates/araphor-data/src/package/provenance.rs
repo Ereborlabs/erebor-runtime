@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use crate::{
-    AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, PackageEncodingSnafu,
-    Result,
+    AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1,
+    PackageContextDecodeSnafu, PackageContextEncodeSnafu, Result,
 };
 
 use super::PackageErrorCodeV1 as Code;
@@ -65,14 +65,14 @@ impl AnalysisContextVersionV1 {
             return Err(Code::Invalid.error("native package context tenant"));
         }
         NativePackageContext::check_output(value.bundle(), package, export, output)?;
-        let body = serde_json::to_vec(&NativePackageContext {
+        let body = rmp_serde::to_vec_named(&NativePackageContext {
             root: value.bundle().root.clone(),
             digest: value.digest().into(),
             package: package.clone(),
             export: export.into(),
             output: output.into(),
         })
-        .context(PackageEncodingSnafu)?;
+        .context(PackageContextEncodeSnafu)?;
         Ok(Self {
             key: AnalysisContextKeyV1 {
                 tenant_id: tenant,
@@ -92,8 +92,12 @@ impl AnalysisContextVersionV1 {
         if self.key.owner_id != "native-package-v1" {
             return Ok(None);
         }
-        let reference: NativePackageContext =
-            serde_json::from_slice(&self.body).context(PackageEncodingSnafu)?;
+        let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(&self.body));
+        let reference =
+            NativePackageContext::deserialize(&mut decoder).context(PackageContextDecodeSnafu)?;
+        if decoder.position() != self.body.len() as u64 {
+            return Err(Code::Invalid.error("native package context trailing bytes"));
+        }
         if self.sensitivity != ContextSensitivityV1::Tenant
             || self.valid_from_utc_ns.is_some()
             || self.valid_until_utc_ns.is_some()

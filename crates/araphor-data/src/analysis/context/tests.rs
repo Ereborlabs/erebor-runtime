@@ -395,6 +395,14 @@ fn context_batch_interns() -> TestResult {
 
 #[test]
 fn context_batch_packages() -> TestResult {
+    #[derive(serde::Serialize)]
+    struct MissingPackage<'a> {
+        root: crate::PackageRefV1,
+        digest: &'a str,
+        package: crate::PackageRefV1,
+        export: &'a str,
+        output: &'a str,
+    }
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("analysis"))?;
     let first = context_value(1, 1);
@@ -402,12 +410,17 @@ fn context_batch_packages() -> TestResult {
     invalid.key.owner_id = "native-package-v1".into();
     invalid.valid_from_utc_ns = None;
     let digest = format!("sha256:{}", "0".repeat(64));
-    invalid.body = serde_json::to_vec(&serde_json::json!({
-        "root": {"package_id": "absent", "revision": "1"},
-        "digest": digest,
-        "package": {"package_id": "absent", "revision": "1"},
-        "export": "run", "output": "rows"
-    }))?;
+    let absent = crate::PackageRefV1 {
+        package_id: "absent".into(),
+        revision: "1".into(),
+    };
+    invalid.body = rmp_serde::to_vec_named(&MissingPackage {
+        root: absent.clone(),
+        digest: &digest,
+        package: absent,
+        export: "run",
+        output: "rows",
+    })?;
     invalid.key.entity_key = crate::Qualification::digest(&invalid.body).into_bytes();
     invalid.key.lifetime_key = digest.into_bytes();
     let changes = store.subscribe_revision();

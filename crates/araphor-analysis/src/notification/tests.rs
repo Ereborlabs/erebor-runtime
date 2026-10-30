@@ -5,7 +5,6 @@ use araphor_data::{
     GraphRevisionV1, GraphSnapshotV1, GraphSubjectKeyV1, GraphSubjectKindV1, GraphVersionV1,
     ProcessorScopeV1, ValidatedEvidenceBatchV1, GRAPH_PROCESSOR,
 };
-use snafu::ResultExt as _;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -235,19 +234,23 @@ pub(crate) fn commit_finding_at(
         context_notice_revision: 0,
         witness_deadline_utc_ns: now + araphor_data::GRAPH_WITNESS_TTL_NS,
     };
-    store.commit_graph(
-        &AnalysisResultCommitV1 {
+    store.commit_graph_snapshot(
+        AnalysisResultCommitV1 {
             scope,
             expected_cursor: first_cursor - 1,
             consumed_cursor: cursor,
             coverage_revision: 0,
             context_revision: 0,
             result_id: format!("graph-test-{cursor}"),
-            body: serde_json::to_vec(&snapshot).context(NotificationEncodingSnafu)?,
+            body: Vec::new(),
             created_utc_ns: now,
             witnesses,
             context_refs: vec![],
         },
+        araphor_data::analysis::CanonicalGraph::new(snapshot)?,
+        &[],
+        &[],
+        &[],
         true,
         || Ok(()),
     )?;

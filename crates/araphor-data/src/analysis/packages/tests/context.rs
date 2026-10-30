@@ -1,6 +1,27 @@
 use super::*;
 use crate::{PackageBundle, PackageBundleV1, PackageRefV1};
 
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+struct StoredContext {
+    root: PackageRefV1,
+    digest: String,
+    package: PackageRefV1,
+    export: String,
+    output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation: Option<u64>,
+}
+
+impl StoredContext {
+    fn from_context(context: &crate::AnalysisContextVersionV1) -> crate::Result<Self> {
+        rmp_serde::from_slice(&context.body).context(crate::PackageContextDecodeSnafu)
+    }
+
+    fn encode(&self) -> crate::Result<Vec<u8>> {
+        rmp_serde::to_vec_named(self).context(crate::PackageContextEncodeSnafu)
+    }
+}
+
 fn bundle() -> crate::Result<PackageBundleV1> {
     let mut root = package("native-root", "v1")?.decode_artifact()?;
     let dependency = package("native-dependency", "v1")?.decode_artifact()?;
@@ -79,7 +100,7 @@ fn package_context_retains_closure() -> TestResult {
     assert_eq!(revisions.len(), 1025);
     let dependencies = &revisions[0].dependencies;
     assert_eq!(dependencies.len(), 1024);
-    assert!(serde_json::to_vec(dependencies)?.len() > 1024 * 1024);
+    assert!(rmp_serde::to_vec_named(dependencies)?.len() > 1024 * 1024);
     let initial = store.meta()?;
     assert!(store
         .install_package(&revisions, || crate::AnalysisReadDeniedSnafu.fail())
@@ -219,6 +240,116 @@ fn package_context_tenant_scope() -> TestResult {
 }
 
 #[test]
+fn package_context_exact_retry_keeps_revision() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let bundle = PackageBundle::try_from(bundle()?)?;
+    store.install_package(
+        &PackageRevisionV1::from_bundle(&bundle, [1; 16])?,
+        || Ok(()),
+    )?;
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &bundle.bundle().root,
+        "model",
+        "rows",
+    )?;
+    let revision = store.commit_context(&context)?;
+    let committed = store.meta()?;
+    assert_eq!(store.commit_context(&context)?, revision);
+    assert_eq!(store.meta()?, committed);
+    assert_eq!(store.context_version(&context.key)?, Some(context.clone()));
+    assert_eq!(store.commit_context(&context)?, revision);
+    assert_eq!(store.meta()?, committed);
+    drop(store);
+    let reopened = AnalysisStore::open(&root)?;
+    let before = reopened.meta()?;
+    assert_eq!(reopened.commit_context(&context)?, revision);
+    assert_eq!(reopened.meta()?, before);
+    Ok(())
+}
+
+#[test]
+fn package_context_collection_failure_cleans_staging() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let bundle = PackageBundle::try_from(bundle()?)?;
+    store.install_package(
+        &PackageRevisionV1::from_bundle(&bundle, [1; 16])?,
+        || Ok(()),
+    )?;
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &bundle.bundle().root,
+        "model",
+        "rows",
+    )?;
+    store.commit_context(&context)?;
+    store.writer()?.get_mut()?.execute(
+        "UPDATE context_versions SET body = ? WHERE owner_id = 'native-package-v1'",
+        duckdb::params![vec![0xc1_u8]],
+    )?;
+    let before = store.meta()?;
+    assert!(store.collect_package_admissions().is_err());
+    assert_eq!(store.meta()?, before);
+    assert!(store
+        .writer()?
+        .get()?
+        .query_row(
+            "SELECT count(*) FROM temp.main.package_context_gc_roots",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .is_err());
+    store.writer()?.get_mut()?.execute(
+        "UPDATE context_versions SET body = ? WHERE owner_id = 'native-package-v1'",
+        duckdb::params![context.body],
+    )?;
+    store.collect_package_admissions()?;
+    assert!(store
+        .package_revision([1; 16], &bundle.bundle().root.package_id, "v1")?
+        .is_some());
+    assert_eq!(store.meta()?, before);
+    Ok(())
+}
+
+#[test]
+fn package_context_collection_keeps_tenant_scope() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let bundle = PackageBundle::try_from(bundle()?)?;
+    for tenant in [1, 2] {
+        store.install_package(
+            &PackageRevisionV1::from_bundle(&bundle, [tenant; 16])?,
+            || Ok(()),
+        )?;
+    }
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &bundle.bundle().root,
+        "model",
+        "rows",
+    )?;
+    store.commit_context(&context)?;
+    store.writer()?.get_mut()?.execute(
+        "UPDATE context_versions SET body = ? WHERE tenant_id = ?",
+        duckdb::params![vec![0xc1_u8], [1_u8; 16].as_slice()],
+    )?;
+    store.collect_package([2; 16], "native-root", "v1")?;
+    assert!(store
+        .package_revision([2; 16], "native-root", "v1")?
+        .is_none());
+    assert!(store
+        .package_revision([1; 16], "native-root", "v1")?
+        .is_some());
+    Ok(())
+}
+
+#[test]
 fn package_context_checks_artifact() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
@@ -235,32 +366,28 @@ fn package_context_checks_artifact() -> TestResult {
         "model",
         "rows",
     )?;
-    let original: serde_json::Value = serde_json::from_slice(&context.body)?;
+    let original = StoredContext::from_context(&context)?;
     let initial = store.meta()?;
     for change in 0..7 {
         let mut candidate = context.clone();
         let mut body = original.clone();
         match change {
-            0 => body["digest"] = serde_json::json!("wrong"),
+            0 => body.digest = "wrong".into(),
             1 => {
-                body["root"] = serde_json::to_value(PackageRefV1 {
+                body.root = PackageRefV1 {
                     package_id: "absent".into(),
                     revision: "v1".into(),
-                })?
+                }
             }
-            2 => body["export"] = serde_json::json!("absent"),
-            3 => body["output"] = serde_json::json!("absent"),
-            4 => body["generation"] = serde_json::json!(1),
+            2 => body.export = "absent".into(),
+            3 => body.output = "absent".into(),
+            4 => body.generation = Some(1),
             5 => candidate.key.tenant_id = [2; 16],
             _ => candidate.sensitivity = crate::ContextSensitivityV1::Public,
         }
-        candidate.body = serde_json::to_vec(&body)?;
+        candidate.body = body.encode()?;
         candidate.key.entity_key = crate::Qualification::digest(&candidate.body).into_bytes();
-        candidate.key.lifetime_key = body["digest"]
-            .as_str()
-            .ok_or("digest absent")?
-            .as_bytes()
-            .to_vec();
+        candidate.key.lifetime_key = body.digest.as_bytes().to_vec();
         assert!(store.intern_context(&candidate).is_err(), "change {change}");
         assert_eq!(store.meta()?, initial);
     }
@@ -278,6 +405,34 @@ fn package_context_checks_artifact() -> TestResult {
     assert!(store.context_version(&context.key).is_err());
     drop(store);
     assert!(AnalysisStore::open(&root).is_err());
+    Ok(())
+}
+
+#[test]
+fn package_context_binary_rejects_trailing_and_malformed() -> TestResult {
+    let bundle = PackageBundle::try_from(bundle()?)?;
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &bundle.bundle().root,
+        "model",
+        "rows",
+    )?;
+    assert!(context.package_provenance()?.is_some());
+    let mut trailing = context.clone();
+    trailing.body.push(0);
+    trailing.key.entity_key = crate::Qualification::digest(&trailing.body).into_bytes();
+    assert!(matches!(
+        trailing.package_provenance(),
+        Err(crate::Error::Package {
+            code: crate::PackageErrorCodeV1::Invalid,
+            field: "native package context trailing bytes",
+            ..
+        })
+    ));
+    let mut malformed = context;
+    malformed.body = vec![0xc1];
+    assert!(malformed.package_provenance().is_err());
     Ok(())
 }
 
@@ -317,9 +472,9 @@ fn package_context_pins_dependency_artifact() -> TestResult {
         "rows",
     )?;
     assert_ne!(context.key, root_context.key);
-    let body: serde_json::Value = serde_json::from_slice(&context.body)?;
-    assert_eq!(body["root"], serde_json::to_value(&bundle.bundle().root)?);
-    assert_eq!(body["package"], serde_json::to_value(&dependency)?);
+    let body = StoredContext::from_context(&context)?;
+    assert_eq!(body.root, bundle.bundle().root);
+    assert_eq!(body.package, dependency);
     let pin = store.intern_context(&context)?;
     for (package, export, output) in [
         (
@@ -349,8 +504,8 @@ fn package_context_pins_dependency_artifact() -> TestResult {
     let before = store.meta()?;
     let mut forged = context.clone();
     let mut body = body;
-    body["package"]["revision"] = "missing".into();
-    forged.body = serde_json::to_vec(&body)?;
+    body.package.revision = "missing".into();
+    forged.body = body.encode()?;
     forged.key.entity_key = crate::Qualification::digest(&forged.body).into_bytes();
     assert!(store.intern_context(&forged).is_err());
     assert_eq!(store.meta()?, before);
@@ -385,11 +540,11 @@ fn native_context_rejects_corruption() -> TestResult {
             let writer = writer.get_mut()?;
             match fault {
                 "body" => {
-                    let mut body: serde_json::Value = serde_json::from_slice(&context.body)?;
-                    body["output"] = serde_json::json!("changed");
+                    let mut body = StoredContext::from_context(&context)?;
+                    body.output = "changed".into();
                     writer.execute(
                         "UPDATE context_versions SET body = ? WHERE owner_id = ?",
-                        duckdb::params![serde_json::to_vec(&body)?, "native-package-v1"],
+                        duckdb::params![body.encode()?, "native-package-v1"],
                     )?;
                 }
                 "artifact" => {
@@ -465,7 +620,7 @@ fn cached_context_checks_dependency() -> TestResult {
     let context = crate::AnalysisContextVersionV1::from_package(
         &bundle,
         [1; 16],
-        &dependency,
+        &bundle.bundle().root,
         "model",
         "rows",
     )?;
@@ -475,6 +630,25 @@ fn cached_context_checks_dependency() -> TestResult {
         "DELETE FROM package_revisions WHERE package_id = ?",
         duckdb::params![dependency.package_id],
     )?;
+    let before = store.meta()?;
+    let failure = store
+        .commit_context(&context)
+        .err()
+        .ok_or("missing dependency accepted on exact retry")?;
+    assert_eq!(
+        erebor_runtime_error::ErrorExt::status_code(&failure),
+        erebor_runtime_error::StatusCode::IllegalState
+    );
+    assert!(matches!(
+        failure,
+        crate::Error::StoredArtifact { source, .. }
+            if matches!(source.as_ref(), crate::Error::Package {
+                code: crate::PackageErrorCodeV1::Missing,
+                field: "installed image artifact",
+                ..
+            })
+    ));
+    assert_eq!(store.meta()?, before);
     assert!(store.context_version(&context.key).is_err());
     Ok(())
 }

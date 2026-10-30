@@ -54,6 +54,12 @@ fn optional_bytes_keep_history() -> TestResult {
         .ok_or("route absent")?;
     assert!(route.body.len() > 32 * 1024);
     assert_eq!(ApprovedNotificationRouteV1::try_from(&route)?.grant, human);
+    let mut trailing = route.clone();
+    trailing.body.push(0);
+    assert!(ApprovedNotificationRouteV1::try_from(&trailing).is_err());
+    let mut malformed = route.clone();
+    malformed.body.clear();
+    assert!(ApprovedNotificationRouteV1::try_from(&malformed).is_err());
     let mut finding = finding(1, FindingSeverityV1::High);
     finding.finding_id = format!("finding:{}", "f".repeat(33 * 1024));
     let reference = NotificationFindingRefV1 {

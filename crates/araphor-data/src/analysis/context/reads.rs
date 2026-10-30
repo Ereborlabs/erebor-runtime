@@ -46,6 +46,9 @@ impl AnalysisStore {
         if tenant == [0; 16] || owner.is_empty() || entity.is_empty() || lifetime.is_empty() {
             return self.reject("the context head scope is invalid");
         }
+        if owner == crate::NOTIFICATION_STATE_OWNER && lifetime == b"obligation" {
+            return self.notification_state_head(tenant, entity);
+        }
         self.read_snapshot(|reader| {
             let revision: Option<u64> = reader
                 .query_row(
@@ -105,38 +108,61 @@ impl AnalysisStore {
         root: &Path,
         key: &AnalysisContextKeyV1,
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
-        let stored: Option<ContextRow> = connection
+        let version_key = super::version_key(key)?;
+        let stored: Option<(Vec<u8>, String, Vec<u8>, Vec<u8>, u64, ContextRow)> = connection
             .prepare_cached(
-                "SELECT valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision
-                 FROM context_versions WHERE tenant_id = ? AND owner_id = ? AND entity_key = ?
-                 AND lifetime_key = ? AND owner_revision = ?",
+                "SELECT tenant_id, owner_id, entity_key, lifetime_key, owner_revision,
+                    valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision
+                 FROM context_versions WHERE version_key = ?",
             )
             .and_then(|mut statement| {
-                statement.query_row(
-                    params![
-                        key.tenant_id.as_slice(),
-                        key.owner_id,
-                        key.entity_key.as_slice(),
-                        key.lifetime_key.as_slice(),
-                        key.owner_revision,
-                    ],
-                    |row| {
-                        Ok((
-                            row.get(0)?,
-                            row.get(1)?,
-                            row.get(2)?,
-                            row.get(3)?,
-                            row.get(4)?,
-                        ))
-                    },
-                )
+                statement.query_row(params![version_key], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        (
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                            row.get(8)?,
+                            row.get(9)?,
+                        ),
+                    ))
+                })
             })
             .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read context version",
             })?;
         stored
-            .map(|stored| Self::decode_context_row(root, key.clone(), stored))
+            .map(
+                |(tenant, owner_id, entity_key, lifetime_key, owner_revision, stored)| {
+                    let tenant_id = tenant.try_into().map_err(|_| {
+                        crate::AnalysisStateSnafu {
+                            path: root,
+                            reason: "the context version index tenant is invalid",
+                        }
+                        .build()
+                    })?;
+                    let stored_key = AnalysisContextKeyV1 {
+                        tenant_id,
+                        owner_id,
+                        entity_key,
+                        lifetime_key,
+                        owner_revision,
+                    };
+                    if &stored_key != key {
+                        return Self::reject_path(
+                            root,
+                            "the context version index has a foreign row",
+                        );
+                    }
+                    Self::decode_context_row(root, stored_key, stored)
+                },
+            )
             .transpose()
     }
 

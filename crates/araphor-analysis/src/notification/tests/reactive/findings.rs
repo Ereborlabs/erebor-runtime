@@ -18,15 +18,15 @@ fn revise_finding(store: &AnalysisStore, result_id: &str, next: FindingV1, now: 
     assert_eq!(cursor, 1);
     snapshot.previous_result_id = Some(prior);
     snapshot.findings[0] = next.clone();
-    store.commit_graph(
-        &AnalysisResultCommitV1 {
+    store.commit_graph_snapshot(
+        AnalysisResultCommitV1 {
             scope: snapshot.scope.clone(),
             expected_cursor: cursor,
             consumed_cursor: cursor,
             coverage_revision: 0,
             context_revision: 0,
             result_id: result_id.into(),
-            body: serde_json::to_vec(&snapshot)?,
+            body: Vec::new(),
             created_utc_ns: now,
             witnesses: snapshot
                 .input_manifest
@@ -40,6 +40,10 @@ fn revise_finding(store: &AnalysisStore, result_id: &str, next: FindingV1, now: 
                 .collect(),
             context_refs: Vec::new(),
         },
+        araphor_data::analysis::CanonicalGraph::new(snapshot.clone())?,
+        &[],
+        &[],
+        &[],
         false,
         || Ok(()),
     )?;

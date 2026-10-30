@@ -1,5 +1,4 @@
 use super::*;
-use snafu::ResultExt as _;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -47,6 +46,12 @@ pub struct ApprovedNotificationRouteV1 {
     pub approved_utc_ns: u64,
 }
 
+impl ApprovedNotificationRouteV1 {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        super::encode_notification(self)
+    }
+}
+
 impl TryFrom<&crate::AnalysisContextVersionV1> for ApprovedNotificationRouteV1 {
     type Error = crate::Error;
 
@@ -57,8 +62,7 @@ impl TryFrom<&crate::AnalysisContextVersionV1> for ApprovedNotificationRouteV1 {
                 && context.sensitivity == ContextSensitivityV1::HostRestricted,
             "route context owner",
         )?;
-        let route: Self =
-            serde_json::from_slice(&context.body).context(crate::NotificationEncodingSnafu)?;
+        let route: Self = super::decode_notification(&context.body)?;
         route.policy.validate()?;
         route.grant.validate()?;
         NotificationErrorCodeV1::Invalid.require(

@@ -133,7 +133,9 @@ impl AnalysisStore {
             "UPDATE package_images SET installed = false, commit_revision = ? WHERE tenant_id = ? AND package_id = ? AND revision = ? AND digest = ?",
             params![revision, tenant.as_slice(), image.package_id, image.revision, expected.digest],
         ).context(AnalysisDatabaseSnafu { operation: "uninstall exact image" })?;
+        self.stage_package_context_roots(&transaction, Some(tenant))?;
         self.collect_package_rows(&transaction, tenant, &image.package_id, &image.revision)?;
+        Self::drop_package_context_roots(&transaction)?;
         self.check_revision_limits(&transaction, tenant)?;
         Self::record_revision(
             &transaction,

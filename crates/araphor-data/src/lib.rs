@@ -18,8 +18,8 @@ pub use discovery::*;
 pub(crate) use error::*;
 pub use error::{
     AnalysisContractSnafu, DiscoveryConflictSnafu, DiscoveryEncodingSnafu, DiscoveryInvalidSnafu,
-    EvidenceDecodeSnafu, GraphEncodingSnafu, GraphInvalidSnafu, NotificationEncodingSnafu,
-    NotificationSnafu, PackageEncodingSnafu, PackageSnafu, RetainedRangeExpiredSnafu,
+    EvidenceDecodeSnafu, GraphEncodingSnafu, GraphInvalidSnafu, NotificationSnafu,
+    PackageEncodingSnafu, PackageSnafu, RetainedRangeExpiredSnafu,
 };
 pub use error::{Error, Result};
 pub use evidence::{

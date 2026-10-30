@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use snafu::ResultExt as _;
 
 use super::AnalysisStore;
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, Result};
@@ -17,6 +18,17 @@ type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 pub use araphor_analysis_builtins::graph::AnalysisContextKeyV1;
 
 pub use araphor_analysis_builtins::graph::ContextSensitivityV1;
+
+pub(in crate::analysis) fn version_key(key: &AnalysisContextKeyV1) -> Result<Vec<u8>> {
+    rmp_serde::to_vec(&(
+        key.tenant_id,
+        &key.owner_id,
+        &key.entity_key,
+        &key.lifetime_key,
+        key.owner_revision,
+    ))
+    .context(crate::AnalysisKeyEncodeSnafu)
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AnalysisContextVersionV1 {

@@ -1,7 +1,6 @@
 use std::sync::{Arc, Mutex};
 
 use araphor_data::*;
-use serde::Serialize;
 
 use crate::Result;
 
