@@ -48,7 +48,10 @@ impl AnalysisStore {
         let ports = model
             .inputs
             .iter()
-            .filter(|port| !contract.generated(&port.port.name))
+            .filter(|port| {
+                !contract.generated(&port.port.name)
+                    && !matches!(&port.source, sdk::InputSource::Lookup(_))
+            })
             .map(|port| port.port.clone())
             .collect::<Vec<_>>();
         let datasets = changes
@@ -160,7 +163,10 @@ impl AnalysisStore {
         let names = model
             .inputs
             .iter()
-            .filter(|port| !contract.generated(&port.port.name))
+            .filter(|port| {
+                !contract.generated(&port.port.name)
+                    && !matches!(&port.source, sdk::InputSource::Lookup(_))
+            })
             .map(|port| port.port.name.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         if changes
@@ -197,7 +203,9 @@ impl AnalysisStore {
             })
             .transpose()?;
         for (slot, port) in record.inputs.iter().enumerate() {
-            if port.name == contract.reset {
+            if port.name == contract.reset
+                || matches!(&model.inputs[slot].source, sdk::InputSource::Lookup(_))
+            {
                 continue;
             }
             let (basis, name) = match contract.ports.iter().find(|pair| pair.before == port.name) {

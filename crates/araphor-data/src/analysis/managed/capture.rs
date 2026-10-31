@@ -115,6 +115,10 @@ impl AnalysisStore {
                         }
                         let mut state = std::sync::Arc::clone(state);
                         std::sync::Arc::make_mut(&mut state).reusable = reuse
+                            && state
+                                .retained
+                                .as_ref()
+                                .is_none_or(|saved| saved.changes.is_none())
                             && matches!(&instance.spec.destination, ManagedDestination::Graph { calls, .. } if calls.contains(call))
                             && matches!(
                                 instance.spec.manifest.calls[call].target.as_str(),
@@ -159,6 +163,7 @@ impl AnalysisStore {
                     // The decoded state owns its buffers; the IPC payload has been released.
                     output.input_bytes -= payload;
                     state.reusable = reuse
+                        && (state.native_graph || !continuation)
                         && matches!(&instance.spec.destination,
                             ManagedDestination::Graph { calls, .. } if calls.contains(call))
                         && matches!(
@@ -393,11 +398,13 @@ impl AnalysisStore {
                 Ok(decoded)
             })
             .transpose()?;
-        let continuation = model
-            .checkpoint
-            .as_ref()
-            .is_some_and(|spec| spec.resume_input_changes);
-        let native = araphor_analysis_builtins::graph::Detector::supports(model);
+        let continuation = model.change_inputs.is_some()
+            || model
+                .checkpoint
+                .as_ref()
+                .is_some_and(|spec| spec.resume_input_changes);
+        let native = model.change_inputs.is_none()
+            && araphor_analysis_builtins::graph::Detector::supports(model);
         Ok((
             ManagedPrior {
                 revision,

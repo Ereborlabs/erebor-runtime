@@ -1,7 +1,7 @@
 # Araphor retained execution state review
 
-This guide covers retained state in `621665a6a` and the change-input working
-tree based on that commit. The changes remove repeated saved-call reads and
+This guide covers retained state, change inputs, and membership in
+`6a61cd89a`, plus the lookup working tree based on that commit. The changes remove repeated saved-call reads and
 deliver declared input changes to packages. The parent
 plan is [reactive execution latency](../plans/araphor-reactive-execution-latency.md).
 
@@ -83,7 +83,8 @@ cannot retain these memory references and restores state from the store.
 [ChangeInputs](../../crates/araphor-analysis-sdk/src/model/changes.rs) names
 ordinary input ports. Each pair has a `before` port for removed rows and an
 `after` port for inserted rows. A separate reset port has one non-null Bool
-row. The model declares a resumable checkpoint. The descriptor fragment is:
+row. A guest checkpoint is optional. A stateful model declares a resumable
+checkpoint. The descriptor fragment is:
 
 ```yaml
 change_inputs:
@@ -120,6 +121,26 @@ Current support inputs remain ordinary complete inputs. A missing base,
 changed parameters, or changed support input resets the whole invocation.
 Reset supplies empty before ports and complete after targets. Reset also
 clears the checkpoint and previous outputs.
+
+An [InputSource::Lookup](../../crates/araphor-analysis-sdk/src/model.rs)
+contains native SQL that executes after the difference plans. Admission
+prepares that SQL and rejects caller overrides. The input dependency graph
+rejects a target or stable support query that reads a late lookup, before
+port, or reset port. Lookup queries can read the delivered before, after,
+reset, and earlier lookup ports. Their raw source dependencies share the
+captured snapshot. Native row numbering supplies zero-based `__row_index`
+values before lookup filters and joins.
+
+Lookup ports retain bound-input provenance as well as durable dependencies.
+A lookup over removed rows inherits their historical revision and coverage.
+Data stores delivered lookup rows for exact replay. Data excludes lookup
+rows from the target cache and support-reset comparison. A lookup source
+change can therefore invoke a package when the main row difference is empty.
+
+A stateless package retains no guest checkpoint. Data still retains its
+exact committed target and base. Commit and replay validate the reset flag
+against that base independently of guest checkpoint presence. Stateful
+packages retain their existing checkpoint/reset checks.
 
 The SDK rejects output evidence links to before and reset ports. A new
 output cites current after or support inputs. Historical before inputs keep

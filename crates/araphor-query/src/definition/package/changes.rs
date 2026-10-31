@@ -16,6 +16,7 @@ impl Packages {
         let mut call = ChangeCall {
             start: children.len(),
             ports: Vec::new(),
+            lookups: Default::default(),
         };
         for pair in &changes.ports {
             let before = model

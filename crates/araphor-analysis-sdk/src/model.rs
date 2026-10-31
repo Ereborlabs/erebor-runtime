@@ -62,6 +62,7 @@ impl From<Port> for InputPort {
 pub enum InputSource {
     Table(TableRef),
     Query(String),
+    Lookup(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

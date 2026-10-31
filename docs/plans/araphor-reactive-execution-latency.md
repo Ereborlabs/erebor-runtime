@@ -507,6 +507,43 @@ Local proof logs are `/tmp/araphor-change-integration-final.log`,
 `/tmp/araphor-change-analysis-clippy-final.log`. Full workspace CI was not
 run. The user requested relevant tests only.
 
+#### Native lookup and stateless result
+
+**Prepared lookup inputs and stateless continuation: Done. Builtin Graph
+migration: Not done. Proposals 1 and 5: Not done.** This result follows
+`6a61cd89a` and the earlier generic change-input delivery.
+
+The SDK's `InputSource::Lookup` declares native SQL that executes after the
+input difference. Query prepares those children at admission and binds the
+delivered before, after, reset, and earlier lookup rows during physical
+execution. Raw dependencies use the same captured source cut. Admission
+rejects caller overrides, cycles, and early queries that depend on late
+inputs. Bound ports retain their actual input revisions and coverage.
+
+Data stores actual lookup rows for replay. Lookup rows do not enter the
+retained target or force a complete reset when their source changes. A
+stateless consumer uses the committed target and exact historical base.
+It needs no guest checkpoint. Stateful consumers keep their existing rules.
+No ABI, version, timer, quota, or engine changes are added.
+
+Eight Analysis change-input cases passed, including native and Wasm, in
+100.32 seconds. Three SDK cases passed. The new lookup checks cover empty
+main differences, raw-source updates, cold restart, exact replay, historical
+before-row provenance, caller override rejection, and phase rejection.
+The first phase-rejection assertion inspected only the outer error text.
+That assertion failed. The corrected assertion checks the exact rejection
+field in the error chain; the case passed in 3.17 seconds. No production
+behavior was changed to satisfy that assertion.
+
+Final SDK, Query, Data, and Analysis clippy passed with tests and warnings
+denied in 37.60 seconds. Scoped formatting and whitespace checks passed.
+
+Proof is in `/tmp/araphor-lookup-integration.log`,
+`/tmp/araphor-lookup-sdk.log`, `/tmp/araphor-lookup-final.log`, and
+`/tmp/araphor-lookup-phase.log`. The final clippy log is
+`/tmp/araphor-lookup-clippy-final.log`. This result adds no speed claim. Final
+Graph timing requires the builtin unit migration and old-path removal.
+
 #### Choice for the remaining Graph work
 
 **Combined design: Approved; implementation Not done.** The user approves

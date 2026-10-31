@@ -30,7 +30,7 @@ use datafusion::sql::sqlparser::ast::{
 };
 use snafu::ResultExt as _;
 
-use super::call::SqlCall;
+use super::call::{LookupInputs, SqlCall};
 use super::PackageCall;
 use crate::execution::{Engine, Session};
 use crate::inputs::Inputs;
@@ -282,9 +282,16 @@ impl Packages {
         let mut parameters = BTreeMap::new();
         for (index, argument) in arguments.into_iter().enumerate() {
             if let FunctionArg::Named { name, .. } = &argument {
-                if model.change_inputs.as_ref().is_some_and(|changes| {
-                    changes.generated(&context.normalize_ident(name.clone()))
-                }) {
+                let normalized = context.normalize_ident(name.clone());
+                if model
+                    .change_inputs
+                    .as_ref()
+                    .is_some_and(|changes| changes.generated(&normalized))
+                    || model.inputs.iter().any(|input| {
+                        input.port.name == normalized
+                            && matches!(&input.source, sdk::InputSource::Lookup(_))
+                    })
+                {
                     return InvalidSnafu {
                         field: "generated package input",
                     }
@@ -455,7 +462,7 @@ impl Packages {
                     .map_err(|source| DataFusionError::External(Box::new(source)))
                     .context(SqlSnafu)?;
             }
-            let (inputs, origins) = self.inputs(
+            let (inputs, origins, lookups) = self.inputs(
                 context.context_provider(),
                 model,
                 if key == root {
@@ -487,7 +494,10 @@ impl Packages {
             };
             let mut children = inputs;
             children.extend(params);
-            let changes = self.changes(model, &mut children)?;
+            let mut changes = self.changes(model, &mut children)?;
+            if let Some(changes) = &mut changes {
+                changes.lookups = lookups;
+            }
             let sql = sql.map(|(sql, plans)| {
                 children.extend(plans);
                 sql
@@ -566,25 +576,40 @@ impl Packages {
         model: &sdk::Model,
         supplied: &InputPlans,
         exports: &Exports,
-    ) -> Result<(Vec<LogicalPlan>, Vec<BTreeSet<SourceOrigin>>)> {
+    ) -> Result<(Vec<LogicalPlan>, Vec<BTreeSet<SourceOrigin>>, LookupInputs)> {
         let mut tables = self.sources.clone();
         let mut ports = BTreeMap::new();
+        let has_lookups = model
+            .inputs
+            .iter()
+            .any(|input| matches!(&input.source, sdk::InputSource::Lookup(_)));
         for (slot, input) in model.inputs.iter().enumerate() {
-            if model
-                .change_inputs
-                .as_ref()
-                .is_some_and(|changes| changes.generated(&input.port.name))
+            if !has_lookups
+                && model
+                    .change_inputs
+                    .as_ref()
+                    .is_some_and(|changes| changes.generated(&input.port.name))
             {
                 continue;
             }
-            if !supplied.contains_key(&input.port.name)
+            if !has_lookups
+                && !supplied.contains_key(&input.port.name)
                 && matches!(&input.source, sdk::InputSource::Table(sdk::TableRef::Named(name))
                     if name == &input.port.name)
             {
                 continue;
             }
-            let schema = Session::indexed_schema(&input.port.schema)?;
-            let (id, source) = Self::port(schema)?;
+            let (id, source) = if has_lookups {
+                let (id, source) = Self::port(Arc::new(input.port.schema.clone()))?;
+                let plan = Inputs::scan(&input.port.name, source, &input.port.schema)?;
+                let plan = self.indexed(&plan)?;
+                (
+                    id,
+                    Arc::new(ViewTable::new(plan, None)) as Arc<dyn TableProvider>,
+                )
+            } else {
+                Self::port(Session::indexed_schema(&input.port.schema)?)?
+            };
             ports.insert(id, slot);
             tables.insert(input.port.name.clone(), source);
         }
@@ -615,7 +640,7 @@ impl Packages {
                 plan.clone()
             } else {
                 self.demand.capture(|| match &input.source {
-                    sdk::InputSource::Query(sql) => {
+                    sdk::InputSource::Query(sql) | sdk::InputSource::Lookup(sql) => {
                         if let Some(source) = self.sources.get(&input.port.name) {
                             let mut source_tables = tables.clone();
                             source_tables.insert(input.port.name.clone(), Arc::clone(source));
@@ -625,7 +650,13 @@ impl Packages {
                         }
                     }
                     sdk::InputSource::Table(sdk::TableRef::Named(name)) => {
-                        let source = tables.get(name).cloned().ok_or_else(|| {
+                        let source = if name == &input.port.name {
+                            self.sources.get(name)
+                        } else {
+                            tables.get(name)
+                        }
+                        .cloned()
+                        .ok_or_else(|| {
                             InvalidSnafu {
                                 field: "package input table",
                             }
@@ -673,6 +704,8 @@ impl Packages {
         }
         let mut plans = BTreeMap::new();
         let mut scopes = BTreeMap::<usize, BTreeSet<SourceOrigin>>::new();
+        let mut lookups = LookupInputs::default();
+        let mut lookup_bindings = BTreeSet::new();
         while !pending.is_empty() {
             let next = pending
                 .iter()
@@ -687,21 +720,45 @@ impl Packages {
                 })?;
             let (slot, mut plan, dependencies, mut origins) = pending.remove(next);
             let input = &model.inputs[slot];
+            let lookup = matches!(&input.source, sdk::InputSource::Lookup(_));
+            if !lookup
+                && dependencies.iter().any(|id| {
+                    let dependency = &model.inputs[ports[id]];
+                    matches!(&dependency.source, sdk::InputSource::Lookup(_))
+                        || model
+                            .change_inputs
+                            .as_ref()
+                            .is_some_and(|changes| changes.generated(&dependency.port.name))
+                })
+            {
+                return InvalidSnafu {
+                    field: "lookup input phase",
+                }
+                .fail();
+            }
+            if lookup {
+                lookups.order.push(slot);
+                lookup_bindings.extend(dependencies.iter().copied());
+            }
             if !dependencies.is_empty() {
                 let mut bindings = BTreeMap::new();
                 let mut bound_origins = BTreeMap::new();
                 for id in dependencies {
                     let dependency = ports[&id];
-                    origins.remove(&SourceOrigin::Port(id));
+                    if !lookup {
+                        origins.remove(&SourceOrigin::Port(id));
+                    }
                     origins.extend(scopes[&dependency].iter().cloned());
                     bound_origins.insert(id, &scopes[&dependency]);
-                    bindings.insert(
-                        id,
-                        provider_as_source(Arc::new(ViewTable::new(
-                            self.indexed(&plans[&dependency])?,
-                            None,
-                        ))),
-                    );
+                    if !lookup {
+                        bindings.insert(
+                            id,
+                            provider_as_source(Arc::new(ViewTable::new(
+                                self.indexed(&plans[&dependency])?,
+                                None,
+                            ))),
+                        );
+                    }
                 }
                 plan = plan
                     .transform_up_with_subqueries(|node| {
@@ -780,6 +837,13 @@ impl Packages {
         Ok((
             plans.into_values().collect(),
             scopes.into_values().collect(),
+            {
+                lookups.bindings = lookup_bindings
+                    .into_iter()
+                    .map(|id| (id, ports[&id]))
+                    .collect();
+                lookups
+            },
         ))
     }
 

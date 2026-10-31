@@ -119,7 +119,7 @@ impl Model {
         self.input_values(evaluation)?;
         self.checkpoint(evaluation.checkpoint.as_ref(), false)?;
         if let Some(changes) = &self.change_inputs {
-            changes.check_state(evaluation)?;
+            changes.check_state(evaluation, self.checkpoint.is_some())?;
         }
         if self
             .checkpoint

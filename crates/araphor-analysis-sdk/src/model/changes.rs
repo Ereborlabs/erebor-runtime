@@ -66,10 +66,10 @@ impl ChangeInputs {
 
     pub(crate) fn validate(&self, model: &Model) -> Result<()> {
         if self.ports.is_empty()
-            || !model
+            || model
                 .checkpoint
                 .as_ref()
-                .is_some_and(|checkpoint| checkpoint.resume_input_changes)
+                .is_some_and(|checkpoint| !checkpoint.resume_input_changes)
         {
             return Err(Self::invalid("change checkpoint declaration"));
         }
@@ -88,6 +88,7 @@ impl ChangeInputs {
             if !names.insert(&port.before)
                 || !names.insert(&port.after)
                 || input(&port.before)?.port.schema != input(&port.after)?.port.schema
+                || matches!(&input(&port.after)?.source, InputSource::Lookup(_))
             {
                 return Err(Self::invalid("change input pair"));
             }
@@ -105,9 +106,9 @@ impl ChangeInputs {
         Ok(())
     }
 
-    pub(crate) fn check_state(&self, evaluation: &Evaluation) -> Result<()> {
+    pub(crate) fn check_state(&self, evaluation: &Evaluation, stateful: bool) -> Result<()> {
         let reset = self.is_reset(evaluation)?;
-        if reset == evaluation.checkpoint.is_some() {
+        if stateful && reset == evaluation.checkpoint.is_some() {
             return Err(Self::invalid("change reset state"));
         }
         Ok(())
@@ -316,5 +317,34 @@ mod tests {
                 "case {case}"
             );
         }
+    }
+
+    #[test]
+    fn stateless_changes_keep_reset_rules() -> crate::Result<()> {
+        for reset in [true, false] {
+            let (mut package, mut evaluation, mut output) = fixture(reset);
+            package.exports[0].checkpoint = None;
+            evaluation.checkpoint = None;
+            evaluation.previous_outputs.clear();
+            output.checkpoint = None;
+            package
+                .check_evaluation(&evaluation)?
+                .validate_output(&output)?;
+            let model = &mut package.exports[0];
+            model.input_mode = InputMode::Resolved;
+            model.inputs[0].source = InputSource::Lookup("SELECT 7 AS value".into());
+            assert!(package.validate().is_err());
+            let model = &mut package.exports[0];
+            model.inputs[0].source = InputSource::Table(TableRef::Named("after".into()));
+            model.inputs.push(crate::InputPort {
+                port: model.inputs[0].port.clone(),
+                source: InputSource::Lookup("SELECT 7 AS value".into()),
+            });
+            model.inputs[3].port.name = "support".into();
+            package.validate()?;
+            package.exports[0].change_inputs = None;
+            assert!(package.validate().is_err());
+        }
+        Ok(())
     }
 }

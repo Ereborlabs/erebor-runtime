@@ -240,7 +240,8 @@ impl AnalysisStore {
                 continue;
             }
             let declaration = &instance.spec.manifest.calls[&returned.call];
-            let native_graph = matches!(&instance.spec.destination,
+            let native_graph = returned.changes.is_none()
+                && matches!(&instance.spec.destination,
                 ManagedDestination::Graph { calls, .. } if calls.contains(&returned.call));
             let native = retention
                 .progress

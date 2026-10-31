@@ -533,10 +533,18 @@ impl AnalysisStore {
                         Ok(araphor_analysis_builtins::graph::ResumeBasis::Progress)
                     )
                 });
-            let input_basis = match (&evaluation.checkpoint, sparse) {
-                (None, _) => InputBasis::None,
-                (Some(_), true) => InputBasis::Progress,
-                (Some(_), false) => InputBasis::Complete,
+            let input_basis = if let Some(changes) = returned.changes {
+                if changes.base.is_some() {
+                    InputBasis::Complete
+                } else {
+                    InputBasis::None
+                }
+            } else {
+                match (&evaluation.checkpoint, sparse) {
+                    (None, _) => InputBasis::None,
+                    (Some(_), true) => InputBasis::Progress,
+                    (Some(_), false) => InputBasis::Complete,
+                }
             };
             let mut expected = input
                 .attempt

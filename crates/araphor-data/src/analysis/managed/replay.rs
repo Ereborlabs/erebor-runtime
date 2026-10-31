@@ -687,7 +687,25 @@ impl SavedEvaluation {
         } else if self.input_basis != InputBasis::None {
             return Err(Code::Invalid.error("saved managed input basis"));
         }
-        if evaluation.checkpoint.is_some() != (self.input_basis != InputBasis::None)
+        let has_basis = if let Some(contract) = &model.change_inputs {
+            let base = self
+                .changes
+                .as_ref()
+                .ok_or_else(|| Code::Missing.error("saved change base"))?
+                .base
+                .is_some();
+            if contract
+                .is_reset(&evaluation)
+                .context(crate::AnalysisContractSnafu)?
+                == base
+            {
+                return Err(Code::Invalid.error("saved change reset base"));
+            }
+            base
+        } else {
+            evaluation.checkpoint.is_some()
+        };
+        if has_basis != (self.input_basis != InputBasis::None)
             || (self.input_basis == InputBasis::Progress
                 && evaluation.checkpoint.as_ref().is_none_or(|checkpoint| {
                     !matches!(

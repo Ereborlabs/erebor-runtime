@@ -54,12 +54,14 @@ fn package_reserves_are_charged() -> TestResult {
     for source in [
         InputSource::Table(TableRef::Named("input".into())),
         InputSource::Query("SELECT 1".into()),
+        InputSource::Lookup("SELECT 1".into()),
     ] {
         package.exports[0].inputs[0].source = source;
         let original = serde_json::to_vec(&package)?;
         let before = package.allocated_bytes();
-        let (InputSource::Table(TableRef::Named(value)) | InputSource::Query(value)) =
-            &mut package.exports[0].inputs[0].source
+        let (InputSource::Table(TableRef::Named(value))
+        | InputSource::Query(value)
+        | InputSource::Lookup(value)) = &mut package.exports[0].inputs[0].source
         else {
             return Err("table or query source absent".into());
         };

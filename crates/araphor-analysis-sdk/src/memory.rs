@@ -148,9 +148,9 @@ impl Memory {
                 .saturating_add(input.port.name.capacity())
                 .saturating_add(Self::schema_heap(&input.port.schema));
             bytes = bytes.saturating_add(match &input.source {
-                InputSource::Query(value) | InputSource::Table(TableRef::Named(value)) => {
-                    value.capacity()
-                }
+                InputSource::Query(value)
+                | InputSource::Lookup(value)
+                | InputSource::Table(TableRef::Named(value)) => value.capacity(),
                 InputSource::Table(TableRef::Output(output)) => output
                     .package
                     .capacity()

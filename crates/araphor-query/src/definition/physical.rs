@@ -701,47 +701,16 @@ impl PackageExec {
         let mut inputs = Vec::with_capacity(model.inputs.len());
         for (slot, port) in model.inputs.iter().enumerate() {
             if self.call.changes.is_some()
-                && model
-                    .change_inputs
-                    .as_ref()
-                    .is_some_and(|changes| changes.generated(&port.port.name))
+                && model.change_inputs.as_ref().is_some_and(|changes| {
+                    changes.generated(&port.port.name)
+                        || matches!(&port.source, sdk::InputSource::Lookup(_))
+                })
             {
                 continue;
             }
-            let data = sdk::Dataset {
-                name: port.port.name.clone(),
-                batches: self
-                    .collect(slot, &port.port.schema, &owner, &context, &input, true)
-                    .await?,
-            };
-            let mut completed = Vec::new();
-            self.call.children[slot].apply_with_subqueries(|plan| {
-                if let LogicalPlan::Extension(extension) = plan {
-                    if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
-                        if let Some(result) = owner.completed(call.id)? {
-                            completed.push(result);
-                        }
-                        return Ok(TreeNodeRecursion::Jump);
-                    }
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })?;
-            let inherited = completed
-                .iter()
-                .flat_map(|result| result.evaluation.inputs.iter())
-                .collect::<Vec<_>>();
             inputs.push(
-                self.call
-                    .input_scope
-                    .input_for(
-                        data,
-                        &source,
-                        (self.call.id, slot, &owner.invocation.id),
-                        &self.children[slot],
-                        &inherited,
-                        &owner.memory,
-                    )
-                    .map_err(external)?,
+                self.read_input(slot, port, &owner, &context, &input, &source)
+                    .await?,
             );
         }
         if self.call.changes.is_some() {
@@ -753,11 +722,10 @@ impl PackageExec {
                 .first()
                 .cloned()
                 .ok_or_else(|| internal("change target is absent"))?;
-            for port in model
-                .inputs
-                .iter()
-                .filter(|port| changes.generated(&port.port.name))
-            {
+            for port in model.inputs.iter().filter(|port| {
+                changes.generated(&port.port.name)
+                    || matches!(&port.source, sdk::InputSource::Lookup(_))
+            }) {
                 let mut input = basis.clone();
                 input.data = if port.port.name == changes.reset {
                     changes.reset_input(true).map_err(external)?
@@ -1030,6 +998,50 @@ impl PackageExec {
             _input: input,
             _output: output_memory,
         })
+    }
+
+    async fn read_input(
+        &self,
+        slot: usize,
+        port: &sdk::InputPort,
+        owner: &CallContext,
+        context: &Arc<TaskContext>,
+        input: &MemoryReservation,
+        source: &SourceSnapshot,
+    ) -> Result<sdk::Input> {
+        let data = sdk::Dataset {
+            name: port.port.name.clone(),
+            batches: self
+                .collect(slot, &port.port.schema, owner, context, input, true)
+                .await?,
+        };
+        let mut completed = Vec::new();
+        self.call.children[slot].apply_with_subqueries(|plan| {
+            if let LogicalPlan::Extension(extension) = plan {
+                if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
+                    if let Some(result) = owner.completed(call.id)? {
+                        completed.push(result);
+                    }
+                    return Ok(TreeNodeRecursion::Jump);
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        let inherited = completed
+            .iter()
+            .flat_map(|result| result.evaluation.inputs.iter())
+            .collect::<Vec<_>>();
+        self.call
+            .input_scope
+            .input_for(
+                data,
+                source,
+                (self.call.id, slot, &owner.invocation.id),
+                &self.children[slot],
+                &inherited,
+                &owner.memory,
+            )
+            .map_err(external)
     }
 
     fn parameters(batches: Vec<sdk::RecordBatch>) -> Result<sdk::RecordBatch> {

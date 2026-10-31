@@ -57,6 +57,13 @@ pub(crate) struct SqlCall {
 pub(crate) struct ChangeCall {
     pub(crate) start: usize,
     pub(crate) ports: Vec<ChangePort>,
+    pub(crate) lookups: LookupInputs,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LookupInputs {
+    pub(crate) bindings: Vec<(usize, usize)>,
+    pub(crate) order: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +98,9 @@ impl PackageCall {
                         .ports
                         .len()
                         .saturating_mul(std::mem::size_of::<ChangePort>())
+                        .saturating_add(model.inputs.len().saturating_mul(
+                            std::mem::size_of::<(usize, usize)>() + std::mem::size_of::<usize>(),
+                        ))
                         .saturating_mul(model.outputs.len().saturating_add(1))
                 }))
             })

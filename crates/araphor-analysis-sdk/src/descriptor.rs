@@ -119,6 +119,8 @@ impl Model {
                 InputSource::Table(TableRef::Named(name)) => Package::name(name)?,
                 InputSource::Table(TableRef::Output(_)) => {}
                 InputSource::Query(_) if self.input_mode == InputMode::Resolved => {}
+                InputSource::Lookup(_)
+                    if self.input_mode == InputMode::Resolved && self.change_inputs.is_some() => {}
                 _ => return Err(Error::contract(ErrorCode::Invalid, "input source mode")),
             }
         }

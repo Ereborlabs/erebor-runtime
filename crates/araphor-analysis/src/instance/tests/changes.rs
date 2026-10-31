@@ -65,6 +65,264 @@ fn sql(value: &str) -> String {
     )
 }
 
+fn lookup_image() -> TestResult<PackageBundleV1> {
+    let mut image = image("sql")?;
+    let artifact = &mut image.artifacts[0];
+    let model = &mut artifact.descriptor.exports[0];
+    model.input_mode = sdk::InputMode::Resolved;
+    model.checkpoint = None;
+    model.inputs.push(sdk::InputPort {
+        port: model.inputs[0].port.clone(),
+        source: sdk::InputSource::Lookup("SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS value FROM input
+            UNION ALL SELECT CAST(MAX(owner_revision) AS BIGINT UNSIGNED) AS value FROM context_versions".into()),
+    });
+    model.inputs[3].port.name = "support".into();
+    let PackageImplementationV1::Sql { program, .. } = &mut artifact.implementations[0] else {
+        return Err("lookup SQL fixture".into());
+    };
+    *program = SqlModelV1 {
+        outputs: BTreeMap::from([(
+            "data".into(),
+            "SELECT CAST(COALESCE(SUM(value), 0) AS BIGINT UNSIGNED) AS value FROM support".into(),
+        )]),
+        ..Default::default()
+    };
+    Ok(image)
+}
+
+#[tokio::test]
+async fn lookup_rejects_early_dependencies() -> TestResult {
+    for sql in [
+        "SELECT value FROM removed",
+        "SELECT CAST(reset AS BIGINT UNSIGNED) AS value FROM reset",
+        "SELECT value FROM support",
+    ] {
+        let fixture = Fixture::new(Default::default())?;
+        let mut image = lookup_image()?;
+        let model = &mut image.artifacts[0].descriptor.exports[0];
+        let mut port = model.inputs[0].port.clone();
+        port.name = "early".into();
+        model.inputs.push(sdk::InputPort {
+            port,
+            source: sdk::InputSource::Query(sql.into()),
+        });
+        fixture.install(&image)?;
+        let error = fixture
+            .admit("early", &self::sql("CAST(7 AS BIGINT UNSIGNED)"))
+            .await
+            .err()
+            .ok_or("early lookup admission")?;
+        assert!(
+            format!("{error:?}").contains("lookup input phase"),
+            "{error:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn lookup_keeps_historical_provenance() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    let mut image = lookup_image()?;
+    let model = &mut image.artifacts[0].descriptor.exports[0];
+    for (name, source) in [
+        (
+            "copy",
+            sdk::InputSource::Query("SELECT value FROM input".into()),
+        ),
+        (
+            "copy_removed",
+            sdk::InputSource::Table(sdk::TableRef::Named("copy_removed".into())),
+        ),
+        (
+            "old_input",
+            sdk::InputSource::Lookup("SELECT value FROM removed".into()),
+        ),
+        (
+            "old_copy",
+            sdk::InputSource::Lookup("SELECT value FROM copy_removed".into()),
+        ),
+    ] {
+        let mut port = model.inputs[0].port.clone();
+        port.name = name.into();
+        model.inputs.push(sdk::InputPort { port, source });
+    }
+    model
+        .change_inputs
+        .as_mut()
+        .ok_or("change declaration")?
+        .ports
+        .push(sdk::ChangeInput {
+            before: "copy_removed".into(),
+            after: "copy".into(),
+        });
+    fixture.install(&image)?;
+    fixture.context(2)?;
+    let instance = fixture
+        .admit("history", &sql("CAST(NULL AS BIGINT UNSIGNED)"))
+        .await?;
+    let lifecycle = fixture.start(&instance)?;
+    let control = Arc::new(AnalysisReadControl::default());
+    let mut stream = instance.subscribe(Arc::clone(&control), u64::MAX, lifecycle)?;
+    tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("first historical lookup")??;
+    fixture.context(3)?;
+    let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("second historical lookup")??;
+    let reference = receipt
+        .results
+        .values()
+        .next()
+        .ok_or("historical lookup result")?;
+    let evaluation = fixture.query.store().managed_evaluation(
+        instance.admitted(),
+        &reference.result_id,
+        &control,
+    )?;
+    let before = evaluation.input("removed")?;
+    let copy = evaluation.input("copy_removed")?;
+    let first = evaluation.input("old_input")?;
+    let second = evaluation.input("old_copy")?;
+    assert_eq!(first.data.batches, second.data.batches);
+    assert_eq!(first.data.rows(), 1);
+    assert_ne!(before.revision, copy.revision);
+    assert_ne!(first.revision, second.revision);
+    assert_eq!(first.coverage, before.coverage);
+    assert_eq!(second.coverage, copy.coverage);
+    stream.cancel_and_join(&control).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stateless_lookup_uses_changes() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    let image = lookup_image()?;
+    fixture.install(&image)?;
+    fixture.context(1)?;
+    let definition = sql("CAST(NULL AS BIGINT UNSIGNED)");
+    assert!(fixture
+        .admit(
+            "override",
+            &definition.replace("input => (", "support => (")
+        )
+        .await
+        .is_err());
+    let instance = fixture.admit("lookup", &definition).await?;
+    let control = Arc::new(AnalysisReadControl::default());
+    let lifecycle = fixture.start(&instance)?;
+    let mut stream = instance.subscribe(Arc::clone(&control), u64::MAX, lifecycle)?;
+    for (revision, added, removed, total) in
+        [(1, 1, 0, 2), (2, 1, 0, 3), (4, 0, 0, 4), (5, 0, 1, 5)]
+    {
+        if revision != 1 {
+            fixture.context(revision)?;
+        }
+        let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
+            .await?
+            .ok_or("lookup receipt")??;
+        assert_eq!(fixture.selected("lookup", &receipt.attempt)?, [total]);
+        let reference = receipt.results.values().next().ok_or("lookup result")?;
+        let evaluation = fixture.query.store().managed_evaluation(
+            instance.admitted(),
+            &reference.result_id,
+            &control,
+        )?;
+        assert!(evaluation.checkpoint.is_none());
+        assert!(evaluation.previous_outputs.is_empty());
+        assert_eq!(
+            image.artifacts[0].descriptor.exports[0]
+                .change_inputs
+                .as_ref()
+                .ok_or("change declaration")?
+                .is_reset(&evaluation)?,
+            revision == 1
+        );
+        assert_eq!(evaluation.input("input")?.data.rows(), added);
+        assert_eq!(evaluation.input("removed")?.data.rows(), removed);
+        assert_eq!(
+            values(&evaluation.input("support")?.data.batches)?,
+            [added, revision]
+        );
+        let replay = Instance::replay_result(
+            Arc::clone(&fixture.query),
+            fixture.authority.clone(),
+            fixture.grant.clone(),
+            "lookup",
+            &reference.result_id,
+            &control,
+        )
+        .await?;
+        assert_eq!(values(&replay.batches)?, [total]);
+        let actual = replay
+            .calls
+            .values()
+            .next()
+            .ok_or("lookup replay")?
+            .evaluation();
+        for (actual, expected) in actual.inputs.iter().zip(&evaluation.inputs) {
+            assert_eq!(actual.data.batches, expected.data.batches);
+            assert_eq!(actual.revision, expected.revision);
+            assert_eq!(actual.coverage, expected.coverage);
+        }
+    }
+    stream.cancel_and_join(&control).await?;
+    let definition = instance.admitted().spec.definition.clone();
+    drop(instance);
+    let Fixture {
+        directory,
+        query,
+        authority,
+        grant,
+    } = fixture;
+    drop(query);
+    let fixture = Fixture {
+        query: Engine::new(
+            Arc::new(AnalysisStore::open(directory.path().join("data"))?),
+            Default::default(),
+        )?,
+        directory,
+        authority,
+        grant,
+    };
+    fixture.context(6)?;
+    let control = Arc::new(AnalysisReadControl::default());
+    let instance = Instance::admit(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.grant.clone(),
+        "lookup".into(),
+        definition,
+        &control,
+    )
+    .await?;
+    let mut stream = instance.subscribe(Arc::clone(&control), u64::MAX, lifecycle)?;
+    let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("reopened lookup receipt")??;
+    assert_eq!(fixture.selected("lookup", &receipt.attempt)?, [7]);
+    let reference = receipt
+        .results
+        .values()
+        .next()
+        .ok_or("reopened lookup result")?;
+    let evaluation = fixture.query.store().managed_evaluation(
+        instance.admitted(),
+        &reference.result_id,
+        &control,
+    )?;
+    assert!(!image.artifacts[0].descriptor.exports[0]
+        .change_inputs
+        .as_ref()
+        .ok_or("change declaration")?
+        .is_reset(&evaluation)?);
+    assert!(evaluation.checkpoint.is_none());
+    assert_eq!(evaluation.input("input")?.data.rows(), 1);
+    stream.cancel_and_join(&control).await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn subscription_consumes_query_changes() -> TestResult {
     subscription_changes("sql").await
