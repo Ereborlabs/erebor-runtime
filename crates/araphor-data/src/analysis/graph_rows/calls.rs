@@ -556,7 +556,7 @@ impl GraphCallRows {
             findings: BTreeMap::new(),
             progress: BTreeMap::new(),
         };
-        let mut statement=reader.prepare("SELECT p.value_ref,e.cpu_id,e.durable_cursor,p.digest,p.state,s.stream_key,s.tenant_id,r.stream_key,m.member_key FROM graph_producer_members m LEFT JOIN graph_progress_values p ON p.value_ref=m.value_ref LEFT JOIN graph_evidence e USING(evidence_id) LEFT JOIN graph_sources s USING(source_ref) LEFT JOIN source_receipts r ON r.stream_key=s.stream_key AND r.tenant_id=s.tenant_id WHERE m.scope_id=? AND m.member_kind=5 AND m.valid_from<=? AND (m.valid_to IS NULL OR m.valid_to>?) ORDER BY e.cpu_id,e.durable_cursor").context(AnalysisDatabaseSnafu {operation:"prepare Graph progress basis"})?;
+        let mut statement=reader.prepare("SELECT DISTINCT p.value_ref,e.cpu_id,e.durable_cursor,p.digest,p.state,s.stream_key,s.tenant_id,r.stream_key,m.member_key,count(*) OVER(PARTITION BY m.unit_ref,m.member_key) AS unit_count FROM graph_producer_members m LEFT JOIN graph_progress_values p ON p.value_ref=m.value_ref LEFT JOIN graph_evidence e USING(evidence_id) LEFT JOIN graph_sources s USING(source_ref) LEFT JOIN source_receipts r ON r.stream_key=s.stream_key AND r.tenant_id=s.tenant_id WHERE m.scope_id=? AND m.member_kind=5 AND m.valid_from<=? AND (m.valid_to IS NULL OR m.valid_to>?) ORDER BY e.cpu_id,e.durable_cursor").context(AnalysisDatabaseSnafu {operation:"prepare Graph progress basis"})?;
         let mut rows = statement
             .query(params![scope, revision, revision])
             .context(AnalysisDatabaseSnafu {
@@ -593,7 +593,9 @@ impl GraphCallRows {
                 digest: digest.into(),
                 state: GraphRows::column(row, 4)?,
             };
-            if state.progress.insert(record, value).is_some() {
+            if GraphRows::column::<u64>(row, 9)? != 1
+                || state.progress.insert(record, value).is_some()
+            {
                 return Err(GraphRows::invalid("graph progress duplicate"));
             }
         }
@@ -641,7 +643,19 @@ impl GraphCallRows {
         let package = &spec.manifest.calls[&call].package.package_id;
         let basis = CallBasis::new(evaluation)?;
         Self::validate_record_cut(reader, spec, result_id, &basis)?;
-        let selected="WITH selected AS (SELECT * FROM graph_producer_members WHERE scope_id=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>?))";
+        let selected="WITH active AS (SELECT * FROM graph_producer_members WHERE scope_id=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>?)), selected AS (SELECT * EXCLUDE(member_rank) FROM (SELECT *,row_number() OVER(PARTITION BY member_kind,member_key ORDER BY unit_ref) AS member_rank FROM active) WHERE member_rank=1)";
+        let conflict: bool = reader
+            .query_row(
+                &format!("{selected} SELECT EXISTS(SELECT 1 FROM active GROUP BY member_kind,member_key HAVING count(DISTINCT value_ref)>1 OR count(*)<>count(DISTINCT unit_ref))"),
+                params![scope, revision, revision],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "check Graph call shared values",
+            })?;
+        if conflict {
+            return Err(GraphRows::invalid("graph call member conflict"));
+        }
         let mut evidence = BTreeMap::new();
         let mut statement=reader.prepare(&format!("{selected}, refs AS (
             SELECT anchor_record_id AS evidence_id FROM selected WHERE anchor_record_id IS NOT NULL

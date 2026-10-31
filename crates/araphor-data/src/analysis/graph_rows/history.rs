@@ -565,35 +565,41 @@ impl GraphRows {
             .context(AnalysisDatabaseSnafu {
                 operation: "stage Graph fact members",
             })?;
-        writer
-            .execute(
-                "UPDATE graph_producer_members old SET valid_to = ?
-             WHERE old.scope_id = ? AND old.member_kind IN (0, 1, 7) AND old.valid_to IS NULL
-             AND NOT EXISTS (SELECT 1 FROM graph_stage_members stage
-                 WHERE stage.member_kind = old.member_kind AND stage.member_key = old.member_key
-                   AND stage.value_ref = old.value_ref AND stage.ordinal = old.ordinal)",
-                params![revision, scope],
-            )
+        let mut statement = writer
+            .prepare("SELECT member_kind,member_key,value_ref,ordinal FROM graph_stage_members")
             .context(AnalysisDatabaseSnafu {
-                operation: "close changed Graph metadata",
+                operation: "prepare Graph metadata members",
             })?;
-        writer
-            .execute(
-                "INSERT INTO graph_producer_members
-                 (scope_id, member_kind, member_key, value_ref, anchor_record_id, anchor_fact,
-                  reason_code, ordinal, valid_from, valid_to)
-             SELECT ?, stage.member_kind, stage.member_key, stage.value_ref,
-                    NULL, NULL, NULL, stage.ordinal, ?, NULL
-             FROM graph_stage_members stage
-             WHERE NOT EXISTS (SELECT 1 FROM graph_producer_members current
-                 WHERE current.scope_id = ? AND current.member_kind = stage.member_kind
-                   AND current.member_key = stage.member_key AND current.valid_to IS NULL
-                   AND current.value_ref = stage.value_ref AND current.ordinal = stage.ordinal)",
-                params![scope, revision, scope],
-            )
+        let members = statement
+            .query_map([], |row| {
+                Ok(araphor_graph::Member {
+                    kind: row.get(0)?,
+                    key: row.get(1)?,
+                    value: row.get(2)?,
+                    record: None,
+                    fact: None,
+                    reason: None,
+                    ordinal: row.get(3)?,
+                })
+            })
             .context(AnalysisDatabaseSnafu {
-                operation: "insert changed Graph metadata",
+                operation: "read Graph metadata members",
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode Graph metadata members",
             })?;
+        drop(statement);
+        araphor_graph::Contributions::apply(
+            writer,
+            scope,
+            revision,
+            &[araphor_graph::Replacement {
+                unit: None,
+                members,
+            }],
+            false,
+        )?;
         writer
             .execute_batch(
                 "DROP TABLE graph_stage_members;

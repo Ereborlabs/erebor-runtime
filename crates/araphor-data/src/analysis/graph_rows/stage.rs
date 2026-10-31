@@ -2,14 +2,6 @@ use super::calls::CallBasis;
 use super::history::Member;
 use super::*;
 
-struct PriorMember {
-    value: u64,
-    record: Option<u64>,
-    fact: Option<Vec<u8>>,
-    reason: Option<String>,
-    ordinal: u32,
-}
-
 pub(super) struct GraphStage<'a> {
     pub writer: &'a Connection,
     pub scope: u64,
@@ -43,36 +35,8 @@ impl GraphStage<'_> {
                 return Err(GraphRows::invalid("graph duplicate removal"));
             }
         }
-        let touched = selected
-            .keys()
-            .chain(deleted.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        self.writer.execute_batch("CREATE TEMP TABLE graph_stage_keys(member_kind UTINYINT,member_key BLOB,PRIMARY KEY(member_kind,member_key)); CREATE TEMP TABLE graph_stage_close(member_kind UTINYINT,member_key BLOB,PRIMARY KEY(member_kind,member_key))").context(AnalysisDatabaseSnafu {operation:"create Graph member stage"})?;
-        {
-            let mut appender =
-                self.writer
-                    .appender("graph_stage_keys")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "open Graph member keys",
-                    })?;
-            for (kind, key) in &touched {
-                appender
-                    .append_row(params![kind, key])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "append Graph member key",
-                    })?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush Graph member keys",
-            })?;
-        }
         let mut previous = BTreeMap::new();
-        let query = if self.full {
-            "SELECT m.member_kind,m.member_key,m.value_ref,m.anchor_record_id,m.anchor_fact,m.reason_code,m.ordinal FROM graph_producer_members m WHERE m.scope_id=? AND m.valid_to IS NULL"
-        } else {
-            "SELECT m.member_kind,m.member_key,m.value_ref,m.anchor_record_id,m.anchor_fact,m.reason_code,m.ordinal FROM graph_stage_keys wanted JOIN graph_producer_members m USING(member_kind,member_key) WHERE m.scope_id=? AND m.valid_to IS NULL"
-        };
+        let query = "SELECT member_kind,member_key,value_ref,anchor_record_id,anchor_fact,reason_code,ordinal FROM graph_producer_members WHERE scope_id=? AND unit_ref=0 AND valid_to IS NULL";
         let mut statement = self.writer.prepare(query).context(AnalysisDatabaseSnafu {
             operation: "prepare prior Graph members",
         })?;
@@ -89,8 +53,10 @@ impl GraphStage<'_> {
             if !(2..=6).contains(&kind)
                 || previous
                     .insert(
-                        (kind, key),
-                        PriorMember {
+                        (kind, key.clone()),
+                        araphor_graph::Member {
+                            kind,
+                            key,
                             value: GraphRows::column(row, 2)?,
                             record: GraphRows::column(row, 3)?,
                             fact: GraphRows::column(row, 4)?,
@@ -136,9 +102,6 @@ impl GraphStage<'_> {
                 }
             }
         }
-        let mut counts:[i128;4]=self.writer.query_row("SELECT subject_count,edge_count,finding_count,progress_count FROM graph_producer_versions WHERE scope_id=? AND commit_revision<? ORDER BY commit_revision DESC LIMIT 1",params![self.scope,self.revision],|row|Ok([row.get::<_,u64>(0)? as i128,row.get::<_,u64>(1)? as i128,row.get::<_,u64>(2)? as i128,row.get::<_,u64>(3)? as i128])).optional().context(AnalysisDatabaseSnafu {operation:"read Graph stage counts"})?.unwrap_or([0;4]);
-        let mut close = BTreeSet::new();
-        let mut opened = Vec::new();
         for ((kind, key), identity) in &deleted {
             let old = previous
                 .remove(&(*kind, key.clone()))
@@ -146,24 +109,9 @@ impl GraphStage<'_> {
             if (2..=5).contains(kind) && identities.get(&(*kind, old.value)) != Some(identity) {
                 return Err(GraphRows::invalid("graph member identity collision"));
             }
-            close.insert((*kind, key.clone()));
-            if (2..=5).contains(kind) {
-                counts[(*kind - 2) as usize] -= 1;
-            }
         }
         if self.full {
-            let removed = previous
-                .keys()
-                .filter(|key| !selected.contains_key(*key))
-                .cloned()
-                .collect::<Vec<_>>();
-            for key in removed {
-                previous.remove(&key);
-                close.insert(key.clone());
-                if (2..=5).contains(&key.0) {
-                    counts[(key.0 - 2) as usize] -= 1;
-                }
-            }
+            previous.retain(|key, _| selected.contains_key(key));
         }
         let by_id = self
             .records
@@ -187,8 +135,7 @@ impl GraphStage<'_> {
                 .and_then(|anchor| anchor.fact.as_ref())
                 .map(GraphRows::encode_value)
                 .transpose()?;
-            let old = previous.remove(&key);
-            if let Some(old) = old {
+            if let Some(old) = previous.get(&key) {
                 if member.kind == MemberKind::Subject && self.sparse {
                     if old.value != member.value {
                         return Err(GraphRows::invalid("graph sparse subject identity"));
@@ -243,72 +190,37 @@ impl GraphStage<'_> {
                 {
                     return Err(GraphRows::invalid("graph member identity collision"));
                 }
-                close.insert(key.clone());
-            } else if (2..=5).contains(&key.0) {
-                counts[(key.0 - 2) as usize] += 1;
             }
-            opened.push((member, record, fact));
+            previous.insert(
+                key,
+                araphor_graph::Member {
+                    kind: member.kind as u8,
+                    key: member.key,
+                    value: member.value,
+                    record,
+                    fact,
+                    reason: member.reason,
+                    ordinal: member.ordinal,
+                },
+            );
         }
-        {
-            let mut appender =
-                self.writer
-                    .appender("graph_stage_close")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "open Graph close stage",
-                    })?;
-            for (kind, key) in &close {
-                appender
-                    .append_row(params![kind, key])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "append closed Graph key",
-                    })?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush closed Graph keys",
-            })?;
-        }
-        let changed=self.writer.execute("UPDATE graph_producer_members m SET valid_to=? WHERE m.scope_id=? AND m.valid_to IS NULL AND EXISTS(SELECT 1 FROM graph_stage_close c WHERE c.member_kind=m.member_kind AND c.member_key=m.member_key)",params![self.revision,self.scope]).context(AnalysisDatabaseSnafu {operation:"close changed Graph members"})?;
-        if changed != close.len() {
-            return Err(GraphRows::invalid("graph closed member count"));
-        }
-        {
-            let mut appender =
-                self.writer
-                    .appender("graph_producer_members")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "open Graph member appender",
-                    })?;
-            for (member, record, fact) in opened {
-                appender
-                    .append_row(params![
-                        self.scope,
-                        member.kind as u8,
-                        member.key,
-                        member.value,
-                        record,
-                        fact,
-                        member.reason,
-                        member.ordinal,
-                        self.revision,
-                        None::<u64>
-                    ])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "append Graph members",
-                    })?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush Graph members",
-            })?;
-        }
-        let counts = counts
-            .into_iter()
-            .map(|count| u64::try_from(count).map_err(|_| GraphRows::invalid("graph stage count")))
-            .collect::<Result<Vec<_>>>()?;
-        self.writer.execute("UPDATE graph_producer_versions SET subject_count=?,edge_count=?,finding_count=?,progress_count=?,derived_progress_digest=? WHERE scope_id=? AND commit_revision=?",params![counts[0],counts[1],counts[2],counts[3],progress_root,self.scope,self.revision]).context(AnalysisDatabaseSnafu {operation:"record Graph stage counts"})?;
+        araphor_graph::Contributions::apply(
+            self.writer,
+            self.scope,
+            self.revision,
+            &[araphor_graph::Replacement {
+                unit: None,
+                members: previous.into_values().collect(),
+            }],
+            false,
+        )?;
         self.writer
-            .execute_batch("DROP TABLE graph_stage_close; DROP TABLE graph_stage_keys")
+            .execute(
+                "UPDATE graph_producer_versions SET derived_progress_digest=? WHERE scope_id=? AND commit_revision=?",
+                params![progress_root, self.scope, self.revision],
+            )
             .context(AnalysisDatabaseSnafu {
-                operation: "release Graph member stage",
+                operation: "record Graph progress digest",
             })?;
         Ok(())
     }

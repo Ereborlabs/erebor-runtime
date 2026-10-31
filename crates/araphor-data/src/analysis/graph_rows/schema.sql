@@ -38,11 +38,12 @@ CREATE TABLE graph_producer_versions (
     UNIQUE (scope_id, commit_revision)
 );
 CREATE TABLE graph_producer_members (
-    scope_id UBIGINT NOT NULL, member_kind UTINYINT NOT NULL, member_key BLOB NOT NULL,
+    scope_id UBIGINT NOT NULL, unit_ref UBIGINT NOT NULL DEFAULT 0,
+    member_kind UTINYINT NOT NULL, member_key BLOB NOT NULL,
     value_ref UBIGINT NOT NULL, anchor_record_id UBIGINT, anchor_fact BLOB,
     reason_code VARCHAR, ordinal UINTEGER NOT NULL,
     valid_from UBIGINT NOT NULL, valid_to UBIGINT,
-    PRIMARY KEY (scope_id, member_kind, member_key, valid_from),
+    PRIMARY KEY (scope_id, unit_ref, member_kind, member_key, valid_from),
     CHECK (member_kind <= 7), CHECK (valid_to IS NULL OR valid_to > valid_from)
 );
 CREATE INDEX graph_producer_lookup ON graph_producer_members (scope_id, member_kind, member_key);

@@ -46,8 +46,9 @@ master plan invented for them.
 - [Reactive execution in milliseconds](araphor-reactive-execution-latency.md) —
   the measured Graph, DuckDB, and notification costs, plus the proposed
   replacement with retained DataFusion execution, change inputs, atomic
-  writes, and a batch outbox. The measurements are complete. The replacement
-  and its numeric performance targets are not approved.
+  writes, and a batch outbox. The measurements are complete. Retained execution,
+  change inputs, and Graph contribution ownership are approved. The other
+  replacement proposals and numeric performance targets are not approved.
 - [Araphor component redesign](araphor-component-redesign.md) — the user
   approves one Arrow query operation and retained package admission. DataFusion
   replaces query execution. DuckDB retains durable storage. The source studies

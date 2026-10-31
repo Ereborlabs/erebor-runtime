@@ -30,7 +30,7 @@ impl GraphRows {
 
     fn schema_shape(writer: &Connection) -> Result<Vec<(String, String)>> {
         let mut statement = writer.prepare(
-            "SELECT table_name, column_name || ':' || data_type || ':' || is_nullable || ':' || ordinal_position
+            "SELECT table_name, column_name || ':' || data_type || ':' || is_nullable || ':' || ordinal_position || ':' || coalesce(column_default, '')
              FROM information_schema.columns WHERE table_schema = 'main' AND starts_with(table_name, 'graph_')
              UNION ALL SELECT table_name, constraint_type || ':' || constraint_text
              FROM duckdb_constraints() WHERE schema_name = 'main' AND starts_with(table_name, 'graph_')

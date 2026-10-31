@@ -76,7 +76,7 @@ fn branch_values_keep_history_order_and_duplicates() -> TestResult {
     {
         let transaction = writer.transaction()?;
         transaction.execute(
-            "INSERT INTO graph_producer_members VALUES (1,6,from_hex('0000'),1,NULL,NULL,NULL,0,4,NULL)",
+            "INSERT INTO graph_producer_members VALUES (1,0,6,from_hex('0000'),1,NULL,NULL,NULL,0,4,NULL)",
             [],
         )?;
         assert!(NativeRows::read_branches(&transaction, "empty", tenant, 0, None).is_err());

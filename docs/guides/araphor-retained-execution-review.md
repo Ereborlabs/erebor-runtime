@@ -143,6 +143,35 @@ selected provenance. These positions do not encode the full Arrow selection
 to obtain its identity. Direct producer bindings keep the producer's exact
 revision. Snapshot and unpaired support inputs keep row-based identity.
 
+## Graph contribution membership
+
+[GraphStage::apply](../../crates/araphor-data/src/analysis/graph_rows/stage.rs) the Snapshot adapter validates and merges the unit-zero contribution
+  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph compares complete replacement rows with current unit members
+  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph closes removed or changed intervals before it opens replacement intervals
+  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph updates logical counts from touched-key presence transitions
+  -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the existing transaction
+
+[GraphRows::write_metadata](../../crates/araphor-data/src/analysis/graph_rows/history.rs) Data prepares one complete metadata contribution
+  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph uses the same member comparison and interval writer
+
+Data supplies one batch for each scope and version. Graph opens no store and
+commits no transaction. The existing member history includes an interned
+event reference as the unit key. An empty unit replacement removes that
+unit's members. An omitted unit remains unchanged. Shared logical members
+survive removal of one owner. Equal replacements preserve their intervals.
+
+[Recovery validation](../../crates/araphor-data/src/analysis/graph_rows/validation.rs)
+checks source ownership, overlap within each unit, conflicting historical
+values, and logical counts. The result-to-producer-cut relation still selects
+historical Graphs. The
+[Graph owner tests](../../crates/araphor-graph/src/contributions/tests.rs)
+and [Data unit tests](../../crates/araphor-data/src/analysis/graph_rows/tests/schema.rs)
+exercise these rules.
+
+This is the membership foundation. Builtin event-unit publication is not
+connected yet. The Snapshot adapter still reads its complete prior unit.
+This guide does not claim a timing gain for that transitional path.
+
 ## Proof and limits
 
 [Data tests](../../crates/araphor-data/src/analysis/managed/tests/execution.rs)

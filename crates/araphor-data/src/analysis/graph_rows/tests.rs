@@ -992,7 +992,7 @@ fn duplicate_finding_membership_rejected() -> TestResult {
         "INSERT INTO graph_finding_values
          SELECT value_id + 1000, * EXCLUDE (value_id) FROM graph_finding_values;
          INSERT INTO graph_producer_members
-         SELECT scope_id, member_kind, member_key, value_ref + 1000,
+         SELECT scope_id, unit_ref, member_kind, member_key, value_ref + 1000,
             anchor_record_id, anchor_fact, reason_code, ordinal, 0, valid_to
          FROM graph_producer_members WHERE member_kind=4",
         &[],

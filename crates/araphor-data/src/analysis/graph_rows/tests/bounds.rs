@@ -512,14 +512,60 @@ fn complete_producer_replacement_keeps_history_and_unchanged_rows() -> TestResul
         )?,
         1
     );
+    for (revision, result, base, additions, removals, count) in [
+        (
+            4,
+            "partial-added",
+            "complete-removed",
+            members(&keys[1..])?,
+            Vec::new(),
+            2,
+        ),
+        (
+            5,
+            "partial-removed",
+            "partial-added",
+            Vec::new(),
+            vec![(MemberKind::Subject, GraphRows::encode_value(&keys[1])?)],
+            1,
+        ),
+    ] {
+        GraphRows::version(&writer, result, scope, revision, Some(base))?;
+        GraphStage {
+            writer: &writer,
+            scope,
+            revision,
+            records: &records,
+            basis: None,
+            sparse: false,
+            full: false,
+        }
+        .apply(additions, removals, None)?;
+        assert_eq!(
+            writer.query_row(
+                "SELECT subject_count FROM graph_producer_versions WHERE result_id=?",
+                params![result],
+                |row| row.get::<_, u64>(0),
+            )?,
+            count,
+        );
+        assert_eq!(
+            writer.query_row(
+                "SELECT valid_from FROM graph_producer_members WHERE scope_id=? AND value_ref=? AND valid_to IS NULL",
+                params![scope, subjects[&keys[0]]],
+                |row| row.get::<_, u64>(0),
+            )?,
+            1,
+        );
+    }
     {
         let transaction = writer.transaction()?;
         GraphRows::version(
             &transaction,
             "complete-corrupt",
             scope,
-            4,
-            Some("complete-removed"),
+            6,
+            Some("partial-removed"),
         )?;
         transaction.execute(
             "UPDATE graph_producer_members SET member_key=? WHERE scope_id=? AND valid_to IS NULL",
@@ -529,7 +575,7 @@ fn complete_producer_replacement_keeps_history_and_unchanged_rows() -> TestResul
             GraphStage {
                 writer: &transaction,
                 scope,
-                revision: 4,
+                revision: 6,
                 records: &records,
                 basis: None,
                 sparse: false,
@@ -548,7 +594,7 @@ fn complete_producer_replacement_keeps_history_and_unchanged_rows() -> TestResul
             params![scope],
             |row| row.get::<_, u64>(0)
         )?,
-        2
+        3
     );
     Ok(())
 }

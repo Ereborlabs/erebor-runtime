@@ -104,11 +104,15 @@ impl NativeRows {
     }
 
     pub fn bind(writer: &Connection, id: &str, scope: u64, revision: u64) -> TestResult {
-        writer.execute("INSERT INTO graph_producer_scopes VALUES(?, ?,1,1,NULL,NULL,NULL,NULL,NULL,1,1) ON CONFLICT DO NOTHING",params![scope,[1u8;16].as_slice()])?;
-        writer.execute(
-            "INSERT INTO graph_producer_versions VALUES(?,?,?,NULL,0,0,0,0,NULL)",
-            params![id, scope, revision],
-        )?;
+        writer.execute("INSERT INTO graph_producer_scopes VALUES(?, ?,1,1,NULL,NULL,NULL,NULL,NULL,1,?) ON CONFLICT DO NOTHING",params![scope,[1u8;16].as_slice(),revision])?;
+        let base: Option<String> = writer
+            .query_row(
+                "SELECT result_id FROM graph_producer_versions WHERE scope_id=? ORDER BY commit_revision DESC LIMIT 1",
+                params![scope],
+                |row| row.get(0),
+            )
+            .optional()?;
+        GraphRows::version(writer, id, scope, revision, base.as_deref())?;
         writer.execute(
             "INSERT INTO graph_versions VALUES(?,?,?,false,false)",
             params![id, revision, id],

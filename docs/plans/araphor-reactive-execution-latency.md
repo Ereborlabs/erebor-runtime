@@ -4,10 +4,12 @@ Replace repeated source capture, saved-state reconstruction, and per-row
 transactions with one retained DataFusion subscription and atomic writes of
 changes. This plan records the measured costs and proposes the replacement.
 
-**Measurement record: Done. Proposal 1: Approved; implementation in progress.
-Proposals 2 through 6: Not approved; implementation Not done.** The user
-approved retained execution state and change inputs, measurement with the
-existing workload, and commits. This approval does not include the other
+**Measurement record: Done. Proposals 1 and 5: Approved; implementation in
+progress. Proposals 2, 3, 4, and 6: Not approved; implementation Not done.**
+The user approves retained execution state, change inputs, contribution
+ownership through `araphor-graph`, measurement with the existing workload,
+and commits. Completion requires measured reductions in input/package work
+and Graph application work. This approval does not include the other
 proposals or a storage engine change.
 
 The parent designs are [component ownership](araphor-component-redesign.md),
@@ -507,14 +509,12 @@ run. The user requested relevant tests only.
 
 #### Choice for the remaining Graph work
 
-**Broader design: Not approved. No implementation.** Proposal 1 can retain
-package-owned contribution indexes and checkpoint state. A broader option
-combines proposals 1 and 5: Graph packages remain pure functions, and Data
-owns contribution membership through `araphor-graph`. The broader option
-requires user approval. Proposal 5 is not an automatic prerequisite for
-proposal 1.
+**Combined design: Approved; implementation Not done.** The user approves
+proposals 1 and 5 together. Graph packages remain pure functions. Data owns
+contribution membership through `araphor-graph`. Do not add package-owned
+whole-Graph checkpoints or a second membership history.
 
-The recommended broader flow is:
+The approved flow is:
 
 Native input SQL selects complete Graph change units
   -> each unit has a stable record key and canonically ordered support keys
@@ -688,6 +688,36 @@ Graphs, traversal, stable finding identity, exact replay, and reopen remain
 correct. This is an ownership and algorithm change; a file move alone does
 not satisfy it.
 
+#### Membership owner result
+
+**Membership mutation owner: Done. Builtin unit integration: Not done.
+Proposals 1 and 5: Not done.** This result follows `b19b0c89a`.
+
+`araphor_graph::Contributions::apply` changes the existing versioned member
+history through Data's transaction. Each member names an interned event unit.
+The history has no second contribution table. An empty replacement removes
+one unit. An absent unit remains unchanged. Identical rows keep their open
+intervals. Shared members remain present until the last owner is removed.
+The owner checks conflicts across retained and replacement owners. Counts
+change from presence transitions for touched keys.
+
+Data's direct, metadata, and Snapshot adapters use this owner. Data retains
+producer pins, expected bases, authority checks, and COMMIT. Recovery checks
+unit-scoped intervals, historical conflicts, source ownership, and logical
+counts. Historical results retain their existing exact producer cuts.
+
+Fourteen focused Graph tests and eleven focused Data tests pass. The Data
+checks include shared values, historical conflicts, unchanged intervals,
+canonical anchors, metadata, branch order and duplicates, rollback, retry,
+schema integrity, and reopen. Graph and Data clippy pass with warnings
+denied. Scoped formatting and whitespace checks pass. Data proof is in
+`/tmp/araphor-graph-membership-data.log`.
+
+The transitional unit-zero adapter merges its full prior contribution.
+Builtin event-unit publication must bypass this adapter before completion.
+No timing reduction is claimed for this ownership change alone. Native
+value ownership, builtin change inputs, and final measurements remain open.
+
 ### 6. Select the durable storage engine
 
 Changing the engine alone leaves thousands of requests in place. First
@@ -777,6 +807,6 @@ The probe patch passed `git apply --check` after exact source restoration.
 The current code does not contain the probes. No release result or measured
 speed factor is claimed for the proposed replacement.
 
-**Recorded measurements: Done. Retained committed state: Done. Proposal 1:
-Approved and Not done. Millisecond execution: Not done. Proposals 2 through
-6: Not approved and Not done.**
+**Recorded measurements: Done. Retained committed state: Done. Proposals 1
+and 5: Approved and Not done. Millisecond execution: Not done. Proposals 2,
+3, 4, and 6: Not approved and Not done.**

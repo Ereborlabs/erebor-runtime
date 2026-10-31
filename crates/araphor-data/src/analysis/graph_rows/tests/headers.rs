@@ -142,7 +142,7 @@ fn native_header_shape_rejects_missing_values_and_duplicate_subjects() -> TestRe
         params![lineage, last],
     )?;
     transaction.execute(
-        "INSERT INTO graph_producer_members VALUES (?,2,from_hex('00'),?,NULL,NULL,NULL,0,0,NULL)",
+        "INSERT INTO graph_producer_members VALUES (?,0,2,from_hex('00'),?,NULL,NULL,NULL,0,0,NULL)",
         params![lineage, first],
     )?;
     assert!(matches!(
