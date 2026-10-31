@@ -744,7 +744,7 @@ pub struct ManagedAttempt(
 );
 
 impl ManagedAttempt {
-    pub(in crate::analysis) fn prior_result(&self, call: u64) -> Option<&PackageResultRefV1> {
+    pub fn prior_result(&self, call: u64) -> Option<&PackageResultRefV1> {
         self.0.capture.prior.get(&call).and_then(Option::as_ref)
     }
 
@@ -752,7 +752,7 @@ impl ManagedAttempt {
         self.0.capture.follows_graph(&self.1.spec)
     }
 
-    pub(in crate::analysis) fn captured_revision(&self) -> u64 {
+    pub fn captured_revision(&self) -> u64 {
         self.0.capture.revision
     }
 

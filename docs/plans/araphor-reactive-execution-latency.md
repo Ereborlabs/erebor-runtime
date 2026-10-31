@@ -20,6 +20,60 @@ addresses execution and delivery latency.
 
 ## Intended end state
 
+### Central journal references
+
+The user requires removal of saved package input, output, selected-result,
+and source-capture payloads. A call records its package revision and source
+time. Source time identifies the committed data visible to the call. It does
+not identify the call's complete input. SQL determines that input.
+
+Data commits a source event
+  -> the subscription receives the committed source position
+  -> native DataFusion executes the admitted SQL at that source position
+  -> the package consumes the query result
+  -> Data commits the call reference and its canonical produced data
+  -> the subscription advances after the commit succeeds
+
+A caller requests replay or restart recovery
+  -> Data checks the retained call, package, source, and authority references
+  -> Query reads the referenced central journal and immutable context versions
+  -> native DataFusion reconstructs the inputs at the recorded source time
+  -> execution reconstructs required prior state through recorded calls
+  -> replay returns data without publishing a second result
+
+Required source data is no longer retained
+  -> replay reports the missing or expired source range
+  -> replay does not substitute current data
+
+Remove `managed_arrow` and its payload writers, readers, source IPC records,
+and payload accounting. Do not move those copies into another table or blob.
+Preserve the existing canonical Graph, finding, notification, package, and
+context owners. Their committed data can be referenced by a call.
+
+**Journal-reference replacement: Not done.** The user authorizes this work
+after the checkpoint at `ef8024ed7`. The payload-based replay and recovery
+results later in this document describe the old implementation. They do not
+define the new storage requirement.
+
+The checked metadata lookup is implemented by `AnalysisStore::managed_reference`.
+It returns the recorded request, source cut, call ID, receipt, and historical
+definition. The lookup does not read an Arrow payload or admit publication.
+The existing payload readers keep their input-slot checks.
+
+**Payload removal: Not done.** The source-reader replacement remains a saved
+working patch. Review found gaps in recovery after journal retention, memory
+reservation before reconstruction, and source batch validation. The bounded
+context query also fails the existing index-access test. The current source
+reader and writer remain in place until these gaps have replacements.
+
+An explicit read-contract decision remains open. Current Inspect operations
+return saved package and selected data without Run permission. Reference-only
+Inspect operations would return the call and source references. Explicit Run
+replay would reconstruct data. Keeping the existing Inspect result requires
+internal execution and exact historical sources, including administrative
+table changes that the current journal does not retain. No read permission
+or result contract changes are approved by this record.
+
 Data accepts source data
   -> Query wakes the affected subscription
   -> the retained native DataFusion plan reads one committed source cut

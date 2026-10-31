@@ -2,6 +2,7 @@ use super::codec::ManagedCodec;
 use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
+use std::collections::BTreeMap;
 
 use super::super::AnalysisStore;
 use super::model::*;
@@ -530,6 +531,89 @@ impl AnalysisStore {
         .transpose()
     }
 
+    pub fn managed_reference(
+        &self,
+        instance: &ManagedInstance,
+        id: &str,
+        now: u64,
+        control: &AnalysisReadControl,
+    ) -> Result<(ManagedAttempt, Option<u64>, bool)> {
+        let mut reader = self.reader_until(control)?;
+        control.run(&mut reader, |reader| {
+            if Self::managed_version_from(
+                reader,
+                instance.spec.tenant,
+                &instance.spec.id,
+                instance.generation,
+            )? != instance.spec
+            {
+                return Err(Code::Denied.error("managed result scope"));
+            }
+            let processor: Option<String> = reader.query_row(
+                "SELECT processor_id FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+                params![instance.spec.tenant.as_slice(), id],
+                |row| row.get(0),
+            ).optional().context(AnalysisDatabaseSnafu {
+                operation: "read managed reference kind",
+            })?;
+            let (attempt, call, current) = match processor.as_deref() {
+                Some("managed-package-v1") => {
+                    let (record, _, revision) =
+                        Self::managed_header_from(reader, instance.spec.tenant, id)?;
+                    if record.instance != instance.spec.id {
+                        return Err(Code::Denied.error("managed result scope"));
+                    }
+                    let (_, attempt) = Self::validate_managed_header(
+                        reader,
+                        instance.spec.tenant,
+                        id,
+                        &record,
+                        revision,
+                    )?;
+                    let current =
+                        self.managed_current(reader, &instance.spec, id, revision, now, control)?;
+                    (attempt, Some(record.call), current)
+                }
+                Some("managed-definition-v1") => {
+                    let (step, _, revision) =
+                        Self::managed_step_header(reader, instance.spec.tenant, id)?;
+                    if step.instance != instance.spec.id {
+                        return Err(Code::Denied.error("managed result scope"));
+                    }
+                    let (attempt, _) = Self::validate_selected_header(
+                        reader,
+                        instance.spec.tenant,
+                        id,
+                        &step,
+                        revision,
+                    )?;
+                    (attempt, None, instance.progress == revision)
+                }
+                _ => return Err(Code::Missing.error("managed result")),
+            };
+            attempt
+                .capture
+                .grant
+                .permitted_by(&instance.grant.selection)?;
+            let mut historical = instance.clone();
+            historical.spec = Self::managed_version_from(
+                reader,
+                instance.spec.tenant,
+                &instance.spec.id,
+                attempt.capture.generation,
+            )?;
+            historical.generation = attempt.capture.generation;
+            historical.progress = attempt.capture.progress;
+            historical.running = attempt.capture.running;
+            historical.lifecycle = attempt.capture.lifecycle;
+            Ok((
+                ManagedAttempt(attempt, historical, None, BTreeMap::new(), None, None),
+                call,
+                current,
+            ))
+        })
+    }
+
     pub fn managed_result(
         &self,
         instance: &ManagedInstance,
@@ -716,6 +800,16 @@ impl AnalysisStore {
         id: &str,
         (mut record, mut output, revision): (Record, sdk::wire::Output, u64),
     ) -> Result<(Record, sdk::wire::Output, u64)> {
+        let (count, invalid): (usize, usize) = reader.query_row(
+            "SELECT count(*), count(*) FILTER (WHERE slot >= ? OR octet_length(ipc) = 0) FROM managed_arrow WHERE result_id = ? AND role = 'input'",
+            params![record.inputs.len(), id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "validate managed input slots" })?;
+        if invalid != 0 || count > record.inputs.len() {
+            return Err(Code::Invalid.error("managed input payload count"));
+        }
+        if count < record.inputs.len() {
+            return Err(Code::Missing.error("managed input payload"));
+        }
         let query = if record.changes.is_some() {
             "SELECT role, slot, ipc FROM managed_arrow WHERE result_id = ? AND role NOT IN ('input', 'target') ORDER BY role, slot"
         } else {
@@ -794,16 +888,6 @@ impl AnalysisStore {
             ManagedCodec::decode(&body).context(crate::ManagedDecodingSnafu)?;
         if Self::managed_edges(reader, tenant, id)? != record.dependencies {
             return Err(Code::Invalid.error("managed result edges"));
-        }
-        let (count, invalid): (usize, usize) = reader.query_row(
-            "SELECT count(*), count(*) FILTER (WHERE slot >= ? OR octet_length(ipc) = 0) FROM managed_arrow WHERE result_id = ? AND role = 'input'",
-            params![record.inputs.len(), id], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "validate managed input slots" })?;
-        if invalid != 0 || count > record.inputs.len() {
-            return Err(Code::Invalid.error("managed input payload count"));
-        }
-        if count < record.inputs.len() {
-            return Err(Code::Missing.error("managed input payload"));
         }
         Ok((record, output, revision))
     }

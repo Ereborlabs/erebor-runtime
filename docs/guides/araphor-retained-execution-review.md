@@ -483,3 +483,25 @@ uses SQL, Wasm, and the existing source-built native fixture. The tests cover
 NULL duplicates, insertion, removal, exact replay, restart, parameter reset,
 and separate captures of the same plan. The parent plan records run results
 and the remaining work.
+
+## Checked journal references
+
+The working change after `ef8024ed7` adds a metadata lookup. Full payload
+removal is **Not done**. The existing payload readers remain active.
+
+[AnalysisStore::managed_reference](../../crates/araphor-data/src/analysis/managed/read.rs) A caller requests one retained result reference
+  -> [managed_reference](../../crates/araphor-data/src/analysis/managed/read.rs) Data checks the tenant, instance version, receipt, source evidence, and selection
+  -> [ManagedAttempt](../../crates/araphor-data/src/analysis/managed/model.rs) Data returns the recorded request, source cut, prior call references, and historical definition
+  -> [managed_reference](../../crates/araphor-data/src/analysis/managed/read.rs) Data omits the publication claim and reads no Arrow payload
+
+[references_require_no_payloads](../../crates/araphor-data/src/analysis/managed/tests/replay.rs)
+checks call and selected references after deletion of all managed Arrow rows.
+The test also checks foreign instance rejection, cancellation, and an unchanged
+store revision. Existing payload readers retain their input-slot checks.
+
+The parent plan records the open Inspect result contract and source-recovery
+gaps. This lookup does not reconstruct package output or administrative tables.
+
+The reference test and the existing evaluation and selected-output corruption
+tests pass. Data library and test clippy checks pass with warnings denied.
+Scoped formatting and whitespace checks pass. No latency result is claimed.

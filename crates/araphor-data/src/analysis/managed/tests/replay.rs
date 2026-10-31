@@ -1,5 +1,54 @@
 use super::*;
 
+#[test]
+fn references_require_no_payloads() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let fixture = Fixture::admit_inputs(&store, true)?;
+    let captured = fixture.capture(&store, false)?;
+    let request = request("reference");
+    let attempt = store.register_managed_attempt(&captured, &request, || Ok(()))?;
+    let evaluations = [
+        fixture.evaluation(&request, 10, Some(&captured))?,
+        fixture.evaluation(&request, 11, Some(&captured))?,
+    ];
+    let receipt = fixture.publish(
+        &store,
+        &attempt,
+        &evaluations,
+        &[fixture.output(2)?, fixture.output(3)?],
+    )?;
+    store
+        .writer()?
+        .get_mut()?
+        .execute("DELETE FROM managed_arrow", [])?;
+    let current = fixture.current(&store)?;
+    let control = AnalysisReadControl::default();
+    let before = store.meta()?;
+    for (id, expected) in receipt
+        .results
+        .iter()
+        .map(|(call, reference)| (reference.result_id.as_str(), Some(*call)))
+        .chain(std::iter::once((receipt.selected.result_id.as_str(), None)))
+    {
+        let (reference, call, _) = store.managed_reference(&current, id, 10, &control)?;
+        assert_eq!(call, expected);
+        assert_eq!(reference.request(), &request);
+        assert_eq!(reference.receipt(), Some(&receipt));
+        assert_eq!(reference.captured_revision(), captured.revision());
+        assert_eq!(reference.instance().spec, current.spec);
+        let mut foreign = current.clone();
+        foreign.spec.id = "another-instance".into();
+        assert!(store.managed_reference(&foreign, id, 10, &control).is_err());
+    }
+    assert_eq!(store.meta()?, before);
+    control.cancel()?;
+    assert!(store
+        .managed_reference(&current, &receipt.selected.result_id, 10, &control)
+        .is_err());
+    Ok(())
+}
+
 fn same_evaluation(actual: &sdk::Evaluation, expected: &sdk::Evaluation) {
     assert_eq!(actual.export, expected.export);
     assert_eq!(actual.context, expected.context);
