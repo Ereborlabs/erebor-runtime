@@ -794,6 +794,61 @@ Complete target queries and source captures remain. The existing incident
 workload must still measure input/package work and Graph application work
 against the recorded baseline. No combined speed factor is claimed here.
 
+#### Unit measurement result
+
+**Diagnostic measurement: Done. Original observation deadline: Failed.
+Proposals 1 and 5: Not done.**
+
+The source was `209cb8297` with temporary probes. The existing 1,592-event
+incident test completed in **243.94 seconds**, against the recorded
+**121.13-second** baseline. No compilation ran during this measurement.
+The fixture reached `policy_ready` at 104.977 seconds. Observation took
+115.086 seconds. Observation exceeded the original 90-second deadline.
+The diagnostic run used a temporary 300-second observation cap. This cap
+does not change acceptance. All 43 probe paths were restored from exact
+copies and checked with SHA-256.
+
+The following rows compare the selected cursor-950 invocation with the
+same baseline boundary. They are not totals for the complete test or
+guaranteed execution times. Child scopes are included in parent scopes.
+
+| Selected-cut boundary | Baseline | Unit implementation | Change |
+| --- | ---: | ---: | --- |
+| Saved-call capture | 1,474.773 ms | 215.101 ms | 85.4% lower |
+| Attempt ready to first package worker | 657.889 ms | 18,272.531 ms | 27.8 times higher |
+| Graph publication, `graph_result_rows` | 1,332.962 ms | 1,592.164 ms | 19.4% higher |
+| DuckDB API time inside Graph publication | 930.511 ms | 1,446.965 ms | 55.5% higher |
+| Time outside DuckDB APIs inside Graph publication | 402.451 ms | 145.199 ms | 63.9% lower |
+| Complete Data result commit | 2,814.612 ms | 2,480.537 ms | 11.9% lower |
+
+The selected invocation delivered 10 changed units and 10 lookup records
+to each package. The Process package produced 31 subjects, 21 edges, and
+one finding. The other two packages produced no Graph values. Each package
+still retained a complete target of 950 rows and 275,424 Arrow memory
+bytes. Changed guest input does not prove that target query work is
+incremental.
+
+The three package-worker intervals covered 130.473 ms. Their complete
+span was 2,197.335 ms. The 2,066.862 ms between these intervals remains
+part of execution latency. Do not omit this time from the comparison.
+Input preparation before the first worker is the largest measured
+regression. Current probes do not identify the exact input operator that
+causes this cost. The startup interval also needs a separate source-level
+measurement.
+
+The retained state reduces saved-call capture. Graph publication spends
+less time outside DuckDB APIs, but more time inside those APIs. The whole
+test is slower. Both approved proposals remain incomplete until input
+execution and Graph publication show measured reductions with the same
+behavior checks. No millisecond or overall speed improvement is proved.
+
+The diagnostic log is
+`/tmp/araphor-unit-measure-20261031-quiet.log`. Selected-cut scopes, API
+counts, and source-log hashes are in
+`/tmp/araphor-unit-analysis-20261031/quiet/focus.json`. The selected commit
+scope is 4478. Its invocation is
+`f7aa2fbb-3f1a-4c9b-b5fc-fb98e4f4ca13`.
+
 ### 6. Select the durable storage engine
 
 Changing the engine alone leaves thousands of requests in place. First
