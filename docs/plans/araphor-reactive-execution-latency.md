@@ -290,16 +290,55 @@ Scoped formatting, whitespace, and 86 local document links pass.
 This change supplies a correct input cut for the change reader. It does not
 replace the complete Query or Graph capture and proves no latency gain.
 
-### Native source-view replacement under review
+### Coverage change read result
+
+**Coverage change reader: Done. Incremental source execution: Not done.
+Proposals 1 and 5: Not done.** This change follows `b2df26330`.
+
+Data receives a coverage change read after complete input cut C
+  -> the existing reader transaction fixes committed revision R
+  -> the native revision index selects coverage headers after C
+  -> Data checks tenant, node, and source scope before it reads a report
+  -> a native equality lookup reads each selected immutable report through R
+  -> Data returns the report bytes and exact source, revision, and position
+
+Each accepted report has its own global commit revision and ordinal zero.
+The existing writer inserts one report per transaction. A unique index on
+that revision supplies both native access paths. The report decoder and
+coverage writer remain unchanged. A standalone historical read checks the
+exact reference and its captured revision. Reading does not advance managed
+progress.
+
+Five focused tests pass. They cover fixed cuts, later arrivals, scope checks
+before report reads, invalid references and stored rows, cancellation,
+idempotence, reopen, backup, restore, and native index use. The index test
+uses the production statements and default engine settings. The test log is
+`/tmp/araphor-coverage-changes-fixed-20261101.log`. Data clippy passes with
+tests and warnings denied. Its log is
+`/tmp/araphor-coverage-clippy-20261101.log`. Full workspace CI was not run.
+The user requires relevant checks only.
+Scoped formatting, task whitespace checks, and 94 local document links pass.
+
+The shared source view and Graph runtime do not use this reader yet. Managed
+execution still requests `Read::Snapshot`, executes complete target inputs,
+and compares those targets. That path does not satisfy the incremental
+requirement. No incident latency reduction is claimed for this reader.
+
+### Native source-view replacement
 
 **Concrete source-record and input-contract implementation: Not done.**
-The change reviewer must approve the record and model flow before code.
-The current source review establishes these requirements:
+The change reviewer approves the source-record and model flow for
+implementation. The approved flow has these requirements:
 
 - Reuse one managed `Step` for the shared source basis. Link its parent to
   the prior selected result. Retain the source cut, projection, typed Arrow
   additions, removal ranges, and exact metadata references once per step.
   Reuse `managed_arrow` for payloads. Remove per-call complete target IPC.
+- Data seals the actual read mode, prior selected result, lower input cut,
+  and projection in the attempt contract. Initial capture requires no prior
+  basis or an explicitly authorized rebuild. Continued capture names the
+  exact committed basis. A source-parent edge retains history without
+  turning old witnesses into current input dependencies.
 - Store the first projected source basis once. Later steps store changes.
   Restart validates the same instance, generation, store, schema, and epoch,
   then restores the indexed view once. Parent result commits are strictly
@@ -324,7 +363,7 @@ The current source review establishes these requirements:
 The first complete slice must execute installed SQL, Wasm, and native
 packages through real Selected publication. Its proof must cover changed
 inputs, indexed support, failed publication, acknowledgement, and restart.
-Coverage changes, Graph migration, ordinary incremental SQL plans, and
+Coverage integration, Graph migration, ordinary incremental SQL plans, and
 window transitions remain required parts of the full goal.
 
 ## Measured baseline

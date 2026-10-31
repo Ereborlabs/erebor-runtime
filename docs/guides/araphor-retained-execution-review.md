@@ -3,6 +3,7 @@
 This guide covers retained state and lookup inputs through `babd497c4`, plus
 the current unit migration and managed raw-change reads. The context change
 reader follows `e80f918fd`. The binary input frontier follows `ad4aad54b`.
+The coverage change reader follows `b2df26330`.
 The changes remove
 repeated saved-call reads and deliver declared input changes to packages. The parent
 plan is [reactive execution latency](../plans/araphor-reactive-execution-latency.md).
@@ -290,7 +291,7 @@ reopen, and unselected context keys. The existing
 also check source and trace retirement, binding filters, and replay floors.
 
 This Data API is a prerequisite. Query still uses complete captures for
-managed Graph execution. Native input execution, coverage change feeds,
+managed Graph execution. Native input execution, coverage integration,
 and the complete incremental Graph path are **Not done**. The parent
 plan records the required replacement. This API alone proves no latency gain.
 
@@ -354,6 +355,34 @@ both restart cursor forms for Graph and Selected destinations.
 
 This correction does not implement the indexed source view. The complete
 Query and Graph input reads remain open in the parent plan.
+
+## Committed coverage changes
+
+[AnalysisStore::coverage_changes](../../crates/araphor-data/src/analysis/coverage.rs) Data receives a coverage change read after complete input cut C
+  -> [AnalysisReadControl::run](../../crates/araphor-data/src/analysis/read.rs) the existing reader transaction fixes committed revision R
+  -> [AnalysisStore::coverage_changes_from](../../crates/araphor-data/src/analysis/coverage.rs) the native revision index selects coverage headers after C
+  -> [AnalysisStore::coverage_changes_from](../../crates/araphor-data/src/analysis/coverage.rs) Data checks tenant, node, and source scope before it reads a report
+  -> [AnalysisStore::coverage_report_from](../../crates/araphor-data/src/analysis/coverage.rs) a native equality lookup reads each selected immutable report through R
+  -> [CoverageChanges](../../crates/araphor-data/src/analysis/coverage.rs) Data returns the report bytes and exact source, revision, and position
+
+The existing coverage writer assigns a fresh global revision to each report.
+The unique `coverage_commit_idx` index is installed at store open. Both read
+statements filter on that index column. The header reader uses only the
+immutable source identity from the raw journal cache. It does not use cached
+receipt progress as metadata for R. The report lookup checks the stored
+source key, tenant, logical revision, commit revision, ordinal, and body.
+
+[AnalysisStore::coverage_report](../../crates/araphor-data/src/analysis/coverage.rs)
+checks an exact historical reference against its authorized scope and the
+captured store revision. Report bytes retain their existing encoding. A read
+owns no managed progress, source cursor, or call state.
+
+The [coverage tests](../../crates/araphor-data/src/analysis/coverage/tests.rs)
+exercise fixed cuts, excluded invalid reports, historical lookup, invalid
+references, cancellation, idempotence, reopen, backup, restore, and both
+native index statements. The parent plan records the five passing tests and
+Data clippy result. Source-view integration is **Not done**. This component
+does not prove lower incident latency.
 
 ## Proof and limits
 

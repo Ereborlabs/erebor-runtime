@@ -18,6 +18,7 @@ mod backup;
 mod capacity;
 mod connection;
 mod context;
+mod coverage;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod crash;
 mod definitions;
@@ -47,6 +48,7 @@ mod trace;
 pub use backup::{AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisRecoveryStatusV1};
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
+pub use coverage::{CoverageChanges, CoverageRecord, CoverageReportRef};
 pub use extraction::{
     AnalysisExtractLimits, AnalysisExtractionV1, AnalysisInputTables, AnalysisPositionPageV1,
     AnalysisReadModeV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
@@ -548,6 +550,11 @@ impl AnalysisStore {
             .execute_batch("CREATE INDEX IF NOT EXISTS context_commit_idx ON context_versions(commit_revision)")
             .context(AnalysisDatabaseSnafu {
                 operation: "index committed context changes",
+            })?;
+        writer
+            .execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS coverage_commit_idx ON coverage(commit_revision)")
+            .context(AnalysisDatabaseSnafu {
+                operation: "index committed coverage changes",
             })?;
         let raw = Self::recover_segments(&mut writer, &root, retention)?;
         let meta = Self::read_meta_from(&writer, &path)?;
