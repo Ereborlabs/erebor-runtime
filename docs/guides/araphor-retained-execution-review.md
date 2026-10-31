@@ -2,7 +2,8 @@
 
 This guide covers retained state and lookup inputs through `babd497c4`, plus
 the current unit migration and managed raw-change reads. The context change
-reader follows `e80f918fd`. The changes remove
+reader follows `e80f918fd`. The binary input frontier follows `ad4aad54b`.
+The changes remove
 repeated saved-call reads and deliver declared input changes to packages. The parent
 plan is [reactive execution latency](../plans/araphor-reactive-execution-latency.md).
 
@@ -325,6 +326,34 @@ cancellation, and reopen. The
 uses the actual production statements. It checks the revision index and six
 unique-key lookups. It does not force an optimizer setting or set a timing
 target. The parent plan records verification and the remaining Graph work.
+
+## Binary managed input cut
+
+[Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) A managed subscription captures input through transaction revision R
+  -> [Cursor::new](../../crates/araphor-query/src/follow/cursor.rs) Query stores input position `(R, u32::MAX)` in the offered frontier
+  -> [ExecutionReceipt::acknowledge](../../crates/araphor-query/src/definition/physical.rs) the existing Data publication can acknowledge output commit P
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) Query emits input position R and publication revision P as separate fields
+  -> [Run::resume_revision](../../crates/araphor-query/src/stream/mod.rs) a live or resumed subscription reads input progress from R
+
+[SubscribeExec::open](../../crates/araphor-query/src/stream/physical.rs)
+uses the input cut for its dependency check before it waits. Runtime uses the
+same cut after capture and at initialization. Graph and Selected publication
+use the same rule. `Run::session` retains the publication revision for
+offered and completed window acknowledgements.
+
+Cursor encoding uses named MessagePack fields. The decoder requires one
+complete value and then validates the fields. Source-scope fingerprints use
+the same binary serializer. No JSON compatibility path or version change
+exists. The
+[cursor tests](../../crates/araphor-query/src/follow/cursor/tests.rs)
+check maximum values, malformed values, trailing bytes, store identity,
+scope binding, and window identity. The
+[pending-input test](../../crates/araphor-query/src/definition/tests/captured/managed/snapshot.rs)
+holds publication while new input arrives. It checks live execution and
+both restart cursor forms for Graph and Selected destinations.
+
+This correction does not implement the indexed source view. The complete
+Query and Graph input reads remain open in the parent plan.
 
 ## Proof and limits
 

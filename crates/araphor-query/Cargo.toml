@@ -22,6 +22,7 @@ erebor-runtime-error = { path = "../erebor-runtime-error" }
 futures-core = "0.3"
 futures-util.workspace = true
 prost.workspace = true
+rmp-serde.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

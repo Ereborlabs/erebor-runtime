@@ -274,7 +274,7 @@ impl SubscribeExec {
                     .dependencies(&session, selection, Some(&permit), None)
                     .await?;
                 cursor.check_store(&meta)?;
-                if revision <= cursor.read_revision() {
+                if revision <= run.resume_revision() {
                     let calls = session
                         .calls
                         .as_ref()

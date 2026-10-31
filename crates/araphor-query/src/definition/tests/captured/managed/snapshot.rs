@@ -2,8 +2,12 @@ use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publication_keeps_pending_input() -> TestResult {
-    for restart in [false, true] {
+    for (graph, resume) in [false, true]
+        .into_iter()
+        .flat_map(|graph| [None, Some(false), Some(true)].map(|resume| (graph, resume)))
+    {
         let fixture = fixture().await?;
+        let raw_revision = fixture.engine.store().meta()?.commit_revision;
         let (entered, observed) = tokio::sync::oneshot::channel();
         let (release, held) = mpsc::channel();
         let state = Arc::new(SinkState {
@@ -47,11 +51,15 @@ async fn publication_keeps_pending_input() -> TestResult {
         let mut spec = original.spec.clone();
         spec.id = "graph-cut".into();
         spec.manifest.calls = [(call_id, declaration)].into_iter().collect();
-        spec.destination = araphor_data::ManagedDestination::Graph {
-            source: fixture.engine.store().source_page([1; 16], None)?[0].clone(),
-            events_sql: "SELECT * FROM events".into(),
-            calls: [call_id].into_iter().collect(),
-            operation: araphor_data::ManagedGraphOperation::Evaluate,
+        spec.destination = if graph {
+            araphor_data::ManagedDestination::Graph {
+                source: fixture.engine.store().source_page([1; 16], None)?[0].clone(),
+                events_sql: "SELECT * FROM events".into(),
+                calls: [call_id].into_iter().collect(),
+                operation: araphor_data::ManagedGraphOperation::Evaluate,
+            }
+        } else {
+            araphor_data::ManagedDestination::Selected
         };
         let selection = spec.destination.selection(&original.grant.selection)?;
         let admitted = fixture
@@ -71,6 +79,9 @@ async fn publication_keeps_pending_input() -> TestResult {
             state: Arc::clone(&state),
             managed: Some(instance),
         });
+        fixture.context(1)?;
+        let input_revision = fixture.engine.store().meta()?.commit_revision;
+        assert!(raw_revision < input_revision);
         let mut subscription = Subscription::managed(
             fixture
                 .engine
@@ -87,29 +98,43 @@ async fn publication_keeps_pending_input() -> TestResult {
             observed = observed => observed?,
         }
         let frontier = state.frontier.lock().unwrap().clone().ok_or("input cut")?;
-        let captured = crate::follow::Cursor::decode(&frontier.cursor)?.read_revision();
+        let input_cursor = crate::follow::Cursor::decode(&frontier.cursor)?;
+        let captured = input_cursor.read_revision();
+        assert_eq!(captured, input_revision);
+        assert_eq!(input_cursor.position().commit_revision, captured);
+        assert_eq!(input_cursor.position().ordinal, u32::MAX);
         fixture.event(2)?;
         let arrival = fixture.engine.store().meta()?.commit_revision;
-        fixture.context(1)?;
+        fixture.context(2)?;
         let published = fixture.engine.store().meta()?.commit_revision;
         assert!(captured < arrival && arrival < published);
         state.publication.store(published, Ordering::SeqCst);
         release.send(())?;
         let first = next.await.ok_or("captured receipt")??;
-        assert!(first.snapshot.managed().unwrap().follows_graph());
+        assert_eq!(first.snapshot.managed().unwrap().follows_graph(), graph);
         assert_eq!(
             first.snapshot.page.extraction.meta.commit_revision,
             captured
         );
         assert_eq!(first.cursor.read_revision(), published);
+        assert_eq!(first.cursor.position(), input_cursor.position());
+        assert_eq!(first.snapshot.page.scanned_through, first.cursor.position());
         assert_eq!(
             first.snapshot.page.extraction.sources[0]
                 .receipt
                 .contiguous_cursor,
             1
         );
+        let frontier = if resume == Some(true) {
+            ManagedFrontier {
+                cursor: first.cursor.encode()?,
+                ..frontier
+            }
+        } else {
+            frontier
+        };
         drop(first);
-        if restart {
+        if resume.is_some() {
             subscription.cancel_and_join().await?;
             subscription = Subscription::managed(
                 fixture

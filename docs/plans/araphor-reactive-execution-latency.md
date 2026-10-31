@@ -249,6 +249,84 @@ Coverage changes, the explicit delta-source contract, indexed native Query
 execution, and Graph integration remain open. This reader alone proves no
 incident latency improvement.
 
+### Managed input-frontier result
+
+**Exact binary input frontier: Done. Incremental source execution: Not done.
+Proposals 1 and 5: Not done.** This change follows `ad4aad54b`.
+
+A managed subscription captures input through transaction revision R
+  -> Query stores input position `(R, u32::MAX)` in the offered frontier
+  -> the existing Data publication can acknowledge output commit P
+  -> Query emits input position R and publication revision P as separate fields
+  -> a live or resumed subscription reads input progress from R
+
+This rule applies to Graph and Selected destinations. The previous generic
+managed path used P for consumed input. An arrival between R and P could
+then appear to be consumed. The resume checks, runtime initialization, and
+runtime progress now use the same input rule. Window acknowledgement keeps
+its separate publication-revision check.
+
+Cursor storage and source-scope fingerprints use MessagePack through the
+existing workspace dependency. Decoding rejects trailing bytes, unknown
+fields, invalid versions, invalid window identities, and inconsistent
+positions. No JSON fallback or version change is added.
+
+Twenty-six focused Query tests pass: four cursor tests, seventeen managed
+capture tests, and five fixed-window tests. The publication test covers
+Graph and Selected destinations in live execution and restart from both the
+saved frontier and emitted cursor. A context commit after the last raw
+arrival precedes R. Another arrival and a context commit occur during the
+held publication. The returned input position remains R. The next execution
+processes the pending arrival.
+
+The logs are `/tmp/araphor-input-frontier-codec-final-20261101.log`,
+`/tmp/araphor-input-frontier-managed-final-20261101.log`, and
+`/tmp/araphor-input-frontier-windows-20261101.log`. Query clippy passes with
+tests and warnings denied. Its log is
+`/tmp/araphor-input-frontier-clippy-20261101.log`. Full workspace CI was not
+run. The user requires relevant checks only.
+Scoped formatting, whitespace, and 86 local document links pass.
+
+This change supplies a correct input cut for the change reader. It does not
+replace the complete Query or Graph capture and proves no latency gain.
+
+### Native source-view replacement under review
+
+**Concrete source-record and input-contract implementation: Not done.**
+The change reviewer must approve the record and model flow before code.
+The current source review establishes these requirements:
+
+- Reuse one managed `Step` for the shared source basis. Link its parent to
+  the prior selected result. Retain the source cut, projection, typed Arrow
+  additions, removal ranges, and exact metadata references once per step.
+  Reuse `managed_arrow` for payloads. Remove per-call complete target IPC.
+- Store the first projected source basis once. Later steps store changes.
+  Restart validates the same instance, generation, store, schema, and epoch,
+  then restores the indexed view once. Parent result commits are strictly
+  older. Equal source cuts remain valid for window transitions.
+- Add an `affected` reference to each existing SDK change pair. The reference
+  names a typed query input port. Existing native query ports supply before,
+  after, and Lookup rows from invocation-local source views. The declaration
+  does not introduce another SQL parser, join implementation, or guest ABI.
+- Keep the committed index at C in Query. Each invocation reads a candidate
+  through R. Promote the exact candidate after its own acknowledgement.
+  Failure after COMMIT must adopt that candidate or invalidate the local
+  index and restore the committed basis.
+- Native DataFusion joins execute the queries. A transparent build-stream
+  adapter can expose exact Arrow join keys to the indexed probe provider.
+  The provider must not scan all retained keys to evaluate an opaque native
+  hash filter. A key wait must not depend on its own probe. Reused and
+  concurrent plans require fresh task-local key and filter state.
+- Internal Graph facts use stable record and context identities. Local guest
+  row ordinals are assigned only after selected support is known. Remove
+  global row numbering and complete Graph reconstruction from normal updates.
+
+The first complete slice must execute installed SQL, Wasm, and native
+packages through real Selected publication. Its proof must cover changed
+inputs, indexed support, failed publication, acknowledgement, and restart.
+Coverage changes, Graph migration, ordinary incremental SQL plans, and
+window transitions remain required parts of the full goal.
+
 ## Measured baseline
 
 The source was `2d7d4164b9c2`. The existing

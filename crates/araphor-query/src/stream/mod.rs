@@ -38,6 +38,16 @@ pub(crate) struct Run {
 }
 
 impl Run {
+    pub(crate) fn resume_revision(&self) -> u64 {
+        self.resume.as_ref().map_or(0, |cursor| {
+            if self.managed.is_some() {
+                cursor.position().commit_revision
+            } else {
+                cursor.read_revision()
+            }
+        })
+    }
+
     pub(crate) fn sources(&self) -> &AnalysisTableRequests {
         self.managed
             .as_ref()

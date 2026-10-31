@@ -96,7 +96,7 @@ impl Runtime {
             .map_or(0, |cursor| cursor.read_revision());
         Ok(Self {
             revision,
-            captured: revision,
+            captured: run.resume_revision(),
             position: run.resume.as_ref().map(|cursor| cursor.position()),
             run,
             input: Arc::clone(&physical.input),
@@ -346,6 +346,17 @@ impl Runtime {
                     Arc::clone(self.run.session.control()),
                     pending,
                 );
+                let position = if self.run.managed.is_some() {
+                    StorePositionV1 {
+                        commit_revision: captured.snapshot().page.extraction.meta.commit_revision,
+                        ordinal: u32::MAX,
+                    }
+                } else {
+                    StorePositionV1 {
+                        commit_revision: 0,
+                        ordinal: 0,
+                    }
+                };
                 if let Some((_, publication)) = &self.run.managed {
                     let snapshot = captured.snapshot();
                     self.check_store(&snapshot.page.extraction.meta)?;
@@ -355,7 +366,7 @@ impl Runtime {
                     {
                         if !managed.rebuild()
                             && !self.run.resume_pending
-                            && managed.source_revision() <= cursor.read_revision()
+                            && managed.source_revision() <= self.run.resume_revision()
                             && self.run.resume_expiry.is_none_or(|expiry| expiry > now)
                         {
                             let cursor = cursor.clone();
@@ -372,7 +383,7 @@ impl Runtime {
                                 });
                             }
                             self.revision = cursor.read_revision();
-                            self.captured = cursor.read_revision();
+                            self.captured = self.run.resume_revision();
                             self.position = Some(cursor.position());
                             self.evaluated = cursor.evaluated();
                             self.exhausted = true;
@@ -389,10 +400,7 @@ impl Runtime {
                         &snapshot.page.extraction.meta,
                         self.run.operation,
                         self.run.binding,
-                        StorePositionV1 {
-                            commit_revision: 0,
-                            ordinal: 0,
-                        },
+                        position,
                         now,
                     );
                     cursor.set_windows(
@@ -443,10 +451,7 @@ impl Runtime {
                     snapshot,
                     batches: None,
                     positions: Vec::new(),
-                    position: StorePositionV1 {
-                        commit_revision: 0,
-                        ordinal: 0,
-                    },
+                    position,
                     limited: false,
                     _memory: reservation,
                     _permit: Some(permit),
@@ -474,12 +479,7 @@ impl Runtime {
         self.check_store(&output.snapshot.page.extraction.meta)?;
         let captured = output.snapshot.page.extraction.meta.commit_revision;
         self.revision = captured.max(calls.published_revision());
-        self.captured = if self.run.follow
-            && output
-                .snapshot
-                .managed()
-                .is_some_and(|managed| managed.follows_graph())
-        {
+        self.captured = if self.run.managed.is_some() {
             captured
         } else {
             self.revision

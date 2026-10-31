@@ -59,6 +59,13 @@ impl ManagedPublication for Sink {
             cursor.read_revision(),
             snapshot.page.extraction.meta.commit_revision
         );
+        assert_eq!(
+            cursor.position(),
+            araphor_data::StorePositionV1 {
+                commit_revision: snapshot.page.extraction.meta.commit_revision,
+                ordinal: u32::MAX,
+            }
+        );
         *self.state.frontier.lock().unwrap() = Some(frontier.clone());
         assert!(!self.state.admitted.load(Ordering::SeqCst));
         assert_eq!(

@@ -33,7 +33,7 @@ pub struct Cursor {
 
 impl Cursor {
     pub fn encode(&self) -> Result<Vec<u8>> {
-        serde_json::to_vec(self).map_err(|_| {
+        rmp_serde::to_vec_named(self).map_err(|_| {
             InvalidSnafu {
                 field: "cursor encoding",
             }
@@ -48,12 +48,19 @@ impl Cursor {
             }
             .fail();
         }
-        let cursor: Self = serde_json::from_slice(bytes).map_err(|_| {
+        let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
+        let cursor = Self::deserialize(&mut decoder).map_err(|_| {
             InvalidSnafu {
                 field: "cursor encoding",
             }
             .build()
         })?;
+        if decoder.position() != bytes.len() as u64 {
+            return InvalidSnafu {
+                field: "cursor encoding",
+            }
+            .fail();
+        }
         cursor.check_fields()?;
         Ok(cursor)
     }
@@ -225,12 +232,14 @@ impl Fingerprint {
         }
         operation.hash(&mut hash);
         caller.hash(&mut hash);
-        serde_json::to_writer(&mut hash, selection).map_err(|_| {
-            InvalidSnafu {
-                field: "cursor scope",
-            }
-            .build()
-        })?;
+        selection
+            .serialize(&mut rmp_serde::Serializer::new(&mut hash).with_struct_map())
+            .map_err(|_| {
+                InvalidSnafu {
+                    field: "cursor scope",
+                }
+                .build()
+            })?;
         Ok(hash.finish_digest())
     }
 }

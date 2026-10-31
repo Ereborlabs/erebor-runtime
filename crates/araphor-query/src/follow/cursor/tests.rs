@@ -70,16 +70,27 @@ fn invalid_store_cursors() {
     assert!(Cursor::decode(&vec![b' '; 1025]).is_err());
     assert!(Cursor::decode(b"{}").is_err());
     assert!(Cursor::decode(b"not a cursor").is_err());
-    let mut value = serde_json::to_value(&cursor).unwrap();
-    value["unknown"] = serde_json::json!(true);
-    assert!(Cursor::decode(&serde_json::to_vec(&value).unwrap()).is_err());
-    value.as_object_mut().unwrap().remove("unknown");
-    value["version"] = serde_json::json!(2);
-    assert!(Cursor::decode(&serde_json::to_vec(&value).unwrap()).is_err());
-    value["version"] = serde_json::json!(1);
-    value["revision"] = serde_json::json!(1);
-    value["position"]["commit_revision"] = serde_json::json!(2);
-    assert!(Cursor::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    let mut trailing = cursor.encode().unwrap();
+    trailing.push(0);
+    assert!(Cursor::decode(&trailing).is_err());
+    #[derive(Serialize)]
+    struct Extra<'a> {
+        #[serde(flatten)]
+        cursor: &'a Cursor,
+        unknown: bool,
+    }
+    let unknown = Extra {
+        cursor: &cursor,
+        unknown: true,
+    };
+    assert!(Cursor::decode(&rmp_serde::to_vec_named(&unknown).unwrap()).is_err());
+    let mut invalid = cursor.clone();
+    invalid.version = 2;
+    assert!(Cursor::decode(&invalid.encode().unwrap()).is_err());
+    invalid.version = 1;
+    invalid.revision = 1;
+    invalid.position.commit_revision = 2;
+    assert!(Cursor::decode(&invalid.encode().unwrap()).is_err());
     let window = WindowRange {
         source: WindowSource::Query,
         start_utc_ns: 0,
@@ -88,38 +99,41 @@ fn invalid_store_cursors() {
     };
     let mut window_cursor = cursor.clone();
     window_cursor.set_windows(&[window], &[window]);
-    let frame = serde_json::to_value(window_cursor).unwrap();
-    for (field, value) in [
-        ("start_utc_ns", serde_json::json!(2)),
-        ("end_utc_ns", serde_json::json!(0)),
-        ("active", serde_json::json!(false)),
-    ] {
-        let mut invalid = frame.clone();
-        invalid["windows"][0][field] = value;
+    for case in 0..3 {
+        let mut invalid = window_cursor.clone();
+        match case {
+            0 => invalid.windows[0].start_utc_ns = 2,
+            1 => invalid.windows[0].end_utc_ns = 0,
+            _ => invalid.windows[0].active = false,
+        }
         assert!(matches!(
-            Cursor::decode(&serde_json::to_vec(&invalid).unwrap()),
+            Cursor::decode(&invalid.encode().unwrap()),
             Err(crate::Error::Invalid {
                 field: "cursor fields",
                 ..
             })
         ));
     }
-    for field in ["windows", "completed_windows"] {
-        let mut invalid = frame.clone();
-        let duplicate = invalid[field][0].clone();
-        invalid[field].as_array_mut().unwrap().push(duplicate);
+    for completed in [false, true] {
+        let mut invalid = window_cursor.clone();
+        let windows = if completed {
+            &mut invalid.completed_windows
+        } else {
+            &mut invalid.windows
+        };
+        windows.push(windows[0]);
         assert!(matches!(
-            Cursor::decode(&serde_json::to_vec(&invalid).unwrap()),
+            Cursor::decode(&invalid.encode().unwrap()),
             Err(crate::Error::Invalid {
                 field: "cursor fields",
                 ..
             })
         ));
     }
-    let mut invalid = frame;
-    invalid["completed_windows"][0]["end_utc_ns"] = serde_json::json!(3);
+    let mut invalid = window_cursor;
+    invalid.completed_windows[0].end_utc_ns = 3;
     assert!(matches!(
-        Cursor::decode(&serde_json::to_vec(&invalid).unwrap()),
+        Cursor::decode(&invalid.encode().unwrap()),
         Err(crate::Error::Invalid {
             field: "cursor fields",
             ..
@@ -243,21 +257,15 @@ fn source_keys_keep_binding() {
     let plan = plan(11, "value");
     let scope = AnalysisSelectionV1::new([1; 16], vec![]);
     let names = BTreeSet::from(["coverage".to_owned(), "events".to_owned()]);
-    let mut legacy = Fingerprint::new();
-    Hasher::write(&mut legacy, b"araphor-query.follow.v1\0");
-    plan.hash(&mut legacy);
-    names.hash(&mut legacy);
-    Operation::Append.hash(&mut legacy);
-    b"principal".as_slice().hash(&mut legacy);
-    serde_json::to_writer(&mut legacy, &scope).unwrap();
-    let legacy = legacy.finish_digest();
     let mut requests: AnalysisTableRequests = names.into_iter().map(|name| (name, None)).collect();
+    let binding =
+        Fingerprint::binding(&plan, &requests, &scope, Operation::Append, b"principal").unwrap();
     for columns in [None, Some(BTreeSet::new()), Some(BTreeSet::from([1, 3]))] {
         requests.insert("events".to_owned(), columns);
         assert_eq!(
             Fingerprint::binding(&plan, &requests, &scope, Operation::Append, b"principal")
                 .unwrap(),
-            legacy
+            binding
         );
     }
 }
