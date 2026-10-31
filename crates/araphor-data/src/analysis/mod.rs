@@ -544,6 +544,11 @@ impl AnalysisStore {
                 operation: "commit schema",
             })?;
         }
+        writer
+            .execute_batch("CREATE INDEX IF NOT EXISTS context_commit_idx ON context_versions(commit_revision)")
+            .context(AnalysisDatabaseSnafu {
+                operation: "index committed context changes",
+            })?;
         let raw = Self::recover_segments(&mut writer, &root, retention)?;
         let meta = Self::read_meta_from(&writer, &path)?;
         let (revision, _) = watch::channel(meta.commit_revision);

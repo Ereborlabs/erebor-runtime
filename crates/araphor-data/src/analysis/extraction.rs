@@ -482,7 +482,8 @@ impl AnalysisTableRead<'_> {
         }
         if self.inputs.is_some()
             || selection.targets
-            || !selection.contexts.as_slice().is_empty()
+            || (!selection.contexts.as_slice().is_empty()
+                && self.projected("context_versions").is_none())
             || !selection.results.is_empty()
             || !selection.profiles.is_empty()
             || !selection.graphs.is_empty()
@@ -495,7 +496,12 @@ impl AnalysisTableRead<'_> {
             columns.is_some()
                 && !matches!(
                     name.as_str(),
-                    "events" | "trace_output" | "coverage" | "discovery_state" | "graph_state"
+                    "events"
+                        | "trace_output"
+                        | "coverage"
+                        | "discovery_state"
+                        | "graph_state"
+                        | "context_versions"
                 )
         }) {
             return Err(crate::PackageErrorCodeV1::Invalid.error("managed change relation"));
@@ -1656,9 +1662,11 @@ impl AnalysisStore {
             #[cfg(test)]
             control.test_snapshot()?;
             let requested = selection;
-            let raw_scope = (managed.is_some()
-                && matches!(mode, AnalysisReadModeV1::Changes(_))
-                && selection.contexts.is_all())
+            if matches!(mode, AnalysisReadModeV1::Changes(_)) {
+                limits.check_keys(requested)?;
+            }
+            let raw_scope = (matches!(mode, AnalysisReadModeV1::Changes(_))
+                && !selection.contexts.is_empty())
             .then(|| {
                 let mut scope = selection.clone();
                 scope.contexts = Selection::Exact(Vec::new());
@@ -1938,9 +1946,21 @@ impl AnalysisStore {
                     after = Some(record.position);
                 }
             }
-            if matches!(mode, AnalysisReadModeV1::Changes(_)) {
+            if let AnalysisReadModeV1::Changes(after) = mode {
                 for removal in removals {
                     output.remove_raw(&mut capture, &removal, control)?;
+                }
+                self.extract_context_changes(
+                    snapshot,
+                    requested,
+                    after.commit_revision,
+                    context_owners,
+                    &mut output.sink(control),
+                    &mut capture,
+                )?;
+                if managed.is_some() && read.projected("context_versions").is_some() {
+                    self.extract_provenance(snapshot, selection.tenant_id, &mut output,
+                        capture.graph_witnesses(), control)?;
                 }
                 control.check()?;
                 let page = capture.finish(output, end, true, control)?;

@@ -8,6 +8,11 @@ use super::*;
 type StoredContextRow = (Vec<u8>, String, Vec<u8>, Vec<u8>, u64, ContextRow);
 
 impl AnalysisStore {
+    pub(in crate::analysis) const CONTEXT_VERSION_SQL: &'static str =
+        "SELECT tenant_id, owner_id, entity_key, lifetime_key, owner_revision,
+            valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision
+         FROM context_versions WHERE version_key = ?";
+
     pub fn context_tenant_page(
         &self,
         owner: &str,
@@ -122,11 +127,7 @@ impl AnalysisStore {
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         let version_key = super::version_key(key)?;
         let stored: Option<StoredContextRow> = connection
-            .prepare_cached(
-                "SELECT tenant_id, owner_id, entity_key, lifetime_key, owner_revision,
-                    valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision
-                 FROM context_versions WHERE version_key = ?",
-            )
+            .prepare_cached(Self::CONTEXT_VERSION_SQL)
             .and_then(|mut statement| {
                 statement.query_row(params![version_key], |row| {
                     Ok((

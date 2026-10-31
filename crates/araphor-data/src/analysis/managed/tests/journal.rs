@@ -6,11 +6,14 @@ use crate::{
 };
 use sdk::arrow_array::{UInt32Array, UInt64Array};
 
+mod contexts;
+
 struct Journal {
     fixture: Fixture,
     selection: AnalysisSelectionV1,
     requests: AnalysisTableRequests,
     limits: AnalysisExtractLimits,
+    owners: Option<BTreeSet<String>>,
 }
 
 impl Journal {
@@ -32,6 +35,7 @@ impl Journal {
                 ("context_versions".into(), None),
             ]),
             limits: AnalysisExtractLimits::default(),
+            owners: None,
         })
     }
 
@@ -98,7 +102,7 @@ impl Journal {
             },
             self.limits,
             control,
-            None,
+            self.owners.as_ref(),
         )
     }
 
@@ -263,7 +267,7 @@ fn managed_changes_reject_reads() -> TestResult {
     let request = journal.request(&store)?;
     let control = AnalysisReadControl::default();
     for name in [
-        "context_versions",
+        "context",
         "graph_manifest",
         "graph_coverage",
         "findings",

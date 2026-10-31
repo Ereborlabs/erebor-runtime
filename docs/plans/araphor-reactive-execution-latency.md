@@ -203,6 +203,52 @@ commit-only candidate promotion, and changed Graph metadata remain open.
 This prerequisite proves no reduction in incident latency. The recorded
 243.94-second diagnostic remains the latest full incident measurement.
 
+### Context-version change read result
+
+**Context-version change read: Done. Complete incremental Query and Graph
+execution: Not done. Proposals 1 and 5: Not done.** This change follows
+`e80f918fd`. The
+[review route](../guides/araphor-retained-execution-review.md#committed-context-changes)
+links the reader and its tests.
+
+Data receives a managed or ordinary change read after committed input cut C
+  -> Data resolves source keys without expanding the context history
+  -> the native revision index selects new context key headers through captured cut R
+  -> Data checks tenant, owner, and exact-key scope before it reads a value
+  -> the existing verified context reader fetches each selected value by its unique key
+  -> Data checks the key, header revision, value revision, and package provenance
+  -> Data returns every selected immutable version and its exact reference
+
+The reader uses the same captured transaction for headers and values. Future
+arrivals remain outside R. Versions with past or future validity remain in
+the change feed. Native SQL can select the required validity later. Reading
+does not advance durable progress. Failed reads and cancellation leave the
+committed input cut unchanged.
+
+The revision index is installed at store open. The value lookup reuses the
+existing decoder and provenance owner. The change adds no storage format,
+engine setting, input cap, cache, or timer. The configured key count includes
+source, trace, and binding keys. Temporary decoded values release their
+memory charge after Arrow and references retain their own allocations.
+
+Seven context tests pass. The tests include both native index statements,
+six selected keys in reverse exact-scope order, excluded invalid values,
+fixed cuts, validity, corruption, cancellation, enabled limits, and reopen.
+The index proof covers the tested source state. DuckDB retains its native
+access-path choice. The proof log is
+`/tmp/araphor-context-changes-final-20261101.log`.
+
+Fourteen related raw-change, managed-owner, and retained-state tests pass.
+Data clippy passes with tests and warnings denied. Its log is
+`/tmp/araphor-context-clippy-20261101.log`. Scoped formatting, whitespace,
+and 78 local document links pass. Full workspace CI was not run. The user
+requires relevant checks only.
+
+The Graph caller still reads complete inputs before it computes differences.
+Coverage changes, the explicit delta-source contract, indexed native Query
+execution, and Graph integration remain open. This reader alone proves no
+incident latency improvement.
+
 ## Measured baseline
 
 The source was `2d7d4164b9c2`. The existing
@@ -425,7 +471,9 @@ do not give a correct result for every SQL join, aggregate, or window. Preserve
 native SQL semantics. Use existing DataFusion operators and accumulators;
 do not add a second incremental SQL engine. Rewrite the builtin input queries
 and package state contract to expose the required incremental work. A query
-that requires its complete selection continues to execute that selection.
+for a finite snapshot keeps its native complete selection. A managed
+incremental query must consume changes. A complete-query fallback does not
+meet the incremental requirement.
 
 Remove whole prior-call reconstruction from normal `capture_managed` work.
 Remove repeated progress-map expansion, copying, and whole-input hashing.

@@ -71,6 +71,10 @@ impl<'a> Capture<'a> {
         self.read.now
     }
 
+    pub(super) fn key_count(&self) -> usize {
+        self.scope.key_count()
+    }
+
     pub(super) fn input_unbounded(&self) -> bool {
         self.scope.time_range() == Some((0, u64::MAX))
             && self.scope.cursor_range() == Some((0, u64::MAX))

@@ -1,7 +1,8 @@
 # Araphor retained execution state review
 
 This guide covers retained state and lookup inputs through `babd497c4`, plus
-the current unit migration and managed raw-change reads. The changes remove
+the current unit migration and managed raw-change reads. The context change
+reader follows `e80f918fd`. The changes remove
 repeated saved-call reads and deliver declared input changes to packages. The parent
 plan is [reactive execution latency](../plans/araphor-reactive-execution-latency.md).
 
@@ -267,9 +268,11 @@ accepts a managed read after a complete committed input position
 
 This read returns additions, removals, and current source metadata. Current
 metadata is not a delta relation. The supported projected relations are
-`events`, `trace_output`, `coverage`, `discovery_state`, and `graph_state`.
-Trace measurements and context or result relations require their own change
-read support. This read rejects those requests. A dependency-only context
+`events`, `trace_output`, `coverage`, `discovery_state`, `graph_state`, and
+`context_versions`. The next section describes the context reader. Trace
+measurements, derived context relations, and result relations require their
+own change read support. This read rejects those requests. A dependency-only
+context
 request retains its source interest without reading context rows. An
 unselected `contexts = All` scope is not expanded to all context keys.
 
@@ -286,9 +289,42 @@ reopen, and unselected context keys. The existing
 also check source and trace retirement, binding filters, and replay floors.
 
 This Data API is a prerequisite. Query still uses complete captures for
-managed Graph execution. Native input execution, context and coverage change
-feeds, and the complete incremental Graph path are **Not done**. The parent
+managed Graph execution. Native input execution, coverage change feeds,
+and the complete incremental Graph path are **Not done**. The parent
 plan records the required replacement. This API alone proves no latency gain.
+
+## Committed context changes
+
+[AnalysisStore::read_tables_inner](../../crates/araphor-data/src/analysis/extraction.rs) Data receives a managed or ordinary change read after committed input cut C
+  -> [AnalysisStore::resolve_selection_filtered](../../crates/araphor-data/src/analysis/extraction.rs) Data resolves source keys without expanding the context history
+  -> [AnalysisStore::extract_context_changes](../../crates/araphor-data/src/analysis/extraction/changes/context.rs) the native revision index selects new context key headers through captured cut R
+  -> [AnalysisStore::extract_context_changes](../../crates/araphor-data/src/analysis/extraction/changes/context.rs) Data checks tenant, owner, and exact-key scope before it reads a value
+  -> [AnalysisStore::read_context_verified_from](../../crates/araphor-data/src/analysis/context/reads.rs) the existing verified context reader fetches each selected value by its unique key
+  -> [AnalysisStore::extract_context_changes](../../crates/araphor-data/src/analysis/extraction/changes/context.rs) Data checks the key, header revision, value revision, and package provenance
+  -> [Capture::context](../../crates/araphor-data/src/analysis/extraction/tables/context.rs) Data returns every selected immutable version and its exact reference
+
+The existing reader transaction fixes R before either query. The revision
+query reads only headers after C. Trusted Data applies the original scope
+before it requests a body. The unique-key query validates the stored identity
+and package provenance. The change reader also requires the body revision
+to equal its header revision. It does not select only current heads or omit
+versions because their validity interval excludes the invocation time.
+
+[Capture::key_count](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs)
+supplies the resolved source, trace, and binding count for an enabled key
+setting. Each emitted version adds one key. The reader checks peak memory
+for each temporary key and decoded value. It drops those values before it
+releases their charges. Arrow and reference allocations remain charged.
+No read changes the instance progress or call heads.
+
+The [context change tests](../../crates/araphor-data/src/analysis/managed/tests/journal/contexts.rs)
+exercise managed and ordinary reads, fixed cuts, all immutable versions,
+unsorted exact keys, excluded invalid bodies, provenance, enabled settings,
+cancellation, and reopen. The
+[native access-path test](../../crates/araphor-data/src/analysis/extraction/changes/context/tests.rs)
+uses the actual production statements. It checks the revision index and six
+unique-key lookups. It does not force an optimizer setting or set a timing
+target. The parent plan records verification and the remaining Graph work.
 
 ## Proof and limits
 
