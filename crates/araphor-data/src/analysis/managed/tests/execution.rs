@@ -141,6 +141,7 @@ fn execution_checks_heads_and_recovery_epoch() -> TestResult {
     assert!(execution
         .calls(
             &ManagedRead {
+                source: None,
                 execution: Some(Arc::clone(&execution)),
                 instance: fixture.current(&reopened)?,
                 expected: None,

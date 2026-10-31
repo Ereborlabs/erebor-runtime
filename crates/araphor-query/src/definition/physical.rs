@@ -126,19 +126,33 @@ impl ExecutionReceipt {
         &self.calls
     }
 
-    pub fn acknowledge(&self, context: &TaskContext, revision: u64) -> Result<()> {
+    pub fn acknowledge(&self, context: &TaskContext, revision: u64, completed: bool) -> Result<()> {
         let current = Self::from_context(context)?;
         if !Arc::ptr_eq(&self.snapshot, &current.snapshot) {
             return Err(external(
                 araphor_data::PackageErrorCodeV1::Invalid.error("publication receipt"),
             ));
         }
-        context
+        let source = context
             .session_config()
-            .get_extension::<CallContext>()
-            .ok_or_else(|| internal("package execution context is absent"))?
-            .publication
-            .fetch_max(revision, Ordering::AcqRel);
+            .get_extension::<SourceSnapshot>()
+            .ok_or_else(|| internal("the publication source is absent"))?;
+        if let Some(view) = source.source_view()? {
+            let proof = view
+                .frame()
+                .proof()
+                .filter(|proof| proof.result.commit_revision == revision)
+                .ok_or_else(|| internal("the source publication acknowledgement differs"))?;
+            view.commit(&proof.result)?;
+        }
+        if completed {
+            context
+                .session_config()
+                .get_extension::<CallContext>()
+                .ok_or_else(|| internal("package execution context is absent"))?
+                .publication
+                .fetch_max(revision, Ordering::AcqRel);
+        }
         Ok(())
     }
 
@@ -573,6 +587,10 @@ impl fmt::Debug for PackageExec {
 }
 
 impl PackageExec {
+    pub(crate) fn has_changes(&self) -> bool {
+        self.call.changes.is_some()
+    }
+
     pub(crate) fn call_id(&self) -> u64 {
         self.call.id
     }
@@ -691,71 +709,13 @@ impl PackageExec {
         let input = Arc::new(owner.memory.reserve_input(0)?);
         let mut inputs = Vec::with_capacity(model.inputs.len());
         for (slot, port) in model.inputs.iter().enumerate() {
-            if self.call.changes.is_some()
-                && model.change_inputs.as_ref().is_some_and(|changes| {
-                    changes.generated(&port.port.name)
-                        || matches!(&port.source, sdk::InputSource::Lookup(_))
-                })
-            {
+            if self.call.changes.is_some() {
                 continue;
             }
             inputs.push(
                 self.read_input(slot, port, &owner, &context, &input, &source)
                     .await?,
             );
-        }
-        if self.call.changes.is_some() {
-            let changes = model
-                .change_inputs
-                .as_ref()
-                .ok_or_else(|| internal("change contract is absent"))?;
-            let basis = inputs
-                .first()
-                .cloned()
-                .ok_or_else(|| internal("change target is absent"))?;
-            for port in model.inputs.iter().filter(|port| {
-                changes.generated(&port.port.name)
-                    || matches!(&port.source, sdk::InputSource::Lookup(_))
-            }) {
-                let mut input = basis.clone();
-                input.data = if port.port.name == changes.reset {
-                    changes.reset_input(true).map_err(external)?
-                } else {
-                    sdk::Dataset {
-                        name: port.port.name.clone(),
-                        batches: vec![sdk::RecordBatch::new_empty(Arc::new(
-                            port.port.schema.clone(),
-                        ))],
-                    }
-                };
-                inputs.push(input);
-            }
-            inputs.sort_by_key(|input| {
-                model
-                    .inputs
-                    .iter()
-                    .position(|port| port.port.name == input.data.name)
-            });
-        }
-        if let Some(supplied) = owner.invocation.inputs.get(&self.call.id) {
-            self.call
-                .input_scope
-                .supplied_inputs(&mut inputs, supplied)
-                .map_err(external)?;
-        }
-        let reason = "source evidence retention expired";
-        if inputs
-            .iter()
-            .any(|input| input.coverage.limits.iter().any(|limit| limit == reason))
-        {
-            let expired = sdk::Coverage {
-                state: sdk::CoverageState::Unknown,
-                limits: vec![reason.into()],
-            };
-            for input in &mut inputs {
-                input.coverage =
-                    crate::inputs::Inputs::coverage([&input.coverage, &expired].into_iter());
-            }
         }
         let parameters = if model.parameters.fields().is_empty() {
             None
@@ -841,6 +801,27 @@ impl PackageExec {
                 &input,
             )
             .await?;
+        if let Some(supplied) = owner.invocation.inputs.get(&self.call.id) {
+            self.call
+                .input_scope
+                .supplied_inputs(&mut evaluation.inputs, supplied)
+                .map_err(external)?;
+        }
+        let reason = "source evidence retention expired";
+        if evaluation
+            .inputs
+            .iter()
+            .any(|input| input.coverage.limits.iter().any(|limit| limit == reason))
+        {
+            let expired = sdk::Coverage {
+                state: sdk::CoverageState::Unknown,
+                limits: vec![reason.into()],
+            };
+            for input in &mut evaluation.inputs {
+                input.coverage =
+                    crate::inputs::Inputs::coverage([&input.coverage, &expired].into_iter());
+            }
+        }
         let configured = context
             .session_config()
             .get_extension::<crate::execution::Limits>()

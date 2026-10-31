@@ -57,6 +57,7 @@ impl Detector {
                 sdk::ChangeInputs::reset_port("reset"),
                 Observation::port(),
                 Fact::port(),
+                Unit::affected_port(),
             ],
             vec![
                 subjects,
@@ -76,10 +77,14 @@ impl Detector {
         ));
         model.inputs[3].source = sdk::InputSource::Lookup(include_str!("units/records.sql").into());
         model.inputs[4].source = sdk::InputSource::Lookup(include_str!("units/facts.sql").into());
+        model.inputs[5].source = sdk::InputSource::Query(
+            "SELECT record FROM inserted.units UNION SELECT record FROM removed.units".into(),
+        );
         model.input_mode = sdk::InputMode::Resolved;
         model.change_inputs = Some(sdk::ChangeInputs {
             reset: "reset".into(),
             ports: vec![sdk::ChangeInput {
+                affected: "affected".into(),
                 before: "unit_removals".into(),
                 after: "units".into(),
             }],

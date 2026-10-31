@@ -179,6 +179,7 @@ async fn immutable_facts_precede_guests() -> TestResult {
                 &fixture.control
             )?,
             araphor_data::ManagedResume {
+                source: None,
                 instance: before_instance.clone(),
                 frontier: Some(frontier),
                 completed: revision

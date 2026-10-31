@@ -25,8 +25,8 @@ use datafusion::logical_expr::{
 use datafusion::sql::parser::Statement;
 use datafusion::sql::planner::{object_name_to_table_reference, SqlToRel};
 use datafusion::sql::sqlparser::ast::{
-    Expr as SqlExpr, FunctionArg, FunctionArgExpr, FunctionArgOperator, ObjectName, TableFactor,
-    Value, Visit, Visitor,
+    Expr as SqlExpr, FunctionArg, FunctionArgExpr, FunctionArgOperator, ObjectName, Query,
+    TableFactor, Value, Visit, Visitor,
 };
 use snafu::ResultExt as _;
 
@@ -321,13 +321,7 @@ impl Packages {
                 {
                     let name = context.normalize_ident(name);
                     let plan = self.demand.capture(|| {
-                        context
-                            .plan(TableFactor::Derived {
-                                lateral: false,
-                                subquery,
-                                alias: None,
-                                sample: None,
-                            })
+                        Self::input_plan(context, subquery)
                             .and_then(PackageCall::expose_programs)
                             .context(SqlSnafu)
                     })?;
@@ -495,10 +489,7 @@ impl Packages {
             };
             let mut children = inputs;
             children.extend(params);
-            let mut changes = self.changes(model, &mut children)?;
-            if let Some(changes) = &mut changes {
-                changes.lookups = lookups;
-            }
+            let changes = self.changes(model, lookups);
             let sql = sql.map(|(sql, plans)| {
                 children.extend(plans);
                 sql
@@ -579,6 +570,9 @@ impl Packages {
         supplied: &InputPlans,
         exports: &Exports,
     ) -> Result<(Vec<LogicalPlan>, Vec<BTreeSet<SourceOrigin>>, LookupInputs)> {
+        if model.change_inputs.is_some() {
+            return self.change_plans(provider, model, supplied, exports);
+        }
         let mut tables = self.sources.clone();
         let mut ports = BTreeMap::new();
         let has_lookups = model
@@ -847,6 +841,29 @@ impl Packages {
                 lookups
             },
         ))
+    }
+
+    fn input_plan(
+        context: &mut dyn RelationPlannerContext,
+        subquery: Box<Query>,
+    ) -> datafusion::common::Result<LogicalPlan> {
+        // The native query entry keeps order; derived-relation planning removes it.
+        let Expr::Exists(query) = context.sql_expr_to_logical_expr(
+            SqlExpr::Exists {
+                subquery,
+                negated: false,
+            },
+            &DFSchema::empty(),
+        )?
+        else {
+            return datafusion::common::internal_err!("the native query plan is absent");
+        };
+        if !query.subquery.outer_ref_columns.is_empty() {
+            return datafusion::common::not_impl_err!(
+                "a package input cannot reference an outer row"
+            );
+        }
+        Ok(Arc::unwrap_or_clone(query.subquery.subquery))
     }
 
     fn port(schema: Arc<sdk::Schema>) -> Result<(usize, Arc<dyn TableProvider>)> {

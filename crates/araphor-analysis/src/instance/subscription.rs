@@ -87,6 +87,7 @@ impl Instance {
             ),
             completed: resume.completed,
             admission: Some(ManagedResume {
+                source: None,
                 instance: resume.instance,
                 frontier: None,
                 completed: resume.completed,
@@ -432,6 +433,7 @@ impl ManagedPublication for sink::Publication {
                                 ..Default::default()
                             },
                             ManagedRead {
+                                source: None,
                                 execution: None,
                                 expected: None,
                                 instance: current.clone(),
@@ -455,6 +457,7 @@ impl ManagedPublication for sink::Publication {
                                 ..Default::default()
                             },
                             ManagedRead {
+                                source: None,
                                 execution: None,
                                 instance: self.owner.admitted.clone(),
                                 expected: Some(expected.clone()),
@@ -487,6 +490,7 @@ impl ManagedPublication for sink::Publication {
                     return Err(Code::Incomplete.error("managed subscription step"));
                 }
                 state.admission = Some(ManagedResume {
+                    source: None,
                     instance: current.clone(),
                     frontier: None,
                     completed: resume.completed,
@@ -498,6 +502,7 @@ impl ManagedPublication for sink::Publication {
                 Ok((
                     invocation,
                     ManagedRead {
+                        source: None,
                         execution: Some(Arc::clone(&state.execution)),
                         expected: None,
                         instance: current,

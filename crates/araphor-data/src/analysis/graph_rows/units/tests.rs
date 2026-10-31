@@ -173,6 +173,7 @@ impl Fixture {
         let changes = sdk::ChangeInputs {
             reset: "reset".into(),
             ports: vec![sdk::ChangeInput {
+                affected: "affected".into(),
                 before: "unit_removals".into(),
                 after: "units".into(),
             }],
@@ -397,7 +398,7 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
     fixture.records.push(third);
     let mut writer = Connection::open_in_memory()?;
     fixture.schema(&writer)?;
-    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT)")?;
+    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT,kind VARCHAR)")?;
     let scope = writer.query_row("SELECT scope_id FROM graph_producer_scopes", [], |row| {
         row.get::<_, u64>(0)
     })?;

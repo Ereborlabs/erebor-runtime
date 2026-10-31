@@ -321,6 +321,7 @@ impl AnalysisStore {
             }
             Self::check_managed_pending(reader, tenant, id, instance.generation)?;
             let completed = Self::managed_completed_from(reader, tenant, id, instance.generation)?;
+            let source = Self::managed_source_head(reader, &instance)?;
             if completed > instance.progress {
                 let bytes: Vec<u8> = reader.query_row(
                     "SELECT contract FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND completed = ?",
@@ -345,7 +346,8 @@ impl AnalysisStore {
                             let frontier = attempt.request.frontier.ok_or_else(||
                                 Code::Incomplete.error("managed native frontier unavailable"))?;
                             control.check()?;
-                            return Ok(ManagedResume { instance, frontier: Some(frontier), completed });
+                            return Ok(ManagedResume {
+                                source, instance, frontier: Some(frontier), completed });
                         }
                         ManagedExit::Cancelled | ManagedExit::Failed(Code::Denied) => {}
                     }
@@ -372,7 +374,8 @@ impl AnalysisStore {
                     Code::Incomplete.error("managed native frontier unavailable"))?)
             };
             control.check()?;
-            Ok(ManagedResume { instance, frontier, completed })
+            Ok(ManagedResume {
+                source, instance, frontier, completed })
         })
     }
 
@@ -503,6 +506,7 @@ impl AnalysisStore {
                 instance,
                 None,
                 std::collections::BTreeMap::new(),
+                None,
                 None,
             )))
         })
@@ -801,17 +805,6 @@ impl AnalysisStore {
         if count < record.inputs.len() {
             return Err(Code::Missing.error("managed input payload"));
         }
-        if let Some(changes) = &record.changes {
-            changes.check_header()?;
-            let expected = changes.targets.len();
-            let (count, invalid): (usize, usize) = reader.query_row(
-            "SELECT count(*), count(*) FILTER (WHERE slot >= ? OR octet_length(ipc) = 0) FROM managed_arrow WHERE result_id = ? AND role = 'target'",
-            params![expected, id], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "validate managed target slots" })?;
-            if invalid != 0 || count != expected {
-                return Err(Code::Invalid.error("managed target payload count"));
-            }
-        }
         Ok((record, output, revision))
     }
 
@@ -909,7 +902,7 @@ impl AnalysisStore {
                 JOIN needed n ON n.result_id = e.result_id
                 JOIN analysis_results parent ON parent.result_id = e.result_id
                     AND parent.tenant_id = e.tenant_id AND parent.commit_revision = n.revision
-                WHERE e.tenant_id = ? AND parent.processor_id
+                WHERE e.tenant_id = ? AND e.kind = 'input' AND parent.processor_id
                     IN ('managed-package-v1', 'managed-definition-v1'))
             SELECT n.result_id, n.revision, r.processor_id, c.instance_id FROM needed n
             LEFT JOIN analysis_results r ON n.result_id = r.result_id AND r.tenant_id = ? AND r.commit_revision = n.revision
@@ -940,20 +933,21 @@ impl AnalysisStore {
             let Some(processor) = processor else {
                 return Ok(SourceFreshness::Changed);
             };
-            let attempt = if processor == "managed-package-v1" {
+            let (attempt, witnesses, contexts) = if processor == "managed-package-v1" {
                 if instance.as_deref() != Some(spec.id.as_str()) {
                     return Ok(SourceFreshness::Changed);
                 }
                 let metadata: Vec<u8> = reader.query_row("SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![spec.tenant.as_slice(), id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "read managed freshness metadata" })?;
                 let record: Record =
                     ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
-                match self.retained_call_from(reader, spec, &record, &id, revision)? {
+                let attempt = match self.retained_call_from(reader, spec, &record, &id, revision)? {
                     Some(attested) => attested,
                     None => {
                         Self::managed_attempt_from(reader, spec.tenant, &spec.id, &record.attempt)?
                             .ok_or_else(|| Code::Missing.error("managed result attempt"))?
                     }
-                }
+                };
+                (attempt, record.witnesses, record.contexts)
             } else if processor == "managed-definition-v1" {
                 let metadata: Vec<u8> = reader.query_row("SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![spec.tenant.as_slice(), id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "read managed selected freshness" })?;
                 let step: Step =
@@ -964,8 +958,10 @@ impl AnalysisStore {
                 {
                     return Ok(SourceFreshness::Changed);
                 }
-                Self::managed_attempt_from(reader, spec.tenant, &spec.id, &step.attempt)?
-                    .ok_or_else(|| Code::Missing.error("managed selected attempt"))?
+                let attempt =
+                    Self::managed_attempt_from(reader, spec.tenant, &spec.id, &step.attempt)?
+                        .ok_or_else(|| Code::Missing.error("managed selected attempt"))?;
+                (attempt, step.witnesses, step.contexts)
             } else {
                 if self.package_source_revision(reader, spec.tenant, &id)? != revision {
                     return Ok(SourceFreshness::Changed);
@@ -999,14 +995,13 @@ impl AnalysisStore {
                     }
                 }
             }
-            if capture
-                .witnesses
+            if witnesses
                 .iter()
                 .any(|witness| witness.expires_utc_ns <= now)
             {
                 freshness = SourceFreshness::EvidenceExpired;
             }
-            for reference in &capture.contexts {
+            for reference in &contexts {
                 if self
                     .read_context_cached_from(reader, &self.root, &reference.key)?
                     .is_none_or(|(_, current)| current != reference.commit_revision)
@@ -1090,6 +1085,7 @@ impl AnalysisStore {
         if Self::managed_edges(reader, tenant, id)? != step.dependencies {
             return Err(Code::Invalid.error("managed selected edges"));
         }
+        Self::check_source_header(reader, tenant, id, &step, revision)?;
         Ok((step, packet, revision))
     }
 
@@ -1098,7 +1094,7 @@ impl AnalysisStore {
         id: &str,
         mut packet: sdk::wire::Dataset,
     ) -> Result<sdk::wire::Dataset> {
-        let blobs = reader.query_row("SELECT count(*), count(*) FILTER (WHERE role = 'selected' AND slot = 0) FROM managed_arrow WHERE result_id = ?", params![id], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)))
+        let blobs = reader.query_row("SELECT count(*), count(*) FILTER (WHERE role = 'selected' AND slot = 0) FROM managed_arrow WHERE result_id = ? AND role <> 'source'", params![id], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)))
             .context(AnalysisDatabaseSnafu { operation: "validate selected Arrow role" })?;
         if blobs != (1, 1) {
             return Err(Code::Invalid.error("managed selected payload"));
@@ -1212,11 +1208,30 @@ impl AnalysisStore {
             || record.context.context.id != attempt.request.id
             || record.context.context.time_utc_ns != attempt.request.time_utc_ns as i64
             || record.context.context.seed != attempt.request.seed
-            || record.witnesses != attempt.capture.witnesses
-            || record.contexts != attempt.capture.contexts
         {
             return Err(Code::Invalid.error("retained managed result contract"));
         }
+        let (metadata, selected): (Vec<u8>, u64) = reader
+            .query_row(
+                "SELECT request_meta, commit_revision FROM analysis_results
+             WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-definition-v1'",
+                params![tenant.as_slice(), receipt.selected.result_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read managed result evidence owner",
+            })?;
+        let step: Step = ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
+        if selected != receipt.selected.commit_revision
+            || selected != receipt.commit_revision
+            || step.instance != record.instance
+            || step.attempt != record.attempt
+            || record.witnesses != step.witnesses
+            || record.contexts != step.contexts
+        {
+            return Err(Code::Invalid.error("managed result source evidence"));
+        }
+        Self::check_source_evidence(reader, &attempt, &step)?;
         let descriptor = Self::managed_contract(reader, tenant, &record.declaration)?;
         let model = descriptor
             .exports
@@ -1263,7 +1278,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         id: &str,
     ) -> Result<Vec<super::super::PackageResultRefV1>> {
-        let mut statement = reader.prepare("SELECT dependency_id, commit_revision FROM managed_edges WHERE tenant_id = ? AND result_id = ? ORDER BY dependency_id")
+        let mut statement = reader.prepare("SELECT dependency_id, commit_revision FROM managed_edges WHERE tenant_id = ? AND result_id = ? AND kind = 'input' ORDER BY dependency_id")
             .context(AnalysisDatabaseSnafu { operation: "prepare managed result edges" })?;
         statement
             .query_map(params![tenant.as_slice(), id], |row| {

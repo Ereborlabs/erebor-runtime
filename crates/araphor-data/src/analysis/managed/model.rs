@@ -1,5 +1,9 @@
 use super::codec::ManagedCodec;
 use super::execution::ManagedExecution;
+use super::source::{
+    ManagedSourceFrame, ManagedSourceRead, ManagedSourceRef, RecordSource, SourceCapture,
+    SourceContract,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 use araphor_analysis_sdk as sdk;
@@ -335,6 +339,7 @@ pub struct ManagedRead {
     pub expected: Option<ManagedInstance>,
     pub rebuild: bool,
     pub follow: bool,
+    pub source: Option<ManagedSourceRead>,
     /// Require this completion when a native frontier was selected.
     pub completed: Option<u64>,
 }
@@ -350,6 +355,7 @@ pub struct ManagedResume {
     pub instance: ManagedInstance,
     pub frontier: Option<ManagedFrontier>,
     pub completed: u64,
+    pub source: Option<ManagedSourceRef>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -393,39 +399,19 @@ pub struct RetainedCall {
 #[derive(Clone, Debug)]
 pub struct ManagedChanges {
     pub base: Option<PackageResultRefV1>,
-    pub targets: Vec<sdk::Input>,
 }
 
 impl ManagedChanges {
     pub fn metadata_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            .saturating_add(
-                self.base
-                    .as_ref()
-                    .map_or(0, |base| base.result_id.capacity()),
-            )
-            .saturating_add(
-                self.targets
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<sdk::Input>()),
-            )
-            .saturating_add(
-                self.targets
-                    .iter()
-                    .map(sdk::Input::metadata_bytes)
-                    .sum::<usize>(),
-            )
+        std::mem::size_of::<Self>().saturating_add(
+            self.base
+                .as_ref()
+                .map_or(0, |base| base.result_id.capacity()),
+        )
     }
 
     pub fn allocated_bytes(&self) -> usize {
-        self.metadata_bytes().saturating_add(
-            self.targets
-                .iter()
-                .flat_map(|input| &input.data.batches)
-                .flat_map(sdk::RecordBatch::columns)
-                .map(|array| array.get_buffer_memory_size())
-                .sum::<usize>(),
-        )
+        self.metadata_bytes()
     }
 }
 
@@ -562,6 +548,7 @@ pub(super) struct Capture {
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
     pub traces: Vec<[u8; 16]>,
+    pub source: Option<SourceContract>,
 }
 
 impl Capture {
@@ -586,9 +573,13 @@ pub struct ManagedCapture {
     pub(super) contract: Capture,
     pub(super) prior: BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
     pub(super) bytes: usize,
+    pub(super) source: Option<SourceCapture>,
 }
 
 impl ManagedCapture {
+    pub fn source(&self) -> Option<&std::sync::Arc<ManagedSourceFrame>> {
+        self.source.as_ref().map(|source| &source.frame)
+    }
     pub fn follows_graph(&self) -> bool {
         self.contract.follows_graph(&self.instance.spec)
     }
@@ -620,33 +611,31 @@ impl ManagedCapture {
         self.bytes
     }
     pub fn datasets(&self) -> impl Iterator<Item = &sdk::Dataset> {
-        self.prior.values().flat_map(|prior| {
-            prior
-                .parameters
-                .iter()
-                .chain(prior.checkpoint.iter().flat_map(|state| &state.datasets))
-                .chain(prior.retained.iter().flat_map(|retained| {
-                    retained
-                        .evaluation
-                        .inputs
-                        .iter()
-                        .map(|input| &input.data)
-                        .chain(
-                            retained.changes.iter().flat_map(|changes| {
-                                changes.targets.iter().map(|input| &input.data)
-                            }),
-                        )
-                        .chain(retained.evaluation.previous_outputs.iter())
-                        .chain(retained.output.datasets.iter())
-                        .chain(
-                            retained
-                                .output
-                                .checkpoint
-                                .iter()
-                                .flat_map(|state| &state.datasets),
-                        )
-                }))
-        })
+        self.source
+            .iter()
+            .flat_map(|source| source.frame.datasets())
+            .chain(self.prior.values().flat_map(|prior| {
+                prior
+                    .parameters
+                    .iter()
+                    .chain(prior.checkpoint.iter().flat_map(|state| &state.datasets))
+                    .chain(prior.retained.iter().flat_map(|retained| {
+                        retained
+                            .evaluation
+                            .inputs
+                            .iter()
+                            .map(|input| &input.data)
+                            .chain(retained.evaluation.previous_outputs.iter())
+                            .chain(retained.output.datasets.iter())
+                            .chain(
+                                retained
+                                    .output
+                                    .checkpoint
+                                    .iter()
+                                    .flat_map(|state| &state.datasets),
+                            )
+                    }))
+            }))
     }
     pub fn metadata_bytes(&self) -> usize {
         self.bytes.saturating_sub(
@@ -751,6 +740,7 @@ pub struct ManagedAttempt(
     pub(super) Option<tokio::sync::watch::Receiver<u64>>,
     pub(super) BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
     pub(super) Option<std::sync::Arc<super::execution::Retention>>,
+    pub(super) Option<SourceCapture>,
 );
 
 impl ManagedAttempt {
@@ -840,7 +830,7 @@ pub struct ManagedCommit<'a> {
     pub selected_schema: &'a sdk::Schema,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(super) struct RecordInput {
     pub name: String,
     pub rows: u64,
@@ -873,14 +863,6 @@ pub(super) struct Record {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct RecordChanges {
     pub base: Option<PackageResultRefV1>,
-    pub targets: Vec<RecordTarget>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct RecordTarget {
-    pub input: sdk::wire::Input,
-    pub rows: u64,
-    pub batches: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -899,6 +881,7 @@ pub(super) struct Step {
     pub dependencies: Vec<PackageResultRefV1>,
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
+    pub source: Option<RecordSource>,
 }
 
 #[derive(Clone, Debug)]

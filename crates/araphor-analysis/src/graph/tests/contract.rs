@@ -131,6 +131,7 @@ fn descriptor_preserves_owners() -> TestResult {
         assert_eq!(
             changes.ports,
             vec![sdk::ChangeInput {
+                affected: "affected".into(),
                 before: "unit_removals".into(),
                 after: "units".into()
             }]

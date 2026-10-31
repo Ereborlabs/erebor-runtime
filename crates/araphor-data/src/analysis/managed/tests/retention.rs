@@ -109,6 +109,7 @@ fn retained_provenance_survives_expiry() -> TestResult {
         .read_managed_tables(
             &fixture.instance.grant.selection,
             &ManagedRead {
+                source: None,
                 execution: None,
                 follow: false,
                 expected: None,

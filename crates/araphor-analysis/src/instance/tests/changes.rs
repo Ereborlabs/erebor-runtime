@@ -10,12 +10,20 @@ fn image(target: &str) -> TestResult<PackageBundleV1> {
     let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, true)]);
     model.inputs = vec![
         sdk::Port::new("input", schema.clone()).into(),
-        sdk::Port::new("removed", schema).into(),
+        sdk::Port::new("removed", schema.clone()).into(),
         sdk::ChangeInputs::reset_port("reset").into(),
+        sdk::InputPort {
+            port: sdk::Port::new("affected", schema),
+            source: sdk::InputSource::Query(
+                "SELECT value FROM inserted.input UNION SELECT value FROM removed.input".into(),
+            ),
+        },
     ];
+    model.input_mode = sdk::InputMode::Resolved;
     model.change_inputs = Some(sdk::ChangeInputs {
         reset: "reset".into(),
         ports: vec![sdk::ChangeInput {
+            affected: "affected".into(),
             before: "removed".into(),
             after: "input".into(),
         }],
@@ -76,7 +84,7 @@ fn lookup_image() -> TestResult<PackageBundleV1> {
         source: sdk::InputSource::Lookup("SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS value FROM input
             UNION ALL SELECT CAST(MAX(owner_revision) AS BIGINT UNSIGNED) AS value FROM context_versions".into()),
     });
-    model.inputs[3].port.name = "support".into();
+    model.inputs[4].port.name = "support".into();
     let PackageImplementationV1::Sql { program, .. } = &mut artifact.implementations[0] else {
         return Err("lookup SQL fixture".into());
     };
@@ -95,7 +103,7 @@ async fn lookup_preserves_sql_order() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     let control = AnalysisReadControl::default();
     let mut image = lookup_image()?;
-    image.artifacts[0].descriptor.exports[0].inputs[3].source = sdk::InputSource::Lookup(
+    image.artifacts[0].descriptor.exports[0].inputs[4].source = sdk::InputSource::Lookup(
         "SELECT value FROM (VALUES (CAST(3 AS BIGINT UNSIGNED)), (CAST(NULL AS BIGINT UNSIGNED)), (CAST(1 AS BIGINT UNSIGNED)), (CAST(2 AS BIGINT UNSIGNED))) values(value) ORDER BY value DESC NULLS FIRST".into(),
     );
     fixture.install(&image)?;
@@ -142,6 +150,88 @@ async fn lookup_preserves_sql_order() -> TestResult {
         call.evaluation().input("support")?.data.batches,
         saved.input("support")?.data.batches
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn source_lookup_keeps_evidence() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    let mut image = lookup_image()?;
+    image.artifacts[0].descriptor.exports[0].inputs[4].source = sdk::InputSource::Lookup(
+        "SELECT c.owner_revision AS value FROM input i JOIN context_versions c ON c.owner_revision = i.value - 1".into(),
+    );
+    fixture.install(&image)?;
+    fixture.context(1)?;
+    let instance = fixture.admit("indexed-support", r#"SELECT * FROM "runtime-fixture"."1".changes(input => (SELECT owner_revision AS value FROM context_versions))"#).await?;
+    let lifecycle = fixture.start(&instance)?;
+    let control = Arc::new(AnalysisReadControl::default());
+    let mut stream = instance.subscribe(Arc::clone(&control), u64::MAX, lifecycle)?;
+    for revision in 1..=3 {
+        if revision != 1 {
+            fixture.context(revision)?;
+        }
+        let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
+            .await?
+            .ok_or("indexed support receipt")??;
+        let result = receipt
+            .results
+            .values()
+            .next()
+            .ok_or("indexed support result")?;
+        let evaluation = fixture.query.store().managed_evaluation(
+            instance.admitted(),
+            &result.result_id,
+            &control,
+        )?;
+        assert_eq!(
+            values(&evaluation.input("input")?.data.batches)?,
+            [revision]
+        );
+        assert_eq!(
+            values(&evaluation.input("support")?.data.batches)?,
+            if revision == 1 {
+                vec![]
+            } else {
+                vec![revision - 1]
+            }
+        );
+        let (_, contexts) = fixture
+            .query
+            .store()
+            .package_evidence([1; 16], &[result.result_id.clone()])?;
+        let actual = contexts
+            .iter()
+            .map(|reference| reference.key.owner_revision)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            if revision == 1 {
+                vec![1]
+            } else {
+                vec![revision - 1, revision]
+            }
+        );
+    }
+    stream.cancel_and_join(&control).await?;
+    fixture.context(4)?;
+    let control = Arc::new(AnalysisReadControl::default());
+    let mut stream = instance.subscribe(Arc::clone(&control), u64::MAX, lifecycle)?;
+    let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("restored support receipt")??;
+    let result = receipt
+        .results
+        .values()
+        .next()
+        .ok_or("restored support result")?;
+    let evaluation = fixture.query.store().managed_evaluation(
+        instance.admitted(),
+        &result.result_id,
+        &control,
+    )?;
+    assert_eq!(values(&evaluation.input("input")?.data.batches)?, [4]);
+    assert_eq!(values(&evaluation.input("support")?.data.batches)?, [3]);
+    stream.cancel_and_join(&control).await?;
     Ok(())
 }
 
@@ -208,6 +298,7 @@ async fn lookup_keeps_historical_provenance() -> TestResult {
         .ok_or("change declaration")?
         .ports
         .push(sdk::ChangeInput {
+            affected: "affected_support".into(),
             before: "copy_removed".into(),
             after: "copy".into(),
         });
@@ -381,6 +472,166 @@ async fn stateless_lookup_uses_changes() -> TestResult {
 #[tokio::test]
 async fn subscription_consumes_query_changes() -> TestResult {
     subscription_changes("sql").await
+}
+
+#[tokio::test]
+async fn subscription_reads_source_changes() -> TestResult {
+    source_changes("sql").await
+}
+
+#[tokio::test]
+async fn wasm_reads_source_changes() -> TestResult {
+    source_changes("wasm").await
+}
+
+#[tokio::test]
+#[ignore = "requires source-built native artifacts in ARAPHOR_NATIVE_DIR"]
+async fn native_reads_source_changes() -> TestResult {
+    source_changes("native").await
+}
+
+#[tokio::test]
+async fn ordered_input_keeps_ctes() -> TestResult {
+    for (outer, query, expected) in [
+        ("SELECT owner_revision AS value, owner_id AS owner FROM context_versions", "SELECT value, owner FROM picked ORDER BY value DESC", Some(vec![3, 2, 1])),
+        ("SELECT owner_revision AS value, owner_id AS owner FROM context_versions", "WITH selected AS (SELECT * FROM picked WHERE value >= 2) SELECT value, owner FROM selected ORDER BY value DESC", Some(vec![3, 2])),
+        ("SELECT owner_revision AS value, owner_id AS owner FROM context_versions WHERE owner_revision = 1", "WITH picked AS (SELECT owner_revision AS value, owner_id AS owner FROM context_versions WHERE owner_revision >= 2) SELECT value, owner FROM picked ORDER BY value DESC", None),
+        ("SELECT owner_revision AS value, owner_id AS owner FROM context_versions", "SELECT value, owner FROM picked ORDER BY value DESC NULLS LAST LIMIT 2", Some(vec![3, 2])),
+    ] {
+        let fixture = Fixture::new(Default::default())?;
+        let mut image = image("sql")?;
+        let model = &mut image.artifacts[0].descriptor.exports[0];
+        let schema = sdk::Schema::new(vec![model.inputs[0].port.schema.fields()[0].clone(), Arc::new(sdk::Field::new("owner", sdk::DataType::Utf8, true))]);
+        model.inputs[0].port.schema = schema.clone();
+        model.inputs[1].port.schema = schema;
+        fixture.install(&image)?;
+        for revision in 1..=3 { fixture.context(revision)?; }
+        let sql = format!(r#"WITH picked AS ({outer}) SELECT * FROM "runtime-fixture"."1".changes(input => ({query}))"#);
+        let Some(expected) = expected else {
+            let native = datafusion::prelude::SessionContext::new();
+            native.register_table("context_versions", Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(&AnalysisStore::table_schemas()["context_versions"]))))?;
+            let plain = format!("WITH picked AS ({outer}) SELECT * FROM ({query}) nested");
+            let diagnostic = "WITH query name \"picked\" specified more than once";
+            let native = native.sql(&plain).await.err().ok_or("native CTE shadowing was accepted")?;
+            assert!(native.to_string().contains(diagnostic));
+            let actual = fixture.admit("ordered-cte", &sql).await.err().ok_or("package CTE shadowing was accepted")?;
+            let mut source = Some(actual.as_ref() as &dyn std::error::Error);
+            let mut matched = false;
+            while let Some(error) = source {
+                matched |= error.to_string().contains(diagnostic);
+                source = error.source();
+            }
+            assert!(matched, "{actual:?}");
+            continue;
+        };
+        let instance = fixture.admit("ordered-cte", &sql).await?;
+        let control = AnalysisReadControl::default();
+        let receipt = instance.run(request("ordered-cte"), &control).await?;
+        let reference = receipt.results.values().next().ok_or("ordered CTE result")?;
+        let evaluation = fixture.query.store().managed_evaluation(instance.admitted(), &reference.result_id, &control)?;
+        let mut ordered = Vec::new();
+        for batch in &evaluation.input("input")?.data.batches {
+            assert_eq!(batch.num_columns(), 2);
+            let column = batch.column(0).as_any().downcast_ref::<UInt64Array>().ok_or("ordered CTE values")?;
+            ordered.extend_from_slice(column.values());
+        }
+        assert_eq!(ordered, expected);
+    }
+    Ok(())
+}
+
+async fn source_changes(target: &str) -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    fixture.install(&image(target)?)?;
+    fixture.context(1)?;
+    let instance = fixture.admit("source-changes", r#"SELECT * FROM "runtime-fixture"."1".changes(input => (SELECT owner_revision AS value FROM context_versions ORDER BY owner_revision DESC))"#).await?;
+    let lifecycle = fixture.start(&instance)?;
+    let control = Arc::new(AnalysisReadControl::default());
+    let mut stream = instance.subscribe(Arc::clone(&control), u64::MAX, lifecycle)?;
+    for revision in 1..=3 {
+        if revision != 1 {
+            fixture.context(revision)?;
+        }
+        let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
+            .await?
+            .ok_or("source change receipt")??;
+        assert_eq!(
+            fixture.selected("source-changes", &receipt.attempt)?,
+            [revision]
+        );
+        let result = receipt
+            .results
+            .values()
+            .next()
+            .ok_or("source change result")?;
+        let evaluation = fixture.query.store().managed_evaluation(
+            instance.admitted(),
+            &result.result_id,
+            &control,
+        )?;
+        assert_eq!(
+            values(&evaluation.input("input")?.data.batches)?,
+            [revision]
+        );
+        assert_eq!(
+            values(&evaluation.input("affected")?.data.batches)?,
+            [revision]
+        );
+        assert_eq!(evaluation.input("removed")?.data.rows(), 0);
+        let resume = fixture
+            .query
+            .store()
+            .managed_resume([1; 16], "source-changes", &control)?;
+        let reference = resume.source.ok_or("source change frontier")?;
+        let mut rows = Vec::new();
+        fixture
+            .query
+            .store()
+            .managed_source_history::<araphor_data::Error>(
+                &resume.instance,
+                &reference,
+                &control,
+                |_| Ok(()),
+                |frame| {
+                    rows.push(frame.datasets().iter().map(sdk::Dataset::rows).sum::<u64>());
+                    Ok(())
+                },
+            )?;
+        assert_eq!(rows, vec![1; revision as usize]);
+        assert!(futures_util::poll!(stream.next()).is_pending());
+    }
+    stream.cancel_and_join(&control).await?;
+    let control = Arc::new(AnalysisReadControl::default());
+    fixture.context(4)?;
+    fixture.context(5)?;
+    let mut stream = instance.subscribe(Arc::clone(&control), u64::MAX, lifecycle)?;
+    let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
+        .await?
+        .ok_or("restored source receipt")??;
+    assert_eq!(fixture.selected("source-changes", &receipt.attempt)?, [5]);
+    let result = receipt
+        .results
+        .values()
+        .next()
+        .ok_or("restored source result")?;
+    let evaluation = fixture.query.store().managed_evaluation(
+        instance.admitted(),
+        &result.result_id,
+        &control,
+    )?;
+    let mut ordered = Vec::new();
+    for batch in &evaluation.input("input")?.data.batches {
+        let column = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("ordered source values")?;
+        ordered.extend_from_slice(column.values());
+    }
+    assert_eq!(ordered, [5, 4]);
+    assert_eq!(evaluation.input("removed")?.data.rows(), 0);
+    stream.cancel_and_join(&control).await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -685,6 +936,7 @@ async fn support_change_resets_inputs() -> TestResult {
             &instance.prepared,
             araphor_query::definition::Invocation::default(),
             araphor_data::ManagedRead {
+                source: None,
                 execution: None,
                 instance: current,
                 expected: None,
@@ -699,19 +951,14 @@ async fn support_change_resets_inputs() -> TestResult {
         .managed()
         .and_then(|managed| managed.prior(*last.results.keys().next()?))
         .and_then(|prior| prior.retained.as_ref())
-        .and_then(|prior| prior.changes.as_ref())
-        .ok_or("saved reset target")?;
-    assert!(prior.base.is_none());
-    assert_eq!(
-        prior
-            .targets
-            .iter()
-            .find(|input| input.data.name == "input")
-            .ok_or("saved input")?
-            .data
-            .rows(),
-        2
-    );
+        .ok_or("saved reset call")?;
+    assert!(prior
+        .changes
+        .as_ref()
+        .ok_or("saved change base")?
+        .base
+        .is_none());
+    assert_eq!(prior.evaluation.input("input")?.data.rows(), 2);
     Ok(())
 }
 
@@ -739,6 +986,7 @@ async fn captures_keep_distinct_positions() -> TestResult {
         .query
         .session(fixture.grant.selection.clone(), &control, 10)?;
     let read = || ManagedRead {
+        source: None,
         execution: None,
         instance: current.clone(),
         expected: None,

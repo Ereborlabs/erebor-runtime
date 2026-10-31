@@ -1110,6 +1110,7 @@ async fn managed_expiry_reads_history() -> TestResult {
     selection.select_graphs(araphor_data::Selection::All, None)?;
     selection.contexts = araphor_data::Selection::Exact(Vec::new());
     let managed = araphor_data::ManagedRead {
+        source: None,
         execution: None,
         instance: instance.admitted().clone(),
         expected: None,
@@ -1258,6 +1259,7 @@ async fn managed_expiry_reads_history() -> TestResult {
     let ordinary = fixture.query.store().read_managed_tables(
         &selection,
         &araphor_data::ManagedRead {
+            source: None,
             execution: None,
             instance: ordinary.admitted().clone(),
             expected: None,

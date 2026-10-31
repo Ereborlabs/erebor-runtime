@@ -76,5 +76,7 @@ pub use analysis::{
     ManagedExecution, ManagedExit, ManagedFrontier, ManagedGraphOperation, ManagedInputRef,
     ManagedInstance, ManagedLease, ManagedManifest, ManagedMember, ManagedOutput, ManagedPage,
     ManagedPrior, ManagedRead, ManagedReceipt, ManagedRequest, ManagedResult, ManagedResume,
-    ManagedReturn, ManagedSelected, ManagedSpec, ManagedStatus, ManagedTerminal,
+    ManagedReturn, ManagedSelected, ManagedSourceBlock, ManagedSourceFrame, ManagedSourceMetadata,
+    ManagedSourceProof, ManagedSourceRead, ManagedSourceRef, ManagedSourceRows, ManagedSourceState,
+    ManagedSpec, ManagedStatus, ManagedTerminal,
 };

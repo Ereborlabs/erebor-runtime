@@ -37,6 +37,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read committed context changes",
             })?;
+        #[cfg(any(test, feature = "test-fixtures"))]
         let control = budget.control;
         let mut verified = VerifiedPackages::default();
         let mut count = capture.key_count();

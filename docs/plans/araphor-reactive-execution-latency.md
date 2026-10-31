@@ -366,6 +366,121 @@ inputs, indexed support, failed publication, acknowledgement, and restart.
 Coverage integration, Graph migration, ordinary incremental SQL plans, and
 window transitions remain required parts of the full goal.
 
+#### Source-record working state
+
+**Shared source records: Partial. Native runtime integration: Partial.
+Proposals 1 and 5: Not done.** The working tree follows `29d7a356b`.
+
+Data seals the source read mode, exact committed parent, input position,
+selection, and projection. The existing managed transaction stores source
+Arrow payloads once on the selected `Step`. A separate source edge retains
+the parent without changing ordinary input freshness. Each source metadata
+change is an initial state or accepted ranges. Receipt replacement, new
+gaps, and exact coverage references use the same captured revision.
+
+Source frames share a proof cell. Data checks the cell before COMMIT and
+fills the cell after COMMIT. Cold restoration reads the existing Step proof
+and loads one payload frame at a time through a callback. Arrow frames do
+not retain cumulative source membership. Data retains current membership in
+the existing capture, attempt, and committed execution state.
+
+Zero-batch table headers require zero rows. These headers store no Arrow
+payload. Nonempty headers map to contiguous payload slots. Explicit empty
+batches retain their payload and exact batch count.
+
+The managed change path now supplies an initial or continued source read.
+Query retains indexed Arrow blocks and stages each candidate without
+changing the committed index. Native DataFusion joins select matching old
+rows by hash key. The existing native join checks key equality. The SDK
+change pair names its affected query port. Package execution binds each
+input once in dependency order. Complete-target comparison and target IPC
+storage are removed from the working code.
+
+The source subscription test passes for three successive context changes.
+Each execution delivers one new row. Source history contains three one-row
+frames. A new runtime restores the committed frames before it reads the
+next change. The selected-key Graph test checks missing current rows,
+missing retired rows, duplicates, foreign streams, and cursor zero. These
+two tests pass in `/tmp/araphor-native-source-subscription-4.log`.
+
+The order test now reads Arrow rows directly. Its earlier assertion used
+an existing helper that sorts values and could not qualify delivery order.
+Native query planning retains the caller's query AST and outer scope.
+Native physical output requirements preserve the probe input's sort.
+The key provider accepts a native sort without a fetch limit. Native joins
+still execute the restriction. No replacement parser or sort evaluator is
+added. The SQL and Wasm tests restore a new runtime, consume only the two
+new context rows, and deliver `[5, 4]`. These checks and the Graph selection
+and direct-run checks pass in
+`/tmp/araphor-native-source-subscription-9.log`.
+
+The same counter case passes with the source-built native Rust library.
+The log is `/tmp/araphor-native-source-native.log`. The complete native test
+takes 102.49 seconds with a 171 MiB debug library. This test result does not
+measure the latency of an admitted source update. The native test cost
+still needs investigation. Multicolumn, outer CTE, inner CTE, explicit SQL
+limit, and native duplicate-name checks pass in
+`/tmp/araphor-native-source-cte-4.log`. CTE shadowing has the same rejection
+as an equivalent query in a plain native DataFusion session.
+
+Data now creates opaque row handles for captured Arrow blocks. Query records
+only the old rows that an indexed read selects. Data adds their exact evidence
+to the new call and Step. The source record stores compact origin references
+and indices. Cold validation reads those named origin headers. It does not
+scan their Arrow payloads. A focused SQL subscription check passes with one
+new context row and one matching old context row per update. The saved proof
+contains only those two context versions. The same check restores a new
+runtime before the next update. This test took 3.11 seconds. This duration
+covers the complete test, not one source update.
+
+Sixteen focused Data checks pass after the evidence changes. They cover
+source records, metadata, replay, and retention. The source evidence test
+checks selected old rows, rejected publication, a frozen retry, exact evidence
+expiry, invalid support indices, and reopen. These checks took 49.56 seconds.
+
+Cold restoration now borrows IPC bytes and uses the existing SDK decoder.
+A caller reserves the decode bound before allocation. Query transfers the
+decoded buffers to its existing memory owner before indexing. A failed
+restoration discards the partial local index. The final six Analysis checks
+pass for SQL and Wasm source changes, indexed support with restart, input
+order, native CTE behavior, and selected Graph roots. They took 6.64 seconds.
+`cargo check -p araphor-analysis --tests`, formatting for the five changed
+crates, and the staged whitespace check also pass. Partial-restoration failure
+and incomplete-commit wake behavior still lack their required focused proof.
+The full regression suite and incident workload were not run.
+
+Complete Graph integration, general native incremental SQL, and semantic
+window transitions remain Not done. The old source metadata loop also remains.
+The focused source checks do not qualify complete Graph execution or windows.
+There is no new incident latency result.
+
+**Checkpoint and stop: Requested by the user.** The user requires a commit of
+the current work and an architecture explanation before work stops. The
+checkpoint includes unfinished code. It does not complete this slice or
+proposals 1 and 5. The user has rejected the current complexity. The separate
+block and table containers, repeated evidence and scope records, and custom
+version leases require design review before further implementation.
+
+Native wiring must also reserve the source proof before COMMIT. The proof
+cell is empty when the current capture size is measured. The current cached
+size does not include the proof vectors that publication adds later. This
+memory accounting remains Not done.
+
+Before the native runtime edits, six focused source-record tests passed.
+They check shared payloads across two
+calls, rejection before COMMIT, exact committed proof, fixed input cuts,
+reopen, cancellation, malformed payloads, source order, and empty tables.
+Seven existing managed-state tests also passed. Data clippy passed with tests
+and warnings denied. The logs are
+`/tmp/araphor-source-frames-final-20261101.log`,
+`/tmp/araphor-source-basis-regressions-20261101.log`, and
+`/tmp/araphor-source-basis-clippy-20261101.log`. These results cover the Data
+source-record path before the native edits. They do not qualify the current
+working tree, complete native Query integration, or incident
+latency. Full workspace CI was not run. The user requires relevant checks.
+The six source-record checks also pass after the native input edits in
+`/tmp/araphor-source-frames-integrated.log`.
+
 ## Measured baseline
 
 The source was `2d7d4164b9c2`. The existing

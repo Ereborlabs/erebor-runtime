@@ -12,6 +12,7 @@ use crate::{
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChangeInput {
+    pub affected: String,
     pub before: String,
     pub after: String,
 }
@@ -32,7 +33,11 @@ impl ChangeInputs {
     }
 
     pub fn generated(&self, name: &str) -> bool {
-        self.reset == name || self.ports.iter().any(|port| port.before == name)
+        self.reset == name
+            || self
+                .ports
+                .iter()
+                .any(|port| port.before == name || port.affected == name)
     }
 
     pub fn is_reset(&self, evaluation: &Evaluation) -> Result<bool> {
@@ -85,18 +90,33 @@ impl ChangeInputs {
         }
         let mut names = BTreeSet::from([self.reset.as_str()]);
         for port in &self.ports {
-            if !names.insert(&port.before)
+            if !names.insert(&port.affected)
+                || !names.insert(&port.before)
                 || !names.insert(&port.after)
                 || input(&port.before)?.port.schema != input(&port.after)?.port.schema
                 || matches!(&input(&port.after)?.source, InputSource::Lookup(_))
             {
                 return Err(Self::invalid("change input pair"));
             }
+            let affected = input(&port.affected)?;
+            let after = input(&port.after)?;
+            if affected.port.schema.fields().is_empty()
+                || !matches!(&affected.source, InputSource::Query(_))
+                || affected.port.schema.fields().iter().any(|field| {
+                    !after
+                        .port
+                        .schema
+                        .field_with_name(field.name())
+                        .is_ok_and(|other| other.data_type() == field.data_type())
+                })
+            {
+                return Err(Self::invalid("affected input keys"));
+            }
         }
         for port in model
             .inputs
             .iter()
-            .filter(|input| self.generated(&input.port.name))
+            .filter(|input| input.port.name == self.reset)
         {
             if !matches!(&port.source, InputSource::Table(TableRef::Named(name)) if name == &port.port.name)
             {
@@ -149,6 +169,7 @@ mod tests {
         let changes = ChangeInputs {
             reset: "reset".into(),
             ports: vec![ChangeInput {
+                affected: "affected".into(),
                 before: "before".into(),
                 after: "after".into(),
             }],
@@ -159,10 +180,15 @@ mod tests {
                 port("after"),
                 port("before"),
                 ChangeInputs::reset_port("reset"),
+                port("affected"),
             ],
             vec![port("total")],
         );
         model.outputs[0].evidence_required = true;
+        model.input_mode = InputMode::Resolved;
+        model.inputs[3].source = InputSource::Query(
+            "SELECT value FROM inserted.after UNION SELECT value FROM removed.after".into(),
+        );
         model.change_inputs = Some(changes.clone());
         model.checkpoint = Some(CheckpointSpec {
             version: 1,
@@ -215,6 +241,7 @@ mod tests {
                 input(dataset("after", vec![7])),
                 input(dataset("before", if reset { vec![] } else { vec![3] })),
                 input(changes.reset_input(reset).unwrap()),
+                input(dataset("affected", vec![7])),
             ],
             context: EvaluationContext {
                 id: "call".into(),
@@ -272,7 +299,8 @@ mod tests {
                         &[
                             ("after".into(), 1),
                             ("before".into(), 1),
-                            ("reset".into(), 1)
+                            ("reset".into(), 1),
+                            ("affected".into(), 1)
                         ]
                         .into(),
                         &output
@@ -340,7 +368,7 @@ mod tests {
                 port: model.inputs[0].port.clone(),
                 source: InputSource::Lookup("SELECT 7 AS value".into()),
             });
-            model.inputs[3].port.name = "support".into();
+            model.inputs[4].port.name = "support".into();
             package.validate()?;
             package.exports[0].change_inputs = None;
             assert!(package.validate().is_err());

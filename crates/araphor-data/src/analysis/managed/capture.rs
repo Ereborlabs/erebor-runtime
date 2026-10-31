@@ -14,10 +14,12 @@ impl AnalysisStore {
         &self,
         reader: &Connection,
         request: &ManagedRead,
-        now: u64,
+        read: &crate::AnalysisTableRead<'_>,
+        selection: &AnalysisSelectionV1,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<ManagedCapture> {
+        let now = read.now;
         if request.follow
             && matches!(
                 &request.instance.spec.destination,
@@ -250,10 +252,12 @@ impl AnalysisStore {
                 witnesses: Vec::new(),
                 contexts: Vec::new(),
                 traces: Vec::new(),
+                source: Self::capture_source(reader, request, read, selection, &output.meta)?,
             },
             instance,
             prior,
             bytes: output.input_bytes.saturating_sub(before),
+            source: None,
         })
     }
 

@@ -6,7 +6,7 @@ fn standalone_graph_rejects_managed_producer_binding() -> TestResult {
     let source = &fixture.snapshot.scope.identity;
     let writer = Connection::open_in_memory()?;
     writer.execute_batch(&GraphRows::schema())?;
-    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT)")?;
+    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT,kind VARCHAR)")?;
     writer.execute(
         "INSERT INTO source_receipts VALUES(?,?,?)",
         params![
@@ -258,7 +258,7 @@ fn unit_history_keeps_shared_values_and_rejects_conflicts() -> TestResult {
     let source = &fixture.snapshot.scope.identity;
     let mut writer = Connection::open_in_memory()?;
     writer.execute_batch(&GraphRows::schema())?;
-    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT)")?;
+    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT,kind VARCHAR)")?;
     let record = fixture.snapshot.input_manifest.evidence[0].clone();
     writer.execute(
         "INSERT INTO source_receipts VALUES(?,?,?)",

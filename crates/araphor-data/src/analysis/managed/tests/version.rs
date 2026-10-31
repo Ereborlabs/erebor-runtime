@@ -23,6 +23,7 @@ pub(super) fn capture(
         .read_managed_tables(
             &current.grant.selection,
             &ManagedRead {
+                source: None,
                 execution: None,
                 follow: false,
                 instance: target.clone(),

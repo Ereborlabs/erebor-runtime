@@ -22,6 +22,7 @@ pub(super) struct PortScope<'a> {
     pub(super) selection: AnalysisSelectionV1,
     pub(super) packages: std::collections::BTreeSet<usize>,
     window: Option<(i64, i64)>,
+    reads: Option<Vec<araphor_data::ManagedSourceRows>>,
 }
 
 impl Inputs {
@@ -216,6 +217,7 @@ impl Inputs {
                 invocation: Some((invocation, call)),
                 selection,
                 packages: source.package_indices(&port.origins),
+                reads: source.input_reads(physical).context(SqlSnafu)?,
                 window: snapshot
                     .windows
                     .iter()
@@ -474,6 +476,26 @@ impl Inputs {
             &window,
         ))?;
         hash.update(provenance.as_bytes());
+        if let Some(reads) = &scope.reads {
+            let frame = snapshot
+                .managed()
+                .and_then(|managed| managed.source())
+                .ok_or_else(|| {
+                    araphor_data::PackageErrorCodeV1::Incomplete.error("indexed input source")
+                })?;
+            let selected = reads
+                .iter()
+                .map(|rows| (rows.position(), rows.witnesses(), rows.contexts()))
+                .collect::<Vec<_>>();
+            hash.update(
+                araphor_data::InputRevision::of_native(&(
+                    frame.read(),
+                    frame.position(),
+                    selected,
+                ))?
+                .as_bytes(),
+            );
+        }
         if !inherited.is_empty() {
             let revisions = inherited
                 .iter()
@@ -491,7 +513,7 @@ impl Inputs {
                 .build()
             })?
             .schema();
-        if port.changes && snapshot.managed().is_some() {
+        if scope.reads.is_some() || (port.changes && snapshot.managed().is_some()) {
             let (invocation, call) = scope.invocation.ok_or_else(|| {
                 InvalidSnafu {
                     field: "change input invocation",
@@ -736,6 +758,7 @@ mod supplied {
         let held = memory.reserve_input(scratch + 1)?;
         let scope = scope(&[SourceOrigin::Local("fixture".into())])?;
         let selected = PortScope {
+            reads: None,
             invocation: None,
             packages: Default::default(),
             slot: 0,

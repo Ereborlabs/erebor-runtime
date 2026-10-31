@@ -90,7 +90,7 @@ impl AnalysisStore {
         })
     }
 
-    fn coverage_changes_from(
+    pub(in crate::analysis) fn coverage_changes_from(
         &self,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,

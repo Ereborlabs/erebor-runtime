@@ -8,6 +8,7 @@ use snafu::ResultExt as _;
 use super::super::context::VerifiedPackages;
 use super::super::{AnalysisStore, PackageResultRefV1};
 use super::model::*;
+use super::source::SourceEvidence;
 use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result, ResultContext,
 };
@@ -83,6 +84,7 @@ impl AnalysisStore {
                 None,
                 BTreeMap::new(),
                 None,
+                None,
             ));
         }
         if request.frontier.is_some() {
@@ -93,7 +95,12 @@ impl AnalysisStore {
                 capture.expected_generation,
             )?;
         }
-        self.check_managed_capture(&transaction, capture, request.time_utc_ns)?;
+        self.check_managed_capture(
+            &transaction,
+            capture,
+            request.time_utc_ns,
+            (&capture.witnesses, &capture.contexts),
+        )?;
         self.resolve_witnesses(&capture.witnesses, capture.revision)?;
         let revision = self.package_next(&transaction)?;
         let attempt = Attempt {
@@ -133,6 +140,7 @@ impl AnalysisStore {
                     execution,
                 )))
             }),
+            captured.source.clone(),
         ))
     }
 
@@ -170,6 +178,17 @@ impl AnalysisStore {
         ) -> Result<(Vec<&'static str>, Option<PackageResultRefV1>)>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<ManagedReceipt> {
+        let evidence = match &input.attempt.5 {
+            Some(source) => source.frame.freeze_evidence(
+                &input.attempt.0.capture,
+                input.attempt.request().witness_expiry,
+            )?,
+            None => SourceEvidence {
+                witnesses: input.attempt.0.capture.witnesses.clone(),
+                contexts: input.attempt.0.capture.contexts.clone(),
+                support: Vec::new(),
+            },
+        };
         let mut writer = self.writer()?;
         let transaction = writer
             .get_mut()?
@@ -179,8 +198,21 @@ impl AnalysisStore {
             })?;
         let revision = self.package_next(&transaction)?;
         let (receipt, projected, mut verified) =
-            self.managed_commit_rows(&transaction, input, revision, project)?;
+            self.managed_commit_rows(&transaction, input, revision, &evidence, project)?;
         let retained = self.retain_managed(&transaction, input, &receipt, &mut verified)?;
+        let source_proof = input.attempt.5.as_ref().map(|frame| {
+            (
+                std::sync::Arc::clone(&frame.frame),
+                std::sync::Arc::new(super::source::ManagedSourceProof {
+                    result: receipt.selected.clone(),
+                    witnesses: evidence.witnesses,
+                    contexts: evidence.contexts,
+                }),
+            )
+        });
+        if let Some((frame, proof)) = &source_proof {
+            frame.check_proof(proof)?;
+        }
         let mut relations = Self::MANAGED_RELATIONS.to_vec();
         relations.extend(projected);
         relations.sort_unstable();
@@ -195,6 +227,9 @@ impl AnalysisStore {
         #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("managed.before");
         self.commit_metadata(transaction, "commit complete managed step")?;
+        if let Some((frame, proof)) = source_proof {
+            frame.commit_proof(proof);
+        }
         if let Some((owner, state)) = retained {
             owner.promote(state);
         }
@@ -207,11 +242,12 @@ impl AnalysisStore {
         Ok(receipt)
     }
 
-    pub(in crate::analysis) fn managed_commit_rows(
+    fn managed_commit_rows(
         &self,
         transaction: &Transaction<'_>,
         input: &ManagedCommit<'_>,
         revision: u64,
+        evidence: &SourceEvidence,
         project: impl FnOnce(
             &Transaction<'_>,
             u64,
@@ -242,11 +278,15 @@ impl AnalysisStore {
         }
         self.check_managed_claim(input.attempt)?;
         let (packets, mut step, selected, mut receipt) =
-            self.prepare_managed(transaction, &attempt, input, revision)?;
-        let mut verified =
-            self.check_managed_capture(transaction, &attempt.capture, input.now_utc_ns)?;
-        let segments = self.resolve_witnesses(&attempt.capture.witnesses, revision - 1)?;
-        if segments.len() != attempt.capture.witnesses.len() {
+            self.prepare_managed(transaction, &attempt, input, revision, evidence)?;
+        let mut verified = self.check_managed_capture(
+            transaction,
+            &attempt.capture,
+            input.now_utc_ns,
+            (&evidence.witnesses, &evidence.contexts),
+        )?;
+        let segments = self.resolve_witnesses(&evidence.witnesses, revision - 1)?;
+        if segments.len() != evidence.witnesses.len() {
             return Err(Code::Invalid.error("managed witness segments"));
         }
         if attempt.capture.generation != attempt.capture.expected_generation {
@@ -282,7 +322,7 @@ impl AnalysisStore {
             transaction,
             revision,
             &receipt,
-            (&attempt.capture.witnesses, &segments),
+            (&evidence.witnesses, &segments),
             &mut verified,
         )?;
         if let Some(reference) = &graph {
@@ -302,14 +342,15 @@ impl AnalysisStore {
             &receipt.selected.result_id,
             step,
             selected,
+            input.attempt.5.as_ref().map(|source| source.frame.as_ref()),
             revision,
         )?;
         Self::insert_references(
             transaction,
             &receipt.selected.result_id,
-            &attempt.capture.witnesses,
+            &evidence.witnesses,
             &segments,
-            &attempt.capture.contexts,
+            &evidence.contexts,
         )?;
         transaction
             .execute(
@@ -342,6 +383,7 @@ impl AnalysisStore {
         reader: &Connection,
         capture: &Capture,
         now: u64,
+        evidence: (&[crate::AnalysisWitnessV1], &[crate::AnalysisContextRefV1]),
     ) -> Result<VerifiedPackages> {
         let mut verified = VerifiedPackages::default();
         let instance = Self::managed_instance_from(reader, capture.tenant, &capture.instance)?
@@ -410,7 +452,7 @@ impl AnalysisStore {
             };
         }
         Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, &control)?;
-        for reference in &capture.contexts {
+        for reference in evidence.1 {
             if self
                 .read_context_verified_from(reader, &self.root, &reference.key, &mut verified)?
                 .is_none_or(|(_, revision)| revision != reference.commit_revision)
@@ -430,7 +472,7 @@ impl AnalysisStore {
                 return crate::AnalysisConflictSnafu.fail();
             }
         }
-        if capture.witnesses.iter().any(|witness| {
+        if evidence.0.iter().any(|witness| {
             witness.identity.tenant() != spec.tenant
                 || witness.cursor == 0
                 || witness.expires_utc_ns <= now
@@ -446,6 +488,7 @@ impl AnalysisStore {
         attempt: &Attempt,
         input: &ManagedCommit<'_>,
         revision: u64,
+        evidence: &SourceEvidence,
     ) -> Result<(Vec<Packet>, Step, sdk::wire::Dataset, ManagedReceipt)> {
         let current =
             Self::managed_instance_from(reader, attempt.capture.tenant, &attempt.capture.instance)?
@@ -660,8 +703,8 @@ impl AnalysisStore {
                 inputs: input_shapes,
                 changes,
                 dependencies,
-                witnesses: attempt.capture.witnesses.clone(),
-                contexts: attempt.capture.contexts.clone(),
+                witnesses: evidence.witnesses.clone(),
+                contexts: evidence.contexts.clone(),
             };
             Self::check_change_record(reader, spec.tenant, &record, checked.model(), attempt)?;
             let output = sdk::wire::Output::encode_checked(&checked, returned.output)
@@ -684,8 +727,17 @@ impl AnalysisStore {
             attempt: attempt.request.id.clone(),
             rows: input.selected.rows(),
             dependencies,
-            witnesses: attempt.capture.witnesses.clone(),
-            contexts: attempt.capture.contexts.clone(),
+            witnesses: evidence.witnesses.clone(),
+            contexts: evidence.contexts.clone(),
+            source: match (&attempt.capture.source, &input.attempt.5) {
+                (None, None) => None,
+                (Some(contract), Some(source)) if *contract == source.frame.record.contract => {
+                    let mut record = source.frame.record.clone();
+                    record.support = evidence.support.clone();
+                    Some(record)
+                }
+                _ => return Err(Code::Invalid.error("managed source buffers")),
+            },
         };
         let id =
             crate::InputRevision::of(&(spec.tenant, &spec.id, &attempt.request.id, None::<u64>))
@@ -724,21 +776,6 @@ impl AnalysisStore {
                 "input",
                 slot,
                 &mut data.arrow_ipc,
-            )?;
-        }
-        for (slot, target) in packet
-            .record
-            .changes
-            .iter_mut()
-            .flat_map(|changes| &mut changes.targets)
-            .enumerate()
-        {
-            Self::insert_managed_arrow(
-                transaction,
-                &packet.id,
-                "target",
-                slot,
-                &mut target.input.data.arrow_ipc,
             )?;
         }
         for (slot, data) in packet.output.datasets.iter_mut().enumerate() {
@@ -807,13 +844,42 @@ impl AnalysisStore {
         id: &str,
         step: Step,
         mut selected: sdk::wire::Dataset,
+        source: Option<&super::source::ManagedSourceFrame>,
         revision: u64,
     ) -> Result<()> {
         Self::insert_managed_arrow(transaction, id, "selected", 0, &mut selected.arrow_ipc)?;
+        if let Some(source) = source {
+            for (slot, mut table) in source.encode()?.into_iter().enumerate() {
+                Self::insert_managed_arrow(transaction, id, "source", slot, &mut table.arrow_ipc)?;
+            }
+        }
         transaction.execute("INSERT INTO analysis_results (result_id, tenant_id, processor_id, body, request_meta, commit_revision) VALUES (?, ?, 'managed-definition-v1', ?, ?, ?)",
             params![id, spec.tenant.as_slice(), ManagedCodec::encode(&selected).context(crate::ManagedEncodingSnafu)?, ManagedCodec::encode(&step).context(crate::ManagedEncodingSnafu)?, revision])
             .context(AnalysisDatabaseSnafu { operation: "insert selected managed relation" })?;
-        Self::insert_managed_edges(transaction, spec.tenant, id, &step.dependencies)
+        Self::insert_managed_edges(transaction, spec.tenant, id, &step.dependencies)?;
+        if let Some(parent) = step
+            .source
+            .as_ref()
+            .and_then(|source| match &source.contract.read {
+                super::source::ManagedSourceRead::Initial => None,
+                super::source::ManagedSourceRead::Changes(parent) => Some(&parent.result),
+            })
+        {
+            transaction
+                .execute(
+                    "INSERT INTO managed_edges VALUES (?, ?, ?, ?, 'source')",
+                    params![
+                        spec.tenant.as_slice(),
+                        id,
+                        parent.result_id,
+                        parent.commit_revision
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "retain managed source basis",
+                })?;
+        }
+        Ok(())
     }
 
     pub(in crate::analysis) fn insert_managed_edges(
@@ -825,7 +891,7 @@ impl AnalysisStore {
         for dependency in dependencies {
             transaction
                 .execute(
-                    "INSERT INTO managed_edges VALUES (?, ?, ?, ?)",
+                    "INSERT INTO managed_edges VALUES (?, ?, ?, ?, 'input')",
                     params![
                         tenant.as_slice(),
                         id,

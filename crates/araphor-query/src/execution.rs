@@ -288,6 +288,18 @@ impl Engine {
             .with_runtime_env(native)
             .with_query_planner(Arc::new(crate::planner::subscription::SubscriptionPlanner))
             .build();
+        let mut rules = state.physical_optimizers().to_vec();
+        let distribution = rules
+            .iter()
+            .position(|rule| rule.name() == "EnforceDistribution")
+            .ok_or_else(|| crate::Error::Sql {
+                source: DataFusionError::Internal("the native distribution rule is absent".into()),
+            })?;
+        rules.insert(distribution, Arc::new(crate::sources::SourceJoin));
+        rules.push(Arc::new(crate::sources::SourceLookup));
+        let state = SessionStateBuilder::new_from_existing(state)
+            .with_physical_optimizer_rules(rules)
+            .build();
         Ok(Arc::new(Self {
             store,
             state,
@@ -593,6 +605,7 @@ impl Engine {
             tables: Arc::default(),
             calls: None,
             managed: None,
+            source_index: None,
             inputs: None,
             workers: None,
             context_init: None,
@@ -725,6 +738,7 @@ impl Engine {
 #[derive(Clone, Copy, Debug)]
 pub enum Read {
     Snapshot,
+    Changes(StorePositionV1),
     Page(Option<StorePositionV1>),
 }
 
@@ -757,6 +771,7 @@ pub struct Session {
     pub(crate) tables: Arc<LocalTables>,
     pub(crate) calls: Option<Arc<crate::definition::CallContext>>,
     pub(crate) managed: Option<araphor_data::ManagedRead>,
+    pub(crate) source_index: Option<Arc<crate::sources::SourceIndex>>,
     pub(crate) inputs: Option<Arc<crate::sources::InputCapture>>,
     pub(crate) workers: Option<araphor_package_runtime::TaskTracker>,
     context_init: Option<Arc<ContextInit>>,
@@ -872,6 +887,7 @@ impl Session {
             tables: Arc::clone(&self.tables),
             calls: None,
             managed: None,
+            source_index: None,
             inputs: None,
             workers: self.workers.clone(),
             context_init: self.context_init.clone(),
@@ -1381,6 +1397,69 @@ impl Session {
     ) -> Result<CapturedPhysical> {
         self.control.check()?;
         let reservation = self.output_reservation(&physical)?;
+        let mut managed = self.managed.clone();
+        let mut read = read;
+        let source_index = if let Some(index) = &self.source_index {
+            Some(Arc::clone(index))
+        } else if managed.is_some()
+            && crate::sources::SourceLookup::required(&physical).context(SqlSnafu)?
+        {
+            Some(
+                crate::sources::SourceIndex::new(
+                    crate::sources::SourceLookup::keys(&physical).context(SqlSnafu)?,
+                    Arc::clone(&self.memory),
+                )
+                .context(SqlSnafu)?,
+            )
+        } else {
+            None
+        };
+        if let Some(index) = &source_index {
+            let managed = managed.as_mut().ok_or_else(|| {
+                araphor_data::PackageErrorCodeV1::Invalid.error("managed source owner")
+            })?;
+            if index.reference().context(SqlSnafu)?.is_none() && !managed.rebuild {
+                let index = Arc::clone(index);
+                let store = Arc::clone(&self.engine.store);
+                let instance = managed.instance.clone();
+                let control = Arc::clone(&self.control);
+                let memory = Arc::clone(&self.memory);
+                Engine::blocking(Arc::clone(&control), self.token()?, move || {
+                    let resume =
+                        store.managed_resume(instance.spec.tenant, &instance.spec.id, &control)?;
+                    if let Some(reference) = resume.source {
+                        let decode = memory.reserve_input(0).context(SqlSnafu)?;
+                        let restored = store.managed_source_history::<crate::Error>(
+                            &instance,
+                            &reference,
+                            &control,
+                            |bytes| decode.try_resize(bytes).context(SqlSnafu),
+                            |frame| {
+                                for batch in frame.datasets().iter().flat_map(|data| &data.batches)
+                                {
+                                    memory.retain_input(batch, &decode).context(SqlSnafu)?;
+                                }
+                                index.restore(frame, &control).context(SqlSnafu)
+                            },
+                        );
+                        if restored.is_err() {
+                            index.discard_restore().context(SqlSnafu)?;
+                        }
+                        restored?;
+                    }
+                    Ok(())
+                })
+                .await?;
+            }
+            let reference = index.reference().context(SqlSnafu)?;
+            read = reference.as_ref().map_or(Read::Snapshot, |reference| {
+                Read::Changes(reference.position)
+            });
+            managed.source = Some(reference.map_or(
+                araphor_data::ManagedSourceRead::Initial,
+                araphor_data::ManagedSourceRead::Changes,
+            ));
+        }
         let snapshot = SourceSnapshot::new(
             Arc::clone(&self.engine.store),
             self.selection.clone(),
@@ -1395,8 +1474,11 @@ impl Session {
             self.engine.limits.extract_timeout,
             self.now,
             Arc::clone(&self.memory),
-            self.managed.clone(),
+            managed,
         );
+        if let Some(index) = &source_index {
+            snapshot.bind_index(Arc::clone(index)).context(SqlSnafu)?;
+        }
         let mut config = context.session_config().clone();
         config.set_extension(Arc::clone(&permit));
         config.set_extension(Arc::clone(&snapshot));
@@ -1419,6 +1501,7 @@ impl Session {
         );
         let mode = match read {
             Read::Snapshot => ReadMode::Snapshot,
+            Read::Changes(after) => ReadMode::Changes(after),
             Read::Page(after) => ReadMode::Page(after),
         };
         let mut requests = sources.clone();

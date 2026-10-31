@@ -65,6 +65,7 @@ impl Journal {
 
     fn request(&self, store: &AnalysisStore) -> TestResult<ManagedRead> {
         Ok(ManagedRead {
+            source: None,
             instance: self.fixture.current(store)?,
             execution: None,
             expected: None,

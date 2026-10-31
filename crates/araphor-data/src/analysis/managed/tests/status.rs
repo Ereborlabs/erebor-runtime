@@ -121,6 +121,7 @@ fn idle_failure_keeps_progress() -> TestResult {
     ));
     let denied = store.fail_managed(
         &ManagedResume {
+            source: None,
             instance: resumed,
             frontier: None,
             completed: receipt.commit_revision,
@@ -528,6 +529,7 @@ fn admission_failure_keeps_intent() -> TestResult {
     let terminal =
         store.finish_managed(&attempt, ManagedExit::Failed(Code::Unsupported), || Ok(()))?;
     let expected = ManagedResume {
+        source: None,
         instance: fixture.current(&store)?,
         frontier: None,
         completed: terminal.revision,
@@ -623,6 +625,7 @@ fn admission_failure_checks_fences() -> TestResult {
             Ok(())
         })?;
     let expected = ManagedResume {
+        source: None,
         instance: current.clone(),
         frontier: None,
         completed: 0,
@@ -716,6 +719,7 @@ fn admission_failure_checks_fences() -> TestResult {
     assert_eq!(fixture.current(&store)?.progress, receipt.commit_revision);
     let current = fixture.current(&store)?;
     let expected = ManagedResume {
+        source: None,
         instance: current.clone(),
         completed: receipt.commit_revision,
         frontier: None,

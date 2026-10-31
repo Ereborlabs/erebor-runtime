@@ -3,6 +3,89 @@ use super::fixture::*;
 use super::{derive, TestResult};
 
 #[test]
+fn selection_keeps_affected_roots() -> TestResult {
+    let input = credential_input()?.normalized()?;
+    let graph = Graph::new(&input)?;
+    let current = graph
+        .observations
+        .first()
+        .ok_or("current observation")?
+        .id
+        .clone();
+    let mut retired = current.clone();
+    retired.durable_cursor = graph
+        .observations
+        .iter()
+        .map(|row| row.id.durable_cursor)
+        .max()
+        .ok_or("current cursor")?
+        .checked_add(1)
+        .ok_or("retired cursor")?;
+    let unit = |record| algorithm::Unit {
+        record,
+        window_ns: GRAPH_WINDOW_NS,
+        restricted: false,
+        support: Vec::new(),
+    };
+    graph.check_selection(
+        std::slice::from_ref(&current),
+        &[],
+        &[unit(current.clone())],
+    )?;
+    graph.check_selection(
+        std::slice::from_ref(&retired),
+        &[unit(retired.clone())],
+        &[],
+    )?;
+    graph.check_selection(
+        std::slice::from_ref(&current),
+        &[unit(current.clone())],
+        &[unit(current.clone())],
+    )?;
+    for (keys, before, after) in [
+        (vec![current.clone()], vec![], vec![]),
+        (vec![retired.clone()], vec![], vec![]),
+        (
+            vec![current.clone(), current.clone()],
+            vec![],
+            vec![unit(current.clone())],
+        ),
+        (
+            vec![retired.clone()],
+            vec![unit(retired.clone()), unit(retired.clone())],
+            vec![],
+        ),
+        (
+            vec![current.clone()],
+            vec![],
+            vec![unit(current.clone()), unit(current.clone())],
+        ),
+        (vec![], vec![], vec![unit(current.clone())]),
+        (vec![retired.clone()], vec![], vec![unit(retired.clone())]),
+    ] {
+        assert!(graph.check_selection(&keys, &before, &after).is_err());
+    }
+    let mut foreign = retired.clone();
+    foreign.stream.source_epoch += 1;
+    assert!(graph
+        .check_selection(
+            std::slice::from_ref(&foreign),
+            &[unit(foreign.clone())],
+            &[]
+        )
+        .is_err());
+    retired.durable_cursor = 0;
+    assert!(graph
+        .check_selection(
+            std::slice::from_ref(&retired),
+            &[unit(retired.clone())],
+            &[]
+        )
+        .is_err());
+    Ok(())
+}
+
+#[test]
 fn input_binding_accepts_batches() -> TestResult {
     let input = credential_input()?.normalized()?;
     let graph = Graph::new(&input)?;

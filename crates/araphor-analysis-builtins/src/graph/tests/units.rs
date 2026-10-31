@@ -85,6 +85,12 @@ impl UnitFixture {
             changes.reset_input(true)?,
             Observation::encode(records)?,
             Fact::encode(facts)?,
+            Unit::encode_affected(
+                &units
+                    .iter()
+                    .map(|unit| unit.record.clone())
+                    .collect::<Vec<_>>(),
+            )?,
         ];
         detector.evaluate(&sdk::Evaluation {
             export: "detect".into(),

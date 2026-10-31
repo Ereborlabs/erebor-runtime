@@ -15,6 +15,7 @@ fn assert_frontier(completed: bool) -> TestResult {
     assert_eq!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
         ManagedResume {
+            source: None,
             instance: fixture.instance.clone(),
             frontier: None,
             completed: 0
@@ -117,6 +118,7 @@ fn assert_frontier(completed: bool) -> TestResult {
     assert_eq!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
         ManagedResume {
+            source: None,
             instance: current,
             frontier,
             completed: receipt.commit_revision
@@ -271,6 +273,7 @@ fn pending_frontier_settles_startup() -> TestResult {
     assert_eq!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
         ManagedResume {
+            source: None,
             instance: fixture.instance.clone(),
             frontier: None,
             completed: terminal.revision

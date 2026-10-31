@@ -47,6 +47,7 @@ async fn empty_gate_keeps_history() -> TestResult {
             data.read_managed_tables(
                 &grant.selection,
                 &araphor_data::ManagedRead {
+                    source: None,
                     execution: None,
                     instance: current,
                     expected: None,
@@ -177,6 +178,7 @@ async fn failed_graph_disables_reuse() -> TestResult {
         store.read_managed_tables(
             &grant.selection,
             &araphor_data::ManagedRead {
+                source: None,
                 execution: None,
                 instance,
                 expected: None,
@@ -232,11 +234,12 @@ async fn failed_graph_disables_reuse() -> TestResult {
         )?;
         assert!(checkpoint.is_none());
         assert!(previous_outputs.is_empty());
-        let targets = retained.changes.as_ref().ok_or("retained change targets")?;
-        assert_eq!(targets.targets.len(), 1);
-        assert_eq!(targets.targets[0].data.name, "units");
+        retained.changes.as_ref().ok_or("retained change basis")?;
         assert_eq!(
-            araphor_analysis_builtins::graph::Unit::decode(&targets.targets[0].data)?.len(),
+            araphor_analysis_builtins::graph::Unit::decode(
+                &retained.evaluation.input("units")?.data
+            )?
+            .len(),
             3
         );
         evaluation.checkpoint = checkpoint;

@@ -202,31 +202,61 @@ impl Graph<'_> {
         if !algorithm::Detector::supports_units(model) {
             return Ok(());
         }
-        let targets = result
-            .changes()
-            .and_then(|changes| {
-                changes
-                    .targets
-                    .iter()
-                    .find(|input| input.data.name == "units")
-            })
-            .ok_or_else(|| {
-                GraphInvalidSnafu {
-                    field: "graph unit target",
-                }
-                .build()
-            })?;
-        let units = algorithm::Unit::decode(&targets.data).context(AnalysisContractSnafu)?;
+        Self::require(result.changes().is_some(), "graph unit change basis")?;
+        let evaluation = result.evaluation();
+        let affected = algorithm::Unit::decode_affected(
+            &evaluation
+                .input("affected")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        let units = algorithm::Unit::decode(
+            &evaluation
+                .input("units")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        let before = algorithm::Unit::decode(
+            &evaluation
+                .input("unit_removals")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        self.check_selection(&affected, &before, &units)
+    }
+
+    pub(super) fn check_selection(
+        &self,
+        affected: &[DiscoveryRecordIdV1],
+        before: &[algorithm::Unit],
+        units: &[algorithm::Unit],
+    ) -> Result<()> {
+        let keys = affected.iter().collect::<BTreeSet<_>>();
+        let removed = before
+            .iter()
+            .map(|unit| &unit.record)
+            .collect::<BTreeSet<_>>();
         let ids = units
             .iter()
             .map(|unit| &unit.record)
             .collect::<BTreeSet<_>>();
         Self::require(
-            ids.len() == units.len()
-                && ids.len() == self.observations.len()
-                && ids
-                    .into_iter()
-                    .eq(self.observations.iter().map(|record| &record.id)),
+            keys.len() == affected.len()
+                && keys
+                    .iter()
+                    .all(|key| key.stream == self.input.source && key.durable_cursor > 0)
+                && ids.len() == units.len()
+                && removed.len() == before.len()
+                && ids.union(&removed).copied().eq(keys.iter().copied())
+                && keys.iter().all(|key| {
+                    self.observations
+                        .binary_search_by(|record| record.id.cmp(key))
+                        .is_ok()
+                        == ids.contains(key)
+                }),
             "graph unit target selection",
         )
     }

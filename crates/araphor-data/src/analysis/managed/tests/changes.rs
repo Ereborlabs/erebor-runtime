@@ -33,30 +33,12 @@ fn change_base_matches_basis() -> TestResult {
     model.change_inputs = Some(sdk::ChangeInputs {
         reset: "reset".into(),
         ports: vec![sdk::ChangeInput {
+            affected: "affected".into(),
             before: "before".into(),
             after: "source".into(),
         }],
     });
-    record.changes = Some(super::super::model::RecordChanges {
-        base: None,
-        targets: record
-            .inputs
-            .iter()
-            .enumerate()
-            .map(|(slot, input)| super::super::model::RecordTarget {
-                input: sdk::wire::Input {
-                    data: sdk::wire::Dataset {
-                        name: input.name.clone(),
-                        arrow_ipc: Vec::new(),
-                    },
-                    revision: record.context.inputs[slot].clone(),
-                    coverage: record.context.input_coverage[slot].clone(),
-                },
-                rows: input.rows,
-                batches: input.batches,
-            })
-            .collect(),
-    });
+    record.changes = Some(super::super::model::RecordChanges { base: None });
     for name in ["before", "reset"] {
         record.inputs.push(super::super::model::RecordInput {
             name: name.into(),

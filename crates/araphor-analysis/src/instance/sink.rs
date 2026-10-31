@@ -474,15 +474,13 @@ impl DataSink for Publication {
                             admission.completed = receipt.commit_revision;
                         }
                         state.receipt = Some(receipt);
-                        Ok(completed.then_some(revision))
+                        Ok((revision, completed))
                     },
                 )
                 .map_err(araphor_query::Error::from)
             })
             .await?;
-        if let Some(revision) = published {
-            acknowledgement.acknowledge(context, revision)?;
-        }
+        acknowledgement.acknowledge(context, published.0, published.1)?;
         Ok(rows as u64)
     }
 }

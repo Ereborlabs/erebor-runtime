@@ -21,7 +21,11 @@ impl Dataset {
 
     /// Return the number of record batch messages in the IPC stream.
     pub fn batch_count(&self) -> Result<usize> {
-        super::framing::IpcFrames::validate(&self.arrow_ipc)
+        Self::batch_count_ipc(&self.arrow_ipc)
+    }
+
+    pub fn batch_count_ipc(ipc: &[u8]) -> Result<usize> {
+        super::framing::IpcFrames::validate(ipc)
     }
 
     /// Return the buffer bound for IPC decode and owned normalization.

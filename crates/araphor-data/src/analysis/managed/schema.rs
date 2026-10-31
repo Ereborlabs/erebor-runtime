@@ -34,7 +34,8 @@ impl AnalysisStore {
         CREATE TABLE managed_edges (
             tenant_id BLOB NOT NULL, result_id VARCHAR NOT NULL, dependency_id VARCHAR NOT NULL,
             commit_revision UBIGINT NOT NULL,
-            PRIMARY KEY (result_id, dependency_id)
+            kind VARCHAR NOT NULL CHECK (kind IN ('input', 'source')),
+            PRIMARY KEY (result_id, dependency_id, kind)
         );
         CREATE TABLE managed_arrow (
             result_id VARCHAR NOT NULL, role VARCHAR NOT NULL, slot UBIGINT NOT NULL, ipc BLOB NOT NULL,
@@ -184,6 +185,9 @@ impl AnalysisStore {
             UNION ALL SELECT 1 FROM managed_edges e LEFT JOIN analysis_results r ON e.result_id = r.result_id AND e.tenant_id = r.tenant_id
                 LEFT JOIN analysis_results d ON e.dependency_id = d.result_id AND e.tenant_id = d.tenant_id
                 WHERE r.result_id IS NULL OR d.result_id IS NULL OR e.commit_revision <> d.commit_revision
+                    OR e.kind NOT IN ('input', 'source')
+                    OR (e.kind = 'source' AND (r.processor_id <> 'managed-definition-v1'
+                        OR d.processor_id <> 'managed-definition-v1' OR d.commit_revision >= r.commit_revision))
             UNION ALL SELECT 1 FROM managed_arrow a LEFT JOIN analysis_results r USING (result_id)
                 WHERE r.result_id IS NULL OR r.processor_id NOT IN ('managed-package-v1', 'managed-definition-v1')
         )", [], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "validate managed references" })?;

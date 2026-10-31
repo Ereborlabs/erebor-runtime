@@ -15,13 +15,17 @@ Each invocation receives changes to its input query and the last committed
 state. Data remains the durable owner. Native DataFusion operators execute
 the input query. Native and Wasm packages use the same checked contract.
 
-The current code retains saved state and delivers changed Graph units with
+The prior committed implementation retains saved state and delivers changed Graph units with
 their current support. Native input SQL still selects complete targets. Data
 retains those targets for difference execution and cold recovery. Graph
 packages do not receive the complete prior Graph. Data owns contribution
 history and the derived package state. Live integration, historical anchor
 validation, exact replay, and restart checks pass. Combined timing proof
 for the unit migration is **Not done**.
+
+The working changes below replace the complete-target path. The earlier
+sections retain the review record for that prior implementation. They do
+not qualify the new native source path.
 
 ## Implementation review flow
 
@@ -385,6 +389,81 @@ Data clippy result. Source-view integration is **Not done**. This component
 does not prove lower incident latency.
 
 ## Proof and limits
+
+The working source-record path follows `29d7a356b`. This path is **Partial**.
+The managed change runtime now uses this path for source capture.
+
+[AnalysisStore::read_managed_tables](../../crates/araphor-data/src/analysis/extraction.rs) A caller supplies an explicit initial or continued source read
+  -> [AnalysisStore::capture_source](../../crates/araphor-data/src/analysis/managed/source/reader.rs) Data checks the committed parent, actual read mode, input cut, selection, and projection
+  -> [AnalysisStore::seal_source](../../crates/araphor-data/src/analysis/managed/source/metadata.rs) Data retains one source frame and typed metadata changes
+  -> [AnalysisStore::insert_managed_step](../../crates/araphor-data/src/analysis/managed/commit.rs) Data stores shared source Arrow payloads and a separate source-parent edge
+  -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the existing transaction before it publishes the source proof
+
+[AnalysisStore::managed_source_history](../../crates/araphor-data/src/analysis/managed/source/reader.rs)
+checks the parent chain and invokes a callback for each decoded frame in
+commit order. The callback can retain live Arrow buffers and release retired
+buffers before the next frame loads. Data uses the existing Step witnesses
+and context references as the frame's proof catalogue. Indexed row reads
+must select exact references from that catalogue. Copying every catalogue
+into a new call would restore the repeated work.
+
+[SourceCapture](../../crates/araphor-data/src/analysis/managed/source.rs)
+holds candidate membership. The current `ManagedExecution` retains the
+committed membership. Arrow row blocks retain no membership history.
+Zero-batch headers reconstruct empty datasets from the canonical schema.
+They have no source IPC payload. Explicit empty batches retain their exact
+batch count. The
+[source-frame tests](../../crates/araphor-data/src/analysis/managed/tests/source.rs)
+exercise publication, fixed cuts, replay, rejection, payload shape, and empty
+tables. Current verification results remain in the parent plan.
+
+Native indexed execution and runtime integration are **Partial**.
+[Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) retains
+the index for a managed change subscription.
+[Session::capture_physical](../../crates/araphor-query/src/execution.rs)
+selects an explicit source-change read and binds the index before capture.
+[SourceIndex](../../crates/araphor-query/src/sources/index.rs) stages new
+blocks, selects keyed old rows, and retains leased versions.
+[SourceJoin and SourceLookup](../../crates/araphor-query/src/sources/keys/planner.rs)
+extend native physical planning. The native hash join executes equality,
+null handling, and join predicates. The source provider supplies indexed
+candidate rows. It rejects an unkeyed retained scan.
+
+[Packages::change_plans](../../crates/araphor-query/src/definition/package/changes.rs)
+plans affected, before, after, and lookup ports.
+[PackageExec::change_inputs](../../crates/araphor-query/src/definition/physical/changes.rs)
+executes the ports once in dependency order. Data stores the exact delivered
+inputs. It no longer stores complete targets for difference execution.
+[ExecutionReceipt::acknowledge](../../crates/araphor-query/src/definition/physical.rs)
+promotes the source frame that Data committed. A committed unfinished step
+also requires source promotion.
+
+The source subscription, direct-run, and selected-key Graph checks pass.
+The SQL, Wasm, and source-built native counter checks read Arrow rows
+directly and preserve descending order after runtime restoration. Native
+query planning preserves the argument's SQL scope and order. The native
+physical output-requirement operator protects the ordered probe input.
+Multicolumn, outer CTE, inner CTE, explicit SQL limit, and native
+duplicate-name checks also pass. The shadowed-name rejection matches a
+plain native DataFusion session.
+Selected old-row evidence is now implemented in the working code.
+[ManagedSourceFrame](../../crates/araphor-data/src/analysis/managed/source.rs)
+creates immutable row handles. The
+[selection owner](../../crates/araphor-data/src/analysis/managed/source/selection.rs)
+checks the source scope, row position, and origin proof before it records a
+selected old row. Publication freezes that selection. Data stores compact
+origin indices once on the Step source record and uses the combined evidence
+for new call records and reference retention. Cold validation reads each named
+origin header. Inputs use the actual physical read handles for revision
+provenance.
+
+The current code has separate Arrow block, table index, candidate view,
+evidence, and scope types. Data remains the durable owner. The custom version
+leases and reclamation code remain unqualified. Evidence vectors and scope
+fields repeat information from existing Step and Capture records. The user
+requires a checkpoint commit and a stop for architecture review. Complete
+Graph integration, semantic window transitions, and proof memory accounting
+remain Not done. No new incident latency result is available.
 
 [Data tests](../../crates/araphor-data/src/analysis/managed/tests/execution.rs)
 cover failed publication, retry, matching warm and cold values, parameter

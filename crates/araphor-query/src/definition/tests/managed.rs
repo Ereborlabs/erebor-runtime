@@ -68,6 +68,7 @@ async fn constant_capture_keeps_state() -> TestResult {
             &definition,
             Invocation::default(),
             ManagedRead {
+                source: None,
                 execution: None,
                 follow: false,
                 expected: None,
@@ -121,6 +122,7 @@ async fn constant_capture_keeps_state() -> TestResult {
             &definition,
             Invocation::default(),
             ManagedRead {
+                source: None,
                 execution: None,
                 follow: false,
                 expected: None,
@@ -171,6 +173,7 @@ async fn managed_capture_rejects_state() -> TestResult {
                 &definition,
                 invocation,
                 ManagedRead {
+                    source: None,
                     execution: None,
                     follow: false,
                     expected: None,
@@ -215,6 +218,7 @@ async fn managed_capture_keeps_binding() -> TestResult {
                 &definition,
                 Invocation::default(),
                 ManagedRead {
+                    source: None,
                     execution: None,
                     follow: false,
                     expected: None,

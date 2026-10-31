@@ -343,6 +343,7 @@ impl Fixture {
         assert_eq!(
             store.managed_resume(self.source.tenant_id, id, &self.control)?,
             araphor_data::ManagedResume {
+                source: None,
                 instance: instance.clone(),
                 frontier: Some(frontier),
                 completed: revision
@@ -2328,6 +2329,7 @@ async fn cancel_joins_projection_capacity() -> TestResult {
                 &fixture.control
             )?,
             araphor_data::ManagedResume {
+                source: None,
                 instance: before_instance.clone(),
                 frontier: None,
                 completed: revision

@@ -37,6 +37,7 @@ pub(super) struct Runtime {
     exhausted: bool,
     ended: bool,
     initial: Option<(Arc<crate::execution::Permit>, u64, Session)>,
+    source_index: Option<Arc<crate::sources::SourceIndex>>,
 }
 
 struct WindowCut {
@@ -94,6 +95,20 @@ impl Runtime {
             .resume
             .as_ref()
             .map_or(0, |cursor| cursor.read_revision());
+        let keys = crate::sources::SourceLookup::keys(&physical.input).context(SqlSnafu)?;
+        let required = run.managed.is_some()
+            && crate::sources::SourceLookup::required(&physical.input).context(SqlSnafu)?;
+        if required && run.follow && !reusable {
+            return Err(crate::Error::Sql {
+                source: DataFusionError::NotImplemented(
+                    "a retained source subscription requires a reusable native plan".into(),
+                ),
+            });
+        }
+        let source_index = required
+            .then(|| crate::sources::SourceIndex::new(keys, Arc::clone(run.session.memory())))
+            .transpose()
+            .context(SqlSnafu)?;
         Ok(Self {
             revision,
             captured: run.resume_revision(),
@@ -114,6 +129,7 @@ impl Runtime {
             exhausted: true,
             ended: false,
             initial,
+            source_index,
         })
     }
 
@@ -236,7 +252,7 @@ impl Runtime {
             self.check_store(&meta)?;
         }
         let reuse = initial.is_some();
-        let session = match initial {
+        let mut session = match initial {
             Some(session) => session,
             None => {
                 self.run
@@ -244,6 +260,7 @@ impl Runtime {
                     .await?
             }
         };
+        session.source_index = self.source_index.clone();
         let calls = session.calls.clone().ok_or_else(Self::state_error)?;
         let execution = async {
             let output = if self.run.operation == Operation::Append {
@@ -315,6 +332,9 @@ impl Runtime {
                     let physical = if self.reusable {
                         match reset_plan_states(Arc::clone(&self.input)) {
                             Ok(physical) => physical,
+                            Err(error) if self.source_index.is_some() => {
+                                return Err(error).context(SqlSnafu)
+                            }
                             Err(_) => session.physical(&self.run.plan, &state).await?,
                         }
                     } else {
@@ -491,7 +511,17 @@ impl Runtime {
         self.snapshot = Some(Arc::clone(&output.snapshot));
         self.evaluated = now;
         let completed = self.run.managed.is_none() || calls.published_revision() != 0;
-        self.exhausted = completed
+        let consumed = match (
+            &self.source_index,
+            output
+                .snapshot
+                .managed()
+                .and_then(|capture| capture.source()),
+        ) {
+            (Some(index), Some(frame)) => index.committed(frame).context(SqlSnafu)?,
+            _ => false,
+        };
+        self.exhausted = (completed || consumed)
             && (self.run.operation == Operation::Replace
                 || (output.snapshot.page.exhausted && !output.limited));
         let completed_windows = calls

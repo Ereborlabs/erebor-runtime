@@ -195,6 +195,7 @@ impl DataSink for Sink {
             acknowledgement.acknowledge(
                 context,
                 revision.max(self.state.publication.load(Ordering::SeqCst)),
+                true,
             )?;
         }
         Ok(rows)

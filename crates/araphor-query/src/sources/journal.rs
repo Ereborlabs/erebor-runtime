@@ -475,6 +475,9 @@ mod tests {
     fn changes_require_exact_schema() {
         let canonical = &SourceSnapshot::schemas()["events"];
         let mut source = SourceData {
+            image: None,
+            read: 0,
+            key: None,
             origin: SourceOrigin::Durable("events".into()),
             schema: Arc::clone(canonical),
             indices: (0..canonical.fields().len()).collect(),

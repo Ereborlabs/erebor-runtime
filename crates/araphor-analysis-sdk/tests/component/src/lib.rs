@@ -436,15 +436,18 @@ impl RuntimeFixture {
         });
         let mut changes = continuation.clone();
         changes.name = "changes".into();
+        changes.input_mode = sdk::InputMode::Resolved;
         let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, true)]);
         changes.inputs = vec![
             sdk::Port::new("input", schema.clone()).into(),
-            sdk::Port::new("removed", schema).into(),
+            sdk::Port::new("removed", schema.clone()).into(),
             sdk::ChangeInputs::reset_port("reset").into(),
+            sdk::InputPort { port: sdk::Port::new("affected", schema), source: sdk::InputSource::Query("SELECT value FROM inserted.input UNION SELECT value FROM removed.input".into()) },
         ];
         changes.change_inputs = Some(sdk::ChangeInputs {
             reset: "reset".into(),
             ports: vec![sdk::ChangeInput {
+                affected: "affected".into(),
                 before: "removed".into(),
                 after: "input".into(),
             }],

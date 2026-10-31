@@ -1579,12 +1579,14 @@ impl AnalysisStore {
         let packages = read.inputs;
         let mode = match read.mode {
             AnalysisReadModeV1::Complete
-                if !read.requests.keys().any(|name| {
-                    matches!(
-                        name.as_str(),
-                        "events" | "trace_output" | "trace_measurements"
-                    )
-                }) && packages.is_none_or(|inputs| inputs.outputs.is_empty()) =>
+                if managed.is_none_or(|request| request.source.is_none())
+                    && !read.requests.keys().any(|name| {
+                        matches!(
+                            name.as_str(),
+                            "events" | "trace_output" | "trace_measurements"
+                        )
+                    })
+                    && packages.is_none_or(|inputs| inputs.outputs.is_empty()) =>
             {
                 AnalysisReadModeV1::Metadata
             }
@@ -1709,7 +1711,7 @@ impl AnalysisStore {
             };
             output.charge(size_of::<AnalysisExtractionV1>())?;
             output.charge(key_bytes)?;
-            let mut managed = managed.map(|request| self.capture_managed(snapshot, request, read.now, &mut output, control)).transpose()?;
+            let mut managed = managed.map(|request| self.capture_managed(snapshot, request, &read, requested, &mut output, control)).transpose()?;
             if let Some(managed) = &managed {
                 capture.graph_expiry(managed)?;
             }
@@ -1963,8 +1965,11 @@ impl AnalysisStore {
                         capture.graph_witnesses(), control)?;
                 }
                 control.check()?;
-                let page = capture.finish(output, end, true, control)?;
-                if let Some(state) = &mut managed { state.seal(requested, &page.extraction); }
+                let mut page = capture.finish(output, end, true, control)?;
+                if let Some(state) = &mut managed {
+                    state.seal(requested, &page.extraction);
+                    self.seal_source(snapshot, state, &mut page, control)?;
+                }
                 return Ok((page, managed));
             }
             if let Some(packages) = packages {
@@ -2270,11 +2275,14 @@ impl AnalysisStore {
                     capture.graph_witnesses(), control)?;
             }
             control.check()?;
-            let page = capture.finish(output, after.unwrap_or(StorePositionV1 {
+            let mut page = capture.finish(output, after.unwrap_or(StorePositionV1 {
                     commit_revision: 0,
                     ordinal: 0,
                 }), exhausted, control)?;
-            if let Some(state) = &mut managed { state.seal(requested, &page.extraction); }
+            if let Some(state) = &mut managed {
+                state.seal(requested, &page.extraction);
+                self.seal_source(snapshot, state, &mut page, control)?;
+            }
             Ok((page, managed))
         })
     }

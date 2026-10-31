@@ -43,6 +43,12 @@ struct UnitRow {
     support: Vec<SupportRow>,
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct AffectedRow {
+    record: RecordIdRow,
+}
+
 impl From<&Unit> for UnitRow {
     fn from(value: &Unit) -> Self {
         Self {
@@ -138,6 +144,25 @@ impl TryFrom<ContributionRow> for Contribution {
 }
 
 impl Unit {
+    pub fn affected_port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<AffectedRow>("affected", &PORT)
+    }
+
+    pub fn encode_affected(
+        rows: &[crate::discovery::DiscoveryRecordIdV1],
+    ) -> sdk::Result<sdk::Dataset> {
+        encode(Self::affected_port(), rows, |record| AffectedRow {
+            record: RecordIdRow::from(record),
+        })
+    }
+
+    pub fn decode_affected(
+        data: &sdk::Dataset,
+    ) -> sdk::Result<Vec<crate::discovery::DiscoveryRecordIdV1>> {
+        decode::<AffectedRow, _>(Self::affected_port(), data, |row| row.record.try_into())
+    }
+
     pub fn port() -> sdk::Port {
         static PORT: OnceLock<sdk::Port> = OnceLock::new();
         port::<UnitRow>("units", &PORT)

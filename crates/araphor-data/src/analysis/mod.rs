@@ -164,7 +164,7 @@ pub struct AnalysisReadPageV1 {
     pub read_revision: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct AnalysisSourceReceiptV1 {
     pub identity: EvidenceIntakeIdentityV1,
     pub cpu_id: u32,
@@ -555,6 +555,17 @@ impl AnalysisStore {
             .execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS coverage_commit_idx ON coverage(commit_revision)")
             .context(AnalysisDatabaseSnafu {
                 operation: "index committed coverage changes",
+            })?;
+        writer
+            .execute_batch(
+                "CREATE INDEX IF NOT EXISTS coverage_source_idx ON coverage(stream_key);
+             CREATE INDEX IF NOT EXISTS expired_commit_idx ON expired_ranges(commit_revision);
+             CREATE INDEX IF NOT EXISTS expired_source_idx ON expired_ranges(stream_key);
+             CREATE INDEX IF NOT EXISTS recovery_commit_idx ON recovery_gaps(commit_revision);
+             CREATE INDEX IF NOT EXISTS recovery_source_idx ON recovery_gaps(stream_key);",
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "index managed source metadata changes",
             })?;
         let raw = Self::recover_segments(&mut writer, &root, retention)?;
         let meta = Self::read_meta_from(&writer, &path)?;

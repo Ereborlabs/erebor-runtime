@@ -634,6 +634,7 @@ impl InstanceHost {
                     store.managed_resume(selected.0.tenant, &selected.0.id, &stage)?
                 } else {
                     ManagedResume {
+                        source: None,
                         instance: store
                             .managed_instance(selected.0.tenant, &selected.0.id, &stage)?
                             .ok_or_else(|| Code::Missing.error("managed member instance"))?,
@@ -945,6 +946,7 @@ impl InstanceHost {
             if owner.admitted.spec.destination == ManagedDestination::Notification {
                 if let Some(code) = Subscription::admission(&failure) {
                     let expected = ManagedResume {
+                        source: None,
                         instance: owner.admitted.clone(),
                         frontier: None,
                         completed: 0,

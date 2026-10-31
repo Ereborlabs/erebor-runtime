@@ -5,6 +5,7 @@ use araphor_analysis_sdk as sdk;
 use duckdb::Connection;
 
 use super::model::*;
+use super::source::ManagedSourceRef;
 use crate::{AnalysisStore, AnalysisStoreMetaV1, Result, ResultContext};
 
 #[derive(Debug, Default)]
@@ -17,6 +18,13 @@ pub(super) struct Committed {
     meta: AnalysisStoreMetaV1,
     instance: ManagedInstance,
     calls: BTreeMap<u64, Arc<ManagedPrior>>,
+    source: Option<SourceHead>,
+}
+
+#[derive(Debug)]
+struct SourceHead {
+    reference: ManagedSourceRef,
+    members: Arc<std::collections::BTreeSet<Vec<u8>>>,
 }
 
 #[derive(Debug)]
@@ -53,6 +61,27 @@ impl ManagedExecution {
         *self.state.lock().unwrap_or_else(|error| error.into_inner()) = Some(state);
     }
 
+    pub(super) fn source_members(
+        &self,
+        instance: &ManagedInstance,
+        meta: &AnalysisStoreMetaV1,
+        reference: &ManagedSourceRef,
+    ) -> Option<Arc<std::collections::BTreeSet<Vec<u8>>>> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = state.as_ref().filter(|state| {
+            &state.instance == instance
+                && state.meta.store_uuid == meta.store_uuid
+                && state.meta.schema_version == meta.schema_version
+                && state.meta.recovery_epoch == meta.recovery_epoch
+                && state.meta.commit_revision <= meta.commit_revision
+        })?;
+        let source = state
+            .source
+            .as_ref()
+            .filter(|source| &source.reference == reference)?;
+        Some(Arc::clone(&source.members))
+    }
+
     pub fn metadata_bytes(&self) -> usize {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.as_ref().map_or(0, |state| {
@@ -67,6 +96,11 @@ impl ManagedExecution {
                         .map(|prior| prior.metadata_bytes())
                         .sum::<usize>(),
                 )
+                .saturating_add(state.source.as_ref().map_or(0, |source| {
+                    size_of::<SourceHead>()
+                        .saturating_add(source.reference.result.result_id.capacity())
+                        .saturating_add(super::source::SourceCapture::member_bytes(&source.members))
+                }))
         })
     }
 }
@@ -131,41 +165,36 @@ impl ManagedPrior {
     }
 
     fn metadata_bytes(&self) -> usize {
-        let buffers =
-            self.parameters
-                .iter()
-                .chain(self.checkpoint.iter().flat_map(|state| &state.datasets))
-                .chain(self.retained.iter().flat_map(|state| {
-                    state
-                        .evaluation
-                        .inputs
-                        .iter()
-                        .map(|input| &input.data)
-                        .chain(
-                            state.changes.iter().flat_map(|changes| {
-                                changes.targets.iter().map(|input| &input.data)
-                            }),
-                        )
-                        .chain(state.output.datasets.iter())
-                        .chain(
-                            state
-                                .output
-                                .checkpoint
-                                .iter()
-                                .flat_map(|state| &state.datasets),
-                        )
-                }))
-                .flat_map(|data| &data.batches)
-                .chain(self.retained.iter().flat_map(|state| {
-                    state
-                        .evaluation
-                        .parameters
-                        .iter()
-                        .chain(state.output.reasons.iter().map(|reason| &reason.details))
-                }))
-                .flat_map(sdk::RecordBatch::columns)
-                .map(|array| array.get_buffer_memory_size())
-                .sum::<usize>();
+        let buffers = self
+            .parameters
+            .iter()
+            .chain(self.checkpoint.iter().flat_map(|state| &state.datasets))
+            .chain(self.retained.iter().flat_map(|state| {
+                state
+                    .evaluation
+                    .inputs
+                    .iter()
+                    .map(|input| &input.data)
+                    .chain(state.output.datasets.iter())
+                    .chain(
+                        state
+                            .output
+                            .checkpoint
+                            .iter()
+                            .flat_map(|state| &state.datasets),
+                    )
+            }))
+            .flat_map(|data| &data.batches)
+            .chain(self.retained.iter().flat_map(|state| {
+                state
+                    .evaluation
+                    .parameters
+                    .iter()
+                    .chain(state.output.reasons.iter().map(|reason| &reason.details))
+            }))
+            .flat_map(sdk::RecordBatch::columns)
+            .map(|array| array.get_buffer_memory_size())
+            .sum::<usize>();
         self.allocated_bytes().saturating_sub(buffers)
     }
 }
@@ -245,6 +274,13 @@ impl AnalysisStore {
             },
             instance,
             calls,
+            source: input.attempt.5.as_ref().map(|frame| SourceHead {
+                reference: ManagedSourceRef {
+                    result: receipt.selected.clone(),
+                    position: frame.frame.position(),
+                },
+                members: Arc::clone(&frame.members),
+            }),
         };
         let owner = Arc::clone(&retention.owner);
         Ok(Some((owner, state)))

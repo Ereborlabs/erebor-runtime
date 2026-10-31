@@ -90,11 +90,10 @@ impl AnalysisStore {
                     || (reference.commit_revision != revision
                         && !attempt.retains(&spec, *call, reference))
             })
-            || step.witnesses != attempt.capture.witnesses
-            || step.contexts != attempt.capture.contexts
         {
             return Err(Code::Invalid.error("retained managed selected contract"));
         }
+        Self::check_source_evidence(reader, &attempt, step)?;
         match (&spec.destination, &receipt.graph) {
             (ManagedDestination::Graph { source, .. }, Some(reference)) => {
                 Self::check_graph_publication(reader, tenant, source, reference, revision)?;

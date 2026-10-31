@@ -615,7 +615,7 @@ fn selected_edges_reject_corruption() -> TestResult {
                 _ => {
                     assert_eq!(
                         writer.execute(
-                            "INSERT INTO managed_edges VALUES (?, ?, ?, ?)",
+                            "INSERT INTO managed_edges VALUES (?, ?, ?, ?, 'input')",
                             params![
                                 [1u8; 16].as_slice(),
                                 first.selected.result_id,

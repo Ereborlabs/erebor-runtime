@@ -244,6 +244,7 @@ fn read(graph: &CommitFixture, mode: &ManagedRead) -> TestResult<ManagedCapture>
 
 fn mode(fixture: &Fixture, follow: bool) -> ManagedRead {
     ManagedRead {
+        source: None,
         execution: None,
         instance: fixture.instance.clone(),
         expected: None,
@@ -364,12 +365,7 @@ fn publish(
     let changes = evaluations
         .last()
         .filter(|_| calls.last() == Some(&13))
-        .map(|evaluation| -> TestResult<ManagedChanges> {
-            Ok(ManagedChanges {
-                base: None,
-                targets: vec![evaluation.input("units")?.clone()],
-            })
-        })
+        .map(|_| -> TestResult<ManagedChanges> { Ok(ManagedChanges { base: None }) })
         .transpose()?;
     let returns = evaluations
         .iter()

@@ -33,6 +33,7 @@ mod removal;
 mod renewal;
 mod replay;
 mod retention;
+mod source;
 mod status;
 mod storage;
 mod terminal;
@@ -191,6 +192,7 @@ impl Fixture {
         let page = store.read_managed_tables(
             &instance.grant.selection,
             &ManagedRead {
+                source: None,
                 execution,
                 follow: false,
                 expected: None,
@@ -1061,6 +1063,7 @@ fn managed_sql_checks_authority() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                source: None,
                 execution: None,
                 follow: false,
                 expected: None,
@@ -1667,6 +1670,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
             .read_managed_tables(
                 &grant.selection,
                 &ManagedRead {
+                    source: None,
                     execution: None,
                     follow: false,
                     expected: None,
@@ -1898,6 +1902,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                source: None,
                 execution: None,
                 follow: false,
                 expected: None,
@@ -1932,6 +1937,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                source: None,
                 execution: None,
                 follow: false,
                 expected: None,
@@ -1996,6 +2002,7 @@ fn managed_witness_lifetime_check() -> TestResult {
         .read_managed_tables(
             &grant.selection,
             &ManagedRead {
+                source: None,
                 execution: None,
                 follow: false,
                 expected: None,

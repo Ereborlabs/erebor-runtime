@@ -79,6 +79,7 @@ fn attempt_witnesses_keep_earliest() -> TestResult {
             .read_managed_tables(
                 &grant.selection,
                 &ManagedRead {
+                    source: None,
                     execution: None,
                     follow: false,
                     expected: None,
@@ -220,6 +221,7 @@ fn metadata_skips_prior_ipc() -> TestResult {
     let page = store.read_managed_tables(
         &fixture.instance.grant.selection,
         &ManagedRead {
+            source: None,
             execution: None,
             follow: false,
             expected: None,
@@ -263,6 +265,7 @@ fn metadata_skips_prior_ipc() -> TestResult {
         &[fixture.output(2)?, fixture.output(3)?],
     )?;
     let selected = ManagedRead {
+        source: None,
         execution: None,
         follow: false,
         expected: None,
@@ -275,6 +278,7 @@ fn metadata_skips_prior_ipc() -> TestResult {
     let tables = AnalysisTableRequests::from([("context_versions".into(), None)]);
     let before = store.meta()?;
     let stale = ManagedRead {
+        source: None,
         execution: None,
         follow: false,
         expected: None,
@@ -375,6 +379,7 @@ fn metadata_fences_managed_head() -> TestResult {
     let tables = AnalysisTableRequests::new();
     let control = AnalysisReadControl::default();
     let mut selected = ManagedRead {
+        source: None,
         execution: None,
         follow: false,
         expected: None,

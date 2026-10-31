@@ -495,7 +495,7 @@ impl AnalysisStore {
             "tenant_id, instance_id, authority, generation, progress, running, removed, lifecycle, failure FROM managed_instances",
             "tenant_id, instance_id, call_id, state_revision, result_id FROM managed_calls",
             "tenant_id, instance_id, attempt_id, generation, contract, completed FROM managed_attempts",
-            "tenant_id, result_id, dependency_id, commit_revision FROM managed_edges",
+            "tenant_id, result_id, dependency_id, commit_revision, kind FROM managed_edges",
             "result_id, role, slot, ipc FROM managed_arrow",
             "relation_name, last_changed_revision FROM relation_revisions",
             "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor FROM source_receipts",
