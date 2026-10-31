@@ -712,13 +712,14 @@ impl AnalysisStore {
         id: &str,
         (mut record, mut output, revision): (Record, sdk::wire::Output, u64),
     ) -> Result<(Record, sdk::wire::Output, u64)> {
-        let mut blobs = reader
-            .prepare(
-                "SELECT role, slot, ipc FROM managed_arrow WHERE result_id = ? AND role <> 'input' ORDER BY role, slot",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare managed Arrow payloads",
-            })?;
+        let query = if record.changes.is_some() {
+            "SELECT role, slot, ipc FROM managed_arrow WHERE result_id = ? AND role NOT IN ('input', 'target') ORDER BY role, slot"
+        } else {
+            "SELECT role, slot, ipc FROM managed_arrow WHERE result_id = ? AND role <> 'input' ORDER BY role, slot"
+        };
+        let mut blobs = reader.prepare(query).context(AnalysisDatabaseSnafu {
+            operation: "prepare managed Arrow payloads",
+        })?;
         let rows = blobs
             .query_map(params![id], |row| {
                 Ok((
@@ -799,6 +800,17 @@ impl AnalysisStore {
         }
         if count < record.inputs.len() {
             return Err(Code::Missing.error("managed input payload"));
+        }
+        if let Some(changes) = &record.changes {
+            changes.check_header()?;
+            let expected = changes.targets.len();
+            let (count, invalid): (usize, usize) = reader.query_row(
+            "SELECT count(*), count(*) FILTER (WHERE slot >= ? OR octet_length(ipc) = 0) FROM managed_arrow WHERE result_id = ? AND role = 'target'",
+            params![expected, id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "validate managed target slots" })?;
+            if invalid != 0 || count != expected {
+                return Err(Code::Invalid.error("managed target payload count"));
+            }
         }
         Ok((record, output, revision))
     }
@@ -1235,6 +1247,7 @@ impl AnalysisStore {
         {
             return Err(Code::Invalid.error("retained managed evaluation context"));
         }
+        Self::check_change_record(reader, tenant, record, model, &attempt)?;
         let mut dependencies = attempt.capture.dependencies.clone();
         dependencies.extend(
             record

@@ -409,6 +409,160 @@ Local measurement files are in `/tmp/araphor-retain-final-20261030/`:
 `run.log`, `detail.txt`, `summary.txt`, `scopes.csv`, and `api.csv`.
 The source contains no diagnostic probes or changed observation cap.
 
+#### Declared change-input result
+
+**Generic change inputs: Done. Builtin Graph migration: Not done. Proposal 1:
+Not done.** This change follows `621665a6a`. The
+[review guide](../guides/araphor-retained-execution-review.md#declared-change-inputs)
+shows the SDK declaration, native plans, storage, and replay path.
+
+An opted-in model names ordinary before, after, and reset ports. Query
+prepares native row-number windows and anti joins at admission. Execution
+reads each target once, binds immutable old and current Arrow batches, and
+executes those prepared difference children. NULL rows and duplicate counts
+remain correct. Snapshot models retain their complete input behavior.
+
+Data retains the committed full target separately from the delivered input.
+Data stores the exact delivered before, after, and reset batches for replay.
+The historical base must equal the captured call head. A continuing result
+has a complete input basis and a base. A reset has neither. A parameter or
+support change resets all pairs and clears prior state. Output evidence
+cannot cite historical before rows or the reset flag.
+
+The input identity for a managed after port uses its exact invocation, call,
+port, store cut, selected provenance, and window. This path avoids encoding
+the full target to obtain its identity. Direct producer inputs retain the
+producer revision. Metadata hashing in this input path uses the existing
+MessagePack encoder. Unpaired support and Snapshot ports retain row-based
+identity. No ABI layout, contract version, quota, or polling loop changes.
+
+Focused verification passed:
+
+- Six Analysis cases cover SQL, Wasm, and native execution; NULL duplicate
+  insertion and removal; exact replay; restart; parameter reset; and
+  concurrent captures of one plan. All six passed in 74.10 seconds.
+- A seventh Analysis case first proves continuation with unchanged support.
+  It then changes only support and checks a complete reset, empty before
+  rows, cleared prior state, no saved base, and exact replay. This case
+  passed separately in 3.97 seconds.
+- Six Data cases cover retained-state guards and a changed base/input-basis
+  mutation. All six passed in 9.06 seconds.
+- Two SDK cases cover invalid declarations, reset rules, evidence rules,
+  wire round trips, and state restoration.
+- Clippy passed for SDK, Data, Query, Analysis, and the component fixture,
+  including tests, with warnings denied.
+
+The native case used the existing source-built component fixture on
+`x86_64-unknown-linux-gnu`. Debug sections were removed from a copy of its
+library. This reduced that qualification artifact from 178 MiB to 16 MiB.
+The unstripped qualification run was stopped before completion. No native
+performance factor is claimed from that change.
+
+Native input SQL still selects the current complete target. Native windows
+and joins then compute the row difference. Data still encodes the full
+target for cold recovery, and Wasm still encodes saved checkpoint values.
+These costs remain. The builtin Graph ports still use coupled record/fact
+ordinals. Their migration requires stable, complete change units, current
+support evidence, and retained contribution indexes. Independent differences
+of the present ports would corrupt those references. This result does not
+claim a Graph speed gain or completion of proposal 1.
+
+The final instrumented incident run used the same 1,592 source events. The
+builtin Graph jobs still use Snapshot inputs. Thus this run measures the
+remaining Graph path, not the cost of executing Graph packages on changes.
+
+| Measurement | Earlier baseline | Final change-input source |
+| --- | ---: | ---: |
+| Complete instrumented test | 121.13 s | 155.52 s |
+| Observation interval | 84.48 s | 112.52 s |
+| Cursor 950 source signal to Graph commit | 13,746 ms | 15,600 ms |
+| Graph computations | 3 | 5 |
+| Guest calls | 9 | 15 |
+| Prepare retained candidate | Not present | At most 0.303 ms; no DuckDB calls |
+
+The cursor 950 signal occurs at 75,084.871 ms. Its Graph commit completes
+at 90,684.507 ms. That commit takes 2,891 ms: 1,824 ms inside DuckDB API
+calls and 1,067 ms outside them. The last notification update selects 138
+rows and takes 58,090 ms. It makes 690 durable metadata commits. These
+notification and Graph intervals overlap; do not add them.
+
+The complete test is slower. The different execution cuts and notification
+selections do not establish the cause of that difference. No overall speed
+gain is proved. The 112.52-second observation exceeds the original
+90-second cap. The diagnostic run uses a temporary 300-second observation
+cap and does not qualify the unmodified incident acceptance test. The
+temporary cap and probes are removed. All 41 source paths match their exact
+copies from before measurement. Scoped formatting and whitespace checks
+pass after restoration.
+
+Local measurement files are in `/tmp/araphor-changes-measure-20261030/`:
+`run.log`, `detail.txt`, `summary.txt`, `scopes.csv`, and `api.csv`.
+
+Local proof logs are `/tmp/araphor-change-integration-final.log`,
+`/tmp/araphor-change-data.log`, `/tmp/araphor-change-sdk.log`, and
+`/tmp/araphor-change-clippy.log`. The support proof is in
+`/tmp/araphor-change-support.log`. Final Analysis clippy is in
+`/tmp/araphor-change-analysis-clippy-final.log`. Full workspace CI was not
+run. The user requested relevant tests only.
+
+#### Choice for the remaining Graph work
+
+**Broader design: Not approved. No implementation.** Proposal 1 can retain
+package-owned contribution indexes and checkpoint state. A broader option
+combines proposals 1 and 5: Graph packages remain pure functions, and Data
+owns contribution membership through `araphor-graph`. The broader option
+requires user approval. Proposal 5 is not an automatic prerequisite for
+proposal 1.
+
+The recommended broader flow is:
+
+Native input SQL selects complete Graph change units
+  -> each unit has a stable record key and canonically ordered support keys
+  -> prepared native difference plans select affected units
+  -> prepared current lookup queries select their support from the same cut
+  -> the package computes Graph values for those units
+  -> Data replaces each affected unit's contribution in its transaction
+  -> shared members remain active while another unit still owns them
+  -> Data commits Graph membership, input base, and progress together
+
+For example, two events can own the same process subject. When one event
+leaves a window, Data removes that event's ownership. The other event keeps
+the subject active. A package output with no Graph values explicitly clears
+that unit's contribution. An untouched unit keeps its contribution.
+
+The present [GraphStage::apply](../../crates/araphor-data/src/analysis/graph_rows/stage.rs)
+keys active members by producer scope and member identity. The member has
+one anchor. That anchor does not identify all contributing units. A new
+per-unit ownership index changes the storage algorithm and schema. The
+change belongs to proposal 5 even when Data keeps the same transaction.
+
+The proposed owners and changes are:
+
+| Owner | Proposed change |
+| --- | --- |
+| Query and SDK | Declare current lookup ports and prepare their native SQL after the difference step. Store their delivered inputs for exact replay. Do not compare lookup results as complete support state for reset. Permit a change consumer without a guest checkpoint; Data still retains its committed target and base. |
+| Builtin packages | Replace independently indexed record/fact inputs with stable units and current support. Compute only affected contributions. Remove whole-selection progress reconstruction after equivalent proof passes. |
+| araphor-graph | Add contribution application keyed by the existing producer scope and stable unit key. Reuse native value identities and shared-member indexes. Do not open or commit a store. |
+| Data | Validate the exact source cut, authority, and expected base. Supply its transaction to contribution application. Retain one authoritative versioned membership history. Treat counts as an index over that history. |
+
+Scope each unit by the existing tenant, source, definition, and call pin.
+Do not use a bare call number or row ordinal as the durable key. Preserve
+current rejection of conflicting values or authority. Select a surviving
+anchor from surviving owners without changing its provenance.
+
+The credential input query must update affected old units on removal, late
+input, window exit, and proof or context change. A query that selects support
+only for new events is incomplete. Native SQL must determine the complete
+current unit value before the difference step. Current lookup inputs must
+retain the same captured cut and permission checks.
+
+This option removes package-owned whole-Graph checkpoints and their normal
+restore path. It must not add another snapshot normalizer or a second
+membership history. The existing tests for shared subjects, historical
+reads, late input, expiry, evidence, rollback, replay, and restart must pass.
+The existing incident workload must measure the result. No saving is proved
+for this option yet.
+
 ### 2. Replace attempt-first publication with one atomic change commit
 
 An invocation prepares output in memory. Data performs one final authority

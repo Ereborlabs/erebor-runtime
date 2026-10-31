@@ -84,7 +84,13 @@ impl PackageExec {
                 );
             source.bind_port(*slot, schema, batches, None)?;
         }
-        let mut child = model.inputs.len() + usize::from(evaluation.parameters.is_some());
+        let mut child = model.inputs.len()
+            + usize::from(evaluation.parameters.is_some())
+            + self
+                .call
+                .changes
+                .as_ref()
+                .map_or(0, |changes| changes.ports.len() * 2);
         let mut datasets = Vec::with_capacity(model.outputs.len());
         for port in &model.outputs {
             let batches = self

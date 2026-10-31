@@ -37,6 +37,7 @@ use crate::inputs::Inputs;
 use crate::sources::{SourceOrigin, SourceProvider, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
+mod changes;
 mod scope;
 use scope::Scope;
 
@@ -280,6 +281,16 @@ impl Packages {
         let mut supplied = BTreeMap::new();
         let mut parameters = BTreeMap::new();
         for (index, argument) in arguments.into_iter().enumerate() {
+            if let FunctionArg::Named { name, .. } = &argument {
+                if model.change_inputs.as_ref().is_some_and(|changes| {
+                    changes.generated(&context.normalize_ident(name.clone()))
+                }) {
+                    return InvalidSnafu {
+                        field: "generated package input",
+                    }
+                    .fail();
+                }
+            }
             match argument {
                 FunctionArg::Unnamed(FunctionArgExpr::Expr(SqlExpr::Value(value)))
                     if index == 0 =>
@@ -476,6 +487,7 @@ impl Packages {
             };
             let mut children = inputs;
             children.extend(params);
+            let changes = self.changes(model, &mut children)?;
             let sql = sql.map(|(sql, plans)| {
                 children.extend(plans);
                 sql
@@ -520,6 +532,7 @@ impl Packages {
                     artifact: artifact_index,
                     bundle: Arc::clone(bundle),
                     sql: sql.clone(),
+                    changes: changes.clone(),
                     input_scope: Arc::clone(&input_scope),
                     admitted: Arc::clone(&admitted),
                     children: children.clone(),
@@ -557,6 +570,13 @@ impl Packages {
         let mut tables = self.sources.clone();
         let mut ports = BTreeMap::new();
         for (slot, input) in model.inputs.iter().enumerate() {
+            if model
+                .change_inputs
+                .as_ref()
+                .is_some_and(|changes| changes.generated(&input.port.name))
+            {
+                continue;
+            }
             if !supplied.contains_key(&input.port.name)
                 && matches!(&input.source, sdk::InputSource::Table(sdk::TableRef::Named(name))
                     if name == &input.port.name)
@@ -570,6 +590,22 @@ impl Packages {
         }
         let mut pending = Vec::new();
         for (slot, input) in model.inputs.iter().enumerate() {
+            if model
+                .change_inputs
+                .as_ref()
+                .is_some_and(|changes| changes.generated(&input.port.name))
+            {
+                let provider = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(
+                    input.port.schema.clone(),
+                )));
+                pending.push((
+                    slot,
+                    Inputs::scan(&input.port.name, provider, &input.port.schema)?,
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ));
+                continue;
+            }
             let local = !supplied.contains_key(&input.port.name)
                 && !matches!(
                     &input.source,

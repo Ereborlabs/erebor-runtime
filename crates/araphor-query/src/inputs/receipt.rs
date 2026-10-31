@@ -16,8 +16,9 @@ use crate::memory::Memory;
 use crate::sources::{ArrowSnapshot, SourceOrigin, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
-pub(super) struct PortScope {
+pub(super) struct PortScope<'a> {
     pub(super) slot: usize,
+    invocation: Option<(&'a str, u64)>,
     pub(super) selection: AnalysisSelectionV1,
     pub(super) packages: std::collections::BTreeSet<usize>,
     window: Option<(i64, i64)>,
@@ -149,7 +150,7 @@ impl Inputs {
         &self,
         data: sdk::Dataset,
         source: &SourceSnapshot,
-        (call, slot): (u64, usize),
+        (call, slot, invocation): (u64, usize, &str),
         physical: &Arc<dyn ExecutionPlan>,
         inherited: &[&sdk::Input],
         memory: &Memory,
@@ -212,6 +213,7 @@ impl Inputs {
             &snapshot,
             &PortScope {
                 slot,
+                invocation: Some((invocation, call)),
                 selection,
                 packages: source.package_indices(&port.origins),
                 window: snapshot
@@ -234,7 +236,7 @@ impl Inputs {
         &self,
         data: sdk::Dataset,
         snapshot: &ArrowSnapshot,
-        scope: &PortScope,
+        scope: &PortScope<'_>,
         inherited: impl Iterator<Item = &'a sdk::Input>,
         memory: &Memory,
     ) -> Result<sdk::Input> {
@@ -453,10 +455,9 @@ impl Inputs {
                     .iter()
                     .map(|source| (&source.receipt.identity, source.receipt.cpu_id))
                     .collect::<Vec<_>>();
-                let source = serde_json::to_vec(&(&data.name, sources))
-                    .context(araphor_data::PackageEncodingSnafu)?;
+                let source = araphor_data::InputRevision::of_native(&(&data.name, sources))?;
                 Ok::<_, crate::Error>(sdk::SourceWindow {
-                    source: Sha256::digest(source).to_vec(),
+                    source: Sha256::digest(source.as_bytes()).to_vec(),
                     start_utc_ns: start,
                     end_utc_ns: end,
                 })
@@ -464,25 +465,21 @@ impl Inputs {
             .transpose()?;
         let mut hash = Sha256::new();
         hash.update(b"ARAPHOR-SQL-INPUT-V1\0");
-        serde_json::to_writer(
-            &mut hash,
-            &(
-                &scope.selection,
-                receipts,
-                contexts,
-                results,
-                &coverage,
-                &window,
-            ),
-        )
-        .context(araphor_data::PackageEncodingSnafu)?;
+        let provenance = araphor_data::InputRevision::of_native(&(
+            &scope.selection,
+            receipts,
+            contexts,
+            results,
+            &coverage,
+            &window,
+        ))?;
+        hash.update(provenance.as_bytes());
         if !inherited.is_empty() {
             let revisions = inherited
                 .iter()
                 .map(|input| &input.revision)
                 .collect::<Vec<_>>();
-            serde_json::to_writer(&mut hash, &revisions)
-                .context(araphor_data::PackageEncodingSnafu)?;
+            hash.update(araphor_data::InputRevision::of_native(&revisions)?.as_bytes());
         }
         let schema = data
             .batches
@@ -494,7 +491,25 @@ impl Inputs {
                 .build()
             })?
             .schema();
-        {
+        if port.changes && snapshot.managed().is_some() {
+            let (invocation, call) = scope.invocation.ok_or_else(|| {
+                InvalidSnafu {
+                    field: "change input invocation",
+                }
+                .build()
+            })?;
+            let meta = &snapshot.page.extraction.meta;
+            let position = araphor_data::InputRevision::of_native(&(
+                invocation,
+                call,
+                scope.slot,
+                meta.store_uuid,
+                meta.schema_version,
+                meta.recovery_epoch,
+                meta.commit_revision,
+            ))?;
+            hash.update(position.as_bytes());
+        } else {
             let _scratch = if memory.input_capacity().is_some() {
                 let bytes = data.batches.iter().try_fold(0usize, |bytes, batch| {
                     let scratch = sdk::wire::Dataset::encoding_scratch(batch)
@@ -721,6 +736,7 @@ mod supplied {
         let held = memory.reserve_input(scratch + 1)?;
         let scope = scope(&[SourceOrigin::Local("fixture".into())])?;
         let selected = PortScope {
+            invocation: None,
             packages: Default::default(),
             slot: 0,
             window: None,

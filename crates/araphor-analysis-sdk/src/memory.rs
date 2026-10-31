@@ -167,6 +167,23 @@ impl Memory {
         if let Some(checkpoint) = &model.checkpoint {
             bytes = bytes.saturating_add(Self::ports(&checkpoint.datasets));
         }
+        if let Some(changes) = &model.change_inputs {
+            bytes = bytes
+                .saturating_add(changes.reset.capacity())
+                .saturating_add(
+                    changes
+                        .ports
+                        .capacity()
+                        .saturating_mul(size_of::<crate::ChangeInput>()),
+                )
+                .saturating_add(
+                    changes
+                        .ports
+                        .iter()
+                        .map(|port| port.before.capacity().saturating_add(port.after.capacity()))
+                        .sum::<usize>(),
+                );
+        }
         bytes
     }
 

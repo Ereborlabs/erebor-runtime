@@ -123,6 +123,9 @@ impl Model {
             }
         }
         Self::ports(self.outputs.iter())?;
+        if let Some(changes) = &self.change_inputs {
+            changes.validate(self)?;
+        }
         Self::schema(&self.parameters)?;
         if self.outputs.is_empty() {
             return Err(Error::contract(ErrorCode::Invalid, "outputs or reasons"));

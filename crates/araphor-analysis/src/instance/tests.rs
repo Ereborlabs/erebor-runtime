@@ -16,6 +16,7 @@ use sdk::arrow_array::{Array as _, UInt64Array};
 
 use super::*;
 
+mod changes;
 mod checkpoint;
 mod continuation;
 mod control;

@@ -538,7 +538,7 @@ impl AnalysisStore {
                 (Some(_), true) => InputBasis::Progress,
                 (Some(_), false) => InputBasis::Complete,
             };
-            let expected = input
+            let mut expected = input
                 .attempt
                 .3
                 .get(&returned.call)
@@ -553,6 +553,14 @@ impl AnalysisStore {
                 })
                 .transpose()?
                 .unwrap_or_default();
+            if checked
+                .model()
+                .change_inputs
+                .as_ref()
+                .is_some_and(|changes| changes.is_reset(evaluation).unwrap_or(false))
+            {
+                expected = (None, Vec::new());
+            }
             let same =
                 match (&expected.0, &evaluation.checkpoint) {
                     (None, None) => true,
@@ -648,6 +656,7 @@ impl AnalysisStore {
                         .context(crate::AnalysisContractSnafu)
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let changes = Self::prepare_changes(input, returned, checked.model())?;
             let record = Record {
                 instance: spec.id.clone(),
                 call: returned.call,
@@ -657,10 +666,12 @@ impl AnalysisStore {
                 input_basis,
                 parameters,
                 inputs: input_shapes,
+                changes,
                 dependencies,
                 witnesses: attempt.capture.witnesses.clone(),
                 contexts: attempt.capture.contexts.clone(),
             };
+            Self::check_change_record(reader, spec.tenant, &record, checked.model(), attempt)?;
             let output = sdk::wire::Output::encode_checked(&checked, returned.output)
                 .context(crate::AnalysisContractSnafu)?;
             packets.push(Packet {
@@ -721,6 +732,21 @@ impl AnalysisStore {
                 "input",
                 slot,
                 &mut data.arrow_ipc,
+            )?;
+        }
+        for (slot, target) in packet
+            .record
+            .changes
+            .iter_mut()
+            .flat_map(|changes| &mut changes.targets)
+            .enumerate()
+        {
+            Self::insert_managed_arrow(
+                transaction,
+                &packet.id,
+                "target",
+                slot,
+                &mut target.input.data.arrow_ipc,
             )?;
         }
         for (slot, data) in packet.output.datasets.iter_mut().enumerate() {

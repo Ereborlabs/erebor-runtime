@@ -391,6 +391,46 @@ pub struct ManagedPrior {
 pub struct RetainedCall {
     pub evaluation: sdk::Evaluation,
     pub output: sdk::Output,
+    pub changes: Option<ManagedChanges>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ManagedChanges {
+    pub base: Option<PackageResultRefV1>,
+    pub targets: Vec<sdk::Input>,
+}
+
+impl ManagedChanges {
+    pub fn metadata_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(
+                self.base
+                    .as_ref()
+                    .map_or(0, |base| base.result_id.capacity()),
+            )
+            .saturating_add(
+                self.targets
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<sdk::Input>()),
+            )
+            .saturating_add(
+                self.targets
+                    .iter()
+                    .map(sdk::Input::metadata_bytes)
+                    .sum::<usize>(),
+            )
+    }
+
+    pub fn allocated_bytes(&self) -> usize {
+        self.metadata_bytes().saturating_add(
+            self.targets
+                .iter()
+                .flat_map(|input| &input.data.batches)
+                .flat_map(sdk::RecordBatch::columns)
+                .map(|array| array.get_buffer_memory_size())
+                .sum::<usize>(),
+        )
+    }
 }
 
 impl RetainedCall {
@@ -675,6 +715,11 @@ impl ManagedCapture {
                         .inputs
                         .iter()
                         .map(|input| &input.data)
+                        .chain(
+                            retained.changes.iter().flat_map(|changes| {
+                                changes.targets.iter().map(|input| &input.data)
+                            }),
+                        )
                         .chain(retained.evaluation.previous_outputs.iter())
                         .chain(retained.output.datasets.iter())
                         .chain(
@@ -839,6 +884,7 @@ pub struct ManagedReturn<'a> {
     pub evaluation: &'a sdk::Evaluation,
     pub output: &'a sdk::Output,
     pub retained: Option<&'a PackageResultRefV1>,
+    pub changes: Option<&'a ManagedChanges>,
 }
 
 impl Attempt {
@@ -906,9 +952,23 @@ pub(super) struct Record {
     pub input_basis: InputBasis,
     pub parameters: Option<sdk::wire::Dataset>,
     pub inputs: Vec<RecordInput>,
+    pub changes: Option<RecordChanges>,
     pub dependencies: Vec<PackageResultRefV1>,
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct RecordChanges {
+    pub base: Option<PackageResultRefV1>,
+    pub targets: Vec<RecordTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct RecordTarget {
+    pub input: sdk::wire::Input,
+    pub rows: u64,
+    pub batches: usize,
 }
 
 #[derive(Clone, Debug)]

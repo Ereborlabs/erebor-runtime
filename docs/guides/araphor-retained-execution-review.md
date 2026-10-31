@@ -1,7 +1,8 @@
 # Araphor retained execution state review
 
-This guide covers the first retained-state change after `80e0a0b`. The change
-removes repeated saved-call reads from a running subscription. The parent
+This guide covers retained state in `621665a6a` and the change-input working
+tree based on that commit. The changes remove repeated saved-call reads and
+deliver declared input changes to packages. The parent
 plan is [reactive execution latency](../plans/araphor-reactive-execution-latency.md).
 
 ## Intended end state
@@ -11,10 +12,11 @@ Each invocation receives changes to its input query and the last committed
 state. Data remains the durable owner. Native DataFusion operators execute
 the input query. Native and Wasm packages use the same checked contract.
 
-The current change implements retained saved state. Generic changed-input
-delivery remains **Not done**. Full input query execution, input encoding,
-and progress hashing remain in the current path. Complete Graph state uses
-the cold path when the retained state is incomplete.
+The current code retains saved state and delivers declared change inputs.
+Builtin Graph inputs still use complete selections. Native input SQL still
+executes its complete selection. Data still encodes the complete target for
+cold recovery. Complete Graph state uses the cold path when the retained
+state is incomplete. The complete latency proposal remains **Not done**.
 
 ## Implementation review flow
 
@@ -23,7 +25,8 @@ the cold path when the retained state is incomplete.
   -> [ManagedPublication::begin](../../crates/araphor-analysis/src/instance/subscription.rs) the subscription supplies its retained state with the current instance
   -> [AnalysisStore::capture_managed](../../crates/araphor-data/src/analysis/managed/capture.rs) Data checks the store, instance, current package bytes, and exact saved-call heads
   -> [ManagedExecution::calls](../../crates/araphor-data/src/analysis/managed/execution.rs) Data borrows matching saved state or uses the existing cold read
-  -> Partial [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) package physical execution computes output changes and tentative state from the complete input selection
+  -> [PackageExec::change_inputs](../../crates/araphor-query/src/definition/physical/changes.rs) Query binds the committed base and current target to the prepared native difference plans
+  -> Partial [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) package physical execution receives declared changes or the complete selection and computes output and tentative state
   -> [GraphRows::progress_plan](../../crates/araphor-data/src/analysis/graph_rows/progress.rs) the existing Graph writer validates the next progress map
   -> [AnalysisStore::retain_managed](../../crates/araphor-data/src/analysis/managed/execution.rs) Data prepares retained state from checked live inputs, output, and validated progress
   -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits output changes, saved state, progress, and replay references
@@ -75,6 +78,71 @@ A call-head, instance, store UUID, schema, or recovery-epoch mismatch uses the
 cold path. A clean reopen can reuse matching immutable state. A new process
 cannot retain these memory references and restores state from the store.
 
+## Declared change inputs
+
+[ChangeInputs](../../crates/araphor-analysis-sdk/src/model/changes.rs) names
+ordinary input ports. Each pair has a `before` port for removed rows and an
+`after` port for inserted rows. A separate reset port has one non-null Bool
+row. The model declares a resumable checkpoint. The descriptor fragment is:
+
+```yaml
+change_inputs:
+  reset: reset
+  ports:
+    - before: removed
+      after: input
+```
+
+All three ports are declared in the model's typed interface. The before and
+after schemas match. The caller supplies the after query. Query supplies
+before and reset. Admission rejects caller arguments for generated ports.
+For example, the qualification image accepts:
+
+```sql
+SELECT * FROM "runtime-fixture"."1".changes(
+  input => (SELECT source_cursor AS value FROM events))
+```
+
+[Packages::changes](../../crates/araphor-query/src/definition/package/changes.rs)
+builds native `ROW_NUMBER` windows and two anti joins. The row number is
+partitioned by all input columns. The join compares all columns and that
+occurrence number, with NULL values equal. Thus `[7]` to `[7, 7]` supplies
+one inserted row. Native optimization and physical planning prepare these
+children with the rest of the package call. There is no custom difference
+execution operator. The
+[subscription runtime](../../crates/araphor-query/src/stream/physical/runtime.rs)
+uses DataFusion's plan-state reset before reuse. Each invocation has its own
+source bindings and task context.
+
+Change ports describe unordered row collections. The package handles each
+declared input change. Metadata-only changes still invoke the package.
+Current support inputs remain ordinary complete inputs. A missing base,
+changed parameters, or changed support input resets the whole invocation.
+Reset supplies empty before ports and complete after targets. Reset also
+clears the checkpoint and previous outputs.
+
+The SDK rejects output evidence links to before and reset ports. A new
+output cites current after or support inputs. Historical before inputs keep
+their old revision and coverage. Data binds their metadata to the exact
+committed prior result. That historical base is replay lineage. Data does
+not turn old witnesses into current witnesses.
+
+[ManagedChanges](../../crates/araphor-data/src/analysis/managed/model.rs)
+retains full targets separately from delivered inputs. Data stores the
+delivered before, after, and reset Arrow batches without reordering them.
+[RecordTarget](../../crates/araphor-data/src/analysis/managed/model.rs)
+stores target metadata through the existing binary record and Arrow payload
+path. Target IPC is absent from the record header. Cold restoration charges
+the wire and decoded Arrow memory before decoding. Replay restores the saved
+state, then performs the complete SDK validation. Native and Wasm ABI
+layouts and contract versions are unchanged.
+
+[Inputs::input](../../crates/araphor-query/src/inputs/receipt.rs) identifies
+managed after targets by invocation, call, port, committed store cut, and
+selected provenance. These positions do not encode the full Arrow selection
+to obtain its identity. Direct producer bindings keep the producer's exact
+revision. Snapshot and unpaired support inputs keep row-based identity.
+
 ## Proof and limits
 
 [Data tests](../../crates/araphor-data/src/analysis/managed/tests/execution.rs)
@@ -89,4 +157,10 @@ and their history, notices, and restart modules exercise the production
 subscription, Wasm calls, proof changes, empty input, historical output,
 rollback, reopen, and memory release. Run results and the existing incident
 measurement are recorded in the parent plan. This guide does not claim
-completion of generic change inputs or millisecond event latency.
+millisecond event latency or migration of the builtin Graph input contract.
+
+[Change-input qualification](../../crates/araphor-analysis/src/instance/tests/changes.rs)
+uses SQL, Wasm, and the existing source-built native fixture. The tests cover
+NULL duplicates, insertion, removal, exact replay, restart, parameter reset,
+and separate captures of the same plan. The parent plan records run results
+and the remaining work.

@@ -59,6 +59,7 @@ fn assert_frontier(completed: bool) -> TestResult {
         .enumerate()
         .map(|(index, (evaluation, output))| ManagedReturn {
             retained: None,
+            changes: None,
             call: 10 + index as u64,
             evaluation,
             output,
@@ -385,6 +386,7 @@ fn finite_result_rejects_resume() -> TestResult {
         .enumerate()
         .map(|(index, (evaluation, output))| ManagedReturn {
             retained: None,
+            changes: None,
             call: 10 + index as u64,
             evaluation,
             output,

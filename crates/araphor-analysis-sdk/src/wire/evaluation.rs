@@ -67,6 +67,29 @@ impl Evaluation {
         &self,
         package: &'a Package,
     ) -> Result<(crate::Evaluation, &'a crate::Model)> {
+        let (evaluation, model) = self.decode_values(package)?;
+        model.input(&evaluation)?;
+        Ok((evaluation, model))
+    }
+
+    /// Decode inputs before the caller restores saved state.
+    /// The caller must validate the complete evaluation after restoration.
+    pub fn decode_inputs(&self, package: &Package) -> Result<crate::Evaluation> {
+        if self.checkpoint.is_some() || !self.previous_outputs.is_empty() {
+            return Err(Error::contract(
+                ErrorCode::Invalid,
+                "input-only saved state",
+            ));
+        }
+        let (evaluation, model) = self.decode_values(package)?;
+        model.input_values(&evaluation)?;
+        Ok(evaluation)
+    }
+
+    fn decode_values<'a>(
+        &self,
+        package: &'a Package,
+    ) -> Result<(crate::Evaluation, &'a crate::Model)> {
         let model = package.wire_validator(&self.export_name)?;
         let mut codec = Codec::new(None);
         let inputs = self
@@ -103,7 +126,6 @@ impl Evaluation {
                 .map(|checkpoint| checkpoint.decode(model, &mut codec, ErrorCode::Incompatible))
                 .transpose()?,
         };
-        model.input(&evaluation)?;
         Ok((evaluation, model))
     }
 }

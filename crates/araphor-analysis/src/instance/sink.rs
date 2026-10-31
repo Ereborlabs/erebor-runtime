@@ -323,6 +323,7 @@ impl DataSink for Publication {
                         evaluation: returned.evaluation(),
                         output: returned.output(),
                         retained: returned.retained(),
+                        changes: returned.changes(),
                     })
                     .collect::<Vec<_>>();
                 let now = SystemTime::now()

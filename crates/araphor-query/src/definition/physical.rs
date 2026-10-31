@@ -30,6 +30,7 @@ use super::PackageCall;
 use crate::memory::Memory;
 use crate::sources::SourceSnapshot;
 
+mod changes;
 mod guest;
 mod sql;
 #[cfg(test)]
@@ -64,6 +65,7 @@ pub struct CallResult {
     origin: Origin,
     retained: Option<araphor_data::analysis::PackageResultRefV1>,
     graph_prior: Option<Vec<sdk::Dataset>>,
+    changes: Option<araphor_data::ManagedChanges>,
     _input: Arc<MemoryReservation>,
     _output: Arc<MemoryReservation>,
 }
@@ -235,6 +237,10 @@ impl CallResult {
 
     pub fn graph_prior(&self) -> Option<&[sdk::Dataset]> {
         self.graph_prior.as_deref()
+    }
+
+    pub fn changes(&self) -> Option<&araphor_data::ManagedChanges> {
+        self.changes.as_ref()
     }
 }
 
@@ -694,6 +700,14 @@ impl PackageExec {
         let input = Arc::new(owner.memory.reserve_input(0)?);
         let mut inputs = Vec::with_capacity(model.inputs.len());
         for (slot, port) in model.inputs.iter().enumerate() {
+            if self.call.changes.is_some()
+                && model
+                    .change_inputs
+                    .as_ref()
+                    .is_some_and(|changes| changes.generated(&port.port.name))
+            {
+                continue;
+            }
             let data = sdk::Dataset {
                 name: port.port.name.clone(),
                 batches: self
@@ -722,13 +736,47 @@ impl PackageExec {
                     .input_for(
                         data,
                         &source,
-                        (self.call.id, slot),
+                        (self.call.id, slot, &owner.invocation.id),
                         &self.children[slot],
                         &inherited,
                         &owner.memory,
                     )
                     .map_err(external)?,
             );
+        }
+        if self.call.changes.is_some() {
+            let changes = model
+                .change_inputs
+                .as_ref()
+                .ok_or_else(|| internal("change contract is absent"))?;
+            let basis = inputs
+                .first()
+                .cloned()
+                .ok_or_else(|| internal("change target is absent"))?;
+            for port in model
+                .inputs
+                .iter()
+                .filter(|port| changes.generated(&port.port.name))
+            {
+                let mut input = basis.clone();
+                input.data = if port.port.name == changes.reset {
+                    changes.reset_input(true).map_err(external)?
+                } else {
+                    sdk::Dataset {
+                        name: port.port.name.clone(),
+                        batches: vec![sdk::RecordBatch::new_empty(Arc::new(
+                            port.port.schema.clone(),
+                        ))],
+                    }
+                };
+                inputs.push(input);
+            }
+            inputs.sort_by_key(|input| {
+                model
+                    .inputs
+                    .iter()
+                    .position(|port| port.port.name == input.data.name)
+            });
         }
         if let Some(supplied) = owner.invocation.inputs.get(&self.call.id) {
             self.call
@@ -833,6 +881,17 @@ impl PackageExec {
             checkpoint,
             previous_outputs,
         };
+        let changes = self
+            .change_inputs(
+                &mut evaluation,
+                snapshot
+                    .managed()
+                    .and_then(|managed| managed.prior(self.call.id)),
+                &owner,
+                &context,
+                &input,
+            )
+            .await?;
         let configured = context
             .session_config()
             .get_extension::<crate::execution::Limits>()
@@ -851,7 +910,13 @@ impl PackageExec {
         {
             owner.memory.retain_input(batch, &input)?;
         }
-        input.try_resize(input_metadata(&evaluation))?;
+        input.try_resize(
+            input_metadata(&evaluation).saturating_add(
+                changes
+                    .as_ref()
+                    .map_or(0, araphor_data::ManagedChanges::metadata_bytes),
+            ),
+        )?;
         let retained = snapshot
             .managed()
             .filter(|_| self.call.sql.is_none())
@@ -961,6 +1026,7 @@ impl PackageExec {
             origin: Origin::new(&self.call),
             retained: reference,
             graph_prior,
+            changes,
             _input: input,
             _output: output_memory,
         })

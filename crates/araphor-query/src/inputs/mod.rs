@@ -23,6 +23,7 @@ pub struct Inputs {
 #[derive(Debug)]
 struct PortPlan {
     slot: usize,
+    changes: bool,
     window: Option<Window>,
     plan: Arc<LogicalPlan>,
     origins: BTreeSet<SourceOrigin>,
@@ -57,6 +58,12 @@ impl Inputs {
                 });
                 Ok(PortPlan {
                     slot,
+                    changes: model.change_inputs.as_ref().is_some_and(|changes| {
+                        changes
+                            .ports
+                            .iter()
+                            .any(|pair| pair.after == model.inputs[slot].port.name)
+                    }),
                     window: Window::infer(plan)?,
                     plan: Arc::new(plan.clone()),
                     origins,

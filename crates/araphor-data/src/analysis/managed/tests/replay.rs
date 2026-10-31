@@ -278,6 +278,7 @@ fn saved_inputs_commit_atomically() -> TestResult {
         .enumerate()
         .map(|(index, (evaluation, output))| ManagedReturn {
             retained: None,
+            changes: None,
             call: 10 + index as u64,
             evaluation,
             output,

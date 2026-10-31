@@ -184,6 +184,7 @@ impl AnalysisStore {
                         )?;
                         output.charge(saved.decoding_bytes(control)?)?;
                         let mut evaluation = saved.inputs_only(control)?;
+                        let changes = saved.changes(control)?;
                         if state.native_graph {
                             state.native = Some(std::sync::Arc::new(if state.sparse_resume {
                                 crate::analysis::graph_rows::GraphCallRows::load_progress(
@@ -249,12 +250,15 @@ impl AnalysisStore {
                         output.charge(native_bytes)?;
                         output.charge(evaluation.allocated_bytes())?;
                         output.charge(returned.allocated_bytes())?;
+                        output
+                            .charge(changes.as_ref().map_or(0, ManagedChanges::allocated_bytes))?;
                         output.charge(
                             std::mem::size_of::<RetainedCall>() + 2 * std::mem::size_of::<usize>(),
                         )?;
                         state.retained = Some(std::sync::Arc::new(RetainedCall {
                             evaluation,
                             output: returned,
+                            changes,
                         }));
                     }
                     prior.insert(*call, std::sync::Arc::new(state));

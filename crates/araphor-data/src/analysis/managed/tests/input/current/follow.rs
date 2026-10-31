@@ -321,6 +321,7 @@ fn publish(
             evaluation,
             output,
             retained: None,
+            changes: None,
         })
         .collect::<Vec<_>>();
     let selected = sdk::Dataset {

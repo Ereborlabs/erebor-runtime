@@ -26,6 +26,7 @@ pub struct PackageCall {
     pub(crate) artifact: usize,
     pub(crate) bundle: Arc<PackageBundle>,
     pub(crate) sql: Option<SqlCall>,
+    pub(crate) changes: Option<ChangeCall>,
     pub(crate) input_scope: Arc<Inputs>,
     pub(super) admitted: Arc<[LogicalPlan]>,
     pub(crate) children: Vec<LogicalPlan>,
@@ -52,6 +53,20 @@ pub(crate) struct SqlCall {
     pub(crate) used: BTreeSet<usize>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ChangeCall {
+    pub(crate) start: usize,
+    pub(crate) ports: Vec<ChangePort>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ChangePort {
+    pub(crate) before: usize,
+    pub(crate) after: usize,
+    pub(crate) base: usize,
+    pub(crate) target: usize,
+}
+
 impl PackageCall {
     pub(super) fn metadata(
         memory: &crate::memory::Memory,
@@ -70,6 +85,15 @@ impl PackageCall {
         let bytes = input_scope
             .allocated_bytes()
             .checked_add(plans)
+            .and_then(|bytes| {
+                bytes.checked_add(model.change_inputs.as_ref().map_or(0, |changes| {
+                    changes
+                        .ports
+                        .len()
+                        .saturating_mul(std::mem::size_of::<ChangePort>())
+                        .saturating_mul(model.outputs.len().saturating_add(1))
+                }))
+            })
             .and_then(|bytes| {
                 bytes.checked_add(
                     model

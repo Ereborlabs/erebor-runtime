@@ -131,6 +131,12 @@ impl ManagedPrior {
                     .evaluation
                     .allocated_bytes()
                     .saturating_add(state.output.allocated_bytes())
+                    .saturating_add(
+                        state
+                            .changes
+                            .as_ref()
+                            .map_or(0, ManagedChanges::allocated_bytes),
+                    )
             }))
             .saturating_add(
                 self.native
@@ -140,36 +146,41 @@ impl ManagedPrior {
     }
 
     fn metadata_bytes(&self) -> usize {
-        let buffers = self
-            .parameters
-            .iter()
-            .chain(self.checkpoint.iter().flat_map(|state| &state.datasets))
-            .chain(self.retained.iter().flat_map(|state| {
-                state
-                    .evaluation
-                    .inputs
-                    .iter()
-                    .map(|input| &input.data)
-                    .chain(state.output.datasets.iter())
-                    .chain(
-                        state
-                            .output
-                            .checkpoint
-                            .iter()
-                            .flat_map(|state| &state.datasets),
-                    )
-            }))
-            .flat_map(|data| &data.batches)
-            .chain(self.retained.iter().flat_map(|state| {
-                state
-                    .evaluation
-                    .parameters
-                    .iter()
-                    .chain(state.output.reasons.iter().map(|reason| &reason.details))
-            }))
-            .flat_map(sdk::RecordBatch::columns)
-            .map(|array| array.get_buffer_memory_size())
-            .sum::<usize>();
+        let buffers =
+            self.parameters
+                .iter()
+                .chain(self.checkpoint.iter().flat_map(|state| &state.datasets))
+                .chain(self.retained.iter().flat_map(|state| {
+                    state
+                        .evaluation
+                        .inputs
+                        .iter()
+                        .map(|input| &input.data)
+                        .chain(
+                            state.changes.iter().flat_map(|changes| {
+                                changes.targets.iter().map(|input| &input.data)
+                            }),
+                        )
+                        .chain(state.output.datasets.iter())
+                        .chain(
+                            state
+                                .output
+                                .checkpoint
+                                .iter()
+                                .flat_map(|state| &state.datasets),
+                        )
+                }))
+                .flat_map(|data| &data.batches)
+                .chain(self.retained.iter().flat_map(|state| {
+                    state
+                        .evaluation
+                        .parameters
+                        .iter()
+                        .chain(state.output.reasons.iter().map(|reason| &reason.details))
+                }))
+                .flat_map(sdk::RecordBatch::columns)
+                .map(|array| array.get_buffer_memory_size())
+                .sum::<usize>();
         self.allocated_bytes().saturating_sub(buffers)
     }
 }
@@ -277,6 +288,7 @@ impl AnalysisStore {
                     retained: Some(Arc::new(RetainedCall {
                         evaluation,
                         output: returned.output.clone(),
+                        changes: returned.changes.cloned(),
                     })),
                     reusable: false,
                     native_graph,

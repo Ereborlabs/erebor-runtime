@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::Schema;
 
+mod changes;
+pub use changes::{ChangeInput, ChangeInputs};
+
 pub const CONTRACT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -86,6 +89,8 @@ pub struct Model {
     pub name: String,
     pub inputs: Vec<InputPort>,
     pub input_mode: InputMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_inputs: Option<ChangeInputs>,
     pub parameters: Schema,
     pub outputs: Vec<Port>,
     pub checkpoint: Option<CheckpointSpec>,
@@ -106,6 +111,7 @@ impl Model {
             name: name.into(),
             inputs: inputs.into_iter().map(InputPort::from).collect(),
             input_mode: InputMode::Provided,
+            change_inputs: None,
             parameters: Schema::empty(),
             outputs,
             checkpoint: None,

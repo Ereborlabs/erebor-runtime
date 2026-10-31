@@ -98,6 +98,10 @@ impl Session {
                     .into());
             }
             call.children.splice(..count, plans);
+            if let Some(changes) = call.changes.take() {
+                call.children
+                    .drain(changes.start..changes.start + changes.ports.len() * 2);
+            }
             call.admitted = call.children.clone().into();
             call._metadata = PackageCall::metadata(
                 session.memory(),

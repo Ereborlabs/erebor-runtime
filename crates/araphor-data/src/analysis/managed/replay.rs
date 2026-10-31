@@ -16,6 +16,7 @@ pub(super) struct SavedEvaluation {
     descriptor: sdk::Package,
     packet: sdk::wire::Evaluation,
     inputs: Vec<RecordInput>,
+    changes: Option<super::model::RecordChanges>,
     prior: Option<(
         PackageResultRefV1,
         Record,
@@ -388,6 +389,7 @@ impl AnalysisStore {
         } else {
             None
         };
+        let changes = Self::managed_changes_from(reader, id, &record, control)?;
         Ok(SavedEvaluation {
             call: record.call,
             generation: attempt.capture.generation,
@@ -401,6 +403,7 @@ impl AnalysisStore {
                 previous_outputs: Vec::new(),
             },
             inputs: record.inputs,
+            changes,
             prior,
             native_prior,
             native_graph,
@@ -467,10 +470,25 @@ impl AnalysisStore {
 }
 
 impl SavedEvaluation {
+    pub(super) fn changes(
+        &self,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<super::ManagedChanges>> {
+        let model = self
+            .descriptor
+            .exports
+            .iter()
+            .find(|model| model.name == self.packet.export_name)
+            .ok_or_else(|| Code::Missing.error("saved change model"))?;
+        self.changes
+            .as_ref()
+            .map(|changes| changes.decode(model, control))
+            .transpose()
+    }
     pub(super) fn inputs_only(&self, control: &AnalysisReadControl) -> Result<sdk::Evaluation> {
         let mut evaluation = self
             .packet
-            .decode(&self.descriptor)
+            .decode_inputs(&self.descriptor)
             .context(crate::AnalysisContractSnafu)?;
         for ((shape, input), packet) in self
             .inputs
@@ -589,6 +607,9 @@ impl SavedEvaluation {
         if let Some(native) = &self.native_prior {
             bytes = bytes.saturating_add(native.allocated_bytes());
         }
+        if let Some(changes) = &self.changes {
+            bytes = bytes.saturating_add(changes.decoding_bytes(control)?);
+        }
         Ok(bytes)
     }
 
@@ -619,9 +640,14 @@ impl SavedEvaluation {
             let retained = saved
                 .map(|saved| -> Result<_> {
                     let evaluation = saved.inputs_only(control)?;
+                    let changes = saved.changes(control)?;
                     let output =
                         AnalysisStore::decode_managed_record(&self.descriptor, &record, &packet)?;
-                    Ok(std::sync::Arc::new(RetainedCall { evaluation, output }))
+                    Ok(std::sync::Arc::new(RetainedCall {
+                        evaluation,
+                        output,
+                        changes,
+                    }))
                 })
                 .transpose()?;
             let checkpoint = if let Some(retained) = &retained {

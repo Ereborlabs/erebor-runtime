@@ -71,7 +71,10 @@ impl RuntimeFixture {
         }
         let package = Self::package();
         let evaluation = input.decode(&package)?;
-        if matches!(evaluation.export.as_str(), "accumulate" | "continue-input") {
+        if matches!(
+            evaluation.export.as_str(),
+            "accumulate" | "continue-input" | "changes"
+        ) {
             return Self::accumulate(&package, &evaluation);
         }
         let parameters = evaluation
@@ -329,7 +332,9 @@ impl RuntimeFixture {
             .map(|checkpoint| Self::sum(&checkpoint.datasets[0]))
             .transpose()?
             .unwrap_or_default();
-        let prior = if evaluation.export == "continue-input" && evaluation.checkpoint.is_some() {
+        let prior = if matches!(evaluation.export.as_str(), "continue-input" | "changes")
+            && evaluation.checkpoint.is_some()
+        {
             let previous = evaluation.previous_outputs.first().ok_or_else(|| {
                 sdk::Error::contract(sdk::ErrorCode::Incomplete, "previous output")
             })?;
@@ -344,9 +349,16 @@ impl RuntimeFixture {
         } else {
             prior
         };
-        let total = prior
-            .checked_add(Self::sum(&evaluation.input("input")?.data)?)
-            .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "checkpoint sum"))?;
+        let total = if evaluation.export == "changes" {
+            let added = evaluation.input("input")?.data.rows();
+            let removed = evaluation.input("removed")?.data.rows();
+            prior
+                .checked_add(added)
+                .and_then(|total| total.checked_sub(removed))
+        } else {
+            prior.checked_add(Self::sum(&evaluation.input("input")?.data)?)
+        }
+        .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "checkpoint sum"))?;
         let model = package
             .exports
             .iter()
@@ -422,10 +434,25 @@ impl RuntimeFixture {
             version: 1,
             datasets: vec![sdk::Port::new("state", model.outputs[0].schema.clone())],
         });
+        let mut changes = continuation.clone();
+        changes.name = "changes".into();
+        let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, true)]);
+        changes.inputs = vec![
+            sdk::Port::new("input", schema.clone()).into(),
+            sdk::Port::new("removed", schema).into(),
+            sdk::ChangeInputs::reset_port("reset").into(),
+        ];
+        changes.change_inputs = Some(sdk::ChangeInputs {
+            reset: "reset".into(),
+            ports: vec![sdk::ChangeInput {
+                before: "removed".into(),
+                after: "input".into(),
+            }],
+        });
         sdk::Package::new(
             "runtime-fixture",
             "1",
-            vec![model, count, accumulate, continuation],
+            vec![model, count, accumulate, continuation, changes],
         )
     }
 }

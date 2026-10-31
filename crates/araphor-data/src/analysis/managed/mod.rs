@@ -1,4 +1,5 @@
 mod capture;
+mod changes;
 mod codec;
 mod commit;
 mod execution;

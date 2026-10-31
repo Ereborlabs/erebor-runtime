@@ -17,6 +17,7 @@ use crate::{
     PackageImplementationV1, SqlModelV1, SqlReasonV1,
 };
 
+mod changes;
 mod destination;
 mod execution;
 mod guards;
@@ -341,6 +342,7 @@ impl Fixture {
             .enumerate()
             .map(|(index, (evaluation, output))| ManagedReturn {
                 retained: None,
+                changes: None,
                 call: 10 + index as u64,
                 evaluation,
                 output,
@@ -771,12 +773,14 @@ fn managed_failure_is_atomic() -> TestResult {
     let returns = [
         ManagedReturn {
             retained: None,
+            changes: None,
             call: 10,
             evaluation: &evaluations[0],
             output: &outputs[0],
         },
         ManagedReturn {
             retained: None,
+            changes: None,
             call: 11,
             evaluation: &evaluations[1],
             output: &outputs[1],
@@ -2020,12 +2024,14 @@ fn managed_witness_lifetime_check() -> TestResult {
     let returns = [
         ManagedReturn {
             retained: None,
+            changes: None,
             call: 10,
             evaluation: &evaluations[0],
             output: &outputs[0],
         },
         ManagedReturn {
             retained: None,
+            changes: None,
             call: 11,
             evaluation: &evaluations[1],
             output: &outputs[1],

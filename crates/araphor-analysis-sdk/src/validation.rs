@@ -116,6 +116,25 @@ impl<'a> CheckedEvaluation<'a> {
 
 impl Model {
     pub(crate) fn input(&self, evaluation: &Evaluation) -> Result<()> {
+        self.input_values(evaluation)?;
+        self.checkpoint(evaluation.checkpoint.as_ref(), false)?;
+        if let Some(changes) = &self.change_inputs {
+            changes.check_state(evaluation)?;
+        }
+        if self
+            .checkpoint
+            .as_ref()
+            .is_some_and(|spec| spec.resume_input_changes)
+            && evaluation.checkpoint.is_some()
+        {
+            Self::datasets(self.outputs.iter(), evaluation.previous_outputs.iter())?;
+        } else if !evaluation.previous_outputs.is_empty() {
+            return Err(Error::contract(ErrorCode::Invalid, "previous outputs"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn input_values(&self, evaluation: &Evaluation) -> Result<()> {
         Package::text(&evaluation.context.id)?;
         match (&evaluation.parameters, self.parameters.fields().is_empty()) {
             (None, true) => {}
@@ -140,16 +159,8 @@ impl Model {
                 Package::text(reason)?;
             }
         }
-        self.checkpoint(evaluation.checkpoint.as_ref(), false)?;
-        if self
-            .checkpoint
-            .as_ref()
-            .is_some_and(|spec| spec.resume_input_changes)
-            && evaluation.checkpoint.is_some()
-        {
-            Self::datasets(self.outputs.iter(), evaluation.previous_outputs.iter())?;
-        } else if !evaluation.previous_outputs.is_empty() {
-            return Err(Error::contract(ErrorCode::Invalid, "previous outputs"));
+        if let Some(changes) = &self.change_inputs {
+            changes.check_inputs(evaluation)?;
         }
         Ok(())
     }
@@ -171,6 +182,16 @@ impl Model {
             .collect();
         let mut evidence = BTreeSet::new();
         for link in &output.evidence {
+            if self
+                .change_inputs
+                .as_ref()
+                .is_some_and(|changes| changes.generated(&link.input.dataset))
+            {
+                return Err(Error::contract(
+                    ErrorCode::Invalid,
+                    "historical change evidence",
+                ));
+            }
             Self::reference(&link.output, &outputs)?;
             Self::reference(&link.input, &inputs)?;
             if !evidence.insert(link) {
