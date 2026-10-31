@@ -4,9 +4,10 @@ use erebor_interceptor_abi::{EffectPhysicalResultV1, KernelEffectFamilyV1};
 
 mod fixture;
 mod incremental;
+mod units;
 use fixture::*;
 
-type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[test]
 fn graph_identities_use_stable_binary_keys() -> TestResult {
@@ -164,10 +165,12 @@ fn fact_reference_is_exact() -> TestResult {
         &[record()],
         &[fact(u32::MAX, context(ContextClass::InMemory))],
     )?;
-    Detector::Process.descriptor().validate()?;
-    assert!(matches!(Detector::Process.evaluate(&fixture.evaluation),
+    Detector::Process.snapshot_descriptor().validate()?;
+    assert!(
+        matches!(Detector::Process.evaluate_snapshot(&fixture.evaluation),
         Err(sdk::Error::Contract { code: sdk::ErrorCode::Invalid, field, .. })
-            if field == "graph record reference"));
+            if field == "graph record reference")
+    );
     Ok(())
 }
 
@@ -413,7 +416,7 @@ fn known_task_mismatch_blocks_channel_join() -> TestResult {
 
 fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResult {
     let detector = Detector::Credentials;
-    let package = detector.descriptor();
+    let package = detector.snapshot_descriptor();
     let records = Observation::decode(&complete.evaluation.inputs[0].data)?;
     let mut blocked = records[1].clone();
     blocked.effect.decision = EffectPhysicalResultV1::DeniedBeforeEffect as u32;
@@ -455,7 +458,7 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
         let fixture = fixture(detector, &records, &facts)?;
         package.validate_evaluation(&fixture.evaluation)?;
         let mut manifests = Manifest::decode(&fixture.evaluation.inputs[2].data)?;
-        let mut computation = Computation::new(
+        let mut computation = Computation::snapshot(
             Observation::decode(&fixture.evaluation.inputs[0].data)?,
             facts.clone(),
             manifests.pop().ok_or("graph manifest")?,
@@ -542,7 +545,7 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
                 return Err("authority fixture".into());
             };
             proof_quality.remote_subject_binding = RemoteSubjectBindingV1::Contextual;
-            let mut computation = Computation::new(
+            let mut computation = Computation::snapshot(
                 Observation::decode(&fixture.evaluation.inputs[0].data)?,
                 changed,
                 Manifest::decode(&fixture.evaluation.inputs[2].data)?.remove(0),
@@ -583,7 +586,7 @@ fn authority_publication(
     fixture: &sdk::Fixture,
     expected_edges: Vec<Relationship>,
 ) -> TestResult {
-    let package = Detector::Credentials.descriptor();
+    let package = Detector::Credentials.snapshot_descriptor();
     let expected_findings = computation.findings.values().cloned().collect::<Vec<_>>();
     assert!(!expected_findings.is_empty());
     let prior_subjects = computation.subjects.clone();
@@ -717,7 +720,7 @@ fn empty_inputs_retain_state() -> TestResult {
         (Detector::Kubernetes, "KUBERNETES_PROOF_MISSING"),
     ] {
         let fixture = fixture(detector, &[], &[])?;
-        let output = detector.evaluate(&fixture.evaluation)?;
+        let output = detector.evaluate_snapshot(&fixture.evaluation)?;
         assert!(SubjectChange::decode(&output.datasets[0])?.is_empty());
         assert!(SubjectRemoval::decode(&output.datasets[1])?.is_empty());
         assert!(RelationshipChange::decode(&output.datasets[2])?.is_empty());
@@ -740,7 +743,7 @@ fn empty_inputs_retain_state() -> TestResult {
 fn checkpoint_requires_one_state() -> TestResult {
     let detector = Detector::Process;
     let fixture = fixture(detector, &[record()], &[])?;
-    let output = detector.evaluate(&fixture.evaluation)?;
+    let output = detector.evaluate_snapshot(&fixture.evaluation)?;
     for states in [
         Vec::new(),
         vec![GraphPackageStateV1::Waiting, GraphPackageStateV1::Waiting],
@@ -750,7 +753,7 @@ fn checkpoint_requires_one_state() -> TestResult {
         checkpoint.datasets[0] = GraphPackageStateV1::encode(&states)?;
         evaluation.checkpoint = Some(checkpoint);
         evaluation.previous_outputs = normalized_prior(&output)?;
-        assert!(detector.evaluate(&evaluation).is_err());
+        assert!(detector.evaluate_snapshot(&evaluation).is_err());
     }
     Ok(())
 }

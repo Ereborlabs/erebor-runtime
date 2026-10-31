@@ -34,13 +34,7 @@ async fn drains_captured_backlog() -> TestResult {
         let mut previous = None;
         let mut previous_calls = std::collections::BTreeMap::<
             u64,
-            (
-                Vec<algorithm::Observation>,
-                Vec<algorithm::Fact>,
-                araphor_analysis_sdk::Revision,
-                araphor_analysis_sdk::Output,
-                Vec<araphor_analysis_sdk::Dataset>,
-            ),
+            std::collections::BTreeSet<araphor_data::DiscoveryRecordIdV1>,
         >::new();
         for consumed in 1..=3 {
             let receipt = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
@@ -111,78 +105,37 @@ async fn drains_captured_backlog() -> TestResult {
                     &reference.result_id,
                     &fixture.control,
                 )?;
-                let records_input = evaluation.input("records")?;
-                for port in ["facts", "manifest"] {
-                    let bound = evaluation.input(port)?;
-                    assert_eq!(bound.revision, records_input.revision);
-                    assert_eq!(bound.coverage, records_input.coverage);
-                }
-                let records = algorithm::Observation::decode(&records_input.data)?;
-                let facts = algorithm::Fact::decode(&evaluation.input("facts")?.data)?;
-                assert_eq!(records.len(), consumed as usize);
-                if let Some((old_records, old_facts, revision, output, full)) =
-                    previous_calls.get(&call)
-                {
-                    assert_eq!(&records[..old_records.len()], old_records);
-                    assert_eq!(&facts[..old_facts.len()], old_facts);
-                    assert_ne!(&records_input.revision, revision);
-                    assert_eq!(evaluation.previous_outputs.len(), full.len());
-                    for (actual, expected) in evaluation.previous_outputs.iter().zip(full) {
-                        assert_eq!(actual.name, expected.name);
-                        if actual.name == "progress" {
-                            assert_eq!(actual.batches, expected.batches);
-                        } else {
-                            assert!(actual.batches.iter().all(|batch| batch.num_rows() == 0));
-                        }
-                    }
-                    let checkpoint = evaluation.checkpoint.as_ref().ok_or("prior checkpoint")?;
-                    let saved_checkpoint = output.checkpoint.as_ref().ok_or("saved checkpoint")?;
-                    assert_eq!(checkpoint.version, saved_checkpoint.version);
-                    assert_eq!(checkpoint.datasets.len(), saved_checkpoint.datasets.len());
-                    assert_eq!(
-                        checkpoint.datasets[0].name,
-                        saved_checkpoint.datasets[0].name
-                    );
-                    assert_eq!(
-                        checkpoint.datasets[0].batches,
-                        saved_checkpoint.datasets[0].batches
-                    );
-                    assert_eq!(
-                        algorithm::Resume::basis(checkpoint)?,
-                        algorithm::ResumeBasis::Progress
-                    );
-                    assert_eq!(
-                        algorithm::Resume::basis(saved_checkpoint)?,
-                        algorithm::ResumeBasis::Complete
-                    );
-                    let progress = evaluation
-                        .previous_outputs
+                let records = algorithm::Observation::decode(&evaluation.input("records")?.data)?;
+                let units = algorithm::Unit::decode(&evaluation.input("units")?.data)?;
+                let removals = algorithm::Unit::decode(&evaluation.input("unit_removals")?.data)?;
+                let model = &package.exports[0];
+                assert_eq!(
+                    model
+                        .change_inputs
+                        .as_ref()
+                        .ok_or("change contract")?
+                        .is_reset(&evaluation)?,
+                    consumed == 1
+                );
+                assert!(evaluation.checkpoint.is_none());
+                assert!(evaluation.previous_outputs.is_empty());
+                assert_eq!(units.len(), 1);
+                assert_eq!(units[0].record.durable_cursor, consumed);
+                assert!(removals.is_empty());
+                let roots = previous_calls.entry(call).or_default();
+                assert!(roots.insert(units[0].record.clone()));
+                assert_eq!(roots.len(), consumed as usize);
+                let selected = units
+                    .iter()
+                    .flat_map(|unit| unit.support.iter().map(|support| &support.record))
+                    .collect::<std::collections::BTreeSet<_>>();
+                assert_eq!(
+                    records
                         .iter()
-                        .find(|data| data.name == "progress")
-                        .ok_or("prior progress")?;
-                    assert_eq!(
-                        algorithm::Progress::decode(progress)?
-                            .into_iter()
-                            .map(|row| row.record)
-                            .collect::<Vec<_>>(),
-                        old_records
-                            .iter()
-                            .map(|record| record.id.clone())
-                            .collect::<Vec<_>>()
-                    );
-                    assert_eq!(
-                        progress
-                            .batches
-                            .iter()
-                            .map(|batch| batch.num_rows())
-                            .sum::<usize>(),
-                        consumed as usize - 1
-                    );
-                } else {
-                    assert_eq!(consumed, 1);
-                    assert!(evaluation.previous_outputs.is_empty());
-                    assert!(evaluation.checkpoint.is_none());
-                }
+                        .map(|record| &record.id)
+                        .collect::<std::collections::BTreeSet<_>>(),
+                    selected
+                );
                 let result = fixture.query.store().managed_result(
                     job.admitted(),
                     &reference.result_id,
@@ -196,71 +149,18 @@ async fn drains_captured_backlog() -> TestResult {
                         package,
                         &evaluation,
                         &result.output
-                    )?
+                    )?,
                 );
-                let progress = result
+                let contribution = result
                     .output
                     .datasets
                     .iter()
-                    .find(|data| data.name == "progress")
-                    .ok_or("current progress")?;
-                let mut folded = evaluation
-                    .previous_outputs
-                    .iter()
-                    .find(|data| data.name == "progress")
-                    .map(algorithm::Progress::decode)
-                    .transpose()?
-                    .unwrap_or_default();
-                let additions = algorithm::Progress::decode(progress)?;
-                assert_eq!(additions.len(), 1);
-                assert_eq!(
-                    additions[0].record,
-                    records.last().ok_or("current Graph record")?.id
-                );
-                assert!(algorithm::ProgressRemoval::decode(
-                    result
-                        .output
-                        .datasets
-                        .iter()
-                        .find(|data| data.name == "progress_removals")
-                        .ok_or("current progress removals")?
-                )?
-                .is_empty());
-                folded.extend(additions);
-                folded.sort_by(|left, right| left.record.cmp(&right.record));
-                assert_eq!(
-                    folded.into_iter().map(|row| row.record).collect::<Vec<_>>(),
-                    records
-                        .iter()
-                        .map(|record| record.id.clone())
-                        .collect::<Vec<_>>()
-                );
-                let mut fresh = evaluation.clone();
-                fresh.checkpoint = None;
-                fresh.previous_outputs.clear();
-                let mut full = detector.evaluate(&fresh)?.datasets;
-                let findings = full
-                    .iter_mut()
-                    .find(|data| data.name == "findings")
-                    .ok_or("complete Graph findings")?;
-                let mut rows = algorithm::FindingChange::decode(findings)?;
-                for row in &mut rows {
-                    row.prior_reason = Some(algorithm::FindingReasonV1::from_analysis_code(
-                        &package.id,
-                        &row.reason_code,
-                    )?);
-                }
-                *findings = algorithm::FindingChange::encode(&rows)?;
-                previous_calls.insert(
-                    call,
-                    (
-                        records,
-                        facts,
-                        records_input.revision.clone(),
-                        result.output,
-                        full,
-                    ),
-                );
+                    .find(|data| data.name == "contributions")
+                    .ok_or("current contributions")?;
+                let contribution = algorithm::Contribution::decode(contribution)?;
+                assert_eq!(contribution.len(), 1);
+                assert_eq!(contribution[0].record, units[0].record);
+                assert!(result.output.checkpoint.is_none());
             }
             previous = Some(id);
         }

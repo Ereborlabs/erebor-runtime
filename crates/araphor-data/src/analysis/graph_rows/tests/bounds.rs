@@ -168,146 +168,6 @@ fn native_input_values_reject_foreign_records() -> TestResult {
 }
 
 #[test]
-fn sparse_subject_keeps_earliest_local_anchor() -> TestResult {
-    use super::super::{calls::CallBasis, history::Member, stage::GraphStage};
-    let fixture = CommitFixture::new()?;
-    let mut metadata = GraphManifest::from_snapshot(&fixture.snapshot);
-    let later_observed = metadata.input_manifest.evidence[0].clone();
-    let mut earlier_observed = later_observed.clone();
-    earlier_observed.durable_cursor += 1;
-    metadata.input_manifest.evidence = vec![later_observed.clone(), earlier_observed.clone()];
-    let observation = |id| Observation {
-        id,
-        position: Position {
-            commit_revision: 1,
-            ordinal: 0,
-        },
-        effect: crate::DiscoveryEffectKeyV1 {
-            task_cookie: 0,
-            target_task_cookie: None,
-            process_lineage_id: Vec::new(),
-            authority_domain_id: Vec::new(),
-            execution_set_id: Vec::new(),
-            exact_object_id: Vec::new(),
-            destination_id: 0,
-            policy_rule_id: 0,
-            reason: 0,
-            decision: 0,
-            effect_family: 0,
-            operation: 0,
-            operation_argument: None,
-            configured_errno: 0,
-            kernel_result: 0,
-            exact_file_object: None,
-        },
-        ingested_utc_ns: 1,
-        observed_boottime_ns: 1,
-        profile_generation_ref_id: None,
-        original_kernel_sequence: None,
-        coverage_interval_id: Vec::new(),
-        process_instance_id: None,
-        entry_instance_id: None,
-        binding_id: None,
-        role_id: None,
-        state_id: None,
-        entry_rule_id: None,
-        proof_quality: fixture.snapshot.graph.edges[0].proof_quality,
-    };
-    let input = |data| sdk::Input {
-        data,
-        revision: sdk::Revision {
-            owner: "graph".into(),
-            id: "1".into(),
-            window: None,
-        },
-        coverage: sdk::Coverage {
-            state: sdk::CoverageState::Complete,
-            limits: Vec::new(),
-        },
-    };
-    let evaluation = sdk::Evaluation {
-        export: "evaluate".into(),
-        inputs: vec![
-            input(Observation::encode(&[
-                observation(earlier_observed.clone()),
-                observation(later_observed.clone()),
-            ])?),
-            input(Fact::encode(&[])?),
-        ],
-        parameters: None,
-        context: sdk::EvaluationContext {
-            id: "anchor".into(),
-            time_utc_ns: 1,
-            seed: None,
-        },
-        checkpoint: None,
-        previous_outputs: Vec::new(),
-    };
-    let basis = CallBasis::new(&evaluation)?;
-    let writer = Connection::open_in_memory()?;
-    writer.execute_batch(&GraphRows::schema())?;
-    writer.execute_batch(
-        "CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER)",
-    )?;
-    writer.execute(
-        "INSERT INTO source_receipts VALUES(?,?,?)",
-        params![
-            metadata.scope.identity.key(),
-            metadata.scope.identity.tenant_id.as_slice(),
-            later_observed.cpu_id
-        ],
-    )?;
-    let source = GraphRows::source_id(&writer, &metadata.scope.identity)?;
-    let scope = GraphRows::new_scope(&writer, &metadata, source, 1, None, 1)?;
-    let records = GraphRows::intern_records(
-        &writer,
-        &metadata.scope.identity,
-        &metadata.input_manifest.evidence,
-    )?;
-    let subject = fixture.snapshot.graph.subjects[0].clone();
-    let value = GraphRows::intern_subjects(&writer, std::slice::from_ref(&subject))?[&subject];
-    let member = |record| -> Result<Member> {
-        Ok(Member {
-            kind: MemberKind::Subject,
-            key: GraphRows::member_key(&subject)?,
-            value,
-            anchor: Some(Anchor { record, fact: None }),
-            reason: None,
-            ordinal: 0,
-        })
-    };
-    for (revision, result, base, anchor, sparse) in [
-        (1, "first", None, later_observed.clone(), false),
-        (2, "earlier", Some("first"), earlier_observed.clone(), true),
-        (3, "later", Some("earlier"), later_observed, true),
-    ] {
-        GraphRows::version(&writer, result, scope, revision, base)?;
-        GraphStage {
-            writer: &writer,
-            scope,
-            revision,
-            records: &records,
-            basis: Some(&basis),
-            sparse,
-            full: false,
-        }
-        .apply(vec![member(anchor)?], Vec::new(), None)?;
-    }
-    let (anchor,count):(u64,u64)=writer.query_row("SELECT anchor_record_id,(SELECT count(*) FROM graph_producer_members WHERE scope_id=?) FROM graph_producer_members WHERE scope_id=? AND valid_to IS NULL",params![scope,scope],|row|Ok((row.get(0)?,row.get(1)?)))?;
-    assert_eq!(anchor, records[&earlier_observed]);
-    assert_eq!(count, 2);
-    assert_eq!(
-        writer.query_row(
-            "SELECT subject_count FROM graph_producer_versions WHERE result_id='later'",
-            [],
-            |row| row.get::<_, u64>(0)
-        )?,
-        1
-    );
-    Ok(())
-}
-
-#[test]
 fn expiry_metadata_and_selected_values_keep_exact_state() -> TestResult {
     let fixture = CommitFixture::new()?;
     let mut request = fixture.request.clone();
@@ -479,11 +339,8 @@ fn complete_producer_replacement_keeps_history_and_unchanged_rows() -> TestResul
             scope,
             revision,
             records: &records,
-            basis: None,
-            sparse: false,
-            full: true,
         }
-        .apply(members(keys)?, Vec::new(), None)?;
+        .replace(members(keys)?)?;
     }
     assert_eq!(
         writer.query_row(
@@ -512,23 +369,9 @@ fn complete_producer_replacement_keeps_history_and_unchanged_rows() -> TestResul
         )?,
         1
     );
-    for (revision, result, base, additions, removals, count) in [
-        (
-            4,
-            "partial-added",
-            "complete-removed",
-            members(&keys[1..])?,
-            Vec::new(),
-            2,
-        ),
-        (
-            5,
-            "partial-removed",
-            "partial-added",
-            Vec::new(),
-            vec![(MemberKind::Subject, GraphRows::encode_value(&keys[1])?)],
-            1,
-        ),
+    for (revision, result, base, selected, count) in [
+        (4, "complete-restored", "complete-removed", keys, 2),
+        (5, "complete-reduced", "complete-restored", &keys[..1], 1),
     ] {
         GraphRows::version(&writer, result, scope, revision, Some(base))?;
         GraphStage {
@@ -536,11 +379,8 @@ fn complete_producer_replacement_keeps_history_and_unchanged_rows() -> TestResul
             scope,
             revision,
             records: &records,
-            basis: None,
-            sparse: false,
-            full: false,
         }
-        .apply(additions, removals, None)?;
+        .replace(members(selected)?)?;
         assert_eq!(
             writer.query_row(
                 "SELECT subject_count FROM graph_producer_versions WHERE result_id=?",
@@ -565,7 +405,7 @@ fn complete_producer_replacement_keeps_history_and_unchanged_rows() -> TestResul
             "complete-corrupt",
             scope,
             6,
-            Some("partial-removed"),
+            Some("complete-reduced"),
         )?;
         transaction.execute(
             "UPDATE graph_producer_members SET member_key=? WHERE scope_id=? AND valid_to IS NULL",
@@ -577,11 +417,8 @@ fn complete_producer_replacement_keeps_history_and_unchanged_rows() -> TestResul
                 scope,
                 revision: 6,
                 records: &records,
-                basis: None,
-                sparse: false,
-                full: true
             }
-            .apply(members(&keys[..1])?, Vec::new(), None),
+            .replace(members(&keys[..1])?),
             Err(crate::Error::GraphInvalid {
                 field: "graph member identity collision",
                 ..

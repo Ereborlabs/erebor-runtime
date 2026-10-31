@@ -1,7 +1,6 @@
 use std::mem::size_of;
 
 use super::*;
-use crate::graph::Progress;
 
 fn strings(values: &Vec<String>) -> usize {
     values
@@ -271,14 +270,5 @@ impl FindingChange {
             .saturating_add(self.reason_code.capacity())
             .saturating_add(optional(&self.required_action))
             .saturating_add(strings(&self.limits))
-    }
-}
-
-impl Progress {
-    pub fn allocated_bytes(&self) -> usize {
-        self.record
-            .allocated_bytes()
-            .saturating_add(self.digest.capacity())
-            .saturating_add(optional(&self.state))
     }
 }

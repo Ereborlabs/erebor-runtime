@@ -328,6 +328,7 @@ impl Packages {
                                 alias: None,
                                 sample: None,
                             })
+                            .and_then(PackageCall::expose_programs)
                             .context(SqlSnafu)
                     })?;
                     if supplied.insert(name, plan).is_some() {
@@ -539,6 +540,7 @@ impl Packages {
                     } else {
                         Arc::default()
                     },
+                    has_input_overrides: key == root && !supplied.is_empty(),
                     artifact: artifact_index,
                     bundle: Arc::clone(bundle),
                     sql: sql.clone(),
@@ -1137,6 +1139,7 @@ impl Packages {
         let scope = Scope { provider, tables };
         let plan =
             crate::parser::Parser::stack(|| SqlToRel::new(&scope).statement_to_plan(statement))
+                .and_then(PackageCall::expose_programs)
                 .context(SqlSnafu)?;
         SQLOptions::new()
             .with_allow_ddl(false)
@@ -1213,6 +1216,7 @@ impl RelationPlanner for Packages {
         let plan = self
             .admit(context, image, export, args.args)
             .map_err(|source| DataFusionError::External(Box::new(source)))?;
+        let plan = PackageCall::defer_programs(plan)?;
         Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
             plan, alias,
         ))))

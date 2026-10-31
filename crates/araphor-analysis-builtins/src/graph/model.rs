@@ -5,10 +5,12 @@ mod memory;
 mod proof;
 mod reason;
 mod resolved;
+mod units;
 
 pub use domain::*;
 pub use proof::*;
 pub use resolved::*;
+pub use units::*;
 
 use crate::discovery::{DiscoveryEffectKeyV1, DiscoveryRecordIdV1};
 
@@ -360,6 +362,7 @@ impl Anchor {
     }
 }
 
+#[cfg(test)]
 pub(super) type FindingAnchor = Anchor;
 
 impl Finding {

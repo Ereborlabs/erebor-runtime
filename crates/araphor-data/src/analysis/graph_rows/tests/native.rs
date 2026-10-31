@@ -149,11 +149,8 @@ impl NativeRows {
             scope,
             revision,
             records: &BTreeMap::new(),
-            basis: None,
-            sparse: false,
-            full: true,
         }
-        .apply(members, Vec::new(), None)
+        .replace(members)
     }
 
     pub fn branches(
@@ -183,11 +180,8 @@ impl NativeRows {
             scope,
             revision,
             records: &BTreeMap::new(),
-            basis: None,
-            sparse: false,
-            full: true,
         }
-        .apply(members, Vec::new(), None)
+        .replace(members)
     }
 
     pub fn read_branches(

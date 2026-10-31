@@ -17,6 +17,8 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion::optimizer::OptimizerRule;
 use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_optimizer::output_requirements::OutputRequirements;
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -64,7 +66,6 @@ pub struct CallResult {
     output: sdk::Output,
     origin: Origin,
     retained: Option<araphor_data::analysis::PackageResultRefV1>,
-    graph_prior: Option<Vec<sdk::Dataset>>,
     changes: Option<araphor_data::ManagedChanges>,
     _input: Arc<MemoryReservation>,
     _output: Arc<MemoryReservation>,
@@ -75,18 +76,6 @@ pub struct CallReuse {
 }
 
 impl CallReuse {
-    pub fn new(allows: impl Fn(&PackageCall) -> bool + Send + Sync + 'static) -> Self {
-        Self {
-            allows: Arc::new(allows),
-        }
-    }
-}
-
-pub struct CallSparse {
-    allows: Arc<dyn Fn(&PackageCall) -> bool + Send + Sync>,
-}
-
-impl CallSparse {
     pub fn new(allows: impl Fn(&PackageCall) -> bool + Send + Sync + 'static) -> Self {
         Self {
             allows: Arc::new(allows),
@@ -233,10 +222,6 @@ impl CallResult {
 
     pub fn retained(&self) -> Option<&araphor_data::analysis::PackageResultRefV1> {
         self.retained.as_ref()
-    }
-
-    pub fn graph_prior(&self) -> Option<&[sdk::Dataset]> {
-        self.graph_prior.as_deref()
     }
 
     pub fn changes(&self) -> Option<&araphor_data::ManagedChanges> {
@@ -668,7 +653,13 @@ impl PackageExec {
         ));
         Ok(Self {
             call: call.clone(),
-            children: children.to_vec(),
+            children: children
+                .iter()
+                .map(|child| {
+                    OutputRequirements::new_add_mode()
+                        .optimize(Arc::clone(child), state.config_options())
+                })
+                .collect::<Result<_>>()?,
             prepared: prepared.0,
             properties,
         })
@@ -804,20 +795,10 @@ impl PackageExec {
                             .error("managed package declaration"),
                     ));
                 }
-                let sparse = context
-                    .session_config()
-                    .get_extension::<CallSparse>()
-                    .is_some_and(|gate| (gate.allows)(&self.call));
                 managed
                     .prior(self.call.id)
                     .map(|prior| {
-                        prior.state_sparse(
-                            model,
-                            &inputs,
-                            parameters.as_ref(),
-                            managed.rebuild(),
-                            sparse,
-                        )
+                        prior.state(model, &inputs, parameters.as_ref(), managed.rebuild())
                     })
                     .transpose()
                     .map_err(external)?
@@ -906,35 +887,6 @@ impl PackageExec {
             result_id: prior.result.clone(),
             commit_revision: prior.revision,
         });
-        let graph_prior = retained
-            .filter(|_| evaluation.previous_outputs.is_empty())
-            .filter(|_| {
-                snapshot.managed().is_none_or(|managed| {
-                    !matches!(
-                        managed.instance().spec.destination,
-                        araphor_data::ManagedDestination::Graph { .. }
-                    )
-                })
-            })
-            .map(|prior| prior.graph_prior().map_err(external))
-            .transpose()?
-            .flatten();
-        if let Some(datasets) = &graph_prior {
-            for batch in datasets.iter().flat_map(|data| &data.batches) {
-                owner.memory.retain_input(batch, &input)?;
-            }
-            let allocated = datasets
-                .iter()
-                .map(sdk::Dataset::allocated_bytes)
-                .sum::<usize>();
-            let buffers = datasets
-                .iter()
-                .flat_map(|data| &data.batches)
-                .flat_map(sdk::RecordBatch::columns)
-                .map(|array| array.get_buffer_memory_size())
-                .sum::<usize>();
-            input.try_grow(allocated.saturating_sub(buffers))?;
-        }
         // Keep admission until retained output replaces the exchange reservation.
         let (_admission, output, output_memory) = if let Some(prior) = retained {
             let checked = self
@@ -993,7 +945,6 @@ impl PackageExec {
             output,
             origin: Origin::new(&self.call),
             retained: reference,
-            graph_prior,
             changes,
             _input: input,
             _output: output_memory,

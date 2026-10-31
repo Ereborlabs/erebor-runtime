@@ -1,7 +1,5 @@
 use super::*;
-use crate::analysis::graph_rows::{
-    tests::fixture::CommitFixture, CanonicalGraph, GraphCallState, GraphRows,
-};
+use crate::analysis::graph_rows::{tests::fixture::CommitFixture, CanonicalGraph, GraphRows};
 
 fn fixture() -> TestResult<(CommitFixture, Fixture)> {
     fixture_with_unused_call(false)
@@ -128,6 +126,63 @@ fn graph_reopen_uses_selected_call_subset() -> TestResult {
 }
 
 #[test]
+fn graph_reopen_rejects_package_state_mismatch() -> TestResult {
+    let (graph, fixture) = fixture()?;
+    let captured = read(&graph, &mode(&fixture, true))?;
+    let attempt = graph
+        .store
+        .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
+    let receipt = publish(&graph, &fixture, &captured, &attempt, None)?;
+    let result = receipt.graph.as_ref().ok_or("Graph result absent")?;
+    {
+        let mut writer = graph.store.writer()?;
+        let writer = writer.get_mut()?;
+        let header =
+            GraphRows::read_header(writer, fixture.instance.spec.tenant, &result.result_id)?
+                .ok_or("Graph header absent")?;
+        let mut snapshot = GraphRows::read(writer, &result.result_id, &header)?;
+        let package = snapshot
+            .packages
+            .iter_mut()
+            .find(|package| {
+                package.package_id == araphor_analysis_builtins::graph::Detector::Process.id()
+            })
+            .ok_or("Graph package absent")?;
+        package.state =
+            if package.state == araphor_analysis_builtins::graph::GraphPackageStateV1::Waiting {
+                araphor_analysis_builtins::graph::GraphPackageStateV1::NativeEffect
+            } else {
+                araphor_analysis_builtins::graph::GraphPackageStateV1::Waiting
+            };
+        let body = GraphRows::encode(&snapshot)?;
+        writer.execute(
+            "UPDATE analysis_results SET body=? WHERE result_id=?",
+            params![body, result.result_id],
+        )?;
+    }
+    let error = graph
+        .store
+        .verify_state()
+        .err()
+        .ok_or("mismatched Graph package state accepted")?;
+    assert!(
+        format!("{error:?}").contains("published Graph package state differs"),
+        "{error:?}"
+    );
+    let root = graph._directory.path().join("analysis");
+    let CommitFixture {
+        store,
+        _graph,
+        _directory,
+        ..
+    } = graph;
+    drop(_graph);
+    drop(store);
+    assert!(AnalysisStore::open(&root).is_err());
+    Ok(())
+}
+
+#[test]
 fn graph_publication_requires_a_graph_producer() -> TestResult {
     let (graph, fixture) = fixture_with_calls(false, false)?;
     let captured = read(&graph, &mode(&fixture, true))?;
@@ -243,21 +298,31 @@ fn empty_dataset(port: &sdk::Port) -> sdk::Dataset {
 }
 
 fn graph_evaluation(request: &ManagedRequest) -> TestResult<sdk::Evaluation> {
-    let inputs = araphor_analysis_builtins::graph::Detector::inputs()
+    let descriptor = araphor_analysis_builtins::graph::Detector::Process.descriptor();
+    let model = &descriptor.exports[0];
+    let changes = model.change_inputs.as_ref().ok_or("Graph changes absent")?;
+    let inputs = model
+        .inputs
         .iter()
-        .map(|port| sdk::Input {
-            data: empty_dataset(port),
-            revision: sdk::Revision {
-                owner: "fixture".into(),
-                id: format!("graph-{}", port.name),
-                window: None,
-            },
-            coverage: sdk::Coverage {
-                state: sdk::CoverageState::Complete,
-                limits: Vec::new(),
-            },
+        .map(|input| {
+            Ok(sdk::Input {
+                data: if input.port.name == changes.reset {
+                    changes.reset_input(true)?
+                } else {
+                    empty_dataset(&input.port)
+                },
+                revision: sdk::Revision {
+                    owner: "fixture".into(),
+                    id: "graph-cut".into(),
+                    window: None,
+                },
+                coverage: sdk::Coverage {
+                    state: sdk::CoverageState::Complete,
+                    limits: Vec::new(),
+                },
+            })
         })
-        .collect();
+        .collect::<TestResult<Vec<_>>>()?;
     Ok(sdk::Evaluation {
         export: "detect".into(),
         inputs,
@@ -272,26 +337,8 @@ fn graph_evaluation(request: &ManagedRequest) -> TestResult<sdk::Evaluation> {
     })
 }
 
-fn graph_output() -> TestResult<sdk::Output> {
-    let model = &araphor_analysis_builtins::graph::Detector::Process
-        .descriptor()
-        .exports[0];
-    let state = GraphCallState {
-        subjects: BTreeMap::new(),
-        edges: BTreeMap::new(),
-        findings: BTreeMap::new(),
-        progress: BTreeMap::new(),
-    };
-    let checkpoint = model.checkpoint.as_ref().ok_or("Graph checkpoint absent")?;
-    Ok(sdk::Output {
-        datasets: state.outputs()?,
-        evidence: Vec::new(),
-        reasons: Vec::new(),
-        checkpoint: Some(sdk::Checkpoint {
-            version: checkpoint.version,
-            datasets: checkpoint.datasets.iter().map(empty_dataset).collect(),
-        }),
-    })
+fn graph_output(evaluation: &sdk::Evaluation) -> TestResult<sdk::Output> {
+    Ok(araphor_analysis_builtins::graph::Detector::Process.evaluate(evaluation)?)
 }
 
 fn publish(
@@ -309,9 +356,21 @@ fn publish(
     let mut calls = vec![10, 11];
     if fixture.instance.spec.manifest.calls.contains_key(&13) {
         evaluations.push(graph_evaluation(attempt.request())?);
-        outputs.push(graph_output()?);
+        outputs.push(graph_output(
+            evaluations.last().ok_or("Graph evaluation absent")?,
+        )?);
         calls.push(13);
     }
+    let changes = evaluations
+        .last()
+        .filter(|_| calls.last() == Some(&13))
+        .map(|evaluation| -> TestResult<ManagedChanges> {
+            Ok(ManagedChanges {
+                base: None,
+                targets: vec![evaluation.input("units")?.clone()],
+            })
+        })
+        .transpose()?;
     let returns = evaluations
         .iter()
         .zip(&outputs)
@@ -321,7 +380,7 @@ fn publish(
             evaluation,
             output,
             retained: None,
-            changes: None,
+            changes: if call == 13 { changes.as_ref() } else { None },
         })
         .collect::<Vec<_>>();
     let selected = sdk::Dataset {

@@ -601,6 +601,15 @@ impl AnalysisStore {
             )?),
             GraphWrite::Direct(_) | GraphWrite::Expiry(_) => None,
         };
+        let resolved = staged
+            .as_ref()
+            .map(|changes| {
+                let mut metadata = metadata.clone();
+                changes.resolve_metadata(&mut metadata)?;
+                Ok::<_, crate::Error>(metadata)
+            })
+            .transpose()?;
+        let metadata = resolved.as_ref().unwrap_or(metadata);
         if let (Some(changes), Some(prior_id)) =
             (staged.as_ref(), metadata.previous_result_id.as_deref())
         {

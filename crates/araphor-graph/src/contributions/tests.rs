@@ -11,6 +11,7 @@ impl Fixture {
         writer.execute_batch(include_str!(
             "../../../araphor-data/src/analysis/graph_rows/schema.sql"
         ))?;
+        writer.execute_batch(super::StateRows::SCHEMA)?;
         writer.execute_batch(
             "INSERT INTO graph_sources VALUES (10, 'first'::BLOB, 'tenant'::BLOB, 'identity'::BLOB),
                 (20, 'second'::BLOB, 'tenant'::BLOB, 'identity'::BLOB);
@@ -74,7 +75,7 @@ impl Fixture {
 
     fn counts(writer: &Connection, revision: u64) -> Result<[u64; 4], duckdb::Error> {
         writer.query_row(
-            "SELECT subject_count, edge_count, finding_count, progress_count
+            "SELECT subject_count, edge_count, finding_count, state_count
                 FROM graph_producer_versions WHERE scope_id = 1 AND commit_revision = ?",
             params![revision],
             |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?]),
@@ -198,7 +199,7 @@ fn unchanged_members_keep_exact_intervals() -> TestResult {
     Fixture::schema(&writer)?;
     let mut replacement = Fixture::unit(
         101,
-        (2..=5)
+        (2..=4)
             .map(|kind| Fixture::member(kind, kind, 10 + u64::from(kind), 101))
             .collect(),
     );
@@ -208,14 +209,14 @@ fn unchanged_members_keep_exact_intervals() -> TestResult {
         writer.query_row("SELECT count(*) FROM graph_producer_members", [], |row| {
             row.get(0)
         })?;
-    assert_eq!(total, 4);
-    assert_eq!(Fixture::counts(&writer, 2)?, [1; 4]);
+    assert_eq!(total, 3);
+    assert_eq!(Fixture::counts(&writer, 2)?, [1, 1, 1, 0]);
     let original = replacement.members[0].clone();
     replacement.members[0].fact = Some(vec![0, 1]);
     replacement.members[0].reason = Some("changed".into());
     replacement.members[0].ordinal = 20;
     Fixture::publish(&writer, 3, std::slice::from_ref(&replacement), false)?;
-    assert_eq!(Fixture::counts(&writer, 3)?, [1; 4]);
+    assert_eq!(Fixture::counts(&writer, 3)?, [1, 1, 1, 0]);
     assert_eq!(Fixture::anchor(&writer, 2)?, original);
     assert_eq!(Fixture::anchor(&writer, 3)?, replacement.members[0]);
     let intervals: (u64, u64) = writer.query_row(
@@ -224,7 +225,7 @@ fn unchanged_members_keep_exact_intervals() -> TestResult {
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    assert_eq!(intervals, (5, 3));
+    assert_eq!(intervals, (4, 2));
     Ok(())
 }
 
@@ -400,7 +401,7 @@ fn publication_members_require_empty_unit() -> TestResult {
     )?;
     assert!(!invalid);
     let counts: [u64; 4] = writer.query_row(
-        "SELECT subject_count,edge_count,finding_count,progress_count
+        "SELECT subject_count,edge_count,finding_count,state_count
             FROM graph_producer_versions WHERE scope_id = 2",
         [],
         |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?]),

@@ -67,7 +67,7 @@ fn graph_appender_constraint_rollback() -> TestResult {
         "graph_subject_values",
         "graph_edge_values",
         "graph_edge_properties",
-        "graph_progress_values",
+        "graph_unit_state_values",
         "graph_position_values",
         "graph_branch_values",
         "graph_fact_values",
@@ -179,7 +179,7 @@ fn graph_branch_value_failure_rolls_back_public_commit() -> TestResult {
         "graph_branch_values",
         "graph_fact_values",
         "graph_position_values",
-        "graph_progress_values",
+        "graph_unit_state_values",
         "evidence_refs",
     ] {
         let count: u64 =
@@ -294,7 +294,7 @@ fn graph_typed_commit_matches_bytes() -> TestResult {
         "graph_subject_values",
         "graph_edge_values",
         "graph_edge_properties",
-        "graph_progress_values",
+        "graph_unit_state_values",
         "graph_position_values",
         "graph_branch_values",
         "graph_fact_values",

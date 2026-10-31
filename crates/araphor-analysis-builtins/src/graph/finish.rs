@@ -70,6 +70,7 @@ impl GraphPackageCheckpointV1 {
 }
 
 impl Computation {
+    #[cfg(test)]
     pub(super) fn output(mut self) -> sdk::Result<sdk::Output> {
         let record_ids = self
             .records

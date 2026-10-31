@@ -755,6 +755,45 @@ Builtin event-unit publication must bypass this adapter before completion.
 No timing reduction is claimed for this ownership change alone. Native
 value ownership, builtin change inputs, and final measurements remain open.
 
+#### Unit integration result
+
+**Builtin unit inputs and native value ownership: Done. Combined timing
+proof for proposals 1 and 5: Not done.**
+
+Builtin packages now declare native SQL for their target units and lookup
+inputs. Query computes the input differences with native DataFusion plans.
+The package receives changed units and their current records and facts.
+SQL, Wasm, native, and the custom Burst package use the same contract.
+Data changes only the affected unit membership through `araphor-graph`.
+Subject, relationship, finding, and state values have shared native owners.
+Data keeps the transaction, authority checks, progress, and replay records.
+
+The old Graph-call reconstruction, progress rows, sparse resume, and builtin
+classification by artifact bytes are removed from production. Data still
+checks the current installed package bytes. An empty change keeps the
+state of active units. Cold recovery checks historical anchors against the
+exact saved call and owning unit. It reuses the evaluation that recovery
+already decodes. It does not reconstruct a complete prior Graph.
+
+Standalone package query programs keep their native query roots through
+SQL planning. Native DataFusion output requirements preserve their final
+ordering. Araphor delivers the resulting batches without changing their
+values, row order, or batch order. Simple event subscriptions preserve
+committed arrival order across pages, resumed cursors, and combined wakes.
+
+Verification includes 73 builtin and Burst checks, 62 Data Graph-row checks,
+29 Graph-owner checks, 16 Query checks, exact-order and replay checks for
+quoted exports, and 11 input-binding checks. The added historical-anchor
+regression applies 27 mutations to existing closed rows. The original
+managed corruption matrix, source backlog, state recovery, unchanged
+notices, and final-authority denial checks pass. Scoped formatting and
+six-crate clippy checks pass with warnings denied. These are correctness
+results; their test runtimes are not event-processing measurements.
+
+Complete target queries and source captures remain. The existing incident
+workload must still measure input/package work and Graph application work
+against the recorded baseline. No combined speed factor is claimed here.
+
 ### 6. Select the durable storage engine
 
 Changing the engine alone leaves thousands of requests in place. First

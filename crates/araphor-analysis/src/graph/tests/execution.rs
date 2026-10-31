@@ -67,15 +67,8 @@ async fn parity(target: Target) -> TestResult {
             let (call, actual) = fixture.run(&evaluation).await?;
             let result = actual.calls.get(&call.id()).ok_or("complete call")?;
             fixture.compare(&evaluation, &trusted, result)?;
-            let mut expected = Graph::new(&input)?;
-            expected.apply_output(&package, &evaluation, &trusted, false, None)?;
-            let expected = expected.finish()?;
+            let expected = fixture.graph(&input, &evaluation, &trusted, &call, result)?;
             assert_eq!(expected.input_positions, input.input_positions);
-            let actual_graph = Graph::new(&input)?.apply(&call, result)?.finish()?;
-            assert_eq!(
-                serde_json::to_value(actual_graph)?,
-                serde_json::to_value(&expected)?
-            );
             if let Some(comparisons) = &comparisons {
                 let native = captured_graph(
                     &input,
@@ -94,7 +87,7 @@ async fn parity(target: Target) -> TestResult {
                 assert_eq!(serde_json::to_value(native)?, serde_json::to_value(wasm)?);
             }
             evaluation.checkpoint = result.output().checkpoint.clone();
-            evaluation.previous_outputs = normalized_prior(result.output(), &package.id)?;
+            assert!(result.output().checkpoint.is_none());
             evaluation.inputs.reverse();
             drop(actual);
             drop(call);
@@ -108,17 +101,9 @@ async fn parity(target: Target) -> TestResult {
                 &detector.evaluate(&evaluation)?,
                 replay.calls.get(&call.id()).ok_or("replayed call")?,
             )?;
-            let mut replay_graph = Graph::new(&input)?;
-            replay_graph.apply_output(
-                &package,
-                &evaluation,
-                replay
-                    .calls
-                    .get(&call.id())
-                    .ok_or("original replay")?
-                    .output(),
-                false,
-                None,
+            let replay_graph = Graph::new(&input)?.apply(
+                &call,
+                replay.calls.get(&call.id()).ok_or("original replay")?,
             )?;
             assert_eq!(
                 serde_json::to_value(replay_graph.finish()?)?,
@@ -173,19 +158,18 @@ async fn captured_graph<'a>(
 async fn large(target: Target) -> TestResult {
     let input = large_input()?;
     let detector = algorithm::Detector::Process;
-    let package = detector.descriptor();
     let evaluation = evaluation(&input, detector)?;
     assert_eq!(evaluation.input("records")?.data.rows(), 185);
     let expected = detector.evaluate(&evaluation)?;
     assert_eq!(expected.reasons.len(), 185);
     assert!(!expected.evidence.is_empty());
-    assert!(expected.checkpoint.is_some());
+    assert!(expected.checkpoint.is_none());
     let fixture = Fixture::new(detector, target, &evaluation, &expected, None)?;
     let (call, actual) = fixture.run(&evaluation).await?;
     let result = actual.calls.get(&call.id()).ok_or("large call")?;
     assert_eq!(result.output().reasons.len(), 185);
     fixture.compare(&evaluation, &expected, result)?;
-    Graph::new(&input)?.apply(&call, result)?.finish()?;
+    fixture.graph(&input, &evaluation, &expected, &call, result)?;
     drop(actual);
     drop(call);
     fixture.released()?;
@@ -195,13 +179,16 @@ async fn large(target: Target) -> TestResult {
         &expected,
         actual.calls.get(&call.id()).ok_or("after limit")?,
     )?;
+    fixture.graph(
+        &input,
+        &evaluation,
+        &expected,
+        &call,
+        actual.calls.get(&call.id()).ok_or("after limit")?,
+    )?;
     drop(actual);
     drop(call);
     fixture.released()?;
-    let mut prior = evaluation.clone();
-    prior.previous_outputs = normalized_prior(&expected, &package.id)?;
-    prior.checkpoint = expected.checkpoint;
-    package.check_evaluation(&prior)?;
     Ok(())
 }
 
@@ -232,9 +219,9 @@ async fn pressure(target: Target) -> TestResult {
     let (call, actual) = fixture.run(&evaluation).await?;
     let result = actual.calls.get(&call.id()).ok_or("retained call")?;
     fixture.compare(&evaluation, &expected, result)?;
+    fixture.graph(&input, &evaluation, &expected, &call, result)?;
     evaluation.checkpoint = result.output().checkpoint.clone();
-    evaluation.previous_outputs = normalized_prior(result.output(), &package.id)?;
-    assert!(evaluation.checkpoint.is_some());
+    assert!(evaluation.checkpoint.is_none());
     assert!(fixture.engine.memory().reserve_output(OUTPUT).is_err());
     let detached = package
         .check_evaluation(&evaluation)?
@@ -242,7 +229,8 @@ async fn pressure(target: Target) -> TestResult {
         .decode(&package)?;
     drop(actual);
     drop(call);
-    assert!(fixture.engine.memory().reserve_output(OUTPUT).is_err());
+    let available = fixture.engine.memory().reserve_output(OUTPUT)?;
+    drop(available);
     drop(evaluation);
     let held = fixture.engine.memory().reserve_output(OUTPUT)?;
     let error = fixture
@@ -274,6 +262,13 @@ async fn pressure(target: Target) -> TestResult {
         &detector.evaluate(&detached)?,
         replay.calls.get(&call.id()).ok_or("pressure replay")?,
     )?;
+    fixture.graph(
+        &input,
+        &detached,
+        &expected,
+        &call,
+        replay.calls.get(&call.id()).ok_or("pressure replay")?,
+    )?;
     drop(replay);
     drop(call);
     drop(detached);
@@ -288,26 +283,6 @@ fn detectors() -> [algorithm::Detector; 3] {
         algorithm::Detector::Credentials,
         algorithm::Detector::Kubernetes,
     ]
-}
-
-pub(super) fn normalized_prior(
-    output: &sdk::Output,
-    package_id: &str,
-) -> TestResult<Vec<sdk::Dataset>> {
-    let mut datasets = output.datasets.clone();
-    let data = datasets
-        .iter_mut()
-        .find(|data| data.name == "findings")
-        .ok_or("Graph findings output")?;
-    let mut findings = algorithm::FindingChange::decode(data)?;
-    for finding in &mut findings {
-        finding.prior_reason = Some(algorithm::FindingReasonV1::from_analysis_code(
-            package_id,
-            &finding.reason_code,
-        )?);
-    }
-    *data = algorithm::FindingChange::encode(&findings)?;
-    Ok(datasets)
 }
 
 fn evaluation(

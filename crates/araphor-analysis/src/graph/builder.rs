@@ -74,7 +74,7 @@ impl<'a> Graph<'a> {
     }
 
     pub fn supports(model: &sdk::Model) -> bool {
-        algorithm::Detector::supports(model)
+        algorithm::Detector::supports_units(model)
     }
 
     pub fn apply(mut self, call: &PackageCall, result: &CallResult) -> Result<Self> {
@@ -91,13 +91,8 @@ impl<'a> Graph<'a> {
                 .build()
             })?;
         self.check_inputs(model, result.evaluation())?;
-        self.apply_output(
-            call.descriptor(),
-            result.evaluation(),
-            result.output(),
-            result.retained().is_some(),
-            result.graph_prior(),
-        )?;
+        self.check_targets(model, result)?;
+        self.apply_output(call.descriptor(), result.evaluation(), result.output())?;
         Ok(self)
     }
 
@@ -105,6 +100,7 @@ impl<'a> Graph<'a> {
         let package = call.descriptor();
         Self::require(
             result.belongs_to(call)
+                && result.retained().is_none()
                 && call.tenant() == self.input.source.tenant_id
                 && package.id == call.package().package_id
                 && package.revision == call.package().revision

@@ -628,9 +628,11 @@ async fn managed_captures_control_proofs() -> TestValue<()> {
     let selection = AnalysisSelectionV1::tenant(tenant);
     let read = AnalysisReadControl::default();
     let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
-    let sql = araphor_data::FindingV1::PACKAGES.iter().map(|id| format!(
-        "SELECT * FROM \"{id}\".\"1\".detect('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"
-    )).collect::<Vec<_>>().join(" UNION ALL ");
+    let sql = araphor_data::FindingV1::PACKAGES
+        .iter()
+        .map(|id| format!("SELECT * FROM \"{id}\".\"1\".detect('subjects')"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
     let definition = Definition {
         name: "control-graph-capture".into(),
         description: String::new(),

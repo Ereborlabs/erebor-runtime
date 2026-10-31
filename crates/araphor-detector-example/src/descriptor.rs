@@ -11,28 +11,8 @@ impl BurstDetector {
     }
 
     fn build_package() -> sdk::Package {
-        let inputs = Detector::inputs().to_vec();
-        let mut subjects = SubjectChange::port();
-        subjects.kind = sdk::OutputKind::Subjects;
-        let mut relationships = RelationshipChange::port();
-        relationships.kind = sdk::OutputKind::Relationships;
-        let mut findings = FindingChange::port();
-        findings.kind = sdk::OutputKind::Findings;
-        findings.evidence_required = true;
-        let mut model = sdk::Model::new(
-            "detect",
-            inputs,
-            vec![
-                subjects,
-                SubjectRemoval::port(),
-                relationships,
-                RelationshipRemoval::port(),
-                findings,
-                FindingRemoval::port(),
-                Progress::port(),
-                ProgressRemoval::port(),
-            ],
-        );
+        let mut model = Detector::Process.descriptor().exports.remove(0);
+        model.inputs[0].source = sdk::InputSource::Query(include_str!("units.sql").into());
         model.parameters = sdk::Schema::new(vec![sdk::Field::new(
             "threshold",
             sdk::DataType::UInt64,
@@ -45,11 +25,6 @@ impl BurstDetector {
                 sdk::Field::new("count", sdk::DataType::UInt64, false),
             ]),
         }];
-        model.checkpoint = Some(sdk::CheckpointSpec {
-            resume_input_changes: false,
-            version: 1,
-            datasets: vec![GraphPackageStateV1::port()],
-        });
         sdk::Package::new("example-burst", "1", vec![model])
     }
 }

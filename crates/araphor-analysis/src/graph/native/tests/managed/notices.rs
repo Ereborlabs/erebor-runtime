@@ -134,7 +134,7 @@ fn captured_revision(receipt: &araphor_data::ManagedReceipt) -> TestResult<u64> 
 }
 
 #[tokio::test]
-async fn unchanged_notice_reuses_calls() -> TestResult {
+async fn unchanged_notice_keeps_graph() -> TestResult {
     use crate::graph::tests::fixture::{record, wire};
     const CAPACITY: usize = 64 * 1024 * 1024;
     let records = (1..=3)
@@ -202,12 +202,17 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
         fixture.source.tenant_id,
         std::slice::from_ref(&head.result_id),
     )?;
+    let ((signal, reused), entries) = Fixture::observe_guests(Arc::clone(&fixture.query), async {
+        let signal = fixture.signal_notice(1)?;
+        let reused = next_receipt(&mut stream)
+            .await
+            .map_err(|error| format!("Unchanged Graph receipt: {error}"))?;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((signal, reused))
+    })
+    .await?;
+    assert_eq!(entries, 3);
     let (entry, entered) = std::sync::mpsc::channel();
     fixture.query.guest_entry(entry, None)?;
-    let signal = fixture.signal_notice(1)?;
-    let reused = next_receipt(&mut stream)
-        .await
-        .map_err(|error| format!("Unchanged Graph receipt: {error}"))?;
     assert!(reused.commit_revision > signal);
     assert!(
         !reused
@@ -216,7 +221,39 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
             .ok_or("Unchanged Graph frontier")?
             .pending
     );
-    assert_eq!(reused.results, first.results);
+    assert_eq!(reused.results.len(), first.results.len());
+    for (call, reference) in &reused.results {
+        assert_ne!(Some(reference), first.results.get(call));
+        let evaluation = fixture.query.store().managed_evaluation(
+            job.admitted(),
+            &reference.result_id,
+            &fixture.control,
+        )?;
+        let owner = job.graph_owner().ok_or("Graph owner")?;
+        let model = &owner.calls[call].descriptor().exports[0];
+        assert!(!model
+            .change_inputs
+            .as_ref()
+            .ok_or("changes")?
+            .is_reset(&evaluation)?);
+        for port in ["units", "unit_removals", "records", "facts"] {
+            assert_eq!(evaluation.input(port)?.data.rows(), 0, "{port}");
+        }
+        assert!(evaluation.checkpoint.is_none());
+        assert!(evaluation.previous_outputs.is_empty());
+        let result = fixture.query.store().managed_result(
+            job.admitted(),
+            &reference.result_id,
+            u64::try_from(evaluation.context.time_utc_ns)?,
+            &fixture.control,
+        )?;
+        let replayed =
+            Detector::from_id(&owner.calls[call].descriptor().id)?.evaluate(&evaluation)?;
+        assert_eq!(
+            sdk::wire::Output::encode_model(&result.output, model)?,
+            sdk::wire::Output::encode_model(&replayed, model)?
+        );
+    }
     assert_eq!(reused.graph.as_ref(), Some(&initial_graph));
     assert_eq!(
         entered.try_recv(),
@@ -483,14 +520,17 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
         u64::MAX,
         job.admitted().lifecycle,
     )?;
-    let (entry, entered) = std::sync::mpsc::channel();
-    fixture.query.guest_entry(entry, None)?;
     fixture.query.store().set_commit_hook(
         araphor_data::AnalysisCommitStage::BeforeResultCommit,
-        || Err(Code::Denied.error("Graph reused commit authority")),
+        || Err(Code::Denied.error("Graph commit authority")),
     )?;
-    fixture.signal_notice(2)?;
-    assert!(next_receipt(&mut denied).await.is_err());
+    let (outcome, entries) = Fixture::observe_guests(Arc::clone(&fixture.query), async {
+        fixture.signal_notice(2)?;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(next_receipt(&mut denied).await)
+    })
+    .await?;
+    assert!(outcome.is_err());
+    assert_eq!(entries, 3);
     let terminal = denied
         .cancel_and_join(&fixture.control)
         .await?
@@ -500,10 +540,6 @@ async fn unchanged_notice_reuses_calls() -> TestResult {
         araphor_data::ManagedExit::Failed(Code::Denied)
     );
     assert!(terminal.suspended);
-    assert_eq!(
-        entered.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Empty)
-    );
     let status = fixture.query.store().managed_status(
         &grant.selection,
         "unchanged-notice",

@@ -419,7 +419,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -446,7 +449,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -473,7 +479,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "KUBERNETES_PROOF_MISSING",
+        "state": {
+          "declared": null,
+          "tag": "KUBERNETES_PROOF_MISSING"
+        },
         "window_ns": 300000000000
       }
     ],
@@ -911,7 +920,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -938,7 +950,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -965,7 +980,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "KUBERNETES_REQUEST",
+        "state": {
+          "declared": null,
+          "tag": "KUBERNETES_REQUEST"
+        },
         "window_ns": 300000000000
       }
     ],
@@ -1401,7 +1419,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -1428,7 +1449,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -1455,7 +1479,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "KUBERNETES_AUDIT",
+        "state": {
+          "declared": null,
+          "tag": "KUBERNETES_AUDIT"
+        },
         "window_ns": 300000000000
       }
     ],
@@ -1921,7 +1948,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -1948,7 +1978,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -1975,7 +2008,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "KUBERNETES_OBJECT",
+        "state": {
+          "declared": null,
+          "tag": "KUBERNETES_OBJECT"
+        },
         "window_ns": 300000000000
       }
     ],
@@ -2437,7 +2473,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -2464,7 +2503,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -2491,7 +2533,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "KUBERNETES_SCHEDULED",
+        "state": {
+          "declared": null,
+          "tag": "KUBERNETES_SCHEDULED"
+        },
         "window_ns": 300000000000
       }
     ],
@@ -2951,7 +2996,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -2978,7 +3026,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "WAITING",
+        "state": {
+          "declared": null,
+          "tag": "WAITING"
+        },
         "window_ns": 300000000000
       },
       {
@@ -3005,7 +3056,10 @@
           "COVERAGE_INSUFFICIENT"
         ],
         "retention_ttl_ns": 604800000000000,
-        "state": "REMOTE_ADMISSION",
+        "state": {
+          "declared": null,
+          "tag": "REMOTE_ADMISSION"
+        },
         "window_ns": 300000000000
       }
     ],

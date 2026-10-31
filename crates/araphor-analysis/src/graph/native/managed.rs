@@ -32,13 +32,12 @@ impl GraphPublication {
     }
 
     pub(crate) fn replay_tables(session: &mut Session) -> Result<()> {
-        for port in super::Detector::inputs() {
-            session.register_table(
-                &port.name,
-                Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(
-                    port.schema.clone(),
-                ))),
-            )?;
+        for (alias, port) in super::Projection::source_ports() {
+            let table: Arc<dyn datafusion::catalog::TableProvider> = Arc::new(
+                datafusion::datasource::empty::EmptyTable::new(Arc::new(port.schema.clone())),
+            );
+            session.register_table(&port.name, Arc::clone(&table))?;
+            session.register_table(alias, table)?;
         }
         Ok(())
     }

@@ -602,10 +602,73 @@ fn resolved_rows_roundtrip() -> sdk::Result<()> {
 }
 
 #[test]
+fn package_state_messagepack_keeps_declared_labels() -> Result<(), Box<dyn std::error::Error>> {
+    let states = [
+        GraphPackageStateV1::Waiting,
+        GraphPackageStateV1::Declared("WAITING".into()),
+        GraphPackageStateV1::Declared("DIRECT_PIVOT".into()),
+    ];
+    assert_ne!(
+        rmp_serde::to_vec(&states[0])?,
+        rmp_serde::to_vec(&states[1])?
+    );
+    for state in states {
+        for bytes in [rmp_serde::to_vec(&state)?, rmp_serde::to_vec_named(&state)?] {
+            assert_eq!(rmp_serde::from_slice::<GraphPackageStateV1>(&bytes)?, state);
+        }
+        let mut checkpoint = package();
+        checkpoint.state = state.clone();
+        for bytes in [
+            rmp_serde::to_vec(&checkpoint)?,
+            rmp_serde::to_vec_named(&checkpoint)?,
+        ] {
+            let restored: GraphPackageCheckpointV1 = rmp_serde::from_slice(&bytes)?;
+            assert_eq!(restored, checkpoint);
+            assert_eq!(
+                GraphPackageStateV1::decode(&GraphPackageStateV1::encode(&[restored.state])?)?,
+                std::slice::from_ref(&state)
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn package_state_messagepack_rejects_invalid_payloads() -> Result<(), Box<dyn std::error::Error>> {
+    use std::collections::BTreeMap;
+    for values in [
+        vec![("tag", "DECLARED")],
+        vec![("declared", "WAITING")],
+        vec![("tag", "WAITING"), ("declared", "custom")],
+        vec![("tag", "DIRECT_PIVOT"), ("declared", "custom")],
+        vec![("tag", "UNKNOWN")],
+    ] {
+        let values = values.into_iter().collect::<BTreeMap<_, _>>();
+        let bytes = rmp_serde::to_vec_named(&values)?;
+        assert!(rmp_serde::from_slice::<GraphPackageStateV1>(&bytes).is_err());
+        let serde_value::Value::Map(mut checkpoint) = serde_value::to_value(package())? else {
+            return Err("package state fixture".into());
+        };
+        checkpoint.insert(
+            serde_value::Value::String("state".into()),
+            serde_value::to_value(values)?,
+        );
+        let bytes = rmp_serde::to_vec_named(&checkpoint)?;
+        assert!(rmp_serde::from_slice::<GraphPackageCheckpointV1>(&bytes).is_err());
+    }
+    let empty = GraphPackageStateV1::Declared(String::new());
+    let bytes = rmp_serde::to_vec_named(&empty)?;
+    assert!(rmp_serde::from_slice::<GraphPackageStateV1>(&bytes).is_err());
+    assert!(GraphPackageStateV1::encode(&[empty]).is_err());
+    Ok(())
+}
+
+#[test]
 fn native_state_rejects_invalid_rows() -> Result<(), Box<dyn std::error::Error>> {
     for (tag, declared) in [
         ("UNKNOWN", None),
         ("DECLARED", None),
+        ("DECLARED", Some("")),
         ("WAITING", Some("custom")),
         ("NATIVE_EFFECT", Some("custom")),
     ] {
@@ -622,6 +685,7 @@ fn native_state_rejects_invalid_rows() -> Result<(), Box<dyn std::error::Error>>
         })
         .is_err());
     }
+    assert!(GraphPackageStateV1::encode(&[GraphPackageStateV1::Declared(String::new())]).is_err());
     Ok(())
 }
 

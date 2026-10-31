@@ -13,6 +13,8 @@ use datafusion::common::{DFSchemaRef, DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
 
+mod program;
+
 #[derive(Clone)]
 pub struct PackageCall {
     pub(crate) id: u64,
@@ -23,6 +25,7 @@ pub struct PackageCall {
     pub(crate) export: String,
     pub(crate) output: String,
     pub(crate) arguments: Arc<[String]>,
+    pub(crate) has_input_overrides: bool,
     pub(crate) artifact: usize,
     pub(crate) bundle: Arc<PackageBundle>,
     pub(crate) sql: Option<SqlCall>,
@@ -186,6 +189,14 @@ impl PackageCall {
     }
 
     pub fn any(plan: &LogicalPlan, test: &mut impl FnMut(&Self) -> Result<bool>) -> Result<bool> {
+        Self::any_in_views(plan, test, &mut BTreeSet::new())
+    }
+
+    fn any_in_views(
+        plan: &LogicalPlan,
+        test: &mut impl FnMut(&Self) -> Result<bool>,
+        views: &mut BTreeSet<usize>,
+    ) -> Result<bool> {
         let mut found = false;
         plan.apply_with_subqueries(|plan| {
             found |= match plan {
@@ -196,12 +207,19 @@ impl PackageCall {
                     .map(&mut *test)
                     .transpose()?
                     .unwrap_or(false),
-                LogicalPlan::TableScan(scan) => scan
-                    .source
-                    .get_logical_plan()
-                    .map(|plan| Self::any(plan.as_ref(), test))
-                    .transpose()?
-                    .unwrap_or(false),
+                LogicalPlan::TableScan(scan) => {
+                    if let Some(plan) = scan.source.get_logical_plan() {
+                        let identity = Arc::as_ptr(&scan.source) as *const () as usize;
+                        if !views.insert(identity) {
+                            return datafusion::common::plan_err!("recursive source view");
+                        }
+                        let result = Self::any_in_views(plan.as_ref(), test, views)?;
+                        views.remove(&identity);
+                        result
+                    } else {
+                        false
+                    }
+                }
                 _ => false,
             };
             Ok(if found {
@@ -238,6 +256,10 @@ impl PackageCall {
 
     pub fn arguments(&self) -> &[String] {
         &self.arguments
+    }
+
+    pub fn has_input_overrides(&self) -> bool {
+        self.has_input_overrides
     }
 
     fn key(&self) -> (&str, &str, &str, &str, &str, &str, &str) {

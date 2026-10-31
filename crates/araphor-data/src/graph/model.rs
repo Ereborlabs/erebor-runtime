@@ -26,23 +26,7 @@ pub trait GraphValidate {
 
 impl GraphValidate for GraphSubjectKeyV1 {
     fn validate(&self) -> Result<()> {
-        let valid_authority = match &self.authority {
-            GraphSubjectAuthorityV1::Native {
-                node_id,
-                node_boot_id,
-                label_epoch,
-            } => !node_id.is_empty() && *node_boot_id != [0; 16] && *label_epoch > 0,
-            GraphSubjectAuthorityV1::Provider { authority_id }
-            | GraphSubjectAuthorityV1::External { authority_id } => !authority_id.is_empty(),
-            GraphSubjectAuthorityV1::Kubernetes { cluster_id } => !cluster_id.is_empty(),
-        };
-        if self.tenant_id == [0; 16] || !valid_authority || self.identity.is_empty() {
-            return GraphInvalidSnafu {
-                field: "subject lifetime",
-            }
-            .fail();
-        }
-        Ok(())
+        araphor_graph::SubjectRows::validate(self).map_err(Into::into)
     }
 }
 

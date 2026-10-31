@@ -8,7 +8,8 @@ use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use crate::{
-    error::{DatabaseSnafu, DecodingSnafu, EncodingSnafu, InvalidSnafu},
+    error::{DatabaseSnafu, DecodingSnafu, InvalidSnafu},
+    native::NativeRows,
     Result,
 };
 
@@ -96,7 +97,7 @@ impl FindingRows {
         while let Some(row) = rows.next().context(DatabaseSnafu {
             operation: "advance finding candidates",
         })? {
-            let ordinal: u64 = Self::column(row, 18)?;
+            let ordinal: u64 = NativeRows::column(row, 18)?;
             let reference = references
                 .get(usize::try_from(ordinal).map_err(|_| {
                     InvalidSnafu {
@@ -120,7 +121,7 @@ impl FindingRows {
                 )? == *reference.finding
             {
                 let slot = &mut selected[ordinal as usize];
-                if slot.replace(Self::column(row, 0)?).is_some() {
+                if slot.replace(NativeRows::column(row, 0)?).is_some() {
                     return InvalidSnafu {
                         field: "duplicate finding value",
                     }
@@ -156,7 +157,7 @@ impl FindingRows {
             while let Some(row) = rows.next().context(DatabaseSnafu {
                 operation: "advance finding identities",
             })? {
-                allocated.push(Self::column::<u64>(row, 0)?);
+                allocated.push(NativeRows::column::<u64>(row, 0)?);
             }
         }
         if allocated.len() != missing {
@@ -224,11 +225,14 @@ impl FindingRows {
             }
             .build()
         })?;
-        Ok(Sha256::digest(Self::encode(&canonical)?).into())
+        Ok(Sha256::digest(NativeRows::encode(&canonical)?).into())
     }
 
     pub fn references(row: &Row<'_>) -> Result<(u64, Vec<u64>)> {
-        Ok((Self::column(row, 5)?, Self::evidence_references(row, 9)?))
+        Ok((
+            NativeRows::column(row, 5)?,
+            Self::evidence_references(row, 9)?,
+        ))
     }
 
     pub fn evidence_references(row: &Row<'_>, index: usize) -> Result<Vec<u64>> {
@@ -249,8 +253,8 @@ impl FindingRows {
         subject: GraphSubjectKeyV1,
         evidence: Vec<DiscoveryRecordIdV1>,
     ) -> Result<FindingV1> {
-        let tenant: Vec<u8> = Self::column(row, 1)?;
-        let sensitivity: String = Self::column(row, 15)?;
+        let tenant: Vec<u8> = NativeRows::column(row, 1)?;
+        let sensitivity: String = NativeRows::column(row, 15)?;
         Ok(FindingV1 {
             tenant_id: tenant.try_into().map_err(|_| {
                 InvalidSnafu {
@@ -258,13 +262,13 @@ impl FindingRows {
                 }
                 .build()
             })?,
-            finding_id: Self::column(row, 2)?,
-            package_id: Self::column(row, 3)?,
-            package_version: Self::column(row, 4)?,
+            finding_id: NativeRows::column(row, 2)?,
+            package_id: NativeRows::column(row, 3)?,
+            package_version: NativeRows::column(row, 4)?,
             subject_id: subject,
-            state: Self::parse(&Self::column::<String>(row, 6)?)?,
-            window_start_utc_ns: Self::column(row, 7)?,
-            window_end_utc_ns: Self::column(row, 8)?,
+            state: NativeRows::parse(&NativeRows::column::<String>(row, 6)?)?,
+            window_start_utc_ns: NativeRows::column(row, 7)?,
+            window_end_utc_ns: NativeRows::column(row, 8)?,
             evidence,
             required_coverage_interval_ids: Self::list(row, 10)?
                 .into_iter()
@@ -281,17 +285,19 @@ impl FindingRows {
                     .fail(),
                 })
                 .collect::<Result<_>>()?,
-            policy_provenance: Self::decode_bytes(&Self::column::<Vec<u8>>(row, 11)?)?,
-            effects: Self::decode_bytes(&Self::column::<Vec<u8>>(row, 12)?)?,
-            reason: Self::restore_reason(Self::decode_bytes(&Self::column::<Vec<u8>>(row, 13)?)?)?,
-            severity: Self::parse(&Self::column::<String>(row, 14)?)?,
+            policy_provenance: Self::decode_bytes(&NativeRows::column::<Vec<u8>>(row, 11)?)?,
+            effects: Self::decode_bytes(&NativeRows::column::<Vec<u8>>(row, 12)?)?,
+            reason: Self::restore_reason(Self::decode_bytes(&NativeRows::column::<Vec<u8>>(
+                row, 13,
+            )?)?)?,
+            severity: NativeRows::parse(&NativeRows::column::<String>(row, 14)?)?,
             sensitivity: ContextSensitivityV1::try_from(sensitivity.as_str()).map_err(|_| {
                 InvalidSnafu {
                     field: "finding sensitivity",
                 }
                 .build()
             })?,
-            required_action: Self::column(row, 16)?,
+            required_action: NativeRows::column(row, 16)?,
             limits: Self::list(row, 17)?
                 .into_iter()
                 .map(|value| match value {
@@ -320,17 +326,22 @@ impl FindingRows {
         while let Some(row) = rows.next().context(DatabaseSnafu {
             operation: "advance finding validation",
         })? {
-            let tenant: Vec<u8> = Self::column(row, 1)?;
-            if tenant.len() != 16 || Self::column::<i64>(row, 7)? > Self::column::<i64>(row, 8)? {
+            let tenant: Vec<u8> = NativeRows::column(row, 1)?;
+            if tenant.len() != 16
+                || NativeRows::column::<i64>(row, 7)? > NativeRows::column::<i64>(row, 8)?
+            {
                 return InvalidSnafu {
                     field: "finding stored value",
                 }
                 .fail();
             }
             let _: Vec<PolicyObservationProvenanceV1> =
-                Self::decode_bytes(&Self::column::<Vec<u8>>(row, 11)?)?;
-            let _: Vec<GraphEffectV1> = Self::decode_bytes(&Self::column::<Vec<u8>>(row, 12)?)?;
-            Self::restore_reason(Self::decode_bytes(&Self::column::<Vec<u8>>(row, 13)?)?)?;
+                Self::decode_bytes(&NativeRows::column::<Vec<u8>>(row, 11)?)?;
+            let _: Vec<GraphEffectV1> =
+                Self::decode_bytes(&NativeRows::column::<Vec<u8>>(row, 12)?)?;
+            Self::restore_reason(Self::decode_bytes(&NativeRows::column::<Vec<u8>>(
+                row, 13,
+            )?)?)?;
             let refs = Self::references(row)?;
             let finding = Self::decode(
                 row,
@@ -349,7 +360,7 @@ impl FindingRows {
                 },
                 Vec::new(),
             )?;
-            let hash: Vec<u8> = Self::column(row, 18)?;
+            let hash: Vec<u8> = NativeRows::column(row, 18)?;
             if hash
                 != Self::value_hash(&FindingRefs {
                     finding: &finding,
@@ -370,11 +381,11 @@ impl FindingRows {
         if let FindingReasonV1::Declared(reason) = reason {
             return Ok(reason.code.clone());
         }
-        Self::label(reason)
+        NativeRows::label(reason)
     }
 
     fn reason(reason: &FindingReasonV1) -> Result<Vec<u8>> {
-        Self::encode(&match reason {
+        NativeRows::encode(&match reason {
             FindingReasonV1::Declared(reason) => StoredReason::Declared(reason),
             reason => StoredReason::Builtin(Self::reason_label(reason)?),
         })
@@ -382,71 +393,31 @@ impl FindingRows {
 
     fn restore_reason(reason: StoredReason<DeclaredFindingReasonV1>) -> Result<FindingReasonV1> {
         match reason {
-            StoredReason::Builtin(label) => Self::parse(&label),
+            StoredReason::Builtin(label) => NativeRows::parse(&label),
             StoredReason::Declared(reason) => Ok(FindingReasonV1::Declared(reason)),
         }
     }
 
-    fn label(value: &impl Serialize) -> Result<String> {
-        let value = serde_value::to_value(value).map_err(|_| {
-            InvalidSnafu {
-                field: "finding label",
-            }
-            .build()
-        })?;
-        match value {
-            serde_value::Value::String(label) => Ok(label),
-            _ => InvalidSnafu {
-                field: "finding label",
-            }
-            .fail(),
-        }
-    }
-
-    fn parse<T: DeserializeOwned>(label: &str) -> Result<T> {
-        T::deserialize(serde::de::value::StringDeserializer::<
-            serde::de::value::Error,
-        >::new(label.to_owned()))
-        .map_err(|_| {
-            InvalidSnafu {
-                field: "finding label",
-            }
-            .build()
-        })
-    }
-
-    fn column<T: duckdb::types::FromSql>(row: &Row<'_>, index: usize) -> Result<T> {
-        row.get(index).context(DatabaseSnafu {
-            operation: "decode finding row",
-        })
-    }
     #[cfg(test)]
     fn state_label(state: FindingStateV1) -> Result<String> {
-        Self::label(&state)
+        NativeRows::label(&state)
     }
     #[cfg(test)]
     fn severity_label(severity: FindingSeverityV1) -> Result<String> {
-        Self::label(&severity)
+        NativeRows::label(&severity)
     }
     #[cfg(test)]
     fn label_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> Result<T> {
-        Self::parse(&Self::column::<String>(row, index)?)
+        NativeRows::parse(&NativeRows::column::<String>(row, index)?)
     }
     fn list(row: &Row<'_>, index: usize) -> Result<Vec<Value>> {
-        match Self::column(row, index)? {
+        match NativeRows::column(row, index)? {
             Value::List(values) => Ok(values),
             _ => InvalidSnafu {
                 field: "finding native list",
             }
             .fail(),
         }
-    }
-    fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
-        let mut bytes = Vec::new();
-        value
-            .serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
-            .context(EncodingSnafu)?;
-        Ok(bytes)
     }
     fn decode_bytes<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
         let mut decoder = rmp_serde::Deserializer::new(Cursor::new(bytes));
@@ -499,7 +470,7 @@ impl FindingRows {
             packages.append_value(&finding.package_id);
             versions.append_value(finding.package_version);
             subjects.append_value(reference.subject);
-            states.append_value(Self::label(&finding.state)?);
+            states.append_value(NativeRows::label(&finding.state)?);
             starts.append_value(finding.window_start_utc_ns);
             ends.append_value(finding.window_end_utc_ns);
             evidence.values().append_slice(&reference.evidence);
@@ -508,10 +479,10 @@ impl FindingRows {
                 coverage.values().append_value(value);
             }
             coverage.append(true);
-            policies.append_value(Self::encode(&finding.policy_provenance)?);
-            effects.append_value(Self::encode(&finding.effects)?);
+            policies.append_value(NativeRows::encode(&finding.policy_provenance)?);
+            effects.append_value(NativeRows::encode(&finding.effects)?);
             reasons.append_value(Self::reason(&finding.reason)?);
-            severities.append_value(Self::label(&finding.severity)?);
+            severities.append_value(NativeRows::label(&finding.severity)?);
             sensitivities.append_value(<&str>::from(finding.sensitivity));
             if let Some(action) = &finding.required_action {
                 actions.append_value(action);

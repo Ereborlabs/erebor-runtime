@@ -189,7 +189,10 @@ impl<'a> Planner<'a> {
 
     pub(crate) async fn statement(&self, statement: Statement) -> NativeResult<LogicalPlan> {
         let mut planning = std::pin::pin!(self.state.statement_to_plan(statement));
-        poll_fn(|context| crate::parser::Parser::stack(|| planning.as_mut().poll(context))).await
+        let plan =
+            poll_fn(|context| crate::parser::Parser::stack(|| planning.as_mut().poll(context)))
+                .await?;
+        crate::definition::PackageCall::expose_programs(plan)
     }
 
     pub(crate) fn sources(plan: &LogicalPlan) -> Result<BTreeSet<SourceOrigin>> {

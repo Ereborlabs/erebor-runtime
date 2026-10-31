@@ -992,6 +992,7 @@ impl Session {
 
     pub fn register_table(&mut self, name: &str, provider: Arc<dyn TableProvider>) -> Result<()> {
         self.control.check()?;
+        let provider = crate::definition::PackageCall::defer_view(provider).context(SqlSnafu)?;
         Arc::make_mut(&mut self.tables).insert(name.to_owned(), TableBinding::Provider(provider));
         Ok(())
     }

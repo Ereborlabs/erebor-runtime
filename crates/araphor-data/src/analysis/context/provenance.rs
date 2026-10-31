@@ -6,7 +6,6 @@ use super::*;
 use crate::{PackageArtifactIdentityV1, PackageImplementationV1, PackageRefV1};
 
 type RevisionKey = ([u8; 16], PackageRefV1);
-type CallKey = ([u8; 16], PackageRefV1, String);
 
 #[derive(Clone, Eq, PartialEq)]
 struct StoredHashes {
@@ -18,7 +17,6 @@ struct StoredHashes {
 #[derive(Clone, Eq, PartialEq)]
 struct ExportProof {
     identity: PackageArtifactIdentityV1,
-    native_graph: bool,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -36,37 +34,12 @@ pub(in crate::analysis) struct ValidationCache {
 #[derive(Clone, Default)]
 pub(in crate::analysis) struct VerifiedPackages {
     revisions: BTreeMap<RevisionKey, Option<StoredHashes>>,
-    calls: BTreeMap<CallKey, ExportProof>,
 }
 
 impl VerifiedPackages {
     fn insert_package(&mut self, tenant: [u8; 16], key: &PackageRefV1, proof: &PackageProof) {
         self.revisions
             .insert((tenant, key.clone()), Some(proof.hashes.clone()));
-        self.calls.extend(
-            proof
-                .exports
-                .iter()
-                .map(|(export, proof)| ((tenant, key.clone(), export.clone()), proof.clone())),
-        );
-    }
-
-    pub(in crate::analysis) fn native_graph(
-        &self,
-        tenant: [u8; 16],
-        call: &crate::ManagedCall,
-    ) -> Result<Option<bool>> {
-        if call.target != "wasm" {
-            return Ok(Some(false));
-        }
-        let key = (tenant, call.package.clone(), call.export.clone());
-        let Some(proof) = self.calls.get(&key) else {
-            return Ok(None);
-        };
-        if call.artifact.as_ref() != Some(&proof.identity) {
-            return Err(crate::PackageErrorCodeV1::Invalid.error("verified Graph artifact"));
-        }
-        Ok(Some(proof.native_graph))
     }
 }
 
@@ -74,11 +47,7 @@ impl PackageProof {
     fn from_artifact(artifact: &crate::PackageArtifactV1, hashes: StoredHashes) -> Result<Self> {
         let mut exports = BTreeMap::new();
         for implementation in &artifact.implementations {
-            let PackageImplementationV1::Wasm {
-                artifact: component,
-                ..
-            } = implementation
-            else {
+            let PackageImplementationV1::Wasm { .. } = implementation else {
                 continue;
             };
             let identity = implementation
@@ -94,12 +63,6 @@ impl PackageProof {
                         export.clone(),
                         ExportProof {
                             identity: identity.clone(),
-                            native_graph:
-                                araphor_analysis_builtins::graph::Detector::supports_resume(
-                                    &artifact.descriptor,
-                                    export,
-                                    component,
-                                ),
                         },
                     )
                     .is_some()
@@ -203,22 +166,6 @@ impl AnalysisStore {
     ) -> Result<()> {
         self.verified_package_from(reader, tenant, key, verified)
             .map(|_| ())
-    }
-
-    pub(in crate::analysis) fn verified_native_graph_call(
-        &self,
-        reader: &Connection,
-        tenant: [u8; 16],
-        declaration: &crate::ManagedCall,
-        verified: &mut VerifiedPackages,
-    ) -> Result<bool> {
-        if declaration.target != "wasm" {
-            return Ok(false);
-        }
-        self.verified_package_from(reader, tenant, &declaration.package, verified)?;
-        verified
-            .native_graph(tenant, declaration)?
-            .ok_or_else(|| crate::PackageErrorCodeV1::Unsupported.error("model target"))
     }
 
     pub(in crate::analysis) fn validate_context_packages(
@@ -370,18 +317,14 @@ impl AnalysisStore {
 mod tests {
     use super::*;
     use crate::analysis::PackageRevisionV1;
-    use crate::{ManagedCall, PackageArtifactV1, PackageBundle, PackageBundleV1};
+    use crate::{PackageArtifactV1, PackageBundle, PackageBundleV1};
     use araphor_analysis_builtins::{components, graph::Detector};
-    use araphor_discovery_definition::ImagePin;
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
     #[test]
-    fn verified_graph_implementation_requires_exact_component_and_pin() -> TestResult {
-        for (component, canonical) in [
-            (components::PROCESS, true),
-            (components::CREDENTIALS, false),
-        ] {
+    fn verified_package_rechecks_current_bytes_and_export_identity() -> TestResult {
+        for component in [components::PROCESS, components::CREDENTIALS] {
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("store");
             let store = AnalysisStore::open(&root)?;
@@ -411,49 +354,36 @@ mod tests {
                 &bundle, [1; 16], &package, "detect", &output,
             )?;
             store.commit_context(&context)?;
-            let call = ManagedCall {
-                image: ImagePin {
-                    image: package.clone(),
-                    digest: bundle.digest().into(),
-                },
-                package,
-                export: "detect".into(),
-                arguments: Vec::new(),
-                target: "wasm".into(),
-                artifact: Some(identity),
-                dependencies: Default::default(),
-            };
             let mut writer = store.writer()?;
             let mut on_demand = VerifiedPackages::default();
+            let proof = store.verified_package_from(
+                writer.get_mut()?,
+                [1; 16],
+                &package,
+                &mut on_demand,
+            )?;
             assert_eq!(
-                store.verified_native_graph_call(
-                    writer.get_mut()?,
-                    [1; 16],
-                    &call,
-                    &mut on_demand,
-                )?,
-                canonical,
+                proof
+                    .exports
+                    .get("detect")
+                    .ok_or("verified export")?
+                    .identity,
+                identity
             );
             let mut warm = VerifiedPackages::default();
-            assert_eq!(
-                store.verified_native_graph_call(writer.get_mut()?, [1; 16], &call, &mut warm)?,
-                canonical,
-            );
+            store.verify_package_revision(writer.get_mut()?, [1; 16], &package, &mut warm)?;
             let mut verified = VerifiedPackages::default();
             store
                 .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut verified)?
                 .ok_or("verified package context")?;
-            assert_eq!(verified.native_graph([1; 16], &call)?, Some(canonical));
-            let mut forged = call.clone();
-            forged.artifact.as_mut().ok_or("Wasm pin")?.digest = "0".repeat(64);
-            assert!(verified.native_graph([1; 16], &forged).is_err());
+            assert!(verified.revisions.contains_key(&([1; 16], package.clone())));
             writer.get_mut()?.execute(
                 "UPDATE package_revisions SET artifact = ? WHERE tenant_id = ? AND package_id = ? AND revision = ?",
-                params![b"changed".as_slice(), [1u8; 16].as_slice(), forged.package.package_id, forged.package.revision],
+                params![b"changed".as_slice(), [1u8; 16].as_slice(), package.package_id, package.revision],
             )?;
             let mut fresh = VerifiedPackages::default();
             assert!(store
-                .verified_native_graph_call(writer.get_mut()?, [1; 16], &call, &mut fresh)
+                .verify_package_revision(writer.get_mut()?, [1; 16], &package, &mut fresh)
                 .is_err());
             assert!(store
                 .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut fresh)
@@ -488,9 +418,6 @@ mod tests {
         };
         let package = artifact.reference();
         let output = artifact.descriptor.exports[0].outputs[0].name.clone();
-        let identity = artifact.implementations[0]
-            .identity()?
-            .ok_or("Wasm identity")?;
         let bundle = PackageBundle::try_from(PackageBundleV1 {
             schema_version: 1,
             root: package.clone(),
@@ -503,26 +430,9 @@ mod tests {
         let context =
             AnalysisContextVersionV1::from_package(&bundle, [1; 16], &package, "detect", &output)?;
         store.commit_context(&context)?;
-        let call = ManagedCall {
-            image: ImagePin {
-                image: package.clone(),
-                digest: bundle.digest().into(),
-            },
-            package,
-            export: "detect".into(),
-            arguments: Vec::new(),
-            target: "wasm".into(),
-            artifact: Some(identity),
-            dependencies: Default::default(),
-        };
         let mut writer = store.writer()?;
         let mut verified = VerifiedPackages::default();
-        assert!(!store.verified_native_graph_call(
-            writer.get_mut()?,
-            [1; 16],
-            &call,
-            &mut verified,
-        )?);
+        store.verify_package_revision(writer.get_mut()?, [1; 16], &package, &mut verified)?;
         store
             .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut verified)?
             .ok_or("mixed package context")?;
@@ -531,12 +441,10 @@ mod tests {
         let reopened = AnalysisStore::open(&root)?;
         let mut writer = reopened.writer()?;
         let mut fresh = VerifiedPackages::default();
-        assert!(!reopened.verified_native_graph_call(
-            writer.get_mut()?,
-            [1; 16],
-            &call,
-            &mut fresh,
-        )?);
+        reopened.verify_package_revision(writer.get_mut()?, [1; 16], &package, &mut fresh)?;
+        reopened
+            .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut fresh)?
+            .ok_or("reopened mixed package context")?;
         Ok(())
     }
 

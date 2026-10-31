@@ -722,6 +722,93 @@ async fn page_keeps_lookahead() {
 }
 
 #[tokio::test]
+async fn append_keeps_arrival_order() {
+    let fixture = Fixture::new(Limits {
+        output_rows: 3,
+        ..Limits::default()
+    });
+    fixture.commit(&fixture.source, 11, 2, 1_000_000_000);
+    fixture.commit(&fixture.source, 1, 2, 1_100_000_000);
+    let clock = TestClock::new(2_000_000_000);
+    let sql = "SELECT source_cursor FROM events";
+    let mut subscription = fixture.subscribe(sql, clock.clone(), None, true);
+    let first = next(&mut subscription).await;
+    assert_eq!(first.operation, Operation::Append);
+    assert_eq!(
+        values(&first, 0),
+        [11, 12, 1]
+            .map(|value| ScalarValue::UInt64(Some(value)))
+            .to_vec()
+    );
+    assert!(first.positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(first.limited);
+    let cursor = Cursor::decode(&first.cursor.encode().unwrap()).unwrap();
+    subscription.cancel().unwrap();
+    let mut resumed = fixture.subscribe(sql, clock, Some(cursor), true);
+    let second = next(&mut resumed).await;
+    assert_eq!(values(&second, 0), vec![ScalarValue::UInt64(Some(2))]);
+    assert!(second.positions[0] > first.cursor.position());
+    assert!(second.exhausted);
+    fixture.commit(&fixture.source, 21, 2, 1_200_000_000);
+    fixture.commit(&fixture.source, 3, 2, 1_300_000_000);
+    let third = next(&mut resumed).await;
+    assert_eq!(
+        values(&third, 0),
+        [21, 22, 3]
+            .map(|value| ScalarValue::UInt64(Some(value)))
+            .to_vec()
+    );
+    assert!(third.positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(third.positions[0] > second.cursor.position());
+    assert!(third.limited);
+    let fourth = next(&mut resumed).await;
+    assert_eq!(values(&fourth, 0), vec![ScalarValue::UInt64(Some(4))]);
+    assert!(fourth.positions[0] > third.cursor.position());
+    assert!(fourth.exhausted);
+}
+
+#[tokio::test]
+async fn snapshot_keeps_sql_order() {
+    for hidden in [false, true] {
+        let fixture = Fixture::new(Limits::default());
+        fixture.commit(&fixture.source, 11, 2, 1_000_000_000);
+        fixture.commit(&fixture.source, 1, 2, 1_100_000_000);
+        let sql = if hidden {
+            "SELECT CAST(100 - source_cursor AS BIGINT) AS value FROM events ORDER BY source_cursor DESC"
+        } else {
+            "SELECT source_cursor FROM events ORDER BY source_cursor DESC"
+        };
+        let expected = |cursors: &[u64]| {
+            cursors
+                .iter()
+                .map(|cursor| {
+                    if hidden {
+                        ScalarValue::Int64(Some(100 - *cursor as i64))
+                    } else {
+                        ScalarValue::UInt64(Some(*cursor))
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        for follow in [false, true] {
+            let mut subscription =
+                fixture.subscribe(sql, TestClock::new(2_000_000_000), None, follow);
+            let first = next(&mut subscription).await;
+            assert_eq!(first.operation, Operation::Replace);
+            assert_eq!(values(&first, 0), expected(&[12, 11, 2, 1]));
+            if follow {
+                fixture.commit(&fixture.source, 7, 1, 1_200_000_000);
+                let second = next(&mut subscription).await;
+                assert_eq!(values(&second, 0), expected(&[12, 11, 7, 2, 1]));
+                subscription.cancel().unwrap();
+            } else {
+                assert!(subscription.next().await.is_none());
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn filtered_page_progress() {
     let fixture = Fixture::new(Limits::default());
     fixture.commit(&fixture.source, 1, 257, 1_000_000_000);

@@ -45,12 +45,12 @@ fn append_basis_matches_complete_continuation() -> TestResult {
         Detector::Kubernetes,
     ] {
         let old = input(detector, &records(2), &[], 100)?;
-        let prior = detector.evaluate(&old)?;
+        let prior = detector.evaluate_snapshot(&old)?;
         let current = input(detector, &records(3), &[], 100)?;
         let mut complete = current.clone();
         complete.checkpoint = prior.checkpoint.clone();
         complete.previous_outputs = normalized_prior(&prior)?;
-        let complete_result = detector.evaluate(&complete)?;
+        let complete_result = detector.evaluate_snapshot(&complete)?;
 
         let progress = Progress::decode(&complete.previous_outputs[6])?;
         let mut sparse = complete.clone();
@@ -72,7 +72,7 @@ fn append_basis_matches_complete_continuation() -> TestResult {
         }
         let (sparse_result, work) = measured(detector, &sparse)?;
         assert!(work <= 1, "{detector:?} evaluated prior records");
-        let package = detector.descriptor();
+        let package = detector.snapshot_descriptor();
         let sparse_wire = sdk::wire::Output::encode(&package, &sparse, &sparse_result)?;
         let complete_wire = sdk::wire::Output::encode(&package, &sparse, &complete_result)?;
         let subjects = |result: &sdk::Output| -> sdk::Result<BTreeSet<GraphSubjectKeyV1>> {
@@ -117,7 +117,7 @@ fn append_basis_matches_complete_continuation() -> TestResult {
 fn append_basis_rebuilds_for_old_or_restricted_input() -> TestResult {
     let detector = Detector::Process;
     let old = input(detector, &records(2), &[], 100)?;
-    let prior = detector.evaluate(&old)?;
+    let prior = detector.evaluate_snapshot(&old)?;
     let checkpoint = prior.checkpoint.as_ref().ok_or("checkpoint")?;
     let progress = Progress::decode(&prior.datasets[6])?;
     let mut current = records(3);
@@ -144,11 +144,11 @@ fn package_state(output: &sdk::Output) -> sdk::Result<GraphPackageStateV1> {
 }
 
 fn measured(detector: Detector, evaluation: &sdk::Evaluation) -> sdk::Result<(sdk::Output, usize)> {
-    let package = detector.descriptor();
+    let package = detector.snapshot_descriptor();
     let mut work = 0;
     let output = package.check_evaluation(evaluation)?.evaluate(|checked| {
         let mut manifests = Manifest::read(checked)?;
-        let mut computation = Computation::new(
+        let mut computation = Computation::snapshot(
             Observation::read(checked)?,
             Fact::read(checked)?,
             manifests.remove(0),
@@ -169,7 +169,7 @@ fn continued(
     let mut complete = current.clone();
     complete.checkpoint = None;
     complete.previous_outputs.clear();
-    let expected = detector.evaluate(&complete)?;
+    let expected = detector.evaluate_snapshot(&complete)?;
     let mut resumed = complete.clone();
     resumed.checkpoint = prior.checkpoint.clone();
     if let Some(checkpoint) = &mut resumed.checkpoint {
@@ -177,9 +177,9 @@ fn continued(
     }
     resumed.previous_outputs = normalized_prior(prior)?;
     resumed.previous_outputs.reverse();
-    let actual = detector.evaluate(&resumed)?;
+    let actual = detector.evaluate_snapshot(&resumed)?;
     let (counted, work) = measured(detector, &resumed)?;
-    let package = detector.descriptor();
+    let package = detector.snapshot_descriptor();
     let same = |left: &sdk::Dataset, right: &sdk::Dataset| {
         left.name == right.name && left.batches == right.batches
     };
@@ -289,7 +289,7 @@ fn finding_delta_tracks_stable_anchor() -> TestResult {
         &[fact(0, context(ContextClass::OutsideAuthority))],
         100,
     )?;
-    let output = detector.evaluate(&input)?;
+    let output = detector.evaluate_snapshot(&input)?;
     let finding = FindingChange::decode(&output.datasets[4])?
         .into_iter()
         .find(|finding| finding.anchor.fact.is_some())
@@ -317,7 +317,7 @@ fn late_authority_creates_finding() -> TestResult {
         .cloned()
         .collect::<Vec<_>>();
     let first = input(detector, &records[..1], &first_facts, 100)?;
-    let prior = detector.evaluate(&first)?;
+    let prior = detector.evaluate_snapshot(&first)?;
     assert_eq!(
         FindingChange::decode(&prior.datasets[4])?[0].reason_code,
         "HF-DW-001.MISSING_AUTHORITY_PROOF"
@@ -337,7 +337,7 @@ fn late_authority_creates_finding() -> TestResult {
     let mut resumed = current.clone();
     resumed.checkpoint = prior.checkpoint.clone();
     resumed.previous_outputs = normalized_prior(&prior)?;
-    let delta = detector.evaluate(&resumed)?;
+    let delta = detector.evaluate_snapshot(&resumed)?;
     assert!(FindingRemoval::decode(&delta.datasets[5])?.is_empty());
     let additions = FindingChange::decode(&delta.datasets[4])?;
     assert_eq!(additions.len(), 1);
@@ -353,7 +353,7 @@ fn earlier_selected_read_rebuilds_later_finding() -> TestResult {
     let mut prior_facts = vec![facts[1].clone(), facts[2].clone()];
     prior_facts[0].record = 0;
     prior_facts[1].record = 1;
-    let prior = detector.evaluate(&input(detector, &records[1..], &prior_facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &records[1..], &prior_facts, 100)?)?;
     assert!(FindingChange::decode(&prior.datasets[4])?.is_empty());
     let current = input(detector, &records, &facts, 100)?;
     let (output, work) = continued(detector, &current, &prior)?;
@@ -382,7 +382,7 @@ fn contextual_authority_needs_no_network() -> TestResult {
         .filter(|fact| fact.record == 0)
         .cloned()
         .collect::<Vec<_>>();
-    let prior = detector.evaluate(&input(detector, &records[..1], &first_facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &records[..1], &first_facts, 100)?)?;
     let (output, work) = continued(detector, &input(detector, &records, &facts, 100)?, &prior)?;
     assert_eq!(work, 1);
     let findings = FindingChange::decode(&output.datasets[4])?;
@@ -415,7 +415,7 @@ fn retained_state_survives_update() -> TestResult {
     let mut later_credential = facts[0].clone();
     later_credential.record = 1;
     old_facts.push(later_credential);
-    let prior = detector.evaluate(&input(detector, &old_records, &old_facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &old_records, &old_facts, 100)?)?;
     let mut current_records = base;
     current_records[1].position = Position {
         commit_revision: 2,
@@ -454,7 +454,7 @@ fn new_network_creates_finding() -> TestResult {
     let mut old_facts = facts.clone();
     old_facts.remove(1);
     old_facts[1].record = 1;
-    let prior = detector.evaluate(&input(detector, &old_records, &old_facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &old_records, &old_facts, 100)?)?;
     assert_eq!(
         FindingChange::decode(&prior.datasets[4])?[0].reason_code,
         "HF-DW-001.CONTEXTUAL_CREDENTIAL_PIVOT"
@@ -481,7 +481,7 @@ fn new_network_creates_finding() -> TestResult {
     let mut resumed = current.clone();
     resumed.checkpoint = prior.checkpoint.clone();
     resumed.previous_outputs = normalized_prior(&prior)?;
-    let delta = detector.evaluate(&resumed)?;
+    let delta = detector.evaluate_snapshot(&resumed)?;
     assert!(FindingRemoval::decode(&delta.datasets[5])?.is_empty());
     let additions = FindingChange::decode(&delta.datasets[4])?;
     assert_eq!(additions.len(), 1);
@@ -497,7 +497,7 @@ fn new_network_creates_finding() -> TestResult {
 fn network_finding_uses_its_own_channel() -> TestResult {
     let detector = Detector::Credentials;
     let (mut records, mut facts) = credential_input()?;
-    let prior = detector.evaluate(&input(detector, &records, &facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &records, &facts, 100)?)?;
     let prior_findings = FindingChange::decode(&prior.datasets[4])?;
     let mut network = records[1].clone();
     network.id = identity(3);
@@ -525,7 +525,7 @@ fn network_finding_uses_its_own_channel() -> TestResult {
     let mut resumed = current;
     resumed.checkpoint = prior.checkpoint.clone();
     resumed.previous_outputs = normalized_prior(&prior)?;
-    let delta = detector.evaluate(&resumed)?;
+    let delta = detector.evaluate_snapshot(&resumed)?;
     assert!(FindingRemoval::decode(&delta.datasets[5])?.is_empty());
     let additions = FindingChange::decode(&delta.datasets[4])?;
     assert_eq!(additions.len(), 1);
@@ -578,7 +578,8 @@ fn cross_cpu_events_keep_earlier_findings() -> TestResult {
             .filter(|fact| fact.record == 0)
             .cloned()
             .collect::<Vec<_>>();
-        let prior = detector.evaluate(&input_exact(detector, &records[..1], &first_facts)?)?;
+        let prior =
+            detector.evaluate_snapshot(&input_exact(detector, &records[..1], &first_facts)?)?;
         let original = FindingChange::decode(&prior.datasets[4])?.remove(0);
         let full = input_exact(detector, &records, &facts)?;
         let (output, work) = continued(detector, &full, &prior)?;
@@ -658,7 +659,7 @@ fn authority_event_detects_conflict_across_reads() -> TestResult {
         &[facts[0].clone(), second_credential, success, denied],
         100,
     )?;
-    let output = detector.evaluate(&evaluation)?;
+    let output = detector.evaluate_snapshot(&evaluation)?;
     let findings = FindingChange::decode(&output.datasets[4])?;
     assert_eq!(findings.len(), 3);
     assert!(findings.iter().any(|finding| {
@@ -708,7 +709,7 @@ fn shared_edges_update_seeds() -> TestResult {
         }
         selected.push(policy);
     }
-    let prior = detector.evaluate(&input(detector, &records, &selected, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &records, &selected, 100)?)?;
     let edges = RelationshipChange::decode(&prior.datasets[2])?;
     assert_eq!(
         edges
@@ -786,7 +787,7 @@ fn suppressed_finding_keeps_state() -> TestResult {
         *reviewed_policy_revision = "missing".into();
     }
     facts.push(unreviewed);
-    let prior = detector.evaluate(&input(detector, &records, &facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &records, &facts, 100)?)?;
     assert!(FindingChange::decode(&prior.datasets[4])?
         .iter()
         .any(|finding| finding.anchor.record == records[2].id
@@ -832,7 +833,7 @@ fn merged_edge_keeps_anchor() -> TestResult {
         .filter(|fact| fact.record != 2)
         .cloned()
         .collect::<Vec<_>>();
-    let prior = detector.evaluate(&input(detector, &records[..2], &old_facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &records[..2], &old_facts, 100)?)?;
     let (output, work) = continued(
         detector,
         &input(detector, &records, &selected, 100)?,

@@ -23,7 +23,7 @@ fn input_binding_accepts_batches() -> TestResult {
 }
 
 #[test]
-fn input_binding_preserves_order() -> TestResult {
+fn input_binding_preserves_links() -> TestResult {
     let input = credential_input()?.normalized()?;
     let graph = Graph::new(&input)?;
     let package = algorithm::Detector::Credentials.descriptor();
@@ -31,11 +31,11 @@ fn input_binding_preserves_order() -> TestResult {
     let mut evaluation = graph.evaluation_for(model)?;
     let mut records = algorithm::Observation::decode(&graph.projection()?[0])?;
     records.swap(0, 1);
-    evaluation.inputs[0].data = algorithm::Observation::encode(&records)?;
+    evaluation.inputs[3].data = algorithm::Observation::encode(&records)?;
     assert!(matches!(
         graph.check_inputs(model, &evaluation),
         Err(araphor_data::Error::GraphInvalid {
-            field: "graph input binding",
+            field: "graph unit lookup facts",
             ..
         })
     ));
@@ -51,11 +51,49 @@ fn input_binding_preserves_order() -> TestResult {
         })
         .ok_or("credential fact")?;
     *value = !*value;
-    evaluation.inputs[1].data = algorithm::Fact::encode(&facts)?;
+    evaluation.inputs[4].data = algorithm::Fact::encode(&facts)?;
     assert!(graph.check_inputs(model, &evaluation).is_err());
     let mut evaluation = graph.evaluation_for(model)?;
     evaluation.inputs.pop();
     assert!(graph.check_inputs(model, &evaluation).is_err());
+    Ok(())
+}
+
+#[test]
+fn input_binding_accepts_permutations() -> TestResult {
+    let input = credential_input()?.normalized()?;
+    let graph = Graph::new(&input)?;
+    let package = algorithm::Detector::Credentials.descriptor();
+    let model = &package.exports[0];
+    let mut evaluation = graph.evaluation_for(model)?;
+    let original = algorithm::Observation::decode(&evaluation.input("records")?.data)?;
+    let mut records = original.clone();
+    records.reverse();
+    let positions = records
+        .iter()
+        .enumerate()
+        .map(|(row, record)| (&record.id, row as u32))
+        .collect::<BTreeMap<_, _>>();
+    let mut facts = algorithm::Fact::decode(&evaluation.input("facts")?.data)?;
+    for fact in &mut facts {
+        fact.record = positions[&original[fact.record as usize].id];
+    }
+    facts.reverse();
+    let mut units = algorithm::Unit::decode(&evaluation.input("units")?.data)?;
+    units.reverse();
+    for data in [
+        algorithm::Observation::encode(&records)?,
+        algorithm::Fact::encode(&facts)?,
+        algorithm::Unit::encode(&units)?,
+    ] {
+        let input = evaluation
+            .inputs
+            .iter_mut()
+            .find(|input| input.data.name == data.name)
+            .ok_or("input")?;
+        input.data = data;
+    }
+    graph.check_inputs(model, &evaluation)?;
     Ok(())
 }
 
@@ -96,13 +134,13 @@ fn input_positions_bind_exact_records() -> TestResult {
     let graph = Graph::new(&input)?;
     let model = &algorithm::Detector::Credentials.descriptor().exports[0];
     let mut evaluation = graph.evaluation_for(model)?;
-    let mut records = algorithm::Observation::decode(&evaluation.inputs[0].data)?;
+    let mut records = algorithm::Observation::decode(&evaluation.inputs[3].data)?;
     records[0].position.ordinal += 1;
-    evaluation.inputs[0].data = algorithm::Observation::encode(&records)?;
+    evaluation.inputs[3].data = algorithm::Observation::encode(&records)?;
     assert!(matches!(
         graph.check_inputs(model, &evaluation),
         Err(araphor_data::Error::GraphInvalid {
-            field: "graph input binding",
+            field: "graph unit lookup record",
             ..
         })
     ));
@@ -142,15 +180,27 @@ async fn result_requires_exact_image() -> TestResult {
             &input.data.batches,
         )?;
     }
+    for (table, data) in [
+        ("graph_records", &evaluation.input("records")?.data),
+        ("graph_facts", &evaluation.input("facts")?.data),
+    ] {
+        session.register(table, data.batches[0].schema(), &data.batches)?;
+    }
+    let settings = algorithm::Manifest::encode(&[algorithm::Manifest {
+        window_ns: GRAPH_WINDOW_NS,
+    }])?;
+    session.register(
+        "graph_settings",
+        settings.batches[0].schema(),
+        &settings.batches,
+    )?;
     let expected = algorithm::Detector::Process.evaluate(&evaluation)?;
     let mut returns = Vec::new();
     for revision in ["1", "2"] {
         let mut descriptor = package.clone();
         descriptor.revision = revision.into();
         let returned = expected.clone();
-        let prior_checkpoint = returned.checkpoint.clone().ok_or("complete checkpoint")?;
-        let prior_outputs = super::execution::normalized_prior(&returned, &descriptor.id)?;
-        let sql = super::execution::Fixture::sql(&returned)?;
+        let sql = super::execution::Fixture::sql(&evaluation, &returned)?;
         let bundle = PackageBundleV1 {
             schema_version: 1,
             root: PackageRefV1 {
@@ -179,9 +229,7 @@ async fn result_requires_exact_image() -> TestResult {
                 source: Source::Inline {
                     inline: format!(
                         r#"SELECT * FROM "HF-PROC-001"."{revision}".detect('subjects',
-                    records => (SELECT * FROM origin_records),
-                    facts => (SELECT * FROM origin_facts),
-                    manifest => (SELECT * FROM origin_manifest))"#,
+                    units => (SELECT * FROM origin_units))"#,
                     ),
                 },
             },
@@ -197,15 +245,7 @@ async fn result_requires_exact_image() -> TestResult {
             Ok(TreeNodeRecursion::Continue)
         })?;
         let call = call.ok_or("package call")?;
-        let invocation = Invocation {
-            checkpoints: BTreeMap::from([(call.id(), prior_checkpoint)]),
-            previous_outputs: if prior_outputs.is_empty() {
-                BTreeMap::new()
-            } else {
-                BTreeMap::from([(call.id(), prior_outputs)])
-            },
-            ..Default::default()
-        };
+        let invocation = Invocation::default();
         let output = session.execute_definition(&prepared, invocation).await?;
         let result = Arc::clone(output.calls.get(&call.id()).ok_or("package return")?);
         assert!(result.belongs_to(&call));

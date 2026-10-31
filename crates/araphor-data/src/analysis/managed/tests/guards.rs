@@ -1,5 +1,43 @@
 use super::*;
 
+#[test]
+fn managed_images_reject_forged_implementation_pin() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let fixture = Fixture::admit(&store)?;
+    store.read_snapshot(|reader| {
+        AnalysisStore::check_managed_images(reader, &fixture.instance.spec)
+    })?;
+    let identity = crate::PackageImplementationV1::Wasm {
+        exports: vec!["detect".into()],
+        artifact: araphor_analysis_builtins::components::PROCESS.to_vec(),
+    }
+    .identity()?
+    .ok_or("Wasm identity absent")?;
+    for artifact in [false, true] {
+        let mut spec = fixture.instance.spec.clone();
+        let call = spec
+            .manifest
+            .calls
+            .get_mut(&10)
+            .ok_or("managed call absent")?;
+        if artifact {
+            call.artifact = Some(identity.clone());
+        } else {
+            call.target = "forged-target".into();
+        }
+        let error = store
+            .read_snapshot(|reader| AnalysisStore::check_managed_images(reader, &spec))
+            .err()
+            .ok_or("forged managed implementation accepted")?;
+        assert!(
+            format!("{error:?}").contains("managed implementation pin"),
+            "{error:?}"
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, PartialEq)]
 struct GuardCut {
     meta: crate::AnalysisStoreMetaV1,

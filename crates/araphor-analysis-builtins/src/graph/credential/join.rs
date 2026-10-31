@@ -37,8 +37,12 @@ impl Computation {
             );
         }
         let mut matched = BTreeMap::<usize, AuthorityMatch>::new();
-        for &fact_index in candidates {
+        for &candidate in candidates {
+            let fact_index = self.fact_ids[candidate];
             let fact = &self.facts[fact_index];
+            if !self.selected(fact.record) {
+                continue;
+            }
             let remote = self.record(fact.record)?;
             if remote.position > horizon || !self.bounded(read, remote) {
                 continue;
@@ -72,6 +76,9 @@ impl Computation {
             if local && *credential_object_id == Some(*object_id) {
                 if let Some(socket) = socket_object_id {
                     for &row in index.channel_by_socket.get(socket).into_iter().flatten() {
+                        if !self.selected(row) {
+                            continue;
+                        }
                         if trigger_channel.is_some_and(|trigger| trigger != row) {
                             continue;
                         }
@@ -105,11 +112,13 @@ impl Computation {
                         && self.carried(row, channel, &fact.value)
                 });
             matched
-                .entry(self.fact_ids[fact_index])
+                .entry(fact_index)
                 .and_modify(|value| {
                     value.direct |= direct;
                     value.channels.extend(&channels);
-                    value.channels.sort_unstable();
+                    value
+                        .channels
+                        .sort_by_key(|&row| &self.records[row as usize].id);
                     value.channels.dedup();
                 })
                 .or_insert(AuthorityMatch {
@@ -119,7 +128,12 @@ impl Computation {
                 });
         }
         let mut matched = matched.into_values().collect::<Vec<_>>();
-        matched.sort_by_key(|value| (self.facts[value.fact_index].record, value.fact_index));
+        matched.sort_by_key(|value| {
+            self.anchor_key(
+                self.facts[value.fact_index].record,
+                Some(value.fact_index as u32),
+            )
+        });
         Ok(matched)
     }
 

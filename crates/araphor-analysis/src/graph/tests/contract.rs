@@ -48,7 +48,7 @@ fn descriptor_preserves_owners() -> TestResult {
                 .iter()
                 .map(|input| input.port.name.as_str())
                 .collect::<Vec<_>>(),
-            ["records", "facts", "manifest"]
+            ["units", "unit_removals", "reset", "records", "facts"]
         );
         assert_eq!(
             model
@@ -58,18 +58,15 @@ fn descriptor_preserves_owners() -> TestResult {
                 .collect::<Vec<_>>(),
             [
                 "subjects",
-                "subject_removals",
                 "relationships",
-                "relationship_removals",
                 "findings",
-                "finding_removals",
-                "progress",
-                "progress_removals",
+                "contributions",
+                "state"
             ]
         );
         assert_eq!(model.outputs[0].kind, sdk::OutputKind::Subjects);
-        assert_eq!(model.outputs[2].kind, sdk::OutputKind::Relationships);
-        assert_eq!(model.outputs[4].kind, sdk::OutputKind::Findings);
+        assert_eq!(model.outputs[1].kind, sdk::OutputKind::Relationships);
+        assert_eq!(model.outputs[2].kind, sdk::OutputKind::Findings);
         let subject = &model.outputs[0].schema;
         assert_eq!(subject.fields().len(), 2);
         assert_eq!(subject.field(0).name(), "anchor");
@@ -128,16 +125,15 @@ fn descriptor_preserves_owners() -> TestResult {
         for reason in &model.reasons {
             assert_eq!(reason.details, details);
         }
-        assert_eq!(model.checkpoint.as_ref().ok_or("checkpoint")?.version, 1);
-        let checkpoint = model.checkpoint.as_ref().ok_or("checkpoint")?;
-        assert_eq!(checkpoint.datasets.len(), 2);
-        assert_eq!(checkpoint.datasets[1].name, "graph_resume");
-        assert!(
-            model
-                .checkpoint
-                .as_ref()
-                .ok_or("checkpoint")?
-                .resume_input_changes
+        assert!(model.checkpoint.is_none());
+        let changes = model.change_inputs.as_ref().ok_or("changes")?;
+        assert_eq!(changes.reset, "reset");
+        assert_eq!(
+            changes.ports,
+            vec![sdk::ChangeInput {
+                before: "unit_removals".into(),
+                after: "units".into()
+            }]
         );
         let inspected = package.inspect()?;
         assert!(!inspected.contains("GraphSnapshotV1"));
@@ -159,15 +155,16 @@ fn support_requires_exact_ports() -> TestResult {
             0 => altered.inputs.swap(0, 1),
             1 => altered.inputs[0].port.name = "other".into(),
             2 => altered.outputs.reverse(),
-            3 => altered.outputs[4].evidence_required = false,
-            4 => altered.checkpoint = None,
-            5 => altered.checkpoint.as_mut().ok_or("checkpoint")?.version += 1,
+            3 => altered.outputs[2].evidence_required = false,
+            4 => altered.change_inputs = None,
+            5 => altered.change_inputs.as_mut().ok_or("changes")?.reset = "other".into(),
             6 => {
-                altered.checkpoint.as_mut().ok_or("checkpoint")?.datasets[0].name = "other".into();
+                altered.inputs[3].source =
+                    sdk::InputSource::Query("SELECT * FROM graph_records".into())
             }
             7 => {
-                altered.checkpoint.as_mut().ok_or("checkpoint")?.datasets[0].schema =
-                    sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Utf8, false)]);
+                altered.inputs[4].port.schema =
+                    sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Utf8, false)])
             }
             _ => return Err("contract mutation".into()),
         }
@@ -177,21 +174,15 @@ fn support_requires_exact_ports() -> TestResult {
 }
 
 #[test]
-fn support_keeps_native_state() -> TestResult {
+fn support_requires_unit_state() -> TestResult {
     let mut package = algorithm::Detector::Process.descriptor();
-    let checkpoint = package.exports[0].checkpoint.as_mut().ok_or("checkpoint")?;
-    checkpoint.datasets.truncate(1);
-    checkpoint.resume_input_changes = false;
-    let state = checkpoint.datasets[0].clone();
-    package.validate()?;
-    assert!(Graph::supports(&package.exports[0]));
-    package.exports[0]
-        .checkpoint
-        .as_mut()
-        .ok_or("checkpoint")?
-        .datasets
-        .push(state);
-    assert!(Graph::supports(&package.exports[0]));
+    let model = &mut package.exports[0];
+    assert_eq!(
+        model.outputs.last().ok_or("state")?,
+        &GraphPackageStateV1::port()
+    );
+    model.outputs.push(GraphPackageStateV1::port());
+    assert!(!Graph::supports(model));
     assert!(package.validate().is_err());
     Ok(())
 }

@@ -6,7 +6,14 @@ impl GraphRows {
     pub(in crate::analysis) const SCHEMA: &str = include_str!("schema.sql");
 
     pub(in crate::analysis) fn schema() -> String {
-        format!("{}{}", Self::SCHEMA, araphor_graph::FindingRows::SCHEMA)
+        format!(
+            "{}{}{}{}{}",
+            Self::SCHEMA,
+            araphor_graph::SubjectRows::SCHEMA,
+            araphor_graph::RelationshipRows::SCHEMA,
+            araphor_graph::FindingRows::SCHEMA,
+            araphor_graph::StateRows::SCHEMA
+        )
     }
 
     pub(in crate::analysis) fn validate_tables(writer: &Connection) -> Result<()> {

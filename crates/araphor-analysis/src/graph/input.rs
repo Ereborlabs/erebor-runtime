@@ -58,53 +58,177 @@ impl Graph<'_> {
         evaluation: &sdk::Evaluation,
     ) -> Result<()> {
         Self::require(
+            algorithm::Detector::supports_units(model),
+            "graph unit contract",
+        )?;
+        Self::require(
             evaluation.inputs.len() == model.inputs.len(),
             "graph input count",
         )?;
-        for port in &model.inputs {
-            let actual = evaluation
-                .inputs
-                .iter()
-                .find(|input| input.data.name == port.port.name)
-                .ok_or_else(|| {
+        self.check_units(evaluation)
+    }
+
+    fn check_units(&self, evaluation: &sdk::Evaluation) -> Result<()> {
+        let units = algorithm::Unit::decode(
+            &evaluation
+                .input("units")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        let restricted = self
+            .input
+            .facts
+            .iter()
+            .any(|fact| fact.sensitivity == ContextSensitivityV1::HostRestricted);
+        let mut selected = BTreeMap::new();
+        let mut roots = BTreeSet::new();
+        for unit in &units {
+            Self::require(
+                roots.insert(&unit.record)
+                    && unit.window_ns == GRAPH_WINDOW_NS
+                    && unit.restricted == restricted
+                    && unit
+                        .support
+                        .windows(2)
+                        .all(|pair| pair[0].record < pair[1].record)
+                    && unit
+                        .support
+                        .iter()
+                        .any(|support| support.record == unit.record),
+                "graph unit controls",
+            )?;
+            for support in &unit.support {
+                let record = self
+                    .observations
+                    .binary_search_by(|record| record.id.cmp(&support.record))
+                    .ok()
+                    .and_then(|index| self.observations.get(index))
+                    .ok_or_else(|| {
+                        GraphInvalidSnafu {
+                            field: "graph unit source",
+                        }
+                        .build()
+                    })?;
+                Self::require(record.proof_quality == support.proof, "graph unit proof")?;
+                let keys = self
+                    .input
+                    .facts
+                    .iter()
+                    .zip(&self.facts)
+                    .filter(|(_, fact)| fact.record_id == support.record)
+                    .map(|(context, _)| &context.key)
+                    .collect::<Vec<_>>();
+                Self::require(support.facts.iter().eq(keys), "graph unit facts")?;
+                if let Some(old) = selected.insert(&support.record, support) {
+                    Self::require(old == support, "graph shared unit support")?;
+                }
+            }
+        }
+        let records = algorithm::Observation::decode(
+            &evaluation
+                .input("records")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        let indices = records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (&record.id, index as u32))
+            .collect::<BTreeMap<_, _>>();
+        Self::require(
+            records.len() == selected.len()
+                && indices.len() == records.len()
+                && indices.keys().eq(selected.keys()),
+            "graph unit lookup records",
+        )?;
+        for record in &records {
+            let index = self
+                .observations
+                .binary_search_by(|current| current.id.cmp(&record.id))
+                .map_err(|_| {
                     GraphInvalidSnafu {
-                        field: "graph input binding",
+                        field: "graph unit lookup record",
                     }
                     .build()
                 })?;
-            let valid = match port.port.name.as_str() {
-                "records" => {
-                    algorithm::Observation::decode(&actual.data).context(AnalysisContractSnafu)?
-                        == self.observations
-                }
-                "facts" => {
-                    let rows =
-                        algorithm::Fact::decode(&actual.data).context(AnalysisContractSnafu)?;
-                    rows.len() == self.facts.len()
-                        && rows
-                            .iter()
-                            .zip(self.facts.iter().zip(&self.input.facts))
-                            .all(|(row, (fact, context))| {
-                                self.input
-                                    .records
-                                    .get(row.record as usize)
-                                    .is_some_and(|record| record.id == fact.record_id)
-                                    && row.key == context.key
-                                    && row.sensitivity == context.sensitivity
-                                    && row.value == fact.value
-                            })
-                }
-                "manifest" => {
-                    algorithm::Manifest::decode(&actual.data).context(AnalysisContractSnafu)?
-                        == [algorithm::Manifest {
-                            window_ns: GRAPH_WINDOW_NS,
-                        }]
-                }
-                _ => false,
-            };
-            Self::require(valid, "graph input binding")?;
+            Self::require(
+                record == &self.observations[index],
+                "graph unit lookup record",
+            )?;
         }
-        Ok(())
+        let facts = algorithm::Fact::decode(
+            &evaluation
+                .input("facts")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        let expected = self
+            .input
+            .facts
+            .iter()
+            .zip(&self.facts)
+            .filter_map(|(context, fact)| {
+                indices.get(&fact.record_id).map(|&record| {
+                    (
+                        &context.key,
+                        algorithm::Fact {
+                            record,
+                            key: context.key.clone(),
+                            sensitivity: context.sensitivity,
+                            value: fact.value.clone(),
+                        },
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+        let actual = facts
+            .iter()
+            .map(|fact| (&fact.key, fact))
+            .collect::<BTreeMap<_, _>>();
+        Self::require(
+            actual.len() == facts.len()
+                && actual.len() == expected.len()
+                && actual
+                    .iter()
+                    .all(|(key, fact)| expected.get(key) == Some(*fact)),
+            "graph unit lookup facts",
+        )
+    }
+
+    pub(super) fn check_targets(&self, model: &sdk::Model, result: &CallResult) -> Result<()> {
+        if !algorithm::Detector::supports_units(model) {
+            return Ok(());
+        }
+        let targets = result
+            .changes()
+            .and_then(|changes| {
+                changes
+                    .targets
+                    .iter()
+                    .find(|input| input.data.name == "units")
+            })
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph unit target",
+                }
+                .build()
+            })?;
+        let units = algorithm::Unit::decode(&targets.data).context(AnalysisContractSnafu)?;
+        let ids = units
+            .iter()
+            .map(|unit| &unit.record)
+            .collect::<BTreeSet<_>>();
+        Self::require(
+            ids.len() == units.len()
+                && ids.len() == self.observations.len()
+                && ids
+                    .into_iter()
+                    .eq(self.observations.iter().map(|record| &record.id)),
+            "graph unit target selection",
+        )
     }
 
     pub(super) fn qualify_record(

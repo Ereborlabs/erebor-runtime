@@ -5,7 +5,6 @@ use araphor_analysis_sdk as sdk;
 use duckdb::Connection;
 
 use super::model::*;
-use crate::analysis::graph_rows::GraphCallState;
 use crate::{AnalysisStore, AnalysisStoreMetaV1, Result, ResultContext};
 
 #[derive(Debug, Default)]
@@ -23,15 +22,6 @@ pub(super) struct Committed {
 #[derive(Debug)]
 pub(in crate::analysis) struct Retention {
     owner: Arc<ManagedExecution>,
-    progress: Mutex<BTreeMap<u64, Arc<GraphCallState>>>,
-}
-
-pub(super) struct PendingProgress<'a>(&'a Retention);
-
-impl Drop for PendingProgress<'_> {
-    fn drop(&mut self) {
-        self.0.clear();
-    }
 }
 
 impl ManagedExecution {
@@ -138,11 +128,6 @@ impl ManagedPrior {
                             .map_or(0, ManagedChanges::allocated_bytes),
                     )
             }))
-            .saturating_add(
-                self.native
-                    .as_ref()
-                    .map_or(0, |state| state.allocated_bytes()),
-            )
     }
 
     fn metadata_bytes(&self) -> usize {
@@ -186,39 +171,8 @@ impl ManagedPrior {
 }
 
 impl Retention {
-    pub(super) fn pending(&self) -> PendingProgress<'_> {
-        self.clear();
-        PendingProgress(self)
-    }
     pub(super) fn new(owner: Arc<ManagedExecution>) -> Self {
-        Self {
-            owner,
-            progress: Mutex::new(BTreeMap::new()),
-        }
-    }
-
-    pub(in crate::analysis) fn progress(
-        &self,
-        call: u64,
-        progress: BTreeMap<crate::DiscoveryRecordIdV1, araphor_analysis_builtins::graph::Progress>,
-    ) {
-        self.progress
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(
-                call,
-                Arc::new(GraphCallState {
-                    progress,
-                    ..Default::default()
-                }),
-            );
-    }
-
-    pub(super) fn clear(&self) {
-        self.progress
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clear();
+        Self { owner }
     }
 }
 
@@ -228,40 +182,24 @@ impl AnalysisStore {
         reader: &Connection,
         input: &ManagedCommit<'_>,
         receipt: &ManagedReceipt,
+        verified: &mut crate::analysis::context::VerifiedPackages,
     ) -> Result<Option<(Arc<ManagedExecution>, Committed)>> {
         let Some(retention) = &input.attempt.4 else {
             return Ok(None);
         };
         let mut calls = input.attempt.3.clone();
-        let mut verified = crate::analysis::context::VerifiedPackages::default();
         let instance = input.attempt.instance();
         for returned in input.returns {
             if returned.retained.is_some() {
                 continue;
             }
             let declaration = &instance.spec.manifest.calls[&returned.call];
-            let native_graph = returned.changes.is_none()
-                && matches!(&instance.spec.destination,
-                ManagedDestination::Graph { calls, .. } if calls.contains(&returned.call));
-            let native = retention
-                .progress
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .get(&returned.call)
-                .cloned();
-            let sparse_resume = native_graph && native.is_some();
-            if native_graph && !sparse_resume {
-                calls.remove(&returned.call);
-                continue;
-            }
-            if !native_graph {
-                self.verify_package_revision(
-                    reader,
-                    instance.spec.tenant,
-                    &declaration.package,
-                    &mut verified,
-                )?;
-            }
+            self.verify_package_revision(
+                reader,
+                instance.spec.tenant,
+                &declaration.package,
+                verified,
+            )?;
             let mut evaluation = returned.evaluation.clone();
             evaluation.checkpoint = None;
             evaluation.previous_outputs.clear();
@@ -292,9 +230,6 @@ impl AnalysisStore {
                         changes: returned.changes.cloned(),
                     })),
                     reusable: false,
-                    native_graph,
-                    sparse_resume,
-                    native,
                 }),
             );
         }
@@ -313,32 +248,5 @@ impl AnalysisStore {
         };
         let owner = Arc::clone(&retention.owner);
         Ok(Some((owner, state)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::PackageErrorCodeV1 as Code;
-
-    #[test]
-    fn pending_progress_is_released() {
-        let retention = Retention::new(Arc::new(ManagedExecution::default()));
-        for failed in [true, false] {
-            let result: Result<()> = (|| {
-                let _pending = retention.pending();
-                retention.progress(1, BTreeMap::new());
-                if failed {
-                    return Err(Code::Denied.error("retained test publication"));
-                }
-                Ok(())
-            })();
-            assert_eq!(result.is_err(), failed);
-            assert!(retention
-                .progress
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_empty());
-        }
     }
 }

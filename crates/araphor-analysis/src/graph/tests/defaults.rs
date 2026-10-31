@@ -130,9 +130,9 @@ fn graph_accepts_retained_facts() -> TestResult {
     input.validate()?;
     let graph = Graph::new(&input)?;
     let evaluation = graph.evaluation()?;
-    assert_eq!(evaluation.inputs[0].data.rows(), 1);
-    assert_eq!(evaluation.inputs[1].data.rows(), 257);
-    assert_eq!(evaluation.inputs[2].data.rows(), 1);
+    assert_eq!(evaluation.input("records")?.data.rows(), 1);
+    assert_eq!(evaluation.input("facts")?.data.rows(), 257);
+    assert_eq!(evaluation.input("units")?.data.rows(), 1);
     let mut invalid = input;
     invalid.facts[0].key.entity_key.clear();
     assert!(invalid.validate().is_err());

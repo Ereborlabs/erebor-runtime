@@ -178,13 +178,9 @@ impl AnalysisStore {
                 operation: "begin managed publication",
             })?;
         let revision = self.package_next(&transaction)?;
-        let _progress = input
-            .attempt
-            .retention()
-            .map(super::execution::Retention::pending);
-        let (receipt, projected) =
+        let (receipt, projected, mut verified) =
             self.managed_commit_rows(&transaction, input, revision, project)?;
-        let retained = self.retain_managed(&transaction, input, &receipt)?;
+        let retained = self.retain_managed(&transaction, input, &receipt, &mut verified)?;
         let mut relations = Self::MANAGED_RELATIONS.to_vec();
         relations.extend(projected);
         relations.sort_unstable();
@@ -223,7 +219,7 @@ impl AnalysisStore {
             (&[crate::AnalysisWitnessV1], &[u64]),
             &mut VerifiedPackages,
         ) -> Result<(Vec<&'static str>, Option<PackageResultRefV1>)>,
-    ) -> Result<(ManagedReceipt, Vec<&'static str>)> {
+    ) -> Result<(ManagedReceipt, Vec<&'static str>, VerifiedPackages)> {
         if input.now_utc_ns < input.attempt.request().time_utc_ns {
             return Err(Code::Invalid.error("managed publication time"));
         }
@@ -327,7 +323,7 @@ impl AnalysisStore {
         transaction.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ?",
             params![ManagedCodec::encode(&attempt).context(crate::ManagedEncodingSnafu)?, revision, spec.tenant.as_slice(), spec.id, attempt.request.id])
             .context(AnalysisDatabaseSnafu { operation: "complete managed attempt" })?;
-        Ok((receipt, projected))
+        Ok((receipt, projected, verified))
     }
 
     pub(super) fn check_managed_claim(&self, attempt: &ManagedAttempt) -> Result<()> {
@@ -522,17 +518,6 @@ impl AnalysisStore {
             let checked = descriptor
                 .check_evaluation(evaluation)
                 .context(crate::AnalysisContractSnafu)?;
-            let sparse = input
-                .attempt
-                .3
-                .get(&returned.call)
-                .is_some_and(|prior| prior.sparse_resume)
-                && evaluation.checkpoint.as_ref().is_some_and(|checkpoint| {
-                    matches!(
-                        araphor_analysis_builtins::graph::Resume::basis(checkpoint),
-                        Ok(araphor_analysis_builtins::graph::ResumeBasis::Progress)
-                    )
-                });
             let input_basis = if let Some(changes) = returned.changes {
                 if changes.base.is_some() {
                     InputBasis::Complete
@@ -540,10 +525,10 @@ impl AnalysisStore {
                     InputBasis::None
                 }
             } else {
-                match (&evaluation.checkpoint, sparse) {
-                    (None, _) => InputBasis::None,
-                    (Some(_), true) => InputBasis::Progress,
-                    (Some(_), false) => InputBasis::Complete,
+                if evaluation.checkpoint.is_some() {
+                    InputBasis::Complete
+                } else {
+                    InputBasis::None
                 }
             };
             let mut expected = input
@@ -551,12 +536,11 @@ impl AnalysisStore {
                 .3
                 .get(&returned.call)
                 .map(|prior| {
-                    prior.state_sparse(
+                    prior.state(
                         checked.model(),
                         &evaluation.inputs,
                         evaluation.parameters.as_ref(),
                         attempt.request.rebuild,
-                        sparse,
                     )
                 })
                 .transpose()?

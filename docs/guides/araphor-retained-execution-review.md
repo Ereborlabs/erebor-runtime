@@ -1,7 +1,7 @@
 # Araphor retained execution state review
 
-This guide covers retained state, change inputs, and membership in
-`6a61cd89a`, plus the lookup working tree based on that commit. The changes remove repeated saved-call reads and
+This guide covers retained state and lookup inputs through `babd497c4`, plus
+the current unit migration. The changes remove repeated saved-call reads and
 deliver declared input changes to packages. The parent
 plan is [reactive execution latency](../plans/araphor-reactive-execution-latency.md).
 
@@ -12,11 +12,13 @@ Each invocation receives changes to its input query and the last committed
 state. Data remains the durable owner. Native DataFusion operators execute
 the input query. Native and Wasm packages use the same checked contract.
 
-The current code retains saved state and delivers declared change inputs.
-Builtin Graph inputs still use complete selections. Native input SQL still
-executes its complete selection. Data still encodes the complete target for
-cold recovery. Complete Graph state uses the cold path when the retained
-state is incomplete. The complete latency proposal remains **Not done**.
+The current code retains saved state and delivers changed Graph units with
+their current support. Native input SQL still selects complete targets. Data
+retains those targets for difference execution and cold recovery. Graph
+packages do not receive the complete prior Graph. Data owns contribution
+history and the derived package state. Live integration, historical anchor
+validation, exact replay, and restart checks pass. Combined timing proof
+for the unit migration is **Not done**.
 
 ## Implementation review flow
 
@@ -26,14 +28,16 @@ state is incomplete. The complete latency proposal remains **Not done**.
   -> [AnalysisStore::capture_managed](../../crates/araphor-data/src/analysis/managed/capture.rs) Data checks the store, instance, current package bytes, and exact saved-call heads
   -> [ManagedExecution::calls](../../crates/araphor-data/src/analysis/managed/execution.rs) Data borrows matching saved state or uses the existing cold read
   -> [PackageExec::change_inputs](../../crates/araphor-query/src/definition/physical/changes.rs) Query binds the committed base and current target to the prepared native difference plans
-  -> Partial [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) package physical execution receives declared changes or the complete selection and computes output and tentative state
-  -> [GraphRows::progress_plan](../../crates/araphor-data/src/analysis/graph_rows/progress.rs) the existing Graph writer validates the next progress map
-  -> [AnalysisStore::retain_managed](../../crates/araphor-data/src/analysis/managed/execution.rs) Data prepares retained state from checked live inputs, output, and validated progress
+  -> [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) package physical execution receives changed units and their current lookup rows
+  -> [GraphRows::stage_managed](../../crates/araphor-data/src/analysis/graph_rows/publication.rs) Data checks each producer base and validates current unit support
+  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph replaces the changed unit members in Data's transaction
+  -> [StateRows::current](../../crates/araphor-graph/src/contributions/state.rs) Graph selects the current package state from active unit members
+  -> [AnalysisStore::retain_managed](../../crates/araphor-data/src/analysis/managed/execution.rs) Data prepares retained state from checked live inputs, targets, and output
   -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits output changes, saved state, progress, and replay references
   -> [ManagedExecution::promote](../../crates/araphor-data/src/analysis/managed/execution.rs) Data replaces retained state after the commit succeeds
 
 [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) An invocation fails or its authority changes
-  -> [PendingProgress::drop](../../crates/araphor-data/src/analysis/managed/execution.rs) Data releases tentative progress on success or failure
+  -> [ManagedExecution::promote](../../crates/araphor-data/src/analysis/managed/execution.rs) Data promotes retained state only after the commit succeeds
   -> [ManagedExecution](../../crates/araphor-data/src/analysis/managed/execution.rs) the last committed state remains available after a failed publication
 
 [Instance::subscribe_on](../../crates/araphor-analysis/src/instance/subscription.rs) The process restarts
@@ -45,8 +49,7 @@ state is incomplete. The complete latency proposal remains **Not done**.
 
 Analysis creates one opaque `ManagedExecution` in each subscription's `Step`.
 Data alone changes its contents. Each entry contains the last committed
-input, output, checkpoint, context, and result reference. Graph continuation
-also retains the progress map that the existing writer validates. The cache
+input, output, checkpoint, context, and result reference. The cache
 does not hold a Query task context, source snapshot, operation control,
 execution receipt, database connection, or exchange permit.
 
@@ -78,6 +81,18 @@ A call-head, instance, store UUID, schema, or recovery-epoch mismatch uses the
 cold path. A clean reopen can reuse matching immutable state. A new process
 cannot retain these memory references and restores state from the store.
 
+Recovery uses the saved evaluation that Data already decodes for each call.
+It checks member anchors against that call's inputs and the owning unit's
+support. The check includes closed historical intervals. Publication and
+recovery use the same `CallBasis::local_for` rule. A fact can refer to another
+record when both records are in that unit's support. Recovery does not load
+a prior complete Graph for this check.
+
+Arrow and MessagePack use the same state row: a tag and a nullable declared
+value. The builtin `WAITING` state has tag `WAITING` and no declared value.
+A custom state named `WAITING` has tag `DECLARED` and value `WAITING`.
+Both compact and named MessagePack preserve that difference.
+
 ## Declared change inputs
 
 [ChangeInputs](../../crates/araphor-analysis-sdk/src/model/changes.rs) names
@@ -97,12 +112,18 @@ change_inputs:
 All three ports are declared in the model's typed interface. The before and
 after schemas match. The caller supplies the after query. Query supplies
 before and reset. Admission rejects caller arguments for generated ports.
-For example, the qualification image accepts:
+The following SQL calls the qualification package. This SQL does not start
+a subscription:
 
 ```sql
 SELECT * FROM "runtime-fixture"."1".changes(
   input => (SELECT source_cursor AS value FROM events))
 ```
+
+A Discovery definition stores this SQL with YAML metadata. Admission checks
+the definition and starts nothing. Starting a Discovery creates the managed
+Query subscription. The subscription executes on relevant source changes
+and runs until stopped. The name `runtime-fixture` identifies a test image.
 
 [Packages::changes](../../crates/araphor-query/src/definition/package/changes.rs)
 builds native `ROW_NUMBER` windows and two anti joins. The row number is
@@ -115,8 +136,10 @@ execution operator. The
 uses DataFusion's plan-state reset before reuse. Each invocation has its own
 source bindings and task context.
 
-Change ports describe unordered row collections. The package handles each
-declared input change. Metadata-only changes still invoke the package.
+DataFusion computes inserted and removed row occurrences. Araphor passes
+the resulting Arrow batches to the package without changing their values,
+row order, or batch order. The package handles each declared input change.
+Metadata-only changes still invoke the package.
 Current support inputs remain ordinary complete inputs. A missing base,
 changed parameters, or changed support input resets the whole invocation.
 Reset supplies empty before ports and complete after targets. Reset also
@@ -130,6 +153,30 @@ port, or reset port. Lookup queries can read the delivered before, after,
 reset, and earlier lookup ports. Their raw source dependencies share the
 captured snapshot. Native row numbering supplies zero-based `__row_index`
 values before lookup filters and joins.
+
+## Query result delivery
+
+A subscription for `SELECT source_cursor FROM events` delivers rows in
+committed arrival order. The order uses `(commit_revision, ordinal)`.
+The numeric cursor value does not change that order. A resumed subscription
+continues after its saved position. One wake can cover multiple commits;
+the subscription reads every retained row after that position.
+
+A snapshot delivers the batches that DataFusion produces. Araphor does not
+sort rows, change values, or change batch order before package execution.
+An explicit top-level `ORDER BY` remains part of that query's execution.
+
+[PackageCall](../../crates/araphor-query/src/definition/call/program.rs)
+uses native views to keep each package's standalone input and output program
+outside the caller's derived-relation cleanup. Query expands these views
+after SQL planning and before parameter binding, source checks, and admission
+sealing. Native `OutputRequirements` preserves the physical program's final
+ordering. No view marker remains in the admitted package call.
+
+A caller-supplied derived relation keeps native DataFusion SQL behavior.
+Query does not rebuild an inner `ORDER BY` that DataFusion removes from that
+relation. Standalone descriptor queries and package output programs have
+their own query roots.
 
 Lookup ports retain bound-input provenance as well as durable dependencies.
 A lookup over removed rows inherits their historical revision and coverage.
@@ -166,32 +213,47 @@ revision. Snapshot and unpaired support inputs keep row-based identity.
 
 ## Graph contribution membership
 
-[GraphStage::apply](../../crates/araphor-data/src/analysis/graph_rows/stage.rs) the Snapshot adapter validates and merges the unit-zero contribution
-  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph compares complete replacement rows with current unit members
+[UnitBatch::new](../../crates/araphor-data/src/analysis/graph_rows/units.rs) Data validates one contribution for each changed unit
+  -> [GraphRows::apply_units](../../crates/araphor-data/src/analysis/graph_rows/units.rs) Data interns the changed native values and their current evidence
   -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph closes removed or changed intervals before it opens replacement intervals
-  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph updates logical counts from touched-key presence transitions
+  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph updates logical counts from touched-key presence changes
+  -> [ProducerChanges::resolve_metadata](../../crates/araphor-data/src/analysis/graph_rows/publication.rs) Data uses the same derived state for result metadata and publication
   -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the existing transaction
 
-[GraphRows::write_metadata](../../crates/araphor-data/src/analysis/graph_rows/history.rs) Data prepares one complete metadata contribution
+[GraphRows::write_metadata](../../crates/araphor-data/src/analysis/graph_rows/history.rs) Data prepares the result metadata contribution
   -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph uses the same member comparison and interval writer
 
 Data supplies one batch for each scope and version. Graph opens no store and
-commits no transaction. The existing member history includes an interned
-event reference as the unit key. An empty unit replacement removes that
-unit's members. An omitted unit remains unchanged. Shared logical members
-survive removal of one owner. Equal replacements preserve their intervals.
+commits no transaction. The member history includes an interned event
+reference as the unit key. An empty unit replacement removes that unit's
+members. An omitted unit remains unchanged. Shared logical members survive
+removal of one owner. Equal replacements preserve their intervals. A reset
+replaces the scope's active members. It does not remove historical values.
+
+[SubjectRows](../../crates/araphor-graph/src/subjects.rs),
+[RelationshipRows](../../crates/araphor-graph/src/relationships.rs), and
+[FindingRows](../../crates/araphor-graph/src/findings.rs) own native value
+schema, interning, and decoding. Data retains source, context, package, and
+result authorization. Existing DataFusion table providers read the selected
+historical cut. No query planner or second Graph store is added.
+
+[StateRows](../../crates/araphor-graph/src/contributions/state.rs) stores the
+existing typed package state as a unit member. Process and credential state
+use native record identity order. Kubernetes state uses context key order.
+Source position proves provenance; it does not select the summary. The
+selected state reference is a checked index over member history. A declared
+custom value uses the existing state tag and declared payload.
 
 [Recovery validation](../../crates/araphor-data/src/analysis/graph_rows/validation.rs)
 checks source ownership, overlap within each unit, conflicting historical
-values, and logical counts. The result-to-producer-cut relation still selects
-historical Graphs. The
-[Graph owner tests](../../crates/araphor-graph/src/contributions/tests.rs)
-and [Data unit tests](../../crates/araphor-data/src/analysis/graph_rows/tests/schema.rs)
-exercise these rules.
-
-This is the membership foundation. Builtin event-unit publication is not
-connected yet. The Snapshot adapter still reads its complete prior unit.
-This guide does not claim a timing gain for that transitional path.
+values, logical counts, and the selected state.
+[GraphRows::call_scope](../../crates/araphor-data/src/analysis/graph_rows/history.rs)
+checks the exact source, instance, call, package, image, and producer version.
+The result-to-producer-cut relation still selects historical Graphs. The
+[Graph owner tests](../../crates/araphor-graph/src/contributions/tests.rs),
+[state tests](../../crates/araphor-graph/src/contributions/state/tests.rs), and
+[Data unit tests](../../crates/araphor-data/src/analysis/graph_rows/units/tests.rs)
+exercise these rules. Current-source run results remain pending.
 
 ## Proof and limits
 
@@ -199,15 +261,14 @@ This guide does not claim a timing gain for that transitional path.
 cover failed publication, retry, matching warm and cold values, parameter
 changes, call-head changes, current package modification and deletion,
 recovery-epoch changes, and a fresh retained-state owner after reopening.
-[Pending progress](../../crates/araphor-data/src/analysis/managed/execution.rs)
-has a cleanup test for both successful and failed scopes.
+The old Graph progress map and its temporary retention owner are removed.
 
 The [managed Graph tests](../../crates/araphor-analysis/src/graph/native/tests/managed.rs)
 and their history, notices, and restart modules exercise the production
 subscription, Wasm calls, proof changes, empty input, historical output,
 rollback, reopen, and memory release. Run results and the existing incident
 measurement are recorded in the parent plan. This guide does not claim
-millisecond event latency or migration of the builtin Graph input contract.
+millisecond event latency or completed qualification of the unit migration.
 
 [Change-input qualification](../../crates/araphor-analysis/src/instance/tests/changes.rs)
 uses SQL, Wasm, and the existing source-built native fixture. The tests cover

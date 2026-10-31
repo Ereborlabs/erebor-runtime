@@ -22,6 +22,7 @@ mod execution;
 mod guest;
 mod managed;
 mod parity;
+mod program;
 mod replay;
 mod retained;
 mod subscription;

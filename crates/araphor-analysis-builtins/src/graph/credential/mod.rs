@@ -98,7 +98,7 @@ impl CredentialIndex {
             }
         }
         for rows in index.channel_by_socket.values_mut() {
-            rows.sort_unstable();
+            rows.sort_by_key(|&row| &computation.records[row as usize].id);
             rows.dedup();
         }
         for (&row, facts) in &index.read_facts_by_row {
@@ -113,7 +113,7 @@ impl CredentialIndex {
         Ok(index)
     }
 
-    fn candidates(&self, computation: &Computation, row: u32) -> BTreeSet<usize> {
+    fn candidates(&self, computation: &Computation, row: u32) -> Vec<usize> {
         let mut candidates = BTreeSet::new();
         candidates.extend(
             self.read_facts_by_row
@@ -177,11 +177,17 @@ impl CredentialIndex {
                     .copied(),
             );
         }
+        candidates.retain(|&index| computation.selected(computation.facts[index].record));
+        let mut candidates = candidates.into_iter().collect::<Vec<_>>();
+        candidates.sort_by_key(|&index| {
+            computation.anchor_key(computation.facts[index].record, Some(index as u32))
+        });
         candidates
     }
 }
 
 impl Computation {
+    #[cfg(test)]
     pub(super) fn credentials(&mut self, affected: &[bool]) -> sdk::Result<()> {
         let index = CredentialIndex::new(self)?;
         for (row, affected) in affected.iter().copied().enumerate() {
@@ -198,7 +204,7 @@ impl Computation {
         Ok(())
     }
 
-    fn credential_event(
+    pub(super) fn credential_event(
         &mut self,
         row: u32,
         index: &CredentialIndex,

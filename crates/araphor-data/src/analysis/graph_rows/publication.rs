@@ -6,6 +6,26 @@ pub(in crate::analysis) struct ProducerChanges {
     previous: Option<GraphManifest>,
     full_check: bool,
     touched: BTreeSet<(u8, Vec<u8>)>,
+    states: BTreeMap<(String, u64), GraphPackageStateV1>,
+}
+
+impl ProducerChanges {
+    pub(in crate::analysis) fn resolve_metadata(&self, metadata: &mut GraphManifest) -> Result<()> {
+        for ((id, version), state) in &self.states {
+            let mut matches = metadata
+                .packages
+                .iter_mut()
+                .filter(|package| &package.package_id == id && package.package_version == *version);
+            let package = matches
+                .next()
+                .ok_or_else(|| GraphRows::invalid("graph unit package metadata"))?;
+            if matches.next().is_some() {
+                return Err(GraphRows::invalid("graph unit package metadata"));
+            }
+            package.state = state.clone();
+        }
+        Ok(())
+    }
 }
 
 impl GraphRows {
@@ -50,6 +70,7 @@ impl GraphRows {
             .transpose()?;
         let mut cuts = Vec::new();
         let mut touched = BTreeSet::new();
+        let mut states = BTreeMap::new();
         let mut full_check = previous.is_none()
             || commit.attempt.request().rebuild
             || commit.attempt.switches_version();
@@ -67,7 +88,8 @@ impl GraphRows {
                 .iter()
                 .find(|model| model.name == spec.manifest.calls[call].export)
                 .ok_or_else(|| Self::invalid("graph producer export"))?;
-            if !Detector::supports(model) {
+            let unit_contract = Detector::supports_units(model);
+            if !unit_contract {
                 continue;
             }
             let returned = commit
@@ -77,59 +99,45 @@ impl GraphRows {
                 .ok_or_else(|| Self::invalid("graph managed return"))?;
             let prior = commit.attempt.prior_result(*call);
             let rebuild = commit.attempt.request().rebuild || commit.attempt.switches_version();
-            let mut verified_append = false;
-            let scope = if returned.retained.is_some() {
-                if returned.retained != Some(reference) || prior != Some(reference) || rebuild {
-                    return Err(Self::invalid("graph retained producer"));
-                }
-                Self::call_scope(writer, spec, *call, reference)?
-            } else {
-                let resume = model
-                    .checkpoint
-                    .as_ref()
-                    .is_some_and(|checkpoint| checkpoint.resume_input_changes);
-                let basis = super::super::AnalysisStore::managed_input_basis(
+            if unit_contract {
+                store.verify_package_revision(
                     writer,
                     spec.tenant,
-                    &reference.result_id,
+                    &spec.manifest.calls[call].package,
+                    verified,
                 )?;
-                use super::super::managed::InputBasis;
-                if returned.evaluation.checkpoint.is_some() != (basis != InputBasis::None)
-                    || (basis == InputBasis::Progress && !resume)
-                    || (rebuild && resume && basis != InputBasis::None)
+                let changes = returned
+                    .changes
+                    .ok_or_else(|| Self::invalid("graph unit input base"))?;
+                let reset = model
+                    .change_inputs
+                    .as_ref()
+                    .ok_or_else(|| Self::invalid("graph unit change contract"))?
+                    .is_reset(returned.evaluation)
+                    .context(crate::AnalysisContractSnafu)?;
+                if returned.retained.is_some()
+                    || reset != changes.base.is_none()
+                    || (!reset && changes.base.as_ref() != prior)
+                    || (rebuild && !reset)
                 {
-                    return Err(Self::invalid("graph producer input basis"));
-                }
-                let continuing = !rebuild && resume && basis != InputBasis::None;
-                if continuing && prior.is_none() {
-                    return Err(Self::invalid("graph producer prior basis"));
+                    return Err(Self::invalid("graph unit input base"));
                 }
                 let storage_prior = prior.filter(|_| !rebuild);
-                let scope = if storage_prior.is_some() {
-                    storage_prior
-                        .map(|prior| Self::call_scope(writer, spec, *call, prior))
-                        .transpose()?
+                let scope = if let Some(prior) = storage_prior {
+                    Self::call_scope(writer, spec, *call, prior)?
                 } else {
-                    None
-                };
-                let scope = match scope {
-                    Some(scope) => scope,
-                    None => {
-                        full_check = true;
-                        let pin = &spec.manifest.calls[call];
-                        Self::new_scope(
-                            writer,
-                            metadata,
-                            source,
-                            0,
-                            Some(super::history::ProducerPin {
-                                instance: &spec.id,
-                                call: *call,
-                                declaration: pin,
-                            }),
-                            reference.commit_revision,
-                        )?
-                    }
+                    Self::new_scope(
+                        writer,
+                        metadata,
+                        source,
+                        0,
+                        Some(super::history::ProducerPin {
+                            instance: &spec.id,
+                            call: *call,
+                            declaration: &spec.manifest.calls[call],
+                        }),
+                        reference.commit_revision,
+                    )?
                 };
                 Self::version(
                     writer,
@@ -138,91 +146,40 @@ impl GraphRows {
                     reference.commit_revision,
                     storage_prior.map(|prior| prior.result_id.as_str()),
                 )?;
-                let native = store.verified_native_graph_call(
+                let effects = Self::apply_units(
                     writer,
-                    spec.tenant,
-                    &spec.manifest.calls[call],
-                    verified,
-                )?;
-                let sparse = basis == InputBasis::Progress;
-                if sparse {
-                    let checkpoint = returned
-                        .evaluation
-                        .checkpoint
-                        .as_ref()
-                        .map(Resume::basis)
-                        .transpose()
-                        .context(crate::AnalysisContractSnafu)?;
-                    if !native || checkpoint != Some(ResumeBasis::Progress) {
-                        return Err(Self::invalid("graph producer sparse basis"));
-                    }
-                }
-                verified_append = sparse;
-                let full = !continuing;
-                full_check |= full;
-                Self::apply_output(
-                    writer,
+                    &store.root,
                     scope,
                     reference.commit_revision,
                     metadata,
                     returned,
                     &spec.manifest.calls[call],
-                    super::calls::OutputMode {
-                        sparse,
-                        full,
-                        native_progress: native,
-                        retained: commit
-                            .attempt
-                            .retention()
-                            .map(|retention| (retention, *call)),
-                    },
                 )?;
-                touched.extend(Self::output_keys(returned.output)?);
-                scope
-            };
-            if let Some(old) = previous.as_ref().filter(|_| !verified_append) {
-                let removed = old.input_manifest.evidence.iter().any(|record| {
-                    metadata
-                        .input_manifest
-                        .evidence
-                        .binary_search(record)
-                        .is_err()
-                });
-                let corrected = old.facts.iter().any(|fact| !metadata.facts.contains(fact));
-                let coverage = old.input_manifest.coverage != metadata.input_manifest.coverage
-                    || old.missing_ranges != metadata.missing_ranges;
-                let context = old
-                    .input_manifest
-                    .context
+                touched.extend(effects.touched);
+                let package = metadata
+                    .packages
                     .iter()
-                    .any(|key| !metadata.input_manifest.context.contains(key));
-                let facts = Fact::decode(
-                    &returned
-                        .evaluation
-                        .input("facts")
-                        .context(crate::AnalysisContractSnafu)?
-                        .data,
-                )
-                .context(crate::AnalysisContractSnafu)?;
-                let restricted = facts
-                    .iter()
-                    .any(|fact| fact.sensitivity == ContextSensitivityV1::HostRestricted)
-                    && old.input_manifest.context != metadata.input_manifest.context;
-                if removed || corrected || coverage || context || restricted {
-                    Self::check_call(
-                        writer,
-                        scope,
-                        reference.commit_revision,
-                        metadata,
-                        returned.evaluation,
-                    )?;
+                    .find(|package| {
+                        package.package_id == spec.manifest.calls[call].package.package_id
+                    })
+                    .ok_or_else(|| Self::invalid("graph unit package metadata"))?;
+                if states
+                    .insert(
+                        (package.package_id.clone(), package.package_version),
+                        effects.state.clone(),
+                    )
+                    .is_some_and(|prior| prior != effects.state)
+                {
+                    return Err(Self::invalid("graph unit package state conflict"));
                 }
+                full_check |= reset || storage_prior.is_none();
+                cuts.push((
+                    reference.result_id.clone(),
+                    scope,
+                    reference.commit_revision,
+                ));
+                continue;
             }
-            cuts.push((
-                reference.result_id.clone(),
-                scope,
-                reference.commit_revision,
-            ));
         }
         if cuts.is_empty() {
             return Err(Self::invalid("graph producer is absent"));
@@ -245,6 +202,7 @@ impl GraphRows {
             previous,
             full_check,
             touched,
+            states,
         })
     }
 
@@ -376,52 +334,6 @@ impl GraphRows {
             metadata,
             (subjects as usize, edges as usize, findings as usize, 0),
         )
-    }
-
-    fn output_keys(output: &sdk::Output) -> Result<BTreeSet<(u8, Vec<u8>)>> {
-        let dataset = |name: &str| {
-            output
-                .datasets
-                .iter()
-                .find(|data| data.name == name)
-                .ok_or_else(|| Self::invalid("graph changed dataset"))
-        };
-        let mut keys = BTreeSet::new();
-        for row in
-            SubjectChange::decode(dataset("subjects")?).context(crate::AnalysisContractSnafu)?
-        {
-            keys.insert((2, Self::member_key(&row.key)?));
-        }
-        for row in SubjectRemoval::decode(dataset("subject_removals")?)
-            .context(crate::AnalysisContractSnafu)?
-        {
-            keys.insert((2, Self::member_key(&row.key)?));
-        }
-        for row in RelationshipChange::decode(dataset("relationships")?)
-            .context(crate::AnalysisContractSnafu)?
-        {
-            keys.insert((3, Self::member_key(&row.key)?));
-        }
-        for row in RelationshipRemoval::decode(dataset("relationship_removals")?)
-            .context(crate::AnalysisContractSnafu)?
-        {
-            keys.insert((3, Self::member_key(&row.key)?));
-        }
-        for row in
-            FindingChange::decode(dataset("findings")?).context(crate::AnalysisContractSnafu)?
-        {
-            let key = Self::member_key(&row.finding_id)?;
-            keys.insert((4, key.clone()));
-            keys.insert((6, key));
-        }
-        for row in FindingRemoval::decode(dataset("finding_removals")?)
-            .context(crate::AnalysisContractSnafu)?
-        {
-            let key = Self::member_key(&row.finding_id)?;
-            keys.insert((4, key.clone()));
-            keys.insert((6, key));
-        }
-        Ok(keys)
     }
 
     fn stage_keys(writer: &Connection, changes: &ProducerChanges) -> Result<()> {

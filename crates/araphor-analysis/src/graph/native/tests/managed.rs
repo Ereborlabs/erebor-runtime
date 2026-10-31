@@ -70,9 +70,7 @@ async fn graph_conversion_failure_finishes() -> TestResult {
         .enumerate()
         .map(|(index, id)| {
             let revision = if index == 0 { "conversion" } else { "1" };
-            format!(
-                "SELECT * FROM \"{id}\".\"{revision}\".detect('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"
-            )
+            format!("SELECT * FROM \"{id}\".\"{revision}\".detect('subjects')")
         })
         .collect::<Vec<_>>()
         .join(" UNION ALL ");

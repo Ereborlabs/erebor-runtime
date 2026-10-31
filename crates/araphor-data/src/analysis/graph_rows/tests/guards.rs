@@ -77,7 +77,7 @@ fn graph_authority_rolls_back() -> TestResult {
             "graph_subject_values",
             "graph_edge_values",
             "graph_edge_properties",
-            "graph_progress_values",
+            "graph_unit_state_values",
             "graph_position_values",
             "graph_branch_values",
             "graph_fact_values",

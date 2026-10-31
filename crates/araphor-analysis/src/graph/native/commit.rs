@@ -95,16 +95,6 @@ impl GraphPublication {
         });
         for (call, result) in actual {
             graph.check_call(call, result)?;
-            for input in &result.evaluation().inputs {
-                let expected = captured
-                    .inputs
-                    .iter()
-                    .find(|value| value.data.name == input.data.name)
-                    .ok_or_else(|| Code::Invalid.error("graph qualified input"))?;
-                if input.revision != expected.revision || input.coverage != expected.coverage {
-                    return Err(Code::Invalid.error("graph qualified input").into());
-                }
-            }
             let model = call
                 .descriptor()
                 .exports
@@ -112,26 +102,10 @@ impl GraphPublication {
                 .find(|model| model.name == call.export())
                 .ok_or_else(|| Code::Invalid.error("graph export contract"))?;
             graph.check_inputs(model, result.evaluation())?;
-            if captured.recheck
-                && !self.sparse.contains(&call.id())
-                && !result.evaluation().previous_outputs.is_empty()
-            {
-                graph.apply_output(
-                    call.descriptor(),
-                    result.evaluation(),
-                    result.output(),
-                    result.retained().is_some(),
-                    None,
-                )?;
-            } else {
-                let checkpoint = graph.validate_output(
-                    call.descriptor(),
-                    result.evaluation(),
-                    result.output(),
-                    result.retained().is_some(),
-                )?;
-                graph.packages.push(checkpoint);
-            }
+            graph.check_targets(model, result)?;
+            let checkpoint =
+                graph.validate_output(call.descriptor(), result.evaluation(), result.output())?;
+            graph.packages.push(checkpoint);
         }
         let mut contexts = captured.contexts.clone();
         contexts.sort_by(|left, right| left.key.cmp(&right.key));

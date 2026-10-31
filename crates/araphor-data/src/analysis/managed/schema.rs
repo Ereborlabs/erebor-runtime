@@ -418,7 +418,7 @@ impl AnalysisStore {
                                 .ok_or_else(|| {
                                     crate::PackageErrorCodeV1::Missing.error("managed Graph export")
                                 })?;
-                            if araphor_analysis_builtins::graph::Detector::supports(model) {
+                            if araphor_analysis_builtins::graph::Detector::supports_units(model) {
                                 let result = receipt.results.get(call).ok_or_else(|| {
                                     crate::PackageErrorCodeV1::Missing
                                         .error("managed Graph producer")
@@ -480,7 +480,7 @@ impl AnalysisStore {
         {
             return Self::reject_path(root, "the managed heads differ from completed attempts");
         }
-        crate::analysis::graph_rows::GraphCallRows::validate(reader, root)?;
+        crate::analysis::graph_rows::GraphRows::validate_history(reader, root)?;
         let mut statement = reader.prepare("SELECT tenant_id, result_id, processor_id, commit_revision FROM analysis_results WHERE processor_id IN ('managed-package-v1', 'managed-definition-v1')")
             .context(AnalysisDatabaseSnafu { operation: "prepare complete managed recovery" })?;
         let rows = statement
@@ -505,7 +505,8 @@ impl AnalysisStore {
                 .map_err(|_| crate::PackageErrorCodeV1::Invalid.error("managed result tenant"))?;
             if processor == "managed-package-v1" {
                 let (record, output, saved) = Self::managed_record_from(reader, tenant, &id)?;
-                Self::validate_managed_record(reader, tenant, &id, &record, &output, saved)?;
+                let output =
+                    Self::validate_managed_record(reader, tenant, &id, &record, &output, saved)?;
                 let mut owner = Self::managed_instance_from(reader, tenant, &record.instance)?
                     .ok_or_else(|| {
                         crate::PackageErrorCodeV1::Missing.error("managed evaluation owner")
@@ -528,13 +529,15 @@ impl AnalysisStore {
                 let evaluation =
                     Self::saved_evaluation_from(reader, &owner, &id, &control)?.decode(&control)?;
                 let descriptor = Self::managed_contract(reader, tenant, &record.declaration)?;
-                let native = matches!(&evaluated.destination,
-                    super::ManagedDestination::Graph { calls, .. } if calls.contains(&record.call))
-                    && descriptor
-                        .exports
-                        .iter()
-                        .find(|model| model.name == record.declaration.export)
-                        .is_some_and(araphor_analysis_builtins::graph::Detector::supports);
+                let model = descriptor
+                    .exports
+                    .iter()
+                    .find(|model| model.name == record.declaration.export)
+                    .ok_or_else(|| {
+                        crate::PackageErrorCodeV1::Missing.error("Graph recovery model")
+                    })?;
+                let unit = matches!(&evaluated.destination, super::ManagedDestination::Graph {calls,..} if calls.contains(&record.call))
+                    && araphor_analysis_builtins::graph::Detector::supports_units(model);
                 let base: Option<Option<String>> = reader
                     .query_row(
                         "SELECT base_result_id FROM graph_producer_versions WHERE result_id = ?",
@@ -545,20 +548,82 @@ impl AnalysisStore {
                     .context(AnalysisDatabaseSnafu {
                         operation: "validate Graph call result binding",
                     })?;
-                if native {
+                if unit {
                     base.ok_or_else(|| {
                         crate::PackageErrorCodeV1::Missing.error("Graph call native version")
                     })?;
-                    crate::analysis::graph_rows::GraphCallRows::load(
+                    let scope = crate::analysis::graph_rows::GraphRows::call_scope(
                         reader,
                         &evaluated,
                         record.call,
-                        &id,
+                        &crate::analysis::PackageResultRefV1 {
+                            result_id: id.clone(),
+                            commit_revision: revision,
+                        },
+                    )?;
+                    crate::analysis::graph_rows::GraphRows::validate_call_members(
+                        reader,
+                        scope,
                         revision,
                         &evaluation,
-                        &control,
-                        None,
                     )?;
+                    let state = output
+                        .datasets
+                        .iter()
+                        .find(|data| data.name == "state")
+                        .ok_or_else(|| {
+                            crate::PackageErrorCodeV1::Missing.error("Graph unit state output")
+                        })?;
+                    let states =
+                        araphor_analysis_builtins::graph::GraphPackageStateV1::decode(state)
+                            .context(crate::AnalysisContractSnafu)?;
+                    let [default] = states.as_slice() else {
+                        return Self::reject_path(root, "the Graph unit default state differs");
+                    };
+                    let selected = araphor_graph::StateRows::current(
+                        reader,
+                        scope,
+                        revision,
+                        default.clone(),
+                    )?;
+                    let mut published = reader.prepare("SELECT result_id FROM graph_result_producers WHERE producer_result_id=?")
+                        .context(AnalysisDatabaseSnafu { operation: "prepare Graph package state recovery" })?;
+                    let graphs = published
+                        .query_map(params![id], |row| row.get::<_, String>(0))
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "read Graph package state recovery",
+                        })?
+                        .collect::<duckdb::Result<Vec<_>>>()
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "decode Graph package state recovery",
+                        })?;
+                    for graph in graphs {
+                        let header = crate::analysis::graph_rows::GraphRows::read_metadata_control(
+                            reader, tenant, &graph, None,
+                        )?
+                        .ok_or_else(|| {
+                            crate::PackageErrorCodeV1::Missing.error("Graph package state header")
+                        })?;
+                        if header.expired {
+                            continue;
+                        }
+                        let package = header
+                            .snapshot
+                            .packages
+                            .iter()
+                            .find(|package| {
+                                package.package_id == record.declaration.package.package_id
+                            })
+                            .ok_or_else(|| {
+                                crate::PackageErrorCodeV1::Missing.error("Graph package state pin")
+                            })?;
+                        if package.state != selected {
+                            return Self::reject_path(
+                                root,
+                                "the published Graph package state differs",
+                            );
+                        }
+                    }
                 } else if base.is_some() {
                     return Self::reject_path(root, "a generic call has a native Graph version");
                 }

@@ -11,11 +11,10 @@ use snafu::ResultExt as _;
 use super::{AnalysisReadControl, GraphManifest, ManagedCommit, PackageResultRefV1};
 use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, GraphSnapshotV1, Result};
 
-mod calls;
+mod basis;
 mod header;
 mod history;
 mod intern;
-mod progress;
 mod publication;
 mod read;
 mod registry;
@@ -23,10 +22,10 @@ mod schema;
 mod stage;
 #[cfg(test)]
 pub(in crate::analysis) mod tests;
+mod units;
 mod validation;
 mod values;
 
-pub(in crate::analysis) use calls::{GraphCallRows, GraphCallState};
 pub(in crate::analysis) use header::GraphHeader;
 use intern::EdgeValue;
 
@@ -68,9 +67,9 @@ enum MemberKind {
     Subject = 2,
     Edge = 3,
     Finding = 4,
-    Progress = 5,
     Branch = 6,
     Fact = 7,
+    UnitState = 8,
 }
 
 impl TryFrom<u8> for MemberKind {
@@ -82,9 +81,9 @@ impl TryFrom<u8> for MemberKind {
             2 => Ok(Self::Subject),
             3 => Ok(Self::Edge),
             4 => Ok(Self::Finding),
-            5 => Ok(Self::Progress),
             6 => Ok(Self::Branch),
             7 => Ok(Self::Fact),
+            8 => Ok(Self::UnitState),
             _ => Err(GraphRows::invalid("graph member kind")),
         }
     }

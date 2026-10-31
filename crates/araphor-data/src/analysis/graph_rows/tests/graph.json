@@ -1147,7 +1147,9 @@
         "COVERAGE_INSUFFICIENT"
       ],
       "retention_ttl_ns": 604800000000000,
-      "state": "NATIVE_EFFECT",
+      "state": {
+        "tag": "NATIVE_EFFECT"
+      },
       "window_ns": 300000000000
     },
     {
@@ -1174,7 +1176,9 @@
         "COVERAGE_INSUFFICIENT"
       ],
       "retention_ttl_ns": 604800000000000,
-      "state": "WAITING",
+      "state": {
+        "tag": "WAITING"
+      },
       "window_ns": 300000000000
     },
     {
@@ -1201,7 +1205,9 @@
         "COVERAGE_INSUFFICIENT"
       ],
       "retention_ttl_ns": 604800000000000,
-      "state": "KUBERNETES_PROOF_MISSING",
+      "state": {
+        "tag": "KUBERNETES_PROOF_MISSING"
+      },
       "window_ns": 300000000000
     }
   ],

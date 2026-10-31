@@ -7,13 +7,16 @@ impl Computation {
         record: u32,
         context: Option<u32>,
     ) -> sdk::Result<u32> {
-        if let Some(index) = self.subject_indices.get(&key) {
-            let subject = &mut self.subjects[*index as usize];
-            if (record, context) < (subject.record, subject.context) {
+        if let Some(&index) = self.subject_indices.get(&key) {
+            let previous = &self.subjects[index as usize];
+            let earlier = self.anchor_key(record, context)
+                < self.anchor_key(previous.record, previous.context);
+            if earlier {
+                let subject = &mut self.subjects[index as usize];
                 subject.record = record;
                 subject.context = context;
             }
-            return Ok(*index);
+            return Ok(index);
         }
         let index =
             u32::try_from(self.subjects.len()).map_err(|_| Self::invalid("graph subject count"))?;
@@ -224,6 +227,9 @@ impl Computation {
             first_boottime_ns: boottime,
             last_boottime_ns: boottime,
         };
+        let earlier = self.edges.get(&key).is_some_and(|previous| {
+            self.anchor_key(row, fact_index) < self.anchor_key(previous.record, previous.fact)
+        });
         if let Some(previous) = self.edges.get_mut(&key) {
             if previous.edge != edge {
                 if key.cause != GraphCauseV1::Contradicted {
@@ -233,7 +239,7 @@ impl Computation {
                     OperationResultAuthorityV1::Unknown;
                 edge.proof_quality.operation_result_authority = OperationResultAuthorityV1::Unknown;
             }
-            if previous.edge == edge && (row, fact_index) < (previous.record, previous.fact) {
+            if previous.edge == edge && earlier {
                 previous.record = row;
                 previous.fact = fact_index;
             }

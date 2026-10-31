@@ -91,6 +91,61 @@ fn lookup_image() -> TestResult<PackageBundleV1> {
 }
 
 #[tokio::test]
+async fn lookup_preserves_sql_order() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    let control = AnalysisReadControl::default();
+    let mut image = lookup_image()?;
+    image.artifacts[0].descriptor.exports[0].inputs[3].source = sdk::InputSource::Lookup(
+        "SELECT value FROM (VALUES (CAST(3 AS BIGINT UNSIGNED)), (CAST(NULL AS BIGINT UNSIGNED)), (CAST(1 AS BIGINT UNSIGNED)), (CAST(2 AS BIGINT UNSIGNED))) values(value) ORDER BY value DESC NULLS FIRST".into(),
+    );
+    fixture.install(&image)?;
+    fixture.context(1)?;
+    let instance = fixture
+        .admit("ordered-lookup", &sql("CAST(7 AS BIGINT UNSIGNED)"))
+        .await?;
+    let receipt = instance.run(request("ordered-lookup"), &control).await?;
+    let reference = receipt
+        .results
+        .values()
+        .next()
+        .ok_or("ordered lookup result")?;
+    let saved = fixture.query.store().managed_evaluation(
+        instance.admitted(),
+        &reference.result_id,
+        &control,
+    )?;
+    let mut actual = Vec::new();
+    for batch in &saved.input("support")?.data.batches {
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<sdk::arrow_array::UInt64Array>()
+            .ok_or("lookup value type")?;
+        actual.extend(values.iter());
+    }
+    assert_eq!(actual, [None, Some(3), Some(2), Some(1)]);
+    let replay = Instance::replay_result(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.grant.clone(),
+        "ordered-lookup",
+        &reference.result_id,
+        &control,
+    )
+    .await?;
+    let call = replay
+        .calls
+        .values()
+        .next()
+        .ok_or("ordered lookup replay")?;
+    assert_eq!(
+        call.evaluation().input("support")?.data.batches,
+        saved.input("support")?.data.batches
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn lookup_rejects_early_dependencies() -> TestResult {
     for sql in [
         "SELECT value FROM removed",

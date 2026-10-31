@@ -63,10 +63,64 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     let expected = vec![first.id.clone(), last.id.clone()];
     let records = [first, separate, last];
     let record_count = records.len();
+    let facts = records
+        .iter()
+        .enumerate()
+        .map(|(row, record)| Fact {
+            record: row as u32,
+            key: AnalysisContextKeyV1 {
+                tenant_id: record.id.stream.tenant_id,
+                owner_id: "fixture".into(),
+                entity_key: (row as u32).to_be_bytes().to_vec(),
+                lifetime_key: record.id.stream.key(),
+                owner_revision: 1,
+            },
+            sensitivity: ContextSensitivityV1::Tenant,
+            value: GraphFactValueV1::Context {
+                subject: GraphSubjectKeyV1::native(
+                    &record.id.stream,
+                    GraphSubjectKindV1::Task,
+                    record.effect.task_cookie.to_be_bytes().to_vec(),
+                ),
+                action_id: "example".into(),
+                classification: GraphContextActionV1::InMemory,
+                proof_quality: record.proof_quality,
+            },
+        })
+        .collect::<Vec<_>>();
+    let mut support = records
+        .iter()
+        .enumerate()
+        .map(|(row, record)| UnitSupport {
+            record: record.id.clone(),
+            proof: record.proof_quality,
+            facts: facts
+                .iter()
+                .filter(|fact| fact.record as usize == row)
+                .map(|fact| fact.key.clone())
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    support.sort_by(|left, right| left.record.cmp(&right.record));
+    let units = records
+        .iter()
+        .map(|record| Unit {
+            record: record.id.clone(),
+            window_ns: 100,
+            restricted: false,
+            support: support.clone(),
+        })
+        .collect::<Vec<_>>();
     let inputs = vec![
+        Unit::encode(&units)?,
+        Unit::encode_removals(&[])?,
+        model
+            .change_inputs
+            .as_ref()
+            .ok_or("change inputs")?
+            .reset_input(true)?,
         Observation::encode(&records)?,
-        Fact::encode(&[])?,
-        Manifest::encode(&[Manifest { window_ns: 100 }])?,
+        Fact::encode(&facts)?,
     ];
     let mut evaluation = sdk::Evaluation {
         previous_outputs: Vec::new(),
@@ -110,10 +164,40 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     let other = other.check_evaluation(&evaluation)?;
     assert!(matches!(<BurstDetector as sdk::Guest>::compute(&other),
         Err(sdk::Error::Contract { code: sdk::ErrorCode::Incompatible, field, .. }) if field == "detector package"));
-    let findings = FindingChange::decode(&output.datasets[4])?;
+    let findings = FindingChange::decode(&output.datasets[2])?;
     assert_eq!(
-        GraphPackageStateV1::decode(&output.checkpoint.as_ref().ok_or("checkpoint")?.datasets[0])?,
-        [GraphPackageStateV1::Declared(record_count.to_string())]
+        GraphPackageStateV1::decode(&output.datasets[4])?,
+        [GraphPackageStateV1::Declared("0".into())]
+    );
+    assert!(output.checkpoint.is_none());
+    assert!(model.checkpoint.is_none());
+    assert!(Detector::supports_units(model));
+    let contributions = Contribution::decode(&output.datasets[3])?;
+    assert_eq!(contributions.len(), units.len());
+    assert_eq!(contributions[0].findings, [0]);
+    assert_eq!(contributions[0].subjects, [0]);
+    assert!(contributions[1..]
+        .iter()
+        .all(|unit| unit.findings.is_empty() && unit.subjects.is_empty()));
+    let state = contributions
+        .iter()
+        .find_map(|unit| unit.state.as_ref())
+        .ok_or("declared state")?;
+    assert_eq!(
+        state.state,
+        GraphPackageStateV1::Declared(record_count.to_string())
+    );
+    let last = records
+        .iter()
+        .max_by_key(|record| &record.id)
+        .ok_or("last record")?;
+    assert_eq!(state.position, last.position);
+    assert_eq!(
+        contributions
+            .iter()
+            .filter(|unit| unit.state.is_some())
+            .count(),
+        1
     );
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].evidence, expected);
@@ -134,6 +218,81 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     assert_eq!(
         BurstDetector::evaluate(&evaluation)?.evidence,
         output.evidence
+    );
+    let mut expected_units = contributions.clone();
+    expected_units.sort_by(|left, right| left.record.cmp(&right.record));
+    for order in [[0, 1, 2], [2, 1, 0], [1, 2, 0], [2, 0, 1]] {
+        for reverse_facts in [false, true] {
+            for reverse_units in [false, true] {
+                let selected = order.map(|row| records[row].clone());
+                let mut delivered = facts.clone();
+                for fact in &mut delivered {
+                    fact.record = order
+                        .iter()
+                        .position(|&row| row == fact.record as usize)
+                        .ok_or("permuted record")? as u32;
+                }
+                if reverse_facts {
+                    delivered.reverse();
+                }
+                let mut changed = units.clone();
+                if reverse_units {
+                    changed.reverse();
+                }
+                let mut permuted = evaluation.clone();
+                permuted.inputs[0].data = Unit::encode(&changed)?;
+                permuted.inputs[3].data = Observation::encode(&selected)?;
+                permuted.inputs[4].data = Fact::encode(&delivered)?;
+                let actual = BurstDetector::evaluate(&permuted)?;
+                assert_eq!(
+                    SubjectChange::decode(&actual.datasets[0])?,
+                    SubjectChange::decode(&output.datasets[0])?
+                );
+                assert_eq!(FindingChange::decode(&actual.datasets[2])?, findings);
+                let mut actual_units = Contribution::decode(&actual.datasets[3])?;
+                actual_units.sort_by(|left, right| left.record.cmp(&right.record));
+                assert_eq!(actual_units, expected_units);
+                assert_eq!(
+                    GraphPackageStateV1::decode(&actual.datasets[4])?,
+                    GraphPackageStateV1::decode(&output.datasets[4])?
+                );
+                assert_eq!(
+                    actual
+                        .evidence
+                        .iter()
+                        .map(|link| selected[link.input.row as usize].id.clone())
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                assert_eq!(actual.reasons.len(), output.reasons.len());
+                for (left, right) in actual.reasons.iter().zip(&output.reasons) {
+                    assert_eq!(left.output, right.output);
+                    assert_eq!(left.code, right.code);
+                    assert_eq!(left.details, right.details);
+                }
+            }
+        }
+    }
+    evaluation.inputs[0].data = Unit::encode(&units[1..])?;
+    let partial = BurstDetector::evaluate(&evaluation)?;
+    assert!(FindingChange::decode(&partial.datasets[2])?.is_empty());
+    let partial = Contribution::decode(&partial.datasets[3])?;
+    assert_eq!(partial.len(), units.len() - 1);
+    assert!(partial
+        .iter()
+        .all(|unit| unit.findings.is_empty() && unit.subjects.is_empty()));
+    evaluation.inputs[0].data = Unit::encode(&units[..1])?;
+    let owner = BurstDetector::evaluate(&evaluation)?;
+    assert_eq!(FindingChange::decode(&owner.datasets[2])?, findings);
+    assert!(Contribution::decode(&owner.datasets[3])?[0].state.is_none());
+    evaluation.inputs[0].data = Unit::encode(&[])?;
+    evaluation.inputs[3].data = Observation::encode(&[])?;
+    evaluation.inputs[4].data = Fact::encode(&[])?;
+    let empty = BurstDetector::evaluate(&evaluation)?;
+    assert!(Contribution::decode(&empty.datasets[3])?.is_empty());
+    assert_eq!(
+        GraphPackageStateV1::decode(&empty.datasets[4])?,
+        [GraphPackageStateV1::Declared("0".into())]
     );
     evaluation.parameters = Some(sdk::RecordBatch::try_new(
         Arc::new(model.parameters.clone()),

@@ -76,10 +76,6 @@ fn change_base_matches_basis() -> TestResult {
             super::super::model::InputBasis::None,
             Some(reference.clone()),
         ),
-        (
-            super::super::model::InputBasis::Progress,
-            Some(reference.clone()),
-        ),
     ] {
         record.input_basis = basis;
         record.changes.as_mut().ok_or("changes")?.base = base;

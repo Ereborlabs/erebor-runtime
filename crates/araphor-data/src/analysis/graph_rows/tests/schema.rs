@@ -32,12 +32,12 @@ fn standalone_graph_rejects_managed_producer_binding() -> TestResult {
     )?;
     writer.execute("INSERT INTO graph_result_producers VALUES('standalone','standalone:metadata'),('standalone','standalone:publication')",[])?;
     let directory = tempfile::tempdir()?;
-    GraphCallRows::validate(&writer, directory.path())?;
+    GraphRows::validate_history(&writer, directory.path())?;
     writer.execute(
         "INSERT INTO graph_result_producers VALUES('standalone','call')",
         [],
     )?;
-    assert!(GraphCallRows::validate(&writer, directory.path()).is_err());
+    assert!(GraphRows::validate_history(&writer, directory.path()).is_err());
     Ok(())
 }
 
@@ -45,6 +45,10 @@ fn standalone_graph_rejects_managed_producer_binding() -> TestResult {
 fn native_schema_integrity() -> TestResult {
     let faults = [
         GraphRows::schema().replace("ordinal UINTEGER", "ordinal INTEGER"),
+        GraphRows::schema().replace("state_count UBIGINT", "state_count UINTEGER"),
+        GraphRows::schema().replace("selected_state_ref UBIGINT", "selected_state_ref UINTEGER"),
+        GraphRows::schema().replace("state_tag VARCHAR NOT NULL", "state_tag VARCHAR"),
+        GraphRows::schema().replace("state_declared VARCHAR", "state_declared BLOB"),
         GraphRows::schema().replace("unit_ref UBIGINT", "unit_ref UINTEGER"),
         GraphRows::schema().replace(
             "unit_ref UBIGINT NOT NULL DEFAULT 0",
@@ -104,7 +108,7 @@ fn native_schema_reopen() -> TestResult {
     for fault in [
         "ALTER TABLE graph_producer_members ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_subject_values ADD COLUMN extra INTEGER",
-        "ALTER TABLE graph_progress_values ADD COLUMN extra INTEGER",
+        "ALTER TABLE graph_unit_state_values ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_edge_values ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_edge_properties ADD COLUMN extra INTEGER",
         "ALTER TABLE graph_branch_values ADD COLUMN extra INTEGER",
@@ -146,6 +150,9 @@ fn shared_corruption_rejects_reopen() -> TestResult {
         "UPDATE graph_edge_properties SET edge_rank=255",
         "UPDATE graph_edge_values SET value_hash=from_hex(repeat('00',32))",
         "UPDATE graph_evidence SET source_ref=source_ref+1",
+        "UPDATE graph_producer_members SET anchor_fact=X'00' WHERE member_kind=2",
+        "UPDATE graph_producer_members SET anchor_record_id=(SELECT min(evidence_id) FROM graph_evidence) WHERE member_kind=2",
+        "UPDATE graph_producer_members SET reason_code='wrong' WHERE member_kind=4",
         "UPDATE graph_sources SET tenant_id='wrong'::BLOB",
         "UPDATE graph_branch_values SET tenant_id='wrong'::BLOB",
         "UPDATE graph_branch_values SET body=body || from_hex('00')",

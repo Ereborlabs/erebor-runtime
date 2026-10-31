@@ -95,7 +95,7 @@ fn inserted_state_keeps_last() -> TestResult {
     let detector = Detector::Process;
     let mut old = records(2);
     old[1].id.durable_cursor = 3;
-    let prior = detector.evaluate(&input(detector, &old, &[], 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &old, &[], 100)?)?;
     let mut added = record();
     added.id = identity(1);
     added.position.ordinal = 2;
@@ -147,7 +147,7 @@ fn inserted_state_keeps_last() -> TestResult {
 fn restricted_fact_updates_findings() -> TestResult {
     let detector = Detector::Process;
     let old = records(2);
-    let prior = detector.evaluate(&input(detector, &old, &[], 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &old, &[], 100)?)?;
     let previous = FindingChange::decode(&prior.datasets[4])?;
     assert!(previous
         .iter()
@@ -183,7 +183,7 @@ fn changed_inputs_rebuild_selectively() -> TestResult {
         fact(0, context(ContextClass::InMemory)),
         fact(1, context(ContextClass::OutsideAuthority)),
     ];
-    let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &old, &facts, 100)?)?;
     for case in 0..8 {
         let mut current = old.clone();
         let mut selected = facts.clone();
@@ -244,7 +244,7 @@ fn expired_records_reuse_survivors() -> TestResult {
     let detector = Detector::Process;
     let old = records(64);
     for width in [1, 100, 10_000] {
-        let prior = detector.evaluate(&input(detector, &old, &[], width)?)?;
+        let prior = detector.evaluate_snapshot(&input(detector, &old, &[], width)?)?;
         let (_, work) = continued(detector, &input(detector, &old[1..], &[], width)?, &prior)?;
         assert_eq!(work, 0, "window {width}");
     }
@@ -265,7 +265,7 @@ fn expired_join_reuses_unrelated() -> TestResult {
         old.push(value);
     }
     for width in [10, 100, 10_000] {
-        let prior = detector.evaluate(&input(detector, &old, &facts, width)?)?;
+        let prior = detector.evaluate_snapshot(&input(detector, &old, &facts, width)?)?;
         let mut current = old.clone();
         current.remove(1);
         let mut selected = facts.clone();
@@ -297,7 +297,7 @@ fn expired_authority_support_disappears() -> TestResult {
             *workload_binding = None;
         }
     }
-    let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &old, &facts, 100)?)?;
     let read = FindingChange::decode(&prior.datasets[4])?
         .into_iter()
         .find(|finding| finding.anchor.record == old[0].id)
@@ -326,7 +326,7 @@ fn expired_authority_support_disappears() -> TestResult {
         let mut resumed = current.clone();
         resumed.checkpoint = prior.checkpoint.clone();
         resumed.previous_outputs = normalized_prior(&prior)?;
-        let delta = detector.evaluate(&resumed)?;
+        let delta = detector.evaluate_snapshot(&resumed)?;
         assert!(FindingRemoval::decode(&delta.datasets[5])?
             .iter()
             .all(|finding| finding.finding_id != read.finding_id));
@@ -368,7 +368,7 @@ fn surviving_parent_reanchors_process() -> TestResult {
             proof_quality: proof(),
         },
     )];
-    let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
+    let prior = detector.evaluate_snapshot(&input(detector, &old, &facts, 100)?)?;
     assert_eq!(
         SubjectChange::decode(&prior.datasets[0])?
             .iter()
@@ -406,7 +406,7 @@ fn expired_state_and_sensitivity() -> TestResult {
     let mut restricted = fact(1, context(ContextClass::InMemory));
     restricted.sensitivity = ContextSensitivityV1::HostRestricted;
     let retained = fact(0, context(ContextClass::OutsideAuthority));
-    let prior = detector.evaluate(&input(
+    let prior = detector.evaluate_snapshot(&input(
         detector,
         &old,
         &[retained.clone(), restricted],
@@ -430,7 +430,7 @@ fn expired_state_and_sensitivity() -> TestResult {
 fn incompatible_progress_rebuilds() -> TestResult {
     let detector = Detector::Process;
     let current = input(detector, &records(2), &[], 100)?;
-    let prior = detector.evaluate(&current)?;
+    let prior = detector.evaluate_snapshot(&current)?;
     for case in 0..5 {
         let mut saved = prior.clone();
         let dataset = &mut saved.datasets[6];
@@ -453,9 +453,12 @@ fn incompatible_progress_rebuilds() -> TestResult {
         let mut admitted = current.clone();
         admitted.checkpoint = saved.checkpoint.clone();
         admitted.previous_outputs = normalized_prior(&saved)?;
-        detector.descriptor().check_evaluation(&admitted)?;
+        detector.snapshot_descriptor().check_evaluation(&admitted)?;
         if matches!(case, 1 | 3 | 4) {
-            assert!(detector.evaluate(&admitted).is_err(), "progress {case}");
+            assert!(
+                detector.evaluate_snapshot(&admitted).is_err(),
+                "progress {case}"
+            );
         } else {
             assert_eq!(
                 continued(detector, &current, &saved)?.1,
@@ -467,10 +470,13 @@ fn incompatible_progress_rebuilds() -> TestResult {
     let mut invalid = current;
     invalid.previous_outputs = normalized_prior(&prior)?;
     invalid.checkpoint = prior.checkpoint;
-    detector.descriptor().check_evaluation(&invalid)?;
+    detector.snapshot_descriptor().check_evaluation(&invalid)?;
     let checkpoint = invalid.checkpoint.as_mut().ok_or("checkpoint")?;
     let dataset = checkpoint.datasets.first_mut().ok_or("state")?;
     dataset.batches = Manifest::encode(&[Manifest { window_ns: 100 }])?.batches;
-    assert!(detector.descriptor().check_evaluation(&invalid).is_err());
+    assert!(detector
+        .snapshot_descriptor()
+        .check_evaluation(&invalid)
+        .is_err());
     Ok(())
 }

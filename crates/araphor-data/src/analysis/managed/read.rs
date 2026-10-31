@@ -815,14 +815,6 @@ impl AnalysisStore {
         Ok((record, output, revision))
     }
 
-    pub(in crate::analysis) fn managed_input_basis(
-        reader: &Connection,
-        tenant: [u8; 16],
-        id: &str,
-    ) -> Result<InputBasis> {
-        Ok(Self::managed_header_from(reader, tenant, id)?.0.input_basis)
-    }
-
     fn retained_call_from(
         &self,
         reader: &Connection,

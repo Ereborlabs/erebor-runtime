@@ -27,9 +27,7 @@ async fn managed_versions_rebuild_graph() -> TestResult {
     }
     let sql = araphor_data::FindingV1::PACKAGES
         .iter()
-        .map(|id| format!(
-            "SELECT * FROM \"{id}\".\"2\".detect('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"
-        ))
+        .map(|id| format!("SELECT * FROM \"{id}\".\"2\".detect('subjects')"))
         .collect::<Vec<_>>()
         .join(" UNION ALL ");
     let next = fixture.prepare_sql("*", "", sql).await?;

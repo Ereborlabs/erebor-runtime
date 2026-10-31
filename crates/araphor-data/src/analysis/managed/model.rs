@@ -381,10 +381,6 @@ pub struct ManagedPrior {
     pub checkpoint: Option<sdk::Checkpoint>,
     pub retained: Option<std::sync::Arc<RetainedCall>>,
     pub reusable: bool,
-    pub(in crate::analysis) native_graph: bool,
-    pub(in crate::analysis) sparse_resume: bool,
-    pub(in crate::analysis) native:
-        Option<std::sync::Arc<crate::analysis::graph_rows::GraphCallState>>,
 }
 
 #[derive(Clone, Debug)]
@@ -453,77 +449,6 @@ impl RetainedCall {
 }
 
 impl ManagedPrior {
-    pub fn state_sparse(
-        &self,
-        model: &sdk::Model,
-        inputs: &[sdk::Input],
-        parameters: Option<&sdk::RecordBatch>,
-        rebuild: bool,
-        sparse_allowed: bool,
-    ) -> Result<(Option<sdk::Checkpoint>, Vec<sdk::Dataset>)> {
-        let (checkpoint, previous) = self.state(model, inputs, parameters, rebuild)?;
-        if !self.sparse_resume || checkpoint.is_none() {
-            return Ok((checkpoint, previous));
-        }
-        if !sparse_allowed {
-            return Ok((None, Vec::new()));
-        }
-        let detector = [
-            araphor_analysis_builtins::graph::Detector::Process,
-            araphor_analysis_builtins::graph::Detector::Credentials,
-            araphor_analysis_builtins::graph::Detector::Kubernetes,
-        ]
-        .into_iter()
-        .find(|detector| detector.descriptor().exports[0] == *model)
-        .ok_or_else(|| Code::Invalid.error("Graph built in model"))?;
-        let rows = self
-            .native
-            .as_ref()
-            .ok_or_else(|| Code::Missing.error("Graph call native prior"))?
-            .progress
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        let checkpoint = araphor_analysis_builtins::graph::Resume::for_append(
-            detector,
-            checkpoint
-                .as_ref()
-                .ok_or_else(|| Code::Missing.error("Graph checkpoint"))?,
-            inputs,
-            &rows,
-        )
-        .map_err(|_| Code::Invalid.error("Graph append basis"))?;
-        Ok(match checkpoint {
-            Some(checkpoint) => {
-                let mut previous = previous;
-                for dataset in &mut previous {
-                    if dataset.name != "progress" {
-                        dataset.batches = dataset
-                            .batches
-                            .iter()
-                            .map(|batch| batch.slice(0, 0))
-                            .collect();
-                    }
-                }
-                (Some(checkpoint), previous)
-            }
-            None => (None, Vec::new()),
-        })
-    }
-
-    pub fn graph_prior(&self) -> Result<Option<Vec<sdk::Dataset>>> {
-        if self.native_graph {
-            Ok(Some(
-                self.native
-                    .as_ref()
-                    .ok_or_else(|| Code::Missing.error("Graph call native prior"))?
-                    .outputs()?,
-            ))
-        } else {
-            Ok(None)
-        }
-    }
-
     pub fn state(
         &self,
         model: &sdk::Model,
@@ -577,21 +502,12 @@ impl ManagedPrior {
             return Ok((None, Vec::new()));
         }
         let previous = if continuation {
-            let datasets = if self.native_graph {
-                return self
-                    .native
-                    .as_ref()
-                    .ok_or_else(|| Code::Missing.error("Graph call native prior"))?
-                    .outputs()
-                    .map(|datasets| (Some(checkpoint.clone()), datasets));
-            } else {
-                &self
-                    .retained
-                    .as_ref()
-                    .ok_or_else(|| Code::Invalid.error("managed prior outputs"))?
-                    .output
-                    .datasets
-            };
+            let datasets = &self
+                .retained
+                .as_ref()
+                .ok_or_else(|| Code::Invalid.error("managed prior outputs"))?
+                .output
+                .datasets;
             if datasets.len() != model.outputs.len()
                 || datasets
                     .iter()
@@ -838,9 +754,6 @@ pub struct ManagedAttempt(
 );
 
 impl ManagedAttempt {
-    pub(in crate::analysis) fn retention(&self) -> Option<&super::execution::Retention> {
-        self.4.as_deref()
-    }
     pub(in crate::analysis) fn prior_result(&self, call: u64) -> Option<&PackageResultRefV1> {
         self.0.capture.prior.get(&call).and_then(Option::as_ref)
     }
@@ -939,7 +852,6 @@ pub(super) struct RecordInput {
 pub(in crate::analysis) enum InputBasis {
     None,
     Complete,
-    Progress,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::sync::OnceLock;
 
 use super::*;
@@ -89,38 +90,6 @@ impl ReasonDetails {
 }
 
 impl Detector {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn supports_resume(package: &sdk::Package, export: &str, component: &[u8]) -> bool {
-        let Ok(detector) = Self::from_id(&package.id) else {
-            return false;
-        };
-        let expected = match detector {
-            Self::Process => crate::components::PROCESS,
-            Self::Credentials => crate::components::CREDENTIALS,
-            Self::Kubernetes => crate::components::KUBERNETES,
-        };
-        export == "detect" && package == &detector.descriptor() && component == expected
-    }
-
-    pub fn supports(model: &sdk::Model) -> bool {
-        let expected = Self::Process.descriptor();
-        let expected = &expected.exports[0];
-        model
-            .inputs
-            .iter()
-            .map(|input| &input.port)
-            .eq(expected.inputs.iter().map(|input| &input.port))
-            && model.outputs == expected.outputs
-            && model.checkpoint.as_ref().is_some_and(|checkpoint| {
-                checkpoint.version == 1
-                    && checkpoint.datasets.first()
-                        == expected
-                            .checkpoint
-                            .as_ref()
-                            .and_then(|spec| spec.datasets.first())
-            })
-    }
-
     pub const fn id(self) -> &'static str {
         match self {
             Self::Process => "HF-PROC-001",
@@ -141,11 +110,13 @@ impl Detector {
         }
     }
 
-    pub fn descriptor(self) -> sdk::Package {
-        self.declaration().clone()
+    #[cfg(test)]
+    pub(super) fn snapshot_descriptor(self) -> sdk::Package {
+        self.snapshot_declaration().clone()
     }
 
-    fn declaration(self) -> &'static sdk::Package {
+    #[cfg(test)]
+    fn snapshot_declaration(self) -> &'static sdk::Package {
         static PROCESS: OnceLock<sdk::Package> = OnceLock::new();
         static CREDENTIALS: OnceLock<sdk::Package> = OnceLock::new();
         static KUBERNETES: OnceLock<sdk::Package> = OnceLock::new();
@@ -154,16 +125,18 @@ impl Detector {
             Self::Credentials => &CREDENTIALS,
             Self::Kubernetes => &KUBERNETES,
         };
-        declaration.get_or_init(|| self.build_descriptor())
+        declaration.get_or_init(|| self.build_snapshot())
     }
 
-    pub fn inputs() -> &'static [sdk::Port] {
+    #[cfg(test)]
+    fn snapshot_inputs() -> &'static [sdk::Port] {
         static INPUTS: OnceLock<Vec<sdk::Port>> = OnceLock::new();
         INPUTS.get_or_init(|| vec![Observation::port(), Fact::port(), Manifest::port()])
     }
 
-    fn build_descriptor(self) -> sdk::Package {
-        let inputs = Self::inputs().to_vec();
+    #[cfg(test)]
+    fn build_snapshot(self) -> sdk::Package {
+        let inputs = Self::snapshot_inputs().to_vec();
         let mut findings = FindingChange::port();
         findings.kind = sdk::OutputKind::Findings;
         findings.evidence_required = true;
@@ -202,14 +175,19 @@ impl Detector {
         sdk::Package::new(self.id(), "1", vec![model])
     }
 
-    pub fn evaluate(self, evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-        self.declaration()
+    #[cfg(test)]
+    pub(super) fn evaluate_snapshot(
+        self,
+        evaluation: &sdk::Evaluation,
+    ) -> sdk::Result<sdk::Output> {
+        self.snapshot_declaration()
             .check_evaluation(evaluation)?
-            .evaluate(|input| self.compute(input))
+            .evaluate(|input| self.compute_snapshot(input))
     }
 
-    pub fn compute(self, checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
-        if checked.package() != self.declaration() {
+    #[cfg(test)]
+    fn compute_snapshot(self, checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        if checked.package() != self.snapshot_declaration() {
             return Err(sdk::Error::contract(
                 sdk::ErrorCode::Incompatible,
                 "graph package",
@@ -244,12 +222,12 @@ impl Detector {
                 "graph manifest count",
             ));
         }
-        let mut computation = Computation::new(records, facts, manifests.remove(0), self)?;
+        let mut computation = Computation::snapshot(records, facts, manifests.remove(0), self)?;
         computation.update(evaluation)?;
         computation.output()
     }
 
-    fn reasons(self) -> &'static [&'static str] {
+    pub(super) fn reasons(self) -> &'static [&'static str] {
         match self {
             Self::Process => &[
                 "UNEXPECTED_EFFECT",

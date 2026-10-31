@@ -27,9 +27,8 @@ impl Graph<'_> {
         package: &sdk::Package,
         evaluation: &sdk::Evaluation,
         output: &sdk::Output,
-        retained: bool,
     ) -> Result<GraphPackageCheckpointV1> {
-        let changes = self.changes(package, evaluation, output, retained)?;
+        let changes = self.changes(package, evaluation, output)?;
         Ok(changes.package)
     }
 
@@ -38,7 +37,6 @@ impl Graph<'_> {
         package: &sdk::Package,
         evaluation: &sdk::Evaluation,
         output: &sdk::Output,
-        retained: bool,
     ) -> Result<Changes> {
         let model = package
             .exports
@@ -50,23 +48,11 @@ impl Graph<'_> {
                 }
                 .build()
             })?;
-        let declaration = model
-            .checkpoint
-            .as_ref()
-            .and_then(|state| state.datasets.first())
-            .ok_or_else(|| {
-                GraphInvalidSnafu {
-                    field: "graph checkpoint declaration",
-                }
-                .build()
-            })?;
-        let checkpoint = output.checkpoint.as_ref().ok_or_else(|| {
-            GraphInvalidSnafu {
-                field: "graph checkpoint output",
-            }
-            .build()
-        })?;
-        let state = Changes::dataset(&checkpoint.datasets, &declaration.name)?;
+        Self::require(
+            algorithm::Detector::supports_units(model),
+            "graph unit contract",
+        )?;
+        let state = Changes::dataset(&output.datasets, "state")?;
         let states = GraphPackageStateV1::decode(state).context(AnalysisContractSnafu)?;
         Self::require(states.len() == 1, "graph checkpoint rows")?;
         Self::require(
@@ -91,14 +77,6 @@ impl Graph<'_> {
             accepted,
             observed,
         );
-        if retained {
-            return Ok(Changes {
-                subjects: Vec::new(),
-                edges: Vec::new(),
-                findings: Vec::new(),
-                package: checkpoint,
-            });
-        }
         let subjects =
             algorithm::SubjectChange::decode(Changes::dataset(&output.datasets, "subjects")?)
                 .context(AnalysisContractSnafu)?;
@@ -110,9 +88,7 @@ impl Graph<'_> {
         let additions =
             algorithm::FindingChange::decode(Changes::dataset(&output.datasets, "findings")?)
                 .context(AnalysisContractSnafu)?;
-        let mut seen = BTreeSet::new();
         for row in &subjects {
-            Self::require(seen.insert(&row.key), "graph subject addition")?;
             let (record, context) = self.positions(&row.anchor)?;
             self.validate_subject(&algorithm::Subject {
                 record,
@@ -120,7 +96,6 @@ impl Graph<'_> {
                 key: row.key.clone(),
             })?;
         }
-        let mut seen = BTreeSet::new();
         let indices = self
             .input
             .records
@@ -130,7 +105,7 @@ impl Graph<'_> {
             .collect::<BTreeMap<_, _>>();
         for row in &edges {
             Self::require(
-                row.key.package_id == package.id && seen.insert(&row.key),
+                row.key.package_id == package.id,
                 "graph relationship addition",
             )?;
             let (record, fact) = self.positions(&row.anchor)?;
@@ -181,18 +156,58 @@ impl Graph<'_> {
                 &local,
             )?;
         }
+        let input_records = algorithm::Observation::decode(
+            &evaluation
+                .input("records")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        let input_rows = input_records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (&record.id, index as u32))
+            .collect::<BTreeMap<_, _>>();
+        let input_facts = algorithm::Fact::decode(
+            &evaluation
+                .input("facts")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        let fact_rows = input_facts
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (&fact.key, index as u32))
+            .collect::<BTreeMap<_, _>>();
         let local = additions
             .iter()
             .map(|row| {
                 Self::require(row.prior_reason.is_none(), "graph untrusted prior reason")?;
-                let (record, fact) = self.positions(&row.anchor)?;
+                let record = input_rows.get(&row.anchor.record).copied().ok_or_else(|| {
+                    GraphInvalidSnafu {
+                        field: "graph lookup finding record",
+                    }
+                    .build()
+                })?;
+                let fact = row
+                    .anchor
+                    .fact
+                    .as_ref()
+                    .map(|fact| {
+                        fact_rows.get(&fact.key).copied().ok_or_else(|| {
+                            GraphInvalidSnafu {
+                                field: "graph lookup finding fact",
+                            }
+                            .build()
+                        })
+                    })
+                    .transpose()?;
                 Ok(row.local(record, fact))
             })
             .collect::<Result<Vec<_>>>()?;
-        let index_refs = indices.iter().map(|(id, &index)| (id, index)).collect();
-        Self::finding_evidence(&local, &index_refs, &output.evidence)?;
-        let reasons = Self::finding_reasons(package, &local, &index_refs, &output.reasons)?;
-        let mut seen = BTreeSet::new();
+        Self::finding_evidence(&local, &input_rows, &output.evidence)?;
+        let reasons = Self::finding_reasons(package, &local, &input_rows, &output.reasons)?;
         let findings = additions
             .into_iter()
             .zip(reasons)
@@ -200,8 +215,7 @@ impl Graph<'_> {
                 Self::require(
                     row.package_id == package.id
                         && row.package_version == 1
-                        && row.tenant_id == self.input.source.tenant_id
-                        && seen.insert(row.finding_id.clone()),
+                        && row.tenant_id == self.input.source.tenant_id,
                     "graph finding package",
                 )?;
                 let (record, context) = self.positions(&row.anchor)?;
@@ -224,120 +238,63 @@ impl Graph<'_> {
         package: &sdk::Package,
         evaluation: &sdk::Evaluation,
         output: &sdk::Output,
-        retained: bool,
-        host_prior: Option<&[sdk::Dataset]>,
     ) -> Result<()> {
-        let changes = self.changes(package, evaluation, output, retained)?;
-        let previous = host_prior.unwrap_or(&evaluation.previous_outputs);
-        Self::require(!retained || !previous.is_empty(), "retained Graph prior")?;
-        let mut subjects = BTreeMap::new();
-        let mut edges = BTreeMap::new();
-        let mut findings = BTreeMap::new();
-        if !previous.is_empty() {
-            for name in [
-                "subject_removals",
-                "relationship_removals",
-                "finding_removals",
-                "progress_removals",
-            ] {
-                Self::require(
-                    Changes::dataset(previous, name)?.rows() == 0,
-                    "graph previous normalized output",
-                )?;
-            }
-            for row in algorithm::SubjectChange::decode(Changes::dataset(previous, "subjects")?)
-                .context(AnalysisContractSnafu)?
-            {
-                Self::require(
-                    subjects.insert(row.key.clone(), row).is_none(),
-                    "graph prior subject identity",
-                )?;
-            }
-            for row in
-                algorithm::RelationshipChange::decode(Changes::dataset(previous, "relationships")?)
-                    .context(AnalysisContractSnafu)?
-            {
-                Self::require(
-                    edges.insert(row.key.clone(), row).is_none(),
-                    "graph prior relationship identity",
-                )?;
-            }
-            for row in algorithm::FindingChange::decode(Changes::dataset(previous, "findings")?)
-                .context(AnalysisContractSnafu)?
-            {
-                let reason = row.prior_reason.clone().ok_or_else(|| {
-                    GraphInvalidSnafu {
-                        field: "graph prior finding reason",
-                    }
-                    .build()
-                })?;
-                let anchor = row.anchor.clone();
-                let value = row.into_finding(reason);
-                Self::require(
-                    findings
-                        .insert(value.finding_id.clone(), (value, anchor))
-                        .is_none(),
-                    "graph prior finding identity",
-                )?;
+        let mut changes = self.changes(package, evaluation, output)?;
+        let contract = package
+            .exports
+            .iter()
+            .find(|model| model.name == evaluation.export)
+            .and_then(|model| model.change_inputs.as_ref())
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph change declaration",
+                }
+                .build()
+            })?;
+        Self::require(
+            contract
+                .is_reset(evaluation)
+                .context(AnalysisContractSnafu)?,
+            "complete Graph input",
+        )?;
+        let counts = [
+            changes.subjects.len(),
+            changes.edges.len(),
+            changes.findings.len(),
+        ];
+        changes.package.state =
+            Self::unit_state(evaluation, output, changes.package.state, counts)?;
+        let mut subjects = BTreeMap::<_, algorithm::SubjectChange>::new();
+        let mut edges = BTreeMap::<_, algorithm::RelationshipChange>::new();
+        let mut findings = BTreeMap::<_, (FindingV1, algorithm::Anchor)>::new();
+        for row in changes.subjects {
+            let entry = subjects
+                .entry(row.key.clone())
+                .or_insert_with(|| row.clone());
+            if self.positions(&row.anchor)? < self.positions(&entry.anchor)? {
+                *entry = row;
             }
         }
-        if !retained {
-            let mut removed = BTreeSet::new();
-            for row in algorithm::SubjectRemoval::decode(Changes::dataset(
-                &output.datasets,
-                "subject_removals",
-            )?)
-            .context(AnalysisContractSnafu)?
-            {
-                Self::require(
-                    removed.insert(row.key.clone()) && subjects.remove(&row.key).is_some(),
-                    "graph subject removal",
-                )?;
+        for row in changes.edges {
+            if let Some(old) = edges.get_mut(&row.key) {
+                let mut value = row.clone();
+                value.anchor = old.anchor.clone();
+                Self::require(&value == old, "conflicting edge value")?;
+                if self.positions(&row.anchor)? < self.positions(&old.anchor)? {
+                    *old = row;
+                }
+            } else {
+                edges.insert(row.key.clone(), row);
             }
-            let mut removed = BTreeSet::new();
-            for row in algorithm::RelationshipRemoval::decode(Changes::dataset(
-                &output.datasets,
-                "relationship_removals",
-            )?)
-            .context(AnalysisContractSnafu)?
-            {
-                Self::require(
-                    removed.insert(row.key.clone()) && edges.remove(&row.key).is_some(),
-                    "graph relationship removal",
-                )?;
-            }
-            let mut removed = BTreeSet::new();
-            for row in algorithm::FindingRemoval::decode(Changes::dataset(
-                &output.datasets,
-                "finding_removals",
-            )?)
-            .context(AnalysisContractSnafu)?
-            {
-                Self::require(
-                    removed.insert(row.finding_id.clone())
-                        && findings.remove(&row.finding_id).is_some(),
-                    "graph finding removal",
-                )?;
-            }
-            for row in changes.subjects {
-                Self::require(
-                    subjects.insert(row.key.clone(), row).is_none(),
-                    "graph subject addition",
-                )?;
-            }
-            for row in changes.edges {
-                Self::require(
-                    edges.insert(row.key.clone(), row).is_none(),
-                    "graph relationship addition",
-                )?;
-            }
-            for (row, anchor) in changes.findings {
-                Self::require(
-                    findings
-                        .insert(row.finding_id.clone(), (row, anchor))
-                        .is_none(),
-                    "graph finding addition",
-                )?;
+        }
+        for (row, anchor) in changes.findings {
+            if let Some((old, prior)) = findings.get_mut(&row.finding_id) {
+                Self::require(old == &row, "conflicting finding value")?;
+                if self.positions(&anchor)? < self.positions(prior)? {
+                    *prior = anchor;
+                }
+            } else {
+                findings.insert(row.finding_id.clone(), (row, anchor));
             }
         }
         for row in subjects.into_values() {
@@ -458,6 +415,64 @@ impl Graph<'_> {
         }
         self.packages.push(changes.package);
         Ok(())
+    }
+
+    fn unit_state(
+        evaluation: &sdk::Evaluation,
+        output: &sdk::Output,
+        default: GraphPackageStateV1,
+        counts: [usize; 3],
+    ) -> Result<GraphPackageStateV1> {
+        let contributions =
+            algorithm::Contribution::decode(Changes::dataset(&output.datasets, "contributions")?)
+                .context(AnalysisContractSnafu)?;
+        let units = algorithm::Unit::decode(
+            &evaluation
+                .input("units")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        let records = algorithm::Observation::decode(
+            &evaluation
+                .input("records")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        let facts = algorithm::Fact::decode(
+            &evaluation
+                .input("facts")
+                .context(AnalysisContractSnafu)?
+                .data,
+        )
+        .context(AnalysisContractSnafu)?;
+        algorithm::Contribution::validate(&units, &records, &facts, &contributions, counts)
+            .context(AnalysisContractSnafu)?;
+        let mut selected: Option<(&DiscoveryRecordIdV1, &algorithm::UnitState)> = None;
+        for contribution in &contributions {
+            let Some(state) = &contribution.state else {
+                continue;
+            };
+            if let Some((record, prior)) = selected {
+                Self::require(
+                    prior.fact.is_some() == state.fact.is_some(),
+                    "graph state order",
+                )?;
+                let newer = match (&prior.fact, &state.fact) {
+                    (Some(prior), Some(current)) => current > prior,
+                    (None, None) => &contribution.record > record,
+                    _ => false,
+                };
+                if !newer {
+                    continue;
+                }
+            }
+            selected = Some((&contribution.record, state));
+        }
+        selected
+            .map(|(_, state)| Ok(state.state.clone()))
+            .unwrap_or(Ok(default))
     }
 
     fn insert_subject(&mut self, key: GraphSubjectKeyV1) -> Result<u32> {

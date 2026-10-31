@@ -279,7 +279,11 @@ async fn payload(
     let expected_graph = Graph::new(&expected)?;
     assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
     assert_eq!(captured.inputs.len(), 3);
-    let canonical = Detector::inputs();
+    let canonical = [
+        araphor_analysis_builtins::graph::Observation::port(),
+        araphor_analysis_builtins::graph::Fact::port(),
+        araphor_analysis_builtins::graph::Manifest::port(),
+    ];
     assert_eq!(captured.inputs.len(), canonical.len());
     for (index, input) in captured.inputs.iter().enumerate() {
         assert!(input

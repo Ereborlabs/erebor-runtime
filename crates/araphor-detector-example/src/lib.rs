@@ -44,20 +44,65 @@ impl sdk::Guest for BurstDetector {
                     })?,
                 );
         }
+        let record_ids = records
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>();
+        let record_rows = record_ids
+            .iter()
+            .enumerate()
+            .map(|(row, id)| (id, row))
+            .collect::<BTreeMap<_, _>>();
+        if record_rows.len() != records.len() {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Invalid,
+                "duplicate records",
+            ));
+        }
+        let mut contributions = Vec::new();
+        let mut owners = BTreeMap::new();
+        for unit in Unit::decode(&evaluation.input("units")?.data)? {
+            if !record_rows.contains_key(&unit.record)
+                || owners
+                    .insert(unit.record.clone(), (contributions.len(), unit.restricted))
+                    .is_some()
+            {
+                return Err(sdk::Error::contract(
+                    sdk::ErrorCode::Invalid,
+                    "detector unit",
+                ));
+            }
+            contributions.push(Contribution {
+                record: unit.record,
+                subjects: Vec::new(),
+                relationships: Vec::new(),
+                findings: Vec::new(),
+                state: None,
+            });
+        }
         let mut output = sdk::Output::default();
+        let mut subjects = Vec::new();
         let mut findings = Vec::new();
         for rows in groups
             .into_values()
             .filter(|rows| rows.len() as u64 >= threshold)
         {
+            let anchor_row = rows
+                .iter()
+                .min_by_key(|&&row| &record_ids[row as usize])
+                .copied()
+                .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "record group"))?;
+            let Some(&(owner, restricted)) = owners.get(&record_ids[anchor_row as usize]) else {
+                continue;
+            };
             let row = findings.len() as u64;
             let reason = Self::reason(model, row, threshold, rows.len() as u64)?;
             let declared = FindingReasonV1::Declared(DeclaredFindingReasonV1::from_value(&reason)?);
-            let value = FindingV1::resolve(
+            let mut value = FindingV1::resolve(
                 &checked.package().id,
-                declared.clone(),
+                declared,
                 ReasonDetails {
-                    record: rows[0],
+                    record: anchor_row,
                     context: None,
                     reason: "THRESHOLD".into(),
                     confirmed: false,
@@ -67,65 +112,50 @@ impl sdk::Guest for BurstDetector {
                 &records,
                 &facts,
             )?;
-            let finding = Finding::from_finding(rows[0], None, value, reason.code.clone());
-            findings.push(finding);
-            for record in rows {
+            value.sensitivity = if restricted {
+                ContextSensitivityV1::HostRestricted
+            } else {
+                ContextSensitivityV1::Tenant
+            };
+            let finding = Finding::from_finding(anchor_row, None, value, reason.code.clone());
+            let anchor = Anchor::from_positions(finding.record, None, &record_ids, &facts)?;
+            contributions[owner].subjects.push(subjects.len() as u64);
+            subjects.push(SubjectChange {
+                anchor: anchor.clone(),
+                key: finding.subject_id.clone(),
+            });
+            contributions[owner].findings.push(row);
+            for record in &finding.evidence {
+                let record = record_rows.get(record).ok_or_else(|| {
+                    sdk::Error::contract(sdk::ErrorCode::Invalid, "record evidence")
+                })?;
                 output.evidence.push(sdk::EvidenceLink {
                     output: reason.output.clone(),
                     input: sdk::RowRef {
                         dataset: "records".into(),
-                        row: u64::from(record),
+                        row: *record as u64,
                     },
                 });
             }
+            findings.push(FindingChange::from_local(finding, anchor));
             output.reasons.push(reason);
         }
-        let record_ids = records
-            .iter()
-            .map(|record| record.id.clone())
-            .collect::<Vec<_>>();
-        let subjects = findings
-            .iter()
-            .map(|finding| {
-                Ok((
-                    finding.subject_id.clone(),
-                    SubjectChange {
-                        anchor: Anchor::from_positions(finding.record, None, &record_ids, &facts)?,
-                        key: finding.subject_id.clone(),
-                    },
-                ))
-            })
-            .collect::<sdk::Result<BTreeMap<_, _>>>()?
-            .into_values()
-            .collect::<Vec<_>>();
-        let findings = findings
-            .into_iter()
-            .map(|finding| {
-                let anchor =
-                    Anchor::from_positions(finding.record, finding.context, &record_ids, &facts)?;
-                Ok(FindingChange::from_local(finding, anchor))
-            })
-            .collect::<sdk::Result<Vec<_>>>()?;
-        let state = records.len().to_string();
+        if let Some(record) = records.iter().max_by_key(|record| &record.id) {
+            if let Some(&(owner, _)) = owners.get(&record.id) {
+                contributions[owner].state = Some(UnitState {
+                    state: GraphPackageStateV1::Declared(records.len().to_string()),
+                    position: record.position,
+                    fact: None,
+                });
+            }
+        }
         output.datasets = vec![
             SubjectChange::encode(&subjects)?,
-            SubjectRemoval::encode(&[])?,
             RelationshipChange::encode(&[])?,
-            RelationshipRemoval::encode(&[])?,
             FindingChange::encode(&findings)?,
-            FindingRemoval::encode(&[])?,
-            Progress::encode(&[])?,
-            ProgressRemoval::encode(&[])?,
+            Contribution::encode(&contributions)?,
+            GraphPackageStateV1::encode(&[GraphPackageStateV1::Declared("0".into())])?,
         ];
-        let spec = model.checkpoint.as_ref().ok_or_else(|| {
-            sdk::Error::contract(sdk::ErrorCode::Invalid, "checkpoint declaration")
-        })?;
-        output.checkpoint = Some(sdk::Checkpoint {
-            version: spec.version,
-            datasets: vec![GraphPackageStateV1::encode(&[
-                GraphPackageStateV1::Declared(state),
-            ])?],
-        });
         Ok(output)
     }
 }

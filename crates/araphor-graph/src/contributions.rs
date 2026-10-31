@@ -1,3 +1,6 @@
+mod state;
+pub use state::{StateRows, StateValue};
+
 use std::{collections::BTreeSet, sync::Arc};
 
 use araphor_analysis_sdk::{
@@ -63,7 +66,9 @@ impl Contributions {
         }
         for member in replacements.iter().flat_map(|item| &item.members) {
             let allowed = match frontier.kind {
-                0 => (2..=5).contains(&member.kind) && member.record.is_some(),
+                0 => {
+                    ((2..=4).contains(&member.kind) || member.kind == 8) && member.record.is_some()
+                }
                 1 => matches!(member.kind, 2..=4 | 6),
                 2 => matches!(member.kind, 0..=1 | 7),
                 _ => false,
@@ -142,6 +147,8 @@ impl Contributions {
                 }
                 .fail();
             }
+            let prior_state = StateRows::prior(writer, scope, revision)?;
+            let state_values = StateRows::staged(writer, scope, reset)?;
             writer
                 .execute(
                     "CREATE TEMP TABLE graph_contribution_diff AS
@@ -196,7 +203,7 @@ impl Contributions {
                         coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 2), 0)::BIGINT,
                         coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 3), 0)::BIGINT,
                         coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 4), 0)::BIGINT,
-                        coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 5), 0)::BIGINT
+                        coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 8), 0)::BIGINT
                     FROM presence",
                     params![scope],
                     |row| {
@@ -255,7 +262,7 @@ impl Contributions {
             writer
                 .execute(
                     "UPDATE graph_producer_versions SET subject_count = ?, edge_count = ?,
-                        finding_count = ?, progress_count = ? WHERE scope_id = ? AND commit_revision = ?",
+                        finding_count = ?, state_count = ? WHERE scope_id = ? AND commit_revision = ?",
                     params![
                         frontier.counts[0],
                         frontier.counts[1],
@@ -268,6 +275,7 @@ impl Contributions {
                 .context(DatabaseSnafu {
                     operation: "update contribution counts",
                 })?;
+            StateRows::advance(writer, scope, revision, prior_state, state_values, reset)?;
             Ok(())
         })();
         let cleanup = writer
@@ -294,7 +302,7 @@ impl Contributions {
             }
             let mut keys = BTreeSet::new();
             for member in &replacement.members {
-                if member.kind > 7
+                if member.kind > 8
                     || member.key.is_empty()
                     || member.value == 0
                     || member.record == Some(0)
@@ -317,7 +325,7 @@ impl Contributions {
                 "SELECT s.source_ref, s.producer_kind, s.created_revision, current.commit_revision,
                     current.base_result_id, previous.result_id, previous.commit_revision,
                     coalesce(previous.subject_count, 0), coalesce(previous.edge_count, 0),
-                    coalesce(previous.finding_count, 0), coalesce(previous.progress_count, 0)
+                    coalesce(previous.finding_count, 0), coalesce(previous.state_count, 0)
                 FROM graph_producer_scopes s
                 JOIN graph_producer_versions current ON current.scope_id = s.scope_id
                     AND current.commit_revision = (SELECT max(commit_revision)

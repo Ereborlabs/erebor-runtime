@@ -435,6 +435,10 @@ impl ExecutionPlan for SubscribeExec {
         vec![&self.input]
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         self.children()
             .iter()

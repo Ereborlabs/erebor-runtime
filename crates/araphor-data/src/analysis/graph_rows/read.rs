@@ -1,7 +1,5 @@
 use super::*;
-use crate::{
-    DiscoveryRecordIdV1, GraphEdgeKeyV1, GraphEdgeV1, GraphValidate as _, StorePositionV1,
-};
+use crate::{DiscoveryRecordIdV1, GraphEdgeV1, GraphValidate as _, StorePositionV1};
 
 type GraphIndexRow = (Vec<u8>, Vec<u8>, u64, u64, u64, u64);
 type GraphInputs = (
@@ -402,7 +400,14 @@ impl GraphRows {
         count: usize,
         control: Option<&AnalysisReadControl>,
     ) -> Result<Vec<GraphSubjectKeyV1>> {
-        let mut statement=reader.prepare("SELECT ordinal,tenant_id,authority_rank,authority_text,authority_boot,authority_epoch,subject_kind,identity FROM graph_subjects WHERE result_id=? ORDER BY ordinal").context(AnalysisDatabaseSnafu {operation:"prepare Graph subjects"})?;
+        let mut statement = reader
+            .prepare(&format!(
+                "SELECT {} FROM graph_subjects WHERE result_id=? ORDER BY ordinal",
+                araphor_graph::SubjectRows::COLUMNS
+            ))
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare Graph subjects",
+            })?;
         let mut rows = statement
             .query(params![result])
             .context(AnalysisDatabaseSnafu {
@@ -430,7 +435,14 @@ impl GraphRows {
         count: usize,
         control: Option<&AnalysisReadControl>,
     ) -> Result<Vec<GraphEdgeV1>> {
-        let mut statement=reader.prepare("SELECT ordinal,from_subject_id,to_subject_id,edge_type,package_id,cause,evidence,proof_quality,required_coverage_interval_ids,first_boottime_ns,last_boottime_ns FROM graph_relationships WHERE result_id=? ORDER BY ordinal").context(AnalysisDatabaseSnafu {operation:"prepare Graph relationships"})?;
+        let mut statement = reader
+            .prepare(&format!(
+                "SELECT {} FROM graph_relationships WHERE result_id=? ORDER BY ordinal",
+                araphor_graph::RelationshipRows::COLUMNS
+            ))
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare Graph relationships",
+            })?;
         let mut rows = statement
             .query(params![result])
             .context(AnalysisDatabaseSnafu {
@@ -453,30 +465,7 @@ impl GraphRows {
     }
 
     pub(super) fn decode_edge(row: &Row<'_>) -> Result<GraphEdgeV1> {
-        let evidence = match Self::column(row, 6)? {
-            duckdb::types::Value::List(values) => values
-                .into_iter()
-                .map(|value| match value {
-                    duckdb::types::Value::UInt(id) => Ok(id),
-                    _ => Err(Self::invalid("graph relationship evidence")),
-                })
-                .collect::<Result<Vec<_>>>()?,
-            _ => return Err(Self::invalid("graph relationship evidence")),
-        };
-        Ok(GraphEdgeV1 {
-            key: GraphEdgeKeyV1 {
-                from: Self::column(row, 1)?,
-                to: Self::column(row, 2)?,
-                edge_type: Self::label_column(row, 3)?,
-                package_id: Self::column(row, 4)?,
-                cause: Self::label_column(row, 5)?,
-                evidence,
-            },
-            proof_quality: Self::read_proof(row, 7)?,
-            required_coverage_interval_ids: Self::read_bytes(row, 8)?,
-            first_boottime_ns: Self::column(row, 9)?,
-            last_boottime_ns: Self::column(row, 10)?,
-        })
+        araphor_graph::RelationshipRows::decode(row).map_err(Into::into)
     }
 
     pub(in crate::analysis) fn read_findings(

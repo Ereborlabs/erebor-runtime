@@ -20,26 +20,67 @@ impl Graph<'_> {
     }
 
     fn evaluation_for(&self, model: &sdk::Model) -> Result<sdk::Evaluation> {
-        let inputs = model
-            .inputs
+        let source = self.projection()?;
+        let records = algorithm::Observation::decode(&source[0]).context(AnalysisContractSnafu)?;
+        let facts = algorithm::Fact::decode(&source[1]).context(AnalysisContractSnafu)?;
+        let restricted = self
+            .input
+            .facts
             .iter()
-            .zip(self.projection()?)
-            .map(|(_, values)| {
-                Ok(sdk::Input {
-                    data: values.clone(),
-                    revision: sdk::Revision {
-                        owner: "captured".into(),
-                        id: "fixture".into(),
-                        window: None,
-                    },
-                    coverage: sdk::Coverage {
-                        state: sdk::CoverageState::Complete,
-                        limits: Vec::new(),
-                    },
-                })
+            .any(|fact| fact.sensitivity == ContextSensitivityV1::HostRestricted);
+        let units = records
+            .iter()
+            .map(|record| algorithm::Unit {
+                record: record.id.clone(),
+                window_ns: GRAPH_WINDOW_NS,
+                restricted,
+                support: records
+                    .iter()
+                    .filter(|candidate| candidate.position <= record.position)
+                    .map(|candidate| algorithm::UnitSupport {
+                        record: candidate.id.clone(),
+                        proof: candidate.proof_quality,
+                        facts: facts
+                            .iter()
+                            .filter(|fact| records[fact.record as usize].id == candidate.id)
+                            .map(|fact| fact.key.clone())
+                            .collect(),
+                    })
+                    .collect(),
             })
-            .collect::<sdk::Result<Vec<_>>>()
-            .context(AnalysisContractSnafu)?;
+            .collect::<Vec<_>>();
+        let data = vec![
+            algorithm::Unit::encode(&units).context(AnalysisContractSnafu)?,
+            algorithm::Unit::encode_removals(&[]).context(AnalysisContractSnafu)?,
+            model
+                .change_inputs
+                .as_ref()
+                .ok_or_else(|| {
+                    GraphInvalidSnafu {
+                        field: "fixture changes",
+                    }
+                    .build()
+                })?
+                .reset_input(true)
+                .context(AnalysisContractSnafu)?,
+            source[0].clone(),
+            source[1].clone(),
+        ];
+        let inputs = data
+            .into_iter()
+            .map(|data| sdk::Input {
+                data,
+                revision: sdk::Revision {
+                    owner: "captured".into(),
+                    id: "fixture".into(),
+                    window: None,
+                },
+                coverage: sdk::Coverage {
+                    state: sdk::CoverageState::Complete,
+                    limits: Vec::new(),
+                },
+            })
+            .collect();
         Ok(sdk::Evaluation {
             previous_outputs: Vec::new(),
             export: model.name.clone(),
@@ -69,7 +110,7 @@ fn derive(input: &GraphReplayInputV1) -> Result<GraphSnapshotV1> {
             .evaluate(&evaluation)
             .context(AnalysisContractSnafu)?;
         graph.check_inputs(&package.exports[0], &evaluation)?;
-        graph.apply_output(&package, &evaluation, &output, false, None)?;
+        graph.apply_output(&package, &evaluation, &output)?;
     }
     graph.finish()
 }
@@ -90,19 +131,82 @@ fn computation(
 }
 
 #[test]
-fn checkpoint_requires_one_state() -> TestResult {
+fn output_requires_one_state() -> TestResult {
     let input = input()?;
     let (mut owner, evaluation, mut output) = computation(&input)?;
-    let checkpoint = output.checkpoint.as_mut().ok_or("checkpoint")?;
-    checkpoint.datasets[0] = GraphPackageStateV1::encode(&[])?;
+    *output
+        .datasets
+        .iter_mut()
+        .find(|data| data.name == "state")
+        .ok_or("state")? = GraphPackageStateV1::encode(&[])?;
     let package = algorithm::Detector::Credentials.descriptor();
     assert!(matches!(
-        owner.apply_output(&package, &evaluation, &output, false, None),
+        owner.apply_output(&package, &evaluation, &output),
         Err(araphor_data::Error::GraphInvalid {
             field: "graph checkpoint rows",
             ..
         })
     ));
+    Ok(())
+}
+
+#[test]
+fn rejects_invalid_contributions() -> TestResult {
+    let input = input()?;
+    let package = algorithm::Detector::Credentials.descriptor();
+    for fault in 0..6 {
+        let (mut owner, evaluation, mut output) = computation(&input)?;
+        let data = output
+            .datasets
+            .iter_mut()
+            .find(|data| data.name == "contributions")
+            .ok_or("contributions")?;
+        let mut rows = algorithm::Contribution::decode(data)?;
+        match fault {
+            0 => rows[0].record.durable_cursor = u64::MAX,
+            1 => rows.push(rows[0].clone()),
+            2 => {
+                rows.iter_mut()
+                    .find_map(|row| row.state.as_mut())
+                    .ok_or("unit state")?
+                    .position
+                    .commit_revision = 0
+            }
+            3 => {
+                let state = rows
+                    .iter_mut()
+                    .find_map(|row| row.state.as_mut())
+                    .ok_or("unit state")?;
+                state.fact = Some(araphor_data::AnalysisContextKeyV1 {
+                    tenant_id: input.source.tenant_id,
+                    owner_id: "absent".into(),
+                    entity_key: vec![1],
+                    lifetime_key: vec![1],
+                    owner_revision: 1,
+                });
+            }
+            4 => {
+                let index = *rows
+                    .iter()
+                    .find_map(|row| row.subjects.first())
+                    .ok_or("owned subject")?;
+                rows[0].subjects.push(index);
+            }
+            5 => rows
+                .iter_mut()
+                .find(|row| !row.subjects.is_empty())
+                .ok_or("owned subject")?
+                .subjects
+                .clear(),
+            _ => return Err("contribution fault".into()),
+        }
+        *data = algorithm::Contribution::encode(&rows)?;
+        package.validate_output(&evaluation, &output)?;
+        assert!(
+            owner.apply_output(&package, &evaluation, &output).is_err(),
+            "accepted fault {fault}"
+        );
+    }
     Ok(())
 }
 
@@ -113,12 +217,6 @@ fn candidate_reason_matches_contract() -> TestResult {
     output.datasets.reverse();
     output.reasons.reverse();
     output.evidence.reverse();
-    output
-        .checkpoint
-        .as_mut()
-        .ok_or("checkpoint")?
-        .datasets
-        .reverse();
     let package = algorithm::Detector::Credentials.descriptor();
     package.validate_output(&evaluation, &output)?;
     assert!(!output.reasons.is_empty());
@@ -134,8 +232,6 @@ fn candidate_reason_matches_contract() -> TestResult {
         &algorithm::Detector::Credentials.descriptor(),
         &evaluation,
         &output,
-        false,
-        None,
     )?;
     let expected = derive(&input)?;
     let findings: Vec<_> = expected
@@ -165,9 +261,7 @@ fn candidate_requires_host_validation() -> TestResult {
         owner.apply_output(
             &algorithm::Detector::Credentials.descriptor(),
             &evaluation,
-            &output,
-            false,
-            None
+            &output
         ),
         Err(araphor_data::Error::GraphInvalid {
             field: "graph anchor record",
@@ -210,9 +304,7 @@ fn candidate_reason_is_exact() -> TestResult {
             owner.apply_output(
                 &algorithm::Detector::Credentials.descriptor(),
                 &evaluation,
-                &altered,
-                false,
-                None
+                &altered
             ),
             Err(araphor_data::Error::GraphInvalid {
                 field: "graph candidate reason",
@@ -246,9 +338,7 @@ fn candidate_evidence_is_exact() -> TestResult {
         owner.apply_output(
             &algorithm::Detector::Credentials.descriptor(),
             &evaluation,
-            &output,
-            false,
-            None
+            &output
         ),
         Err(araphor_data::Error::GraphInvalid {
             field: "graph candidate evidence",
@@ -282,7 +372,7 @@ fn resolved_output_preserves_authority() -> TestResult {
         *data = algorithm::FindingChange::encode(&rows)?;
         package.validate_output(&evaluation, &altered)?;
         let mut owner = Graph::new(&input)?;
-        let result = owner.apply_output(&package, &evaluation, &altered, false, None);
+        let result = owner.apply_output(&package, &evaluation, &altered);
         assert!(
             matches!(&result, Err(araphor_data::Error::GraphInvalid { field: actual, .. }) if *actual == field),
             "{field}: {result:?}"
@@ -318,7 +408,7 @@ fn candidate_rejects_authority_upgrade() -> TestResult {
     *data = algorithm::RelationshipChange::encode(&edges)?;
     package.validate_output(&evaluation, &output)?;
     assert!(matches!(
-        owner.apply_output(&package, &evaluation, &output, false, None),
+        owner.apply_output(&package, &evaluation, &output),
         Err(araphor_data::Error::GraphInvalid {
             field: "graph direct cause proof",
             ..
@@ -341,7 +431,7 @@ fn resolved_output_keeps_provenance_limits() -> TestResult {
     let input = input.normalized()?;
     let (mut owner, evaluation, mut output) = computation(&input)?;
     let package = algorithm::Detector::Credentials.descriptor();
-    owner.apply_output(&package, &evaluation, &output, false, None)?;
+    owner.apply_output(&package, &evaluation, &output)?;
     let data = output
         .datasets
         .iter_mut()
@@ -375,7 +465,7 @@ fn resolved_output_keeps_provenance_limits() -> TestResult {
     }
     package.validate_output(&evaluation, &output)?;
     let mut owner = Graph::new(&input)?;
-    let result = owner.apply_output(&package, &evaluation, &output, false, None);
+    let result = owner.apply_output(&package, &evaluation, &output);
     assert!(
         matches!(
             &result,
@@ -418,7 +508,7 @@ fn candidate_rejects_missing_coverage() -> TestResult {
     }
     package.validate_output(&evaluation, &output)?;
     assert!(matches!(
-        owner.apply_output(&package, &evaluation, &output, false, None),
+        owner.apply_output(&package, &evaluation, &output),
         Err(araphor_data::Error::GraphInvalid {
             field: "graph confirmed finding proof",
             ..
@@ -449,16 +539,6 @@ fn declared_reason(package_id: &str, reason: &str) -> TestResult {
         code: code.clone(),
         details: schema.clone(),
     }];
-    let checkpoint = model.checkpoint.as_mut().ok_or("declared checkpoint")?;
-    checkpoint.resume_input_changes = false;
-    checkpoint.datasets.truncate(1);
-    let state = checkpoint.datasets[0].name.clone();
-    output
-        .checkpoint
-        .as_mut()
-        .ok_or("declared output checkpoint")?
-        .datasets
-        .retain(|data| data.name == state);
     assert!(Graph::supports(model));
     let data = output
         .datasets
@@ -490,7 +570,7 @@ fn declared_reason(package_id: &str, reason: &str) -> TestResult {
         )?;
     }
     package.validate_output(&evaluation, &output)?;
-    owner.apply_output(&package, &evaluation, &output, false, None)?;
+    owner.apply_output(&package, &evaluation, &output)?;
     let snapshot = owner.finish()?;
     assert!(!snapshot.findings.is_empty());
     for finding in snapshot.findings {

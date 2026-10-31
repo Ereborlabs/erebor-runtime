@@ -181,8 +181,7 @@ pub struct FindingV1 {
     pub limits: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphPackageStateV1 {
     Waiting,
     NativeEffect,
@@ -198,7 +197,6 @@ pub enum GraphPackageStateV1 {
     KubernetesObject,
     KubernetesScheduled,
     RemoteAdmission,
-    #[serde(untagged)]
     Declared(String),
 }
 

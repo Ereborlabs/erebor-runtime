@@ -203,9 +203,9 @@ async fn graph_call_version_flush_failure_rolls_back() -> TestResult {
         result_id VARCHAR PRIMARY KEY, scope_id UBIGINT NOT NULL,
         commit_revision UBIGINT NOT NULL, base_result_id VARCHAR,
         subject_count UBIGINT NOT NULL, edge_count UBIGINT NOT NULL,
-        finding_count UBIGINT NOT NULL, progress_count UBIGINT NOT NULL,
-        derived_progress_digest BLOB,
-        CHECK (derived_progress_digest IS NULL OR octet_length(derived_progress_digest) = 32),
+        finding_count UBIGINT NOT NULL, state_count UBIGINT NOT NULL,
+        selected_state_ref UBIGINT,
+        CHECK (selected_state_ref IS NULL OR selected_state_ref > 0),
         UNIQUE (scope_id, commit_revision)";
     store.fault_write(
         &format!(
@@ -280,7 +280,7 @@ async fn graph_call_version_flush_failure_rolls_back() -> TestResult {
 }
 
 #[tokio::test]
-async fn retained_noncontinuing_graph_call_uses_native_prior() -> TestResult {
+async fn unit_calls_keep_declared_state() -> TestResult {
     let fixture = Fixture::target(Target::Wasm)?;
     let artifact = PackageArtifactV1 {
         descriptor: araphor_detector_example::BurstDetector::package(),
@@ -301,18 +301,9 @@ async fn retained_noncontinuing_graph_call_uses_native_prior() -> TestResult {
     )?;
     let calls = araphor_data::FindingV1::PACKAGES
         .iter()
-        .map(|id| {
-            format!(
-                "SELECT * FROM \"{id}\".\"1\".detect('subjects', records => \
-                (SELECT * FROM records), facts => (SELECT * FROM facts), \
-                manifest => (SELECT * FROM manifest))"
-            )
-        })
+        .map(|id| format!("SELECT * FROM \"{id}\".\"1\".detect('subjects')"))
         .chain(std::iter::once(
-            "SELECT * FROM \"example-burst\".\"1\".detect('subjects', \
-                records => (SELECT * FROM records), facts => (SELECT * FROM facts), \
-                manifest => (SELECT * FROM manifest), threshold => 2)"
-                .into(),
+            "SELECT * FROM \"example-burst\".\"1\".detect('subjects', threshold => 2)".into(),
         ))
         .collect::<Vec<_>>()
         .join(" UNION ALL ");
@@ -359,6 +350,15 @@ async fn retained_noncontinuing_graph_call_uses_native_prior() -> TestResult {
         .findings
         .iter()
         .any(|finding| finding.package_id == "example-burst"));
+    assert_eq!(
+        original
+            .packages
+            .iter()
+            .find(|package| package.package_id == "example-burst")
+            .ok_or("burst state")?
+            .state,
+        araphor_data::GraphPackageStateV1::Declared("3".into())
+    );
     let second = job.run(request("burst-second")?, &fixture.control).await?;
     assert_eq!(second.results.len(), first.results.len());
     let fresh = second.results.get(&burst).ok_or("fresh example call")?;
@@ -394,6 +394,10 @@ async fn retained_noncontinuing_graph_call_uses_native_prior() -> TestResult {
     let resumed = reopened.managed_resume(source.tenant_id, "retained-burst", &control)?;
     let saved = reopened.managed_evaluation(&resumed.instance, &fresh.result_id, &control)?;
     assert_eq!(saved.export, "detect");
+    for name in ["units", "unit_removals", "records", "facts"] {
+        assert_eq!(saved.input(name)?.data.rows(), 0, "{name}");
+    }
+    assert!(saved.checkpoint.is_none());
     Ok(())
 }
 
@@ -449,10 +453,10 @@ async fn graph_call_reopen_rejects_corruption() -> TestResult {
         ("scope source", "UPDATE graph_producer_scopes SET source_ref = (SELECT max(source_ref) + 1 FROM graph_sources) WHERE scope_id = (SELECT min(scope_id) FROM graph_producer_scopes WHERE producer_kind = 0)"),
         ("membership count", "UPDATE graph_producer_versions SET subject_count = subject_count + 1 WHERE result_id = (SELECT min(result_id) FROM graph_producer_versions v JOIN graph_producer_scopes s USING (scope_id) WHERE s.producer_kind = 0)"),
         ("anchor", "UPDATE graph_producer_members SET anchor_fact = X'00' WHERE rowid = (SELECT min(rowid) FROM graph_producer_members WHERE member_kind = 2)"),
-        ("orphan", "UPDATE graph_producer_members SET scope_id = (SELECT max(scope_id) + 1 FROM graph_producer_scopes) WHERE rowid = (SELECT min(rowid) FROM graph_producer_members WHERE member_kind = 5)"),
-        ("progress value", "UPDATE graph_producer_members SET value_ref = (SELECT max(value_ref) + 1 FROM graph_progress_values) WHERE rowid = (SELECT min(rowid) FROM graph_producer_members WHERE member_kind = 5)"),
-        ("progress overlap", "INSERT INTO graph_producer_members SELECT m.scope_id, m.member_kind, m.member_key, m.value_ref, m.anchor_record_id, m.anchor_fact, m.reason_code, m.ordinal, (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id), NULL FROM graph_producer_members m WHERE m.member_kind = 5 AND m.valid_to IS NULL AND m.valid_from < (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id) LIMIT 1"),
-        ("overlap", "INSERT INTO graph_producer_members SELECT m.scope_id, m.member_kind, m.member_key, m.value_ref, m.anchor_record_id, m.anchor_fact, m.reason_code, m.ordinal, (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id), NULL FROM graph_producer_members m WHERE m.member_kind = 2 AND m.valid_to IS NULL AND m.valid_from < (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id) LIMIT 1"),
+        ("orphan", "UPDATE graph_producer_members SET scope_id = (SELECT max(scope_id) + 1 FROM graph_producer_scopes) WHERE rowid = (SELECT min(rowid) FROM graph_producer_members WHERE member_kind = 8)"),
+        ("unit state value", "UPDATE graph_producer_members SET value_ref = (SELECT max(value_ref) + 1 FROM graph_unit_state_values) WHERE rowid = (SELECT min(rowid) FROM graph_producer_members WHERE member_kind = 8)"),
+        ("unit state overlap", "INSERT INTO graph_producer_members SELECT m.scope_id, m.unit_ref, m.member_kind, m.member_key, m.value_ref, m.anchor_record_id, m.anchor_fact, m.reason_code, m.ordinal, (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id), NULL FROM graph_producer_members m WHERE m.member_kind = 8 AND m.valid_to IS NULL AND m.valid_from < (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id) LIMIT 1"),
+        ("overlap", "INSERT INTO graph_producer_members SELECT m.scope_id, m.unit_ref, m.member_kind, m.member_key, m.value_ref, m.anchor_record_id, m.anchor_fact, m.reason_code, m.ordinal, (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id), NULL FROM graph_producer_members m WHERE m.member_kind = 2 AND m.valid_to IS NULL AND m.valid_from < (SELECT max(v.commit_revision) FROM graph_producer_versions v WHERE v.scope_id = m.scope_id) LIMIT 1"),
         ("base", "UPDATE graph_producer_versions SET base_result_id = NULL WHERE base_result_id IS NOT NULL"),
         ("producer version", "UPDATE graph_result_producers SET producer_result_id = 'absent' WHERE rowid = (SELECT min(rowid) FROM graph_result_producers)"),
         ("missing producer", "DELETE FROM graph_result_producers WHERE rowid = (SELECT min(rowid) FROM graph_result_producers)"),
@@ -464,15 +468,17 @@ async fn graph_call_reopen_rejects_corruption() -> TestResult {
         drop(restored);
         assert!(AnalysisStore::open(&root).is_err(), "{name}");
     }
-    let root = fixture
-        ._directory
-        .path()
-        .join("graph-call-duplicate-progress");
+    let root = fixture._directory.path().join("graph-call-duplicate-state");
     let restored = AnalysisStore::restore(&backup, &root)?;
-    assert!(restored.fault_write(
-        "INSERT INTO graph_progress_values SELECT (SELECT max(value_ref) + 1 FROM graph_progress_values), evidence_id, digest, state FROM graph_progress_values LIMIT 1",
+    restored.fault_write(
+        "INSERT INTO graph_unit_state_values SELECT (SELECT max(value_ref) + 1 FROM graph_unit_state_values), * EXCLUDE(value_ref) FROM graph_unit_state_values LIMIT 1",
         &[],
-    ).is_err());
+    )?;
+    drop(restored);
+    assert!(
+        AnalysisStore::open(&root).is_err(),
+        "duplicate native unit state"
+    );
     let first_result = first.results.values().next().ok_or("first Graph call")?;
     let other_result = first
         .results

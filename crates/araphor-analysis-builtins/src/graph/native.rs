@@ -1,9 +1,10 @@
 use super::*;
 use araphor_analysis_sdk as sdk;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_arrow::schema::{SchemaLike as _, TracingOptions};
 use std::sync::{Arc, OnceLock};
 
+mod units;
 mod variants;
 mod views;
 
@@ -143,6 +144,7 @@ impl Manifest {
     }
 }
 
+#[cfg(test)]
 impl Progress {
     pub fn port() -> sdk::Port {
         static PORT: OnceLock<sdk::Port> = OnceLock::new();
@@ -156,6 +158,7 @@ impl Progress {
     }
 }
 
+#[cfg(test)]
 impl ProgressRemoval {
     pub fn port() -> sdk::Port {
         static PORT: OnceLock<sdk::Port> = OnceLock::new();
@@ -169,8 +172,36 @@ impl ProgressRemoval {
     }
 }
 
+impl Serialize for GraphPackageStateV1 {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        views::StateRow::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for GraphPackageStateV1 {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        views::StateRow::deserialize(deserializer)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 impl GraphPackageStateV1 {
-    pub(super) fn from_marker(value: &str) -> sdk::Result<Self> {
+    pub fn native_fields(&self) -> (String, Option<String>) {
+        let row = views::StateRow::from(self);
+        (row.tag, row.declared)
+    }
+
+    pub fn from_native(tag: String, declared: Option<String>) -> sdk::Result<Self> {
+        views::StateRow { tag, declared }.try_into()
+    }
+
+    pub fn from_marker(value: &str) -> sdk::Result<Self> {
         views::StateRow {
             tag: value.into(),
             declared: None,
@@ -184,6 +215,12 @@ impl GraphPackageStateV1 {
     }
 
     pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
+        if rows
+            .iter()
+            .any(|state| matches!(state, Self::Declared(value) if value.is_empty()))
+        {
+            return Err(invalid("graph native package state"));
+        }
         encode(Self::port(), rows, views::StateRow::from)
     }
 

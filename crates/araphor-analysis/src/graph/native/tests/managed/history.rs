@@ -224,49 +224,30 @@ async fn failed_graph_disables_reuse() -> TestResult {
             .find(|model| model.name == retained.evaluation.export)
             .ok_or("retained Graph model")?;
         let mut evaluation = retained.evaluation.clone();
-        let (checkpoint, previous_outputs) = prior.state_sparse(
+        let (checkpoint, previous_outputs) = prior.state(
             model,
             &evaluation.inputs,
             evaluation.parameters.as_ref(),
             false,
-            true,
         )?;
-        assert!(checkpoint.is_some());
-        assert_eq!(previous_outputs.len(), model.outputs.len());
+        assert!(checkpoint.is_none());
+        assert!(previous_outputs.is_empty());
+        let targets = retained.changes.as_ref().ok_or("retained change targets")?;
+        assert_eq!(targets.targets.len(), 1);
+        assert_eq!(targets.targets[0].data.name, "units");
         assert_eq!(
-            araphor_analysis_builtins::graph::Resume::basis(
-                checkpoint.as_ref().ok_or("Graph checkpoint")?
-            )?,
-            araphor_analysis_builtins::graph::ResumeBasis::Progress
+            araphor_analysis_builtins::graph::Unit::decode(&targets.targets[0].data)?.len(),
+            3
         );
-        let progress = previous_outputs
-            .iter()
-            .find(|data| data.name == "progress")
-            .ok_or("normalized Graph progress")?;
-        assert!(!araphor_analysis_builtins::graph::Progress::decode(progress)?.is_empty());
-        assert!(previous_outputs
-            .iter()
-            .filter(|data| data.name != "progress")
-            .all(|data| data.rows() == 0));
         evaluation.checkpoint = checkpoint;
         evaluation.previous_outputs = previous_outputs;
-        let encoded = descriptor.check_evaluation(&evaluation)?.encode()?;
-        let resumed = encoded.decode(&descriptor)?;
-        assert_eq!(
-            araphor_analysis_builtins::graph::Resume::basis(
-                resumed
-                    .checkpoint
-                    .as_ref()
-                    .ok_or("decoded Graph checkpoint")?
-            )?,
-            araphor_analysis_builtins::graph::ResumeBasis::Progress
-        );
+        let resumed = descriptor
+            .check_evaluation(&evaluation)?
+            .encode()?
+            .decode(&descriptor)?;
         let expected = sdk::wire::Output::encode_model(&retained.output, model)?;
-        let delta = Detector::from_id(&descriptor.id)?.evaluate(&resumed)?;
-        let actual = sdk::wire::Output::encode_model(&delta, model)?;
-        assert_eq!(actual.checkpoint, expected.checkpoint);
-        assert!(delta.datasets.iter().all(|data| data.rows() == 0));
-        assert!(delta.reasons.is_empty());
+        let replayed = Detector::from_id(&descriptor.id)?.evaluate(&resumed)?;
+        assert_eq!(sdk::wire::Output::encode_model(&replayed, model)?, expected);
     }
     store.stop_managed(&failed, || Ok(()))?;
     Ok(())

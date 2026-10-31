@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use super::*;
 
 impl Computation {
+    #[cfg(test)]
     pub(super) fn process(&mut self, affected: &[bool]) -> sdk::Result<()> {
         for (row, affected) in affected.iter().copied().enumerate() {
             if affected {
@@ -10,26 +11,12 @@ impl Computation {
                 self.progress[row].state = state;
             }
         }
-        for index in 0..self.facts.len() {
-            let FactValue::Context { classification, .. } = self.facts[index].value else {
-                continue;
-            };
-            let row = self.facts[index].record;
-            if !affected[row as usize] {
-                continue;
+        for (row, affected) in affected.iter().copied().enumerate() {
+            if affected {
+                for index in self.fact_rows[row].clone() {
+                    self.process_context(index)?;
+                }
             }
-            self.context_finding(
-                row,
-                Some(index as u32),
-                match classification {
-                    ContextClass::OutsideAuthority => "OUTSIDE_AUTHORITY",
-                    ContextClass::InMemory => "IN_MEMORY_ONLY",
-                    ContextClass::PayloadUnobservable => "PAYLOAD_UNOBSERVABLE",
-                },
-                false,
-                vec![row],
-                vec!["CONTEXT_ANCHOR_HAS_NO_PHYSICAL_ACTION_PROOF".into()],
-            )?;
         }
         self.state = self
             .progress
@@ -38,6 +25,33 @@ impl Computation {
             .find_map(|progress| progress.state.clone())
             .unwrap_or_else(|| "WAITING".into());
         Ok(())
+    }
+
+    pub(super) fn process_unit(&mut self, row: u32) -> sdk::Result<Option<String>> {
+        let state = self.process_record(row)?;
+        for index in self.fact_rows[row as usize].clone() {
+            self.process_context(index)?;
+        }
+        Ok(state)
+    }
+
+    fn process_context(&mut self, index: usize) -> sdk::Result<()> {
+        let FactValue::Context { classification, .. } = self.facts[index].value else {
+            return Ok(());
+        };
+        let row = self.facts[index].record;
+        self.context_finding(
+            row,
+            Some(index as u32),
+            match classification {
+                ContextClass::OutsideAuthority => "OUTSIDE_AUTHORITY",
+                ContextClass::InMemory => "IN_MEMORY_ONLY",
+                ContextClass::PayloadUnobservable => "PAYLOAD_UNOBSERVABLE",
+            },
+            false,
+            vec![row],
+            vec!["CONTEXT_ANCHOR_HAS_NO_PHYSICAL_ACTION_PROOF".into()],
+        )
     }
 
     fn process_record(&mut self, row: u32) -> sdk::Result<Option<String>> {

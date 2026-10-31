@@ -23,8 +23,6 @@ pub(super) struct SavedEvaluation {
         sdk::wire::Output,
         Option<Box<SavedEvaluation>>,
     )>,
-    native_prior: Option<crate::analysis::graph_rows::GraphCallState>,
-    native_graph: bool,
     input_basis: InputBasis,
     rebuild: bool,
 }
@@ -85,7 +83,7 @@ impl AnalysisStore {
         id: &str,
         control: &AnalysisReadControl,
     ) -> Result<SavedEvaluation> {
-        Self::saved_call_from(reader, instance, id, control, true, None)
+        Self::saved_call_from(reader, instance, id, control, true)
     }
 
     pub(super) fn saved_inputs_from(
@@ -93,9 +91,8 @@ impl AnalysisStore {
         instance: &ManagedInstance,
         id: &str,
         control: &AnalysisReadControl,
-        verified_native: Option<(&crate::ManagedCall, bool)>,
     ) -> Result<SavedEvaluation> {
-        Self::saved_call_from(reader, instance, id, control, false, verified_native)
+        Self::saved_call_from(reader, instance, id, control, false)
     }
 
     fn saved_call_from(
@@ -104,7 +101,6 @@ impl AnalysisStore {
         id: &str,
         control: &AnalysisReadControl,
         state: bool,
-        verified_native: Option<(&crate::ManagedCall, bool)>,
     ) -> Result<SavedEvaluation> {
         if Self::managed_version_from(
             reader,
@@ -238,14 +234,8 @@ impl AnalysisStore {
                     }
                     let saved = continuation
                         .then(|| {
-                            Self::saved_inputs_from(
-                                reader,
-                                instance,
-                                &reference.result_id,
-                                control,
-                                None,
-                            )
-                            .map(Box::new)
+                            Self::saved_inputs_from(reader, instance, &reference.result_id, control)
+                                .map(Box::new)
                         })
                         .transpose()?;
                     Ok((reference, prior, output, saved))
@@ -260,22 +250,6 @@ impl AnalysisStore {
             &instance.spec.id,
             attempt.capture.generation,
         )?;
-        let prior_spec = prior
-            .as_ref()
-            .filter(|_| continuation)
-            .map(|(_, _, _, saved)| {
-                let generation = saved
-                    .as_ref()
-                    .ok_or_else(|| Code::Missing.error("Graph call saved input"))?
-                    .generation;
-                Self::managed_version_from(
-                    reader,
-                    instance.spec.tenant,
-                    &instance.spec.id,
-                    generation,
-                )
-            })
-            .transpose()?;
         let graph_producer = matches!(
             &evaluated_spec.destination,
             super::ManagedDestination::Graph { calls, .. } if calls.contains(&record.call)
@@ -283,8 +257,17 @@ impl AnalysisStore {
             .exports
             .iter()
             .find(|model| model.name == record.declaration.export)
-            .is_some_and(araphor_analysis_builtins::graph::Detector::supports);
+            .is_some_and(araphor_analysis_builtins::graph::Detector::supports_units);
         if graph_producer {
+            crate::analysis::graph_rows::GraphRows::call_scope(
+                reader,
+                &evaluated_spec,
+                record.call,
+                &PackageResultRefV1 {
+                    result_id: id.into(),
+                    commit_revision: revision,
+                },
+            )?;
             let version: Option<(u64, Option<String>, u64)> = reader
                 .query_row(
                     "SELECT v.scope_id, v.base_result_id, s.created_revision FROM graph_producer_versions v JOIN graph_producer_scopes s USING (scope_id) WHERE v.result_id = ? AND v.commit_revision = ?",
@@ -325,70 +308,6 @@ impl AnalysisStore {
                 }
             }
         }
-        let native_graph = continuation
-            && prior.is_some()
-            && record.input_basis != InputBasis::None
-            && graph_producer;
-        let sparse_resume = record.input_basis == InputBasis::Progress;
-        if sparse_resume {
-            if state && !native_graph {
-                return Err(Code::Invalid.error("saved Graph append basis"));
-            }
-            let native = if let Some((declaration, native)) = verified_native {
-                if declaration != &record.declaration {
-                    return Err(Code::Invalid.error("verified Graph call"));
-                }
-                native
-            } else {
-                Self::native_graph_call(reader, instance.spec.tenant, &record.declaration)?
-            };
-            if !native {
-                return Err(Code::Invalid.error("saved Graph append basis"));
-            }
-        }
-        let native_prior = if native_graph {
-            if !prior_spec.as_ref().is_some_and(|spec| {
-                matches!(&spec.destination,
-                    super::ManagedDestination::Graph { calls, .. } if calls.contains(&record.call))
-            }) {
-                return Err(Code::Invalid.error("Graph call prior destination"));
-            }
-            let (reference, _, _, saved) = prior
-                .as_ref()
-                .ok_or_else(|| Code::Missing.error("Graph call native prior"))?;
-            let evaluation = saved
-                .as_ref()
-                .ok_or_else(|| Code::Missing.error("Graph call saved input"))?
-                .inputs_only(control)?;
-            let prior_spec = prior_spec
-                .as_ref()
-                .ok_or_else(|| Code::Missing.error("Graph call saved spec"))?;
-            Some(if sparse_resume {
-                crate::analysis::graph_rows::GraphCallRows::load_progress(
-                    reader,
-                    prior_spec,
-                    record.call,
-                    &reference.result_id,
-                    reference.commit_revision,
-                    &evaluation,
-                    control,
-                    None,
-                )?
-            } else {
-                crate::analysis::graph_rows::GraphCallRows::load(
-                    reader,
-                    prior_spec,
-                    record.call,
-                    &reference.result_id,
-                    reference.commit_revision,
-                    &evaluation,
-                    control,
-                    None,
-                )?
-            })
-        } else {
-            None
-        };
         let changes = Self::managed_changes_from(reader, id, &record, control)?;
         Ok(SavedEvaluation {
             call: record.call,
@@ -405,8 +324,6 @@ impl AnalysisStore {
             inputs: record.inputs,
             changes,
             prior,
-            native_prior,
-            native_graph,
             input_basis: record.input_basis,
             rebuild: attempt.request.rebuild,
         })
@@ -604,9 +521,6 @@ impl SavedEvaluation {
                 }
             }
         }
-        if let Some(native) = &self.native_prior {
-            bytes = bytes.saturating_add(native.allocated_bytes());
-        }
         if let Some(changes) = &self.changes {
             bytes = bytes.saturating_add(changes.decoding_bytes(control)?);
         }
@@ -671,17 +585,13 @@ impl SavedEvaluation {
                 checkpoint,
                 retained,
                 reusable: false,
-                native_graph: self.native_graph,
-                sparse_resume: self.input_basis == InputBasis::Progress,
-                native: self.native_prior.map(std::sync::Arc::new),
             };
             if self.input_basis != InputBasis::None {
-                (evaluation.checkpoint, evaluation.previous_outputs) = prior.state_sparse(
+                (evaluation.checkpoint, evaluation.previous_outputs) = prior.state(
                     model,
                     &evaluation.inputs,
                     evaluation.parameters.as_ref(),
                     self.rebuild,
-                    self.input_basis == InputBasis::Progress,
                 )?;
             }
         } else if self.input_basis != InputBasis::None {
@@ -705,15 +615,7 @@ impl SavedEvaluation {
         } else {
             evaluation.checkpoint.is_some()
         };
-        if has_basis != (self.input_basis != InputBasis::None)
-            || (self.input_basis == InputBasis::Progress
-                && evaluation.checkpoint.as_ref().is_none_or(|checkpoint| {
-                    !matches!(
-                        araphor_analysis_builtins::graph::Resume::basis(checkpoint),
-                        Ok(araphor_analysis_builtins::graph::ResumeBasis::Progress)
-                    )
-                }))
-        {
+        if has_basis != (self.input_basis != InputBasis::None) {
             return Err(Code::Invalid.error("saved managed input basis"));
         }
         self.descriptor

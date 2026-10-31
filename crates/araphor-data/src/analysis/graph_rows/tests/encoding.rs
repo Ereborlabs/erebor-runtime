@@ -2,6 +2,28 @@ use super::super::header::HeaderMetadata;
 use super::*;
 
 #[test]
+fn native_header_keeps_declared_state_type() -> TestResult {
+    let mut snapshot: GraphSnapshotV1 = serde_json::from_slice(include_bytes!("graph.json"))?;
+    let states = [
+        GraphPackageStateV1::Waiting,
+        GraphPackageStateV1::Declared("WAITING".into()),
+        GraphPackageStateV1::DirectPivot,
+        GraphPackageStateV1::Declared("DIRECT_PIVOT".into()),
+        GraphPackageStateV1::Declared("17".into()),
+    ];
+    let mut encoded = BTreeSet::new();
+    for state in &states {
+        snapshot.packages[0].state = state.clone();
+        let body = GraphRows::encode(&snapshot)?;
+        let header = GraphHeader::decode(&body)?;
+        assert_eq!(&header.snapshot.packages[0].state, state);
+        encoded.insert(body);
+    }
+    assert_eq!(encoded.len(), states.len());
+    Ok(())
+}
+
+#[test]
 fn native_header_encoding_roundtrip() -> TestResult {
     let fixture = CommitFixture::new()?;
     let mut snapshot = fixture.snapshot.clone();

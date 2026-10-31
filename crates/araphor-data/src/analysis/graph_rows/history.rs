@@ -317,7 +317,7 @@ impl GraphRows {
         Self::new_scope(writer, metadata, source, kind, None, revision).map(|scope| (scope, None))
     }
 
-    pub(super) fn call_scope(
+    pub(in crate::analysis) fn call_scope(
         writer: &Connection,
         spec: &ManagedSpec,
         call: u64,
@@ -700,11 +700,8 @@ impl GraphRows {
             scope,
             revision,
             records: &records,
-            basis: None,
-            sparse: false,
-            full: true,
         }
-        .apply(members, Vec::new(), None)
+        .replace(members)
     }
 
     pub(super) fn result_counts(

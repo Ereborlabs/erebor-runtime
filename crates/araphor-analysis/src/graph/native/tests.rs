@@ -477,10 +477,33 @@ impl Fixture {
                     .map_err(|error| error.to_string())?,
             );
         }
-        program.checkpoint.insert(
-            "state".into(),
-            "SELECT 'WAITING' AS tag, CAST(NULL AS VARCHAR) AS declared".into(),
-        );
+        if Detector::supports_units(model) {
+            let empty = program
+                .outputs
+                .get("contributions")
+                .ok_or("contribution SQL")?
+                .clone();
+            program.outputs.insert(
+                "contributions".into(),
+                format!(
+                    "SELECT units.record, COALESCE(empty.subjects, []) AS subjects,
+                    COALESCE(empty.relationships, []) AS relationships,
+                    COALESCE(empty.findings, []) AS findings, empty.state
+                 FROM units LEFT JOIN ({empty}) empty ON FALSE"
+                ),
+            );
+        }
+        if model.checkpoint.is_some() {
+            program.checkpoint.insert(
+                "state".into(),
+                "SELECT 'WAITING' AS tag, CAST(NULL AS VARCHAR) AS declared".into(),
+            );
+        } else {
+            program.outputs.insert(
+                "state".into(),
+                "SELECT 'WAITING' AS tag, CAST(NULL AS VARCHAR) AS declared".into(),
+            );
+        }
         if let Some(checkpoint) = &model.checkpoint {
             for port in checkpoint.datasets.iter().skip(1) {
                 let empty = sdk::RecordBatch::new_empty(Arc::new(port.schema.clone()));
@@ -652,9 +675,11 @@ impl Fixture {
     }
 
     async fn prepare(&self, filter: &str) -> TestResult<GraphPublication> {
-        let sql = araphor_data::FindingV1::PACKAGES.iter().map(|id| format!(
-            "SELECT * FROM \"{id}\".\"1\".detect('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"
-        )).collect::<Vec<_>>().join(" UNION ALL ");
+        let sql = araphor_data::FindingV1::PACKAGES
+            .iter()
+            .map(|id| format!("SELECT * FROM \"{id}\".\"1\".detect('subjects')"))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
         self.prepare_sql("*", filter, sql).await
     }
 
@@ -693,6 +718,41 @@ impl Fixture {
         )
         .await?)
     }
+}
+
+#[tokio::test]
+async fn rejects_unit_input_overrides() -> TestResult {
+    let fixture = Fixture::target(Target::Sql)?;
+    let package = Detector::Credentials.descriptor();
+    let sdk::InputSource::Query(query) = &package.exports[0].inputs[0].source else {
+        return Err("native unit selection".into());
+    };
+    for input in [
+        query.clone(),
+        format!("SELECT * FROM ({query}) selected WHERE FALSE"),
+    ] {
+        let calls = araphor_data::FindingV1::PACKAGES
+            .iter()
+            .map(|id| {
+                if *id == package.id {
+                    format!("SELECT * FROM \"{id}\".\"1\".detect('subjects', units => ({input}))")
+                } else {
+                    format!("SELECT * FROM \"{id}\".\"1\".detect('subjects')")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        let error = fixture
+            .prepare_sql("*", "", calls)
+            .await
+            .err()
+            .ok_or("Graph unit override accepted")?;
+        assert!(
+            format!("{error:?}").contains("Graph unit input override"),
+            "{error:?}"
+        );
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -1509,10 +1569,20 @@ async fn requires_all_detectors() -> TestResult {
 #[tokio::test]
 async fn requires_all_returns() -> TestResult {
     let fixture = Fixture::target(Target::Sql)?;
-    let sql = araphor_data::FindingV1::PACKAGES.iter().map(|id| format!(
-        "SELECT * FROM \"{id}\".\"1\".detect('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest)){}",
-        if *id == "HF-XNODE-001" { " WHERE FALSE" } else { "" }
-    )).collect::<Vec<_>>().join(" UNION ALL ");
+    let sql = araphor_data::FindingV1::PACKAGES
+        .iter()
+        .map(|id| {
+            format!(
+                "SELECT * FROM \"{id}\".\"1\".detect('subjects'){}",
+                if *id == "HF-XNODE-001" {
+                    " WHERE FALSE"
+                } else {
+                    ""
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
     let publication = fixture.prepare_sql("*", "", sql).await?;
     let grant = publication.grant.clone();
     let definition = publication.prepared.resolved().clone();
@@ -1578,9 +1648,11 @@ async fn requires_all_returns() -> TestResult {
 #[tokio::test]
 async fn projected_events_are_valid() -> TestResult {
     let fixture = Fixture::target(Target::Sql)?;
-    let sql = araphor_data::FindingV1::PACKAGES.iter().map(|id| format!(
-        "SELECT * FROM \"{id}\".\"1\".detect('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"
-    )).collect::<Vec<_>>().join(" UNION ALL ");
+    let sql = araphor_data::FindingV1::PACKAGES
+        .iter()
+        .map(|id| format!("SELECT * FROM \"{id}\".\"1\".detect('subjects')"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
     let columns = "tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,cpu_id,source_cursor,framed_record,commit_revision,ordinal,temporal_coverage,kernel_sequence,coverage_interval_id";
     let events = format!("SELECT {columns} FROM events");
     let publication = fixture.prepare_sql(columns, "", sql).await?;
@@ -1861,9 +1933,11 @@ async fn fallback_has_no_keys() -> TestResult {
 async fn rejects_changed_coverage_fields() -> TestResult {
     let fixture = Fixture::target(Target::Sql)?;
     let columns = "tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,cpu_id,source_cursor,framed_record,commit_revision,ordinal,temporal_coverage,CAST(18446744073709551615 AS BIGINT UNSIGNED) AS kernel_sequence,coverage_interval_id";
-    let sql = araphor_data::FindingV1::PACKAGES.iter().map(|id| format!(
-        "SELECT * FROM \"{id}\".\"1\".detect('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"
-    )).collect::<Vec<_>>().join(" UNION ALL ");
+    let sql = araphor_data::FindingV1::PACKAGES
+        .iter()
+        .map(|id| format!("SELECT * FROM \"{id}\".\"1\".detect('subjects')"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
     let events = format!("SELECT {columns} FROM events");
     let publication = fixture.prepare_sql(columns, "", sql).await?;
     let grant = publication.grant.clone();
@@ -1961,9 +2035,11 @@ async fn rejects_foreign_event_call() -> TestResult {
     let (entry, observed) = std::sync::mpsc::channel();
     fixture.query.guest_entry(entry, None)?;
     let before = fixture.query.store().meta()?;
-    let sql = araphor_data::FindingV1::PACKAGES.iter().map(|id| format!(
-        "SELECT * FROM \"{id}\".\"1\".detect('subjects', records => (SELECT * FROM records), facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"
-    )).collect::<Vec<_>>().join(" UNION ALL ");
+    let sql = araphor_data::FindingV1::PACKAGES
+        .iter()
+        .map(|id| format!("SELECT * FROM \"{id}\".\"1\".detect('subjects')"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
     let denied = GraphPublication::prepare(
         session,
         fixture.authority.clone(),

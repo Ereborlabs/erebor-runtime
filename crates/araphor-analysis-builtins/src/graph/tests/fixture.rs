@@ -115,8 +115,8 @@ pub(super) fn findings(
     detector: Detector,
     fixture: &sdk::Fixture,
 ) -> sdk::Result<(Vec<Finding>, sdk::Output)> {
-    let package = detector.descriptor();
-    let report = package.test(fixture, |evaluation| detector.evaluate(evaluation))?;
+    let package = detector.snapshot_descriptor();
+    let report = package.test(fixture, |evaluation| detector.evaluate_snapshot(evaluation))?;
     let records = Observation::decode(&fixture.evaluation.input("records")?.data)?;
     let facts = Fact::decode(&fixture.evaluation.input("facts")?.data)?;
     let rows = FindingChange::decode(&report.output.datasets[4])?

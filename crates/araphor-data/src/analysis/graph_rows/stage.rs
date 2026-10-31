@@ -1,4 +1,3 @@
-use super::calls::CallBasis;
 use super::history::Member;
 use super::*;
 
@@ -7,18 +6,10 @@ pub(super) struct GraphStage<'a> {
     pub scope: u64,
     pub revision: u64,
     pub records: &'a BTreeMap<crate::DiscoveryRecordIdV1, u64>,
-    pub basis: Option<&'a CallBasis>,
-    pub sparse: bool,
-    pub full: bool,
 }
 
 impl GraphStage<'_> {
-    pub fn apply(
-        &self,
-        additions: Vec<Member>,
-        removals: Vec<(MemberKind, Vec<u8>)>,
-        progress_root: Option<&[u8]>,
-    ) -> Result<()> {
+    pub fn replace(&self, additions: Vec<Member>) -> Result<()> {
         let mut selected = BTreeMap::new();
         for member in additions {
             if selected
@@ -28,18 +19,9 @@ impl GraphStage<'_> {
                 return Err(GraphRows::invalid("graph duplicate addition"));
             }
         }
-        let mut deleted = BTreeMap::new();
-        for (kind, identity) in removals {
-            let key = GraphRows::hash(&identity);
-            if deleted.insert((kind as u8, key), identity).is_some() {
-                return Err(GraphRows::invalid("graph duplicate removal"));
-            }
-        }
         let mut previous = BTreeMap::new();
-        let query = "SELECT member_kind,member_key,value_ref,anchor_record_id,anchor_fact,reason_code,ordinal FROM graph_producer_members WHERE scope_id=? AND unit_ref=0 AND valid_to IS NULL";
-        let mut statement = self.writer.prepare(query).context(AnalysisDatabaseSnafu {
-            operation: "prepare prior Graph members",
-        })?;
+        let mut statement = self.writer.prepare("SELECT member_kind,member_key,value_ref FROM graph_producer_members WHERE scope_id=? AND unit_ref=0 AND valid_to IS NULL")
+            .context(AnalysisDatabaseSnafu {operation:"prepare prior Graph members"})?;
         let mut rows = statement
             .query(params![self.scope])
             .context(AnalysisDatabaseSnafu {
@@ -49,20 +31,11 @@ impl GraphStage<'_> {
             operation: "advance prior Graph members",
         })? {
             let kind = GraphRows::column::<u8>(row, 0)?;
-            let key = GraphRows::column::<Vec<u8>>(row, 1)?;
-            if !(2..=6).contains(&kind)
+            if !matches!(kind, 2..=4 | 6)
                 || previous
                     .insert(
-                        (kind, key.clone()),
-                        araphor_graph::Member {
-                            kind,
-                            key,
-                            value: GraphRows::column(row, 2)?,
-                            record: GraphRows::column(row, 3)?,
-                            fact: GraphRows::column(row, 4)?,
-                            reason: GraphRows::column(row, 5)?,
-                            ordinal: GraphRows::column(row, 6)?,
-                        },
+                        (kind, GraphRows::column::<Vec<u8>>(row, 1)?),
+                        GraphRows::column::<u64>(row, 2)?,
                     )
                     .is_some()
             {
@@ -73,52 +46,36 @@ impl GraphStage<'_> {
         drop(statement);
         let needed = previous
             .iter()
-            .map(|((kind, _), value)| (*kind, value.value))
+            .map(|((kind, _), value)| (*kind, *value))
             .chain(
                 selected
                     .values()
                     .map(|value| (value.kind as u8, value.value)),
             )
-            .filter(|(kind, _)| (2..=5).contains(kind))
-            .collect::<BTreeSet<_>>();
+            .filter(|(kind, _)| (2..=4).contains(kind))
+            .collect();
         let identities = self.identities(&needed)?;
-        for ((kind, key), old) in &previous {
-            if (2..=5).contains(kind) {
-                let identity = identities
-                    .get(&(*kind, old.value))
-                    .ok_or_else(|| GraphRows::invalid("graph stage native identity"))?;
-                if GraphRows::hash(identity) != *key {
-                    return Err(GraphRows::invalid("graph member identity collision"));
-                }
-            }
-        }
-        for ((kind, key), new) in &selected {
-            if (2..=5).contains(kind) {
-                let identity = identities
-                    .get(&(*kind, new.value))
-                    .ok_or_else(|| GraphRows::invalid("graph stage native identity"))?;
-                if GraphRows::hash(identity) != *key {
-                    return Err(GraphRows::invalid("graph member identity collision"));
-                }
-            }
-        }
-        for ((kind, key), identity) in &deleted {
-            let old = previous
-                .remove(&(*kind, key.clone()))
-                .ok_or_else(|| GraphRows::invalid("graph member removal"))?;
-            if (2..=5).contains(kind) && identities.get(&(*kind, old.value)) != Some(identity) {
+        for ((kind, key), value) in previous
+            .iter()
+            .map(|(key, value)| (key, *value))
+            .chain(selected.iter().map(|(key, value)| (key, value.value)))
+        {
+            if (2..=4).contains(kind)
+                && identities
+                    .get(&(*kind, value))
+                    .map(|identity| GraphRows::hash(identity))
+                    != Some(key.clone())
+            {
                 return Err(GraphRows::invalid("graph member identity collision"));
             }
         }
-        if self.full {
-            previous.retain(|key, _| selected.contains_key(key));
-        }
-        let by_id = self
-            .records
-            .iter()
-            .map(|(record, id)| (*id, record))
-            .collect::<BTreeMap<_, _>>();
+        let mut members = Vec::with_capacity(selected.len());
         for (key, member) in selected {
+            if let Some(old) = previous.get(&key).filter(|_| (2..=4).contains(&key.0)) {
+                if identities.get(&(key.0, *old)) != identities.get(&(key.0, member.value)) {
+                    return Err(GraphRows::invalid("graph member identity collision"));
+                }
+            }
             let record = member
                 .anchor
                 .as_ref()
@@ -135,74 +92,15 @@ impl GraphStage<'_> {
                 .and_then(|anchor| anchor.fact.as_ref())
                 .map(GraphRows::encode_value)
                 .transpose()?;
-            if let Some(old) = previous.get(&key) {
-                if member.kind == MemberKind::Subject && self.sparse {
-                    if old.value != member.value {
-                        return Err(GraphRows::invalid("graph sparse subject identity"));
-                    }
-                    let prior = Anchor {
-                        record: by_id
-                            .get(
-                                &old.record
-                                    .ok_or_else(|| GraphRows::invalid("graph sparse anchor"))?,
-                            )
-                            .cloned()
-                            .cloned()
-                            .ok_or_else(|| GraphRows::invalid("graph sparse anchor"))?,
-                        fact: old
-                            .fact
-                            .as_deref()
-                            .map(GraphRows::decode_value)
-                            .transpose()?,
-                    };
-                    let basis = self
-                        .basis
-                        .ok_or_else(|| GraphRows::invalid("graph sparse basis"))?;
-                    if basis.local(&prior)?
-                        <= basis.local(
-                            member
-                                .anchor
-                                .as_ref()
-                                .ok_or_else(|| GraphRows::invalid("graph sparse anchor"))?,
-                        )?
-                    {
-                        continue;
-                    }
-                } else if !self.full {
-                    return Err(GraphRows::invalid("graph member already exists"));
-                }
-                if old.value == member.value
-                    && old.record == record
-                    && old.fact == fact
-                    && old.reason == member.reason
-                    && old.ordinal == member.ordinal
-                {
-                    continue;
-                }
-                if matches!(
-                    member.kind,
-                    MemberKind::Subject
-                        | MemberKind::Edge
-                        | MemberKind::Finding
-                        | MemberKind::Progress
-                ) && identities.get(&(member.kind as u8, old.value))
-                    != identities.get(&(member.kind as u8, member.value))
-                {
-                    return Err(GraphRows::invalid("graph member identity collision"));
-                }
-            }
-            previous.insert(
-                key,
-                araphor_graph::Member {
-                    kind: member.kind as u8,
-                    key: member.key,
-                    value: member.value,
-                    record,
-                    fact,
-                    reason: member.reason,
-                    ordinal: member.ordinal,
-                },
-            );
+            members.push(araphor_graph::Member {
+                kind: member.kind as u8,
+                key: member.key,
+                value: member.value,
+                record,
+                fact,
+                reason: member.reason,
+                ordinal: member.ordinal,
+            });
         }
         araphor_graph::Contributions::apply(
             self.writer,
@@ -210,22 +108,17 @@ impl GraphStage<'_> {
             self.revision,
             &[araphor_graph::Replacement {
                 unit: None,
-                members: previous.into_values().collect(),
+                members,
             }],
             false,
         )?;
-        self.writer
-            .execute(
-                "UPDATE graph_producer_versions SET derived_progress_digest=? WHERE scope_id=? AND commit_revision=?",
-                params![progress_root, self.scope, self.revision],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "record Graph progress digest",
-            })?;
         Ok(())
     }
 
-    fn identities(&self, needed: &BTreeSet<(u8, u64)>) -> Result<BTreeMap<(u8, u64), Vec<u8>>> {
+    pub(super) fn identities(
+        &self,
+        needed: &BTreeSet<(u8, u64)>,
+    ) -> Result<BTreeMap<(u8, u64), Vec<u8>>> {
         let mut identities = BTreeMap::new();
         if needed.is_empty() {
             return Ok(identities);
@@ -251,7 +144,7 @@ impl GraphStage<'_> {
         }
         let source: Option<crate::EvidenceIntakeIdentityV1> = if needed
             .iter()
-            .any(|(kind, _)| matches!(kind, 3 | 5))
+            .any(|(kind, _)| *kind == 3)
         {
             let bytes:Vec<u8>=self.writer.query_row("SELECT identity FROM graph_producer_scopes s JOIN graph_sources src USING(source_ref) WHERE s.scope_id=?",params![self.scope],|row|row.get(0)).context(AnalysisDatabaseSnafu {operation:"read Graph staged source"})?;
             Some(GraphRows::decode_value(&bytes)?)
@@ -277,7 +170,7 @@ impl GraphStage<'_> {
         drop(statement);
         let mut records = BTreeMap::new();
         if source.is_some() {
-            let mut statement=self.writer.prepare("WITH needed AS (SELECT unnest(e.evidence_refs) AS evidence_id FROM graph_stage_values v JOIN graph_edge_values e ON e.edge_id=v.value_ref WHERE v.member_kind=3 UNION SELECT p.evidence_id FROM graph_stage_values v JOIN graph_progress_values p ON p.value_ref=v.value_ref WHERE v.member_kind=5) SELECT e.evidence_id,e.cpu_id,e.durable_cursor,s.stream_key,s.tenant_id,r.stream_key IS NOT NULL FROM needed JOIN graph_evidence e USING(evidence_id) JOIN graph_sources s USING(source_ref) LEFT JOIN source_receipts r ON r.stream_key=s.stream_key AND r.tenant_id=s.tenant_id").context(AnalysisDatabaseSnafu {operation:"prepare Graph staged evidence"})?;
+            let mut statement=self.writer.prepare("WITH needed AS (SELECT unnest(e.evidence_refs) AS evidence_id FROM graph_stage_values v JOIN graph_edge_values e ON e.edge_id=v.value_ref WHERE v.member_kind=3) SELECT e.evidence_id,e.cpu_id,e.durable_cursor,s.stream_key,s.tenant_id,r.stream_key IS NOT NULL FROM needed JOIN graph_evidence e USING(evidence_id) JOIN graph_sources s USING(source_ref) LEFT JOIN source_receipts r ON r.stream_key=s.stream_key AND r.tenant_id=s.tenant_id").context(AnalysisDatabaseSnafu {operation:"prepare Graph staged evidence"})?;
             let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
                 operation: "read Graph staged evidence",
             })?;
@@ -351,23 +244,6 @@ impl GraphStage<'_> {
             identities.insert(
                 (4, GraphRows::column::<u64>(row, 0)?),
                 GraphRows::encode_value(&GraphRows::column::<String>(row, 1)?)?,
-            );
-        }
-        drop(rows);
-        drop(statement);
-        let mut statement=self.writer.prepare("SELECT p.value_ref,p.evidence_id FROM graph_stage_values v JOIN graph_progress_values p ON p.value_ref=v.value_ref WHERE v.member_kind=5").context(AnalysisDatabaseSnafu {operation:"prepare Graph staged progress identities"})?;
-        let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
-            operation: "read Graph staged progress identities",
-        })?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance Graph staged progress identities",
-        })? {
-            let record = records
-                .get(&GraphRows::column::<u64>(row, 1)?)
-                .ok_or_else(|| GraphRows::invalid("graph stage progress evidence"))?;
-            identities.insert(
-                (5, GraphRows::column::<u64>(row, 0)?),
-                GraphRows::encode_value(record)?,
             );
         }
         drop(rows);

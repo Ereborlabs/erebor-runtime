@@ -56,7 +56,6 @@ pub struct GraphPublication {
     feedback: bool,
     calls: BTreeMap<u64, PackageCall>,
     packages: BTreeMap<u64, AnalysisContextRefV1>,
-    sparse: BTreeSet<u64>,
     projection: Arc<Projection>,
 }
 
@@ -89,7 +88,6 @@ struct Capture {
     consumed: u64,
     accepted: u64,
     coverage_revision: u64,
-    recheck: bool,
     now: u64,
     inputs: Vec<sdk::Input>,
     _memory: MemoryReservation,
@@ -99,14 +97,30 @@ struct Head {
     id: String,
     first: u64,
     deadline: u64,
-    coverage: u64,
-    packages: BTreeSet<araphor_data::AnalysisContextKeyV1>,
-    reusable: bool,
 }
 
 enum DefinitionRef<'a> {
     Fresh(&'a Definition),
     Retained(&'a ResolvedDefinition),
+}
+
+impl Projection {
+    fn source_ports() -> [(&'static str, sdk::Port); 3] {
+        [
+            (
+                "graph_records",
+                araphor_analysis_builtins::graph::Observation::port(),
+            ),
+            (
+                "graph_facts",
+                araphor_analysis_builtins::graph::Fact::port(),
+            ),
+            (
+                "graph_settings",
+                araphor_analysis_builtins::graph::Manifest::port(),
+            ),
+        ]
+    }
 }
 
 impl GraphPublication {
@@ -250,7 +264,10 @@ impl GraphPublication {
         let projection = Arc::new(Projection {
             tenant: grant.selection.tenant_id,
             facts,
-            ports: Detector::inputs().to_vec(),
+            ports: Projection::source_ports()
+                .into_iter()
+                .map(|(_, port)| port)
+                .collect(),
             memory: Arc::clone(session.memory()),
             limits: query.limits().clone(),
             prepared: prepared_inputs,
@@ -259,7 +276,11 @@ impl GraphPublication {
             #[cfg(test)]
             observed: Default::default(),
         });
-        for (index, port) in projection.ports.iter().enumerate() {
+        for (index, ((alias, _), port)) in Projection::source_ports()
+            .into_iter()
+            .zip(&projection.ports)
+            .enumerate()
+        {
             let source = Arc::new(node::Port {
                 owner: Arc::clone(&projection),
                 index,
@@ -280,15 +301,14 @@ impl GraphPublication {
                     source,
                 )?
             };
-            session.register_table(
-                &port.name,
-                Arc::new(ViewTable::new(
-                    LogicalPlan::Extension(Extension {
-                        node: Arc::new(provider),
-                    }),
-                    None,
-                )),
-            )?;
+            let table: Arc<dyn datafusion::catalog::TableProvider> = Arc::new(ViewTable::new(
+                LogicalPlan::Extension(Extension {
+                    node: Arc::new(provider),
+                }),
+                None,
+            ));
+            session.register_table(&port.name, Arc::clone(&table))?;
+            session.register_table(alias, table)?;
         }
         let prepared = match definition {
             DefinitionRef::Fresh(definition) => session.prepare_definition(definition).await?,
@@ -313,6 +333,16 @@ impl GraphPublication {
         })
         .map_err(|source| araphor_query::Error::Sql { source })?;
         let mut supported = BTreeSet::new();
+        if calls.values().any(|call| {
+            call.has_input_overrides()
+                && call
+                    .descriptor()
+                    .exports
+                    .iter()
+                    .any(|model| model.name == call.export() && Detector::supports_units(model))
+        }) {
+            return Err(Code::Invalid.error("Graph unit input override").into());
+        }
         for call in calls.values().filter(|call| {
             call.descriptor()
                 .exports
@@ -329,7 +359,6 @@ impl GraphPublication {
         {
             return Err(Code::Invalid.error("required graph detector call").into());
         }
-        let mut sparse = BTreeMap::new();
         let values = calls
             .iter()
             .map(|(&id, call)| {
@@ -340,23 +369,6 @@ impl GraphPublication {
                             && image.digest() == call.image().digest
                     })
                     .ok_or_else(|| Code::Denied.error("graph image attribution"))?;
-                let artifact = image
-                    .bundle()
-                    .artifacts
-                    .iter()
-                    .find(|artifact| artifact.reference() == *call.package())
-                    .ok_or_else(|| Code::Denied.error("graph package attribution"))?;
-                if let araphor_data::PackageImplementationV1::Wasm {
-                    artifact: component,
-                    ..
-                } = artifact
-                    .implementation(call.export())
-                    .map_err(araphor_data::Error::from)?
-                {
-                    if Detector::supports_resume(call.descriptor(), call.export(), component) {
-                        sparse.insert(id, call.clone());
-                    }
-                }
                 Ok((
                     id,
                     AnalysisContextVersionV1::from_package(
@@ -408,11 +420,6 @@ impl GraphPublication {
                 Ok((prepared, packages))
             })
             .await?;
-        let package_keys = packages
-            .values()
-            .map(|reference| reference.key.clone())
-            .collect::<BTreeSet<_>>();
-        let sparse_ids = sparse.keys().copied().collect();
         let weak = Arc::downgrade(&projection);
         session.set_context_init(move |config| {
             let run = Arc::new(GraphRun {
@@ -420,39 +427,6 @@ impl GraphPublication {
                 captured: OnceCell::new(),
             });
             config.set_extension(Arc::clone(&run));
-            let checked = Arc::clone(&run);
-            let sparse = sparse.clone();
-            config.set_extension(Arc::new(araphor_query::definition::CallSparse::new(
-                move |call| {
-                    sparse
-                        .get(&call.id())
-                        .is_some_and(|expected| expected.same_call(call))
-                        && checked
-                            .captured
-                            .get()
-                            .and_then(|value| value.as_ref().ok())
-                            .is_some()
-                },
-            )));
-            let packages = package_keys.clone();
-            config.set_extension(Arc::new(araphor_query::definition::CallReuse::new(
-                move |call| {
-                    call.descriptor()
-                        .exports
-                        .iter()
-                        .any(|model| model.name == call.export() && Graph::supports(model))
-                        && run
-                            .captured
-                            .get()
-                            .and_then(|value| value.as_ref().ok())
-                            .is_some_and(|capture| {
-                                capture
-                                    .heads
-                                    .iter()
-                                    .any(|head| head.reusable && head.packages == packages)
-                            })
-                },
-            )));
         });
         Ok(Self {
             session,
@@ -462,7 +436,6 @@ impl GraphPublication {
             feedback,
             calls,
             packages,
-            sparse: sparse_ids,
             projection,
         })
     }

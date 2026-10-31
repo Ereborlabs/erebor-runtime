@@ -582,6 +582,7 @@ impl TryFrom<StateRow> for GraphPackageStateV1 {
         if value.tag == "DECLARED" {
             return value
                 .declared
+                .filter(|value| !value.is_empty())
                 .map(Self::Declared)
                 .ok_or_else(|| invalid("graph native package state"));
         }
@@ -802,11 +803,13 @@ impl TryFrom<MetadataRow> for Metadata {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 pub(super) struct ProgressRow {
     pub record: RecordIdRow,
     pub digest: ByteBuf,
     pub state: Option<String>,
 }
+#[cfg(test)]
 impl From<&super::super::Progress> for ProgressRow {
     fn from(value: &super::super::Progress) -> Self {
         Self {
@@ -816,6 +819,7 @@ impl From<&super::super::Progress> for ProgressRow {
         }
     }
 }
+#[cfg(test)]
 impl TryFrom<ProgressRow> for super::super::Progress {
     type Error = sdk::Error;
     fn try_from(value: ProgressRow) -> sdk::Result<Self> {
@@ -829,9 +833,11 @@ impl TryFrom<ProgressRow> for super::super::Progress {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 pub(super) struct ProgressRemovalRow {
     record: RecordIdRow,
 }
+#[cfg(test)]
 impl From<&ProgressRemoval> for ProgressRemovalRow {
     fn from(value: &ProgressRemoval) -> Self {
         Self {
@@ -839,6 +845,7 @@ impl From<&ProgressRemoval> for ProgressRemovalRow {
         }
     }
 }
+#[cfg(test)]
 impl TryFrom<ProgressRemovalRow> for ProgressRemoval {
     type Error = sdk::Error;
     fn try_from(value: ProgressRemovalRow) -> sdk::Result<Self> {

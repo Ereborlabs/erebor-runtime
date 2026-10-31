@@ -6,6 +6,7 @@ use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection};
 
 use super::{FindingRefs, FindingRows, StoredReason};
+use crate::native::NativeRows;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -361,7 +362,7 @@ fn reason_codec_keeps_details() -> TestResult {
     };
     let declared = DeclaredFindingReasonV1::from_value(&value)?;
     assert_eq!(
-        FindingRows::decode_bytes::<DeclaredFindingReasonV1>(&FindingRows::encode(&declared)?)?,
+        FindingRows::decode_bytes::<DeclaredFindingReasonV1>(&NativeRows::encode(&declared)?)?,
         declared
     );
     let reason = FindingReasonV1::Declared(declared);

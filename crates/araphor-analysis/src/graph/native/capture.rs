@@ -153,8 +153,6 @@ impl Projection {
                 {
                     continue;
                 }
-                let refs: Vec<araphor_data::AnalysisContextRefV1> =
-                    Self::value(batch, "context_refs", row)?;
                 heads.push(Head {
                     id: Self::column::<StringArray>(batch, "graph_result_id")?
                         .value(row)
@@ -162,14 +160,6 @@ impl Projection {
                     first: Self::column::<UInt64Array>(batch, "first_cursor")?.value(row),
                     deadline: Self::column::<UInt64Array>(batch, "witness_deadline_utc_ns")?
                         .value(row),
-                    coverage: Self::column::<UInt64Array>(batch, "notice_coverage_revision")?
-                        .value(row),
-                    packages: refs
-                        .into_iter()
-                        .filter(|reference| reference.key.owner_id == "native-package-v1")
-                        .map(|reference| reference.key)
-                        .collect(),
-                    reusable: false,
                 });
                 manifests.push(revision);
             }
@@ -302,48 +292,6 @@ impl Projection {
         .map_err(Self::external)?;
         let mut graph = Graph::try_from(input).map_err(Self::external)?;
         let (contexts, fact_refs) = Self::bind_facts(&graph.input.facts, &inputs[1])?;
-        let recheck = heads.iter().zip(&manifests).any(|(head, previous)| {
-            let prior_ids = previous.evidence.iter().collect::<BTreeSet<_>>();
-            let context = graph
-                .input
-                .facts
-                .iter()
-                .zip(&graph.facts)
-                .filter(|(_, fact)| prior_ids.contains(&fact.record_id))
-                .map(|(version, _)| version.key.clone())
-                .collect::<Vec<_>>();
-            let prior_host = graph.input.facts.iter().any(|fact| {
-                previous.context.contains(&fact.key)
-                    && fact.sensitivity == araphor_data::ContextSensitivityV1::HostRestricted
-            });
-            let current_host =
-                graph.input.facts.iter().any(|fact| {
-                    fact.sensitivity == araphor_data::ContextSensitivityV1::HostRestricted
-                });
-            previous
-                .evidence
-                .iter()
-                .any(|id| graph.revision.evidence.binary_search(id).is_err())
-                || context != previous.context
-                || previous.missing_ranges != graph.revision.missing_ranges
-                || head.coverage != latest
-                || (!prior_host && current_host)
-        });
-        for (head, manifest) in heads.iter_mut().zip(&manifests) {
-            head.reusable = graph
-                .input
-                .records
-                .first()
-                .is_some_and(|row| row.id.durable_cursor == head.first)
-                && graph
-                    .input
-                    .records
-                    .last()
-                    .is_some_and(|row| row.id.durable_cursor <= consumed)
-                && head.deadline > source.time_utc_ns()
-                && head.coverage == latest
-                && manifest == &graph.revision;
-        }
         memory.try_grow(
             positions.len() * size_of::<(DiscoveryRecordIdV1, StorePositionV1)>()
                 + heads.len() * size_of::<Head>()
@@ -412,7 +360,6 @@ impl Projection {
             consumed,
             accepted,
             coverage_revision: latest,
-            recheck,
             now: source.time_utc_ns(),
             inputs,
             _memory: memory,
