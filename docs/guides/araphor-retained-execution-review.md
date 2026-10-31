@@ -1,8 +1,8 @@
 # Araphor retained execution state review
 
 This guide covers retained state and lookup inputs through `babd497c4`, plus
-the current unit migration. The changes remove repeated saved-call reads and
-deliver declared input changes to packages. The parent
+the current unit migration and managed raw-change reads. The changes remove
+repeated saved-call reads and deliver declared input changes to packages. The parent
 plan is [reactive execution latency](../plans/araphor-reactive-execution-latency.md).
 
 ## Intended end state
@@ -254,6 +254,41 @@ The result-to-producer-cut relation still selects historical Graphs. The
 [state tests](../../crates/araphor-graph/src/contributions/state/tests.rs), and
 [Data unit tests](../../crates/araphor-data/src/analysis/graph_rows/units/tests.rs)
 exercise these rules. Current-source run results remain pending.
+
+## Committed raw changes
+
+[AnalysisStore::read_managed_tables_filtered](../../crates/araphor-data/src/analysis/extraction.rs)
+accepts a managed read after a complete committed input position
+  -> [AnalysisTableRead::check_managed_changes](../../crates/araphor-data/src/analysis/extraction.rs) rejects projected relations and selections that this read cannot supply
+  -> [AnalysisStore::capture_managed](../../crates/araphor-data/src/analysis/managed/capture.rs) checks the instance, grant, generation, progress, and current call heads in the captured transaction
+  -> [RawJournal::select_position](../../crates/araphor-data/src/analysis/raw.rs) selects committed raw rows after the input position and through the captured revision
+  -> [AnalysisStore::raw_removals](../../crates/araphor-data/src/analysis/extraction/changes.rs) reads retirement ranges from the same revision interval
+  -> [ManagedCapture::seal](../../crates/araphor-data/src/analysis/managed/capture.rs) retains the exact source interests and witnesses for publication
+
+This read returns additions, removals, and current source metadata. Current
+metadata is not a delta relation. The supported projected relations are
+`events`, `trace_output`, `coverage`, `discovery_state`, and `graph_state`.
+Trace measurements and context or result relations require their own change
+read support. This read rejects those requests. A dependency-only context
+request retains its source interest without reading context rows. An
+unselected `contexts = All` scope is not expanded to all context keys.
+
+The reader owns the captured revision and segment lease. The returned
+`ManagedCapture` has the existing publication contract. A read, failed read,
+or cancellation does not advance the instance progress or call heads.
+Only the existing publication transaction commits execution state.
+
+The [managed journal tests](../../crates/araphor-data/src/analysis/managed/tests/journal.rs)
+check bounded reads, arrivals after the captured cut, late gap repair, idle
+reads, unsupported selections, stale owners, cancellation, retirement,
+reopen, and unselected context keys. The existing
+[raw change tests](../../crates/araphor-data/src/analysis/extraction/changes/tests.rs)
+also check source and trace retirement, binding filters, and replay floors.
+
+This Data API is a prerequisite. Query still uses complete captures for
+managed Graph execution. Native input execution, context and coverage change
+feeds, and the complete incremental Graph path are **Not done**. The parent
+plan records the required replacement. This API alone proves no latency gain.
 
 ## Proof and limits
 

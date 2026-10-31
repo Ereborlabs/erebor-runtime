@@ -24,6 +24,7 @@ mod guards;
 mod health;
 mod history;
 mod input;
+mod journal;
 mod lifecycle;
 mod memory;
 mod metadata;

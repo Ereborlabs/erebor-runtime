@@ -97,6 +97,112 @@ No polling loop, periodic discovery clock, artificial batching delay, memory
 quota, or package-size cap is introduced. A batch consists of available
 committed changes. A real window deadline remains a Query processing event.
 
+## Current incremental requirement
+
+**Query, execution, and Graph changes: Not done.** The user requires
+incremental computation and storage throughout proposals 1 and 5. Reading
+the complete current input and then computing its difference does not meet
+this requirement. The complete-target flows and their results below record
+earlier implementations. They do not define the required final behavior.
+
+The local TerminusDB source supplies these concrete lessons:
+
+- [Layer queries](../../terminusdb/src/rust/terminusdb-store-prolog/src/layer.rs)
+  use stable value IDs and separate addition and removal iterators. Bound
+  subject, predicate, or object keys select the corresponding index.
+- [Layer builders](../../terminusdb/src/rust/terminusdb-store-prolog/src/builder.rs)
+  apply additions and removals against a parent layer.
+- [Query compilation](../../terminusdb/src/core/query/woql_compile.pl)
+  compiles addition and removal queries to these change readers. It does
+  not discover changes by comparing two complete query results.
+
+Reuse these rules with Arrow, native DataFusion plans, and Data's existing
+transaction. Do not add a second durable store or a second SQL engine.
+
+Data receives changes after the last committed input cut C
+  -> Data captures changed raw, context, proof, and coverage inputs through R
+  -> Query prepares a candidate over the retained indexed view at C
+  -> native SQL selects affected keys from old and new dependencies
+  -> native SQL reads only the changed roots and required indexed support
+  -> the same package executor receives exact before, after, and support rows
+  -> Data commits typed changes, Graph membership, and input cut R together
+  -> Query promotes the candidate view only after that commit is acknowledged
+
+A window closes or removes selected rows
+  -> the existing Query window stream supplies the affected keys
+  -> the same candidate and publication path applies those changes
+
+Publication fails or the process restarts
+  -> failed publication leaves input cut C and its indexed view unchanged
+  -> restart loads the committed base and typed change records once
+  -> execution resumes with changes after the recovered committed input cut
+
+The input cut differs from the output commit revision. Later arrivals stay
+outside R. Concurrent captures must not combine different cuts. Do not
+promote a source cursor or mutable input index before publication succeeds.
+Retain row counts, reservations, and dependency indexes. A normal update must
+not rebuild complete witness lists, input hashes, target Arrow payloads, or
+Graph metadata. Preserve exact replay through typed base and change records.
+
+Affected keys include prior dependents and new join candidates. Late input
+can create a new match that no prior unit referenced. Use stable record and
+context keys at the index boundary. Use local Arrow row indexes only within
+the selected package input. A global proof or sensitivity change can affect
+all units; an unrelated append does not justify reading all prior records.
+
+Ordinary SQL subscriptions and package inputs must use the same source-change
+machinery. Native joins, groups, outer joins, aggregates, and windows must
+retain their SQL meaning. An unsupported incremental plan must remain an
+explicit implementation gap. A complete-query fallback does not qualify as
+incremental execution. Finite snapshot queries retain their native results
+and output order.
+
+The first implementation prerequisite is a managed read of the existing raw
+change journal. This prerequisite does not complete the context and coverage
+feed, indexed native execution, Graph integration, or either proposal. The
+reviewer must approve the concrete next source contract and state lifetime
+before implementation. Proposals 2, 3, 4, and 6 remain unapproved.
+
+### Managed raw-change read result
+
+**Managed raw-change read prerequisite: Done. Complete incremental Query and
+Graph execution: Not done. Proposals 1 and 5: Not done.** This change follows
+`516c1fdd`. The
+[review route](../guides/araphor-retained-execution-review.md#committed-raw-changes)
+links the current owners and tests.
+
+Data accepts a managed `Changes` read after a complete committed input
+position. The existing raw journal selects additions and retirement ranges
+through the captured revision. The same transaction checks the instance,
+grant, generation, lifecycle, call heads, and replay floor. The returned
+capture keeps its exact source interests and witnesses. Reading does not
+advance durable progress or execution state.
+
+The read rejects relations and explicit input selections that its early
+change return cannot supply. Current source metadata remains current
+metadata. A dependency-only context request does not read context rows.
+An unselected all-context scope is pruned before key resolution. Its original
+source interest remains in the sealed capture. The read does not introduce a
+new cursor, storage engine, quota, format version, or polling task.
+
+Four new managed journal tests and ten existing raw-change, managed-owner,
+and retained-state tests pass. The managed tests cover arrivals after a fixed
+snapshot, late gap repair, idle reads, unsupported requests, stale owners,
+cancellation, retirement, replay floors, and reopen. The context regression
+uses the existing optional key configuration to prove that unrequested
+context keys are not resolved. It adds no default limit or performance test.
+The proof log is `/tmp/araphor-managed-journal-final-20261031.log`.
+Data clippy passes with tests and warnings denied. Scoped formatting,
+whitespace, and document-link checks pass. The clippy log is
+`/tmp/araphor-managed-journal-clippy-20261031.log`. Full workspace CI was
+not run. The user requires relevant checks only.
+
+The Graph caller still uses complete captures. Context and coverage change
+feeds, the shared explicit delta-source contract, indexed native execution,
+commit-only candidate promotion, and changed Graph metadata remain open.
+This prerequisite proves no reduction in incident latency. The recorded
+243.94-second diagnostic remains the latest full incident measurement.
+
 ## Measured baseline
 
 The source was `2d7d4164b9c2`. The existing

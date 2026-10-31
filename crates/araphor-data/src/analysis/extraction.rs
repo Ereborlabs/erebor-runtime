@@ -476,6 +476,33 @@ pub struct AnalysisTableRead<'a> {
 }
 
 impl AnalysisTableRead<'_> {
+    fn check_managed_changes(&self, selection: &AnalysisSelectionV1) -> Result<()> {
+        if !matches!(self.mode, AnalysisReadModeV1::Changes(_)) {
+            return Ok(());
+        }
+        if self.inputs.is_some()
+            || selection.targets
+            || !selection.contexts.as_slice().is_empty()
+            || !selection.results.is_empty()
+            || !selection.profiles.is_empty()
+            || !selection.graphs.is_empty()
+            || selection.graph_traversal.is_some()
+            || !selection.obligations.is_empty()
+        {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("managed change selection"));
+        }
+        if self.requests.iter().any(|(name, columns)| {
+            columns.is_some()
+                && !matches!(
+                    name.as_str(),
+                    "events" | "trace_output" | "coverage" | "discovery_state" | "graph_state"
+                )
+        }) {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("managed change relation"));
+        }
+        Ok(())
+    }
+
     fn projected(&self, name: &str) -> Option<&BTreeSet<usize>> {
         self.requests.get(name).and_then(Option::as_ref)
     }
@@ -1513,11 +1540,14 @@ impl AnalysisStore {
         if selection.tenant_id != managed.instance.spec.tenant
             || !matches!(
                 read.mode,
-                AnalysisReadModeV1::Complete | AnalysisReadModeV1::Metadata
+                AnalysisReadModeV1::Complete
+                    | AnalysisReadModeV1::Metadata
+                    | AnalysisReadModeV1::Changes(_)
             )
         {
             return Err(crate::PackageErrorCodeV1::Invalid.error("managed capture scope"));
         }
+        read.check_managed_changes(selection)?;
         let (page, state) = self.read_tables_inner(
             selection,
             Some(managed),
@@ -1626,8 +1656,16 @@ impl AnalysisStore {
             #[cfg(test)]
             control.test_snapshot()?;
             let requested = selection;
+            let raw_scope = (managed.is_some()
+                && matches!(mode, AnalysisReadModeV1::Changes(_))
+                && selection.contexts.is_all())
+            .then(|| {
+                let mut scope = selection.clone();
+                scope.contexts = Selection::Exact(Vec::new());
+                scope
+            });
             let (selection, key_bytes) =
-                self.resolve_selection_filtered(snapshot, selection, control, limits, context_owners)?;
+                self.resolve_selection_filtered(snapshot, raw_scope.as_ref().unwrap_or(selection), control, limits, context_owners)?;
             let selection = selection.as_ref();
             let mut capture = tables::Capture::new(&read, selection);
             let end = StorePositionV1 {
