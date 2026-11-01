@@ -276,13 +276,13 @@ async fn joined_trap_becomes_durable() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             [1; 16],
             "known-trap",
             &terminal.attempt,
             &AnalysisReadControl::default()
         )?
-        .is_none());
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     let current = fixture
         .query
         .store()
@@ -533,13 +533,13 @@ async fn valid_notice_keeps_instance() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             [1; 16],
             "valid-notice",
             &attempt.request().id,
             &AnalysisReadControl::default()
         )?
-        .is_none());
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     drop(fixture.query.reserve_evaluation([1; 16])?);
     Ok(())
 }
@@ -719,13 +719,13 @@ async fn failed_writer_keeps_claim() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             [1; 16],
             "failed-writer",
             &attempt.request().id,
             &AnalysisReadControl::default()
         )?
-        .is_none());
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     let terminal = stream
         .cancel_and_join(&AnalysisReadControl::default())
         .await?
@@ -826,7 +826,10 @@ async fn failed_offer_fences_old_stream() -> TestResult {
     let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("changed failed-offer receipt")??;
-    assert_eq!(fixture.selected("failed-offer", &receipt.attempt)?, [7]);
+    assert_eq!(
+        fixture.selected("failed-offer", &receipt.attempt).await?,
+        [7]
+    );
     assert_eq!(fixture.progress("failed-offer")?, receipt.commit_revision);
     assert!(receipt.commit_revision > terminal.revision);
     assert_ne!(receipt.attempt, terminal.attempt);
@@ -838,8 +841,8 @@ async fn failed_offer_fences_old_stream() -> TestResult {
     assert_eq!(retained.terminal(), Some(&terminal));
     assert!(retained.receipt().is_none());
     assert!(store
-        .managed_selected([1; 16], "failed-offer", &terminal.attempt, &control)?
-        .is_none());
+        .managed_attempt([1; 16], "failed-offer", &terminal.attempt, &control)?
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     drop(fixture.query.reserve_evaluation([1; 16])?);
     Ok(())
 }

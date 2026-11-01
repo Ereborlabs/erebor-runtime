@@ -23,7 +23,7 @@ impl Package {
         &'a self,
         evaluation: &'a Evaluation,
     ) -> Result<CheckedEvaluation<'a>> {
-        let model = self.validator(evaluation)?;
+        let model = self.wire_validator(&evaluation.export)?;
         model.input(evaluation)?;
         Ok(CheckedEvaluation::new(self, model, evaluation))
     }
@@ -36,42 +36,12 @@ impl Package {
         self.check_evaluation(evaluation)?.validate_output(output)
     }
 
-    pub fn validate_retained_output(
-        &self,
-        export: &str,
-        inputs: &BTreeMap<String, u64>,
-        output: &Output,
-    ) -> Result<()> {
-        let model = self.wire_validator(export)?;
-        if inputs.keys().map(String::as_str).collect::<BTreeSet<_>>()
-            != model
-                .inputs
-                .iter()
-                .map(|input| input.port.name.as_str())
-                .collect()
-        {
-            return Err(Error::contract(ErrorCode::Invalid, "retained input names"));
-        }
-        model.output_rows(inputs, output)
-    }
-
-    pub(crate) fn validator(&self, evaluation: &Evaluation) -> Result<&Model> {
-        self.validate()?;
-        self.select_validator(&evaluation.export)
-    }
-
     pub(crate) fn wire_validator(&self, export: &str) -> Result<&Model> {
         self.validate()?;
-        self.select_validator(export)
-    }
-
-    fn select_validator(&self, export: &str) -> Result<&Model> {
-        let model = self
-            .exports
+        self.exports
             .iter()
             .find(|model| model.name == export)
-            .ok_or_else(|| Error::contract(ErrorCode::Incompatible, "export"))?;
-        Ok(model)
+            .ok_or_else(|| Error::contract(ErrorCode::Incompatible, "export"))
     }
 }
 
@@ -116,25 +86,6 @@ impl<'a> CheckedEvaluation<'a> {
 
 impl Model {
     pub(crate) fn input(&self, evaluation: &Evaluation) -> Result<()> {
-        self.input_values(evaluation)?;
-        self.checkpoint(evaluation.checkpoint.as_ref(), false)?;
-        if let Some(changes) = &self.change_inputs {
-            changes.check_state(evaluation, self.checkpoint.is_some())?;
-        }
-        if self
-            .checkpoint
-            .as_ref()
-            .is_some_and(|spec| spec.resume_input_changes)
-            && evaluation.checkpoint.is_some()
-        {
-            Self::datasets(self.outputs.iter(), evaluation.previous_outputs.iter())?;
-        } else if !evaluation.previous_outputs.is_empty() {
-            return Err(Error::contract(ErrorCode::Invalid, "previous outputs"));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn input_values(&self, evaluation: &Evaluation) -> Result<()> {
         Package::text(&evaluation.context.id)?;
         match (&evaluation.parameters, self.parameters.fields().is_empty()) {
             (None, true) => {}
@@ -161,6 +112,20 @@ impl Model {
         }
         if let Some(changes) = &self.change_inputs {
             changes.check_inputs(evaluation)?;
+        }
+        self.validate_checkpoint(evaluation.checkpoint.as_ref(), false)?;
+        if let Some(changes) = &self.change_inputs {
+            changes.check_state(evaluation, self.checkpoint.is_some())?;
+        }
+        if self
+            .checkpoint
+            .as_ref()
+            .is_some_and(|spec| spec.resume_input_changes)
+            && evaluation.checkpoint.is_some()
+        {
+            Self::datasets(self.outputs.iter(), evaluation.previous_outputs.iter())?;
+        } else if !evaluation.previous_outputs.is_empty() {
+            return Err(Error::contract(ErrorCode::Invalid, "previous outputs"));
         }
         Ok(())
     }
@@ -227,7 +192,7 @@ impl Model {
             }
             batch::validate(&value.details, &reason.details)?;
         }
-        self.checkpoint(output.checkpoint.as_ref(), true)
+        self.validate_checkpoint(output.checkpoint.as_ref(), true)
     }
 
     fn datasets<'a, 'p>(
@@ -265,7 +230,11 @@ impl Model {
         Ok(())
     }
 
-    fn checkpoint(&self, checkpoint: Option<&Checkpoint>, required: bool) -> Result<()> {
+    pub fn validate_checkpoint(
+        &self,
+        checkpoint: Option<&Checkpoint>,
+        required: bool,
+    ) -> Result<()> {
         match (&self.checkpoint, checkpoint) {
             (None, None) => Ok(()),
             (Some(_), None) if !required => Ok(()),
@@ -309,4 +278,4 @@ impl Dataset {
 }
 
 #[cfg(test)]
-mod retained_tests;
+mod output_tests;

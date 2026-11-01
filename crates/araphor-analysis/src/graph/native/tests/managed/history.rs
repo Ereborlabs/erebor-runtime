@@ -44,7 +44,7 @@ async fn empty_gate_keeps_history() -> TestResult {
         let now = request("inspect-history")?.time_utc_ns;
         let requests = araphor_data::AnalysisTableRequests::new();
         let capture = |current| {
-            data.read_managed_tables(
+            data.read_managed_tables_filtered(
                 &grant.selection,
                 &araphor_data::ManagedRead {
                     source: None,
@@ -58,12 +58,12 @@ async fn empty_gate_keeps_history() -> TestResult {
                 araphor_data::AnalysisTableRead {
                     requests: &requests,
                     event_ranges: None,
-                    inputs: None,
                     mode: araphor_data::AnalysisReadModeV1::Complete,
                     now,
                 },
                 araphor_data::AnalysisExtractLimits::default(),
                 &fixture.control,
+                None,
             )
         };
         let captured_revision = araphor_query::follow::Cursor::decode(
@@ -79,16 +79,10 @@ async fn empty_gate_keeps_history() -> TestResult {
                 (&prior.result, prior.revision),
                 (&reference.result_id, reference.commit_revision)
             );
-            let araphor_data::ManagedOutput::Call { result, .. } =
-                data.managed_output(&current, &reference.result_id, now, &fixture.control)?
-            else {
-                return Err("initial Graph call".into());
-            };
+            let result = data.managed_result(&current,&reference.result_id,now,&fixture.control)?;
+            assert!(matches!(result.kind,araphor_data::InstanceResultKindV1::Call {..}));
             assert!(!result.current);
-            saved.insert(
-                *call,
-                (result.context, result.output, result.commit_revision),
-            );
+            saved.insert(*call,serde_json::to_value(result)?);
         }
         drop(captured);
         let fourth = record(
@@ -127,16 +121,10 @@ async fn empty_gate_keeps_history() -> TestResult {
                 (&prior.result, prior.revision),
                 (&reference.result_id, reference.commit_revision)
             );
-            let araphor_data::ManagedOutput::Call { result, .. } =
-                data.managed_output(&current, &reference.result_id, now, &fixture.control)?
-            else {
-                return Err("historical Graph call".into());
-            };
+            let result = data.managed_result(&current,&reference.result_id,now,&fixture.control)?;
+            assert!(matches!(result.kind,araphor_data::InstanceResultKindV1::Call {..}));
             assert!(!result.current);
-            assert_eq!(
-                (result.context, result.output, result.commit_revision),
-                saved[call]
-            );
+            assert_eq!(serde_json::to_value(result)?,saved[call]);
         }
         data.fault_write(
             "UPDATE analysis_results SET request_meta = 'invalid'::BLOB WHERE tenant_id = ? AND result_id = ?",
@@ -144,7 +132,7 @@ async fn empty_gate_keeps_history() -> TestResult {
         )?;
         let reference = first.results.values().next().ok_or("historical call")?;
         assert!(data
-            .managed_output(&current, &reference.result_id, now, &fixture.control)
+            .managed_result(&current, &reference.result_id, now, &fixture.control)
             .is_err());
         Ok(())
     }
@@ -154,7 +142,7 @@ async fn empty_gate_keeps_history() -> TestResult {
 }
 
 #[tokio::test]
-async fn failed_graph_disables_reuse() -> TestResult {
+async fn failed_graph_keeps_references() -> TestResult {
     let fixture = Fixture::target(Target::Wasm)?;
     let (grant, definition) = fixture.graph_definition().await?;
     let job = fixture
@@ -175,7 +163,7 @@ async fn failed_graph_disables_reuse() -> TestResult {
     let requests = araphor_data::AnalysisTableRequests::new();
     let now = request("capture-reuse")?.time_utc_ns;
     let capture = |instance: araphor_data::ManagedInstance| {
-        store.read_managed_tables(
+        store.read_managed_tables_filtered(
             &grant.selection,
             &araphor_data::ManagedRead {
                 source: None,
@@ -189,20 +177,19 @@ async fn failed_graph_disables_reuse() -> TestResult {
             araphor_data::AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: araphor_data::AnalysisReadModeV1::Complete,
                 now,
             },
             araphor_data::AnalysisExtractLimits::default(),
             &fixture.control,
+            None,
         )
     };
     let before = capture(resume.instance.clone())?;
     assert_eq!(first.results.len(), 3);
     for call in first.results.keys() {
         let prior = before.state.prior(*call).ok_or("saved Graph call")?;
-        assert!(prior.reusable);
-        assert!(prior.retained.is_some());
+        assert!(prior.retained.is_none());
     }
     drop(before);
     let failed = store.fail_managed(&resume, Code::Limit, || Ok(()))?;
@@ -216,41 +203,26 @@ async fn failed_graph_disables_reuse() -> TestResult {
             (&prior.result, prior.revision),
             (&reference.result_id, reference.commit_revision)
         );
-        assert!(!prior.reusable);
-        let retained = prior.retained.as_ref().ok_or("continued Graph call")?;
-        let declaration = &failed.spec.manifest.calls[call];
-        let descriptor = Detector::from_id(&declaration.package.package_id)?.descriptor();
-        let model = descriptor
-            .exports
-            .iter()
-            .find(|model| model.name == retained.evaluation.export)
-            .ok_or("retained Graph model")?;
-        let mut evaluation = retained.evaluation.clone();
-        let (checkpoint, previous_outputs) = prior.state(
-            model,
-            &evaluation.inputs,
-            evaluation.parameters.as_ref(),
-            false,
-        )?;
-        assert!(checkpoint.is_none());
-        assert!(previous_outputs.is_empty());
-        retained.changes.as_ref().ok_or("retained change basis")?;
+        assert!(prior.retained.is_none());
+        let replayed = fixture
+            .replay_result(&failed, &reference.result_id, &fixture.control)
+            .await?;
+        let returned = replayed.calls.get(call).ok_or("historical Graph replay")?;
+        let evaluation = returned.evaluation();
+        assert!(evaluation.checkpoint.is_none());
+        assert!(evaluation.previous_outputs.is_empty());
         assert_eq!(
-            araphor_analysis_builtins::graph::Unit::decode(
-                &retained.evaluation.input("units")?.data
-            )?
-            .len(),
+            araphor_analysis_builtins::graph::Unit::decode(&evaluation.input("units")?.data)?.len(),
             3
         );
-        evaluation.checkpoint = checkpoint;
-        evaluation.previous_outputs = previous_outputs;
-        let resumed = descriptor
-            .check_evaluation(&evaluation)?
-            .encode()?
-            .decode(&descriptor)?;
-        let expected = sdk::wire::Output::encode_model(&retained.output, model)?;
-        let replayed = Detector::from_id(&descriptor.id)?.evaluate(&resumed)?;
-        assert_eq!(sdk::wire::Output::encode_model(&replayed, model)?, expected);
+        let descriptor =
+            Detector::from_id(&failed.spec.manifest.calls[call].package.package_id)?.descriptor();
+        let model = &descriptor.exports[0];
+        let expected = Detector::from_id(&descriptor.id)?.evaluate(evaluation)?;
+        assert_eq!(
+            sdk::wire::Output::encode_model(returned.output(), model)?,
+            sdk::wire::Output::encode_model(&expected, model)?
+        );
     }
     store.stop_managed(&failed, || Ok(()))?;
     Ok(())

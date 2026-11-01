@@ -54,24 +54,18 @@ fn retained_origins_merge_refs() -> TestResult {
     let mut selection = AnalysisSelectionV1::new([1; 16], vec![source]);
     selection.contexts = crate::Selection::Exact(vec![saved.context.key.clone()]);
     selection.results = vec![reference.result_id.clone(), "saved-origins-proof".into()];
-    let outputs = [saved.inputs[0].clone(), saved.inputs[0].clone()];
     let requests = AnalysisTableRequests::new();
     let page = saved.store.read_tables(
         &selection,
         AnalysisTableRead {
             requests: &requests,
             event_ranges: None,
-            inputs: Some(crate::AnalysisInputTables {
-                authorized: &saved.fixture.instance.grant.selection,
-                outputs: &outputs,
-            }),
             mode: AnalysisReadModeV1::Metadata,
             now: 10,
         },
         AnalysisExtractLimits::default(),
         &AnalysisReadControl::default(),
     )?;
-    assert!(page.packages.is_empty());
     assert_eq!(page.extraction.references.len(), 3);
     let context = page
         .extraction
@@ -82,12 +76,7 @@ fn retained_origins_merge_refs() -> TestResult {
     assert_eq!(context.context(), Some(&saved.context));
     assert_eq!(
         context.origins(),
-        &[
-            Origin::Context,
-            Origin::ExplicitResult,
-            Origin::Package(0),
-            Origin::Package(1),
-        ]
+        &[Origin::Context, Origin::ExplicitResult,]
     );
     let managed = page
         .extraction
@@ -96,14 +85,7 @@ fn retained_origins_merge_refs() -> TestResult {
         .find(|entry| entry.result().is_some_and(|result| result == reference))
         .ok_or("managed reference absent")?;
     assert_eq!(managed.result(), Some(reference));
-    assert_eq!(
-        managed.origins(),
-        &[
-            Origin::ExplicitResult,
-            Origin::Package(0),
-            Origin::Package(1),
-        ]
-    );
+    assert_eq!(managed.origins(), &[Origin::ExplicitResult]);
     let generic_entry = page
         .extraction
         .references

@@ -14,20 +14,6 @@ mod allocation;
 use allocation::ArrayBudget;
 
 impl Dataset {
-    /// Validate message lengths and the uncompressed IPC storage format.
-    pub fn validate_envelope(&self) -> Result<()> {
-        super::framing::IpcFrames::validate_envelope(&self.arrow_ipc)
-    }
-
-    /// Return the number of record batch messages in the IPC stream.
-    pub fn batch_count(&self) -> Result<usize> {
-        Self::batch_count_ipc(&self.arrow_ipc)
-    }
-
-    pub fn batch_count_ipc(ipc: &[u8]) -> Result<usize> {
-        super::framing::IpcFrames::validate(ipc)
-    }
-
     /// Return the buffer bound for IPC decode and owned normalization.
     /// Charge schema and dataset metadata with the decoded value.
     pub fn decoding_bytes(ipc: &[u8]) -> Result<usize> {

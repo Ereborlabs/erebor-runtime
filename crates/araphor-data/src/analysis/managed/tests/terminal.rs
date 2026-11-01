@@ -61,14 +61,14 @@ fn terminal_keeps_successful_state() -> TestResult {
             assert_eq!(after.batches, before.batches);
         }
     }
-    assert!(store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            &failed.id,
-            &AnalysisReadControl::default()
-        )?
-        .is_none());
+    assert!(Fixture::receipt(
+        &store,
+        [1; 16],
+        "counter",
+        &failed.id,
+        &AnalysisReadControl::default()
+    )?
+    .is_none());
     let meta = store.meta()?;
     let mut checked = false;
     assert_eq!(
@@ -127,14 +127,14 @@ fn terminal_keeps_successful_state() -> TestResult {
             .frontier,
         receipt.frontier
     );
-    assert!(store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            &first.id,
-            &AnalysisReadControl::default()
-        )?
-        .is_some());
+    assert!(Fixture::receipt(
+        &store,
+        [1; 16],
+        "counter",
+        &first.id,
+        &AnalysisReadControl::default()
+    )?
+    .is_some());
     Ok(())
 }
 
@@ -498,7 +498,7 @@ fn startup_keeps_committed_state() -> TestResult {
             .chain(std::iter::once(&receipt.selected))
             .map(|reference| store.frozen_result(&reference.result_id))
             .collect::<crate::Result<Vec<_>>>()?;
-        let rows: (u64, u64) = store.read_snapshot(|reader| reader.query_row("SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_arrow)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read startup output fence" }))?;
+        let rows: (u64, u64) = store.read_snapshot(|reader| reader.query_row("SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_edges)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read startup output fence" }))?;
         let before = store.meta()?;
         drop(store);
         assert!(matches!(
@@ -628,27 +628,22 @@ fn startup_keeps_committed_state() -> TestResult {
                 10,
                 &AnalysisReadControl::default(),
             )?;
-            assert_eq!(
-                sdk::wire::Output::encode_model(&result.output, &fixture.model)?,
-                sdk::wire::Output::encode_model(&outputs[(call - 10) as usize], &fixture.model)?
-            );
-            let evaluation = store.managed_evaluation(
-                &current,
-                &receipt.results[&call].result_id,
-                &AnalysisReadControl::default(),
-            )?;
+            assert_eq!(result.result, receipt.results[&call]);
+            assert_eq!(result.receipt, receipt);
             let original = &evaluations[(call - 10) as usize];
-            assert_eq!(evaluation.context, original.context);
-            assert_eq!(evaluation.parameters, original.parameters);
-            assert_eq!(evaluation.inputs.len(), original.inputs.len());
-            for (actual, expected) in evaluation.inputs.iter().zip(&original.inputs) {
-                assert_eq!(actual.data.name, expected.data.name);
-                assert_eq!(actual.data.batches, expected.data.batches);
-                assert_eq!(actual.revision, expected.revision);
-                assert_eq!(actual.coverage, expected.coverage);
-            }
+            assert_eq!(call_context(&result)?.context, original.context);
+            assert!(call_context(&result)?.matches(&original.inputs));
+            assert_eq!(
+                fixture.checkpoint(&store, &result.result)?.datasets[0].batches,
+                outputs[(call - 10) as usize]
+                    .checkpoint
+                    .as_ref()
+                    .ok_or("expected checkpoint")?
+                    .datasets[0]
+                    .batches
+            );
         }
-        let retained_rows: (u64, u64) = store.read_snapshot(|reader| reader.query_row("SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_arrow)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read recovered output fence" }))?;
+        let retained_rows: (u64, u64) = store.read_snapshot(|reader| reader.query_row("SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_edges)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read recovered output fence" }))?;
         assert_eq!(retained_rows, rows);
         store.verify_state()?;
         drop(store);
@@ -1013,35 +1008,30 @@ fn startup_restores_native_intent() -> TestResult {
             10,
             &AnalysisReadControl::default(),
         )?;
+        assert_eq!(&result.result, reference);
+        assert_eq!(result.receipt, receipt);
+        assert_eq!(call_context(&result)?.context, evaluations[index].context);
+        assert!(call_context(&result)?.matches(&evaluations[index].inputs));
         assert_eq!(
-            sdk::wire::Output::encode_model(&result.output, &fixture.model)?,
-            sdk::wire::Output::encode_model(&outputs[index], &fixture.model)?
+            fixture.checkpoint(&restored, reference)?.datasets[0].batches,
+            outputs[index]
+                .checkpoint
+                .as_ref()
+                .ok_or("expected restored checkpoint")?
+                .datasets[0]
+                .batches
         );
-        let evaluation = restored.managed_evaluation(
-            &current,
-            &reference.result_id,
-            &AnalysisReadControl::default(),
-        )?;
-        assert_eq!(evaluation.context, evaluations[index].context);
-        assert_eq!(evaluation.parameters, evaluations[index].parameters);
-        assert_eq!(evaluation.inputs.len(), evaluations[index].inputs.len());
-        for (actual, original) in evaluation.inputs.iter().zip(&evaluations[index].inputs) {
-            assert_eq!(actual.data.name, original.data.name);
-            assert_eq!(actual.data.batches, original.data.batches);
-            assert_eq!(actual.revision, original.revision);
-            assert_eq!(actual.coverage, original.coverage);
-        }
     }
-    let selected = restored
-        .managed_selected(
-            [1; 16],
-            "counter",
-            &input.id,
-            &AnalysisReadControl::default(),
-        )?
-        .ok_or("restored selected state")?;
-    assert_eq!(selected.commit_revision, receipt.commit_revision);
-    assert_eq!(selected.data.batches, outputs[0].datasets[0].batches);
+    let selected = Fixture::receipt(
+        &restored,
+        [1; 16],
+        "counter",
+        &input.id,
+        &AnalysisReadControl::default(),
+    )?
+    .ok_or("restored selected state")?;
+    assert_eq!(selected, receipt);
+    assert_eq!(Fixture::rows(&restored, &selected.selected)?, 1);
     let error = fixture
         .publish(&restored, &pending, &pending_evaluations, &outputs)
         .err()

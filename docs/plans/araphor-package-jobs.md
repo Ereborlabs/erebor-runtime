@@ -1079,6 +1079,10 @@ passes qualification. Complete migration and the final Rust gate remain
 
 ## Finite saved outputs as native tables
 
+**Historical result.** The current
+[journal-reference requirement](araphor-reactive-execution-latency.md#central-journal-references)
+supersedes this contract. The unused host alias API and its tests are retired.
+
 `Session::register_retained` binds one exact saved package dataset to a native
 table alias. The producer does not run again. Data checks current source
 proofs and the original evidence lease in the same source transaction. Native

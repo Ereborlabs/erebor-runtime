@@ -3,6 +3,8 @@ use snafu::ResultExt as _;
 use super::super::graph_rows::{GraphHeader, GraphRows};
 use super::*;
 
+#[cfg(test)]
+mod tests;
 mod traversal;
 
 impl AnalysisExtractionV1 {
@@ -118,12 +120,18 @@ impl AnalysisStore {
             .query_row(
                 "SELECT p.class, p.start_cursor, p.consumed_cursor, p.resume_floor,
                 p.retired, NULLIF(p.result_id, '') FROM source_receipts s
-             LEFT JOIN processor_progress p ON p.tenant_id = s.tenant_id
-                AND p.stream_key = s.stream_key AND p.processor_id = ? AND p.method_version = ?
+             LEFT JOIN (SELECT * FROM processor_versions
+                WHERE processor_id = ? AND method_version = ? AND tenant_id = ?
+                    AND stream_key = ? AND commit_revision <= ?
+                ORDER BY commit_revision DESC LIMIT 1) p
+                ON p.tenant_id = s.tenant_id AND p.stream_key = s.stream_key
              WHERE s.tenant_id = ? AND s.stream_key = ?",
                 params![
                     crate::GRAPH_PROCESSOR,
                     u64::from(crate::GRAPH_SCHEMA_VERSION),
+                    source.tenant_id.as_slice(),
+                    key.as_slice(),
+                    output.meta.commit_revision,
                     source.tenant_id.as_slice(),
                     key.as_slice()
                 ],
@@ -279,5 +287,125 @@ impl AnalysisStore {
             header.snapshot.validate()?;
         }
         Ok(header)
+    }
+}
+
+impl AnalysisStore {
+    pub(super) fn extract_graph_tables(
+        &self,
+        snapshot: &Connection,
+        selection: &AnalysisSelectionV1,
+        read: &AnalysisTableRead<'_>,
+        output: &mut AnalysisExtractionV1,
+        capture: &mut tables::Capture<'_>,
+        control: &AnalysisReadControl,
+    ) -> Result<()> {
+        if let Some(request) = &selection.graph_traversal {
+            self.traverse_graphs(
+                snapshot,
+                selection,
+                request,
+                output,
+                control,
+                capture,
+                read.projects_field("findings", "finding_value_id"),
+            )?;
+        }
+        let complete_graph = read.projects_field("graph_manifest", "snapshot");
+        let graph_contexts = read.projects_field("graph_manifest", "context_refs");
+        let graph_findings = ["findings", "policy_observations", "graph_branches"]
+            .iter()
+            .any(|name| read.projected(name).is_some())
+            || !selection.binding_ids.is_empty();
+        for id in selection
+            .graphs
+            .as_slice()
+            .iter()
+            .filter(|_| selection.graph_traversal.is_none())
+        {
+            control.check()?;
+            let (key, revision): (Vec<u8>, u64) = snapshot
+                .query_row(
+                    "SELECT stream_key, commit_revision FROM analysis_results
+                 WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?
+                    AND stream_key IS NOT NULL",
+                    params![
+                        selection.tenant_id.as_slice(),
+                        crate::GRAPH_PROCESSOR,
+                        crate::GRAPH_SCHEMA_VERSION,
+                        id
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read graph result metadata",
+                })?;
+            let source = selection
+                .sources
+                .as_slice()
+                .iter()
+                .find(|source| source.key() == key)
+                .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
+            let subjects = read.projected("graph_subjects").is_some();
+            let edges = read.projected("relationships").is_some();
+            let header = self.graph_input(
+                snapshot,
+                selection.tenant_id,
+                id,
+                control,
+                complete_graph,
+                graph_findings,
+                read.projects_field("findings", "finding_value_id"),
+            )?;
+            let mut graph = header.snapshot;
+            if graph.scope.identity != *source {
+                return self.reject("the graph source differs from its index");
+            }
+            if !selection.permits_graph(&graph) {
+                continue;
+            }
+            let sensitivity = self.graph_sensitivity(snapshot, &graph.input_manifest, control)?;
+            if (subjects || edges) && !complete_graph {
+                graph.graph.subjects =
+                    GraphRows::read_subjects(snapshot, id, header.subject_count, Some(control))?;
+                if graph.graph.subjects.len() != header.subject_count {
+                    return self.reject("the selected graph subject count differs");
+                }
+            }
+            if edges && !complete_graph {
+                graph.graph.edges =
+                    GraphRows::read_edges(snapshot, id, header.edge_count, Some(control))?;
+                if graph.graph.edges.len() != header.edge_count {
+                    return self.reject("the selected graph relationship count differs");
+                }
+            }
+            if !complete_graph && (subjects || edges) {
+                graph.validate()?;
+            }
+            output.capture_graph(id, &graph, control)?;
+            let contexts = if graph_contexts {
+                self.graph_contexts(snapshot, selection.tenant_id, id, output, control)?
+            } else {
+                Vec::new()
+            };
+            output.reference_result(id, revision, AnalysisReferenceOriginV1::Graph)?;
+            capture.graph(
+                id,
+                &graph,
+                &header.finding_value_ids,
+                header.subject_count,
+                header.edge_count,
+                revision,
+                sensitivity,
+                None,
+                None,
+                &contexts,
+                header.notice,
+                header.expired,
+                &mut output.sink(control),
+            )?;
+        }
+        self.extract_graph_coverage(snapshot, read, output, capture, control)?;
+        Ok(())
     }
 }

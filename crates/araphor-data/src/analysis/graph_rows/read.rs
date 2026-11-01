@@ -67,7 +67,7 @@ impl GraphRows {
         complete: bool,
     ) -> Result<Option<GraphHeader>> {
         Self::check(control)?;
-        let indexed: Option<GraphIndexRow> = reader.query_row("SELECT body,stream_key,method_version,first_cursor,facts_revision,coverage_revision FROM analysis_results WHERE result_id=? AND tenant_id=? AND processor_id=?",params![result,tenant.as_slice(),crate::GRAPH_PROCESSOR],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional().context(AnalysisDatabaseSnafu {operation:"read Graph result header"})?;
+        let indexed: Option<GraphIndexRow> = reader.query_row("SELECT body,stream_key,method_version,first_cursor,facts_revision,coverage_revision FROM analysis_result_state WHERE result_id=? AND tenant_id=? AND processor_id=?",params![result,tenant.as_slice(),crate::GRAPH_PROCESSOR],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional().context(AnalysisDatabaseSnafu {operation:"read Graph result header"})?;
         let Some((body, stream, method, first, context, coverage)) = indexed else {
             return Ok(None);
         };

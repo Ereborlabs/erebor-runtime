@@ -779,7 +779,6 @@ impl DataStoreQualification {
                 AnalysisTableRead {
                     requests: &columns,
                     event_ranges: None,
-                    inputs: None,
                     mode: AnalysisReadModeV1::Complete,
                     now: START,
                 },

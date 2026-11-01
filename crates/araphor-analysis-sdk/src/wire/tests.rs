@@ -65,7 +65,6 @@ fn ipc_preserves_schema() -> TestResult {
     let encoded = Dataset::encode(&data, &schema)?;
     let decoded = encoded.decode(&schema)?;
     assert_eq!(decoded.batches, data.batches);
-    assert_eq!(encoded.batch_count()?, 1);
     let wrong = Schema::new(vec![Field::new("other", DataType::UInt64, false)]);
     assert!(encoded.decode(&wrong).is_err());
     assert!(Dataset::encode(&data, &wrong).is_err());
@@ -75,7 +74,6 @@ fn ipc_preserves_schema() -> TestResult {
         arrow_ipc: encoded.arrow_ipc[..8].to_vec(),
     };
     assert!(truncated.decode_any().is_err());
-    assert!(truncated.batch_count().is_err());
     Ok(())
 }
 
@@ -91,13 +89,11 @@ fn ipc_keeps_empty_schema() -> TestResult {
     assert_eq!(decoded.batches.len(), 1);
     assert_eq!(decoded.batches[0].num_rows(), 0);
     assert_eq!(decoded.batches[0].schema().as_ref(), &schema);
-    assert_eq!(encoded.batch_count()?, 0);
     let batch = crate::Dataset {
         name: data.name,
         batches: vec![RecordBatch::new_empty(Arc::new(schema.clone()))],
     };
     let with_batch = Dataset::encode(&batch, &schema)?;
-    assert_eq!(with_batch.batch_count()?, 1);
     assert_eq!(with_batch.decode(&schema)?.batches, decoded.batches);
     Ok(())
 }

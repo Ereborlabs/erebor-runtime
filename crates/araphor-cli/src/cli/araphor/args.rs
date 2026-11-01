@@ -34,7 +34,7 @@ pub(crate) enum AraphorCommand {
     Definition(super::packages::DefinitionArgs),
     /// Read or retain OCI package images.
     Image(super::packages::ImageArgs),
-    /// Inspect a managed instance or query one retained result.
+    /// Inspect a managed instance or replay one recorded result.
     Instance(super::packages::InstanceArgs),
     /// List query relations, recipe source, or retained policy targets.
     Catalog(CatalogArgs),

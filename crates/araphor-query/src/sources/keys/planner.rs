@@ -98,9 +98,29 @@ impl PhysicalOptimizerRule for SourceJoin {
 }
 
 impl SourceLookup {
-    pub(crate) fn required(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    fn cached(
+        plan: &Arc<dyn ExecutionPlan>,
+        calls: Option<&crate::definition::CallContext>,
+    ) -> Result<bool> {
+        match (
+            plan.as_any()
+                .downcast_ref::<crate::definition::physical::PackageExec>(),
+            calls,
+        ) {
+            (Some(package), Some(calls)) => calls.cached(package.logical_call()),
+            _ => Ok(false),
+        }
+    }
+
+    pub(crate) fn required(
+        plan: &Arc<dyn ExecutionPlan>,
+        calls: Option<&crate::definition::CallContext>,
+    ) -> Result<bool> {
         let mut required = false;
         plan.apply(|node| {
+            if Self::cached(node, calls)? {
+                return Ok(TreeNodeRecursion::Jump);
+            }
             if node
                 .as_any()
                 .downcast_ref::<crate::definition::physical::PackageExec>()
@@ -130,6 +150,9 @@ impl SourceLookup {
             let table = source.origin.durable().ok_or_else(|| {
                 DataFusionError::Internal("the retained key source is not durable".into())
             })?;
+            if !araphor_data::AnalysisTableRead::source_rows(table) {
+                return Ok(None);
+            }
             let mut source = source.clone();
             source.key = Some(KeyRead {
                 slot,
@@ -169,11 +192,17 @@ impl SourceLookup {
         Ok(Some(plan.with_new_children(vec![child])?))
     }
 
-    pub(crate) fn keys(plan: &Arc<dyn ExecutionPlan>) -> Result<Vec<SourceKey>> {
+    pub(crate) fn keys(
+        plan: &Arc<dyn ExecutionPlan>,
+        calls: Option<&crate::definition::CallContext>,
+    ) -> Result<Vec<SourceKey>> {
         let mut keys = Vec::new();
         let mut producers = BTreeMap::new();
         let mut readers = BTreeMap::new();
         plan.apply(|plan| {
+            if Self::cached(plan, calls)? {
+                return Ok(TreeNodeRecursion::Jump);
+            }
             if let Some(build) = plan.as_any().downcast_ref::<KeyBuildExec>() {
                 if producers.insert(build.slot, build.hash.seeds()).is_some() {
                     return datafusion::common::plan_err!(
@@ -182,6 +211,9 @@ impl SourceLookup {
                 }
                 let mut dependencies = BTreeSet::new();
                 build.input.apply(|child| {
+                    if Self::cached(child, calls)? {
+                        return Ok(TreeNodeRecursion::Jump);
+                    }
                     if let Some(key) =
                         SourceData::from_plan(child.as_ref()).and_then(|source| source.key.as_ref())
                     {
@@ -199,6 +231,9 @@ impl SourceLookup {
             Ok(TreeNodeRecursion::Continue)
         })?;
         plan.apply(|plan| {
+            if Self::cached(plan, calls)? {
+                return Ok(TreeNodeRecursion::Jump);
+            }
             if let Some(read) =
                 SourceData::from_plan(plan.as_ref()).and_then(|source| source.key.as_ref())
             {

@@ -1,7 +1,10 @@
 # Araphor retained execution state review
 
-This guide covers retained state and lookup inputs through `babd497c4`, plus
-the current unit migration and managed raw-change reads. The context change
+The [journal-reference review](#checked-journal-references) describes the
+current change after `3f9bbd3a4`. The bounded storage change is qualified.
+The earlier sections retain the source review record for retained state and
+lookup inputs through `babd497c4`, plus the unit migration and managed
+raw-change reads. The context change
 reader follows `e80f918fd`. The binary input frontier follows `ad4aad54b`.
 The coverage change reader follows `b2df26330`.
 The changes remove
@@ -23,9 +26,8 @@ history and the derived package state. Live integration, historical anchor
 validation, exact replay, and restart checks pass. Combined timing proof
 for the unit migration is **Not done**.
 
-The working changes below replace the complete-target path. The earlier
-sections retain the review record for that prior implementation. They do
-not qualify the new native source path.
+The journal-reference change removes the saved payload path described in
+the earlier sections. Those sections do not qualify the new Replay path.
 
 ## Implementation review flow
 
@@ -395,7 +397,7 @@ The managed change runtime now uses this path for source capture.
 
 [AnalysisStore::read_managed_tables](../../crates/araphor-data/src/analysis/extraction.rs) A caller supplies an explicit initial or continued source read
   -> [AnalysisStore::capture_source](../../crates/araphor-data/src/analysis/managed/source/reader.rs) Data checks the committed parent, actual read mode, input cut, selection, and projection
-  -> [AnalysisStore::seal_source](../../crates/araphor-data/src/analysis/managed/source/metadata.rs) Data retains one source frame and typed metadata changes
+  -> [AnalysisStore::seal_source](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-data/src/analysis/managed/source/metadata.rs) Data retains one source frame and typed metadata changes
   -> [AnalysisStore::insert_managed_step](../../crates/araphor-data/src/analysis/managed/commit.rs) Data stores shared source Arrow payloads and a separate source-parent edge
   -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the existing transaction before it publishes the source proof
 
@@ -486,22 +488,209 @@ and the remaining work.
 
 ## Checked journal references
 
-The working change after `ef8024ed7` adds a metadata lookup. Full payload
-removal is **Not done**. The existing payload readers remain active.
+The source removes stored package inputs, outputs, selected payloads,
+and source Arrow records. Data stores references to the central journal and
+canonical context versions. Data keeps one optional declared checkpoint as
+canonical package state. Query reconstructs required data with the original
+native plan.
 
-[AnalysisStore::managed_reference](../../crates/araphor-data/src/analysis/managed/read.rs) A caller requests one retained result reference
-  -> [managed_reference](../../crates/araphor-data/src/analysis/managed/read.rs) Data checks the tenant, instance version, receipt, source evidence, and selection
-  -> [ManagedAttempt](../../crates/araphor-data/src/analysis/managed/model.rs) Data returns the recorded request, source cut, prior call references, and historical definition
-  -> [managed_reference](../../crates/araphor-data/src/analysis/managed/read.rs) Data omits the publication claim and reads no Arrow payload
+### Intended end state
 
-[references_require_no_payloads](../../crates/araphor-data/src/analysis/managed/tests/replay.rs)
-checks call and selected references after deletion of all managed Arrow rows.
-The test also checks foreign instance rejection, cancellation, and an unchanged
-store revision. Existing payload readers retain their input-slot checks.
+Inspect returns metadata without executing package code. Explicit Replay
+requires Run and Inspect permission. Replay uses the original package pins,
+source cut, invocation time, seed, and prior call references. Replay does not
+publish another result. Missing required journal bytes produce an expired
+input error. Current data cannot replace those bytes.
 
-The parent plan records the open Inspect result contract and source-recovery
-gaps. This lookup does not reconstruct package output or administrative tables.
+### Implementation review flow
 
-The reference test and the existing evaluation and selected-output corruption
-tests pass. Data library and test clippy checks pass with warnings denied.
-Scoped formatting and whitespace checks pass. No latency result is claimed.
+[AnalysisStore::accept_validated_batch](../../crates/araphor-data/src/analysis/mod.rs) Data commits a source event
+  -> [Runtime::next_event](../../crates/araphor-query/src/stream/physical/runtime.rs) the subscription receives the committed source position
+  -> [Session::capture_physical](../../crates/araphor-query/src/execution.rs) native DataFusion executes the admitted SQL at that source position
+  -> [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) the package consumes the query result
+  -> [AnalysisStore::insert_managed](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the call reference and its canonical produced data
+  -> [ManagedExecution::promote](../../crates/araphor-data/src/analysis/managed/execution.rs) the subscription advances after the commit succeeds
+
+[Instance::replay_response](../../crates/araphor-analysis/src/instance/replay.rs) A caller requests Replay
+  -> [Instance::replay_bound](../../crates/araphor-analysis/src/instance/replay.rs) Analysis checks current Run permission
+  -> [AnalysisStore::managed_reference](../../crates/araphor-data/src/analysis/managed/read.rs) Data checks the retained call, package, source, and authority references
+  -> [AnalysisStore::bind_reference](../../crates/araphor-data/src/analysis/managed/reference.rs) Data binds administrative values at the recorded source cut
+  -> [Session::replay_reference](../../crates/araphor-query/src/definition/replay.rs) native DataFusion reconstructs the inputs at the recorded source time
+  -> [Session::hydrate_source](../../crates/araphor-query/src/definition/replay.rs) execution reconstructs required prior state through recorded calls
+  -> [Instance::replay_response](../../crates/araphor-analysis/src/instance/replay.rs) Replay returns data after the final authority check
+
+[AnalysisStore::check_journal_source](../../crates/araphor-data/src/analysis/managed/reference.rs) Required source data is no longer retained
+  -> [Discovery Replay](../../crates/araphor-analysis/src/discovery/replay.rs) Discovery reports `JOURNAL_INPUT_UNAVAILABLE` without using current input
+
+[Instance::read_result](../../crates/araphor-analysis/src/instance/read.rs) A caller requests Inspect
+  -> [Instance::inspect](../../crates/araphor-analysis/src/instance/read.rs) Analysis checks Inspect permission and watches authority changes
+  -> [AnalysisStore::managed_result](../../crates/araphor-data/src/analysis/managed/read.rs) Data returns call or selected reference metadata
+  -> [InstanceResultV1](../../crates/araphor-data/src/package/model.rs) the response contains no SDK input or output payload
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Analysis
+    participant Query as Native DataFusion
+    participant Data as Central journal and canonical state
+    Caller->>Analysis: Replay exact result reference
+    Analysis->>Analysis: Check Inspect and Run
+    Analysis->>Data: Read checked invocation reference
+    Data-->>Analysis: Definition, source cut, time, seed, prior refs
+    Analysis->>Query: Execute original plan at recorded cut
+    Query->>Data: Read journal and canonical versions at cut
+    Data-->>Query: Transient Arrow batches
+    Query-->>Analysis: Reconstructed output
+    Analysis->>Analysis: Check authority again
+    Analysis-->>Caller: Output without publication
+```
+
+### Durable state and temporary state
+
+| Owner | Stored state | Lifetime and checks |
+| --- | --- | --- |
+| Data managed call | Call ID in the immutable version manifest, context, dependencies, evidence refs, optional declared checkpoint | One immutable call result. Inspect reads metadata. Execution reads the checkpoint. |
+| Data selected result | Receipt, row count, dependencies | The body is empty. No selected Arrow rows are stored. |
+| Data native histories | Source receipts, processor progress, result notices, trace states and receipts | A real commit revision selects each historical value. These histories do not contain copied raw input. |
+| Data raw journal | Canonical source event bytes | Existing retention controls the bytes. Retired headers preserve acceptance metadata only. |
+| Query and Analysis | Reconstructed Arrow batches, source index, retained call output | Memory reservations cover the active operation or running subscription. Process restart removes this state. |
+| Graph | Canonical nodes, edges, findings, member support, package state | Data owns the transaction. Graph borrows the transaction. Native support references replace saved SDK input validation. |
+
+`managed_arrow`, saved evaluations, and saved selected readers are removed.
+No replacement payload table or blob exists. Current trace revocation remains
+effective during historical reads. Temporary historical views do not change
+the canonical tables or the current authorization state.
+
+A historical before-input query can contain a native package dependency.
+Query reconstructs that child at its own invocation and seeds the existing
+call cache before source demand is computed. Parent restoration and candidate
+changes use the native query and recorded grant.
+Transient source scopes check row identity, schema, source range, and index
+coverage. No saved projection contract or source metadata cache remains.
+
+Inspect returns metadata and references. Explicit Replay requires Run access
+and reconstructs the result at its recorded journal position. The unused
+`register_retained` output alias and `query_local` result wrapper are removed.
+Their producer-replay bridge is removed. Native SDK `TableRef::Output`
+dependencies still execute within the admitted program. The context owner
+still uses `stream_local` and native local table providers.
+
+The [Control package RPC](../../crates/mithril-control/src/client_grpc/packages.rs)
+calls the Instance owner and encodes its response directly. The unused
+`package_response` forwarding method and its round-trip test are removed.
+The [RPC tests](../../crates/mithril-control/src/client_grpc/tests/packages/instance.rs)
+use the real handler for reference reads, Replay, history, and shutdown.
+The [CLI](../../crates/araphor-cli/src/cli/araphor/packages.rs) sends the same
+typed requests. Inspect prints metadata. Replay is an explicit command.
+
+The SDK keeps its full input and output validation paths. The separate
+saved-payload decoders and row-count-only output validator are removed.
+Query and Data use the SDK batch traversal and checkpoint validator.
+
+Graph source tables use native DataFusion TableProviders. Each provider owns
+its six native input queries. Its scan plans those queries with the supplied
+session and source image. The physical Graph port reads those inputs, binds
+its full SDK input, and executes a native output port reader. All seven
+physical children remain visible. The outer logical plan contains a table
+scan. It does not contain copies of the six queries in every package input.
+
+The existing source, call, and subscription checks inspect the provider's
+owned queries. They preserve source admission, image pins, call attribution,
+and reuse checks for recursive or volatile queries. A direct input identity
+requires a full table scan without filters or a fetch bound. Native SQL
+operators continue to handle other selections.
+
+Each physical source inside a composite port keeps its port ancestry. A
+derived input uses that ancestry only after it obtains the port's checked SDK
+input metadata. Its fingerprint then uses the checked port revision. It does
+not also count raw reads inside that port. Direct table reads and reads with
+no checked port metadata keep their own proofs. This rule makes the revision
+independent of which Graph port first creates the shared capture.
+
+A native SQL scan without a join key reads the sealed retained Arrow state.
+The scan keeps the recorded cut and row references. The scan does not read a
+new journal snapshot. Native DataFusion executes `MAX`, `UNION`, and the other
+SQL operators. These queries can still read the full retained relation at
+each cut. Incremental global aggregation and millisecond execution remain
+outside the requested storage change.
+
+### Change inputs and source progress
+
+Normal continuation requires the previous call and the current source parent
+to have the same publication revision. Data commits each executed call and
+the selected source step in one transaction.
+
+If a package is skipped while another package advances the subscription,
+its next call uses the existing reset protocol. Query supplies the complete
+current query result, an empty typed before input, and all current affected
+keys. Query clears the checkpoint and previous outputs for that call. Other
+packages continue from their own valid state. This reset includes data that
+arrived while the package was skipped.
+
+A normal before-input query uses the previous call's recorded time and the
+retained source view at that cut. Its key batches select rows. Those batches
+do not add current evidence to the historical input. Native DataFusion window
+and anti-join operators preserve duplicate and NULL counts in the delivered
+changes. An ordinary Lookup receives the delivered changes.
+
+Graph packages declare a before-input SQL query over the affected roots.
+Query then supplies the complete current affected targets and their prior
+rows. The existing Graph validator checks that set. Graph uses the same
+native package path as an installed package.
+
+The Graph facts adapter does not declare which roots a source change can
+affect. The composite inserted and removed queries are unsupported when they
+execute. Initial and reset planning do not prove this incremental path.
+
+### Qualification
+
+**Journal-reference storage replacement: Done.** The source state is the
+complete change after `3f9bbd3a4`. Qualification uses existing production
+owner tests on Linux `x86_64-unknown-linux-gnu`. The native cases use the
+fixture built from source with debug sections removed from its temporary copy.
+
+| Owner | Result and proof |
+| --- | --- |
+| SDK | 14 codec and output checks pass. They include compressed IPC rejection, schema validation, owned buffers, rows without columns, and checkpoint accounting. |
+| Data | Ten source-history checks and four metadata/scope checks pass. The three failed cases pass after correction. Five committed-state, rollback, recovery, frontier, and large-payload checks also pass. |
+| Query | Seven final checks pass. They cover the journal cut, notification deadlines, fixed windows, source wakeups, catalog metadata, and witness ownership. |
+| Analysis | Twelve SQL, Wasm, native, authority, expiry, and trace Replay cases pass. Four final cases pass for SQL/Wasm changes, Before inputs, reopen, and restart under memory pressure. |
+| Graph | The reset Replay case passes for three detectors. It preserves original revisions, coverage, records, units, time, and seed after instance and image removal. It checks that Replay writes nothing. |
+| Control and CLI | Seven real RPC checks and four CLI checks pass. They cover reference reads, explicit Replay, history, lifecycle, and shutdown. |
+
+The Graph result is from the source artifact after the composite-port ancestry
+fix. Its log is `/tmp/araphor-journal-final-owned-graph.log`. This artifact
+precedes the namespace/header correction and removed decoder entry points. The
+Graph implementation does not change after that run. Its three calls reset;
+they have no previous checkpoint or outputs, and their six source programs
+have physical column projections. The later changes do not alter those
+branches. Final Data and Query checks and the four final Analysis cases cover
+the changed metadata and Before-input branches. The result lookup first checks
+the tenant and result. It keeps all guards for existing rows. The check for an
+absent result in another tenant passes.
+
+Final logs are `/tmp/araphor-journal-complete-clippy.log`,
+`/tmp/araphor-journal-final-codec-verified.log`,
+`/tmp/araphor-journal-complete-data.log`,
+`/tmp/araphor-journal-complete-data-corrections.log`,
+`/tmp/araphor-journal-complete-data-metadata.log`,
+`/tmp/araphor-journal-final-data-verified.log`,
+`/tmp/araphor-journal-complete-query.log`, and
+`/tmp/araphor-journal-complete-analysis.log`. The Control and CLI results are
+in `/tmp/araphor-journal-final-control-verified.log` and
+`/tmp/araphor-journal-final-cli-verified.log`. The earlier 12 Analysis passes
+are in `/tmp/araphor-journal-final-owned-analysis.log`; its failed restart case
+passes in the final four-case run.
+
+Scoped formatting and Clippy pass for all nine affected crates. Clippy
+includes test targets and denies warnings. Full workspace CI is not run under
+the user's relevant-test instruction. The complete source change removes
+10 nonblank production Rust lines and 607 nonblank test lines. The totals
+use `3f9bbd3a4` as the common base and exclude blank lines.
+
+The Graph functional check takes 2,683.70 seconds. It includes admission and
+explicit Replay; it does not measure latency from an event to a finding. Incremental
+Graph root dependencies and millisecond execution remain **Not done**. No new
+latency or storage-size improvement is claimed. Cache helper tests with
+invented publication references, host alias tests, and codec assertions for
+removed forwarding methods are removed. The real owner and RPC assertions remain.

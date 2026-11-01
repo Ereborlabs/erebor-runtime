@@ -38,7 +38,6 @@ fn input_scope_is_unbounded() {
         let read = AnalysisTableRead {
             requests: &requests,
             event_ranges: ranges,
-            inputs: None,
             mode: AnalysisReadModeV1::Complete,
             now: 0,
         };
@@ -176,7 +175,6 @@ fn extraction() -> TestResult<(AnalysisExtractionV1, AnalysisReadControl)> {
         AnalysisTableRead {
             requests: &columns,
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Metadata,
             now: 1,
         },
@@ -208,7 +206,6 @@ fn row_preflight_keeps_existing_native_builders() -> TestResult {
     let read = AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Complete,
         now: 1,
     };
@@ -253,7 +250,6 @@ fn native_batch_preserves_rows() -> TestResult {
     let read = AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Complete,
         now: 1,
     };
@@ -301,7 +297,6 @@ fn empty_projection_retains_native_row_count() -> TestResult {
     let read = AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Complete,
         now: 1,
     };
@@ -333,7 +328,6 @@ fn page_prefix_and_fanout_do_not_append_denied_rows() -> TestResult {
         let read = AnalysisTableRead {
             requests: &columns,
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Page(None),
             now: 1,
         };
@@ -420,7 +414,6 @@ fn declared_row_admission() -> TestResult {
     let read = AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Page(None),
         now: 1,
     };
@@ -455,7 +448,6 @@ fn unrequested_json_is_not_serialized() -> TestResult {
     let read = AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Complete,
         now: 1,
     };
@@ -503,7 +495,6 @@ fn capacity_is_admitted_before_native_buffer_mutation() -> TestResult {
     let read = AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Complete,
         now: 1,
     };
@@ -530,7 +521,6 @@ fn mapping_keeps_native_projection_order() -> TestResult {
     let read = AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Complete,
         now: 1,
     };
@@ -575,7 +565,6 @@ fn catalog_preflight_is_atomic() -> TestResult {
     let read = AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Metadata,
         now: 1,
     };
@@ -649,7 +638,6 @@ fn omitted_display_is_unevaluated() -> TestResult {
     let read = AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Metadata,
         now: 1,
     };

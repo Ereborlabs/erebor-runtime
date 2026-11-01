@@ -18,7 +18,7 @@ use datafusion::sql::sqlparser::ast::TableFactor;
 use snafu::ResultExt as _;
 
 use crate::execution::Limits;
-use crate::sources::{SourceOrigin, SourceProvider};
+use crate::sources::{SourceOrigin, SourcePort, SourceProvider};
 use crate::Result;
 
 pub(crate) mod subscription;
@@ -90,7 +90,10 @@ impl SourceDemand {
         Ok(())
     }
 
-    fn collect(plan: &LogicalPlan, scoped: bool) -> NativeResult<BTreeSet<SourceOrigin>> {
+    pub(crate) fn collect(
+        plan: &LogicalPlan,
+        scoped: bool,
+    ) -> NativeResult<BTreeSet<SourceOrigin>> {
         Self::collect_with_views(plan, scoped, &mut BTreeSet::new())
     }
 
@@ -103,17 +106,6 @@ impl SourceDemand {
         let mut ports = BTreeSet::new();
         plan.apply_with_subqueries(|plan| {
             if let LogicalPlan::Extension(extension) = plan {
-                if let Some(source) = extension
-                    .node
-                    .as_any()
-                    .downcast_ref::<crate::sources::SourcePort>()
-                {
-                    origins.insert(SourceOrigin::Port(source.slot));
-                    if scoped {
-                        return Ok(TreeNodeRecursion::Jump);
-                    }
-                    origins.extend(source.origins().iter().cloned());
-                }
                 if let Some(call) = extension
                     .node
                     .as_any()
@@ -133,20 +125,31 @@ impl SourceDemand {
                 }
             }
             if let LogicalPlan::TableScan(scan) = plan {
-                if let Ok(provider) = source_as_provider(&scan.source) {
+                let provider = source_as_provider(&scan.source).ok();
+                if let Some(provider) = &provider {
                     if let Some(source) = provider.as_any().downcast_ref::<SourceProvider>() {
                         origins.insert(source.origin.clone());
                     }
+                    if let Some(source) = provider.as_any().downcast_ref::<SourcePort>() {
+                        origins.insert(SourceOrigin::Port(source.slot));
+                    }
                 }
                 if !scoped {
-                    if let Some(view) = scan.source.get_logical_plan() {
-                        let identity = Arc::as_ptr(&scan.source) as *const () as usize;
-                        if !views.insert(identity) {
-                            return Err(DataFusionError::Plan("recursive source view".into()));
-                        }
-                        origins.extend(Self::collect_with_views(&view, false, views)?);
-                        views.remove(&identity);
+                    let identity = Arc::as_ptr(&scan.source) as *const () as usize;
+                    if !views.insert(identity) {
+                        return Err(DataFusionError::Plan("recursive source view".into()));
                     }
+                    if let Some(source) = provider
+                        .as_ref()
+                        .and_then(|provider| provider.as_any().downcast_ref::<SourcePort>())
+                    {
+                        for input in source.inputs() {
+                            origins.extend(Self::collect_with_views(input, false, views)?);
+                        }
+                    } else if let Some(view) = scan.source.get_logical_plan() {
+                        origins.extend(Self::collect_with_views(&view, false, views)?);
+                    }
+                    views.remove(&identity);
                 }
             }
             Ok(TreeNodeRecursion::Continue)
@@ -197,10 +200,6 @@ impl<'a> Planner<'a> {
 
     pub(crate) fn sources(plan: &LogicalPlan) -> Result<BTreeSet<SourceOrigin>> {
         SourceDemand::collect(plan, true).context(crate::SqlSnafu)
-    }
-
-    pub(crate) fn dependencies(plan: &LogicalPlan) -> Result<BTreeSet<SourceOrigin>> {
-        SourceDemand::collect(plan, false).context(crate::SqlSnafu)
     }
 
     pub fn reads_table(plan: &LogicalPlan, name: &str) -> Result<bool> {
@@ -285,10 +284,32 @@ impl<'a> Planner<'a> {
     }
 
     pub(crate) fn quotas(plan: &LogicalPlan, limits: &Limits) -> Result<()> {
+        Self::quotas_in_views(plan, limits, &mut BTreeSet::new()).context(crate::SqlSnafu)
+    }
+
+    fn quotas_in_views(
+        plan: &LogicalPlan,
+        limits: &Limits,
+        views: &mut BTreeSet<usize>,
+    ) -> NativeResult<()> {
         if limits.projection_columns.is_none() && limits.window_bound.is_none() {
             return Ok(());
         }
         plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan {
+                if let Ok(provider) = source_as_provider(&scan.source) {
+                    if let Some(port) = provider.as_any().downcast_ref::<SourcePort>() {
+                        let identity = Arc::as_ptr(&scan.source) as *const () as usize;
+                        if !views.insert(identity) {
+                            return datafusion::common::plan_err!("recursive source view");
+                        }
+                        for input in port.inputs() {
+                            Self::quotas_in_views(input, limits, views)?;
+                        }
+                        views.remove(&identity);
+                    }
+                }
+            }
             if let LogicalPlan::Projection(projection) = plan {
                 if limits.projection_columns.is_some_and(|maximum| projection.expr.len() > maximum) {
                     return datafusion::common::plan_err!("SQL projection is too wide");
@@ -333,7 +354,7 @@ impl<'a> Planner<'a> {
                 Ok(TreeNodeRecursion::Continue)
             }))?;
             Ok(TreeNodeRecursion::Continue)
-        }).context(crate::SqlSnafu)?;
+        })?;
         Ok(())
     }
 }

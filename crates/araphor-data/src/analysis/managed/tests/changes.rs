@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn change_base_matches_basis() -> TestResult {
+fn change_base_requires_reference() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
@@ -16,8 +16,7 @@ fn change_base_matches_basis() -> TestResult {
     let reference = &receipt.results[&10];
     let mut lease = store.reader()?;
     let reader = lease.get_mut()?;
-    let (mut record, _, _) =
-        AnalysisStore::managed_header_from(reader, [1; 16], &reference.result_id)?;
+    let (mut record, _) = AnalysisStore::managed_meta_from(reader, [1; 16], &reference.result_id)?;
     let mut model = fixture.model.clone();
     model
         .inputs
@@ -39,34 +38,33 @@ fn change_base_matches_basis() -> TestResult {
         }],
     });
     record.changes = Some(super::super::model::RecordChanges { base: None });
-    for name in ["before", "reset"] {
-        record.inputs.push(super::super::model::RecordInput {
-            name: name.into(),
-            rows: u64::from(name == "reset"),
-            batches: 1,
-        });
-        record.context.inputs.push(record.context.inputs[0].clone());
-        record
-            .context
-            .input_coverage
-            .push(record.context.input_coverage[0].clone());
-    }
-    AnalysisStore::check_change_record(reader, [1; 16], &record, &model, &attempt.0)?;
-    for (basis, base) in [
-        (super::super::model::InputBasis::Complete, None),
-        (
-            super::super::model::InputBasis::None,
-            Some(reference.clone()),
-        ),
+    let declaration = &fixture.instance.spec.manifest.calls[&10];
+    AnalysisStore::check_change_record(reader, [1; 16], &record, declaration, &model, &attempt.0)?;
+    for base in [
+        reference.clone(),
+        crate::analysis::PackageResultRefV1 {
+            result_id: "missing-result".into(),
+            commit_revision: reference.commit_revision,
+        },
+        crate::analysis::PackageResultRefV1 {
+            result_id: reference.result_id.clone(),
+            commit_revision: reference.commit_revision + 1,
+        },
+        receipt.results[&11].clone(),
     ] {
-        record.input_basis = basis;
-        record.changes.as_mut().ok_or("changes")?.base = base;
-        let error =
-            AnalysisStore::check_change_record(reader, [1; 16], &record, &model, &attempt.0)
-                .err()
-                .ok_or("unbound change base accepted")?;
+        record.changes.as_mut().ok_or("changes")?.base = Some(base);
+        let error = AnalysisStore::check_change_record(
+            reader,
+            [1; 16],
+            &record,
+            declaration,
+            &model,
+            &attempt.0,
+        )
+        .err()
+        .ok_or("unbound change base accepted")?;
         assert!(
-            error.to_string().contains("managed change input basis"),
+            error.to_string().contains("managed historical base"),
             "{error:?}"
         );
     }

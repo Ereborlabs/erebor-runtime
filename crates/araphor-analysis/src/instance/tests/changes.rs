@@ -2,6 +2,26 @@ use futures_util::StreamExt as _;
 
 use super::*;
 
+impl Fixture {
+    pub(in crate::instance) async fn replay_result(
+        &self,
+        instance: &araphor_data::ManagedInstance,
+        result: &str,
+        control: &AnalysisReadControl,
+    ) -> TestResult<araphor_query::definition::DefinitionOutput> {
+        Ok(Instance::replay_result(
+            Arc::clone(&self.query),
+            self.authority.clone(),
+            None,
+            instance.grant.clone(),
+            &instance.spec.id,
+            result,
+            control,
+        )
+        .await?)
+    }
+}
+
 fn image(target: &str) -> TestResult<PackageBundleV1> {
     let mut image = bundle(target)?;
     let artifact = &mut image.artifacts[0];
@@ -117,11 +137,15 @@ async fn lookup_preserves_sql_order() -> TestResult {
         .values()
         .next()
         .ok_or("ordered lookup result")?;
-    let saved = fixture.query.store().managed_evaluation(
-        instance.admitted(),
-        &reference.result_id,
-        &control,
-    )?;
+    let saved_replay = fixture
+        .replay_result(instance.admitted(), &reference.result_id, &control)
+        .await?;
+    let saved = saved_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed call")?
+        .evaluation();
     let mut actual = Vec::new();
     for batch in &saved.input("support")?.data.batches {
         let values = batch
@@ -135,6 +159,7 @@ async fn lookup_preserves_sql_order() -> TestResult {
     let replay = Instance::replay_result(
         Arc::clone(&fixture.query),
         fixture.authority.clone(),
+        None,
         fixture.grant.clone(),
         "ordered-lookup",
         &reference.result_id,
@@ -178,11 +203,15 @@ async fn source_lookup_keeps_evidence() -> TestResult {
             .values()
             .next()
             .ok_or("indexed support result")?;
-        let evaluation = fixture.query.store().managed_evaluation(
-            instance.admitted(),
-            &result.result_id,
-            &control,
-        )?;
+        let evaluation_replay = fixture
+            .replay_result(instance.admitted(), &result.result_id, &control)
+            .await?;
+        let evaluation = evaluation_replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed call")?
+            .evaluation();
         assert_eq!(
             values(&evaluation.input("input")?.data.batches)?,
             [revision]
@@ -198,7 +227,7 @@ async fn source_lookup_keeps_evidence() -> TestResult {
         let (_, contexts) = fixture
             .query
             .store()
-            .package_evidence([1; 16], &[result.result_id.clone()])?;
+            .package_evidence([1; 16], std::slice::from_ref(&result.result_id))?;
         let actual = contexts
             .iter()
             .map(|reference| reference.key.owner_revision)
@@ -224,11 +253,15 @@ async fn source_lookup_keeps_evidence() -> TestResult {
         .values()
         .next()
         .ok_or("restored support result")?;
-    let evaluation = fixture.query.store().managed_evaluation(
-        instance.admitted(),
-        &result.result_id,
-        &control,
-    )?;
+    let evaluation_replay = fixture
+        .replay_result(instance.admitted(), &result.result_id, &control)
+        .await?;
+    let evaluation = evaluation_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed call")?
+        .evaluation();
     assert_eq!(values(&evaluation.input("input")?.data.batches)?, [4]);
     assert_eq!(values(&evaluation.input("support")?.data.batches)?, [3]);
     stream.cancel_and_join(&control).await?;
@@ -266,6 +299,89 @@ async fn lookup_rejects_early_dependencies() -> TestResult {
 }
 
 #[tokio::test]
+async fn lookup_rejects_early_base() -> TestResult {
+    for sql in [
+        "SELECT value FROM removed",
+        "SELECT CAST(reset AS BIGINT UNSIGNED) AS value FROM reset",
+        "SELECT value FROM support",
+    ] {
+        let fixture = Fixture::new(Default::default())?;
+        let mut image = lookup_image()?;
+        image.artifacts[0].descriptor.exports[0].inputs[0].source =
+            sdk::InputSource::Query(sql.into());
+        fixture.install(&image)?;
+        let error = fixture
+            .admit(
+                "early-base",
+                r#"SELECT * FROM "runtime-fixture"."1".changes()"#,
+            )
+            .await
+            .err()
+            .ok_or("early base admission")?;
+        assert!(
+            format!("{error:?}").contains("lookup input phase"),
+            "{error:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn named_inputs_keep_phase() -> TestResult {
+    for name in ["removed", "support"] {
+        for target in ["input", "early"] {
+            let fixture = Fixture::new(Default::default())?;
+            let mut image = lookup_image()?;
+            let model = &mut image.artifacts[0].descriptor.exports[0];
+            let schema = Arc::new(model.inputs[0].port.schema.clone());
+            let source = sdk::InputSource::Table(sdk::TableRef::Named(name.into()));
+            if target == "input" {
+                model.inputs[0].source = source;
+            } else {
+                let mut port = model.inputs[0].port.clone();
+                port.name = target.into();
+                model.inputs.push(sdk::InputPort { port, source });
+            }
+            fixture.install(&image)?;
+            let batch = sdk::RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt64Array::from(vec![7]))],
+            )?;
+            let table: Arc<dyn datafusion::catalog::TableProvider> = Arc::new(
+                datafusion::datasource::MemTable::try_new(schema, vec![vec![batch]])?,
+            );
+            let control = AnalysisReadControl::default();
+            let mut session =
+                fixture
+                    .query
+                    .session(fixture.grant.selection.clone(), &control, 10)?;
+            session.register_table(name, Arc::clone(&table))?;
+            session.register_table("input", table)?;
+            let prepared = session
+                .prepare_definition(&Fixture::definition(&format!("SELECT value FROM {name}")))
+                .await?;
+            let output = session
+                .execute_definition(&prepared, araphor_query::definition::Invocation::default())
+                .await?;
+            assert_eq!(values(&output.batches)?, [7]);
+            drop(output);
+            let error = session
+                .prepare_definition(&Fixture::definition(
+                    r#"SELECT * FROM "runtime-fixture"."1".changes()"#,
+                ))
+                .await
+                .err()
+                .ok_or("Named input crossed the change phase")?;
+            assert!(
+                format!("{error:?}").contains("lookup input phase"),
+                "{name}/{target}: {error:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn lookup_keeps_historical_provenance() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     let mut image = lookup_image()?;
@@ -278,6 +394,13 @@ async fn lookup_keeps_historical_provenance() -> TestResult {
         (
             "copy_removed",
             sdk::InputSource::Table(sdk::TableRef::Named("copy_removed".into())),
+        ),
+        (
+            "affected_support",
+            sdk::InputSource::Query(
+                r#"SELECT value FROM "inserted.copy" UNION SELECT value FROM "removed.copy""#
+                    .into(),
+            ),
         ),
         (
             "old_input",
@@ -322,11 +445,15 @@ async fn lookup_keeps_historical_provenance() -> TestResult {
         .values()
         .next()
         .ok_or("historical lookup result")?;
-    let evaluation = fixture.query.store().managed_evaluation(
-        instance.admitted(),
-        &reference.result_id,
-        &control,
-    )?;
+    let evaluation_replay = fixture
+        .replay_result(instance.admitted(), &reference.result_id, &control)
+        .await?;
+    let evaluation = evaluation_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed call")?
+        .evaluation();
     let before = evaluation.input("removed")?;
     let copy = evaluation.input("copy_removed")?;
     let first = evaluation.input("old_input")?;
@@ -368,13 +495,17 @@ async fn stateless_lookup_uses_changes() -> TestResult {
         let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
             .await?
             .ok_or("lookup receipt")??;
-        assert_eq!(fixture.selected("lookup", &receipt.attempt)?, [total]);
+        assert_eq!(fixture.selected("lookup", &receipt.attempt).await?, [total]);
         let reference = receipt.results.values().next().ok_or("lookup result")?;
-        let evaluation = fixture.query.store().managed_evaluation(
-            instance.admitted(),
-            &reference.result_id,
-            &control,
-        )?;
+        let evaluation_replay = fixture
+            .replay_result(instance.admitted(), &reference.result_id, &control)
+            .await?;
+        let evaluation = evaluation_replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed call")?
+            .evaluation();
         assert!(evaluation.checkpoint.is_none());
         assert!(evaluation.previous_outputs.is_empty());
         assert_eq!(
@@ -382,7 +513,7 @@ async fn stateless_lookup_uses_changes() -> TestResult {
                 .change_inputs
                 .as_ref()
                 .ok_or("change declaration")?
-                .is_reset(&evaluation)?,
+                .is_reset(evaluation)?,
             revision == 1
         );
         assert_eq!(evaluation.input("input")?.data.rows(), added);
@@ -394,6 +525,7 @@ async fn stateless_lookup_uses_changes() -> TestResult {
         let replay = Instance::replay_result(
             Arc::clone(&fixture.query),
             fixture.authority.clone(),
+            None,
             fixture.grant.clone(),
             "lookup",
             &reference.result_id,
@@ -447,22 +579,26 @@ async fn stateless_lookup_uses_changes() -> TestResult {
     let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("reopened lookup receipt")??;
-    assert_eq!(fixture.selected("lookup", &receipt.attempt)?, [7]);
+    assert_eq!(fixture.selected("lookup", &receipt.attempt).await?, [7]);
     let reference = receipt
         .results
         .values()
         .next()
         .ok_or("reopened lookup result")?;
-    let evaluation = fixture.query.store().managed_evaluation(
-        instance.admitted(),
-        &reference.result_id,
-        &control,
-    )?;
+    let evaluation_replay = fixture
+        .replay_result(instance.admitted(), &reference.result_id, &control)
+        .await?;
+    let evaluation = evaluation_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed call")?
+        .evaluation();
     assert!(!image.artifacts[0].descriptor.exports[0]
         .change_inputs
         .as_ref()
         .ok_or("change declaration")?
-        .is_reset(&evaluation)?);
+        .is_reset(evaluation)?);
     assert!(evaluation.checkpoint.is_none());
     assert_eq!(evaluation.input("input")?.data.rows(), 1);
     stream.cancel_and_join(&control).await?;
@@ -528,7 +664,8 @@ async fn ordered_input_keeps_ctes() -> TestResult {
         let control = AnalysisReadControl::default();
         let receipt = instance.run(request("ordered-cte"), &control).await?;
         let reference = receipt.results.values().next().ok_or("ordered CTE result")?;
-        let evaluation = fixture.query.store().managed_evaluation(instance.admitted(), &reference.result_id, &control)?;
+        let evaluation_replay = fixture.replay_result(instance.admitted(), &reference.result_id, &control).await?;
+        let evaluation = evaluation_replay.calls.values().next().ok_or("replayed call")?.evaluation();
         let mut ordered = Vec::new();
         for batch in &evaluation.input("input")?.data.batches {
             assert_eq!(batch.num_columns(), 2);
@@ -556,7 +693,7 @@ async fn source_changes(target: &str) -> TestResult {
             .await?
             .ok_or("source change receipt")??;
         assert_eq!(
-            fixture.selected("source-changes", &receipt.attempt)?,
+            fixture.selected("source-changes", &receipt.attempt).await?,
             [revision]
         );
         let result = receipt
@@ -564,11 +701,15 @@ async fn source_changes(target: &str) -> TestResult {
             .values()
             .next()
             .ok_or("source change result")?;
-        let evaluation = fixture.query.store().managed_evaluation(
-            instance.admitted(),
-            &result.result_id,
-            &control,
-        )?;
+        let evaluation_replay = fixture
+            .replay_result(instance.admitted(), &result.result_id, &control)
+            .await?;
+        let evaluation = evaluation_replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed call")?
+            .evaluation();
         assert_eq!(
             values(&evaluation.input("input")?.data.batches)?,
             [revision]
@@ -578,26 +719,6 @@ async fn source_changes(target: &str) -> TestResult {
             [revision]
         );
         assert_eq!(evaluation.input("removed")?.data.rows(), 0);
-        let resume = fixture
-            .query
-            .store()
-            .managed_resume([1; 16], "source-changes", &control)?;
-        let reference = resume.source.ok_or("source change frontier")?;
-        let mut rows = Vec::new();
-        fixture
-            .query
-            .store()
-            .managed_source_history::<araphor_data::Error>(
-                &resume.instance,
-                &reference,
-                &control,
-                |_| Ok(()),
-                |frame| {
-                    rows.push(frame.datasets().iter().map(sdk::Dataset::rows).sum::<u64>());
-                    Ok(())
-                },
-            )?;
-        assert_eq!(rows, vec![1; revision as usize]);
         assert!(futures_util::poll!(stream.next()).is_pending());
     }
     stream.cancel_and_join(&control).await?;
@@ -608,17 +729,24 @@ async fn source_changes(target: &str) -> TestResult {
     let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("restored source receipt")??;
-    assert_eq!(fixture.selected("source-changes", &receipt.attempt)?, [5]);
+    assert_eq!(
+        fixture.selected("source-changes", &receipt.attempt).await?,
+        [5]
+    );
     let result = receipt
         .results
         .values()
         .next()
         .ok_or("restored source result")?;
-    let evaluation = fixture.query.store().managed_evaluation(
-        instance.admitted(),
-        &result.result_id,
-        &control,
-    )?;
+    let evaluation_replay = fixture
+        .replay_result(instance.admitted(), &result.result_id, &control)
+        .await?;
+    let evaluation = evaluation_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed call")?
+        .evaluation();
     let mut ordered = Vec::new();
     for batch in &evaluation.input("input")?.data.batches {
         let column = batch
@@ -667,27 +795,58 @@ async fn subscription_changes(target: &str) -> TestResult {
         let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
             .await?
             .ok_or("change receipt")??;
-        assert_eq!(fixture.selected("changes", &receipt.attempt)?, [total]);
+        assert_eq!(
+            fixture.selected("changes", &receipt.attempt).await?,
+            [total]
+        );
         let reference = receipt
             .results
             .values()
             .next()
             .ok_or("change call result")?;
-        let evaluation = fixture.query.store().managed_evaluation(
-            instance.admitted(),
-            &reference.result_id,
-            &control,
-        )?;
+        let evaluation_replay = fixture
+            .replay_result(instance.admitted(), &reference.result_id, &control)
+            .await?;
+        let evaluation = evaluation_replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed call")?
+            .evaluation();
         let contract = image.artifacts[0].descriptor.exports[0]
             .change_inputs
             .as_ref()
             .ok_or("change contract")?;
-        assert_eq!(contract.is_reset(&evaluation)?, revision == 1);
+        let stored = fixture.query.store().managed_result(
+            instance.admitted(),
+            &reference.result_id,
+            u64::try_from(evaluation.context.time_utc_ns)?,
+            &control,
+        )?;
+        let context = call_context(&stored)?;
+        assert_eq!(
+            evaluation
+                .inputs
+                .iter()
+                .map(|input| &input.revision)
+                .collect::<Vec<_>>(),
+            context.inputs.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            evaluation
+                .inputs
+                .iter()
+                .map(|input| &input.coverage)
+                .collect::<Vec<_>>(),
+            context.input_coverage.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(contract.is_reset(evaluation)?, revision == 1);
         assert_eq!(evaluation.input("input")?.data.rows(), added);
         assert_eq!(evaluation.input("removed")?.data.rows(), removed);
         let replay = Instance::replay_result(
             Arc::clone(&fixture.query),
             fixture.authority.clone(),
+            None,
             fixture.grant.clone(),
             "changes",
             &reference.result_id,
@@ -745,18 +904,22 @@ async fn subscription_changes(target: &str) -> TestResult {
     let receipt = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("reopened change receipt")??;
-    assert_eq!(fixture.selected("changes", &receipt.attempt)?, [1]);
+    assert_eq!(fixture.selected("changes", &receipt.attempt).await?, [1]);
     let reference = receipt.results.values().next().ok_or("reopened call")?;
-    let evaluation = fixture.query.store().managed_evaluation(
-        instance.admitted(),
-        &reference.result_id,
-        &control,
-    )?;
+    let evaluation_replay = fixture
+        .replay_result(instance.admitted(), &reference.result_id, &control)
+        .await?;
+    let evaluation = evaluation_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed call")?
+        .evaluation();
     assert!(!image.artifacts[0].descriptor.exports[0]
         .change_inputs
         .as_ref()
         .ok_or("change contract")?
-        .is_reset(&evaluation)?);
+        .is_reset(evaluation)?);
     assert_eq!(evaluation.input("input")?.data.rows(), 0);
     assert_eq!(evaluation.input("removed")?.data.rows(), 1);
     let old = instance.replay(&saved[1].result_id, &control).await?;
@@ -794,18 +957,178 @@ async fn concurrent_changes_keep_bases() -> TestResult {
             .values()
             .next()
             .ok_or("concurrent change result")?;
-        let evaluation = fixture.query.store().managed_evaluation(
-            instance.admitted(),
-            &reference.result_id,
-            &AnalysisReadControl::default(),
-        )?;
+        let evaluation_replay = fixture
+            .replay_result(
+                instance.admitted(),
+                &reference.result_id,
+                &AnalysisReadControl::default(),
+            )
+            .await?;
+        let evaluation = evaluation_replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed call")?
+            .evaluation();
         assert_eq!(values(&evaluation.input("input")?.data.batches)?, [value]);
         assert_eq!(evaluation.input("removed")?.data.rows(), 0);
         assert_eq!(
-            fixture.selected(&instance.admitted().spec.id, &receipt.attempt)?,
+            fixture
+                .selected(&instance.admitted().spec.id, &receipt.attempt)
+                .await?,
             [2]
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn skipped_calls_reset_basis() -> TestResult {
+    let fixture = Fixture::new(Default::default())?;
+    let image = image("sql")?;
+    fixture.install(&image)?;
+    fixture.context(1)?;
+    let instance = fixture
+        .admit(
+            "conditional-changes",
+            r#"SELECT * FROM "runtime-fixture"."1".changes(input => (
+                SELECT owner_revision AS value FROM context_versions ORDER BY owner_revision))
+                WHERE CURRENT_TIMESTAMP <> TIMESTAMP '1970-01-01 00:00:02'
+                UNION ALL
+                SELECT * FROM "runtime-fixture"."1".changes(input => (
+                SELECT owner_revision + CAST(10 AS BIGINT UNSIGNED) AS value
+                FROM context_versions ORDER BY owner_revision))"#,
+        )
+        .await?;
+    let control = AnalysisReadControl::default();
+    let mut receipts = Vec::new();
+    for revision in 1..=2 {
+        if revision != 1 {
+            fixture.context(revision)?;
+        }
+        let mut input = request(&format!("conditional-{revision}"));
+        input.time_utc_ns = revision * 1_000_000_000;
+        input.seed = Some(100 + revision);
+        let receipt = instance.run(input, &control).await?;
+        assert_eq!(receipt.results.len(), if revision == 2 { 1 } else { 2 });
+        receipts.push(receipt);
+    }
+    let resume = fixture
+        .query
+        .store()
+        .managed_resume([1; 16], "conditional-changes", &control)?;
+    let mut saved = Vec::new();
+    for reference in receipts.iter().flat_map(|receipt| receipt.results.values()) {
+        saved.push(fixture.query.store().managed_result(
+            instance.admitted(),
+            &reference.result_id,
+            2_000_000_000,
+            &control,
+        )?);
+    }
+    let definition = instance.admitted().spec.definition.clone();
+    drop(instance);
+    let Fixture {
+        directory,
+        query,
+        authority,
+        grant,
+    } = fixture;
+    drop(query);
+    let fixture = Fixture {
+        query: Engine::new(
+            Arc::new(AnalysisStore::open(directory.path().join("data"))?),
+            Default::default(),
+        )?,
+        directory,
+        authority,
+        grant,
+    };
+    let instance = Instance::admit(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        fixture.grant.clone(),
+        "conditional-changes".into(),
+        definition,
+        &control,
+    )
+    .await?;
+    assert_eq!(
+        fixture
+            .query
+            .store()
+            .managed_resume([1; 16], "conditional-changes", &control)?,
+        resume
+    );
+    for expected in &saved {
+        let actual = fixture.query.store().managed_result(
+            instance.admitted(),
+            &expected.result.result_id,
+            2_000_000_000,
+            &control,
+        )?;
+        assert_eq!(actual.result, expected.result);
+        assert_eq!(actual.receipt, expected.receipt);
+        assert_eq!(actual.source, expected.source);
+        assert_eq!(actual.prior, expected.prior);
+        assert_eq!(call_context(&actual)?, call_context(expected)?);
+    }
+    fixture.context(3)?;
+    let mut input = request("conditional-3");
+    input.time_utc_ns = 3_000_000_000;
+    input.seed = Some(103);
+    let receipt = instance.run(input, &control).await?;
+    assert_eq!(receipt.results.len(), 2);
+    receipts.push(receipt);
+    let first = receipts.first().ok_or("first conditional receipt")?;
+    let second = receipts.get(1).ok_or("second conditional receipt")?;
+    let third = receipts.get(2).ok_or("third conditional receipt")?;
+    let (&sibling, second_ref) = second.results.iter().next().ok_or("active sibling")?;
+    let (&skipped, first_ref) = first
+        .results
+        .iter()
+        .find(|(call, _)| **call != sibling)
+        .ok_or("skipped call")?;
+    let contract = image.artifacts[0].descriptor.exports[0]
+        .change_inputs
+        .as_ref()
+        .ok_or("conditional change contract")?;
+    for (call, expected, reset, base) in [
+        (skipped, vec![1, 2, 3], true, None),
+        (sibling, vec![13], false, Some(second_ref)),
+    ] {
+        let reference = third.results.get(&call).ok_or("resumed call reference")?;
+        let replay = fixture
+            .replay_result(instance.admitted(), &reference.result_id, &control)
+            .await?;
+        let result = replay.calls.get(&call).ok_or("resumed call")?;
+        let evaluation = result.evaluation();
+        assert_eq!(contract.is_reset(evaluation)?, reset);
+        assert_eq!(values(&evaluation.input("input")?.data.batches)?, expected);
+        assert_eq!(evaluation.input("removed")?.data.rows(), 0);
+        assert_eq!(evaluation.checkpoint.is_none(), reset);
+        assert_eq!(evaluation.previous_outputs.is_empty(), reset);
+        assert_eq!(
+            result.changes().ok_or("resumed change base")?.base.as_ref(),
+            base
+        );
+        assert_eq!(values(&replay.batches)?, [3]);
+        assert_eq!(evaluation.context.id, "conditional-3");
+        assert_eq!(evaluation.context.time_utc_ns, 3_000_000_000);
+        assert_eq!(evaluation.context.seed, Some(103));
+    }
+    let old = fixture
+        .replay_result(instance.admitted(), &first_ref.result_id, &control)
+        .await?;
+    assert_eq!(values(&old.batches)?, [1]);
+    let evaluation = old
+        .calls
+        .get(&skipped)
+        .ok_or("old conditional call")?
+        .evaluation();
+    assert_eq!(evaluation.context.id, "conditional-1");
+    assert_eq!(evaluation.context.time_utc_ns, 1_000_000_000);
+    assert_eq!(evaluation.context.seed, Some(101));
     Ok(())
 }
 
@@ -839,7 +1162,9 @@ async fn parameters_reset_all_inputs() -> TestResult {
             .run(request(&format!("parameters-{revision}")), &control)
             .await?;
         assert_eq!(
-            fixture.selected("parameter-changes", &receipt.attempt)?,
+            fixture
+                .selected("parameter-changes", &receipt.attempt)
+                .await?,
             [total]
         );
         let reference = receipt
@@ -847,12 +1172,16 @@ async fn parameters_reset_all_inputs() -> TestResult {
             .values()
             .next()
             .ok_or("parameter change result")?;
-        let evaluation = fixture.query.store().managed_evaluation(
-            instance.admitted(),
-            &reference.result_id,
-            &control,
-        )?;
-        assert_eq!(contract.is_reset(&evaluation)?, reset);
+        let evaluation_replay = fixture
+            .replay_result(instance.admitted(), &reference.result_id, &control)
+            .await?;
+        let evaluation = evaluation_replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed call")?
+            .evaluation();
+        assert_eq!(contract.is_reset(evaluation)?, reset);
         assert_eq!(evaluation.input("input")?.data.rows(), added);
         assert_eq!(evaluation.input("removed")?.data.rows(), 0);
         assert_eq!(
@@ -896,17 +1225,26 @@ async fn support_change_resets_inputs() -> TestResult {
             .run(request(&format!("support-{step}")), &control)
             .await?;
         let reference = receipt.results.values().next().ok_or("support result")?;
-        let evaluation = fixture.query.store().managed_evaluation(
-            instance.admitted(),
-            &reference.result_id,
-            &control,
-        )?;
-        assert_eq!(contract.is_reset(&evaluation)?, reset);
+        let evaluation_replay = fixture
+            .replay_result(instance.admitted(), &reference.result_id, &control)
+            .await?;
+        let evaluation = evaluation_replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed call")?
+            .evaluation();
+        assert_eq!(contract.is_reset(evaluation)?, reset);
         assert_eq!(evaluation.input("input")?.data.rows(), added);
         assert_eq!(evaluation.input("removed")?.data.rows(), 0);
         assert_eq!(evaluation.checkpoint.is_none(), reset);
         assert_eq!(evaluation.previous_outputs.is_empty(), reset);
-        assert_eq!(fixture.selected("support-changes", &receipt.attempt)?, [2]);
+        assert_eq!(
+            fixture
+                .selected("support-changes", &receipt.attempt)
+                .await?,
+            [2]
+        );
         let replay = instance.replay(&reference.result_id, &control).await?;
         assert_eq!(values(&replay.batches)?, [2]);
         let replayed = replay

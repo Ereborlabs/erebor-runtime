@@ -4,7 +4,7 @@ use araphor_data::PackageReadinessV1 as Readiness;
 #[tokio::test]
 async fn status_inspect_keeps_failure() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
-    let (instance, _) = historical(&fixture, "history").await?;
+    let (instance, receipt) = historical(&fixture, "history").await?;
     let store = fixture.query.store();
     let stored = store
         .managed_instance([1; 16], "history", &AnalysisReadControl::default())?
@@ -28,7 +28,16 @@ async fn status_inspect_keeps_failure() -> TestResult {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clear();
-    store.fault_write("UPDATE managed_arrow SET ipc = 'invalid'::BLOB", &[])?;
+    let reference = receipt.results.values().next().ok_or("saved call")?;
+    assert_eq!(
+        store.frozen_result(&reference.result_id)?.2,
+        reference.commit_revision
+    );
+    store.fault_write(
+        "UPDATE analysis_results SET body = 'invalid'::BLOB WHERE tenant_id = ? AND result_id = ?",
+        &[&[1u8; 16].as_slice(), &reference.result_id],
+    )?;
+    assert_eq!(store.frozen_result(&reference.result_id)?.0, b"invalid");
     store.fault_write(
         "UPDATE package_revisions SET artifact = 'invalid'::BLOB",
         &[],

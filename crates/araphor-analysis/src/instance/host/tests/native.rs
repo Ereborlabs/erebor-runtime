@@ -76,7 +76,8 @@ impl Fixture {
             assert!(self
                 .query
                 .store()
-                .managed_selected([1; 16], id, attempt, &read)?
+                .managed_attempt([1; 16], id, attempt, &read)?
+                .and_then(|attempt| attempt.receipt().cloned())
                 .is_none());
         }
         Ok(())

@@ -966,11 +966,23 @@ async fn host_crossing_expiry_joins_admission() -> TestResult {
         &AnalysisReadControl::default(),
     )
     .await?;
-    let checkpoint = retained
-        .output
-        .checkpoint
-        .as_ref()
-        .ok_or("initial checkpoint")?;
+    let initial_replay = Instance::replay_result(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        None,
+        fixture.grant.clone(),
+        "crossing-expiry",
+        result,
+        &AnalysisReadControl::default(),
+    )
+    .await?;
+    let initial = initial_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("initial expiry replay")?
+        .output();
+    let checkpoint = initial.checkpoint.as_ref().ok_or("initial checkpoint")?;
     assert_eq!(checkpoint.datasets.len(), 1);
     assert_eq!(
         checkpoint.datasets[0]
@@ -1058,13 +1070,27 @@ async fn host_crossing_expiry_joins_admission() -> TestResult {
         &AnalysisReadControl::default(),
     )
     .await?;
-    assert_eq!(historical.commit_revision, retained.commit_revision);
-    assert_eq!(
-        historical.output.datasets[0].batches,
-        retained.output.datasets[0].batches
-    );
+    assert_eq!(historical.result, retained.result);
+    assert_eq!(historical.source, retained.source);
+    assert_eq!(historical.receipt, retained.receipt);
+    let historical_replay = Instance::replay_result(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        None,
+        fixture.grant.clone(),
+        "crossing-expiry",
+        result,
+        &AnalysisReadControl::default(),
+    )
+    .await?;
+    let historical = historical_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("historical expiry replay")?
+        .output();
+    assert_eq!(historical.datasets[0].batches, initial.datasets[0].batches);
     let historical = historical
-        .output
         .checkpoint
         .as_ref()
         .ok_or("retained checkpoint")?;
@@ -1087,7 +1113,10 @@ async fn host_crossing_expiry_joins_admission() -> TestResult {
         .iter()
         .find(|receipt| receipt.commit_revision == healthy_progress)
         .ok_or("healthy expiry receipt")?;
-    assert_eq!(fixture.selected("expiry-healthy", &healthy.attempt)?, [2]);
+    assert_eq!(
+        fixture.selected("expiry-healthy", &healthy.attempt).await?,
+        [2]
+    );
     stop.send_replace(true);
     tokio::time::timeout(Duration::from_secs(30), worker).await???;
     let first = fixture.query.reserve_evaluation([1; 16])?;

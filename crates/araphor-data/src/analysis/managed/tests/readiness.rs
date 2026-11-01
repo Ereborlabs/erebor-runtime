@@ -22,14 +22,14 @@ fn failed_frontier_keeps_progress() -> TestResult {
     assert_eq!(resumed.frontier, input.frontier);
     assert_eq!(resumed.completed, terminal.revision);
     assert_eq!(attempt.request(), &input);
-    assert!(store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            &input.id,
-            &AnalysisReadControl::default()
-        )?
-        .is_none());
+    assert!(Fixture::receipt(
+        &store,
+        [1; 16],
+        "counter",
+        &input.id,
+        &AnalysisReadControl::default()
+    )?
+    .is_none());
     let before = store.meta()?;
     assert_eq!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
@@ -91,22 +91,22 @@ fn cancelled_frontier_is_unconsumed() -> TestResult {
         assert_ne!(resumed.frontier, input.frontier);
         assert_eq!(resumed.completed, terminal.revision);
         assert_eq!(attempt.request(), &input);
-        assert!(store
-            .managed_selected(
-                [1; 16],
-                "counter",
-                &input.id,
-                &AnalysisReadControl::default()
-            )?
-            .is_none());
-        assert!(store
-            .managed_selected(
-                [1; 16],
-                "counter",
-                &first.id,
-                &AnalysisReadControl::default()
-            )?
-            .is_some());
+        assert!(Fixture::receipt(
+            &store,
+            [1; 16],
+            "counter",
+            &input.id,
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+        assert!(Fixture::receipt(
+            &store,
+            [1; 16],
+            "counter",
+            &first.id,
+            &AnalysisReadControl::default()
+        )?
+        .is_some());
         resumed
     };
     let store = AnalysisStore::open(directory.path().join("store"))?;
@@ -138,18 +138,18 @@ fn completion_fences_capture() -> TestResult {
         completed: Some(resumed.completed),
     };
     let error = store
-        .read_managed_tables(
+        .read_managed_tables_filtered(
             &resumed.instance.grant.selection,
             &selected,
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )
         .err()
         .ok_or("stale completion captured")?;
@@ -223,14 +223,14 @@ fn completion_fences_publication() -> TestResult {
             .progress,
         0
     );
-    assert!(store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            &input.id,
-            &AnalysisReadControl::default()
-        )?
-        .is_none());
+    assert!(Fixture::receipt(
+        &store,
+        [1; 16],
+        "counter",
+        &input.id,
+        &AnalysisReadControl::default()
+    )?
+    .is_none());
     Ok(())
 }
 

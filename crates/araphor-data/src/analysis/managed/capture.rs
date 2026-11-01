@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, OptionalExt as _};
@@ -10,6 +10,78 @@ use super::model::*;
 use crate::{AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result};
 
 impl AnalysisStore {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "A source frame requires the complete sealed read scope."
+    )]
+    pub(in crate::analysis) fn restore_managed(
+        reader: &Connection,
+        reference: &ManagedAttempt,
+        output: &mut AnalysisExtractionV1,
+        control: &AnalysisReadControl,
+        read: &crate::AnalysisTableRead<'_>,
+        selection: &AnalysisSelectionV1,
+        owners: Option<&BTreeSet<String>>,
+        physical: &crate::AnalysisStoreMetaV1,
+    ) -> Result<ManagedCapture> {
+        let mut captured = ManagedCapture::from(reference);
+        if read.now == reference.request().time_utc_ns {
+            let mode = match read.mode {
+                crate::AnalysisReadModeV1::Complete => Some(super::ManagedSourceRead::Initial),
+                crate::AnalysisReadModeV1::Changes(after) => {
+                    let parent = Self::managed_parent_from(reader, reference)?
+                        .filter(|parent| parent.position == after)
+                        .ok_or_else(|| Code::Invalid.error("managed reference source cut"))?;
+                    Some(super::ManagedSourceRead::Changes(parent))
+                }
+                _ => None,
+            };
+            if let Some(mode) = mode {
+                let mut meta = output.meta.clone();
+                meta.recovery_epoch = physical.recovery_epoch;
+                captured.source = super::source::SourceScope::capture(
+                    &captured.instance,
+                    &meta,
+                    mode,
+                    read,
+                    selection,
+                    owners,
+                )?;
+                if matches!(read.mode, crate::AnalysisReadModeV1::Changes(_))
+                    && captured.source.is_none()
+                {
+                    return Err(Code::Unsupported.error("managed source projection"));
+                }
+                if matches!(read.mode, crate::AnalysisReadModeV1::Complete) {
+                    if let (Some(source), Some(receipt)) = (&captured.source, reference.receipt()) {
+                        source.commit_proof(std::sync::Arc::new(receipt.selected.clone()));
+                    }
+                }
+            }
+        }
+        if !captured.rebuild() {
+            for (call, prior) in &captured.contract.prior {
+                let Some(prior) = prior else { continue };
+                let state = Self::managed_prior_from(
+                    reader,
+                    &captured.instance,
+                    *call,
+                    &prior.result_id,
+                    prior.commit_revision,
+                    output,
+                    control,
+                )?;
+                captured.prior.insert(*call, std::sync::Arc::new(state));
+            }
+        }
+        captured.bytes = output.input_bytes;
+        Ok(captured)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The capture keeps the native read scope and context owners."
+    )]
     pub(in crate::analysis) fn capture_managed(
         &self,
         reader: &Connection,
@@ -18,6 +90,7 @@ impl AnalysisStore {
         selection: &AnalysisSelectionV1,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
+        context_owners: Option<&BTreeSet<String>>,
     ) -> Result<ManagedCapture> {
         let now = read.now;
         if request.follow
@@ -44,18 +117,6 @@ impl AnalysisStore {
         )?;
         let (current, completed) = Self::managed_capture_owner(reader, request)?;
         let instance = request.instance.clone();
-        let reuse = request.completed.is_some()
-            && request.expected.is_none()
-            && !request.rebuild
-            && matches!(
-                instance.spec.destination,
-                ManagedDestination::Graph {
-                    operation: ManagedGraphOperation::Evaluate,
-                    ..
-                }
-            )
-            && Self::validate_managed_failure(reader, &current)?
-                .is_none_or(|failure| failure.progress != current.progress);
         if instance.spec
             != Self::managed_version_from(
                 reader,
@@ -104,19 +165,8 @@ impl AnalysisStore {
                             &declaration.package,
                             &mut verified,
                         )?;
-                        let mut state = std::sync::Arc::clone(state);
-                        std::sync::Arc::make_mut(&mut state).reusable = reuse
-                            && state
-                                .retained
-                                .as_ref()
-                                .is_none_or(|saved| saved.changes.is_none())
-                            && matches!(&instance.spec.destination, ManagedDestination::Graph { calls, .. } if calls.contains(call))
-                            && matches!(
-                                instance.spec.manifest.calls[call].target.as_str(),
-                                "wasm" | "native"
-                            );
                         output.charge(state.allocated_bytes())?;
-                        prior.insert(*call, state);
+                        prior.insert(*call, std::sync::Arc::clone(state));
                         states.insert(
                             *call,
                             Some(PackageResultRefV1 {
@@ -126,19 +176,12 @@ impl AnalysisStore {
                         );
                         continue;
                     }
-                    let (metadata, payload): (u64, u64) = reader.query_row("SELECT octet_length(request_meta) + octet_length(body),
-                    (SELECT COALESCE(SUM(octet_length(ipc)), 0) FROM managed_arrow WHERE result_id = ? AND role IN ('parameters', 'checkpoint'))
-                    FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND commit_revision = ?",
-                    params![id, instance.spec.tenant.as_slice(), id, revision], |row| Ok((row.get(0)?, row.get(1)?)))
-                    .context(AnalysisDatabaseSnafu { operation: "bound managed prior capture" })?;
-                    let payload = usize::try_from(payload).unwrap_or(usize::MAX);
-                    output.charge(
-                        usize::try_from(metadata)
-                            .unwrap_or(usize::MAX)
-                            .saturating_mul(2),
-                    )?;
-                    output.charge(payload)?;
-                    let (mut state, continuation) = Self::managed_prior_from(
+                    let bytes: u64 = reader.query_row(
+                        "SELECT octet_length(request_meta) + octet_length(body) FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND commit_revision = ?",
+                        params![instance.spec.tenant.as_slice(), id, revision], |row| row.get(0),
+                    ).context(AnalysisDatabaseSnafu { operation: "bound canonical prior state" })?;
+                    output.charge(usize::try_from(bytes).unwrap_or(usize::MAX))?;
+                    let state = Self::managed_prior_from(
                         reader, &instance, *call, &id, revision, output, control,
                     )?;
                     self.verify_package_revision(
@@ -147,72 +190,6 @@ impl AnalysisStore {
                         &instance.spec.manifest.calls[call].package,
                         &mut verified,
                     )?;
-                    // The decoded state owns its buffers; the IPC payload has been released.
-                    output.input_bytes -= payload;
-                    state.reusable = reuse
-                        && !continuation
-                        && matches!(&instance.spec.destination,
-                            ManagedDestination::Graph { calls, .. } if calls.contains(call))
-                        && matches!(
-                            instance.spec.manifest.calls[call].target.as_str(),
-                            "wasm" | "native"
-                        );
-                    if state.reusable || continuation {
-                        let payload: u64 = reader.query_row(
-                            "SELECT COALESCE(SUM(octet_length(ipc)), 0) FROM managed_arrow WHERE result_id = ?",
-                            params![id], |row| row.get(0),
-                        ).context(AnalysisDatabaseSnafu { operation: "bound retained Graph call" })?;
-                        let before = output.input_bytes;
-                        output.charge(usize::try_from(payload).unwrap_or(usize::MAX))?;
-                        let saved = Self::saved_inputs_from(reader, &instance, &id, control)?;
-                        output.charge(saved.decoding_bytes(control)?)?;
-                        let mut evaluation = saved.inputs_only(control)?;
-                        let changes = saved.changes(control)?;
-                        evaluation.checkpoint = None;
-                        evaluation.previous_outputs.clear();
-                        let (record, packet, saved) =
-                            Self::managed_record_from(reader, instance.spec.tenant, &id)?;
-                        if saved != revision {
-                            return Err(Code::Invalid.error("retained Graph call revision"));
-                        }
-                        let decoding = packet
-                            .datasets
-                            .iter()
-                            .chain(packet.checkpoint.iter().flat_map(|state| &state.datasets))
-                            .map(|data| sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc))
-                            .chain(
-                                packet.reasons.iter().map(|reason| {
-                                    sdk::wire::Dataset::decoding_bytes(&reason.details)
-                                }),
-                            )
-                            .try_fold(0usize, |bytes, next| {
-                                bytes
-                                    .checked_add(next.context(crate::AnalysisContractSnafu)?)
-                                    .ok_or_else(|| Code::Limit.error("retained Graph call memory"))
-                            })?;
-                        output.charge(decoding)?;
-                        let returned = Self::validate_managed_record(
-                            reader,
-                            instance.spec.tenant,
-                            &id,
-                            &record,
-                            &packet,
-                            revision,
-                        )?;
-                        output.input_bytes = before;
-                        output.charge(evaluation.allocated_bytes())?;
-                        output.charge(returned.allocated_bytes())?;
-                        output
-                            .charge(changes.as_ref().map_or(0, ManagedChanges::allocated_bytes))?;
-                        output.charge(
-                            std::mem::size_of::<RetainedCall>() + 2 * std::mem::size_of::<usize>(),
-                        )?;
-                        state.retained = Some(std::sync::Arc::new(RetainedCall {
-                            evaluation,
-                            output: returned,
-                            changes,
-                        }));
-                    }
                     prior.insert(*call, std::sync::Arc::new(state));
                 }
                 Some(PackageResultRefV1 {
@@ -252,12 +229,18 @@ impl AnalysisStore {
                 witnesses: Vec::new(),
                 contexts: Vec::new(),
                 traces: Vec::new(),
-                source: Self::capture_source(reader, request, read, selection, &output.meta)?,
             },
             instance,
             prior,
             bytes: output.input_bytes.saturating_sub(before),
-            source: None,
+            source: Self::capture_source(
+                reader,
+                request,
+                read,
+                selection,
+                &output.meta,
+                context_owners,
+            )?,
         })
     }
 
@@ -269,7 +252,7 @@ impl AnalysisStore {
         revision: u64,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
-    ) -> Result<(ManagedPrior, bool)> {
+    ) -> Result<ManagedPrior> {
         let tenant = instance.spec.tenant;
         let declaration = instance
             .spec
@@ -281,6 +264,7 @@ impl AnalysisStore {
         if saved != revision {
             return Err(Code::Invalid.error("managed prior revision"));
         }
+        let (_, owner) = Self::managed_call_owner(reader, tenant, id, revision, &record)?;
         let descriptor = Self::managed_contract(reader, tenant, declaration)?;
         output.charge(descriptor.allocated_bytes())?;
         let model = descriptor
@@ -290,35 +274,13 @@ impl AnalysisStore {
             .ok_or_else(|| Code::Missing.error("managed prior model"))?;
         if record.instance != instance.spec.id
             || record.call != call
-            || record.declaration != *declaration
+            || owner.manifest.calls.get(&call) != Some(declaration)
             || record.context.target != declaration.target
             || record.context.artifact != declaration.artifact
         {
             return Err(Code::Invalid.error("managed prior contract"));
         }
-        let parameters = record
-            .parameters
-            .as_ref()
-            .map(|data| {
-                control.check()?;
-                let before = output.input_bytes;
-                output.charge(
-                    sdk::wire::Dataset::decoding_bytes(&data.arrow_ipc)
-                        .context(crate::AnalysisContractSnafu)?,
-                )?;
-                let decoded = data
-                    .decode(&model.parameters)
-                    .context(crate::AnalysisContractSnafu)?;
-                output.input_bytes = before;
-                output.charge(decoded.allocated_bytes())?;
-                if data.name != "parameters" || decoded.batches.len() != 1 || decoded.rows() != 1 {
-                    return Err(Code::Invalid.error("managed retained parameters"));
-                }
-                Ok(decoded)
-            })
-            .transpose()?;
         let checkpoint = packet
-            .checkpoint
             .as_ref()
             .map(|state| -> Result<sdk::Checkpoint> {
                 control.check()?;
@@ -347,23 +309,17 @@ impl AnalysisStore {
                 Ok(decoded)
             })
             .transpose()?;
-        let continuation = model.change_inputs.is_some()
-            || model
-                .checkpoint
-                .as_ref()
-                .is_some_and(|spec| spec.resume_input_changes);
-        Ok((
-            ManagedPrior {
-                revision,
-                result: id.into(),
-                context: record.context,
-                parameters,
-                checkpoint,
-                retained: None,
-                reusable: false,
-            },
-            continuation,
-        ))
+        model
+            .validate_checkpoint(checkpoint.as_ref(), true)
+            .context(crate::AnalysisContractSnafu)?;
+        Ok(ManagedPrior {
+            revision,
+            result: id.into(),
+            context: record.context,
+            parameters: None,
+            checkpoint,
+            retained: None,
+        })
     }
 }
 
@@ -387,13 +343,39 @@ impl ManagedCapture {
         self.contract.contexts = output
             .references
             .iter()
+            .filter(|entry| {
+                !self.source.as_ref().is_some_and(|source| {
+                    source
+                        .projection()
+                        .get("context_versions")
+                        .is_some_and(Option::is_some)
+                }) || entry
+                    .origins()
+                    .iter()
+                    .any(|origin| !matches!(origin, crate::AnalysisReferenceOriginV1::Context))
+            })
             .filter_map(|entry| entry.context().cloned())
             .collect();
         self.contract
             .contexts
             .sort_by(|left, right| left.key.cmp(&right.key));
         self.contract.contexts.dedup();
-        self.contract.witnesses = output.witnesses.clone();
+        self.contract.witnesses = output
+            .witnesses
+            .iter()
+            .filter(|witness| {
+                !self.source.as_ref().is_some_and(|source| {
+                    source
+                        .projection()
+                        .get("events")
+                        .is_some_and(Option::is_some)
+                }) || !matches!(
+                    &witness.identity,
+                    crate::AnalysisStreamIdentityV1::Evidence(_)
+                )
+            })
+            .cloned()
+            .collect();
         self.contract.traces = output.trace_reads().to_vec();
     }
 }

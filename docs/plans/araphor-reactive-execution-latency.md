@@ -50,29 +50,69 @@ and payload accounting. Do not move those copies into another table or blob.
 Preserve the existing canonical Graph, finding, notification, package, and
 context owners. Their committed data can be referenced by a call.
 
-**Journal-reference replacement: Not done.** The user authorizes this work
-after the checkpoint at `ef8024ed7`. The payload-based replay and recovery
-results later in this document describe the old implementation. They do not
-define the new storage requirement.
+**Journal-reference replacement: Done.** The user
+authorizes this work after the checkpoint at `ef8024ed7`. The payload-based
+replay and recovery results later in this document describe the old
+implementation. They do not define the new storage requirement.
 
 The checked metadata lookup is implemented by `AnalysisStore::managed_reference`.
 It returns the recorded request, source cut, call ID, receipt, and historical
 definition. The lookup does not read an Arrow payload or admit publication.
-The existing payload readers keep their input-slot checks.
+The lookup does not execute a package.
 
-**Payload removal: Not done.** The source-reader replacement remains a saved
-working patch. Review found gaps in recovery after journal retention, memory
-reservation before reconstruction, and source batch validation. The bounded
-context query also fails the existing index-access test. The current source
-reader and writer remain in place until these gaps have replacements.
+The source removes `managed_arrow`, saved evaluations, saved outputs,
+selected payloads, source IPC records, and their accounting. Each call stores
+one optional declared checkpoint as its canonical state. Each selected result
+stores its receipt, row count, and dependencies. Its body is
+empty. Temporary Arrow batches remain in live execution and Replay memory.
+They do not persist after a process restart.
 
-An explicit read-contract decision remains open. Current Inspect operations
-return saved package and selected data without Run permission. Reference-only
-Inspect operations would return the call and source references. Explicit Run
-replay would reconstruct data. Keeping the existing Inspect result requires
-internal execution and exact historical sources, including administrative
-table changes that the current journal does not retain. No read permission
-or result contract changes are approved by this record.
+Remove the unused source metadata cache and the saved projection contract.
+The native query derives its projection from the recorded grant. Keep the
+source cut, row identity, schema, and authority checks. The change must remove
+production Rust in total. Count production and test code separately. Exclude
+blank lines. Use existing execution, restart, replay, and expiry tests. Do not
+add a test that only calls a helper with an invented result reference.
+
+Retire the unused host output aliases and local result wrapper. Their earlier
+saved-output contract is superseded by reference-only Inspect and explicit
+Replay. Remove the automatic producer-replay bridge added for those aliases.
+Keep native SDK output dependencies and the local stream used by the context
+owner. Keep real lifecycle, replay, source expiry, and permission checks.
+
+Replay uses the original native query, package pins, source cut, invocation
+time, and seed. Native source, processor, result-notice, and trace histories
+provide administrative values at that cut. Current revocation checks still
+apply. Retired event headers preserve acceptance and retention metadata. The
+headers do not replace missing event bytes.
+
+**Payload-removal qualification: Done.** Existing Data tests cover source
+history, metadata, scope, atomic publication, checkpoints, and empty selected
+bodies. Existing Query tests cover the original journal cut, source witnesses,
+notification deadlines, and reactive windows. Existing Analysis tests cover
+SQL, Wasm, native execution, previous outputs, restart, expiry, and revocation.
+The Graph reset Replay case passes with the original input revisions and
+coverage for all three detectors. The
+[verification record](../guides/araphor-retained-execution-review.md#qualification)
+states the source boundaries and exact results.
+
+Final scoped formatting and Clippy pass for the nine affected crates. Clippy
+denies warnings and includes their test targets. The full workspace procedure
+is not run under the user's relevant-test instruction. No new event latency
+or storage-size result is claimed. The Graph functional check takes
+2,683.70 seconds; it does not prove millisecond execution.
+
+The complete change from `3f9bbd3a4` removes 10 nonblank production Rust lines
+and 607 nonblank test lines. These are separate totals. They include the
+necessary history and replay code, the retired storage APIs, and the removed
+host aliases. Blank lines do not contribute to either total.
+
+The user approves reference-only Inspect operations. Inspect returns the call
+and source references. Explicit replay uses Run permission and reconstructs
+data from the journal. Inspect does not execute package code. Remove the
+Inspect query operation that reads saved output rows. Keep one metadata read
+owner for call and selected references. This approval does not permit current
+administrative state to replace missing historical source state during replay.
 
 Data accepts source data
   -> Query wakes the affected subscription

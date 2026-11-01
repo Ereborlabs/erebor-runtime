@@ -66,7 +66,6 @@ fn witnesses_keep_source_receipt() -> TestResult {
     let snapshot = super::SourceSnapshot::new(
         store,
         selection,
-        None,
         AnalysisExtractLimits {
             input_bytes: 16 * 1024,
             ..Default::default()
@@ -79,15 +78,14 @@ fn witnesses_keep_source_receipt() -> TestResult {
     );
     let mut captured = snapshot.read(
         &BTreeMap::from([
-            ("events".to_owned(), None),
-            ("context_versions".to_owned(), None),
+            ("events".to_owned(), Some(BTreeSet::new())),
+            ("context_versions".to_owned(), Some(BTreeSet::new())),
         ]),
         &super::ScanBounds::default(),
         super::ReadMode::Snapshot,
         &control,
     )?;
     assert!(captured.receipt.page.tables.is_empty());
-    assert!(captured.receipt.page.packages.is_empty());
     assert!(captured.receipt.page.removals.is_empty());
     let previous = captured.receipt._metadata.size();
     let old = captured.receipt.witnesses.capacity() * std::mem::size_of::<AnalysisWitnessV1>()
@@ -148,8 +146,7 @@ fn witnesses_keep_source_receipt() -> TestResult {
     assert_eq!(captured.receipt._metadata.size(), expected);
     assert_eq!(shared.witnesses.len(), 2);
     drop(shared);
-    let held =
-        memory.reserve_input(capacity - expected - captured.receipt.requests()._memory.size())?;
+    let held = memory.reserve_input(capacity - memory.input_reserved())?;
     let mut larger = Vec::with_capacity(64);
     larger.extend(captured.receipt.witnesses.iter().cloned());
     let error = captured
@@ -223,7 +220,6 @@ async fn receipt_releases_binary_scratch() -> TestResult {
     let session = engine.session(selection, &control, 1)?;
     let (receipt, mut stream) = session.stream(&plan, &sources, Read::Snapshot).await?;
     assert!(receipt.page.tables.is_empty());
-    assert!(receipt.page.packages.is_empty());
     assert!(receipt.page.removals.is_empty());
     let batch = stream.try_next().await?.ok_or("context batch is absent")?;
     let body = batch
@@ -289,7 +285,6 @@ fn catalog_native_preflight() -> TestResult {
     let source = super::SourceSnapshot::new(
         Arc::clone(&store),
         AnalysisSelectionV1::tenant([1; 16]),
-        None,
         AnalysisExtractLimits {
             input_bytes: capacity,
             ..Default::default()
@@ -387,7 +382,6 @@ fn catalog_native_preflight() -> TestResult {
     assert_eq!(relation, "behaviors");
     assert_eq!(readiness.value(0), "disabled");
     assert!(captured.receipt.page.tables.is_empty());
-    assert!(captured.receipt.page.packages.is_empty());
     assert!(captured.receipt.page.removals.is_empty());
     let required = captured.receipt.page.extraction.input_bytes;
     drop(batches);
@@ -395,7 +389,6 @@ fn catalog_native_preflight() -> TestResult {
     let source = super::SourceSnapshot::new(
         store,
         AnalysisSelectionV1::tenant([1; 16]),
-        None,
         AnalysisExtractLimits {
             input_bytes: required - 1,
             ..Default::default()
@@ -465,7 +458,6 @@ fn catalog_content_contract() -> TestResult {
         let source = SourceSnapshot::new(
             store,
             AnalysisSelectionV1::tenant([1; 16]),
-            None,
             AnalysisExtractLimits {
                 input_bytes: capacity,
                 ..Default::default()
@@ -514,8 +506,7 @@ fn catalog_content_contract() -> TestResult {
                 | "graph_subjects"
                 | "graph_branches"
                 | "correlation_packages"
-                | "policy_observations"
-                | "graph_manifest" => {
+                | "policy_observations" => {
                     if enabled & 2 != 0 {
                         "enabled"
                     } else {
@@ -643,7 +634,7 @@ mod notification {
             valid_from_utc_ns: None,
             valid_until_utc_ns: None,
             sensitivity: value.sensitivity,
-            body: serde_json::to_vec(value)?,
+            body: value.encode()?,
         })?;
         Ok(())
     }
@@ -689,7 +680,7 @@ mod notification {
             assert_eq!(metadata.next_change, next_change);
             assert_eq!(
                 metadata.page.extraction.scanned_bytes,
-                serde_json::to_vec(&value)?.len()
+                value.encode()?.len()
             );
             assert_eq!(metadata.contexts().count(), 1);
             let reference = metadata.contexts().next().ok_or("notification reference")?;
@@ -821,7 +812,6 @@ fn retirement_map_charges_once() -> TestResult {
     let source = SourceSnapshot::new(
         store,
         AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]),
-        None,
         AnalysisExtractLimits {
             input_bytes: capacity,
             ..Default::default()
@@ -894,7 +884,6 @@ fn captured_requests_keep_charge() -> TestResult {
     let source = SourceSnapshot::new(
         store,
         AnalysisSelectionV1::new([1; 16], Vec::new()),
-        None,
         AnalysisExtractLimits {
             input_bytes: capacity,
             ..Default::default()
@@ -948,7 +937,6 @@ fn metadata_respects_input_bounds() -> TestResult {
         let source = SourceSnapshot::new(
             Arc::clone(&store),
             AnalysisSelectionV1::new([1; 16], Vec::new()),
-            None,
             AnalysisExtractLimits {
                 input_bytes,
                 ..Default::default()

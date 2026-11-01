@@ -162,10 +162,13 @@ async fn managed_expired_ranges() -> TestResult {
             .values()
             .next()
             .ok_or("the retained call is absent")?;
-        let evaluation =
-            fixture
-                .store
-                .managed_evaluation(instance.admitted(), &result.result_id, &control)?;
+        let evaluation_replay = instance.replay(&result.result_id, &control).await?;
+        let evaluation = evaluation_replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed discovery call")?
+            .evaluation();
         let events = evaluation
             .inputs
             .iter()
@@ -188,7 +191,7 @@ async fn managed_expired_ranges() -> TestResult {
         );
         fixture.retained_profile(&retained, &gaps, 3)?;
         assert_eq!(fixture.store.source_receipt(&fixture.source)?, Some(source));
-        drop(evaluation);
+        drop(evaluation_replay);
         drop(instance);
         fixture.released()?;
     }

@@ -10,11 +10,16 @@ impl AnalysisStore {
          FROM context_versions WHERE commit_revision > ?
          ORDER BY commit_revision, owner_id, entity_key, lifetime_key, owner_revision";
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Historical reads bind the context header cut before exact-key value reads."
+    )]
     pub(in crate::analysis::extraction) fn extract_context_changes(
         &self,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         after: u64,
+        cut: Option<u64>,
         owners: Option<&BTreeSet<String>>,
         budget: &mut ReadBudget<'_>,
         capture: &mut tables::Capture<'_>,
@@ -26,12 +31,17 @@ impl AnalysisStore {
             return Ok(());
         }
         budget.check()?;
-        let mut statement =
-            snapshot
-                .prepare_cached(Self::CONTEXT_CHANGES_SQL)
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare committed context changes",
-                })?;
+        let bounded = cut.map(|revision| {
+            Self::CONTEXT_CHANGES_SQL.replace(
+                "WHERE commit_revision > ?",
+                &format!("WHERE commit_revision > ? AND commit_revision <= {revision}"),
+            )
+        });
+        let mut statement = snapshot
+            .prepare_cached(bounded.as_deref().unwrap_or(Self::CONTEXT_CHANGES_SQL))
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare committed context changes",
+            })?;
         let mut rows = statement
             .query(params![after])
             .context(AnalysisDatabaseSnafu {

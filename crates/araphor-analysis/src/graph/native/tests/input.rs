@@ -204,12 +204,13 @@ async fn immutable_facts_precede_guests() -> TestResult {
         assert!(fixture
             .query
             .store()
-            .managed_selected(
+            .managed_attempt(
                 fixture.source.tenant_id,
                 &instance_id,
                 &input.id,
                 &fixture.control
             )?
+            .and_then(|attempt| attempt.receipt().cloned())
             .is_none());
         assert_eq!(fixture.graph_history()?, before_domain);
         assert_eq!(fixture.query.store().frozen_result(&id)?, frozen);

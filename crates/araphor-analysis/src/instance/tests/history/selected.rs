@@ -1,8 +1,8 @@
 use super::*;
 
 #[tokio::test]
-async fn selected_sql_prql_reads() -> TestResult {
-    for (name, program, rows) in [
+async fn selected_sql_prql_references() -> TestResult {
+    for (name, program) in [
         (
             "sql",
             Program::Sql {
@@ -10,7 +10,6 @@ async fn selected_sql_prql_reads() -> TestResult {
                     inline: "SELECT CAST(7 AS BIGINT UNSIGNED) AS value".into(),
                 },
             },
-            1,
         ),
         (
             "empty",
@@ -19,7 +18,6 @@ async fn selected_sql_prql_reads() -> TestResult {
                     inline: "SELECT CAST(7 AS BIGINT UNSIGNED) AS value WHERE false".into(),
                 },
             },
-            0,
         ),
         (
             "prql",
@@ -28,7 +26,6 @@ async fn selected_sql_prql_reads() -> TestResult {
                     inline: "from s\"SELECT CAST(7 AS BIGINT UNSIGNED) AS value\"".into(),
                 },
             },
-            1,
         ),
     ] {
         let fixture = Fixture::new(Default::default())?;
@@ -66,15 +63,15 @@ async fn selected_sql_prql_reads() -> TestResult {
             .run(request("later"), &AnalysisReadControl::default())
             .await?;
         assert!(receipt.results.is_empty());
-        let original = fixture
+        let captured = fixture
             .query
             .store()
-            .managed_selected([1; 16], name, "first", &AnalysisReadControl::default())?
-            .ok_or("selected original")?;
+            .managed_attempt([1; 16], name, "first", &AnalysisReadControl::default())?
+            .ok_or("selected attempt")?;
         fixture.authority.set(false);
         let reader = Arc::new(Reader::new(fixture.grant.clone()));
         let before = fixture.query.store().meta()?;
-        let araphor_data::PackageResponseV1::Output(packet) = Instance::read_output(
+        let result = Instance::read_result(
             Arc::clone(&fixture.query),
             reader.clone(),
             reader.grant.clone(),
@@ -82,62 +79,31 @@ async fn selected_sql_prql_reads() -> TestResult {
             &receipt.selected.result_id,
             &AnalysisReadControl::default(),
         )
-        .await?
-        else {
-            return Err("selected output variant".into());
-        };
-        let data = packet.decode_any()?;
-        assert_eq!(data.name, "selected");
-        assert_eq!(data.rows(), rows);
-        assert_eq!(data.batches, original.data.batches);
-        assert_eq!(
-            data.batches[0].schema_ref().as_ref(),
-            &instance.admitted().spec.manifest.selected_schema
-        );
-        let output = Instance::query_result(
-            Arc::clone(&fixture.query),
-            reader.clone(),
-            reader.grant.clone(),
-            name,
-            Some(&receipt.selected.result_id),
-            "SELECT value, __row_index FROM selected",
-            &AnalysisReadControl::default(),
-        )
         .await?;
-        assert_eq!(output.data.rows(), rows);
-        assert_eq!(output.data.batches[0].num_columns(), 2);
-        if rows != 0 {
-            assert_eq!(values(&output.data.batches)?, [7]);
-            assert_eq!(
-                output.data.batches[0]
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .ok_or("row index")?
-                    .value(0),
-                0
-            );
-        }
-        for sql in ["SELECT * FROM events", "DELETE FROM selected"] {
-            assert!(Instance::query_result(
-                Arc::clone(&fixture.query),
-                reader.clone(),
-                reader.grant.clone(),
-                name,
-                Some(&receipt.selected.result_id),
-                sql,
-                &AnalysisReadControl::default(),
-            )
-            .await
-            .is_err());
-        }
+        assert!(matches!(
+            result.kind,
+            araphor_data::InstanceResultKindV1::Selected
+        ));
+        assert_eq!(result.result, receipt.selected);
+        assert_eq!(result.receipt, receipt);
+        assert_eq!(result.source.store_uuid, before.store_uuid);
+        assert_eq!(result.source.schema_version, before.schema_version);
+        assert_eq!(result.source.recovery_epoch, before.recovery_epoch);
+        assert_eq!(result.source.commit_revision, captured.captured_revision());
+        assert_eq!(result.time_utc_ns, request("first").time_utc_ns);
+        assert_eq!(
+            result.definition_revision,
+            instance.admitted().spec.definition.digest()?
+        );
+        assert!(!result.current);
+        assert!(serde_json::to_value(&result)?.get("output").is_none());
         assert_eq!(fixture.query.store().meta()?, before);
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn selected_scope_precedes_arrow() -> TestResult {
+async fn selected_scope_precedes_integrity() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     let instance = fixture
         .admit(
@@ -150,74 +116,47 @@ async fn selected_scope_precedes_arrow() -> TestResult {
         .run(request("scope"), &AnalysisReadControl::default())
         .await?;
     fixture.query.store().fault_write(
-        "UPDATE managed_arrow SET ipc = 'invalid'::BLOB WHERE result_id = ? AND role = 'selected'",
+        "UPDATE analysis_results SET commit_revision = commit_revision + 1 WHERE result_id = ?",
         &[&receipt.selected.result_id],
     )?;
     let before = fixture.query.store().meta()?;
-    for (query, latest) in [(false, false), (true, false), (true, true)] {
-        for case in 0..4 {
-            let mut reader = Reader::new(fixture.grant.clone());
-            if case == 0 {
-                reader.allowed.store(false, Ordering::SeqCst);
-            }
-            if case == 1 {
-                reader.grant.selection = AnalysisSelectionV1::new([1; 16], Vec::new());
-            }
-            let reader = Arc::new(reader);
-            let name = if case == 2 {
-                "foreign"
-            } else {
-                "selected-scope"
-            };
-            let control = AnalysisReadControl::default();
-            let error = if query {
-                Instance::query_result(
-                    Arc::clone(&fixture.query),
-                    reader.clone(),
-                    reader.grant.clone(),
-                    name,
-                    if latest {
-                        None
-                    } else {
-                        Some(&receipt.selected.result_id)
-                    },
-                    "SELECT * FROM selected",
-                    &control,
-                )
-                .await
-                .err()
-            } else {
-                Instance::read_output(
-                    Arc::clone(&fixture.query),
-                    reader.clone(),
-                    reader.grant.clone(),
-                    name,
-                    &receipt.selected.result_id,
-                    &control,
-                )
-                .await
-                .err()
-            }
-            .ok_or("corrupt selected result returned")?;
-            if latest && case == 2 {
-                assert_eq!(
-                    error.status_code(),
-                    erebor_runtime_error::StatusCode::NotFound,
-                    "{error:?}"
-                );
-            } else if case < 3 {
-                assert_eq!(
-                    error.status_code(),
-                    erebor_runtime_error::StatusCode::PermissionDenied,
-                    "{error:?}"
-                );
-            } else {
-                assert_ne!(
-                    error.status_code(),
-                    erebor_runtime_error::StatusCode::PermissionDenied,
-                    "{error:?}"
-                );
-            }
+    for case in 0..4 {
+        let mut reader = Reader::new(fixture.grant.clone());
+        if case == 0 {
+            reader.allowed.store(false, Ordering::SeqCst);
+        }
+        if case == 1 {
+            reader.grant.selection = AnalysisSelectionV1::new([1; 16], Vec::new());
+        }
+        let reader = Arc::new(reader);
+        let name = if case == 2 {
+            "foreign"
+        } else {
+            "selected-scope"
+        };
+        let error = Instance::read_result(
+            Arc::clone(&fixture.query),
+            reader.clone(),
+            reader.grant.clone(),
+            name,
+            &receipt.selected.result_id,
+            &AnalysisReadControl::default(),
+        )
+        .await
+        .err()
+        .ok_or("invalid selected reference returned")?;
+        if case < 3 {
+            assert_eq!(
+                error.status_code(),
+                erebor_runtime_error::StatusCode::PermissionDenied,
+                "{error:?}"
+            );
+        } else {
+            assert_ne!(
+                error.status_code(),
+                erebor_runtime_error::StatusCode::PermissionDenied,
+                "{error:?}"
+            );
         }
     }
     assert_eq!(fixture.query.store().meta()?, before);

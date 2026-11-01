@@ -1,6 +1,171 @@
 use super::*;
 
 #[test]
+fn reference_keeps_trace_cut() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = AnalysisStore::open(directory.path().join("store"))?;
+    let intent = crate::analysis::trace::tests::intent(3)?;
+    let state = store.accept_trace(&intent)?;
+    let mut selection = AnalysisSelectionV1::new([1; 16], Vec::new());
+    selection.traces = crate::Selection::All;
+    let fixture = Fixture::admit_scope(&store, false, selection.clone())?;
+    let fields = ["request_revision", "cancel_requested", "last_sequence"];
+    let requests = BTreeMap::from([(
+        "traces".into(),
+        Some(
+            fields
+                .iter()
+                .map(|name| AnalysisStore::table_schemas()["traces"].index_of(name))
+                .collect::<std::result::Result<BTreeSet<_>, _>>()?,
+        ),
+    )]);
+    let read = || AnalysisTableRead {
+        requests: &requests,
+        event_ranges: None,
+        mode: AnalysisReadModeV1::Metadata,
+        now: 10,
+    };
+    let control = AnalysisReadControl::default();
+    let captured = store.read_managed_tables_filtered(
+        &selection,
+        &ManagedRead {
+            source: None,
+            execution: None,
+            follow: false,
+            expected: None,
+            instance: fixture.instance.clone(),
+            rebuild: false,
+            completed: None,
+        },
+        read(),
+        AnalysisExtractLimits::default(),
+        &control,
+        None,
+    )?;
+    let input = request("trace-cut");
+    let attempt = store.register_managed_attempt(&captured.state, &input, || Ok(()))?;
+    let evaluations = [
+        fixture.evaluation(&input, 10, Some(&captured.state))?,
+        fixture.evaluation(&input, 11, Some(&captured.state))?,
+    ];
+    let receipt = fixture.publish(
+        &store,
+        &attempt,
+        &evaluations,
+        &[fixture.output(2)?, fixture.output(3)?],
+    )?;
+    let (reference, _, _) = store.managed_reference(
+        &fixture.current(&store)?,
+        &receipt.selected.result_id,
+        10,
+        &control,
+    )?;
+    let identity = &intent.bindings[0].identity;
+    store.append_trace(
+        identity,
+        &crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![crate::TraceFrameV1 {
+                execution_id: identity.execution_id,
+                sequence: 1,
+                kind: crate::TraceFrameKindV1::Data,
+                bytes: vec![7],
+            }],
+            terminal: None,
+        },
+        100,
+    )?;
+    let cancelled = store.update_trace(&crate::TraceStateV1 {
+        cancel_requested: true,
+        ..state.clone()
+    })?;
+    store.accept_trace(&crate::analysis::trace::tests::intent(4)?)?;
+    let before = store.meta()?;
+    for historical in [false, true, false] {
+        let page = if historical {
+            store
+                .read_managed_reference(
+                    &selection,
+                    &reference,
+                    read(),
+                    AnalysisExtractLimits::default(),
+                    &control,
+                    None,
+                )?
+                .page
+        } else {
+            store.read_tables(
+                &selection,
+                read(),
+                AnalysisExtractLimits::default(),
+                &control,
+            )?
+        };
+        let batches = &page.tables["traces"];
+        assert_eq!(
+            batches
+                .iter()
+                .map(sdk::RecordBatch::num_rows)
+                .sum::<usize>(),
+            if historical { 1 } else { 2 }
+        );
+        if historical {
+            let batch = batches
+                .iter()
+                .find(|batch| batch.num_rows() != 0)
+                .ok_or("trace row")?;
+            assert_eq!(
+                batch
+                    .column_by_name("request_revision")
+                    .ok_or("request revision")?
+                    .as_any()
+                    .downcast_ref::<sdk::arrow_array::UInt64Array>()
+                    .ok_or("request type")?
+                    .value(0),
+                state.revision
+            );
+            assert!(!batch
+                .column_by_name("cancel_requested")
+                .ok_or("cancellation")?
+                .as_any()
+                .downcast_ref::<sdk::arrow_array::BooleanArray>()
+                .ok_or("cancel type")?
+                .value(0));
+            assert_eq!(
+                batch
+                    .column_by_name("last_sequence")
+                    .ok_or("sequence")?
+                    .as_any()
+                    .downcast_ref::<sdk::arrow_array::UInt64Array>()
+                    .ok_or("sequence type")?
+                    .value(0),
+                0
+            );
+        }
+    }
+    assert_eq!(store.meta()?, before);
+    store.update_trace(&crate::TraceStateV1 {
+        read_revoked: true,
+        ..cancelled
+    })?;
+    let before = store.meta()?;
+    assert!(matches!(
+        store.read_managed_reference(
+            &selection,
+            &reference,
+            read(),
+            AnalysisExtractLimits::default(),
+            &control,
+            None
+        ),
+        Err(crate::Error::AnalysisReadDenied { .. })
+    ));
+    assert_eq!(store.meta()?, before);
+    store.verify_state()?;
+    Ok(())
+}
+
+#[test]
 fn references_require_no_payloads() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
@@ -18,10 +183,6 @@ fn references_require_no_payloads() -> TestResult {
         &evaluations,
         &[fixture.output(2)?, fixture.output(3)?],
     )?;
-    store
-        .writer()?
-        .get_mut()?
-        .execute("DELETE FROM managed_arrow", [])?;
     let current = fixture.current(&store)?;
     let control = AnalysisReadControl::default();
     let before = store.meta()?;
@@ -49,42 +210,8 @@ fn references_require_no_payloads() -> TestResult {
     Ok(())
 }
 
-fn same_evaluation(actual: &sdk::Evaluation, expected: &sdk::Evaluation) {
-    assert_eq!(actual.export, expected.export);
-    assert_eq!(actual.context, expected.context);
-    assert_eq!(actual.parameters, expected.parameters);
-    assert_eq!(actual.inputs.len(), expected.inputs.len());
-    for (actual, expected) in actual.inputs.iter().zip(&expected.inputs) {
-        assert_eq!(actual.data.name, expected.data.name);
-        assert_eq!(actual.data.batches, expected.data.batches);
-        assert_eq!(actual.revision, expected.revision);
-        assert_eq!(actual.coverage, expected.coverage);
-    }
-    assert_eq!(
-        actual.previous_outputs.len(),
-        expected.previous_outputs.len()
-    );
-    for (actual, expected) in actual
-        .previous_outputs
-        .iter()
-        .zip(&expected.previous_outputs)
-    {
-        assert_eq!(actual.name, expected.name);
-        assert_eq!(actual.batches, expected.batches);
-    }
-    assert_eq!(actual.checkpoint.is_some(), expected.checkpoint.is_some());
-    if let (Some(actual), Some(expected)) = (&actual.checkpoint, &expected.checkpoint) {
-        assert_eq!(actual.version, expected.version);
-        assert_eq!(actual.datasets.len(), expected.datasets.len());
-        for (actual, expected) in actual.datasets.iter().zip(&expected.datasets) {
-            assert_eq!(actual.name, expected.name);
-            assert_eq!(actual.batches, expected.batches);
-        }
-    }
-}
-
 #[test]
-fn saved_evaluation_keeps_inputs() -> TestResult {
+fn references_keep_input_metadata() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
@@ -137,48 +264,54 @@ fn saved_evaluation_keeps_inputs() -> TestResult {
         let current = fixture.current(&store)?;
         for (call, expected) in [10, 11].into_iter().zip(evaluations) {
             let reference = receipt.results[&call].clone();
-            let (saved_call, saved_generation, bound) = store.managed_evaluation_bytes(
+            let actual = store.managed_result(
                 &current,
                 &reference.result_id,
+                10,
                 &AnalysisReadControl::default(),
             )?;
-            assert_eq!(saved_call, call);
-            assert_eq!(saved_generation, current.generation);
-            let actual = store.managed_evaluation(
-                &current,
-                &reference.result_id,
-                &AnalysisReadControl::default(),
-            )?;
-            same_evaluation(&actual, &expected);
-            assert!(actual.allocated_bytes() <= bound);
-            saved.push((reference, expected));
+            assert!(
+                matches!(&actual.kind, crate::InstanceResultKindV1::Call { call: id, .. } if *id == call)
+            );
+            assert_eq!(actual.generation, current.generation);
+            assert_eq!(actual.source.commit_revision, captured.revision());
+            assert_eq!(call_context(&actual)?.context, expected.context);
+            assert!(call_context(&actual)?.matches(&expected.inputs));
+            saved.push(actual);
         }
     }
     let before = store.meta()?;
     drop(store);
     let store = AnalysisStore::open(&root)?;
     let current = fixture.current(&store)?;
-    for (reference, expected) in saved {
-        let actual = store.managed_evaluation(
+    for mut expected in saved {
+        let actual = store.managed_result(
             &current,
-            &reference.result_id,
+            &expected.result.result_id,
+            10,
             &AnalysisReadControl::default(),
         )?;
-        same_evaluation(&actual, &expected);
+        expected.current = expected.receipt.commit_revision == current.progress;
+        assert_eq!(
+            serde_json::to_value(&actual)?,
+            serde_json::to_value(&expected)?
+        );
         let mut foreign = current.clone();
         foreign.spec.id = "another-instance".into();
         assert!(store
-            .managed_evaluation(
+            .managed_result(
                 &foreign,
-                &reference.result_id,
+                &expected.result.result_id,
+                10,
                 &AnalysisReadControl::default()
             )
             .is_err());
         foreign.spec.tenant = [2; 16];
         assert!(store
-            .managed_evaluation_bytes(
+            .managed_result(
                 &foreign,
-                &reference.result_id,
+                &expected.result.result_id,
+                10,
                 &AnalysisReadControl::default()
             )
             .is_err());
@@ -186,130 +319,15 @@ fn saved_evaluation_keeps_inputs() -> TestResult {
     assert_eq!(store.meta()?.commit_revision, before.commit_revision);
     let cancelled = AnalysisReadControl::default();
     cancelled.cancel()?;
-    assert!(store
-        .managed_evaluation_bytes(&current, "absent", &cancelled)
-        .is_err());
-    assert!(store
-        .managed_evaluation(&current, "absent", &cancelled)
-        .is_err());
+    assert!(matches!(
+        store.managed_result(&current, "absent", 10, &cancelled),
+        Err(crate::Error::AnalysisReadCancelled { .. })
+    ));
     Ok(())
 }
 
 #[test]
-fn saved_evaluation_rejects_corruption() -> TestResult {
-    for case in 0..7 {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("store");
-        let store = AnalysisStore::open(&root)?;
-        let fixture = Fixture::admit_inputs(&store, case == 6)?;
-        let captured = fixture.capture(&store, false)?;
-        let input = request("saved-input");
-        let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
-        let evaluations = [
-            fixture.evaluation(&input, 10, Some(&captured))?,
-            fixture.evaluation(&input, 11, Some(&captured))?,
-        ];
-        let receipt = fixture.publish(
-            &store,
-            &attempt,
-            &evaluations,
-            &[fixture.output(2)?, fixture.output(3)?],
-        )?;
-        let id = &receipt.results[&10].result_id;
-        let current = fixture.current(&store)?;
-        {
-            let mut writer = store.writer()?;
-            let writer = writer.get_mut()?;
-            match case {
-                0 => {
-                    writer.execute(
-                        "DELETE FROM managed_arrow WHERE result_id = ? AND role = 'input'",
-                        params![id],
-                    )?;
-                }
-                1 => {
-                    writer.execute(
-                        "UPDATE managed_arrow SET slot = 9 WHERE result_id = ? AND role = 'input'",
-                        params![id],
-                    )?;
-                }
-                2 => {
-                    let schema = sdk::Schema::new(vec![sdk::Field::new(
-                        "value",
-                        sdk::DataType::Utf8,
-                        false,
-                    )]);
-                    let data = sdk::Dataset {
-                        name: "source".into(),
-                        batches: vec![sdk::RecordBatch::try_new(
-                            Arc::new(schema.clone()),
-                            vec![Arc::new(sdk::arrow_array::StringArray::from(vec!["wrong"]))],
-                        )?],
-                    };
-                    let encoded = sdk::wire::Dataset::encode(&data, &schema)?;
-                    writer.execute(
-                        "UPDATE managed_arrow SET ipc = ? WHERE result_id = ? AND role = 'input'",
-                        params![encoded.arrow_ipc, id],
-                    )?;
-                }
-                6 => {
-                    let schema = &fixture.model.inputs[1].port.schema;
-                    let packet = sdk::wire::Dataset::encode(
-                        &sdk::Dataset {
-                            name: "aux".into(),
-                            batches: vec![sdk::RecordBatch::new_empty(Arc::new(schema.clone()))],
-                        },
-                        schema,
-                    )?;
-                    writer.execute(
-                        "UPDATE managed_arrow SET ipc = ? WHERE result_id = ? AND role = 'input' AND slot = 1",
-                        params![packet.arrow_ipc, id],
-                    )?;
-                }
-                _ => {
-                    let metadata: Vec<u8> = writer.query_row(
-                        "SELECT request_meta FROM analysis_results WHERE result_id = ?",
-                        params![id],
-                        |row| row.get(0),
-                    )?;
-                    let mut record: super::super::model::Record = ManagedCodec::decode(&metadata)?;
-                    match case {
-                        3 => record.inputs[0].rows += 1,
-                        4 => record.inputs[0].batches = 0,
-                        _ => record.inputs[0].name = "absent".into(),
-                    }
-                    writer.execute(
-                        "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
-                        params![ManagedCodec::encode(&record)?, id],
-                    )?;
-                }
-            }
-        }
-        let error = store
-            .managed_evaluation(&current, id, &AnalysisReadControl::default())
-            .err()
-            .ok_or_else(|| format!("corrupt saved evaluation accepted: {case}"))?;
-        if case == 6 {
-            assert!(
-                matches!(
-                    error,
-                    crate::Error::Package {
-                        code: crate::PackageErrorCodeV1::Invalid,
-                        field: "saved evaluation input shape",
-                        ..
-                    }
-                ),
-                "{error:?}"
-            );
-        }
-        drop(store);
-        assert!(AnalysisStore::open(&root).is_err(), "case {case}");
-    }
-    Ok(())
-}
-
-#[test]
-fn saved_inputs_commit_atomically() -> TestResult {
+fn call_references_commit_atomically() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
@@ -326,7 +344,6 @@ fn saved_inputs_commit_atomically() -> TestResult {
         .zip(&outputs)
         .enumerate()
         .map(|(index, (evaluation, output))| ManagedReturn {
-            retained: None,
             changes: None,
             call: 10 + index as u64,
             evaluation,
@@ -360,30 +377,41 @@ fn saved_inputs_commit_atomically() -> TestResult {
     let count: usize = store.read_snapshot(|reader| {
         reader
             .query_row(
-                "SELECT count(*) FROM managed_arrow WHERE role = 'input'",
+                "SELECT count(*) FROM analysis_results WHERE processor_id LIKE 'managed-%'",
                 [],
                 |row| row.get(0),
             )
             .context(crate::AnalysisDatabaseSnafu {
-                operation: "check saved input rollback",
+                operation: "check reference rollback",
             })
     })?;
     assert_eq!(count, 0);
     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
     let current = fixture.current(&store)?;
     for (call, expected) in [10, 11].into_iter().zip(evaluations) {
-        let actual = store.managed_evaluation(
+        let actual = store.managed_result(
             &current,
             &receipt.results[&call].result_id,
+            10,
             &AnalysisReadControl::default(),
         )?;
-        same_evaluation(&actual, &expected);
+        assert_eq!(call_context(&actual)?.context, expected.context);
+        assert_eq!(actual.result, receipt.results[&call]);
+        assert_eq!(
+            fixture.checkpoint(&store, &actual.result)?.datasets[0].batches,
+            outputs[(call - 10) as usize]
+                .checkpoint
+                .as_ref()
+                .ok_or("declared checkpoint")?
+                .datasets[0]
+                .batches
+        );
     }
     Ok(())
 }
 
 #[test]
-fn saved_history_rejects_corruption() -> TestResult {
+fn prior_state_rejects_corruption() -> TestResult {
     for case in 0..3 {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("store"))?;
@@ -410,7 +438,17 @@ fn saved_history_rejects_corruption() -> TestResult {
             let mut writer = store.writer()?;
             let writer = writer.get_mut()?;
             if case == 2 {
-                writer.execute("UPDATE managed_arrow SET ipc = 'invalid'::BLOB WHERE result_id = ? AND role = 'checkpoint'", params![receipts[0].results[&10].result_id])?;
+                let prior = &receipts[1].results[&10];
+                let (_, mut state, _) =
+                    AnalysisStore::managed_state_from(writer, [1; 16], &prior.result_id)?;
+                state.as_mut().ok_or("prior checkpoint")?.version += 1;
+                assert_eq!(
+                    writer.execute(
+                        "UPDATE analysis_results SET body = ? WHERE result_id = ?",
+                        params![ManagedCodec::encode(&state)?, prior.result_id]
+                    )?,
+                    1
+                );
             } else {
                 let metadata: Vec<u8> = writer.query_row(
                     "SELECT request_meta FROM analysis_results WHERE result_id = ?",
@@ -421,202 +459,29 @@ fn saved_history_rejects_corruption() -> TestResult {
                 if case == 0 {
                     record.context.context.time_utc_ns += 1;
                 } else {
-                    record.declaration.image.digest =
-                        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                            .into();
+                    record.call = 11;
                 }
-                writer.execute(
-                    "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
-                    params![ManagedCodec::encode(&record)?, id],
-                )?;
+                assert_eq!(
+                    writer.execute(
+                        "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
+                        params![ManagedCodec::encode(&record)?, id],
+                    )?,
+                    1
+                );
             }
         }
         let before = store.meta()?;
-        assert!(
-            store
-                .managed_evaluation_bytes(&current, id, &AnalysisReadControl::default())
-                .is_err(),
-            "case {case}"
-        );
-        assert!(
-            store
-                .managed_evaluation(&current, id, &AnalysisReadControl::default())
-                .is_err(),
-            "case {case}"
-        );
-        assert_eq!(store.meta()?, before);
-    }
-    Ok(())
-}
-
-#[test]
-fn continuation_keeps_captured_outputs() -> TestResult {
-    for continuation in [false, true] {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("store");
-        let store = AnalysisStore::open(&root)?;
-        let fixture = Fixture::admit_model(
-            &store,
-            false,
-            AnalysisSelectionV1::new([1; 16], Vec::new()),
-            continuation,
-        )?;
-        let captured = fixture.capture(&store, false)?;
-        let first = request("initial");
-        let attempt = store.register_managed_attempt(&captured, &first, || Ok(()))?;
-        let evaluations = [
-            fixture.evaluation(&first, 10, None)?,
-            fixture.evaluation(&first, 11, None)?,
-        ];
-        let mut outputs = [fixture.output(2)?, fixture.output(3)?];
-        let initial = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
-        let mut latest = initial.clone();
-        let mut saved = Vec::new();
-        for round in 0..2 {
-            if continuation && round == 0 {
-                let failed = fixture.capture(&store, false)?;
-                let attempt =
-                    store.register_managed_attempt(&failed, &request("failed"), || Ok(()))?;
-                store.finish_managed(
-                    &attempt,
-                    ManagedExit::Failed(crate::PackageErrorCodeV1::Invalid),
-                    || Ok(()),
-                )?;
-            }
-            let captured = fixture.capture(&store, false)?;
-            let input = request(if round == 0 {
-                "continued"
-            } else {
-                "continued-again"
-            });
-            let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
-            let mut evaluations = [
-                fixture.evaluation(&input, 10, Some(&captured))?,
-                fixture.evaluation(&input, 11, Some(&captured))?,
-            ];
-            for (index, evaluation) in evaluations.iter_mut().enumerate() {
-                let prior = captured.prior(10 + index as u64).ok_or("prior absent")?;
-                assert_eq!(prior.result, latest.results[&(10 + index as u64)].result_id);
-                assert!(!prior.reusable);
-                assert_eq!(prior.retained.is_some(), continuation);
-                evaluation.inputs[0]
-                    .revision
-                    .id
-                    .push_str(&format!("-{round}"));
-                evaluation.inputs[0].coverage.state = sdk::CoverageState::Gapped;
-                (evaluation.checkpoint, evaluation.previous_outputs) = prior.state(
-                    &fixture.model,
-                    &evaluation.inputs,
-                    evaluation.parameters.as_ref(),
-                    false,
-                )?;
-                assert_eq!(evaluation.checkpoint.is_some(), continuation);
-                assert_eq!(evaluation.previous_outputs.len(), usize::from(continuation));
-                if continuation {
-                    assert_eq!(
-                        evaluation.previous_outputs[0].batches,
-                        outputs[index].datasets[0].batches
-                    );
-                    let rebuilt = prior.state(
-                        &fixture.model,
-                        &evaluation.inputs,
-                        evaluation.parameters.as_ref(),
-                        true,
-                    )?;
-                    assert!(rebuilt.0.is_none() && rebuilt.1.is_empty());
-                    let parameters = Fixture::batch(&fixture.model.parameters, 99)?;
-                    let changed = prior.state(
-                        &fixture.model,
-                        &evaluation.inputs,
-                        Some(&parameters),
-                        false,
-                    )?;
-                    assert!(changed.0.is_none() && changed.1.is_empty());
-                }
-            }
-            let next = [fixture.output(12 + round)?, fixture.output(13 + round)?];
-            if continuation {
-                let mut forged = evaluations.clone();
-                forged[0].previous_outputs[0].batches = next[0].datasets[0].batches.clone();
-                let before = store.meta()?;
-                let error = fixture
-                    .publish(&store, &attempt, &forged, &next)
-                    .err()
-                    .ok_or("changed previous output was accepted")?;
-                assert!(
-                    matches!(
-                        error.downcast_ref::<crate::Error>(),
-                        Some(crate::Error::Package {
-                            code: crate::PackageErrorCodeV1::Conflict,
-                            field: "managed captured checkpoint",
-                            ..
-                        })
-                    ),
-                    "{error}"
-                );
-                assert_eq!(store.meta()?, before);
-            }
-            latest = fixture.publish(&store, &attempt, &evaluations, &next)?;
-            for (index, evaluation) in evaluations.iter().enumerate() {
-                let reference = &latest.results[&(10 + index as u64)];
-                let current = fixture.current(&store)?;
-                let (_, _, bytes) = store.managed_evaluation_bytes(
-                    &current,
-                    &reference.result_id,
-                    &AnalysisReadControl::default(),
-                )?;
-                let actual = store.managed_evaluation(
-                    &current,
-                    &reference.result_id,
-                    &AnalysisReadControl::default(),
-                )?;
-                same_evaluation(&actual, evaluation);
-                assert!(actual.allocated_bytes() <= bytes);
-                saved.push((reference.clone(), evaluation.clone()));
-            }
-            outputs = next;
-        }
-        if continuation {
-            let id = &initial.results[&10].result_id;
-            let mut writer = store.writer()?;
-            let payload: Vec<u8> = writer.get_mut()?.query_row(
-                "SELECT ipc FROM managed_arrow WHERE result_id = ? AND role = 'output' AND slot = 0",
-                params![id], |row| row.get(0),
-            )?;
-            writer.get_mut()?.execute(
-                "DELETE FROM managed_arrow WHERE result_id = ? AND role = 'output'",
-                params![id],
-            )?;
-            drop(writer);
-            let expected = saved
-                .iter()
-                .rev()
-                .find(|(reference, _)| reference == &latest.results[&10])
-                .ok_or("saved evaluation absent")?;
-            let actual = store.managed_evaluation(
-                &fixture.current(&store)?,
-                &expected.0.result_id,
-                &AnalysisReadControl::default(),
+        if case == 2 {
+            assert!(fixture.capture(&store, false).is_err(), "case {case}");
+        } else {
+            assert!(
+                store
+                    .managed_result(&current, id, 10, &AnalysisReadControl::default())
+                    .is_err(),
+                "case {case}"
             );
-            let mut writer = store.writer()?;
-            writer.get_mut()?.execute(
-                "INSERT INTO managed_arrow(result_id, role, slot, ipc) VALUES (?, 'output', 0, ?)",
-                params![id, payload],
-            )?;
-            drop(writer);
-            same_evaluation(&actual?, &expected.1);
         }
-        drop(store);
-        let store = AnalysisStore::open(&root)?;
-        let current = fixture.current(&store)?;
-        for (reference, expected) in saved.iter().rev().take(2) {
-            let actual = store.managed_evaluation(
-                &current,
-                &reference.result_id,
-                &AnalysisReadControl::default(),
-            )?;
-            same_evaluation(&actual, expected);
-        }
+        assert_eq!(store.meta()?, before);
     }
     Ok(())
 }

@@ -242,36 +242,46 @@ impl Observed {
                     return Err("physical call identity".into());
                 };
                 assert_eq!(result.instance_id, id);
-                assert_eq!(result.result_id, reference.result_id);
-                assert_eq!(result.commit_revision, reference.commit_revision);
-                assert!(definition.images.contains(&result.image));
+                assert_eq!(&result.result, reference);
+                let araphor_data::InstanceResultKindV1::Call {
+                    call: recorded,
+                    image: pin,
+                    package,
+                    export,
+                    context,
+                } = &result.kind
+                else {
+                    return Err("physical call reference kind".into());
+                };
+                assert_eq!(recorded, call);
+                assert!(definition.images.contains(pin));
                 let Response::Image(image) = Self::inspect(
                     client,
                     "InspectImage",
                     Request::InspectImage {
-                        package_id: result.image.image.package_id.clone(),
-                        revision: Some(result.image.image.revision.clone()),
+                        package_id: pin.image.package_id.clone(),
+                        revision: Some(pin.image.revision.clone()),
                     },
                 )
                 .await?
                 else {
                     return Err("physical installed image identity".into());
                 };
-                assert_eq!(image.root, result.image.image);
-                assert_eq!(image.digest, result.image.digest);
+                assert_eq!(image.root, pin.image);
+                assert_eq!(image.digest, pin.digest);
                 assert!(image.artifacts.iter().any(|artifact| {
-                    artifact.descriptor.id == result.package.package_id
-                        && artifact.descriptor.revision == result.package.revision
+                    artifact.descriptor.id == package.package_id
+                        && artifact.descriptor.revision == package.revision
                         && artifact.implementations.iter().any(|implementation| {
-                            implementation.target == result.context.target
-                                && implementation.artifact == result.context.artifact
-                                && implementation.exports.contains(&result.export)
+                            implementation.target == context.target
+                                && implementation.artifact == context.artifact
+                                && implementation.exports.contains(export)
                         })
                 }));
                 calls.push(json!({
-                    "call": call, "result_id": result.result_id, "image": result.image,
-                    "package": result.package, "export": result.export,
-                    "context": result.context, "commit_revision": result.commit_revision,
+                    "call": call, "result_id": result.result.result_id, "image": pin,
+                    "package": package, "export": export,
+                    "context": context, "commit_revision": result.result.commit_revision,
                 }));
             }
             identities.push(json!({

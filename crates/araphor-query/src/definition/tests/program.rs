@@ -104,7 +104,7 @@ async fn native_program_order() -> TestResult {
                 [97, 98, 99]
             );
             let replay = session
-                .replay_call(&prepared, id, call.evaluation().clone())
+                .execute_definition(&prepared, Invocation::default())
                 .await?;
             let actual = replay.calls.get(&id).ok_or("replayed call")?;
             assert_eq!(

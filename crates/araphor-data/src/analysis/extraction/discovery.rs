@@ -43,12 +43,16 @@ impl AnalysisStore {
                 p.retired, NULLIF(p.result_id, ''), r.result_id, r.commit_revision, r.interval_id,
                 r.profile_revision, octet_length(r.body), r.facts_revision, r.coverage_revision
              FROM source_receipts s
-             LEFT JOIN processor_progress p ON p.tenant_id = s.tenant_id AND p.stream_key = s.stream_key
-                AND p.processor_id = 'discovery' AND p.method_version = ?
-             LEFT JOIN analysis_results r ON r.tenant_id = p.tenant_id AND r.processor_id = p.processor_id
+             LEFT JOIN (SELECT * FROM processor_versions
+                WHERE processor_id = 'discovery' AND method_version = ? AND tenant_id = ?
+                    AND stream_key = ? AND commit_revision <= ?
+                ORDER BY commit_revision DESC LIMIT 1) p
+                ON p.tenant_id = s.tenant_id AND p.stream_key = s.stream_key
+             LEFT JOIN analysis_result_state r ON r.tenant_id = p.tenant_id AND r.processor_id = p.processor_id
                 AND r.stream_key = p.stream_key AND r.method_version = p.method_version AND r.result_id = p.result_id
              WHERE s.tenant_id = ? AND s.stream_key = ?",
-            params![u64::from(crate::DISCOVERY_SCHEMA_VERSION), identity.tenant_id.as_slice(), key.as_slice()],
+            params![u64::from(crate::DISCOVERY_SCHEMA_VERSION), identity.tenant_id.as_slice(),
+                key.as_slice(), output.meta.commit_revision, identity.tenant_id.as_slice(), key.as_slice()],
             |row| {
                 let class: Option<String> = row.get(0)?;
                 let current: Option<String> = row.get(6)?;
@@ -165,7 +169,7 @@ impl AnalysisStore {
                  UNION
                  SELECT first_cursor, last_cursor, commit_revision FROM processor_gaps
                  WHERE processor_id = 'discovery' AND method_version = ? AND tenant_id = ?
-                    AND stream_key = ? AND last_cursor > ?
+                    AND stream_key = ? AND last_cursor > ? AND accepted_revision <= ?
                  ORDER BY first_cursor, last_cursor, commit_revision"
             ).context(AnalysisDatabaseSnafu { operation: "prepare captured discovery gaps" })?;
             let rows = statement
@@ -175,7 +179,8 @@ impl AnalysisStore {
                         state.method_version,
                         identity.tenant_id.as_slice(),
                         key.as_slice(),
-                        state.consumed_cursor.unwrap_or(0)
+                        state.consumed_cursor.unwrap_or(0),
+                        output.meta.commit_revision,
                     ],
                     |row| {
                         Ok(AnalysisGapV1 {
@@ -213,8 +218,9 @@ impl AnalysisStore {
         if read.projects_field("discovery_state", "history") {
             let mut statement = snapshot.prepare(
                 "SELECT result_id, commit_revision, facts_revision, coverage_revision, octet_length(body)
-                 FROM analysis_results WHERE tenant_id = ? AND processor_id = 'discovery'
+                 FROM analysis_result_state WHERE tenant_id = ? AND processor_id = 'discovery'
                      AND stream_key = ? AND method_version = ? AND interval_id IS NOT NULL
+                     AND commit_revision <= ?
                  QUALIFY ROW_NUMBER() OVER (PARTITION BY interval_id
                      ORDER BY profile_revision DESC, commit_revision DESC, result_id DESC) = 1
                  ORDER BY interval_id"
@@ -224,7 +230,8 @@ impl AnalysisStore {
                     params![
                         identity.tenant_id.as_slice(),
                         key.as_slice(),
-                        state.method_version
+                        state.method_version,
+                        output.meta.commit_revision,
                     ],
                     |row| {
                         Ok((

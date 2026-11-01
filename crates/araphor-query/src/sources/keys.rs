@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -7,11 +7,13 @@ use std::task::{Context, Poll};
 
 use datafusion::arrow::array::{RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::joins::HashExpr;
+use datafusion::physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
@@ -19,7 +21,7 @@ use datafusion::physical_plan::{
 use futures_util::{Stream, StreamExt};
 use tokio::sync::Notify;
 
-use super::{SourceKey, SourceSnapshot};
+use super::{SourceData, SourceImage, SourceKey, SourceSnapshot};
 
 mod planner;
 pub(crate) use planner::{SourceJoin, SourceLookup};
@@ -61,6 +63,90 @@ struct KeyStream {
 }
 
 impl SourceSnapshot {
+    pub(crate) fn bind_before_keys(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        calls: Option<&crate::definition::CallContext>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let view = self
+            .source_view()?
+            .ok_or_else(|| DataFusionError::Execution("the before source view is absent".into()))?;
+        let cached = |node: &Arc<dyn ExecutionPlan>| match (
+            node.as_any()
+                .downcast_ref::<crate::definition::physical::PackageExec>(),
+            calls,
+        ) {
+            (Some(package), Some(calls)) => calls.cached(package.logical_call()),
+            _ => Ok(false),
+        };
+        SourceLookup::keys(&plan, calls)?;
+        let mut seeds = BTreeMap::new();
+        plan.apply(|node| {
+            if cached(node)? {
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            if let Some(source) = SourceData::from_plan(node.as_ref()) {
+                if source.origin.durable().is_some() && source.image != Some(SourceImage::Before) {
+                    return Err(DataFusionError::Execution(
+                        "the before source image differs".into(),
+                    ));
+                }
+                if let Some(read) = &source.key {
+                    if let Some(admitted) = view.before_key(&read.key) {
+                        let hash = admitted.hash.seeds();
+                        if seeds
+                            .insert(read.slot, hash)
+                            .is_some_and(|saved| saved != hash)
+                        {
+                            return Err(DataFusionError::Execution(
+                                "the before source key bindings differ".into(),
+                            ));
+                        }
+                    }
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        let plan = plan
+            .transform_down(|node| {
+                if cached(&node)? {
+                    return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+                }
+                if let Some(source) = SourceData::from_plan(node.as_ref()) {
+                    if source.origin.durable().is_some() {
+                        let mut source = source.clone();
+                        source.image = Some(SourceImage::Before);
+                        source.key = source.key.as_ref().and_then(|read| {
+                            view.before_key(&read.key).map(|admitted| KeyRead {
+                                slot: read.slot,
+                                key: admitted.clone(),
+                            })
+                        });
+                        return Ok(Transformed::yes(DataSourceExec::from_data_source(source)));
+                    }
+                }
+                if let Some(build) = node.as_any().downcast_ref::<KeyBuildExec>() {
+                    let Some(&(a, b, c, d)) = seeds.get(&build.slot) else {
+                        return Ok(Transformed::yes(Arc::clone(&build.input)));
+                    };
+                    let hash = Arc::new(HashExpr::new(
+                        build.hash.on_columns().to_vec(),
+                        SeededRandomState::with_seeds(a, b, c, d),
+                        build.hash.description().to_owned(),
+                    ));
+                    return Ok(Transformed::yes(Arc::new(KeyBuildExec::new(
+                        Arc::clone(&build.input),
+                        build.slot,
+                        hash,
+                    )?)));
+                }
+                Ok(Transformed::no(node))
+            })?
+            .data;
+        SourceLookup::keys(&plan, calls)?;
+        Ok(plan)
+    }
+
     pub(super) fn key_slot(&self, id: usize) -> Result<Arc<KeySlot>> {
         let mut keys = self
             .keys

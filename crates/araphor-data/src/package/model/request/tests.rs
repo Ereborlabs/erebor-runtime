@@ -114,15 +114,9 @@ fn package_request_metadata_roundtrip() -> TestResult {
             instance_id: "counts".into(),
             result_id: "retained-result".into(),
         },
-        PackageRequestV1::QueryInstanceResult {
+        PackageRequestV1::ReplayInstanceResult {
             instance_id: "counts".into(),
-            result_id: Some("retained-result".into()),
-            sql: "SELECT value, __row_index FROM rows".into(),
-        },
-        PackageRequestV1::QueryInstanceResult {
-            instance_id: "counts".into(),
-            result_id: None,
-            sql: "SELECT value FROM selected".into(),
+            result_id: "retained-result".into(),
         },
         PackageRequestV1::InspectImage {
             package_id: "example".into(),
@@ -193,16 +187,6 @@ fn instance_requests_are_readonly() -> TestResult {
             instance_id: "counts".into(),
             result_id: "retained-result".into(),
         },
-        PackageRequestV1::QueryInstanceResult {
-            instance_id: "counts".into(),
-            result_id: Some("retained-result".into()),
-            sql: "SELECT * FROM rows".into(),
-        },
-        PackageRequestV1::QueryInstanceResult {
-            instance_id: "counts".into(),
-            result_id: None,
-            sql: "SELECT value FROM selected".into(),
-        },
     ] {
         assert_eq!(operation.action(), crate::PackageActionV1::Inspect);
         let mut value = serde_json::to_value(&operation)?;
@@ -219,6 +203,24 @@ fn instance_requests_are_readonly() -> TestResult {
             b"unexpected archive",
         )?)
         .is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn replay_request_requires_run() -> TestResult {
+    let operation = PackageRequestV1::ReplayInstanceResult {
+        instance_id: "counts".into(),
+        result_id: "retained-result".into(),
+    };
+    assert_eq!(operation.action(), crate::PackageActionV1::Run);
+    for metadata in [
+        br#"{"operation":"query_instance_result","instance_id":"counts","result_id":"retained-result","sql":"SELECT 1"}"#.as_slice(),
+        br#"{"operation":"read_instance_result","instance_id":"counts","result_id":"retained-result","sql":"SELECT 1"}"#.as_slice(),
+        br#"{"operation":"replay_instance_result","instance_id":"counts","result_id":"retained-result","sql":"SELECT 1"}"#.as_slice(),
+        br#"{"operation":"replay_instance_result","instance_id":"counts"}"#.as_slice(),
+    ] {
+        assert!(PackageRequestV1::from_bytes(&envelope(metadata, &[])?).is_err());
     }
     Ok(())
 }

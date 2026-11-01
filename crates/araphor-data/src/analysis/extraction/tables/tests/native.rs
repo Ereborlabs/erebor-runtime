@@ -41,7 +41,6 @@ fn read(
         AnalysisTableRead {
             requests: &columns,
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Complete,
             now,
         },
@@ -187,7 +186,6 @@ fn native_compiled_policies() -> TestResult {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 1,
             },
@@ -482,7 +480,6 @@ fn graph_event_coverage_fields() -> TestResult {
         AnalysisTableRead {
             requests: &requests,
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Complete,
             now: 100,
         },
@@ -1215,7 +1212,6 @@ fn native_manifest_budget() -> TestResult {
     let read = AnalysisTableRead {
         requests: &requests,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Complete,
         now: 150,
     };
@@ -1344,7 +1340,6 @@ fn native_manifest_budget() -> TestResult {
     let read = AnalysisTableRead {
         requests: &requests,
         event_ranges: None,
-        inputs: None,
         mode: AnalysisReadModeV1::Complete,
         now: 150,
     };
@@ -1627,7 +1622,6 @@ fn catalog_projection_keeps_rows() -> TestResult {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Metadata,
                 now: 1,
             },
@@ -1766,7 +1760,6 @@ fn graph_snapshot_deadline() -> TestResult {
         AnalysisTableRead {
             requests: &without_id,
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Complete,
             now: deadline - 1,
         },
@@ -1806,7 +1799,6 @@ fn graph_snapshot_deadline() -> TestResult {
         AnalysisTableRead {
             requests: &columns,
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Complete,
             now: deadline - 1,
         },

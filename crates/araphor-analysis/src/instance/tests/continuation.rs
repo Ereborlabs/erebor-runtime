@@ -18,7 +18,10 @@ async fn finite_follow_keeps_frontier() -> TestResult {
         let input = request("exact-finite-call");
         let first = instance.run(input.clone(), &control).await?;
         assert_eq!(first.attempt, input.id);
-        assert_eq!(fixture.selected("finite-follow", &first.attempt)?, [1]);
+        assert_eq!(
+            fixture.selected("finite-follow", &first.attempt).await?,
+            [1]
+        );
         let frontier = first.frontier.clone().ok_or("finite native frontier")?;
         let attempt = fixture
             .query
@@ -30,14 +33,16 @@ async fn finite_follow_keeps_frontier() -> TestResult {
         assert_eq!(attempt.request(), &recorded_request);
         assert_eq!(attempt.receipt(), Some(&first));
         let reference = first.results.values().next().ok_or("finite call result")?;
-        let evaluation = fixture.query.store().managed_evaluation(
+        let evaluation = fixture.query.store().managed_result(
             instance.admitted(),
             &reference.result_id,
+            input.time_utc_ns,
             &control,
         )?;
-        assert_eq!(evaluation.context.id, input.id);
-        assert_eq!(evaluation.context.time_utc_ns, input.time_utc_ns as i64);
-        assert_eq!(evaluation.context.seed, input.seed);
+        let context = &call_context(&evaluation)?.context;
+        assert_eq!(context.id, input.id);
+        assert_eq!(context.time_utc_ns, input.time_utc_ns as i64);
+        assert_eq!(context.seed, input.seed);
         drop(evaluation);
         let before = fixture.query.store().meta()?;
         let error = instance
@@ -86,8 +91,14 @@ async fn finite_follow_keeps_frontier() -> TestResult {
             .ok_or("changed finite-follow receipt")??;
         assert_ne!(second.attempt, first.attempt);
         assert!(second.commit_revision > first.commit_revision);
-        assert_eq!(fixture.selected("finite-follow", &second.attempt)?, [2]);
-        assert_eq!(fixture.selected("finite-follow", &first.attempt)?, [1]);
+        assert_eq!(
+            fixture.selected("finite-follow", &second.attempt).await?,
+            [2]
+        );
+        assert_eq!(
+            fixture.selected("finite-follow", &first.attempt).await?,
+            [1]
+        );
         assert_eq!(stream.cancel_and_join(&control).await?, None);
         assert_eq!(fixture.query.memory().input_reserved(), retained);
     }

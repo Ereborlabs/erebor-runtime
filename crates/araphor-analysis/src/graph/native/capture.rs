@@ -37,6 +37,7 @@ impl Projection {
             .session_config()
             .get_extension::<SourceSnapshot>()
             .ok_or_else(|| Self::invalid("graph captured source"))?;
+        source.check_point(plans, context)?;
         let run = GraphRun::from_context(context, self)?;
         let captured = run
             .captured
@@ -73,16 +74,11 @@ impl Projection {
         context: &Arc<TaskContext>,
         source: Arc<SourceSnapshot>,
     ) -> Result<Capture> {
-        let reset;
-        let plans = if let Some(prepared) = &self.prepared {
-            reset = prepared
-                .iter()
-                .map(|plan| reset_plan_states(Arc::clone(plan)))
-                .collect::<Result<Vec<_>>>()?;
-            reset.as_slice()
-        } else {
-            plans
-        };
+        let reset = plans
+            .iter()
+            .map(|plan| reset_plan_states(Arc::clone(plan)))
+            .collect::<Result<Vec<_>>>()?;
+        let plans = reset.as_slice();
         if plans.len() != 6 {
             return Err(Self::invalid("graph source plans"));
         }

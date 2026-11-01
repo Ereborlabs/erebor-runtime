@@ -1444,7 +1444,7 @@ mod tests {
         let database = backup.join("analysis.duckdb");
         let database_bytes = fs::read(&database)?;
         for sql in [
-            "UPDATE source_receipts SET contiguous_cursor = contiguous_cursor + 1",
+            "UPDATE source_versions SET contiguous_cursor = contiguous_cursor + 1",
             "DROP TABLE coverage",
         ] {
             let writer = duckdb::Connection::open(&database)?;

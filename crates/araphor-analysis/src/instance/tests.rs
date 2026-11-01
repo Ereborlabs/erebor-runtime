@@ -25,7 +25,6 @@ mod history;
 mod renewal;
 mod replay;
 mod restart;
-mod retained;
 mod reusing;
 pub(in crate::instance) mod version;
 
@@ -106,6 +105,15 @@ impl Instance {
 
 pub(super) type TestResult<T = ()> =
     std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+fn call_context(
+    result: &araphor_data::InstanceResultV1,
+) -> TestResult<&araphor_data::ResultContext> {
+    let araphor_data::InstanceResultKindV1::Call { context, .. } = &result.kind else {
+        return Err("call reference variant".into());
+    };
+    Ok(context)
+}
 
 pub(super) struct Authority {
     allowed: Mutex<bool>,
@@ -348,7 +356,7 @@ impl Fixture {
             .progress)
     }
 
-    pub(in crate::instance) fn selected(
+    pub(in crate::instance) async fn selected(
         &self,
         instance: &str,
         attempt: &str,
@@ -356,9 +364,20 @@ impl Fixture {
         let selected = self
             .query
             .store()
-            .managed_selected([1; 16], instance, attempt, &AnalysisReadControl::default())?
-            .ok_or("managed selected")?;
-        values(&selected.data.batches)
+            .managed_attempt([1; 16], instance, attempt, &AnalysisReadControl::default())?
+            .ok_or("managed attempt")?;
+        let reference = &selected.receipt().ok_or("managed receipt")?.selected;
+        let output = Instance::replay_result(
+            Arc::clone(&self.query),
+            self.authority.clone(),
+            None,
+            self.grant.clone(),
+            instance,
+            &reference.result_id,
+            &AnalysisReadControl::default(),
+        )
+        .await?;
+        values(&output.batches)
     }
 }
 
@@ -373,7 +392,7 @@ pub(super) fn request(id: &str) -> ManagedRequest {
     }
 }
 
-fn values(batches: &[sdk::RecordBatch]) -> TestResult<Vec<u64>> {
+pub(in crate::instance) fn values(batches: &[sdk::RecordBatch]) -> TestResult<Vec<u64>> {
     let mut values = Vec::new();
     for batch in batches {
         let column = batch
@@ -470,7 +489,7 @@ async fn sql_instance_is_inert() -> TestResult {
         .run(request("once"), &AnalysisReadControl::default())
         .await?;
     assert!(receipt.results.is_empty());
-    assert_eq!(fixture.selected("sql", "once")?, [7]);
+    assert_eq!(fixture.selected("sql", "once").await?, [7]);
     let meta = fixture.query.store().meta()?;
     assert_eq!(
         instance
@@ -551,10 +570,17 @@ async fn completed_retry_survives_reopen() -> TestResult {
         receipt
     );
     assert_eq!(store.meta()?, meta);
-    let selected = store
-        .managed_selected([1; 16], "reopen", "once", &AnalysisReadControl::default())?
-        .ok_or("saved selected")?;
-    assert_eq!(values(&selected.data.batches)?, [11]);
+    let selected = store.managed_result(
+        reopened.admitted(),
+        &receipt.selected.result_id,
+        10,
+        &AnalysisReadControl::default(),
+    )?;
+    assert!(matches!(
+        selected.kind,
+        araphor_data::InstanceResultKindV1::Selected
+    ));
+    assert_eq!(selected.result, receipt.selected);
     assert_eq!(receipt.results.len(), 1);
     let returned = receipt.results.values().next().ok_or("saved call")?;
     let saved = store.managed_result(
@@ -563,10 +589,7 @@ async fn completed_retry_survives_reopen() -> TestResult {
         10,
         &AnalysisReadControl::default(),
     )?;
-    assert_eq!(saved.commit_revision, receipt.commit_revision);
-    let checkpoint = saved.output.checkpoint.as_ref().ok_or("saved checkpoint")?;
-    assert_eq!(checkpoint.version, 1);
-    assert_eq!(values(&checkpoint.datasets[0].batches)?, [11]);
+    assert_eq!(saved.result.commit_revision, receipt.commit_revision);
     let mut changed = request("once");
     changed.time_utc_ns += 1;
     assert!(reopened
@@ -576,6 +599,19 @@ async fn completed_retry_survives_reopen() -> TestResult {
     assert_eq!(store.meta()?, meta);
     drop(permit);
     drop(held);
+    let replay = reopened
+        .replay(&receipt.selected.result_id, &AnalysisReadControl::default())
+        .await?;
+    assert_eq!(values(&replay.batches)?, [11]);
+    let call = replay.calls.values().next().ok_or("replayed saved call")?;
+    let checkpoint = call
+        .output()
+        .checkpoint
+        .as_ref()
+        .ok_or("saved checkpoint")?;
+    assert_eq!(checkpoint.version, 1);
+    assert_eq!(values(&checkpoint.datasets[0].batches)?, [11]);
+    drop(replay);
     drop(query.reserve_evaluation([1; 16])?);
     assert_eq!(query.memory().input_reserved(), retained);
     drop(reopened);
@@ -604,7 +640,10 @@ async fn stateful_calls(target: &str) -> TestResult {
         let mut input = request(id);
         input.rebuild = rebuild;
         let receipt = instance.run(input, &AnalysisReadControl::default()).await?;
-        assert_eq!(fixture.selected("state", id)?, expected, "{target}");
+        let replay = instance
+            .replay(&receipt.selected.result_id, &AnalysisReadControl::default())
+            .await?;
+        assert_eq!(values(&replay.batches)?, expected, "{target}");
         assert_eq!(receipt.results.len(), 2);
         let mut states = Vec::new();
         for (call, returned) in &receipt.results {
@@ -614,20 +653,25 @@ async fn stateful_calls(target: &str) -> TestResult {
                 10,
                 &AnalysisReadControl::default(),
             )?;
-            assert_eq!(saved.commit_revision, receipt.commit_revision);
-            assert_eq!(saved.context.target, calls[call].target);
-            assert_eq!(saved.context.artifact, calls[call].artifact);
-            assert_eq!(saved.output.datasets.len(), 1);
-            let state = saved.output.checkpoint.as_ref().ok_or("saved checkpoint")?;
+            assert_eq!(saved.result.commit_revision, receipt.commit_revision);
+            assert_eq!(call_context(&saved)?.target, calls[call].target);
+            assert_eq!(call_context(&saved)?.artifact, calls[call].artifact);
+            let output = replay
+                .calls
+                .get(call)
+                .ok_or("replayed state call")?
+                .output();
+            assert_eq!(output.datasets.len(), 1);
+            let state = output.checkpoint.as_ref().ok_or("saved checkpoint")?;
             assert_eq!(state.version, 1);
             states.extend(values(&state.datasets[0].batches)?);
             if target == "sql" {
-                assert_eq!(saved.output.evidence.len(), 1);
-                assert_eq!(saved.output.reasons.len(), 1);
-                assert_eq!(saved.output.reasons[0].code, "runtime-fixture.sum");
+                assert_eq!(output.evidence.len(), 1);
+                assert_eq!(output.reasons.len(), 1);
+                assert_eq!(output.reasons[0].code, "runtime-fixture.sum");
                 assert_eq!(
-                    values(std::slice::from_ref(&saved.output.reasons[0].details))?,
-                    values(&saved.output.datasets[0].batches)?
+                    values(std::slice::from_ref(&output.reasons[0].details))?,
+                    values(&output.datasets[0].batches)?
                 );
             }
         }
@@ -685,13 +729,13 @@ async fn selected_pressure_keeps_progress() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             [1; 16],
             "pressure",
             "too-many",
             &AnalysisReadControl::default()
         )?
-        .is_none());
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     let before = fixture.query.store().meta()?;
     let read = AnalysisReadControl::default();
     read.on_read_step(|| Err(Code::Invalid.error("terminated retry recaptured")))?;
@@ -828,13 +872,13 @@ async fn later_failure_is_atomic() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             [1; 16],
             "atomic",
             "failure",
             &AnalysisReadControl::default()
         )?
-        .is_none());
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     Ok(())
 }
 
@@ -858,16 +902,14 @@ async fn nested_calls_publish_together() -> TestResult {
         .run(request("nested"), &AnalysisReadControl::default())
         .await?;
     assert_eq!(receipt.results.len(), 2);
-    assert_eq!(fixture.selected("nested", "nested")?, [10]);
+    assert_eq!(fixture.selected("nested", "nested").await?, [10]);
     for returned in receipt.results.values() {
         assert_eq!(returned.commit_revision, receipt.commit_revision);
     }
     let control = AnalysisReadControl::default();
-    let outer = declarations
-        .iter()
-        .find(|(_, call)| !call.dependencies.is_empty())
-        .map(|(call, _)| *call)
-        .ok_or("outer call absent")?;
+    let replay = instance
+        .replay(&receipt.selected.result_id, &control)
+        .await?;
     let mut originals = BTreeMap::new();
     for (call, reference) in &receipt.results {
         let original = fixture.query.store().managed_result(
@@ -877,32 +919,27 @@ async fn nested_calls_publish_together() -> TestResult {
             &control,
         )?;
         assert!(original.current);
-        originals.insert(*call, original);
+        let output = replay
+            .calls
+            .get(call)
+            .ok_or("original nested call")?
+            .output();
+        originals.insert(
+            *call,
+            (original, sdk::wire::Output::encode_model(output, model)?),
+        );
     }
-    let mut session = fixture
-        .query
-        .session(fixture.grant.selection.clone(), &control, 10)?;
-    session
-        .register_retained("saved", "nested", receipt.results[&outer].clone(), "data")
-        .await?;
-    let prepared = session
-        .prepare_definition(&Fixture::definition("SELECT value FROM saved"))
-        .await?;
-    let invocation = araphor_query::definition::Invocation {
-        id: "nested-pin".into(),
-        ..Default::default()
-    };
-    let finite = session
-        .execute_definition(&prepared, invocation.clone())
-        .await?;
-    assert_eq!(values(&finite.batches)?, [10]);
-    drop(finite);
+    drop(replay);
     let next = instance.run(request("nested-next"), &control).await?;
     assert_ne!(next.attempt, receipt.attempt);
     assert!(next.commit_revision > receipt.commit_revision);
     assert_eq!(next.results.len(), receipt.results.len());
-    assert_eq!(fixture.selected("nested", "nested-next")?, [20]);
+    assert_eq!(fixture.selected("nested", "nested-next").await?, [20]);
     assert_eq!(fixture.progress("nested")?, next.commit_revision);
+    let before = fixture.query.store().meta()?;
+    let replay = instance
+        .replay(&receipt.selected.result_id, &control)
+        .await?;
     for (call, reference) in &receipt.results {
         assert_ne!(next.results[call], *reference);
         assert_eq!(next.results[call].commit_revision, next.commit_revision);
@@ -912,16 +949,26 @@ async fn nested_calls_publish_together() -> TestResult {
             10,
             &control,
         )?;
-        let original = &originals[call];
+        let (original, packet) = &originals[call];
         assert!(!retained.current);
-        assert_eq!(retained.context, original.context);
+        assert_eq!(call_context(&retained)?, call_context(original)?);
         assert_eq!(
-            sdk::wire::Output::encode_model(&retained.output, model)?,
-            sdk::wire::Output::encode_model(&original.output, model)?
+            sdk::wire::Output::encode_model(
+                replay
+                    .calls
+                    .get(call)
+                    .ok_or("historical nested call")?
+                    .output(),
+                model,
+            )?,
+            *packet
         );
-        assert_eq!(retained.commit_revision, original.commit_revision);
+        assert_eq!(
+            retained.result.commit_revision,
+            original.result.commit_revision
+        );
     }
-    assert_eq!(fixture.selected("nested", "nested")?, [10]);
+    assert_eq!(fixture.selected("nested", "nested").await?, [10]);
     assert_eq!(
         fixture
             .query
@@ -929,19 +976,7 @@ async fn nested_calls_publish_together() -> TestResult {
             .managed_history(&fixture.grant.selection, "nested", &control,)?,
         [receipt, next],
     );
-    let before = fixture.query.store().meta()?;
-    let held = fixture.query.memory().input_reserved();
-    let failure = session
-        .capture_definition(&prepared, invocation)
-        .await
-        .err()
-        .ok_or("replaced nested result captured")?;
-    assert_eq!(
-        araphor_query::Failure::from(&failure),
-        araphor_query::Failure::StorageUnavailable
-    );
     assert_eq!(fixture.query.store().meta()?, before);
-    assert_eq!(fixture.query.memory().input_reserved(), held);
     Ok(())
 }
 
@@ -977,7 +1012,7 @@ async fn denied_ack_keeps_receipt() -> TestResult {
         .receipt()
         .ok_or("durable receipt was lost after denied acknowledgment")?;
     assert_eq!(fixture.progress("ack")?, receipt.commit_revision);
-    assert_eq!(fixture.selected("ack", "committed")?, [17]);
+    assert_eq!(fixture.selected("ack", "committed").await?, [17]);
     let meta = fixture.query.store().meta()?;
     assert_eq!(
         instance
@@ -1002,7 +1037,7 @@ async fn native_elimination_keeps_step() -> TestResult {
             .run(request(id), &AnalysisReadControl::default())
             .await?;
         assert!(receipt.results.is_empty());
-        assert!(fixture.selected(id, id)?.is_empty());
+        assert!(fixture.selected(id, id).await?.is_empty());
         assert_eq!(fixture.progress(id)?, receipt.commit_revision);
         assert!(matches!(
             observed.try_recv(),
@@ -1025,7 +1060,7 @@ async fn prior_pressure_preserves_success() -> TestResult {
     let first = instance
         .run(request("first"), &AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("prior-pressure", "first")?, [10]);
+    assert_eq!(fixture.selected("prior-pressure", "first").await?, [10]);
     let retained = fixture.query.memory().input_reserved();
     let pressure = fixture
         .query
@@ -1039,7 +1074,13 @@ async fn prior_pressure_preserves_success() -> TestResult {
         .await
         .is_err());
     assert_eq!(fixture.progress("prior-pressure")?, first.commit_revision);
-    assert_eq!(fixture.selected("prior-pressure", "first")?, [10]);
+    let original = fixture.query.store().managed_result(
+        instance.admitted(),
+        &first.selected.result_id,
+        10,
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(original.result, first.selected);
     assert!(fixture
         .query
         .store()
@@ -1051,10 +1092,11 @@ async fn prior_pressure_preserves_success() -> TestResult {
         )?
         .is_none());
     drop(pressure);
+    assert_eq!(fixture.selected("prior-pressure", "first").await?, [10]);
     let second = instance
         .run(request("pressure"), &AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("prior-pressure", "pressure")?, [20]);
+    assert_eq!(fixture.selected("prior-pressure", "pressure").await?, [20]);
     assert_eq!(fixture.progress("prior-pressure")?, second.commit_revision);
     assert_eq!(fixture.query.memory().input_reserved(), retained);
     drop(instance);
@@ -1116,7 +1158,7 @@ async fn sql_subscription_keeps_receipts() -> TestResult {
         .await?
         .ok_or("initial SQL receipt")??;
     assert!(first.results.is_empty());
-    assert_eq!(fixture.selected("follow-sql", &first.attempt)?, [7]);
+    assert_eq!(fixture.selected("follow-sql", &first.attempt).await?, [7]);
     assert_eq!(fixture.progress("follow-sql")?, first.commit_revision);
     assert!(futures_util::poll!(stream.next()).is_pending());
     fixture.context(2)?;
@@ -1125,13 +1167,13 @@ async fn sql_subscription_keeps_receipts() -> TestResult {
         .ok_or("changed SQL receipt")??;
     assert_ne!(first.attempt, second.attempt);
     assert!(second.commit_revision > first.commit_revision);
-    assert_eq!(fixture.selected("follow-sql", &second.attempt)?, [7]);
+    assert_eq!(fixture.selected("follow-sql", &second.attempt).await?, [7]);
     assert_eq!(fixture.progress("follow-sql")?, second.commit_revision);
     assert!(futures_util::poll!(stream.next()).is_pending());
     stream
         .cancel_and_join(&AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("follow-sql", &first.attempt)?, [7]);
+    assert_eq!(fixture.selected("follow-sql", &first.attempt).await?, [7]);
     Ok(())
 }
 
@@ -1166,7 +1208,10 @@ async fn managed_subscription(target: &str) -> TestResult {
     let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("initial stateful receipt")??;
-    assert_eq!(fixture.selected("follow-state", &first.attempt)?, [10, 20]);
+    assert_eq!(
+        fixture.selected("follow-state", &first.attempt).await?,
+        [10, 20]
+    );
     assert_eq!(first.results.len(), 2);
     assert_eq!(
         first.results.keys().copied().collect::<BTreeSet<_>>(),
@@ -1184,7 +1229,7 @@ async fn managed_subscription(target: &str) -> TestResult {
         .values()
         .next()
         .ok_or("initial guest result")?;
-    let araphor_data::PackageResponseV1::Result(mut original) = Instance::read_output(
+    let mut original = Instance::read_result(
         Arc::clone(&fixture.query),
         fixture.authority.clone(),
         fixture.grant.clone(),
@@ -1192,16 +1237,13 @@ async fn managed_subscription(target: &str) -> TestResult {
         &reference.result_id,
         &AnalysisReadControl::default(),
     )
-    .await?
-    else {
-        return Err("initial guest output variant".into());
-    };
+    .await?;
     assert!(original.current);
-    assert_eq!(original.context.target, target);
+    assert_eq!(call_context(&original)?.target, target);
     assert!(futures_util::poll!(stream.next()).is_pending());
     fixture.context(2)?;
     let before = fixture.query.store().meta()?;
-    let araphor_data::PackageResponseV1::Result(changed) = Instance::read_output(
+    let changed = Instance::read_result(
         Arc::clone(&fixture.query),
         fixture.authority.clone(),
         fixture.grant.clone(),
@@ -1209,10 +1251,7 @@ async fn managed_subscription(target: &str) -> TestResult {
         &reference.result_id,
         &AnalysisReadControl::default(),
     )
-    .await?
-    else {
-        return Err("changed guest output variant".into());
-    };
+    .await?;
     assert!(!changed.current);
     original.current = false;
     assert_eq!(
@@ -1232,7 +1271,10 @@ async fn managed_subscription(target: &str) -> TestResult {
     let second = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("changed stateful receipt")??;
-    assert_eq!(fixture.selected("follow-state", &second.attempt)?, [10, 20]);
+    assert_eq!(
+        fixture.selected("follow-state", &second.attempt).await?,
+        [10, 20]
+    );
     assert_eq!(second.results.len(), 2);
     assert_ne!(first.attempt, second.attempt);
     let attempt = fixture
@@ -1257,21 +1299,31 @@ async fn managed_subscription(target: &str) -> TestResult {
             .copied()
             .collect(),
     );
-    for reference in second.results.values() {
+    let replay = instance
+        .replay(&second.selected.result_id, &AnalysisReadControl::default())
+        .await?;
+    for (call, reference) in &second.results {
         let result = fixture.query.store().managed_result(
             instance.admitted(),
             &reference.result_id,
             u64::MAX,
             &AnalysisReadControl::default(),
         )?;
-        assert_eq!(result.commit_revision, second.commit_revision);
-        assert_eq!(result.context.context.id, second.attempt);
+        assert_eq!(result.result.commit_revision, second.commit_revision);
+        assert_eq!(call_context(&result)?.context.id, second.attempt);
         assert_eq!(
-            result.context.context.time_utc_ns,
+            call_context(&result)?.context.time_utc_ns,
             attempt.request().time_utc_ns as i64
         );
-        assert!(result.output.checkpoint.is_some());
+        assert!(replay
+            .calls
+            .get(call)
+            .ok_or("replayed subscription call")?
+            .output()
+            .checkpoint
+            .is_some());
     }
+    drop(replay);
     assert!(futures_util::poll!(stream.next()).is_pending());
     stream
         .cancel_and_join(&AnalysisReadControl::default())
@@ -1316,7 +1368,10 @@ async fn managed_subscription(target: &str) -> TestResult {
             .copied()
             .collect()
     );
-    assert_eq!(fixture.selected("follow-state", &third.attempt)?, [10, 20]);
+    assert_eq!(
+        fixture.selected("follow-state", &third.attempt).await?,
+        [10, 20]
+    );
     assert!(third.frontier.is_some());
     resumed
         .cancel_and_join(&AnalysisReadControl::default())
@@ -1458,8 +1513,8 @@ async fn sql_frontier_survives_reopen() -> TestResult {
         .ok_or("durable changed receipt")??;
     assert_ne!(second.attempt, first.attempt);
     assert!(second.commit_revision > first.commit_revision);
-    assert_eq!(fixture.selected("durable-sql", &first.attempt)?, [7]);
-    assert_eq!(fixture.selected("durable-sql", &second.attempt)?, [7]);
+    assert_eq!(fixture.selected("durable-sql", &first.attempt).await?, [7]);
+    assert_eq!(fixture.selected("durable-sql", &second.attempt).await?, [7]);
     let original = fixture
         .query
         .store()
@@ -1762,14 +1817,20 @@ async fn subscription_keeps_selected_progress() -> TestResult {
     let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("initial progress receipt")??;
-    assert_eq!(fixture.selected("sealed-progress", &first.attempt)?, [10]);
+    assert_eq!(
+        fixture.selected("sealed-progress", &first.attempt).await?,
+        [10]
+    );
     assert!(futures_util::poll!(stream.next()).is_pending());
     fixture.context(2)?;
     let second = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await?
         .ok_or("next progress receipt")??;
     assert!(second.commit_revision > first.commit_revision);
-    assert_eq!(fixture.selected("sealed-progress", &second.attempt)?, [10]);
+    assert_eq!(
+        fixture.selected("sealed-progress", &second.attempt).await?,
+        [10]
+    );
     stream
         .cancel_and_join(&AnalysisReadControl::default())
         .await?;
@@ -1798,7 +1859,17 @@ async fn subscription_keeps_selected_progress() -> TestResult {
         &control,
     )?;
     let model = &package.artifacts[0].descriptor.exports[0];
-    let output = sdk::wire::Output::encode_model(&result.output, model)?;
+    let replay = instance.replay(&result.result.result_id, &control).await?;
+    let output = sdk::wire::Output::encode_model(
+        replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed progress call")?
+            .output(),
+        model,
+    )?;
+    drop(replay);
 
     let rejected = tokio::time::timeout(Duration::from_secs(30), stale.next())
         .await?
@@ -1840,15 +1911,36 @@ async fn subscription_keeps_selected_progress() -> TestResult {
         u64::MAX,
         &control,
     )?;
-    assert_eq!(retained.context, result.context);
-    assert_eq!(retained.commit_revision, result.commit_revision);
-    assert_eq!(retained.current, result.current);
+    assert_eq!(call_context(&retained)?, call_context(&result)?);
     assert_eq!(
-        sdk::wire::Output::encode_model(&retained.output, model)?,
+        retained.result.commit_revision,
+        result.result.commit_revision
+    );
+    assert_eq!(retained.current, result.current);
+    let replay = instance
+        .replay(&retained.result.result_id, &control)
+        .await?;
+    assert_eq!(
+        sdk::wire::Output::encode_model(
+            replay
+                .calls
+                .values()
+                .next()
+                .ok_or("retained progress call")?
+                .output(),
+            model,
+        )?,
         output
     );
-    assert_eq!(fixture.selected("sealed-progress", &first.attempt)?, [10]);
-    assert_eq!(fixture.selected("sealed-progress", &second.attempt)?, [10]);
+    drop(replay);
+    assert_eq!(
+        fixture.selected("sealed-progress", &first.attempt).await?,
+        [10]
+    );
+    assert_eq!(
+        fixture.selected("sealed-progress", &second.attempt).await?,
+        [10]
+    );
     drop(fixture.query.reserve_evaluation([1; 16])?);
     Ok(())
 }

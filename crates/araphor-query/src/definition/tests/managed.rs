@@ -17,6 +17,36 @@ impl Fixture {
         self.engine
             .store()
             .admit_definition([1; 16], definition.resolved(), || Ok(()))?;
+        let mut calls = BTreeMap::new();
+        PackageCall::any(&definition.plan, &mut |call| {
+            let implementation = call.bundle.bundle().artifacts[call.artifact]
+                .implementation(call.export())
+                .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
+            let mut dependencies = std::collections::BTreeSet::new();
+            for input in call.inputs() {
+                PackageCall::any(input, &mut |dependency| {
+                    if dependency.id() != call.id() {
+                        dependencies.insert(dependency.id());
+                    }
+                    Ok(false)
+                })?;
+            }
+            calls.insert(
+                call.id(),
+                araphor_data::ManagedCall {
+                    image: call.image().clone(),
+                    package: call.package().clone(),
+                    export: call.export().into(),
+                    target: implementation.target().into(),
+                    artifact: implementation.identity().map_err(|error| {
+                        datafusion::common::DataFusionError::External(Box::new(error))
+                    })?,
+                    arguments: call.arguments().to_vec(),
+                    dependencies,
+                },
+            );
+            Ok(false)
+        })?;
         Ok(self.engine.store().admit_managed(
             &ManagedSpec {
                 destination: araphor_data::ManagedDestination::Selected,
@@ -27,7 +57,7 @@ impl Fixture {
                     format: 1,
                     planner: "datafusion-53/sql-call-1".into(),
                     definition: definition.resolved().digest()?,
-                    calls: BTreeMap::new(),
+                    calls,
                     selected_schema: definition.plan.schema().as_arrow().clone(),
                 },
             },
@@ -84,7 +114,7 @@ async fn constant_capture_keeps_state() -> TestResult {
         .ok_or("managed state absent")?;
     assert_eq!(state.instance(), &instance);
     assert!(state.rebuild());
-    assert!(state.datasets().next().is_none());
+    assert!(state.batches().next().is_none());
     assert!(captured.snapshot().results().next().is_none());
     assert!(session.memory().reserve_input(available).is_err());
     let result = captured.execute().await?;

@@ -259,18 +259,20 @@ async fn managed_versions_rebuild_graph() -> TestResult {
             .ok_or("Updated Graph receipt")?;
         assert_eq!(last.commit_revision, current.commit_revision);
         for reference in last.results.values() {
-            let araphor_data::ManagedOutput::Call { result, .. } =
-                fixture.query.store().managed_output(
-                    updated.admitted(),
-                    &reference.result_id,
-                    request("inspect")?.time_utc_ns,
-                    &fixture.control,
-                )?
+            let result = fixture.query.store().managed_result(
+                updated.admitted(),
+                &reference.result_id,
+                request("inspect")?.time_utc_ns,
+                &fixture.control,
+            )?;
+            let araphor_data::InstanceResultKindV1::Call {
+                package, context, ..
+            } = &result.kind
             else {
                 return Err("Graph version returned a selected output".into());
             };
-            assert_eq!(result.package.revision, "2");
-            assert_eq!(result.context.target, "wasm");
+            assert_eq!(package.revision, "2");
+            assert_eq!(context.target, "wasm");
         }
         let before = fixture.query.store().meta()?;
         assert!(running

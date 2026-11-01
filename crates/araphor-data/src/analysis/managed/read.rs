@@ -8,14 +8,29 @@ use super::super::AnalysisStore;
 use super::model::*;
 use crate::{AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result};
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(super) enum SourceFreshness {
-    Current,
-    EvidenceExpired,
-    Changed,
-}
-
 impl AnalysisStore {
+    pub(in crate::analysis) fn managed_producer_from(
+        reader: &Connection,
+        selection: &crate::AnalysisSelectionV1,
+        reference: &crate::analysis::PackageResultRefV1,
+    ) -> Result<(super::ManagedSpec, u64, u64)> {
+        let (record, revision) =
+            Self::managed_meta_from(reader, selection.tenant_id, &reference.result_id)?;
+        if revision != reference.commit_revision {
+            return Err(Code::Conflict.error("managed producer revision"));
+        }
+        let (_, attempt, spec) = Self::validate_managed_header(
+            reader,
+            selection.tenant_id,
+            &reference.result_id,
+            &record,
+            revision,
+        )?;
+        attempt.capture.grant.permitted_by(selection)?;
+        let generation = attempt.capture.generation;
+        Ok((spec, generation, record.call))
+    }
+
     pub fn admit_managed(
         &self,
         spec: &ManagedSpec,
@@ -540,6 +555,14 @@ impl AnalysisStore {
     ) -> Result<(ManagedAttempt, Option<u64>, bool)> {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |reader| {
+            let processor: Option<String> = reader.query_row(
+                "SELECT processor_id FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+                params![instance.spec.tenant.as_slice(), id],
+                |row| row.get(0),
+            ).optional().context(AnalysisDatabaseSnafu {
+                operation: "read managed reference kind",
+            })?;
+            let processor = processor.ok_or_else(|| Code::Missing.error("managed result"))?;
             if Self::managed_version_from(
                 reader,
                 instance.spec.tenant,
@@ -549,21 +572,29 @@ impl AnalysisStore {
             {
                 return Err(Code::Denied.error("managed result scope"));
             }
-            let processor: Option<String> = reader.query_row(
-                "SELECT processor_id FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
-                params![instance.spec.tenant.as_slice(), id],
-                |row| row.get(0),
-            ).optional().context(AnalysisDatabaseSnafu {
-                operation: "read managed reference kind",
-            })?;
-            let (attempt, call, current) = match processor.as_deref() {
-                Some("managed-package-v1") => {
-                    let (record, _, revision) =
-                        Self::managed_header_from(reader, instance.spec.tenant, id)?;
+            let (attempt, call, current) = match processor.as_str() {
+                "managed-package-v1" => {
+                    let (record, revision) =
+                        Self::managed_meta_from(reader, instance.spec.tenant, id)?;
                     if record.instance != instance.spec.id {
                         return Err(Code::Denied.error("managed result scope"));
                     }
-                    let (_, attempt) = Self::validate_managed_header(
+                    let owner = Self::managed_attempt_from(
+                        reader,
+                        instance.spec.tenant,
+                        &record.instance,
+                        &record.attempt,
+                    )?
+                    .ok_or_else(|| Code::Missing.error("managed result attempt"))?;
+                    owner
+                        .capture
+                        .grant
+                        .permitted_by(&instance.grant.selection)?;
+                    if Self::managed_edges(reader, instance.spec.tenant, id)? != record.dependencies
+                    {
+                        return Err(Code::Invalid.error("managed result edges"));
+                    }
+                    let (_, attempt, _) = Self::validate_managed_header(
                         reader,
                         instance.spec.tenant,
                         id,
@@ -574,11 +605,25 @@ impl AnalysisStore {
                         self.managed_current(reader, &instance.spec, id, revision, now, control)?;
                     (attempt, Some(record.call), current)
                 }
-                Some("managed-definition-v1") => {
-                    let (step, _, revision) =
-                        Self::managed_step_header(reader, instance.spec.tenant, id)?;
+                "managed-definition-v1" => {
+                    let (step, revision) =
+                        Self::managed_step_meta(reader, instance.spec.tenant, id)?;
                     if step.instance != instance.spec.id {
                         return Err(Code::Denied.error("managed result scope"));
+                    }
+                    let owner = Self::managed_attempt_from(
+                        reader,
+                        instance.spec.tenant,
+                        &step.instance,
+                        &step.attempt,
+                    )?
+                    .ok_or_else(|| Code::Missing.error("managed selected attempt"))?;
+                    owner
+                        .capture
+                        .grant
+                        .permitted_by(&instance.grant.selection)?;
+                    if Self::managed_edges(reader, instance.spec.tenant, id)? != step.dependencies {
+                        return Err(Code::Invalid.error("managed selected edges"));
                     }
                     let (attempt, _) = Self::validate_selected_header(
                         reader,
@@ -595,6 +640,7 @@ impl AnalysisStore {
                 .capture
                 .grant
                 .permitted_by(&instance.grant.selection)?;
+            Self::check_managed_progress(reader, &attempt.capture)?;
             let mut historical = instance.clone();
             historical.spec = Self::managed_version_from(
                 reader,
@@ -603,6 +649,7 @@ impl AnalysisStore {
                 attempt.capture.generation,
             )?;
             historical.generation = attempt.capture.generation;
+            historical.grant = attempt.capture.grant.clone();
             historical.progress = attempt.capture.progress;
             historical.running = attempt.capture.running;
             historical.lifecycle = attempt.capture.lifecycle;
@@ -620,340 +667,98 @@ impl AnalysisStore {
         id: &str,
         now: u64,
         control: &AnalysisReadControl,
-    ) -> Result<ManagedResult> {
-        let ManagedOutput::Call { result, data } =
-            self.managed_output(instance, id, now, control)?
-        else {
-            return Err(Code::Unsupported.error("selected package result"));
+    ) -> Result<crate::InstanceResultV1> {
+        let (reference, call, current) = self.managed_reference(instance, id, now, control)?;
+        let captured = &reference.0.capture;
+        let receipt = reference
+            .receipt()
+            .cloned()
+            .ok_or_else(|| Code::Invalid.error("managed result receipt"))?;
+        let (result, kind) = match call {
+            Some(call) => {
+                let result = receipt
+                    .results
+                    .get(&call)
+                    .cloned()
+                    .ok_or_else(|| Code::Invalid.error("managed result reference"))?;
+                let mut reader = self.reader_until(control)?;
+                let (record, _) = control.run(&mut reader, |reader| {
+                    Self::managed_meta_from(reader, instance.spec.tenant, id)
+                })?;
+                let declaration = &reference.1.spec.manifest.calls[&call];
+                (
+                    result,
+                    crate::InstanceResultKindV1::Call {
+                        call,
+                        image: declaration.image.clone(),
+                        package: declaration.package.clone(),
+                        export: declaration.export.clone(),
+                        context: record.context,
+                    },
+                )
+            }
+            None => (
+                receipt.selected.clone(),
+                crate::InstanceResultKindV1::Selected,
+            ),
         };
-        Ok(ManagedResult {
-            context: result.context,
-            output: data,
-            commit_revision: result.commit_revision,
-            current: result.current,
+        Ok(crate::InstanceResultV1 {
+            instance_id: instance.spec.id.clone(),
+            result,
+            definition_revision: reference.instance().spec.definition.digest()?,
+            generation: captured.generation,
+            source: crate::AnalysisStoreMetaV1 {
+                store_uuid: captured.store,
+                schema_version: captured.schema,
+                recovery_epoch: captured.recovery,
+                commit_revision: captured.revision,
+            },
+            time_utc_ns: captured.time_utc_ns,
+            prior: captured.prior.clone(),
+            receipt,
+            current,
+            kind,
         })
     }
 
-    pub fn managed_output(
-        &self,
-        instance: &ManagedInstance,
-        id: &str,
-        now: u64,
-        control: &AnalysisReadControl,
-    ) -> Result<ManagedOutput> {
-        let mut reader = self.reader_until(control)?;
-        control.run(&mut reader, |reader| {
-            self.managed_output_from(reader, instance, id, now, control)
-        })
-    }
-
-    pub fn managed_query_output(
-        &self,
-        selection: &crate::AnalysisSelectionV1,
-        instance: &str,
-        id: Option<&str>,
-        now: u64,
-        control: &AnalysisReadControl,
-    ) -> Result<ManagedOutput> {
-        let mut reader = self.reader_until(control)?;
-        control.run(&mut reader, |reader| {
-            let mut current = Self::managed_instance_from(reader, selection.tenant_id, instance)?
-                .ok_or_else(|| Code::Missing.error("managed instance"))?;
-            let selected;
-            let id = match id {
-                Some(id) => id,
-                None => {
-                    current.grant.permitted_by(selection)?;
-                    if current.progress == 0 {
-                        return Err(Code::Missing.error("managed current result"));
-                    }
-                    let key: String = reader.query_row(
-                        "SELECT attempt_id FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND generation = ? AND completed = ?",
-                        params![selection.tenant_id.as_slice(), instance, current.generation, current.progress],
-                        |row| row.get(0),
-                    ).optional().context(AnalysisDatabaseSnafu { operation: "read current managed receipt" })?
-                        .ok_or_else(|| Code::Invalid.error("managed current receipt"))?;
-                    let attempt = Self::managed_attempt_from(reader, selection.tenant_id, instance, &key)?
-                        .ok_or_else(|| Code::Invalid.error("managed current receipt"))?;
-                    let receipt = attempt.receipt.as_ref().filter(|receipt| {
-                        attempt.capture.generation == current.generation
-                            && attempt.terminal.is_none()
-                            && receipt.instance == instance
-                            && receipt.attempt == key
-                            && receipt.commit_revision == current.progress
-                            && receipt.selected.commit_revision == current.progress
-                            && !receipt.selected.result_id.is_empty()
-                    }).ok_or_else(|| Code::Invalid.error("managed current receipt"))?;
-                    selected = receipt.selected.result_id.clone();
-                    let (step, _, revision) = Self::managed_step_header(reader, selection.tenant_id, &selected)?;
-                    if step.instance != instance || step.attempt != key || revision != current.progress {
-                        return Err(Code::Invalid.error("managed current receipt"));
-                    }
-                    &selected
-                }
-            };
-            current.grant.selection = selection.clone();
-            self.managed_output_from(reader, &current, id, now, control)
-        })
-    }
-
-    fn managed_output_from(
-        &self,
+    pub(super) fn managed_state_from(
         reader: &Connection,
-        instance: &ManagedInstance,
+        tenant: [u8; 16],
         id: &str,
-        now: u64,
-        control: &AnalysisReadControl,
-    ) -> Result<ManagedOutput> {
-        if Self::managed_version_from(
-            reader,
-            instance.spec.tenant,
-            &instance.spec.id,
-            instance.generation,
-        )? != instance.spec
-        {
-            return Err(Code::Denied.error("managed result scope"));
-        }
-        let processor: Option<String> = reader
+    ) -> Result<(Record, Option<sdk::wire::Checkpoint>, u64)> {
+        let (record, revision) = Self::managed_meta_from(reader, tenant, id)?;
+        let body: Vec<u8> = reader
             .query_row(
-                "SELECT processor_id FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
-                params![instance.spec.tenant.as_slice(), id],
+                "SELECT body FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+                params![tenant.as_slice(), id],
                 |row| row.get(0),
             )
-            .optional()
             .context(AnalysisDatabaseSnafu {
-                operation: "read managed result kind",
+                operation: "read canonical managed checkpoint",
             })?;
-        match processor.as_deref() {
-            Some("managed-package-v1") => {}
-            Some("managed-definition-v1") => {
-                let (step, packet, revision) =
-                    Self::managed_step_header(reader, instance.spec.tenant, id)?;
-                if step.instance != instance.spec.id {
-                    return Err(Code::Denied.error("managed result scope"));
-                }
-                let (attempt, schema) = Self::validate_selected_header(
-                    reader,
-                    instance.spec.tenant,
-                    id,
-                    &step,
-                    revision,
-                )?;
-                attempt
-                    .capture
-                    .grant
-                    .permitted_by(&instance.grant.selection)?;
-                let packet = Self::managed_step_payload(reader, id, packet)?;
-                let data = Self::decode_selected_record(&packet, &schema, step.rows)?;
-                return Ok(ManagedOutput::Selected { packet, data });
-            }
-            _ => return Err(Code::Missing.error("managed result")),
-        }
-        let (record, output, commit_revision) =
-            Self::managed_header_from(reader, instance.spec.tenant, id)?;
-        if record.instance != instance.spec.id {
-            return Err(Code::Denied.error("managed result scope"));
-        }
-        let (descriptor, attempt) = Self::validate_managed_header(
-            reader,
-            instance.spec.tenant,
-            id,
-            &record,
-            commit_revision,
-        )?;
-        attempt
-            .capture
-            .grant
-            .permitted_by(&instance.grant.selection)?;
-        let (record, output, commit_revision) =
-            Self::managed_payload_from(reader, id, (record, output, commit_revision))?;
-        let data = Self::decode_managed_record(&descriptor, &record, &output)?;
-        let current =
-            self.managed_current(reader, &instance.spec, id, commit_revision, now, control)?;
-        Ok(ManagedOutput::Call {
-            result: Box::new(crate::InstanceResultV1 {
-                instance_id: instance.spec.id.clone(),
-                result_id: id.to_owned(),
-                image: record.declaration.image,
-                package: record.declaration.package,
-                export: record.declaration.export,
-                context: record.context,
-                commit_revision,
-                current,
-                output,
-            }),
-            data,
-        })
-    }
-
-    pub(super) fn managed_record_from(
-        reader: &Connection,
-        tenant: [u8; 16],
-        id: &str,
-    ) -> Result<(Record, sdk::wire::Output, u64)> {
-        let header = Self::managed_header_from(reader, tenant, id)?;
-        Self::managed_payload_from(reader, id, header)
-    }
-
-    fn managed_payload_from(
-        reader: &Connection,
-        id: &str,
-        (mut record, mut output, revision): (Record, sdk::wire::Output, u64),
-    ) -> Result<(Record, sdk::wire::Output, u64)> {
-        let (count, invalid): (usize, usize) = reader.query_row(
-            "SELECT count(*), count(*) FILTER (WHERE slot >= ? OR octet_length(ipc) = 0) FROM managed_arrow WHERE result_id = ? AND role = 'input'",
-            params![record.inputs.len(), id], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "validate managed input slots" })?;
-        if invalid != 0 || count > record.inputs.len() {
-            return Err(Code::Invalid.error("managed input payload count"));
-        }
-        if count < record.inputs.len() {
-            return Err(Code::Missing.error("managed input payload"));
-        }
-        let query = if record.changes.is_some() {
-            "SELECT role, slot, ipc FROM managed_arrow WHERE result_id = ? AND role NOT IN ('input', 'target') ORDER BY role, slot"
-        } else {
-            "SELECT role, slot, ipc FROM managed_arrow WHERE result_id = ? AND role <> 'input' ORDER BY role, slot"
-        };
-        let mut blobs = reader.prepare(query).context(AnalysisDatabaseSnafu {
-            operation: "prepare managed Arrow payloads",
-        })?;
-        let rows = blobs
-            .query_map(params![id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u64>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                ))
-            })
-            .context(AnalysisDatabaseSnafu {
-                operation: "read managed Arrow payloads",
-            })?;
-        let mut seen = std::collections::BTreeSet::new();
-        for row in rows {
-            let (role, slot, bytes) = row.context(AnalysisDatabaseSnafu {
-                operation: "decode managed Arrow payload",
-            })?;
-            let index =
-                usize::try_from(slot).map_err(|_| Code::Invalid.error("managed Arrow slot"))?;
-            let target = match role.as_str() {
-                "output" => output
-                    .datasets
-                    .get_mut(index)
-                    .map(|data| &mut data.arrow_ipc),
-                "checkpoint" => output
-                    .checkpoint
-                    .as_mut()
-                    .and_then(|state| state.datasets.get_mut(index))
-                    .map(|data| &mut data.arrow_ipc),
-                "reason" => output
-                    .reasons
-                    .get_mut(index)
-                    .map(|reason| &mut reason.details),
-                "parameters" if slot == 0 => {
-                    record.parameters.as_mut().map(|data| &mut data.arrow_ipc)
-                }
-                _ => None,
-            }
-            .ok_or_else(|| Code::Invalid.error("managed Arrow role"))?;
-            if !target.is_empty() || bytes.is_empty() || !seen.insert((role, slot)) {
-                return Err(Code::Invalid.error("managed Arrow payload"));
-            }
-            *target = bytes;
-        }
-        let expected = output.datasets.len()
-            + output.reasons.len()
-            + output
-                .checkpoint
-                .as_ref()
-                .map_or(0, |state| state.datasets.len())
-            + usize::from(record.parameters.is_some());
-        if seen.len() != expected {
-            return Err(Code::Invalid.error("managed Arrow payload count"));
-        }
-        Ok((record, output, revision))
-    }
-
-    pub(super) fn managed_header_from(
-        reader: &Connection,
-        tenant: [u8; 16],
-        id: &str,
-    ) -> Result<(Record, sdk::wire::Output, u64)> {
-        let (metadata, body, revision): (Vec<u8>, Vec<u8>, u64) = reader.query_row("SELECT request_meta, body, commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-package-v1'",
-            params![tenant.as_slice(), id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .context(AnalysisDatabaseSnafu { operation: "read complete managed result" })?;
-        let record: Record =
-            ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
-        let output: sdk::wire::Output =
-            ManagedCodec::decode(&body).context(crate::ManagedDecodingSnafu)?;
         if Self::managed_edges(reader, tenant, id)? != record.dependencies {
             return Err(Code::Invalid.error("managed result edges"));
         }
-        Ok((record, output, revision))
+        Ok((
+            record,
+            ManagedCodec::decode(&body).context(crate::ManagedDecodingSnafu)?,
+            revision,
+        ))
     }
 
-    fn retained_call_from(
-        &self,
+    pub(super) fn managed_meta_from(
         reader: &Connection,
-        spec: &ManagedSpec,
-        record: &Record,
+        tenant: [u8; 16],
         id: &str,
-        revision: u64,
-    ) -> Result<Option<Attempt>> {
-        if !matches!(
-            &spec.destination,
-            ManagedDestination::Graph {
-                operation: ManagedGraphOperation::Evaluate,
-                ..
-            }
-        ) {
-            return Ok(None);
-        }
-        let Some(current) = Self::managed_instance_from(reader, spec.tenant, &spec.id)? else {
-            return Ok(None);
-        };
-        if current.removed || current.spec != *spec || current.progress <= revision {
-            return Ok(None);
-        }
-        let key: String = reader.query_row(
-            "SELECT attempt_id FROM managed_attempts WHERE tenant_id = ? AND instance_id = ? AND generation = ? AND completed = ?",
-            params![spec.tenant.as_slice(), spec.id, current.generation, current.progress], |row| row.get(0),
-        ).context(AnalysisDatabaseSnafu { operation: "read retained Graph call attestation" })?;
-        let attempt = Self::managed_attempt_from(reader, spec.tenant, &spec.id, &key)?
-            .ok_or_else(|| Code::Invalid.error("retained Graph call attestation"))?;
-        let reference = crate::analysis::PackageResultRefV1 {
-            result_id: id.into(),
-            commit_revision: revision,
-        };
-        if !attempt.retains(spec, record.call, &reference) {
-            return Ok(None);
-        }
-        let receipt = attempt
-            .receipt
-            .as_ref()
-            .filter(|receipt| {
-                receipt.commit_revision == current.progress
-                    && receipt
-                        .results
-                        .get(&record.call)
-                        .is_none_or(|retained| retained == &reference)
-                    && attempt.terminal.is_none()
-            })
-            .ok_or_else(|| Code::Invalid.error("retained Graph call attestation"))?;
-        let (step, _, saved) =
-            Self::managed_step_header(reader, spec.tenant, &receipt.selected.result_id)?;
-        Self::validate_selected_header(
-            reader,
-            spec.tenant,
-            &receipt.selected.result_id,
-            &step,
-            saved,
-        )?;
-        Self::validate_managed_header(reader, spec.tenant, id, record, revision)?;
-        if !receipt.results.contains_key(&record.call) {
-            return Ok(None);
-        }
-        Ok(Some(attempt))
+    ) -> Result<(Record, u64)> {
+        let (metadata, revision): (Vec<u8>, u64) = reader.query_row(
+            "SELECT request_meta, commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-package-v1'",
+            params![tenant.as_slice(), id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "read managed call reference" })?;
+        Ok((
+            ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?,
+            revision,
+        ))
     }
 
     pub(super) fn managed_current(
@@ -965,28 +770,13 @@ impl AnalysisStore {
         now: u64,
         control: &AnalysisReadControl,
     ) -> Result<bool> {
-        Ok(
-            self.managed_source_freshness(reader, spec, (id, revision), now, control, None)?
-                == SourceFreshness::Current,
-        )
-    }
-
-    pub(super) fn managed_source_freshness(
-        &self,
-        reader: &Connection,
-        spec: &ManagedSpec,
-        (id, revision): (&str, u64),
-        now: u64,
-        control: &AnalysisReadControl,
-        mut output: Option<&mut crate::AnalysisExtractionV1>,
-    ) -> Result<SourceFreshness> {
         let mut statement = reader.prepare("WITH RECURSIVE needed(result_id, revision) AS (
             SELECT ?::VARCHAR, ?::UBIGINT UNION
             SELECT e.dependency_id, e.commit_revision FROM managed_edges e
                 JOIN needed n ON n.result_id = e.result_id
                 JOIN analysis_results parent ON parent.result_id = e.result_id
                     AND parent.tenant_id = e.tenant_id AND parent.commit_revision = n.revision
-                WHERE e.tenant_id = ? AND e.kind = 'input' AND parent.processor_id
+                WHERE e.tenant_id = ? AND parent.processor_id
                     IN ('managed-package-v1', 'managed-definition-v1'))
             SELECT n.result_id, n.revision, r.processor_id, c.instance_id FROM needed n
             LEFT JOIN analysis_results r ON n.result_id = r.result_id AND r.tenant_id = ? AND r.commit_revision = n.revision
@@ -1011,26 +801,22 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "decode managed freshness",
             })?;
-        let mut freshness = SourceFreshness::Current;
+        let mut current = true;
         for (id, revision, processor, instance) in rows {
             control.check()?;
             let Some(processor) = processor else {
-                return Ok(SourceFreshness::Changed);
+                return Ok(false);
             };
             let (attempt, witnesses, contexts) = if processor == "managed-package-v1" {
                 if instance.as_deref() != Some(spec.id.as_str()) {
-                    return Ok(SourceFreshness::Changed);
+                    return Ok(false);
                 }
                 let metadata: Vec<u8> = reader.query_row("SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![spec.tenant.as_slice(), id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "read managed freshness metadata" })?;
                 let record: Record =
                     ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
-                let attempt = match self.retained_call_from(reader, spec, &record, &id, revision)? {
-                    Some(attested) => attested,
-                    None => {
-                        Self::managed_attempt_from(reader, spec.tenant, &spec.id, &record.attempt)?
-                            .ok_or_else(|| Code::Missing.error("managed result attempt"))?
-                    }
-                };
+                let attempt =
+                    Self::managed_attempt_from(reader, spec.tenant, &spec.id, &record.attempt)?
+                        .ok_or_else(|| Code::Missing.error("managed result attempt"))?;
                 (attempt, record.witnesses, record.contexts)
             } else if processor == "managed-definition-v1" {
                 let metadata: Vec<u8> = reader.query_row("SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![spec.tenant.as_slice(), id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "read managed selected freshness" })?;
@@ -1040,7 +826,7 @@ impl AnalysisStore {
                 if step.instance != spec.id
                     || current.is_none_or(|instance| instance.progress != revision)
                 {
-                    return Ok(SourceFreshness::Changed);
+                    return Ok(false);
                 }
                 let attempt =
                     Self::managed_attempt_from(reader, spec.tenant, &spec.id, &step.attempt)?
@@ -1048,7 +834,7 @@ impl AnalysisStore {
                 (attempt, step.witnesses, step.contexts)
             } else {
                 if self.package_source_revision(reader, spec.tenant, &id)? != revision {
-                    return Ok(SourceFreshness::Changed);
+                    return Ok(false);
                 }
                 continue;
             };
@@ -1059,133 +845,62 @@ impl AnalysisStore {
                 .and_then(|frontier| frontier.next_change)
                 .is_some_and(|deadline| deadline <= now)
             {
-                return Ok(SourceFreshness::Changed);
+                return Ok(false);
             }
             let capture = attempt.capture;
             if !Self::package_sources_current(reader, &capture.sources, control)? {
-                return Ok(SourceFreshness::Changed);
+                return Ok(false);
             }
             Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, control)?;
-            if let Some(output) = output.as_deref_mut() {
-                for trace in &capture.traces {
-                    if !output.trace_reads.contains(trace) {
-                        let added = crate::AnalysisExtractionV1::grow(
-                            &mut output.trace_reads,
-                            output.input_bytes,
-                            output.limits.input_bytes,
-                        )?;
-                        output.charge(added)?;
-                        output.trace_reads.push(*trace);
-                    }
-                }
-            }
             if witnesses
                 .iter()
                 .any(|witness| witness.expires_utc_ns <= now)
             {
-                freshness = SourceFreshness::EvidenceExpired;
+                current = false;
             }
             for reference in &contexts {
                 if self
                     .read_context_cached_from(reader, &self.root, &reference.key)?
                     .is_none_or(|(_, current)| current != reference.commit_revision)
                 {
-                    return Ok(SourceFreshness::Changed);
+                    return Ok(false);
                 }
             }
         }
-        Ok(freshness)
+        Ok(current)
     }
 }
 
 impl AnalysisStore {
-    pub fn managed_selected(
-        &self,
-        tenant: [u8; 16],
-        instance: &str,
-        attempt: &str,
-        control: &AnalysisReadControl,
-    ) -> Result<Option<ManagedSelected>> {
-        let mut reader = self.reader_until(control)?;
-        control.run(&mut reader, |reader| {
-            let Some(attempt) = Self::managed_attempt_from(reader, tenant, instance, attempt)?
-            else {
-                return Ok(None);
-            };
-            let Some(receipt) = attempt.receipt else {
-                return Ok(None);
-            };
-            let (step, packet, revision) =
-                Self::managed_step_from(reader, tenant, &receipt.selected.result_id)?;
-            if step.instance != instance
-                || step.attempt != attempt.request.id
-                || receipt.selected.commit_revision != revision
-            {
-                return Err(Code::Invalid.error("managed selected result rows"));
-            }
-            let (_, schema) = Self::validate_selected_header(
-                reader,
-                tenant,
-                &receipt.selected.result_id,
-                &step,
-                revision,
-            )?;
-            let data = Self::decode_selected_record(&packet, &schema, step.rows)?;
-            Ok(Some(ManagedSelected {
-                data,
-                commit_revision: revision,
-            }))
-        })
-    }
-
-    pub(super) fn managed_step_from(
-        reader: &Connection,
-        tenant: [u8; 16],
-        id: &str,
-    ) -> Result<(Step, sdk::wire::Dataset, u64)> {
-        let (step, packet, revision) = Self::managed_step_header(reader, tenant, id)?;
-        Ok((
-            step,
-            Self::managed_step_payload(reader, id, packet)?,
-            revision,
-        ))
-    }
-
     pub(super) fn managed_step_header(
         reader: &Connection,
         tenant: [u8; 16],
         id: &str,
-    ) -> Result<(Step, sdk::wire::Dataset, u64)> {
-        let (metadata, body, revision): (Vec<u8>, Vec<u8>, u64) = reader.query_row(
-            "SELECT request_meta, body, commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-definition-v1'",
-            params![tenant.as_slice(), id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .context(AnalysisDatabaseSnafu { operation: "read managed selected relation" })?;
-        let step: Step = ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
-        let packet: sdk::wire::Dataset =
-            ManagedCodec::decode(&body).context(crate::ManagedDecodingSnafu)?;
-        if !packet.arrow_ipc.is_empty() {
-            return Err(Code::Invalid.error("managed selected header"));
-        }
-        if Self::managed_edges(reader, tenant, id)? != step.dependencies {
+    ) -> Result<(Step, u64)> {
+        let (step, revision) = Self::managed_step_meta(reader, tenant, id)?;
+        let empty: bool = reader.query_row(
+            "SELECT octet_length(body) = 0 FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+            params![tenant.as_slice(), id], |row| row.get(0),
+        ).context(AnalysisDatabaseSnafu { operation: "check managed selected reference" })?;
+        if !empty || Self::managed_edges(reader, tenant, id)? != step.dependencies {
             return Err(Code::Invalid.error("managed selected edges"));
         }
-        Self::check_source_header(reader, tenant, id, &step, revision)?;
-        Ok((step, packet, revision))
+        Ok((step, revision))
     }
 
-    fn managed_step_payload(
+    pub(super) fn managed_step_meta(
         reader: &Connection,
+        tenant: [u8; 16],
         id: &str,
-        mut packet: sdk::wire::Dataset,
-    ) -> Result<sdk::wire::Dataset> {
-        let blobs = reader.query_row("SELECT count(*), count(*) FILTER (WHERE role = 'selected' AND slot = 0) FROM managed_arrow WHERE result_id = ? AND role <> 'source'", params![id], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)))
-            .context(AnalysisDatabaseSnafu { operation: "validate selected Arrow role" })?;
-        if blobs != (1, 1) {
-            return Err(Code::Invalid.error("managed selected payload"));
-        }
-        packet.arrow_ipc = reader.query_row("SELECT ipc FROM managed_arrow WHERE result_id = ? AND role = 'selected' AND slot = 0", params![id], |row| row.get(0))
-            .context(AnalysisDatabaseSnafu { operation: "read selected Arrow payload" })?;
-        Ok(packet)
+    ) -> Result<(Step, u64)> {
+        let (metadata, revision): (Vec<u8>, u64) = reader.query_row(
+            "SELECT request_meta, commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-definition-v1'",
+            params![tenant.as_slice(), id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "read managed selected reference" })?;
+        Ok((
+            ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?,
+            revision,
+        ))
     }
 
     pub(in crate::analysis) fn managed_evidence(
@@ -1207,53 +922,35 @@ impl AnalysisStore {
 }
 
 impl AnalysisStore {
-    pub(super) fn validate_managed_record(
+    pub(super) fn managed_call_owner(
         reader: &Connection,
         tenant: [u8; 16],
         id: &str,
-        record: &Record,
-        packet: &sdk::wire::Output,
         revision: u64,
-    ) -> Result<sdk::Output> {
-        let (descriptor, _) = Self::validate_managed_header(reader, tenant, id, record, revision)?;
-        Self::decode_managed_record(&descriptor, record, packet)
-    }
-
-    pub(super) fn decode_managed_record(
-        descriptor: &sdk::Package,
         record: &Record,
-        packet: &sdk::wire::Output,
-    ) -> Result<sdk::Output> {
-        let model = descriptor
-            .exports
-            .iter()
-            .find(|model| model.name == record.declaration.export)
-            .ok_or_else(|| Code::Missing.error("retained managed model"))?;
-        match (&record.parameters, model.parameters.fields().is_empty()) {
-            (None, true) => {}
-            (Some(packet), false) => {
-                let data = packet
-                    .decode(&model.parameters)
-                    .context(crate::AnalysisContractSnafu)?;
-                if packet.name != "parameters" || data.batches.len() != 1 || data.rows() != 1 {
-                    return Err(Code::Invalid.error("retained managed parameters"));
-                }
-                data.validate(&sdk::Port::new("parameters", model.parameters.clone()))
-                    .context(crate::AnalysisContractSnafu)?;
-            }
-            _ => return Err(Code::Invalid.error("retained managed parameters")),
+    ) -> Result<(Attempt, ManagedSpec)> {
+        let attempt =
+            Self::managed_attempt_from(reader, tenant, &record.instance, &record.attempt)?
+                .ok_or_else(|| Code::Missing.error("managed result attempt"))?;
+        if attempt.terminal.is_some()
+            || attempt.receipt.as_ref().is_none_or(|receipt| {
+                receipt.instance != record.instance
+                    || receipt.attempt != record.attempt
+                    || receipt.commit_revision != revision
+                    || receipt.results.get(&record.call).is_none_or(|result| {
+                        result.result_id != id || result.commit_revision != revision
+                    })
+            })
+        {
+            return Err(Code::Invalid.error("retained managed result owner"));
         }
-        packet
-            .decode_retained(
-                descriptor,
-                &record.declaration.export,
-                &record
-                    .inputs
-                    .iter()
-                    .map(|input| (input.name.clone(), input.rows))
-                    .collect(),
-            )
-            .context(crate::AnalysisContractSnafu)
+        let spec = Self::managed_version_from(
+            reader,
+            tenant,
+            &record.instance,
+            attempt.capture.generation,
+        )?;
+        Ok((attempt, spec))
     }
 
     pub(super) fn validate_managed_header(
@@ -1262,16 +959,13 @@ impl AnalysisStore {
         id: &str,
         record: &Record,
         revision: u64,
-    ) -> Result<(sdk::Package, Attempt)> {
-        let attempt =
-            Self::managed_attempt_from(reader, tenant, &record.instance, &record.attempt)?
-                .ok_or_else(|| Code::Missing.error("managed result attempt"))?;
-        let spec = Self::managed_version_from(
-            reader,
-            tenant,
-            &record.instance,
-            attempt.capture.generation,
-        )?;
+    ) -> Result<(sdk::Package, Attempt, ManagedSpec)> {
+        let (attempt, spec) = Self::managed_call_owner(reader, tenant, id, revision, record)?;
+        let declaration = spec
+            .manifest
+            .calls
+            .get(&record.call)
+            .ok_or_else(|| Code::Invalid.error("retained managed call"))?;
         let receipt = attempt
             .receipt
             .as_ref()
@@ -1284,11 +978,6 @@ impl AnalysisStore {
                 &record.instance,
                 attempt.capture.generation,
             )?
-            || spec.manifest.calls.get(&record.call) != Some(&record.declaration)
-            || receipt.results.get(&record.call).is_none_or(|reference| {
-                reference.result_id != id || reference.commit_revision != revision
-            })
-            || receipt.commit_revision != revision
             || record.context.context.id != attempt.request.id
             || record.context.context.time_utc_ns != attempt.request.time_utc_ns as i64
             || record.context.context.seed != attempt.request.seed
@@ -1316,33 +1005,39 @@ impl AnalysisStore {
             return Err(Code::Invalid.error("managed result source evidence"));
         }
         Self::check_source_evidence(reader, &attempt, &step)?;
-        let descriptor = Self::managed_contract(reader, tenant, &record.declaration)?;
+        let descriptor = Self::managed_contract(reader, tenant, declaration)?;
         let model = descriptor
             .exports
             .iter()
-            .find(|model| model.name == record.declaration.export)
+            .find(|model| model.name == declaration.export)
             .ok_or_else(|| Code::Missing.error("retained managed model"))?;
-        if record.context.target != record.declaration.target
-            || record.context.artifact != record.declaration.artifact
+        if record.context.target != declaration.target
+            || record.context.artifact != declaration.artifact
             || record.context.inputs.len() != model.inputs.len()
             || record.context.input_coverage.len() != model.inputs.len()
-            || record.inputs.len() != model.inputs.len()
-            || record
-                .inputs
-                .iter()
-                .map(|input| &input.name)
-                .collect::<std::collections::BTreeSet<_>>()
-                != model.inputs.iter().map(|port| &port.port.name).collect()
             || record.context.coverage
                 != crate::ResultContext::coverage(&record.context.input_coverage)
         {
             return Err(Code::Invalid.error("retained managed evaluation context"));
         }
-        Self::check_change_record(reader, tenant, record, model, &attempt)?;
+        Self::check_change_record(reader, tenant, record, declaration, model, &attempt)?;
+        if matches!(&spec.destination, ManagedDestination::Graph { calls, .. }
+            if calls.contains(&record.call))
+            && araphor_analysis_builtins::graph::Detector::supports_units(model)
+        {
+            crate::analysis::graph_rows::GraphRows::call_scope(
+                reader,
+                &spec,
+                record.call,
+                &crate::analysis::PackageResultRefV1 {
+                    result_id: id.into(),
+                    commit_revision: revision,
+                },
+            )?;
+        }
         let mut dependencies = attempt.capture.dependencies.clone();
         dependencies.extend(
-            record
-                .declaration
+            declaration
                 .dependencies
                 .iter()
                 .filter_map(|call| receipt.results.get(call).cloned()),
@@ -1352,7 +1047,7 @@ impl AnalysisStore {
         if dependencies != record.dependencies {
             return Err(Code::Invalid.error("retained managed dependencies"));
         }
-        Ok((descriptor, attempt))
+        Ok((descriptor, attempt, spec))
     }
 }
 
@@ -1362,7 +1057,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         id: &str,
     ) -> Result<Vec<super::super::PackageResultRefV1>> {
-        let mut statement = reader.prepare("SELECT dependency_id, commit_revision FROM managed_edges WHERE tenant_id = ? AND result_id = ? AND kind = 'input' ORDER BY dependency_id")
+        let mut statement = reader.prepare("SELECT dependency_id, commit_revision FROM managed_edges WHERE tenant_id = ? AND result_id = ? ORDER BY dependency_id")
             .context(AnalysisDatabaseSnafu { operation: "prepare managed result edges" })?;
         statement
             .query_map(params![tenant.as_slice(), id], |row| {

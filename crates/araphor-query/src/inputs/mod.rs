@@ -9,7 +9,7 @@ use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use snafu::ResultExt as _;
 
 use crate::follow::Window;
-use crate::sources::{SourceOrigin, SourceProvider};
+use crate::sources::SourceOrigin;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 mod receipt;
@@ -115,19 +115,16 @@ impl Inputs {
 
     fn identity(plan: &LogicalPlan) -> Option<SourceOrigin> {
         match plan {
-            LogicalPlan::Extension(extension) => extension.node.as_any()
-                .downcast_ref::<crate::sources::SourcePort>().map(|source| SourceOrigin::Port(source.slot)),
-            LogicalPlan::TableScan(scan) if scan.filters.is_empty() && scan.fetch.is_none() => {
+            LogicalPlan::TableScan(scan) => {
                 let provider = source_as_provider(&scan.source).ok()?;
-                let provider = provider.as_any().downcast_ref::<SourceProvider>()?;
-                let source = provider.retained_source()?;
-                let expected = &source.schema;
-                let indices = scan.projection.as_deref();
-                if scan.projected_schema.as_arrow() != expected.as_ref()
-                    || indices.is_some_and(|indices| indices.iter().copied().ne(0..expected.fields().len())) {
-                    return None;
-                }
-                Some(SourceOrigin::Package(source.slot))
+                let source = provider.as_any().downcast_ref::<crate::sources::SourcePort>()?;
+                (scan.filters.is_empty()
+                    && scan.fetch.is_none()
+                    && scan.projected_schema.as_arrow() == source.schema().as_ref()
+                    && scan.projection.as_ref().is_none_or(|indices| {
+                        indices.iter().copied().eq(0..source.schema().fields().len())
+                    }))
+                .then_some(SourceOrigin::Port(source.slot))
             }
             LogicalPlan::Projection(projection) if projection.schema.as_arrow() == projection.input.schema().as_arrow()
                 && projection.expr.iter().enumerate().all(|(index, expr)| {

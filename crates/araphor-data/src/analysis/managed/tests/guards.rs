@@ -46,8 +46,8 @@ struct GuardCut {
     heads: Vec<(u64, u64, Option<String>)>,
     attempts: Vec<(String, Vec<u8>, u64)>,
     history: Vec<ManagedReceipt>,
-    arrow: Vec<(String, String, u64, Vec<u8>)>,
-    counts: [u64; 9],
+    states: Vec<(String, Vec<u8>, Vec<u8>)>,
+    counts: [u64; 8],
 }
 
 impl GuardCut {
@@ -61,7 +61,7 @@ impl GuardCut {
                     .map(|prior| (call, prior.revision, prior.result.clone()))
             })
             .collect();
-        let (heads, attempts, arrow, counts) = store.read_snapshot(|reader| {
+        let (heads, attempts, states, counts) = store.read_snapshot(|reader| {
             let mut statement = reader.prepare(
                 "SELECT call_id, state_revision, result_id FROM managed_calls WHERE tenant_id = ? AND instance_id = ? ORDER BY call_id",
             ).context(crate::AnalysisDatabaseSnafu { operation: "prepare managed guard heads" })?;
@@ -79,19 +79,19 @@ impl GuardCut {
             let attempts = rows.collect::<duckdb::Result<Vec<_>>>()
                 .context(crate::AnalysisDatabaseSnafu { operation: "decode managed guard attempts" })?;
             let mut statement = reader.prepare(
-                "SELECT result_id, role, slot, ipc FROM managed_arrow ORDER BY result_id, role, slot",
+                "SELECT result_id, body, request_meta FROM analysis_results ORDER BY result_id",
             ).context(crate::AnalysisDatabaseSnafu { operation: "prepare managed guard payloads" })?;
             let rows = statement.query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             }).context(crate::AnalysisDatabaseSnafu { operation: "read managed guard payloads" })?;
-            let arrow = rows.collect::<duckdb::Result<Vec<_>>>()
+            let states = rows.collect::<duckdb::Result<Vec<_>>>()
                 .context(crate::AnalysisDatabaseSnafu { operation: "decode managed guard payloads" })?;
             let counts = reader.query_row(
-                "SELECT (SELECT count(*) FROM managed_versions), (SELECT count(*) FROM managed_instances), (SELECT count(*) FROM managed_calls), (SELECT count(*) FROM managed_attempts), (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_arrow), (SELECT count(*) FROM managed_edges), (SELECT count(*) FROM evidence_refs), (SELECT count(*) FROM context_refs)",
+                "SELECT (SELECT count(*) FROM managed_versions), (SELECT count(*) FROM managed_instances), (SELECT count(*) FROM managed_calls), (SELECT count(*) FROM managed_attempts), (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_edges), (SELECT count(*) FROM evidence_refs), (SELECT count(*) FROM context_refs)",
                 [],
-                |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?]),
+                |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?]),
             ).context(crate::AnalysisDatabaseSnafu { operation: "count managed guard rows" })?;
-            Ok((heads, attempts, arrow, counts))
+            Ok((heads, attempts, states, counts))
         })?;
         Ok(Self {
             meta: store.meta()?,
@@ -104,7 +104,7 @@ impl GuardCut {
                 &captured.instance().spec.id,
                 &AnalysisReadControl::default(),
             )?,
-            arrow,
+            states,
             counts,
         })
     }
@@ -146,7 +146,7 @@ fn capture_checks_store_identity() -> TestResult {
     assert_eq!(original.prior, separate.prior);
     assert_eq!(original.heads, separate.heads);
     assert_eq!(original.history, separate.history);
-    assert_eq!(original.arrow, separate.arrow);
+    assert_eq!(original.states, separate.states);
     assert_eq!(original.counts, separate.counts);
     let rejected = request("foreign-capture");
     assert!(matches!(
@@ -179,7 +179,7 @@ fn capture_checks_store_identity() -> TestResult {
     assert_eq!(before.heads, pending.heads);
     assert_eq!(before.attempts, pending.attempts);
     assert_eq!(before.history, pending.history);
-    assert_eq!(before.arrow, pending.arrow);
+    assert_eq!(before.states, pending.states);
     assert_eq!(before.counts, pending.counts);
     let copied = restored
         .managed_attempt(

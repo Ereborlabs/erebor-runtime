@@ -7,7 +7,6 @@ use snafu::Snafu;
 use super::progress::{Progress, Wake};
 use super::Run;
 use crate::execution::Session;
-use crate::sources::SourceSnapshot;
 use crate::{Error, Failure, Result};
 
 /// Wait for a source change after a failed managed capture has joined.
@@ -126,7 +125,7 @@ impl SourceRecovery {
             Arc::clone(self.run.session.memory()),
         )?;
         session.managed = self.managed;
-        let selection = SourceSnapshot::selection(&self.selection, &self.requests)?;
+        let selection = self.selection.project(&self.requests)?;
         let (meta, revision) = self
             .run
             .dependencies(&session, selection.clone(), None, None)

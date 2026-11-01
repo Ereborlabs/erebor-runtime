@@ -17,8 +17,30 @@ impl AnalysisStore {
         Self::validate_notification_heads(writer, root)?;
         Self::validate_traces(writer, root)?;
         Self::validate_trace_receipts(writer, root)?;
+        Self::validate_processors(writer, root)?;
+        Self::validate_notices(writer, root)?;
         let checks = [
             ("invalid source key", "SELECT 1 FROM source_receipts WHERE octet_length(stream_key) NOT BETWEEN 68 AND 195"),
+            ("invalid source history", "WITH versions AS (
+                SELECT *, LAG(contiguous_cursor) OVER history AS prior_cursor,
+                    LAG(coverage_revision) OVER history AS prior_coverage,
+                    LAG(retained_floor) OVER history AS prior_floor FROM source_versions
+                WINDOW history AS (PARTITION BY stream_key ORDER BY commit_revision))
+                SELECT 1 FROM versions v LEFT JOIN source_receipts s USING (stream_key)
+                WHERE s.stream_key IS NULL OR v.identity_json <> s.identity_json
+                    OR v.tenant_id <> s.tenant_id OR v.cpu_id <> s.cpu_id
+                    OR v.retained_floor > v.contiguous_cursor
+                    OR v.contiguous_cursor < v.prior_cursor
+                    OR v.coverage_revision < v.prior_coverage
+                    OR v.retained_floor < v.prior_floor"),
+            ("invalid source coverage history", "SELECT 1 FROM source_versions s
+                WHERE s.coverage_revision <> COALESCE((SELECT MAX(c.revision)
+                    FROM coverage c WHERE c.stream_key = s.stream_key
+                        AND c.commit_revision <= s.commit_revision), 0)"),
+            ("invalid coverage source version", "SELECT 1 FROM coverage c
+                LEFT JOIN source_versions s USING (stream_key, commit_revision)
+                WHERE s.stream_key IS NULL OR s.tenant_id <> c.tenant_id
+                    OR s.coverage_revision <> c.revision"),
             ("invalid segment identity or state", "SELECT 1 FROM segments e
                 LEFT JOIN (SELECT stream_key, tenant_id, identity_json, cpu_id, 'records' AS kind FROM source_receipts
                     UNION ALL SELECT stream_key, tenant_id, identity_json, NULL, 'diagnostic' FROM trace_receipts) s USING (stream_key)
@@ -39,6 +61,8 @@ impl AnalysisStore {
                 ) s USING (stream_key)
                 WHERE s.stream_key IS NULL OR x.tenant_id <> s.tenant_id OR x.first_cursor = 0 OR x.segment_id = 0
                 OR x.segment_id >= (SELECT next_segment_id FROM store_meta)
+                OR x.source_revision = 0 OR x.source_revision >= x.commit_revision
+                OR x.received_utc_ns = 0
                 OR x.last_cursor < x.first_cursor OR x.last_cursor > s.contiguous_cursor
                 OR EXISTS (SELECT 1 FROM expired_ranges y WHERE y.stream_key = x.stream_key
                     AND y.first_cursor > x.first_cursor AND y.first_cursor <= x.last_cursor)"),
@@ -50,7 +74,7 @@ impl AnalysisStore {
                 WHERE NOT EXISTS (SELECT 1 FROM replay_floors f WHERE f.tenant_id = x.tenant_id)"),
             ("invalid result body", "SELECT 1 FROM analysis_results WHERE octet_length(tenant_id) <> 16
                 OR result_id = '' OR processor_id = ''
-                OR octet_length(body) = 0
+                OR (octet_length(body) = 0 AND processor_id <> 'managed-definition-v1')
                 OR octet_length(request_meta) = 0"),
             ("invalid profile header", "SELECT 1 FROM analysis_results
                 WHERE (stream_key IS NULL AND (method_version IS NOT NULL OR interval_id IS NOT NULL
@@ -64,6 +88,21 @@ impl AnalysisStore {
                     OR (processor_id = 'graph-findings' AND (profile_revision IS NOT NULL
                         OR interval_id <> first_cursor::VARCHAR))
                     OR facts_revision IS NULL OR coverage_revision IS NULL OR first_cursor IS NULL))"),
+            ("invalid result notice", "SELECT 1 FROM result_notices n LEFT JOIN analysis_results r
+                ON r.tenant_id = n.tenant_id AND r.result_id = n.result_id
+                WHERE r.result_id IS NULL OR r.processor_id NOT IN ('discovery', 'graph-findings')
+                    OR r.stream_key IS NULL OR r.facts_revision IS NULL OR r.coverage_revision IS NULL
+                    OR n.commit_revision <= r.commit_revision"),
+            ("invalid result notice history", "WITH notices AS (
+                SELECT n.*, r.processor_id,
+                    COALESCE(LAG(n.facts_revision) OVER history, r.facts_revision) AS prior_facts,
+                    COALESCE(LAG(n.coverage_revision) OVER history, r.coverage_revision) AS prior_coverage
+                FROM result_notices n JOIN analysis_results r
+                    ON r.tenant_id = n.tenant_id AND r.result_id = n.result_id
+                WINDOW history AS (PARTITION BY n.tenant_id, n.result_id ORDER BY n.commit_revision))
+                SELECT 1 FROM notices WHERE coverage_revision < prior_coverage
+                    OR (processor_id = 'discovery' AND facts_revision < prior_facts)
+                    OR (facts_revision = prior_facts AND coverage_revision = prior_coverage)"),
             ("invalid witness reference", "SELECT 1 FROM evidence_refs r
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
                 LEFT JOIN segments e ON e.segment_id = r.segment_id AND e.state = 'Live'
@@ -76,10 +115,10 @@ impl AnalysisStore {
                     AND c.entity_key = r.entity_key AND c.lifetime_key = r.lifetime_key
                     AND c.owner_revision = r.owner_revision AND c.commit_revision = r.commit_revision
                 WHERE a.result_id IS NULL OR c.owner_id IS NULL OR r.commit_revision = 0"),
-            ("invalid processor result", "SELECT 1 FROM processor_progress p
+            ("invalid processor result", "SELECT 1 FROM processor_versions p
                 LEFT JOIN analysis_results r ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id
                 WHERE p.result_id <> '' AND (r.result_id IS NULL OR r.processor_id <> p.processor_id)"),
-            ("invalid processor progress", "SELECT 1 FROM processor_progress p
+            ("invalid processor progress", "SELECT 1 FROM processor_versions p
                 LEFT JOIN source_receipts s ON s.stream_key = p.stream_key AND s.tenant_id = p.tenant_id
                 WHERE p.class NOT IN ('required', 'optional') OR p.processor_id = '' OR p.method_version = 0
                 OR octet_length(p.tenant_id) <> 16 OR octet_length(p.stream_key) NOT BETWEEN 68 AND 195
@@ -87,8 +126,8 @@ impl AnalysisStore {
                 OR p.consumed_cursor > COALESCE(s.contiguous_cursor, 0)
                 OR p.resume_floor > COALESCE(s.contiguous_cursor, 0)
                 OR p.coverage_revision > COALESCE(s.coverage_revision, 0)
-                OR p.context_revision > (SELECT commit_revision FROM store_meta)"),
-            ("invalid processor retirement", "SELECT 1 FROM processor_progress p
+                OR p.context_revision > p.commit_revision"),
+            ("invalid processor retirement", "SELECT 1 FROM processor_versions p
                 LEFT JOIN source_receipts s ON s.stream_key = p.stream_key AND s.tenant_id = p.tenant_id
                 WHERE (NOT p.retired AND (p.retirement_id <> '' OR p.retirement_reason <> ''
                     OR p.retirement_cursor <> 0 OR p.retirement_revision <> 0))
@@ -98,7 +137,7 @@ impl AnalysisStore {
                     OR p.retirement_cursor < p.consumed_cursor
                     OR p.retirement_cursor > COALESCE(s.contiguous_cursor, 0)
                     OR p.retirement_revision = 0
-                    OR p.retirement_revision > (SELECT commit_revision FROM store_meta)
+                    OR p.retirement_revision <> p.commit_revision
                     OR p.retirement_revision > COALESCE((SELECT last_changed_revision
                         FROM relation_revisions WHERE relation_name = 'processor_progress'), 0)
                     OR (p.retirement_cursor > p.consumed_cursor AND NOT EXISTS (
@@ -108,15 +147,41 @@ impl AnalysisStore {
                             AND g.first_cursor::HUGEINT = p.consumed_cursor::HUGEINT + 1
                             AND g.last_cursor = p.retirement_cursor
                             AND g.commit_revision = p.retirement_revision))))"),
+            ("invalid processor history", "WITH versions AS (
+                SELECT *, ROW_NUMBER() OVER history AS ordinal,
+                    LAG(class) OVER history AS prior_class,
+                    LAG(start_cursor) OVER history AS prior_start,
+                    LAG(consumed_cursor) OVER history AS prior_consumed,
+                    LAG(resume_floor) OVER history AS prior_resumed,
+                    LAG(retired) OVER history AS prior_retired
+                FROM processor_versions
+                WINDOW history AS (PARTITION BY processor_id, method_version, tenant_id,
+                    stream_key ORDER BY commit_revision))
+                SELECT 1 FROM versions WHERE
+                    (ordinal = 1 AND (consumed_cursor::HUGEINT <> start_cursor::HUGEINT - 1
+                        OR resume_floor <> consumed_cursor OR coverage_revision <> 0
+                        OR context_revision <> 0 OR retired OR result_id <> ''))
+                    OR (ordinal > 1 AND (class <> prior_class OR start_cursor <> prior_start
+                        OR consumed_cursor < prior_consumed OR resume_floor < prior_resumed
+                        OR prior_retired))"),
             ("invalid processor gap", "SELECT 1 FROM processor_gaps g LEFT JOIN processor_progress p
                 ON p.processor_id = g.processor_id AND p.method_version = g.method_version
                     AND p.tenant_id = g.tenant_id AND p.stream_key = g.stream_key
-                WHERE p.processor_id IS NULL OR g.first_cursor = 0 OR g.last_cursor < g.first_cursor
-                    OR (p.class = 'optional' AND g.last_cursor > p.resume_floor)
+                LEFT JOIN processor_versions a ON a.processor_id = g.processor_id
+                    AND a.method_version = g.method_version AND a.tenant_id = g.tenant_id
+                    AND a.stream_key = g.stream_key AND a.commit_revision = g.accepted_revision
+                WHERE p.processor_id IS NULL OR a.processor_id IS NULL
+                    OR g.first_cursor = 0 OR g.last_cursor < g.first_cursor
+                    OR g.accepted_revision = 0 OR g.commit_revision > g.accepted_revision
+                    OR g.accepted_revision > (SELECT commit_revision FROM store_meta)
+                    OR g.accepted_revision > COALESCE((SELECT last_changed_revision
+                        FROM relation_revisions WHERE relation_name = 'processor_gaps'), 0)
+                    OR (p.class = 'optional' AND g.last_cursor > a.resume_floor)
                     OR (p.class = 'required' AND (NOT p.retired
                         OR g.first_cursor::HUGEINT <> p.consumed_cursor::HUGEINT + 1
                         OR g.last_cursor <> p.retirement_cursor
-                        OR g.commit_revision <> p.retirement_revision))"),
+                        OR g.commit_revision <> p.retirement_revision
+                        OR g.accepted_revision <> p.retirement_revision))"),
             ("invalid recovery gap", "SELECT 1 FROM recovery_gaps WHERE octet_length(stream_key) NOT BETWEEN 68 AND 195
                 OR octet_length(tenant_id) <> 16 OR first_cursor = 0 OR last_cursor < first_cursor"),
         ];
@@ -131,10 +196,13 @@ impl AnalysisStore {
             }
         }
         for (relation, notice) in [
+            ("source_versions", "source_receipts"),
             ("coverage", "coverage"),
             ("context_versions", "context_versions"),
             ("analysis_results", "analysis_results"),
+            ("result_notices", "result_notices"),
             ("processor_gaps", "processor_gaps"),
+            ("processor_versions", "processor_progress"),
             ("recovery_gaps", "recovery_gaps"),
             ("expired_ranges", "expired_ranges"),
             ("replay_floors", "replay_floors"),
@@ -264,7 +332,23 @@ impl AnalysisStore {
         Ok(())
     }
 
+    pub(super) fn validate_source_schema(writer: &Connection, root: &Path) -> Result<()> {
+        static EXPECTED: std::sync::OnceLock<Vec<Vec<(String, String)>>> =
+            std::sync::OnceLock::new();
+        if !Self::schema_matches(
+            writer,
+            &EXPECTED,
+            Self::SOURCE_SCHEMA,
+            &[("source_versions", "source_receipts")],
+            ["open source schema check", "create source schema check"],
+        )? {
+            return Self::reject_path(root, "the source schema is invalid");
+        }
+        Ok(())
+    }
+
     fn validate_sources(writer: &Connection, root: &Path) -> Result<()> {
+        Self::validate_source_schema(writer, root)?;
         let mut after = Vec::new();
         loop {
             let mut statement = writer
@@ -336,7 +420,7 @@ impl AnalysisStore {
         }
         let mut statement = writer
             .prepare(
-                "SELECT stream_key, tenant_id FROM processor_progress
+                "SELECT DISTINCT stream_key, tenant_id FROM processor_versions
              UNION ALL SELECT stream_key, tenant_id FROM recovery_gaps",
             )
             .context(AnalysisDatabaseSnafu {
@@ -364,6 +448,7 @@ impl AnalysisStore {
     }
 
     fn validate_trace_receipts(writer: &Connection, root: &Path) -> Result<()> {
+        Self::validate_trace_history(writer, root)?;
         let invalid: bool = writer.query_row(
             "SELECT EXISTS (
              SELECT 1 FROM trace_receipts WHERE octet_length(stream_key) <> 33 OR octet_length(tenant_id) <> 16
@@ -375,7 +460,7 @@ impl AnalysisStore {
         if invalid {
             return Self::reject_path(root, "the stored diagnostic receipt bounds are invalid");
         }
-        let mut statement = writer.prepare("SELECT stream_key, tenant_id, identity_json, last_sequence, output_bytes, terminal FROM trace_receipts")
+        let mut statement = writer.prepare("SELECT stream_key, tenant_id, identity_json, last_sequence, output_bytes, terminal, version_revision, commit_revision FROM trace_versions")
             .context(AnalysisDatabaseSnafu { operation: "prepare diagnostic receipt validation" })?;
         let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
             operation: "read diagnostic receipt validation",
@@ -402,6 +487,22 @@ impl AnalysisStore {
             let source = super::raw::RawIdentity::Diagnostic(identity.clone());
             if !source.valid() || key != source.key() || tenant != identity.tenant_id {
                 return Self::reject_path(root, "the diagnostic receipt identity differs");
+            }
+            let raw: u64 = row.get(7).context(AnalysisDatabaseSnafu {
+                operation: "read diagnostic source revision",
+            })?;
+            if raw == 0 {
+                let birth: u64 = row.get(6).context(AnalysisDatabaseSnafu {
+                    operation: "read diagnostic admission revision",
+                })?;
+                let admitted: u64 = writer.query_row(
+                    "SELECT min(revision) FROM trace_states WHERE tenant_id = ? AND request_id = ?",
+                    params![identity.tenant_id.as_slice(), identity.request_id.as_slice()],
+                    |row| row.get(0),
+                ).context(AnalysisDatabaseSnafu { operation: "check diagnostic admission revision" })?;
+                if birth != admitted {
+                    return Self::reject_path(root, "the diagnostic receipt admission differs");
+                }
             }
             let (_, intent) =
                 Self::read_trace_intent(writer, root, identity.tenant_id, identity.request_id)?
@@ -495,11 +596,14 @@ impl AnalysisStore {
             "tenant_id, instance_id, authority, generation, progress, running, removed, lifecycle, failure FROM managed_instances",
             "tenant_id, instance_id, call_id, state_revision, result_id FROM managed_calls",
             "tenant_id, instance_id, attempt_id, generation, contract, completed FROM managed_attempts",
-            "tenant_id, result_id, dependency_id, commit_revision, kind FROM managed_edges",
-            "result_id, role, slot, ipc FROM managed_arrow",
+            "tenant_id, result_id, dependency_id, commit_revision FROM managed_edges",
             "relation_name, last_changed_revision FROM relation_revisions",
             "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor FROM source_receipts",
+            "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor, commit_revision FROM source_versions",
             "stream_key, identity_json, tenant_id, last_sequence, output_bytes, terminal, retained_floor, commit_revision FROM trace_receipts",
+            "stream_key, identity_json, tenant_id, last_sequence, output_bytes, terminal, retained_floor, commit_revision, version_revision FROM trace_versions",
+            "tenant_id, request_id, source, source_sha256, bindings, authority, accepted_unix_ns, deadline_unix_ns, host_sensitive FROM trace_intents",
+            "tenant_id, request_id, revision, cancel_requested, read_revoked FROM trace_states",
             "epoch_key, tenant_id, node_boot_id, label_epoch FROM source_bindings",
             "next_segment_id FROM store_meta",
             "segment_id, stream_key, tenant_id, identity_json, cpu_id, stream_kind, state, sealed, committed_end, first_cursor, last_cursor, last_intake_utc_ns FROM segments",
@@ -507,14 +611,19 @@ impl AnalysisStore {
             "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision, version_key FROM context_versions",
             "state_key, tenant_id, entity_key, owner_revision, commit_revision, finding_key, concern_key FROM notification_heads",
             "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision, result_id FROM processor_progress",
+            "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision, result_id, commit_revision FROM processor_versions",
             "ref_id, tenant_id, stream_key, durable_cursor, expires_utc_ns, segment_id FROM evidence_refs",
             "ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision, commit_revision FROM context_refs",
             "result_id, tenant_id, processor_id, body, request_meta, commit_revision,
              stream_key, method_version, interval_id, profile_revision, facts_revision,
              coverage_revision, first_cursor FROM analysis_results",
-            "processor_id, method_version, tenant_id, stream_key, first_cursor, last_cursor, commit_revision FROM processor_gaps",
+            "result_id, tenant_id, processor_id, body, request_meta, commit_revision,
+             stream_key, method_version, interval_id, profile_revision, facts_revision,
+             coverage_revision, first_cursor FROM analysis_result_state",
+            "tenant_id, result_id, commit_revision, facts_revision, coverage_revision FROM result_notices",
+            "processor_id, method_version, tenant_id, stream_key, first_cursor, last_cursor, commit_revision, accepted_revision FROM processor_gaps",
             "stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM recovery_gaps",
-            "segment_id, stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM expired_ranges",
+            "segment_id, stream_key, tenant_id, first_cursor, last_cursor, commit_revision, source_revision, received_utc_ns FROM expired_ranges",
             "tenant_id, commit_revision, ordinal FROM replay_floors",
             "tenant_id, request_id, source, source_sha256, bindings, authority, accepted_unix_ns, deadline_unix_ns, host_sensitive, revision, cancel_requested, read_revoked FROM traces",
         ];
@@ -750,7 +859,7 @@ mod tests {
         );
         AnalysisStore::validate_state(writer.get()?, &root)?;
         AnalysisStore::validate_sources(writer.get()?, &root)?;
-        for table in ["processor_progress", "recovery_gaps"] {
+        for table in ["processor_versions", "recovery_gaps"] {
             let transaction = writer.get_mut()?.transaction()?;
             let mut invalid = scope.identity.key();
             invalid[66] = 0;
@@ -822,9 +931,9 @@ mod tests {
     #[test]
     fn analysis_rejects_broken_state() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let faults = [
-            "UPDATE source_receipts SET contiguous_cursor = 2",
-            "UPDATE source_receipts SET retained_floor = 2",
-            "DELETE FROM source_receipts",
+            "UPDATE source_versions SET contiguous_cursor = 2",
+            "UPDATE source_versions SET retained_floor = 2",
+            "DELETE FROM source_versions",
             "UPDATE source_bindings SET label_epoch = 9",
             "UPDATE segments SET cpu_id = 9",
             "UPDATE segments SET committed_end = committed_end + 1",
@@ -839,7 +948,7 @@ mod tests {
             "UPDATE context_refs SET lifetime_key = 'changed'::BLOB",
             "DELETE FROM context_versions",
             "UPDATE context_versions SET body = ''::BLOB",
-            "UPDATE processor_progress SET consumed_cursor = 2",
+            "UPDATE processor_versions SET consumed_cursor = 2",
             "UPDATE analysis_results SET body = ''::BLOB",
             "UPDATE analysis_results SET request_meta = ''::BLOB",
             "UPDATE context_refs SET commit_revision = commit_revision + 1",

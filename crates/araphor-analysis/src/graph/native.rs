@@ -17,8 +17,7 @@ use araphor_query::sources::SourceSnapshot;
 use datafusion::common::DataFusionError;
 use datafusion::datasource::view::ViewTable;
 use datafusion::execution::memory_pool::MemoryReservation;
-use datafusion::logical_expr::{Extension, LogicalPlan};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::logical_expr::LogicalPlan;
 use tokio::sync::OnceCell;
 
 use crate::{Graph, Result};
@@ -65,7 +64,6 @@ struct Projection {
     ports: Vec<sdk::Port>,
     memory: Arc<Memory>,
     limits: Limits,
-    prepared: Option<Vec<Arc<dyn ExecutionPlan>>>,
     #[cfg(test)]
     projections: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
@@ -141,15 +139,10 @@ impl GraphPublication {
             feedback,
             DefinitionRef::Fresh(&definition),
             facts,
-            true,
         )
         .await
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Graph preparation binds the admitted inputs, package definition, and authority."
-    )]
     async fn prepare_on(
         mut session: Session,
         authority: Arc<dyn PackageAuthorization>,
@@ -158,7 +151,6 @@ impl GraphPublication {
         feedback: bool,
         definition: DefinitionRef<'_>,
         facts: Arc<dyn GraphFacts>,
-        compile: bool,
     ) -> Result<Self> {
         let mut selection = session.selection().clone();
         selection.sources = grant.selection.sources.clone();
@@ -256,11 +248,6 @@ impl GraphPublication {
             FROM graph_manifest QUALIFY ROW_NUMBER() OVER (PARTITION BY tenant_id, source_key,
             first_cursor ORDER BY commit_revision DESC) = 1", Vec::new()).await?.0);
         children.push(coverage);
-        let prepared_inputs = if compile {
-            session.prepare_reusable_inputs(&children).await?
-        } else {
-            None
-        };
         let projection = Arc::new(Projection {
             tenant: grant.selection.tenant_id,
             facts,
@@ -270,7 +257,6 @@ impl GraphPublication {
                 .collect(),
             memory: Arc::clone(session.memory()),
             limits: query.limits().clone(),
-            prepared: prepared_inputs,
             #[cfg(test)]
             projections: Default::default(),
             #[cfg(test)]
@@ -286,27 +272,13 @@ impl GraphPublication {
                 index,
             });
             let schema = Arc::new(port.schema.clone());
-            let provider = if projection.prepared.is_some() {
-                araphor_query::sources::SourcePort::prepared(
-                    port.name.clone(),
-                    schema,
-                    &children,
-                    source,
-                )?
-            } else {
-                araphor_query::sources::SourcePort::new(
-                    port.name.clone(),
-                    schema,
-                    children.clone(),
-                    source,
-                )?
-            };
-            let table: Arc<dyn datafusion::catalog::TableProvider> = Arc::new(ViewTable::new(
-                LogicalPlan::Extension(Extension {
-                    node: Arc::new(provider),
-                }),
-                None,
-            ));
+            let provider = araphor_query::sources::SourcePort::new(
+                port.name.clone(),
+                schema,
+                children.clone(),
+                source,
+            )?;
+            let table: Arc<dyn datafusion::catalog::TableProvider> = Arc::new(provider);
             session.register_table(&port.name, Arc::clone(&table))?;
             session.register_table(alias, table)?;
         }

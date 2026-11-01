@@ -50,9 +50,9 @@ pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
 pub use coverage::{CoverageChanges, CoverageRecord, CoverageReportRef};
 pub use extraction::{
-    AnalysisExtractLimits, AnalysisExtractionV1, AnalysisInputTables, AnalysisPositionPageV1,
-    AnalysisReadModeV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
-    AnalysisSourceSnapshotV1, AnalysisTableRead, AnalysisTableRequests, Selection,
+    AnalysisExtractLimits, AnalysisExtractionV1, AnalysisPositionPageV1, AnalysisReadModeV1,
+    AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1,
+    AnalysisTableRead, AnalysisTableRequests, Selection,
 };
 pub use graph::{GraphCommit, GraphLease, GraphManifest};
 pub use graph_rows::CanonicalGraph;
@@ -132,7 +132,7 @@ pub struct AnalysisStore {
     _lease: connection::AnalysisLease,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct AnalysisStoreMetaV1 {
     pub store_uuid: Uuid,
     pub schema_version: u32,
@@ -207,6 +207,8 @@ pub enum EvidenceStoreOutcomeV1 {
 }
 
 impl AnalysisStore {
+    const SOURCE_SCHEMA: &str = include_str!("source.sql");
+
     pub fn register_discovery_owner(&self) {
         self.discovery_owners.fetch_add(1, Ordering::AcqRel);
     }
@@ -344,30 +346,11 @@ impl AnalysisStore {
                     relation_name VARCHAR PRIMARY KEY,
                     last_changed_revision UBIGINT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS source_receipts (
-                    stream_key BLOB PRIMARY KEY,
-                    identity_json VARCHAR NOT NULL,
-                    tenant_id BLOB NOT NULL,
-                    cpu_id UINTEGER NOT NULL,
-                    contiguous_cursor UBIGINT NOT NULL,
-                    coverage_revision UBIGINT NOT NULL,
-                    retained_floor UBIGINT NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS source_bindings (
                     epoch_key BLOB PRIMARY KEY,
                     tenant_id BLOB NOT NULL,
                     node_boot_id BLOB NOT NULL,
                     label_epoch UBIGINT NOT NULL
-                );
-                CREATE TABLE trace_receipts (
-                    stream_key BLOB PRIMARY KEY,
-                    identity_json VARCHAR NOT NULL,
-                    tenant_id BLOB NOT NULL,
-                    last_sequence UBIGINT NOT NULL,
-                    output_bytes UBIGINT NOT NULL,
-                    terminal VARCHAR,
-                    retained_floor UBIGINT NOT NULL,
-                    commit_revision UBIGINT NOT NULL
                 );
                 CREATE TABLE segments (
                     segment_id UBIGINT PRIMARY KEY,
@@ -422,26 +405,6 @@ impl AnalysisStore {
                     ON notification_heads(finding_key);
                 CREATE INDEX IF NOT EXISTS notification_concern_key_idx
                     ON notification_heads(concern_key);
-                CREATE TABLE IF NOT EXISTS processor_progress (
-                    processor_id VARCHAR NOT NULL,
-                    method_version UBIGINT NOT NULL,
-                    tenant_id BLOB NOT NULL,
-                    stream_key BLOB NOT NULL,
-                    class VARCHAR NOT NULL,
-                    consumed_cursor UBIGINT NOT NULL,
-                    resume_floor UBIGINT NOT NULL,
-                    coverage_revision UBIGINT NOT NULL,
-                    context_revision UBIGINT NOT NULL,
-                    start_cursor UBIGINT NOT NULL,
-                    required_floor UBIGINT NOT NULL,
-                    retired BOOLEAN NOT NULL,
-                    retirement_id VARCHAR NOT NULL,
-                    retirement_reason VARCHAR NOT NULL,
-                    retirement_cursor UBIGINT NOT NULL,
-                    retirement_revision UBIGINT NOT NULL,
-                    result_id VARCHAR NOT NULL,
-                    PRIMARY KEY (processor_id, method_version, tenant_id, stream_key)
-                );
                 CREATE TABLE IF NOT EXISTS evidence_refs (
                     ref_id VARCHAR NOT NULL,
                     tenant_id BLOB NOT NULL,
@@ -461,21 +424,6 @@ impl AnalysisStore {
                     commit_revision UBIGINT NOT NULL,
                     PRIMARY KEY (ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
                 );
-                CREATE TABLE IF NOT EXISTS analysis_results (
-                    result_id VARCHAR PRIMARY KEY,
-                    tenant_id BLOB NOT NULL,
-                    processor_id VARCHAR NOT NULL,
-                    body BLOB NOT NULL,
-                    request_meta BLOB NOT NULL,
-                    commit_revision UBIGINT NOT NULL,
-                    stream_key BLOB,
-                    method_version UBIGINT,
-                    interval_id VARCHAR,
-                    profile_revision UBIGINT,
-                    facts_revision UBIGINT,
-                    coverage_revision UBIGINT,
-                    first_cursor UBIGINT
-                );
                 CREATE TABLE IF NOT EXISTS processor_gaps (
                     processor_id VARCHAR NOT NULL,
                     method_version UBIGINT NOT NULL,
@@ -484,6 +432,7 @@ impl AnalysisStore {
                     first_cursor UBIGINT NOT NULL,
                     last_cursor UBIGINT NOT NULL,
                     commit_revision UBIGINT NOT NULL,
+                    accepted_revision UBIGINT NOT NULL,
                     PRIMARY KEY (processor_id, method_version, tenant_id, stream_key, first_cursor)
                 );
                 CREATE TABLE IF NOT EXISTS recovery_gaps (
@@ -501,6 +450,8 @@ impl AnalysisStore {
                     first_cursor UBIGINT NOT NULL,
                     last_cursor UBIGINT NOT NULL,
                     commit_revision UBIGINT NOT NULL,
+                    source_revision UBIGINT NOT NULL,
+                    received_utc_ns UBIGINT NOT NULL,
                     PRIMARY KEY (stream_key, first_cursor)
                 );
                 CREATE TABLE replay_floors (
@@ -512,6 +463,21 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "create schema",
             })?;
+            transaction
+                .execute_batch(Self::SOURCE_SCHEMA)
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create source schema",
+                })?;
+            transaction
+                .execute_batch(Self::PROCESSOR_SCHEMA)
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create processor schema",
+                })?;
+            transaction
+                .execute_batch(&Self::notice_schema())
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create result notice schema",
+                })?;
             transaction
                 .execute_batch(Self::TRACE_SCHEMA)
                 .context(AnalysisDatabaseSnafu {
@@ -858,34 +824,15 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert coverage",
             })?;
-        if previous.is_some() {
-            transaction
-                .execute(
-                    "UPDATE source_receipts SET coverage_revision = ? WHERE stream_key = ?",
-                    params![input.revision, key.as_slice()],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "advance coverage receipt",
-                })?;
-        } else {
-            let identity_json = serde_json::to_string(identity).context(JsonSnafu {
-                path: self.root.join("analysis.duckdb"),
-            })?;
-            transaction
-                .execute(
-                    "INSERT INTO source_receipts VALUES (?, ?, ?, ?, 0, ?, 0)",
-                    params![
-                        key.as_slice(),
-                        identity_json,
-                        identity.tenant_id.as_slice(),
-                        input.cpu_id,
-                        input.revision,
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert coverage receipt",
-                })?;
-        }
+        let mut receipt = previous.unwrap_or_else(|| AnalysisSourceReceiptV1 {
+            identity: identity.clone(),
+            cpu_id: input.cpu_id,
+            contiguous_cursor: 0,
+            coverage_revision: 0,
+            retained_floor: 0,
+        });
+        receipt.coverage_revision = input.revision;
+        Self::record_source(&transaction, &self.root, &receipt, revision)?;
         let mut relations = vec!["coverage", "source_receipts"];
         if bound {
             relations.push("source_bindings");
@@ -945,6 +892,40 @@ impl AnalysisStore {
         {
             return self.reject("the validated evidence identity or bounds are invalid");
         }
+        Ok(())
+    }
+
+    fn record_source(
+        writer: &Connection,
+        root: &Path,
+        receipt: &AnalysisSourceReceiptV1,
+        revision: u64,
+    ) -> Result<()> {
+        if revision == 0 || receipt.retained_floor > receipt.contiguous_cursor {
+            return Self::reject_path(root, "the source version bounds are invalid");
+        }
+        let identity_json = serde_json::to_string(&receipt.identity).context(JsonSnafu {
+            path: root.join("analysis.duckdb"),
+        })?;
+        writer
+            .execute(
+                "INSERT INTO source_versions (stream_key, identity_json, tenant_id, cpu_id,
+                contiguous_cursor, coverage_revision, retained_floor, commit_revision)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    receipt.identity.key(),
+                    identity_json,
+                    receipt.identity.tenant_id.as_slice(),
+                    receipt.cpu_id,
+                    receipt.contiguous_cursor,
+                    receipt.coverage_revision,
+                    receipt.retained_floor,
+                    revision,
+                ],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "record source version",
+            })?;
         Ok(())
     }
 
@@ -1114,11 +1095,10 @@ pub(crate) mod tests {
                             (SELECT count(*) FROM managed_calls),
                             (SELECT count(*) FROM managed_attempts),
                             (SELECT count(*) FROM managed_edges),
-                            (SELECT count(*) FROM managed_arrow),
                             (SELECT count(*) FROM analysis_results)",
                     [],
                     |row| {
-                        (0..7)
+                        (0..6)
                             .map(|index| row.get::<usize, u64>(index))
                             .collect::<duckdb::Result<Vec<_>>>()
                     },
@@ -1127,7 +1107,7 @@ pub(crate) mod tests {
                     operation: "read admission effects",
                 })
         })?;
-        assert_eq!(counts, vec![0; 7]);
+        assert_eq!(counts, vec![0; 6]);
         assert!(!store.discovery_enabled());
         Ok(())
     }

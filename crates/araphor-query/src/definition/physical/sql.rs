@@ -23,10 +23,7 @@ impl PackageExec {
             .ok_or_else(|| internal("package SQL plans are absent"))?;
         let model = self
             .call
-            .descriptor()
-            .exports
-            .iter()
-            .find(|model| model.name == self.call.export)
+            .model()
             .ok_or_else(|| internal("package export is absent"))?;
         for (input, slot) in evaluation.inputs.iter().zip(&sql.inputs) {
             if !sql.used.contains(slot) {
@@ -208,7 +205,7 @@ impl PackageExec {
             }
             child += 1;
         }
-        if child != self.children.len() {
+        if child != sql.end {
             return Err(internal("package SQL child count changed"));
         }
         Ok(sdk::Output {

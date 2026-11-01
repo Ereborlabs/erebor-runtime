@@ -1,5 +1,10 @@
 # Discovery Definition Review
 
+Current execution storage is in
+[Checked journal references](araphor-retained-execution-review.md#checked-journal-references).
+The saved-output query and host alias sections below describe historical
+code. Reference-only Inspect and explicit Replay supersede those interfaces.
+
 Current immutable image ownership is in [One immutable package content owner](#one-immutable-package-content-owner).
 
 Current retained aggregate execution is in [Native integral aggregation](#native-integral-aggregation).
@@ -507,11 +512,11 @@ accepts a current reader grant and exact instance/result IDs.
 [Instance::query_result](../../crates/araphor-analysis/src/instance/read.rs)
 accepts an exact result ID or no result ID under the same fresh Inspect guard.
   -> [AnalysisStore::managed_query_output](../../crates/araphor-data/src/analysis/managed/read.rs) resolves the current generation's successful selected receipt when no ID is supplied. It checks scope, instance, attempt, generation, and commit revision in one read transaction before Arrow decoding.
-  -> [Session::query_local](../../crates/araphor-query/src/execution/local.rs) registers only the retained output datasets in a private native catalog.
+  -> [Session::query_local](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-query/src/execution/local.rs) registers only the retained output datasets in a private native catalog.
   -> [Session indexing](../../crates/araphor-query/src/execution/tables.rs) adds original row indices before filtering across Arrow batches.
   -> [Planner](../../crates/araphor-query/src/planner/mod.rs) uses the existing native SQL parser and logical planner.
   -> [Session::stream_local](../../crates/araphor-query/src/execution.rs) uses the native optimizer, physical planner, execution permit, and output bounds.
-  -> [LocalOutput](../../crates/araphor-query/src/execution/local.rs) retains the selected dataset and its metadata reservation.
+  -> [LocalOutput](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-query/src/execution/local.rs) retains the selected dataset and its metadata reservation.
 
 The catalog contains no inherited view, external catalog, undeclared local
 table, or durable source. Native admission rejects DDL, DML, multiple
@@ -526,7 +531,7 @@ Run authority, and image execution trust. Authority loss cancels and drains the
 child operation. The parent request control remains usable. Complete results,
 state, reasons, evidence, and historical receipt revision survive newer writes.
 The [historical tests](../../crates/araphor-analysis/src/instance/tests/history.rs)
-check those rules. The [native local tests](../../crates/araphor-query/src/execution/tests/local.rs)
+check those rules. The [native local tests](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-query/src/execution/tests/local.rs)
 also check catalog exclusion, original indices, empty metadata, native interval
 output, explicit limits, and last-alias memory release.
 
@@ -1605,11 +1610,11 @@ passes qualification. Complete migration and the final Rust gate remain
 [Session::register_retained](../../crates/araphor-query/src/execution.rs)
 The caller supplies a table alias, producer instance, exact result reference
 and dataset name.
-  -> [AnalysisStore::managed_input](../../crates/araphor-data/src/analysis/managed/input.rs) reads the stored header and schema without Arrow IPC and creates an opaque reference.
+  -> [AnalysisStore::managed_input](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-data/src/analysis/managed/input.rs) reads the stored header and schema without Arrow IPC and creates an opaque reference.
   -> [SourceProvider::retained](../../crates/araphor-query/src/sources/mod.rs) owns that reference, the native schema and its metadata reservation.
   -> [Native admission](../../crates/araphor-query/src/definition.rs) seals declared source bindings, including an unused native CTE.
   -> [Source capture](../../crates/araphor-data/src/analysis/extraction/package.rs) checks the exact producer head and original source proof in the existing Data transaction.
-  -> [Retained decode](../../crates/araphor-data/src/analysis/managed/input.rs) bounds encoded and decoded bytes, then uses the existing complete SDK validator.
+  -> [Retained decode](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-data/src/analysis/managed/input.rs) bounds encoded and decoded bytes, then uses the existing complete SDK validator.
   -> [Captured tables](../../crates/araphor-query/src/sources/rows.rs) retain original metadata and real shared Arrow buffer claims.
   -> [Input receipts](../../crates/araphor-query/src/inputs/receipt.rs) preserve full identity projections and derive revisions for other SQL results.
 
@@ -1620,13 +1625,13 @@ and schemas decode once. Each alias pays for its retained metadata and each
 logical input pays the configured model byte cost. These charges do not claim
 a bound on the complete process heap.
 
-[Analysis alias tests](../../crates/araphor-analysis/src/instance/tests/retained.rs)
+[Analysis alias tests](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-analysis/src/instance/tests/retained.rs)
 produce real durable results and execute real native definitions. The tests
 check exact refs, stale heads, stored scope, late trace revocation, eliminated
 CTEs, shared buffers, configured pressure and complete resource release.
-[Revision tests](../../crates/araphor-analysis/src/instance/tests/retained/revisions.rs)
+[Revision tests](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-analysis/src/instance/tests/retained/revisions.rs)
 check registration-order independence and changed source identity.
-[Projection tests](../../crates/araphor-analysis/src/instance/tests/retained/projections.rs)
+[Projection tests](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-analysis/src/instance/tests/retained/projections.rs)
 check narrowed, reordered and full identity projections.
 [Data tests](../../crates/araphor-data/src/analysis/managed/tests/input.rs)
 prove that metadata reads skip corrupt IPC while complete capture reaches the
@@ -1681,7 +1686,7 @@ revision only when its exact saved source is the sole declared origin. Native
 DataFusion can remove an unused CTE from execution. Query still keeps the
 admitted origin and uses its existing complete derived-input hash.
 
-The [actual native regression](../../crates/araphor-analysis/src/instance/tests/retained/origins.rs)
+The [actual native regression](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-analysis/src/instance/tests/retained/origins.rs)
 first fails. After correction, a changed declared context and a changed second
 saved result both change the derived revision while selected rows remain 7.
 The direct right input keeps its original revision. Exact source refs, context
@@ -2147,7 +2152,7 @@ complete retirement, and final shared Rust CI remain **Not done**.
 [Instance::query_result](../../crates/araphor-analysis/src/instance/read.rs) A caller queries the exact saved result
   -> [AnalysisStore::managed_output](../../crates/araphor-data/src/analysis/managed/read.rs) Data supplies the same guarded read and decoded arrays
   -> [Instance::query_result](../../crates/araphor-analysis/src/instance/read.rs) Analysis releases the unused wire packet before query execution
-  -> [Session::query_local](../../crates/araphor-query/src/execution/local.rs) Query uses the decoded datasets as native local tables
+  -> [Session::query_local](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-query/src/execution/local.rs) Query uses the decoded datasets as native local tables
 
 ```mermaid
 sequenceDiagram
@@ -3597,7 +3602,7 @@ keeps its pins and reservations. SourceSnapshot retains the original witnesses
 and Arrow buffers. Receipt hashes and memory charges keep their existing owners.
 
 [Data freshness](../../crates/araphor-data/src/analysis/managed/read.rs) distinguishes current input, expired original evidence, and changed input.
-  -> [Finite saved-input decoding](../../crates/araphor-data/src/analysis/managed/input.rs) accepts readable exact saved rows when only the original witness time expired.
+  -> [Finite saved-input decoding](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-data/src/analysis/managed/input.rs) accepts readable exact saved rows when only the original witness time expired.
   -> [ResultContext::coverage](../../crates/araphor-data/src/package/model.rs) adds Unknown coverage with the existing `source evidence retention expired` reason.
   -> [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) folds that reason through only the affected call's inputs before its memory checks.
 
@@ -3615,7 +3620,7 @@ No finite wait queue or renewed temporary stage is added. Explicit parent and
 grant deadlines stay binding. Native SQL windows and source changes schedule
 work; bare NOW or elapsed time alone does not schedule another evaluation.
 
-Read the [retained expiry tests](../../crates/araphor-analysis/src/instance/tests/retained/expiry.rs)
+Read the [retained expiry tests](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-analysis/src/instance/tests/retained/expiry.rs)
 for original rows and witnesses, call isolation, and later context failure.
 Read the [Managed capacity tests](../../crates/araphor-analysis/src/instance/subscription/tests/capacity.rs)
 for captured offers, slot waits, cancellation, and joins. The
@@ -3644,7 +3649,7 @@ records the independently checked retained-source total.
 It supersedes the saved-input codec gate in the earlier Query retirement
 record. Other legacy package operations keep their existing owners.
 
-[AnalysisStore::managed_input](../../crates/araphor-data/src/analysis/managed/input.rs) resolves an exact saved call result and its declared output.
+[AnalysisStore::managed_input](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-data/src/analysis/managed/input.rs) resolves an exact saved call result and its declared output.
   -> [SourceProvider::retained](../../crates/araphor-query/src/sources/mod.rs) retains the opaque reference, native schema, and metadata reservation.
   -> [Definition admission](../../crates/araphor-query/src/definition.rs) keeps one canonical RetainedSource Arc slice and its native memory reservation.
   -> [SourceSnapshot::read](../../crates/araphor-query/src/sources/rows.rs) derives direct reference/schema pairs and keeps the original AnalysisInputTables.authorized selection.
@@ -3671,7 +3676,7 @@ retain their current behavior. Scope and the native receipt owner remain.
 Read the [native test map](../plans/araphor-analysis-migration.md#native-saved-input-retirement)
 for snapshot isolation, storage guards, historical scope, preflight,
 cancellation, and origin unions. Read
-[retained_revisions_ignore_slots](../../crates/araphor-analysis/src/instance/tests/retained/revisions.rs)
+[retained_revisions_ignore_slots](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-analysis/src/instance/tests/retained/revisions.rs)
 for stable input identity after registration order changes. The migration
 result states the exact final checks and the later test-only correction.
 

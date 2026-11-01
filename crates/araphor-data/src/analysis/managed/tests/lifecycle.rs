@@ -343,7 +343,7 @@ fn transition_fences_registration() -> TestResult {
     assert_eq!(store.meta()?, before);
     let requests = AnalysisTableRequests::new();
     assert!(store
-        .read_managed_tables(
+        .read_managed_tables_filtered(
             &fixture.instance.grant.selection,
             &ManagedRead {
                 source: None,
@@ -357,12 +357,12 @@ fn transition_fences_registration() -> TestResult {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Metadata,
                 now: 10
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )
         .is_err());
     assert_eq!(fixture.current(&store)?, running);
@@ -511,16 +511,17 @@ fn lifecycle_history_survives_reopen() -> TestResult {
         .ok_or("saved completed attempt")?;
     assert_eq!(saved.receipt(), Some(&receipt));
     assert_eq!(saved.instance(), captured.instance());
-    let selected = store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            &input.id,
-            &AnalysisReadControl::default(),
-        )?
-        .ok_or("saved selected relation")?;
+    let selected = Fixture::receipt(
+        &store,
+        [1; 16],
+        "counter",
+        &input.id,
+        &AnalysisReadControl::default(),
+    )?
+    .ok_or("saved selected relation")?;
     assert_eq!(selected.commit_revision, receipt.commit_revision);
-    assert_eq!(selected.data.batches, outputs[0].datasets[0].batches);
+    assert_eq!(selected, receipt);
+    assert_eq!(Fixture::rows(&store, &selected.selected)?, 1);
     for reference in receipt.results.values() {
         let result = store.managed_result(
             &fixture.instance,
@@ -528,11 +529,10 @@ fn lifecycle_history_survives_reopen() -> TestResult {
             10,
             &AnalysisReadControl::default(),
         )?;
-        assert_eq!(result.commit_revision, receipt.commit_revision);
+        assert_eq!(&result.result, reference);
+        assert_eq!(result.receipt, receipt);
         assert!(result.current);
-        assert!(result.output.checkpoint.is_some());
-        assert_eq!(result.output.evidence.len(), 1);
-        assert_eq!(result.output.reasons.len(), 1);
+        assert_eq!(fixture.checkpoint(&store, reference)?.version, 1);
     }
     let resumed = fixture.capture(&store, false)?;
     let next = request("after-lifecycle");

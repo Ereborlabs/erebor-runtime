@@ -538,7 +538,7 @@ fn transport_options_are_separate() -> Result<(), Box<dyn std::error::Error>> {
         vec!["instance", "inspect", "counts"],
         vec!["instance", "read", "counts", "saved"],
         vec!["instance", "history", "counts"],
-        vec!["instance", "query", "counts", "saved", "SELECT * FROM rows"],
+        vec!["instance", "replay", "counts", "saved"],
         vec![
             "trace",
             "--recipe",

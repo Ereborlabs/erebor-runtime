@@ -64,10 +64,19 @@ impl Contributions {
             }
             .fail();
         }
-        for member in replacements.iter().flat_map(|item| &item.members) {
+        for (replacement, member) in replacements
+            .iter()
+            .flat_map(|item| item.members.iter().map(move |member| (item, member)))
+        {
             let allowed = match frontier.kind {
                 0 => {
-                    ((2..=4).contains(&member.kind) || member.kind == 8) && member.record.is_some()
+                    (matches!(member.kind, 2..=4 | 8) && member.record.is_some())
+                        || (matches!(member.kind, 9..=10)
+                            && replacement.unit.is_some()
+                            && member.record.is_some()
+                            && member.fact.is_none()
+                            && member.reason.is_none()
+                            && member.ordinal == 0)
                 }
                 1 => matches!(member.kind, 2..=4 | 6),
                 2 => matches!(member.kind, 0..=1 | 7),
@@ -302,7 +311,7 @@ impl Contributions {
             }
             let mut keys = BTreeSet::new();
             for member in &replacement.members {
-                if member.kind > 8
+                if !matches!(member.kind, 0..=4 | 6..=10)
                     || member.key.is_empty()
                     || member.value == 0
                     || member.record == Some(0)

@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 use std::ops::Bound;
+#[cfg(test)]
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
@@ -26,6 +27,8 @@ mod changes;
 mod discovery;
 mod graph;
 mod package;
+mod selection;
+mod source;
 mod tables;
 
 #[cfg(test)]
@@ -470,23 +473,69 @@ pub type AnalysisTableRequests = BTreeMap<String, Option<BTreeSet<usize>>>;
 pub struct AnalysisTableRead<'a> {
     pub requests: &'a AnalysisTableRequests,
     pub event_ranges: Option<&'a [(u64, u64)]>,
-    pub inputs: Option<AnalysisInputTables<'a>>,
     pub mode: AnalysisReadModeV1,
     pub now: u64,
 }
 
 impl AnalysisTableRead<'_> {
+    fn check_scope(
+        &self,
+        selected: &AnalysisSelectionV1,
+        scope: &AnalysisSelectionV1,
+    ) -> Result<()> {
+        let mut expected = scope.project(self.requests)?;
+        let contains = |outer: Option<(u64, u64)>, inner: Option<(u64, u64)>| {
+            inner.is_none()
+                || outer
+                    .zip(inner)
+                    .is_some_and(|((first, last), (start, end))| first <= start && end <= last)
+        };
+        if !contains(expected.time_range(), selected.time_range())
+            || !contains(expected.cursor_range(), selected.cursor_range())
+        {
+            return Err(crate::PackageErrorCodeV1::Denied.error("managed source bounds"));
+        }
+        expected.received_from = selected.received_from;
+        expected.received_until = selected.received_until;
+        expected.cursor_from = selected.cursor_from;
+        expected.cursor_until = selected.cursor_until;
+        if expected != *selected {
+            return Err(crate::PackageErrorCodeV1::Denied.error("managed source selection"));
+        }
+        Ok(())
+    }
+
+    pub fn source_rows(name: &str) -> bool {
+        matches!(name, "events" | "context_versions")
+    }
+
+    pub fn source_header(name: &str) -> bool {
+        matches!(
+            name,
+            "coverage" | "graph_coverage" | "discovery_state" | "graph_state" | "graph_manifest"
+        )
+    }
+
+    fn reads_raw(&self) -> bool {
+        self.requests.iter().any(|(name, columns)| {
+            columns.is_some()
+                && matches!(
+                    name.as_str(),
+                    "events" | "trace_output" | "trace_measurements"
+                )
+        })
+    }
+
     fn check_managed_changes(&self, selection: &AnalysisSelectionV1) -> Result<()> {
         if !matches!(self.mode, AnalysisReadModeV1::Changes(_)) {
             return Ok(());
         }
-        if self.inputs.is_some()
-            || selection.targets
+        if selection.targets
             || (!selection.contexts.as_slice().is_empty()
                 && self.projected("context_versions").is_none())
             || !selection.results.is_empty()
             || !selection.profiles.is_empty()
-            || !selection.graphs.is_empty()
+            || (!selection.graphs.is_empty() && self.projected("graph_manifest").is_none())
             || selection.graph_traversal.is_some()
             || !selection.obligations.is_empty()
         {
@@ -494,15 +543,9 @@ impl AnalysisTableRead<'_> {
         }
         if self.requests.iter().any(|(name, columns)| {
             columns.is_some()
-                && !matches!(
-                    name.as_str(),
-                    "events"
-                        | "trace_output"
-                        | "coverage"
-                        | "discovery_state"
-                        | "graph_state"
-                        | "context_versions"
-                )
+                && !Self::source_rows(name)
+                && !Self::source_header(name)
+                && name != "trace_output"
         }) {
             return Err(crate::PackageErrorCodeV1::Invalid.error("managed change relation"));
         }
@@ -546,12 +589,6 @@ impl AnalysisTableRead<'_> {
             )
         })
     }
-}
-
-#[derive(Clone, Copy)]
-pub struct AnalysisInputTables<'a> {
-    pub authorized: &'a AnalysisSelectionV1,
-    pub outputs: &'a [(Arc<super::ManagedInputRef>, SchemaRef)],
 }
 
 pub(super) struct ReadBudget<'a> {
@@ -630,7 +667,6 @@ pub enum AnalysisReferenceOriginV1 {
     Graph,
     Notification,
     ExplicitResult,
-    Package(usize),
 }
 
 #[derive(Debug)]
@@ -702,7 +738,6 @@ pub struct AnalysisPositionPageV1 {
     pub scanned_through: StorePositionV1,
     pub exhausted: bool,
     pub tables: BTreeMap<String, Vec<RecordBatch>>,
-    pub packages: BTreeMap<usize, (SchemaRef, Vec<RecordBatch>, araphor_analysis_sdk::Coverage)>,
     pub removals: BTreeMap<super::AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
     pub mutable_discovery: bool,
     pub received_min: Option<u64>,
@@ -1068,7 +1103,7 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         limits: AnalysisExtractLimits,
     ) -> Result<(Cow<'a, AnalysisSelectionV1>, usize)> {
-        self.resolve_selection_filtered(snapshot, selection, control, limits, None)
+        self.resolve_selection_filtered(snapshot, selection, control, limits, None, None)
     }
 
     pub(super) fn resolve_selection_filtered<'a>(
@@ -1078,6 +1113,7 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         limits: AnalysisExtractLimits,
         context_owners: Option<&BTreeSet<String>>,
+        cut: Option<u64>,
     ) -> Result<(Cow<'a, AnalysisSelectionV1>, usize)> {
         control.check()?;
         if !selection.valid() {
@@ -1221,12 +1257,15 @@ impl AnalysisStore {
             let sql = format!(
                 "SELECT owner_id, entity_key, lifetime_key, owner_revision FROM context_versions
                  WHERE tenant_id = ? AND (NOT ? OR owner_id = 'mithril-control/target')
+                 AND (CAST(? AS UBIGINT) IS NULL OR commit_revision <= ?)
                  {owner_predicate}
                  ORDER BY owner_id, entity_key, lifetime_key, owner_revision LIMIT ?"
             );
             let mut parameters = vec![
                 duckdb::types::Value::Blob(selection.tenant_id.to_vec()),
                 duckdb::types::Value::Boolean(selection.targets_only),
+                cut.map_or(duckdb::types::Value::Null, duckdb::types::Value::UBigInt),
+                cut.map_or(duckdb::types::Value::Null, duckdb::types::Value::UBigInt),
             ];
             if let Some(owners) = context_owners {
                 parameters.extend(owners.iter().cloned().map(duckdb::types::Value::Text));
@@ -1436,30 +1475,40 @@ impl AnalysisStore {
             }
         }
         if selection.obligations.is_all() {
-            let mut statement = snapshot
-                .prepare(
-                    "SELECT entity_key, owner_revision FROM notification_heads
+            let sql = match cut {
+                Some(_) => "SELECT entity_key, owner_revision FROM context_versions
+                     WHERE tenant_id = ? AND owner_id = ? AND lifetime_key = ? AND commit_revision <= ?
+                     QUALIFY row_number() OVER (PARTITION BY entity_key ORDER BY owner_revision DESC) = 1
+                     ORDER BY entity_key LIMIT ?",
+                None => "SELECT entity_key, owner_revision FROM notification_heads
                      WHERE tenant_id = ? ORDER BY entity_key LIMIT ?",
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare notification keys",
-                })?;
+            };
+            let mut statement = snapshot.prepare(sql).context(AnalysisDatabaseSnafu {
+                operation: "prepare notification keys",
+            })?;
+            let mut parameters = vec![duckdb::types::Value::Blob(selection.tenant_id.to_vec())];
+            if let Some(cut) = cut {
+                parameters.extend([
+                    duckdb::types::Value::Text(crate::NOTIFICATION_STATE_OWNER.into()),
+                    duckdb::types::Value::Blob(b"obligation".to_vec()),
+                    duckdb::types::Value::UBigInt(cut),
+                ]);
+            }
+            parameters.push(
+                limits
+                    .key_rows(resolved.key_count())
+                    .map_or(duckdb::types::Value::Null, duckdb::types::Value::BigInt),
+            );
             let rows = statement
-                .query_map(
-                    params![
-                        selection.tenant_id.as_slice(),
-                        limits.key_rows(resolved.key_count())
-                    ],
-                    |row| {
-                        Ok(AnalysisContextKeyV1 {
-                            tenant_id: selection.tenant_id,
-                            owner_id: crate::NOTIFICATION_STATE_OWNER.into(),
-                            entity_key: row.get(0)?,
-                            lifetime_key: b"obligation".to_vec(),
-                            owner_revision: row.get(1)?,
-                        })
-                    },
-                )
+                .query_map(duckdb::params_from_iter(parameters), |row| {
+                    Ok(AnalysisContextKeyV1 {
+                        tenant_id: selection.tenant_id,
+                        owner_id: crate::NOTIFICATION_STATE_OWNER.into(),
+                        entity_key: row.get(0)?,
+                        lifetime_key: b"obligation".to_vec(),
+                        owner_revision: row.get(1)?,
+                    })
+                })
                 .context(AnalysisDatabaseSnafu {
                     operation: "read notification keys",
                 })?;
@@ -1507,7 +1556,7 @@ impl AnalysisStore {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
     ) -> Result<AnalysisPositionPageV1> {
-        self.read_tables_inner(selection, None, read, limits, control, None)
+        self.read_tables_inner(selection, None, None, read, limits, control, None)
             .map(|(page, _)| page)
     }
 
@@ -1519,19 +1568,8 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         context_owners: Option<&BTreeSet<String>>,
     ) -> Result<AnalysisPositionPageV1> {
-        self.read_tables_inner(selection, None, read, limits, control, context_owners)
+        self.read_tables_inner(selection, None, None, read, limits, control, context_owners)
             .map(|(page, _)| page)
-    }
-
-    pub fn read_managed_tables(
-        &self,
-        selection: &AnalysisSelectionV1,
-        managed: &super::ManagedRead,
-        read: AnalysisTableRead<'_>,
-        limits: AnalysisExtractLimits,
-        control: &AnalysisReadControl,
-    ) -> Result<super::ManagedPage> {
-        self.read_managed_tables_filtered(selection, managed, read, limits, control, None)
     }
 
     pub fn read_managed_tables_filtered(
@@ -1553,10 +1591,19 @@ impl AnalysisStore {
         {
             return Err(crate::PackageErrorCodeV1::Invalid.error("managed capture scope"));
         }
+        read.check_scope(
+            selection,
+            &managed
+                .instance
+                .spec
+                .destination
+                .selection(&managed.instance.grant.selection)?,
+        )?;
         read.check_managed_changes(selection)?;
         let (page, state) = self.read_tables_inner(
             selection,
             Some(managed),
+            None,
             read,
             limits,
             control,
@@ -1566,27 +1613,59 @@ impl AnalysisStore {
         Ok(super::ManagedPage { page, state })
     }
 
+    pub fn read_managed_reference(
+        &self,
+        selection: &AnalysisSelectionV1,
+        reference: &super::ManagedAttempt,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        context_owners: Option<&BTreeSet<String>>,
+    ) -> Result<super::ManagedPage> {
+        if selection.tenant_id != reference.instance().spec.tenant {
+            return Err(crate::PackageErrorCodeV1::Denied.error("managed reference tenant"));
+        }
+        read.check_scope(
+            selection,
+            &reference
+                .instance()
+                .spec
+                .destination
+                .selection(&reference.instance().grant.selection)?,
+        )?;
+        let (page, state) = self.read_tables_inner(
+            selection,
+            None,
+            Some(reference),
+            read,
+            limits,
+            control,
+            context_owners,
+        )?;
+        Ok(super::ManagedPage {
+            page,
+            state: state.ok_or_else(|| self.state_error("the referenced capture is absent"))?,
+        })
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The read keeps live admission and historical authority distinct."
+    )]
     fn read_tables_inner(
         &self,
         selection: &AnalysisSelectionV1,
         managed: Option<&super::ManagedRead>,
+        reference: Option<&super::ManagedAttempt>,
         read: AnalysisTableRead<'_>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
         context_owners: Option<&BTreeSet<String>>,
     ) -> Result<(AnalysisPositionPageV1, Option<super::ManagedCapture>)> {
         control.check()?;
-        let packages = read.inputs;
         let mode = match read.mode {
             AnalysisReadModeV1::Complete
-                if managed.is_none_or(|request| request.source.is_none())
-                    && !read.requests.keys().any(|name| {
-                        matches!(
-                            name.as_str(),
-                            "events" | "trace_output" | "trace_measurements"
-                        )
-                    })
-                    && packages.is_none_or(|inputs| inputs.outputs.is_empty()) =>
+                if managed.is_none_or(|request| request.source.is_none()) && !read.reads_raw() =>
             {
                 AnalysisReadModeV1::Metadata
             }
@@ -1594,14 +1673,6 @@ impl AnalysisStore {
         };
         if matches!(mode, AnalysisReadModeV1::Changes(after) if after.ordinal != u32::MAX) {
             return self.reject("the raw change frontier is not a complete commit");
-        }
-        if packages.is_some()
-            && matches!(
-                mode,
-                AnalysisReadModeV1::Page(_) | AnalysisReadModeV1::Changes(_)
-            )
-        {
-            return self.reject("a position read cannot include model inputs");
         }
         for (name, columns) in read.requests {
             let Some(columns) = columns else {
@@ -1629,9 +1700,6 @@ impl AnalysisStore {
         {
             return Err(crate::PackageErrorCodeV1::Denied.error("complete processor source scope"));
         }
-        if packages.is_some_and(|inputs| inputs.authorized.tenant_id != selection.tenant_id) {
-            return Err(crate::PackageErrorCodeV1::Denied.error("dependency tenant"));
-        }
         if limits.scan_bytes == 0
             || limits.input_bytes == 0
             || limits.page_bytes == 0
@@ -1657,8 +1725,14 @@ impl AnalysisStore {
         let unscoped_notifications = selection.sources.is_all()
             && selection.nodes.is_empty()
             && selection.binding_ids.is_empty();
-        control.run(&mut reader, |snapshot| {
-            let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
+        let result = control.run(&mut reader, |snapshot| {
+            let (meta, physical) = match reference {
+                Some(reference) => self.bind_reference(snapshot, reference, control)?,
+                None => {
+                    let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
+                    (meta.clone(), meta)
+                }
+            };
             // The revision fixes raw selection. The lease prevents segment deletion.
             drop(coordinator);
             #[cfg(test)]
@@ -1675,7 +1749,7 @@ impl AnalysisStore {
                 scope
             });
             let (selection, key_bytes) =
-                self.resolve_selection_filtered(snapshot, raw_scope.as_ref().unwrap_or(selection), control, limits, context_owners)?;
+                self.resolve_selection_filtered(snapshot, raw_scope.as_ref().unwrap_or(selection), control, limits, context_owners, reference.map(|reference| reference.captured_revision()))?;
             let selection = selection.as_ref();
             let mut capture = tables::Capture::new(&read, selection);
             let end = StorePositionV1 {
@@ -1711,11 +1785,16 @@ impl AnalysisStore {
             };
             output.charge(size_of::<AnalysisExtractionV1>())?;
             output.charge(key_bytes)?;
-            let mut managed = managed.map(|request| self.capture_managed(snapshot, request, &read, requested, &mut output, control)).transpose()?;
+            let mut managed = match reference {
+                Some(reference) => Some(Self::restore_managed(snapshot, reference, &mut output, control, &read, requested, context_owners, &physical)?),
+                None => managed.map(|request| self.capture_managed(snapshot, request, &read, requested, &mut output, control, context_owners)).transpose()?,
+            };
             if let Some(managed) = &managed {
                 capture.graph_expiry(managed)?;
             }
-            if matches!(mode, AnalysisReadModeV1::Page(_) | AnalysisReadModeV1::Changes(_)) {
+            if read.reads_raw()
+                && matches!(mode, AnalysisReadModeV1::Page(_) | AnalysisReadModeV1::Changes(_))
+            {
                 if let (Some(position), Some(floor)) = (after, output.replay_floor) {
                     if position < floor {
                         return crate::AnalysisReplayExpiredSnafu { position, floor }.fail();
@@ -1727,15 +1806,21 @@ impl AnalysisStore {
                 let key = identity.key();
                 let receipt = Self::read_receipt_from(snapshot, &self.root, identity, &key)?
                     .ok_or_else(|| self.state_error("the selected source is absent"))?;
+                if reference.is_some() && !matches!(mode, AnalysisReadModeV1::Metadata)
+                    && read.projected("events").is_some()
+                {
+                    self.check_journal_source(snapshot, &key, selection, &read,
+                        output.meta.commit_revision, control)?;
+                }
                 output.charge(receipt.identity.node_id.capacity())?;
                 let expired = self.extract_gaps(snapshot, identity, false, control, &mut output)?;
                 let recovery = self.extract_gaps(snapshot, identity, true, control, &mut output)?;
-                self.check_selected_source(snapshot, &receipt, &expired, control)?;
-                let pending = self.raw.until(control)?.pending_gaps(
-                    &receipt,
-                    output.meta.commit_revision,
-                    control,
-                )?;
+                let retired = self.retired_source(snapshot,&receipt,output.meta.commit_revision,physical.commit_revision,control,&mut output)?;
+                let staged = retired.capacity().saturating_mul(size_of::<AnalysisGapV1>());
+                let state = self.raw.until(control)?.source_state(&receipt,output.meta.commit_revision,&expired,&retired,control,(output.input_bytes.saturating_add(staged),output.limits.input_bytes))?;
+                self.check_selected_source(&receipt,state.covered)?;
+                drop(retired);
+                let pending = state.pending;
                 output.charge(pending.capacity() * size_of::<AnalysisGapV1>())?;
                 let coverage_report = self.read_coverage_from(snapshot, &receipt)?;
                 output.charge(coverage_report.as_ref().map_or(0, Vec::capacity))?;
@@ -1794,6 +1879,14 @@ impl AnalysisStore {
                 });
                 if !selected {
                     continue;
+                }
+                if reference.is_some() && !matches!(mode, AnalysisReadModeV1::Metadata)
+                    && (read.projected("trace_output").is_some()
+                        || read.projected("trace_measurements").is_some())
+                {
+                    self.check_journal_source(snapshot,
+                        &super::raw::RawIdentity::Diagnostic(identity.clone()).key(),
+                        selection, &read, output.meta.commit_revision, control)?;
                 }
                 if explicit_traces
                     && !matches!(mode, AnalysisReadModeV1::Metadata)
@@ -1956,6 +2049,7 @@ impl AnalysisStore {
                     snapshot,
                     requested,
                     after.commit_revision,
+                    reference.map(|reference| reference.captured_revision()),
                     context_owners,
                     &mut output.sink(control),
                     &mut capture,
@@ -1964,28 +2058,22 @@ impl AnalysisStore {
                     self.extract_provenance(snapshot, selection.tenant_id, &mut output,
                         capture.graph_witnesses(), control)?;
                 }
+                self.extract_graph_tables(snapshot, selection, &read, &mut output, &mut capture, control)?;
                 control.check()?;
                 let mut page = capture.finish(output, end, true, control)?;
                 if let Some(state) = &mut managed {
-                    state.seal(requested, &page.extraction);
-                    self.seal_source(snapshot, state, &mut page, control)?;
+                    if reference.is_none() { state.seal(requested, &page.extraction); }
+                    state.seal_source(&mut page, control)?;
                 }
                 return Ok((page, managed));
-            }
-            if let Some(packages) = packages {
-                self.extract_packages(
-                    snapshot,
-                    packages,
-                    matches!(mode, AnalysisReadModeV1::Metadata),
-                    control,
-                    &mut output,
-                    &mut capture,
-                )?;
             }
             for key in selection.contexts.as_slice() {
                 control.check()?;
                 match self.read_context_cached_from(snapshot, &self.root, key)? {
                     Some((context, revision)) => {
+                        if revision > output.meta.commit_revision {
+                            return self.reject("the context is newer than the referenced source cut");
+                        }
                         output.reference_context(&context.key, revision, AnalysisReferenceOriginV1::Context)?;
                         capture.context(&context, revision, &mut output.sink(control))?;
                     }
@@ -2027,73 +2115,7 @@ impl AnalysisStore {
                 capture.profile(id, &body, revision, selection.sources.as_slice(),
                     discovery_enabled, &mut output.sink(control))?;
             }
-            if let Some(request) = &selection.graph_traversal {
-                self.traverse_graphs(
-                    snapshot,
-                    selection,
-                    request,
-                    &mut output,
-                    control,
-                    &mut capture,
-                    read.projects_field("findings", "finding_value_id"),
-                )?;
-            }
-            let complete_graph = read.projects_field("graph_manifest", "snapshot");
-            let graph_contexts = read.projects_field("graph_manifest", "context_refs");
-            let graph_findings = ["findings", "policy_observations", "graph_branches"]
-                .iter()
-                .any(|name| read.projected(name).is_some())
-                || !selection.binding_ids.is_empty();
-            for id in selection.graphs.as_slice().iter().filter(|_| selection.graph_traversal.is_none()) {
-                control.check()?;
-                let (key, revision): (Vec<u8>, u64) = snapshot.query_row(
-                    "SELECT stream_key, commit_revision FROM analysis_results
-                     WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?
-                        AND stream_key IS NOT NULL",
-                    params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR, crate::GRAPH_SCHEMA_VERSION, id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                ).context(AnalysisDatabaseSnafu { operation: "read graph result metadata" })?;
-                let source = selection.sources.as_slice().iter().find(|source| source.key() == key)
-                    .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
-                let subjects = read.projected("graph_subjects").is_some();
-                let edges = read.projected("relationships").is_some();
-                let header = self.graph_input(
-                    snapshot,
-                    selection.tenant_id,
-                    id,
-                    control,
-                    complete_graph,
-                    graph_findings,
-                    read.projects_field("findings", "finding_value_id"),
-                )?;
-                let mut graph = header.snapshot;
-                if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
-                if !selection.permits_graph(&graph) { continue; }
-                let sensitivity = self.graph_sensitivity(snapshot, &graph.input_manifest, control)?;
-                if (subjects || edges) && !complete_graph {
-                    graph.graph.subjects = super::graph_rows::GraphRows::read_subjects(snapshot, id, header.subject_count, Some(control))?;
-                    if graph.graph.subjects.len() != header.subject_count {
-                        return self.reject("the selected graph subject count differs");
-                    }
-                }
-                if edges && !complete_graph {
-                    graph.graph.edges = super::graph_rows::GraphRows::read_edges(snapshot, id, header.edge_count, Some(control))?;
-                    if graph.graph.edges.len() != header.edge_count {
-                        return self.reject("the selected graph relationship count differs");
-                    }
-                }
-                if !complete_graph && (subjects || edges) { graph.validate()?; }
-                output.capture_graph(id, &graph, control)?;
-                let contexts = if graph_contexts {
-                    self.graph_contexts(snapshot, selection.tenant_id, id, &mut output, control)?
-                } else { Vec::new() };
-                output.reference_result(id, revision, AnalysisReferenceOriginV1::Graph)?;
-                capture.graph(id, &graph, &header.finding_value_ids,
-                    header.subject_count, header.edge_count,
-                    revision, sensitivity, None, None, &contexts, header.notice, header.expired,
-                    &mut output.sink(control))?;
-            }
-            self.extract_graph_coverage(snapshot, &read, &mut output, &mut capture, control)?;
+            self.extract_graph_tables(snapshot, selection, &read, &mut output, &mut capture, control)?;
             let mut routes = BTreeMap::new();
             let mut graphs = Vec::<(String, u64, super::graph_rows::GraphHeader)>::new();
             for key in selection.obligations.as_slice() {
@@ -2164,7 +2186,7 @@ impl AnalysisStore {
                             if let Some((source_key, graph_revision)) = metadata {
                                 let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
                                 let header = self.graph_input(snapshot, selection.tenant_id,
-                                    &reference.result_id, control, complete_graph, true,
+                                    &reference.result_id, control, read.projects_field("graph_manifest", "snapshot"), true,
                                     read.projects_field("notifications", "finding_value_id"))?;
                                 let graph = &header.snapshot;
                                 if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
@@ -2199,7 +2221,7 @@ impl AnalysisStore {
                         let (id, graph_revision, header) = &graphs[index];
                         let graph = &header.snapshot;
                         let sensitivity = self.graph_sensitivity(snapshot, &graph.input_manifest, control)?;
-                        let contexts = if graph_contexts {
+                        let contexts = if read.projects_field("graph_manifest", "context_refs") {
                             self.graph_contexts(snapshot, selection.tenant_id, id, &mut output, control)?
                         } else { Vec::new() };
                         if capture.graph_manifest(graph, id, *graph_revision, sensitivity,
@@ -2270,7 +2292,7 @@ impl AnalysisStore {
                     }
                 }
             }
-            if packages.is_some() || managed.is_some() {
+            if !selection.results.is_empty() || managed.is_some() {
                 self.extract_provenance(snapshot, selection.tenant_id, &mut output,
                     capture.graph_witnesses(), control)?;
             }
@@ -2280,11 +2302,15 @@ impl AnalysisStore {
                     ordinal: 0,
                 }), exhausted, control)?;
             if let Some(state) = &mut managed {
-                state.seal(requested, &page.extraction);
-                self.seal_source(snapshot, state, &mut page, control)?;
+                if reference.is_none() { state.seal(requested, &page.extraction); }
+                state.seal_source(&mut page, control)?;
             }
             Ok((page, managed))
-        })
+        });
+        if reference.is_some() {
+            reader.get()?.flush_prepared_statement_cache();
+        }
+        result
     }
 
     fn selected_position(
@@ -2337,33 +2363,6 @@ impl AnalysisStore {
         Ok(sensitivity)
     }
 
-    fn check_selected_source(
-        &self,
-        snapshot: &Connection,
-        receipt: &AnalysisSourceReceiptV1,
-        expired: &[AnalysisGapV1],
-        control: &AnalysisReadControl,
-    ) -> Result<()> {
-        let identity = &receipt.identity;
-        let revision = Self::read_meta_from(snapshot, &self.root)?.commit_revision;
-        let retained = self.raw.until(control)?.record_count(
-            &identity.key(),
-            1,
-            receipt.contiguous_cursor,
-            revision,
-        );
-        let covered = expired.iter().try_fold(retained, |count, gap| {
-            gap.last_cursor
-                .checked_sub(gap.first_cursor)
-                .and_then(|bytes| bytes.checked_add(1))
-                .and_then(|bytes| count.checked_add(bytes))
-        });
-        if covered != Some(receipt.contiguous_cursor) {
-            return self.reject("the selected source has an unrecorded input gap");
-        }
-        Ok(())
-    }
-
     fn extract_gaps(
         &self,
         snapshot: &Connection,
@@ -2372,12 +2371,14 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         output: &mut AnalysisExtractionV1,
     ) -> Result<Vec<AnalysisGapV1>> {
-        // Expired ranges have no time proof. A time filter cannot hide these gaps.
+        // A time filter does not remove a recorded source gap.
         let sql = if recovery {
-            "SELECT first_cursor, last_cursor, commit_revision FROM recovery_gaps
+            "SELECT first_cursor, last_cursor, commit_revision, NULL::UBIGINT, NULL::UBIGINT
+             FROM recovery_gaps
              WHERE stream_key = ? AND tenant_id = ? ORDER BY first_cursor"
         } else {
-            "SELECT first_cursor, last_cursor, commit_revision FROM expired_ranges
+            "SELECT first_cursor, last_cursor, commit_revision, source_revision, received_utc_ns
+             FROM expired_ranges
              WHERE stream_key = ? AND tenant_id = ? ORDER BY first_cursor"
         };
         let mut statement = snapshot.prepare(sql).context(AnalysisDatabaseSnafu {
@@ -2387,11 +2388,15 @@ impl AnalysisStore {
             .query_map(
                 params![identity.key().as_slice(), identity.tenant_id.as_slice()],
                 |row| {
-                    Ok(AnalysisGapV1 {
-                        first_cursor: row.get(0)?,
-                        last_cursor: row.get(1)?,
-                        commit_revision: row.get(2)?,
-                    })
+                    Ok((
+                        AnalysisGapV1 {
+                            first_cursor: row.get(0)?,
+                            last_cursor: row.get(1)?,
+                            commit_revision: row.get(2)?,
+                        },
+                        row.get::<_, Option<u64>>(3)?,
+                        row.get::<_, Option<u64>>(4)?,
+                    ))
                 },
             )
             .context(AnalysisDatabaseSnafu {
@@ -2400,15 +2405,27 @@ impl AnalysisStore {
         let mut gaps = Vec::new();
         for row in rows {
             control.check()?;
+            let (gap, accepted, intake) = row.context(AnalysisDatabaseSnafu {
+                operation: "decode selected coverage gap",
+            })?;
+            if gap.first_cursor == 0
+                || gap.last_cursor < gap.first_cursor
+                || gap.commit_revision == 0
+                || gap.commit_revision > output.meta.commit_revision
+                || (!recovery
+                    && (accepted
+                        .is_none_or(|revision| revision == 0 || revision >= gap.commit_revision)
+                        || intake.is_none_or(|intake| intake == 0)))
+            {
+                return self.reject("the selected source gap header is invalid");
+            }
             let added = AnalysisExtractionV1::grow(
                 &mut gaps,
                 output.input_bytes,
                 output.limits.input_bytes,
             )?;
             output.charge(added)?;
-            gaps.push(row.context(AnalysisDatabaseSnafu {
-                operation: "decode selected coverage gap",
-            })?);
+            gaps.push(gap);
         }
         Ok(gaps)
     }
@@ -2457,7 +2474,6 @@ mod tests {
             AnalysisTableRead {
                 requests: &columns,
                 event_ranges: None,
-                inputs: None,
                 mode,
                 now: 0,
             },
@@ -2724,6 +2740,7 @@ mod tests {
                     ..Default::default()
                 },
                 Some(&owners),
+                None,
             )?;
             assert_eq!(
                 selected.contexts.as_slice(),
@@ -2737,6 +2754,7 @@ mod tests {
                 &control,
                 AnalysisExtractLimits::default(),
                 Some(&owners),
+                None,
             )?;
             assert_eq!(
                 selected.contexts.as_slice(),
@@ -2753,7 +2771,6 @@ mod tests {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 0,
             },
@@ -3594,7 +3611,13 @@ mod tests {
                                 control,
                             )
                             .map(|_| ()),
-                        1 => store.check_selected_source(reader.get()?, &receipt, &[], control),
+                        1 => store
+                            .raw
+                            .until(control)
+                            .and_then(|raw| {
+                                raw.source_state(&receipt, 1, &[], &[], control, (0, usize::MAX))
+                            })
+                            .and_then(|state| store.check_selected_source(&receipt, state.covered)),
                         _ => store.read_coordinator(control).map(|_| ()),
                     };
                     let _sent = release.send(());

@@ -20,11 +20,15 @@ async fn profile_replay_keeps_capture() -> TestResult {
     assert_eq!(producer.result, receipt.results[&producer.call]);
     assert_eq!(producer.generation, instance.admitted().generation);
     assert_eq!(producer.spec, instance.admitted().spec);
-    let evaluation = fixture.store.managed_evaluation(
-        instance.admitted(),
-        &producer.result.result_id,
-        &control,
-    )?;
+    let evaluation_replay = instance
+        .replay(&producer.result.result_id, &control)
+        .await?;
+    let evaluation = evaluation_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed discovery call")?
+        .evaluation();
     assert_eq!(evaluation.context.id, input.id);
     assert_eq!(evaluation.context.time_utc_ns, input.time_utc_ns as i64);
     assert_eq!(evaluation.context.seed, input.seed);
@@ -70,7 +74,7 @@ async fn profile_replay_keeps_capture() -> TestResult {
     assert!(owner.installed_refs(&changed, &control).await.is_err());
     assert!(owner.replay(&changed, &control).await.is_err());
     assert_eq!(fixture.store.meta()?, before);
-    drop((evaluation, instance, owner));
+    drop((evaluation_replay, instance, owner));
     fixture.released()?;
     Ok(())
 }
@@ -114,7 +118,7 @@ async fn closed_replay_keeps_origin() -> TestResult {
 }
 
 #[tokio::test]
-async fn replay_survives_raw_retention() -> TestResult {
+async fn replay_reports_expired_journal() -> TestResult {
     let mut fixture = Fixture::new(Limits::default())?;
     fixture.store = Arc::new(AnalysisStore::open_with_limits(
         fixture._directory.path().join("retained"),
@@ -163,7 +167,11 @@ async fn replay_survives_raw_retention() -> TestResult {
     let health = fixture.store.processor_health(&fixture.scope())?;
     assert_eq!(
         owner.replay(&profile, &control).await?,
-        DiscoveryReplayV1::Available(Box::new(profile.snapshot.clone()))
+        DiscoveryReplayV1::Unavailable {
+            first_cursor: 1,
+            last_cursor: 1,
+            reason: "JOURNAL_INPUT_UNAVAILABLE".into(),
+        }
     );
     assert_eq!(fixture.store.meta()?, before);
     assert_eq!(fixture.store.processor_health(&fixture.scope())?, health);
@@ -176,7 +184,9 @@ async fn replay_survives_raw_retention() -> TestResult {
 #[tokio::test]
 async fn replay_distinguishes_missing_inputs() -> TestResult {
     for case in 0..3 {
-        let fixture = Fixture::new(Limits::default())?;
+        let mut fixture = Fixture::new(Limits::default())?;
+        let facts = fixture.catalog_facts()?;
+        fixture.store.commit_contexts(&facts)?;
         fixture.append(1)?;
         let owner = fixture.owner(AnalysisSelectionV1::tenant(fixture.source.tenant_id))?;
         let control = AnalysisReadControl::default();
@@ -195,20 +205,38 @@ async fn replay_distinguishes_missing_inputs() -> TestResult {
             .ok_or("missing replay call")?
             .result_id;
         match case {
-            0 => fixture.store.fault_write("DELETE FROM managed_arrow WHERE result_id = ? AND role = 'input'", &[result])?,
+            0 => {
+                let key = &facts[0].key;
+                assert!(fixture
+                    .store
+                    .package_evidence(fixture.source.tenant_id, std::slice::from_ref(result))?
+                    .1
+                    .iter()
+                    .any(|reference| reference.key == *key));
+                fixture.store.fault_write("DELETE FROM context_versions WHERE tenant_id=? AND owner_id=? AND entity_key=? AND lifetime_key=? AND owner_revision=?",&[&key.tenant_id.as_slice(),&key.owner_id,&key.entity_key,&key.lifetime_key,&key.owner_revision])?;
+            }
             1 => {
                 let image = &instance.admitted().spec.definition.images[0].image;
                 fixture.store.fault_write("DELETE FROM package_images WHERE tenant_id = ? AND package_id = ? AND revision = ?", &[&fixture.source.tenant_id.as_slice(), &image.package_id, &image.revision])?;
             }
-            _ => fixture.store.fault_write("UPDATE managed_arrow SET ipc = 'invalid'::BLOB WHERE result_id = ? AND role = 'input'", &[result])?,
+            _ => {
+                let key = &facts[0].key;
+                assert!(fixture
+                    .store
+                    .package_evidence(fixture.source.tenant_id, std::slice::from_ref(result))?
+                    .1
+                    .iter()
+                    .any(|reference| reference.key == *key));
+                fixture.store.fault_write("UPDATE context_versions SET body=X'00' WHERE tenant_id=? AND owner_id=? AND entity_key=? AND lifetime_key=? AND owner_revision=?",&[&key.tenant_id.as_slice(),&key.owner_id,&key.entity_key,&key.lifetime_key,&key.owner_revision])?;
+            }
         }
         let before = fixture.store.meta()?;
         let health = fixture.store.processor_health(&fixture.scope())?;
         let replayed = owner.replay(&profile, &control).await;
-        if case == 2 {
+        if case != 1 {
             assert!(
                 replayed.is_err(),
-                "malformed input was treated as unavailable"
+                "missing or malformed canonical fact was treated as unavailable"
             );
         } else {
             assert_eq!(
@@ -228,12 +256,7 @@ async fn replay_distinguishes_missing_inputs() -> TestResult {
                         .map(|range| range.last_cursor)
                         .max()
                         .unwrap_or(0),
-                    reason: if case == 0 {
-                        "FROZEN_INPUT_UNAVAILABLE"
-                    } else {
-                        "FROZEN_PACKAGES_UNAVAILABLE"
-                    }
-                    .into(),
+                    reason: "FROZEN_PACKAGES_UNAVAILABLE".into(),
                 }
             );
         }

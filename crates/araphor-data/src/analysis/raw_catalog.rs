@@ -106,11 +106,26 @@ mod tests {
                 64
             );
             assert_eq!(raw.sources[&identity.key()].receipt.cursor(), 65);
+            let versions = writer.prepare(
+                "SELECT commit_revision, contiguous_cursor FROM source_versions ORDER BY commit_revision",
+            )?.query_map([], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)))?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+            assert_eq!(versions, [(64, 64)]);
         }
         drop(store);
         let store = AnalysisStore::open(&root)?;
         assert_eq!(store.meta()?.commit_revision, 65);
         assert_eq!(store.read_page(&identity, 1)?.records.len(), 65);
+        let versions = store.read_snapshot(|reader| {
+            let mut statement = reader.prepare(
+                "SELECT commit_revision, contiguous_cursor FROM source_versions ORDER BY commit_revision",
+            ).context(AnalysisDatabaseSnafu { operation: "prepare projected source versions" })?;
+            statement.query_map([], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)))
+                .context(AnalysisDatabaseSnafu { operation: "query projected source versions" })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(AnalysisDatabaseSnafu { operation: "read projected source versions" })
+        })?;
+        assert_eq!(versions, [(64, 64), (65, 65)]);
         for cursor in 66..=130 {
             store.accept_validated_batch(
                 identity.clone(),
@@ -726,20 +741,25 @@ impl RawJournal {
                     .transpose()
                     .context(JsonSnafu { path: &self.root })?;
                 transaction.execute(
-                    "UPDATE trace_receipts SET last_sequence = ?, output_bytes = ?, terminal = ?, commit_revision = ? WHERE stream_key = ?",
-                    params![receipt.last_sequence, receipt.output_bytes, terminal, receipt.commit_revision, key.as_slice()],
+                    "INSERT INTO trace_versions SELECT stream_key, identity_json, tenant_id, ?, ?, ?, retained_floor, ?, ? FROM trace_receipts WHERE stream_key = ?",
+                    params![receipt.last_sequence, receipt.output_bytes, terminal, receipt.commit_revision, group_revision, key.as_slice()],
                 ).context(AnalysisDatabaseSnafu { operation: "publish diagnostic receipt" })?;
                 continue;
             };
-            let json =
-                serde_json::to_string(&receipt.identity).context(JsonSnafu { path: &self.root })?;
-            let mut contiguous = AnalysisStore::read_receipt_from(
+            let mut projected = AnalysisStore::read_receipt_from(
                 &transaction,
                 &self.root,
                 &receipt.identity,
                 &key,
             )?
-            .map_or(0, |receipt| receipt.contiguous_cursor);
+            .unwrap_or_else(|| AnalysisSourceReceiptV1 {
+                identity: receipt.identity.clone(),
+                cpu_id: receipt.cpu_id,
+                contiguous_cursor: 0,
+                coverage_revision: 0,
+                retained_floor: 0,
+            });
+            let mut contiguous = projected.contiguous_cursor;
             for (_, &(revision, index)) in self.ranges.range((
                 std::ops::Bound::Excluded((key.clone(), contiguous)),
                 std::ops::Bound::Included((key.clone(), u64::MAX)),
@@ -753,32 +773,8 @@ impl RawJournal {
             if AnalysisStore::bind_source(&transaction, &self.root, &receipt.identity, None)? {
                 binding_revision = binding_revision.max(first_revision);
             }
-            let changed = transaction
-                .execute(
-                    "UPDATE source_receipts SET contiguous_cursor = ? WHERE stream_key = ?",
-                    params![contiguous, key.as_slice()],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "advance projected raw receipt",
-                })?;
-            if changed == 0 {
-                transaction
-                    .execute(
-                        "INSERT INTO source_receipts VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        params![
-                            key.as_slice(),
-                            json,
-                            receipt.identity.tenant_id.as_slice(),
-                            receipt.cpu_id,
-                            contiguous,
-                            receipt.coverage_revision,
-                            receipt.retained_floor
-                        ],
-                    )
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "publish raw receipt",
-                    })?;
-            }
+            projected.contiguous_cursor = contiguous;
+            AnalysisStore::record_source(&transaction, &self.root, &projected, group_revision)?;
         }
         self.project_paths(&transaction)?;
         transaction

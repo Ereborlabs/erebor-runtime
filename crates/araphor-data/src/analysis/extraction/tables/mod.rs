@@ -42,7 +42,6 @@ pub(super) struct Capture<'a> {
     graph_expiry: bool,
     received_min: Option<u64>,
     next_change: Option<u64>,
-    packages: BTreeMap<usize, (Arc<sdk::Schema>, Vec<RecordBatch>, sdk::Coverage)>,
     graph_manifests: std::collections::BTreeSet<String>,
     pub(super) graph_coverage: std::collections::BTreeSet<(crate::EvidenceIntakeIdentityV1, u64)>,
 }
@@ -61,7 +60,6 @@ impl<'a> Capture<'a> {
             graph_expiry: false,
             received_min: None,
             next_change: None,
-            packages: BTreeMap::new(),
             graph_manifests: Default::default(),
             graph_coverage: Default::default(),
         }
@@ -105,7 +103,6 @@ impl<'a> Capture<'a> {
         };
         if !calls.is_empty()
             || !instance.spec.manifest.calls.is_empty()
-            || self.read.inputs.is_some()
             || self.scope.tenant_id != source.tenant_id
             || self.scope.sources.as_slice() != std::slice::from_ref(source)
             || !self.read.projects_field("graph_manifest", "metadata")
@@ -188,70 +185,6 @@ impl<'a> Capture<'a> {
         Ok(())
     }
 
-    pub(super) fn package_batches(
-        &mut self,
-        index: usize,
-        data: sdk::Dataset,
-        coverage: &sdk::Coverage,
-        budget: &mut ReadBudget<'_>,
-    ) -> Result<()> {
-        let (_, schema) = self
-            .read
-            .inputs
-            .and_then(|inputs| inputs.outputs.get(index))
-            .ok_or_else(|| invalid("the package source index is absent"))?;
-        if data
-            .batches
-            .iter()
-            .any(|batch| batch.schema_ref() != schema)
-        {
-            return Err(invalid("the retained dataset schema differs"));
-        }
-        budget.charge(batch_metadata(&data.batches))?;
-        self.insert_package(index, Arc::clone(schema), data.batches, coverage, budget)
-    }
-
-    pub(super) fn package_alias(
-        &mut self,
-        index: usize,
-        previous: usize,
-        budget: &mut ReadBudget<'_>,
-    ) -> Result<()> {
-        if self.packages.contains_key(&index) {
-            return Err(invalid("the package source is bound twice"));
-        }
-        let (schema, batches, coverage) = self
-            .packages
-            .get(&previous)
-            .ok_or_else(|| invalid("the retained alias is absent"))?;
-        budget.charge(batch_metadata(batches))?;
-        budget.charge(Self::package_bytes(coverage))?;
-        let entry = (Arc::clone(schema), batches.clone(), coverage.clone());
-        self.packages.insert(index, entry);
-        Ok(())
-    }
-
-    fn insert_package(
-        &mut self,
-        index: usize,
-        schema: Arc<sdk::Schema>,
-        batches: Vec<RecordBatch>,
-        coverage: &sdk::Coverage,
-        budget: &mut ReadBudget<'_>,
-    ) -> Result<()> {
-        if self.packages.contains_key(&index) {
-            return Err(invalid("the package source is bound twice"));
-        }
-        budget.charge(Self::package_bytes(coverage))?;
-        self.packages
-            .insert(index, (schema, batches, coverage.clone()));
-        Ok(())
-    }
-
-    fn package_bytes(coverage: &sdk::Coverage) -> usize {
-        size_of::<(usize, sdk::Coverage)>().saturating_add(coverage.metadata_bytes())
-    }
-
     pub(super) fn finish(
         mut self,
         mut extraction: AnalysisExtractionV1,
@@ -299,32 +232,12 @@ impl<'a> Capture<'a> {
                 .into_iter()
                 .map(|(name, table)| (name, table.batches))
                 .collect(),
-            packages: self.packages,
             removals: self.removals,
             mutable_discovery: self.mutable_discovery,
             received_min: self.received_min,
             next_change: self.next_change,
         })
     }
-}
-
-fn batch_metadata(batches: &Vec<RecordBatch>) -> usize {
-    batches.capacity() * size_of::<RecordBatch>()
-        + batches
-            .iter()
-            .map(|batch| {
-                let schema = batch.schema_ref();
-                batch.num_columns() * size_of::<ArrayRef>()
-                    + size_of::<sdk::Schema>()
-                    + schema.fields().size()
-                    + schema.metadata().capacity() * size_of::<(String, String)>()
-                    + schema
-                        .metadata()
-                        .iter()
-                        .map(|(key, value)| key.capacity() + value.capacity())
-                        .sum::<usize>()
-            })
-            .sum::<usize>()
 }
 
 fn json<T: serde::Serialize + ?Sized>(

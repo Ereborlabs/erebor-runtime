@@ -35,6 +35,7 @@ impl AnalysisStore {
         &self,
         transaction: &Transaction<'_>,
         intent: &super::TraceIntentV1,
+        revision: u64,
     ) -> Result<()> {
         for binding in &intent.bindings {
             let identity = super::raw::RawIdentity::Diagnostic(binding.identity.clone());
@@ -42,9 +43,9 @@ impl AnalysisStore {
             let json = identity.json(&self.root)?;
             let changed = transaction
                 .execute(
-                    "INSERT INTO trace_receipts VALUES (?, ?, ?, 0, 0, NULL, 0, 0)
+                    "INSERT INTO trace_versions VALUES (?, ?, ?, 0, 0, NULL, 0, 0, ?)
                  ON CONFLICT DO NOTHING",
-                    params![key.as_slice(), json, identity.tenant().as_slice()],
+                    params![key.as_slice(), json, identity.tenant().as_slice(), revision],
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "reserve diagnostic terminal state",

@@ -2,76 +2,12 @@ use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
 use super::{
-    AnalysisExtractionV1, AnalysisInputTables, AnalysisReadControl, AnalysisReferenceOriginV1,
-    AnalysisReferenceV1, AnalysisStore,
+    AnalysisExtractionV1, AnalysisReadControl, AnalysisReferenceOriginV1, AnalysisReferenceV1,
+    AnalysisStore,
 };
-use crate::{AnalysisDatabaseSnafu, PackageErrorCodeV1 as Code, Result};
+use crate::{AnalysisDatabaseSnafu, Result};
 
 impl AnalysisStore {
-    pub(super) fn extract_packages(
-        &self,
-        reader: &Connection,
-        packages: AnalysisInputTables<'_>,
-        metadata: bool,
-        control: &AnalysisReadControl,
-        output: &mut AnalysisExtractionV1,
-        capture: &mut super::tables::Capture<'_>,
-    ) -> Result<()> {
-        let AnalysisInputTables {
-            authorized: selection,
-            outputs,
-        } = packages;
-        if !selection.valid() {
-            return Err(Code::Invalid.error("dependency selection"));
-        }
-        for (source, _) in outputs {
-            let reference = source.output();
-            for name in [&reference.package, &reference.export, &reference.output] {
-                crate::validate_package_name(name)?;
-            }
-            if reference.revision.is_empty()
-                || reference.revision.len() > 4096
-                || reference.revision.chars().any(char::is_control)
-            {
-                return Err(Code::Invalid.error("dependency revision"));
-            }
-        }
-        for (index, (reference, schema)) in outputs.iter().enumerate() {
-            control.check()?;
-            if metadata {
-                self.check_managed_input(
-                    reader,
-                    reference,
-                    selection,
-                    capture.now(),
-                    output,
-                    control,
-                )?;
-            } else if let Some(previous) = outputs[..index]
-                .iter()
-                .position(|(previous, expected)| previous == reference && expected == schema)
-            {
-                capture.package_alias(index, previous, &mut output.sink(control))?;
-            } else {
-                let (data, coverage) = self.captured_managed_input(
-                    reader,
-                    reference,
-                    selection,
-                    capture.now(),
-                    output,
-                    control,
-                )?;
-                capture.package_batches(index, data, &coverage, &mut output.sink(control))?;
-            }
-            output.reference_result(
-                &reference.result().result_id,
-                reference.result().commit_revision,
-                AnalysisReferenceOriginV1::Package(index),
-            )?;
-        }
-        control.check()
-    }
-
     pub(super) fn extract_provenance(
         &self,
         reader: &Connection,

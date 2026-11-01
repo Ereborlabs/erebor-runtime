@@ -1,319 +1,6 @@
 use super::*;
 
 mod follow;
-use crate::PackageErrorCodeV1 as Code;
-
-#[test]
-fn current_reads_check_storage() -> TestResult {
-    let saved = Saved::new()?;
-    let selection = &saved.fixture.instance.grant.selection;
-    let control = AnalysisReadControl::default();
-    let baseline = saved.read(
-        selection,
-        selection,
-        &saved.inputs,
-        AnalysisReadModeV1::Complete,
-        AnalysisExtractLimits::default(),
-        &control,
-    )?;
-    let references = |page: &crate::AnalysisPositionPageV1| {
-        page.extraction
-            .references
-            .iter()
-            .map(|entry| {
-                (
-                    entry.context().cloned(),
-                    entry.result().cloned(),
-                    entry.origins().to_vec(),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    let reference = &saved.receipt.results[&10];
-    let (spec, state, head) = {
-        let writer = saved.store.writer()?;
-        let reader = writer.get()?;
-        let spec: Vec<u8> = reader.query_row(
-            "SELECT spec FROM managed_versions WHERE tenant_id = ? AND instance_id = ? AND generation = ?",
-            params![selection.tenant_id.as_slice(), saved.fixture.instance.spec.id, saved.fixture.instance.generation],
-            |row| row.get(0),
-        )?;
-        let (state, head): (u64, Option<String>) = reader.query_row(
-            "SELECT state_revision, result_id FROM managed_calls WHERE tenant_id = ? AND instance_id = ? AND call_id = 10",
-            params![selection.tenant_id.as_slice(), saved.fixture.instance.spec.id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        (spec, state, head)
-    };
-    assert_eq!(state, reference.commit_revision);
-    assert_eq!(head.as_deref(), Some(reference.result_id.as_str()));
-    let mut wrong: ManagedSpec = ManagedCodec::decode(&spec)?;
-    wrong
-        .manifest
-        .calls
-        .get_mut(&10)
-        .ok_or("saved call absent")?
-        .package
-        .revision = "wrong".into();
-    let changed = ManagedCodec::encode(&wrong)?;
-    for fault in ["revision", "state", "head", "result", "owner"] {
-        {
-            let mut writer = saved.store.writer()?;
-            let writer = writer.get_mut()?;
-            let key = params![
-                selection.tenant_id.as_slice(),
-                saved.fixture.instance.spec.id
-            ];
-            match fault {
-                "revision" => {
-                    writer.execute(
-                        "UPDATE managed_versions SET spec = ? WHERE tenant_id = ? AND instance_id = ? AND generation = ?",
-                        params![changed, selection.tenant_id.as_slice(), saved.fixture.instance.spec.id, saved.fixture.instance.generation],
-                    )?;
-                }
-                "state" => {
-                    writer.execute(
-                        "UPDATE managed_calls SET state_revision = state_revision + 1 WHERE tenant_id = ? AND instance_id = ? AND call_id = 10",
-                        key,
-                    )?;
-                }
-                "head" => {
-                    writer.execute(
-                        "DELETE FROM managed_calls WHERE tenant_id = ? AND instance_id = ? AND call_id = 10",
-                        key,
-                    )?;
-                }
-                "result" => {
-                    writer.execute(
-                        "UPDATE managed_calls SET result_id = 'absent' WHERE tenant_id = ? AND instance_id = ? AND call_id = 10",
-                        key,
-                    )?;
-                }
-                _ => {
-                    writer.execute(
-                        "UPDATE managed_calls SET instance_id = 'absent-instance' WHERE tenant_id = ? AND instance_id = ? AND call_id = 10",
-                        key,
-                    )?;
-                }
-            }
-        }
-        for mode in [AnalysisReadModeV1::Metadata, AnalysisReadModeV1::Complete] {
-            let result = saved.read(
-                selection,
-                selection,
-                &saved.inputs,
-                mode,
-                AnalysisExtractLimits::default(),
-                &control,
-            );
-            if fault == "revision" {
-                assert!(
-                    matches!(result, Err(crate::Error::AnalysisConflict { .. })),
-                    "{fault}: {mode:?}"
-                );
-            } else {
-                assert!(
-                    matches!(
-                        result,
-                        Err(crate::Error::Package {
-                            code: Code::Incomplete,
-                            field: "managed input freshness",
-                            ..
-                        })
-                    ),
-                    "{fault}: {mode:?}"
-                );
-            }
-        }
-        {
-            let mut writer = saved.store.writer()?;
-            let writer = writer.get_mut()?;
-            writer.execute(
-                "UPDATE managed_versions SET spec = ? WHERE tenant_id = ? AND instance_id = ? AND generation = ?",
-                params![spec, selection.tenant_id.as_slice(), saved.fixture.instance.spec.id, saved.fixture.instance.generation],
-            )?;
-            writer.execute(
-                "DELETE FROM managed_calls WHERE tenant_id = ? AND call_id = 10 AND instance_id IN (?, 'absent-instance')",
-                params![selection.tenant_id.as_slice(), saved.fixture.instance.spec.id],
-            )?;
-            writer.execute(
-                "INSERT INTO managed_calls VALUES (?, ?, 10, ?, ?)",
-                params![
-                    selection.tenant_id.as_slice(),
-                    saved.fixture.instance.spec.id,
-                    state,
-                    head
-                ],
-            )?;
-        }
-        for mode in [AnalysisReadModeV1::Metadata, AnalysisReadModeV1::Complete] {
-            let restored = saved.read(
-                selection,
-                selection,
-                &saved.inputs,
-                mode,
-                AnalysisExtractLimits::default(),
-                &control,
-            )?;
-            assert_eq!(references(&restored), references(&baseline));
-            if matches!(mode, AnalysisReadModeV1::Complete) {
-                assert_eq!(restored.packages, baseline.packages);
-            } else {
-                assert!(restored.packages.is_empty());
-            }
-        }
-    }
-    let mut forged = reference.clone();
-    forged.commit_revision += 1;
-    assert!(matches!(
-        saved.store.managed_input(
-            selection,
-            &saved.fixture.instance.spec.id,
-            &forged,
-            "rows",
-            AnalysisExtractLimits::default(),
-            &control,
-        ),
-        Err(crate::Error::Package {
-            code: Code::Missing,
-            field: "managed input result",
-            ..
-        })
-    ));
-    let current = saved.fixture.current(&saved.store)?;
-    let running = saved.store.set_managed_running(
-        selection.tenant_id,
-        &current.spec.id,
-        current.lifecycle,
-        true,
-        || Ok(()),
-    )?;
-    let stopped = saved.store.set_managed_running(
-        selection.tenant_id,
-        &current.spec.id,
-        running.lifecycle,
-        false,
-        || Ok(()),
-    )?;
-    assert!(!stopped.running);
-    assert_eq!(stopped.progress, saved.receipt.commit_revision);
-    let paused = saved.read(
-        selection,
-        selection,
-        &saved.inputs,
-        AnalysisReadModeV1::Complete,
-        AnalysisExtractLimits::default(),
-        &control,
-    )?;
-    assert_eq!(references(&paused), references(&baseline));
-    assert_eq!(paused.packages, baseline.packages);
-    let restarted = saved.store.set_managed_running(
-        selection.tenant_id,
-        &current.spec.id,
-        stopped.lifecycle,
-        true,
-        || Ok(()),
-    )?;
-    assert!(restarted.running);
-    assert_eq!(restarted.progress, saved.receipt.commit_revision);
-    let restored = saved.read(
-        selection,
-        selection,
-        &saved.inputs,
-        AnalysisReadModeV1::Complete,
-        AnalysisExtractLimits::default(),
-        &control,
-    )?;
-    assert_eq!(references(&restored), references(&baseline));
-    assert_eq!(restored.packages, baseline.packages);
-    saved.permits()?;
-    Ok(())
-}
-
-#[test]
-fn retained_record_checks_identity() -> TestResult {
-    let saved = Saved::new()?;
-    let selection = &saved.fixture.instance.grant.selection;
-    let control = AnalysisReadControl::default();
-    let reference = &saved.receipt.results[&10];
-    let metadata: Vec<u8> = saved.store.writer()?.get()?.query_row(
-        "SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
-        params![selection.tenant_id.as_slice(), reference.result_id],
-        |row| row.get(0),
-    )?;
-    let mut record: model::Record = ManagedCodec::decode(&metadata)?;
-    record.instance = "absent-instance".into();
-    saved.store.writer()?.get_mut()?.execute(
-        "UPDATE analysis_results SET request_meta = ? WHERE tenant_id = ? AND result_id = ?",
-        params![
-            ManagedCodec::encode(&record)?,
-            selection.tenant_id.as_slice(),
-            reference.result_id
-        ],
-    )?;
-    assert!(matches!(
-        saved.store.managed_input(
-            selection,
-            &saved.fixture.instance.spec.id,
-            reference,
-            "rows",
-            AnalysisExtractLimits::default(),
-            &control,
-        ),
-        Err(crate::Error::Package {
-            code: Code::Missing,
-            field: "managed result attempt",
-            ..
-        })
-    ));
-    assert!(matches!(
-        saved.read(
-            selection,
-            selection,
-            &saved.inputs,
-            AnalysisReadModeV1::Complete,
-            AnalysisExtractLimits::default(),
-            &control,
-        ),
-        Err(crate::Error::Package {
-            code: Code::Invalid,
-            field: "captured managed input identity",
-            ..
-        })
-    ));
-    saved.store.writer()?.get_mut()?.execute(
-        "UPDATE analysis_results SET request_meta = ? WHERE tenant_id = ? AND result_id = ?",
-        params![
-            metadata,
-            selection.tenant_id.as_slice(),
-            reference.result_id
-        ],
-    )?;
-    let (pin, schema) = saved.store.managed_input(
-        selection,
-        &saved.fixture.instance.spec.id,
-        reference,
-        "rows",
-        AnalysisExtractLimits::default(),
-        &control,
-    )?;
-    assert_eq!(pin.result(), reference);
-    assert_eq!(&schema.schema, saved.inputs[0].1.as_ref());
-    let restored = saved.read(
-        selection,
-        selection,
-        &saved.inputs,
-        AnalysisReadModeV1::Complete,
-        AnalysisExtractLimits::default(),
-        &control,
-    )?;
-    assert_eq!(
-        restored.packages[&0].1,
-        saved.fixture.output(7)?.datasets[0].batches
-    );
-    saved.permits()?;
-    Ok(())
-}
 
 #[derive(Debug, PartialEq)]
 struct CommitState {
@@ -322,7 +9,6 @@ struct CommitState {
     heads: Vec<(u64, u64, Option<String>)>,
     attempts: Vec<(String, u64, u64, Vec<u8>)>,
     results: Vec<(String, u64, Vec<u8>, Vec<u8>)>,
-    arrows: Vec<(String, String, u64, Vec<u8>)>,
     references: (u64, u64, u64),
     history: Vec<ManagedReceipt>,
 }
@@ -335,7 +21,7 @@ impl Saved {
 
 impl Fixture {
     fn commit_state(&self, store: &AnalysisStore) -> TestResult<CommitState> {
-        let (heads, attempts, results, arrows, references) = store.read_snapshot(|reader| {
+        let (heads, attempts, results, references) = store.read_snapshot(|reader| {
             let mut statement = reader.prepare(
                 "SELECT call_id, state_revision, result_id FROM managed_calls ORDER BY call_id",
             ).context(crate::AnalysisDatabaseSnafu { operation: "prepare saved call heads" })?;
@@ -357,18 +43,11 @@ impl Fixture {
                 .context(crate::AnalysisDatabaseSnafu { operation: "read saved result rows" })?
                 .collect::<duckdb::Result<Vec<_>>>()
                 .context(crate::AnalysisDatabaseSnafu { operation: "decode saved result rows" })?;
-            let mut statement = reader.prepare(
-                "SELECT result_id, role, slot, ipc FROM managed_arrow ORDER BY result_id, role, slot",
-            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare saved IPC rows" })?;
-            let arrows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
-                .context(crate::AnalysisDatabaseSnafu { operation: "read saved IPC rows" })?
-                .collect::<duckdb::Result<Vec<_>>>()
-                .context(crate::AnalysisDatabaseSnafu { operation: "decode saved IPC rows" })?;
             let references = reader.query_row(
                 "SELECT (SELECT count(*) FROM managed_edges), (SELECT count(*) FROM evidence_refs), (SELECT count(*) FROM context_refs)",
                 [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             ).context(crate::AnalysisDatabaseSnafu { operation: "read saved reference counts" })?;
-            Ok((heads, attempts, results, arrows, references))
+            Ok((heads, attempts, results, references))
         })?;
         Ok(CommitState {
             meta: store.meta()?,
@@ -376,7 +55,6 @@ impl Fixture {
             heads,
             attempts,
             results,
-            arrows,
             references,
             history: store.managed_history(
                 &self.instance.grant.selection,
@@ -391,17 +69,20 @@ impl Fixture {
 fn source_change_keeps_commit() -> TestResult {
     let saved = Saved::new()?;
     let control = AnalysisReadControl::default();
-    let selection = &saved.fixture.instance.grant.selection;
     let current = saved.fixture.current(&saved.store)?;
     let reference = &saved.receipt.results[&10];
     let original = saved
         .store
         .managed_result(&current, &reference.result_id, 10, &control)?;
     assert!(original.current);
-    let selected = saved
-        .store
-        .managed_selected([1; 16], &current.spec.id, &saved.receipt.attempt, &control)?
-        .ok_or("saved selected output absent")?;
+    let selected = Fixture::receipt(
+        &saved.store,
+        [1; 16],
+        &current.spec.id,
+        &saved.receipt.attempt,
+        &control,
+    )?
+    .ok_or("saved selected output absent")?;
     let captured = saved.capture()?;
     let input = request("source-pending");
     let attempt = saved
@@ -430,37 +111,21 @@ fn source_change_keeps_commit() -> TestResult {
         .store
         .managed_result(&current, &reference.result_id, 10, &control)?;
     assert!(!changed.current);
-    assert_eq!(changed.context, original.context);
-    assert_eq!(
-        sdk::wire::Output::encode_model(&changed.output, &saved.fixture.model)?,
-        sdk::wire::Output::encode_model(&original.output, &saved.fixture.model)?
-    );
-    assert_eq!(changed.commit_revision, original.commit_revision);
-    let retained = saved
-        .store
-        .managed_selected([1; 16], &current.spec.id, &saved.receipt.attempt, &control)?
-        .ok_or("retained selected output absent")?;
-    assert_eq!(retained.data.name, selected.data.name);
-    assert_eq!(retained.data.batches, selected.data.batches);
-    assert_eq!(retained.commit_revision, selected.commit_revision);
+    assert_eq!(call_context(&changed)?, call_context(&original)?);
+    assert_eq!(changed.result, original.result);
+    assert_eq!(changed.source, original.source);
+    assert_eq!(changed.prior, original.prior);
+    assert_eq!(changed.receipt, original.receipt);
+    let retained = Fixture::receipt(
+        &saved.store,
+        [1; 16],
+        &current.spec.id,
+        &saved.receipt.attempt,
+        &control,
+    )?
+    .ok_or("retained selected output absent")?;
+    assert_eq!(retained, selected);
     assert_eq!(before.history, std::slice::from_ref(&saved.receipt));
-    for mode in [AnalysisReadModeV1::Metadata, AnalysisReadModeV1::Complete] {
-        assert!(matches!(
-            saved.read(
-                selection,
-                selection,
-                &saved.inputs,
-                mode,
-                AnalysisExtractLimits::default(),
-                &control
-            ),
-            Err(crate::Error::Package {
-                code: Code::Incomplete,
-                field: "managed input freshness",
-                ..
-            })
-        ));
-    }
     let failure = saved
         .fixture
         .publish(&saved.store, &attempt, &evaluations, &outputs)
@@ -637,7 +302,7 @@ fn empty_graph_keeps_capture() -> TestResult {
         let control = AnalysisReadControl::default();
         let capture = || -> TestResult<_> {
             let instance = fixture.current(store)?;
-            Ok(store.read_managed_tables(
+            Ok(store.read_managed_tables_filtered(
                 &selection,
                 &ManagedRead {
                     source: None,
@@ -651,12 +316,12 @@ fn empty_graph_keeps_capture() -> TestResult {
                 AnalysisTableRead {
                     requests: &requests,
                     event_ranges: None,
-                    inputs: None,
                     mode: AnalysisReadModeV1::Complete,
                     now: 10,
                 },
                 AnalysisExtractLimits::default(),
                 &control,
+                None,
             )?)
         };
         let initial = capture()?;

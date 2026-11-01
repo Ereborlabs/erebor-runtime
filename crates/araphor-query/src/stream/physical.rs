@@ -31,7 +31,7 @@ use snafu::ResultExt as _;
 
 use super::progress::Progress;
 use super::{Output, OutputStream, Run};
-use crate::sources::{SourceData, SourcePort, SourceProvider, SourceSnapshot};
+use crate::sources::{SourceData, SourcePort, SourceProvider};
 use crate::{Result, SqlSnafu};
 
 mod kernel;
@@ -81,9 +81,7 @@ impl SubscribeExec {
                 safe = false;
             }
             if let LogicalPlan::Extension(extension) = node {
-                if let Some(port) = extension.node.as_any().downcast_ref::<SourcePort>() {
-                    safe &= port.reusable();
-                } else if !extension
+                if !extension
                     .node
                     .as_any()
                     .is::<crate::definition::PackageCall>()
@@ -93,7 +91,18 @@ impl SubscribeExec {
             }
             if let LogicalPlan::TableScan(scan) = node {
                 if let Ok(provider) = source_as_provider(&scan.source) {
-                    if let Some(view) = provider.as_any().downcast_ref::<ViewTable>() {
+                    if let Some(port) = provider.as_any().downcast_ref::<SourcePort>() {
+                        let identity = Arc::as_ptr(&provider) as *const () as usize;
+                        if views.insert(identity) {
+                            safe &= port.reusable();
+                            for input in port.inputs() {
+                                safe &= Self::reusable(input, views)?;
+                            }
+                            views.remove(&identity);
+                        } else {
+                            safe = false;
+                        }
+                    } else if let Some(view) = provider.as_any().downcast_ref::<ViewTable>() {
                         let identity = Arc::as_ptr(&provider) as *const () as usize;
                         if views.insert(identity) {
                             safe &= Self::reusable(view.logical_plan(), views)?;
@@ -269,7 +278,12 @@ impl SubscribeExec {
                         .is_some_and(|managed| !managed.rebuild)
                     && run.resume_expiry.is_none_or(|expiry| expiry > now)
             }) {
-                let selection = SourceSnapshot::selection(&run.selection(now)?, run.sources())?;
+                let sources = run
+                    .sources()
+                    .keys()
+                    .map(|name| (name.clone(), Some(Default::default())))
+                    .collect();
+                let selection = run.selection(now)?.project(&sources)?;
                 let (meta, revision) = run
                     .dependencies(&session, selection, Some(&permit), None)
                     .await?;

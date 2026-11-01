@@ -102,10 +102,9 @@ fn removal_keeps_exact_history() -> TestResult {
             &AnalysisReadControl::default(),
         )?;
         assert!(!retained.current);
-        assert_eq!(retained.commit_revision, reference.commit_revision);
-        assert!(retained.output.checkpoint.is_some());
-        assert_eq!(retained.output.evidence.len(), 1);
-        assert_eq!(retained.output.reasons.len(), 1);
+        assert_eq!(retained.result, *reference);
+        assert_eq!(retained.receipt, receipt);
+        assert_eq!(fixture.checkpoint(&store, reference)?.version, 1);
     }
     assert_eq!(store.meta()?, before);
     drop(store);
@@ -211,13 +210,6 @@ fn recreation_keeps_scoped_history() -> TestResult {
             ..
         })
     ));
-    assert!(matches!(
-        store.managed_evaluation_bytes(&current, &old_id, &control),
-        Err(crate::Error::Package {
-            code: Code::Denied,
-            ..
-        })
-    ));
     assert_eq!(
         store.managed_history(&grant.selection, "counter", &control)?,
         vec![second.clone()]
@@ -245,10 +237,9 @@ fn recreation_keeps_scoped_history() -> TestResult {
     historical.grant = original.grant.clone();
     let old = store.managed_result(&historical, &old_id, 10, &control)?;
     assert!(!old.current);
-    assert_eq!(old.commit_revision, first.commit_revision);
+    assert_eq!(old.result.commit_revision, first.commit_revision);
     assert_eq!(
-        store
-            .managed_evaluation(&broad, &old_id, &control)?
+        call_context(&store.managed_result(&broad, &old_id, 10, &control)?)?
             .context
             .id,
         "scope-a"
@@ -279,9 +270,7 @@ fn recreation_keeps_scoped_history() -> TestResult {
         })
     ));
     assert_eq!(
-        reopened
-            .managed_result(&historical, &old_id, 10, &control)?
-            .context
+        call_context(&reopened.managed_result(&historical, &old_id, 10, &control)?)?
             .context
             .id,
         "scope-a"
@@ -290,7 +279,7 @@ fn recreation_keeps_scoped_history() -> TestResult {
 }
 
 #[test]
-fn historical_scope_precedes_hydration() -> TestResult {
+fn historical_scope_precedes_integrity() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
@@ -303,7 +292,10 @@ fn historical_scope_precedes_hydration() -> TestResult {
     let id = &first.results[&10].result_id;
     {
         let mut writer = store.writer()?;
-        writer.get_mut()?.execute("UPDATE managed_arrow SET ipc = 'corrupt'::BLOB WHERE result_id = ? AND role IN ('input', 'output')", params![id])?;
+        writer.get_mut()?.execute(
+            "UPDATE analysis_results SET commit_revision = commit_revision + 1 WHERE result_id = ?",
+            params![id],
+        )?;
     }
     let control = AnalysisReadControl::default();
     assert!(matches!(
@@ -313,19 +305,9 @@ fn historical_scope_precedes_hydration() -> TestResult {
             ..
         })
     ));
-    assert!(matches!(
-        store.managed_evaluation_bytes(&current, id, &control),
-        Err(crate::Error::Package {
-            code: Code::Denied,
-            ..
-        })
-    ));
     let mut permitted = current.clone();
     permitted.grant = original.grant;
     assert!(store.managed_result(&permitted, id, 10, &control).is_err());
-    assert!(store
-        .managed_evaluation_bytes(&permitted, id, &control)
-        .is_err());
     Ok(())
 }
 
@@ -418,7 +400,7 @@ fn uninstall_keeps_admitted_program() -> TestResult {
         &AnalysisReadControl::default(),
     )?;
     assert!(!old.current);
-    assert_eq!(old.context.context.id, "before-uninstall");
+    assert_eq!(call_context(&old)?.context.id, "before-uninstall");
     let mut fresh = current.spec.clone();
     fresh.id = "fresh-counter".into();
     let before = store.meta()?;

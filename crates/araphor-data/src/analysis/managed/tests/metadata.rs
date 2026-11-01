@@ -73,11 +73,11 @@ fn attempt_witnesses_keep_earliest() -> TestResult {
         grant.selection = AnalysisSelectionV1::tenant(source.tenant_id);
         grant.selection.results = vec![retained.result_id.clone()];
         fixture.instance = store.admit_managed(&spec, &grant, || Ok(()))?;
-        let tables = AnalysisTableRequests::from([("events".into(), None)]);
+        let tables = AnalysisTableRequests::from([("events".into(), Some(BTreeSet::new()))]);
         let control = AnalysisReadControl::default();
         let mut captured = store
-            .read_managed_tables(
-                &grant.selection,
+            .read_managed_tables_filtered(
+                &grant.selection.project(&tables)?,
                 &ManagedRead {
                     source: None,
                     execution: None,
@@ -90,12 +90,12 @@ fn attempt_witnesses_keep_earliest() -> TestResult {
                 AnalysisTableRead {
                     requests: &tables,
                     event_ranges: None,
-                    inputs: None,
                     mode: AnalysisReadModeV1::Complete,
                     now: 10,
                 },
                 AnalysisExtractLimits::default(),
                 &control,
+                None,
             )?
             .state;
         assert_eq!(captured.contract.witnesses.len(), 4);
@@ -217,9 +217,9 @@ fn metadata_skips_prior_ipc() -> TestResult {
         body: vec![1],
     };
     let changed = store.commit_context(&context)?;
-    let requests = AnalysisTableRequests::new();
-    let page = store.read_managed_tables(
-        &fixture.instance.grant.selection,
+    let requests = AnalysisTableRequests::from([("context_versions".into(), None)]);
+    let page = store.read_managed_tables_filtered(
+        &fixture.instance.grant.selection.project(&requests)?,
         &ManagedRead {
             source: None,
             execution: None,
@@ -232,12 +232,12 @@ fn metadata_skips_prior_ipc() -> TestResult {
         AnalysisTableRead {
             requests: &requests,
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Complete,
             now: 10,
         },
         AnalysisExtractLimits::default(),
         &AnalysisReadControl::default(),
+        None,
     )?;
     assert!(page.page.tables.is_empty());
     assert_eq!(page.page.extraction.references.len(), 1);
@@ -273,9 +273,8 @@ fn metadata_skips_prior_ipc() -> TestResult {
         rebuild: false,
         completed: Some(receipt.commit_revision),
     };
-    let mut selection = selected.instance.grant.selection.clone();
-    selection.select_profiles(crate::Selection::Exact(Vec::new()))?;
     let tables = AnalysisTableRequests::from([("context_versions".into(), None)]);
+    let selection = selected.instance.grant.selection.project(&tables)?;
     let before = store.meta()?;
     let stale = ManagedRead {
         source: None,
@@ -337,7 +336,7 @@ fn metadata_skips_prior_ipc() -> TestResult {
     {
         let mut writer = store.writer()?;
         let count = writer.get_mut()?.execute(
-            "UPDATE managed_arrow SET ipc = ? WHERE role = 'checkpoint'",
+            "UPDATE analysis_results SET body = ? WHERE processor_id = 'managed-package-v1'",
             params![vec![0_u8, 1, 2, 3]],
         )?;
         assert_eq!(count, 2);
@@ -352,21 +351,22 @@ fn metadata_skips_prior_ipc() -> TestResult {
         )?,
         metadata
     );
-    assert!(store
-        .read_managed_tables(
+    assert!(matches!(
+        store.read_managed_tables_filtered(
             &selection,
             &selected,
             AnalysisTableRead {
                 requests: &tables,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-        )
-        .is_err());
+            None,
+        ),
+        Err(crate::Error::ManagedDecoding { .. })
+    ));
     assert_eq!(store.meta()?, before);
     Ok(())
 }

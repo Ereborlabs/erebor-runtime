@@ -4,9 +4,9 @@ use std::sync::Arc;
 use araphor_analysis_sdk as sdk;
 use araphor_data::analysis::PackageResultRefV1;
 use araphor_data::{
-    AnalysisContextRefV1, AnalysisGapV1, AnalysisInputTables, AnalysisPositionPageV1,
-    AnalysisReadControl, AnalysisReadModeV1, AnalysisSelectionV1, AnalysisStreamIdentityV1,
-    AnalysisTableRead, AnalysisTableRequests, AnalysisWitnessV1, Selection,
+    AnalysisContextRefV1, AnalysisGapV1, AnalysisPositionPageV1, AnalysisReadControl,
+    AnalysisReadModeV1, AnalysisSelectionV1, AnalysisStreamIdentityV1, AnalysisTableRead,
+    AnalysisTableRequests, AnalysisWitnessV1,
 };
 use datafusion::arrow::array::{RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
@@ -15,6 +15,7 @@ use datafusion::execution::memory_pool::MemoryReservation;
 
 use super::{ReadMode, ScanBounds, SourceOrigin, SourceSnapshot};
 
+mod before;
 mod package;
 
 #[cfg(test)]
@@ -85,6 +86,10 @@ impl std::fmt::Debug for ArrowSnapshot {
 }
 
 impl ArrowSnapshot {
+    pub(super) fn metadata(&self) -> &MemoryReservation {
+        &self._metadata
+    }
+
     pub(crate) fn requests(&self) -> &Arc<CapturedRequests> {
         &self.requests
     }
@@ -231,9 +236,9 @@ impl Captured {
         let Some((stored, captured, batches, _)) = self.tables.get(origin) else {
             return match origin {
                 SourceOrigin::Durable(_) => Ok(Vec::new()),
-                SourceOrigin::Port(_) | SourceOrigin::Package(_) | SourceOrigin::Local(_) => Err(
-                    DataFusionError::Execution("the materialized port is not bound".into()),
-                ),
+                SourceOrigin::Port(_) | SourceOrigin::Local(_) => Err(DataFusionError::Execution(
+                    "the materialized port is not bound".into(),
+                )),
             };
         };
         let projection = indices
@@ -259,6 +264,56 @@ impl Captured {
 }
 
 impl SourceSnapshot {
+    pub(crate) fn discard_prior(&self, call: u64) -> Result<()> {
+        let mut captured = self
+            .captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
+        let captured = captured
+            .as_mut()
+            .ok_or_else(|| DataFusionError::Internal("source capture is absent".into()))?;
+        let receipt = Arc::get_mut(&mut captured.receipt).ok_or_else(|| {
+            DataFusionError::Internal("the source receipt is already shared".into())
+        })?;
+        let managed = receipt
+            .managed
+            .as_mut()
+            .ok_or_else(|| DataFusionError::Internal("managed source capture is absent".into()))?;
+        receipt._metadata.shrink(managed.discard_prior(call));
+        self.control.check().map_err(Self::data_error)
+    }
+
+    pub(crate) fn hydrate_prior(
+        &self,
+        call: u64,
+        model: &sdk::Model,
+        parameters: Option<sdk::Dataset>,
+        retained: Option<Arc<araphor_data::RetainedCall>>,
+    ) -> Result<()> {
+        let mut captured = self
+            .captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
+        let captured = captured
+            .as_mut()
+            .ok_or_else(|| DataFusionError::Internal("source capture is absent".into()))?;
+        let receipt = Arc::get_mut(&mut captured.receipt).ok_or_else(|| {
+            DataFusionError::Internal("the source receipt is already shared".into())
+        })?;
+        let managed = receipt
+            .managed
+            .as_mut()
+            .ok_or_else(|| DataFusionError::Internal("managed source capture is absent".into()))?;
+        let added = managed
+            .hydrate_prior(call, model, parameters, retained)
+            .map_err(Self::data_error)?;
+        for batch in managed.batches() {
+            self.memory.retain_input(batch, &captured._memory)?;
+        }
+        receipt._metadata.try_grow(added)?;
+        self.control.check().map_err(Self::data_error)
+    }
+
     pub async fn blocking<T: Send + 'static>(
         self: &Arc<Self>,
         context: &datafusion::execution::TaskContext,
@@ -309,16 +364,30 @@ impl SourceSnapshot {
         let captured = captured
             .as_ref()
             .ok_or_else(|| DataFusionError::Execution("source snapshot was not captured".into()))?;
-        let (schema, _, batches, _) = captured
+        let (schema, columns, batches, _) = captured
             .tables
             .get(&SourceOrigin::Durable(name.to_owned()))
             .ok_or_else(|| DataFusionError::Execution("captured source table is absent".into()))?;
+        if AnalysisTableRead::source_rows(name) {
+            if let Some(view) = self.source_view()? {
+                let image = view.image_at(
+                    captured.receipt.page.extraction.meta.commit_revision,
+                    self.reference
+                        .get()
+                        .and_then(|reference| reference.receipt().map(|receipt| &receipt.selected)),
+                )?;
+                let memory = self.memory.reserve_input(0)?;
+                let rows = view.read(name, image, None, columns, schema, &memory)?;
+                return read(schema, &rows.batches);
+            }
+        }
         read(schema, batches)
     }
 
     pub(crate) fn input_bounds(
         &self,
         plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+        calls: Option<&crate::definition::CallContext>,
     ) -> Result<ScanBounds> {
         let mut requests = {
             let captured = self.captured.lock().map_err(|_| {
@@ -334,7 +403,7 @@ impl SourceSnapshot {
                 .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None)))
                 .collect()
         };
-        Self::requests(&mut requests, std::slice::from_ref(plan), None)
+        Self::requests(&mut requests, std::slice::from_ref(plan), None, calls)
     }
 
     pub(crate) fn snapshot(&self) -> Result<Arc<ArrowSnapshot>> {
@@ -346,99 +415,33 @@ impl SourceSnapshot {
             .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))
     }
 
-    pub(crate) fn selection(
-        scope: &AnalysisSelectionV1,
-        sources: &AnalysisTableRequests,
-    ) -> araphor_data::Result<AnalysisSelectionV1> {
-        let mut selection = scope.clone();
-        let graph = sources.keys().any(|name| {
-            matches!(
-                name.as_str(),
-                "findings"
-                    | "relationships"
-                    | "graph_subjects"
-                    | "graph_branches"
-                    | "correlation_packages"
-                    | "policy_observations"
-                    | "graph_manifest"
-            )
-        });
-        let discovery = sources.contains_key("behaviors");
-        let targets = sources.contains_key("targets");
-        let context = sources.contains_key("context")
-            || sources.contains_key("context_versions")
-            || sources.contains_key("notification_routes")
-            || sources.contains_key("compiled_policies")
-            || targets;
-        if !sources.contains_key("events")
-            && !sources.contains_key("coverage")
-            && !sources.contains_key("graph_coverage")
-            && !sources.contains_key("discovery_state")
-            && !sources.contains_key("graph_state")
-            && !sources.contains_key("notifications")
-            && !graph
-            && !discovery
-        {
-            selection.sources = Selection::Exact(Vec::new());
-        }
-        if !sources.keys().any(|name| {
-            matches!(
-                name.as_str(),
-                "traces" | "trace_output" | "trace_measurements"
-            )
-        }) {
-            selection.traces = Selection::Exact(Vec::new());
-        }
-        if !context {
-            selection.contexts = Selection::Exact(Vec::new());
-        }
-        selection.select_targets(
-            targets,
-            targets
-                && !sources.contains_key("events")
-                && !sources.contains_key("context")
-                && !sources.contains_key("context_versions")
-                && !sources.contains_key("compiled_policies"),
-        )?;
-        let profiles = if selection.profiles().is_empty() {
-            Selection::All
-        } else {
-            Selection::Exact(selection.profiles().to_vec())
-        };
-        selection.select_profiles(if discovery {
-            profiles
-        } else {
-            Selection::Exact(Vec::new())
-        })?;
-        let traversal = selection.graph_traversal().cloned();
-        selection.select_graphs(
-            if graph {
-                if selection.graphs().is_empty() {
-                    Selection::All
-                } else {
-                    Selection::Exact(selection.graphs().to_vec())
-                }
-            } else {
-                Selection::Exact(Vec::new())
-            },
-            if graph { traversal } else { None },
-        )?;
-        let notifications = if selection.notification_keys().is_empty() {
-            Selection::All
-        } else {
-            Selection::Exact(selection.notification_keys().to_vec())
-        };
-        selection.select_notifications(if sources.contains_key("notifications") {
-            notifications
-        } else {
-            Selection::Exact(Vec::new())
-        })?;
-        Ok(selection)
-    }
-
     pub fn bind_port(
         &self,
         port: usize,
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+        input: Option<&sdk::Input>,
+    ) -> Result<()> {
+        self.bind_input(SourceOrigin::Port(port), schema, batches, input)
+    }
+
+    pub(crate) fn copy_port(&self, port: usize, to: &Self) -> Result<()> {
+        let (schema, batches) = {
+            let captured = self.captured.lock().map_err(|_| {
+                DataFusionError::Internal("source snapshot lock is poisoned".into())
+            })?;
+            let (schema, _, batches, _) = captured
+                .as_ref()
+                .and_then(|captured| captured.tables.get(&SourceOrigin::Port(port)))
+                .ok_or_else(|| DataFusionError::Execution("the source port is not bound".into()))?;
+            (Arc::clone(schema), batches.clone())
+        };
+        to.bind_port(port, schema, batches, None)
+    }
+
+    fn bind_input(
+        &self,
+        origin: SourceOrigin,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
         input: Option<&sdk::Input>,
@@ -456,7 +459,6 @@ impl SourceSnapshot {
         let captured = captured.as_mut().ok_or_else(|| {
             DataFusionError::Execution("the source snapshot was not captured before binding".into())
         })?;
-        let origin = SourceOrigin::Port(port);
         if let Some((previous, _, rows, binding)) = captured.tables.get(&origin) {
             if previous == &schema
                 && rows == &batches
@@ -510,7 +512,49 @@ impl SourceSnapshot {
         mode: ReadMode,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<Captured> {
+        let selection = self.selection.project(requests).map_err(Self::data_error)?;
+        let selection = Self::prune_selection(selection, bounds);
+        self.read_selected(requests, bounds, mode, control, selection)
+    }
+
+    fn read_selected(
+        &self,
+        requests: &AnalysisTableRequests,
+        bounds: &ScanBounds,
+        mode: ReadMode,
+        control: &araphor_data::AnalysisReadControl,
+        selection: AnalysisSelectionV1,
+    ) -> Result<Captured> {
         let metadata_read = matches!(mode, ReadMode::Metadata);
+        let mut header_requests = None;
+        let mut header_selection = None;
+        if metadata_read && self.source_view()?.is_some() {
+            let headers = requests
+                .iter()
+                .filter(|(name, _)| {
+                    AnalysisTableRead::source_header(name) || name.as_str() == "events"
+                })
+                .map(|(name, columns)| {
+                    (
+                        name.clone(),
+                        AnalysisTableRead::source_header(name)
+                            .then(|| columns.clone())
+                            .flatten(),
+                    )
+                })
+                .collect::<AnalysisTableRequests>();
+            let mut selected = selection.project(&headers).map_err(Self::data_error)?;
+            selected.results.clear();
+            header_selection = Some(selected);
+            header_requests = Some(headers);
+        }
+        let requested = header_requests.as_ref().unwrap_or(requests);
+        let selected = header_selection.as_ref().unwrap_or(&selection);
+        let context_owners = if header_requests.is_some() {
+            None
+        } else {
+            bounds.context_owners.as_ref()
+        };
         let reservation = if metadata_read {
             self.memory.reserve_input(0)?
         } else {
@@ -540,28 +584,13 @@ impl SourceSnapshot {
                 Self::data_error(error)
             }
         };
-        let selection = Self::prune_selection(
-            Self::selection(&self.selection, requests).map_err(Self::data_error)?,
-            bounds,
-        );
-        let outputs = self.inputs.as_ref().map(|inputs| {
-            inputs
-                .retained
-                .iter()
-                .map(|source| (Arc::clone(&source.reference), Arc::clone(&source.schema)))
-                .collect::<Vec<_>>()
-        });
-        let inputs = outputs.as_ref().map(|outputs| AnalysisInputTables {
-            authorized: &self.selection,
-            outputs,
-        });
         let read = AnalysisTableRead {
-            requests,
-            event_ranges: bounds
-                .events
-                .as_deref()
-                .or_else(|| self.inputs.as_ref().map(|_| &[][..])),
-            inputs,
+            requests: requested,
+            event_ranges: if header_requests.is_some() {
+                None
+            } else {
+                bounds.events.as_deref()
+            },
             mode: match mode {
                 ReadMode::Snapshot => AnalysisReadModeV1::Complete,
                 ReadMode::Page(after) => AnalysisReadModeV1::Page(after),
@@ -570,33 +599,35 @@ impl SourceSnapshot {
             },
             now: self.now,
         };
-        let (mut page, managed) = match &self.managed {
-            Some(managed) => {
-                let captured = self
-                    .store
-                    .read_managed_tables_filtered(
-                        &selection,
-                        managed,
-                        read,
-                        limits,
-                        control,
-                        bounds.context_owners.as_ref(),
-                    )
-                    .map_err(data_error)?;
-                (captured.page, Some(captured.state))
+        let (mut page, managed) = if let Some(reference) = self.reference.get() {
+            let captured = self
+                .store
+                .read_managed_reference(selected, reference, read, limits, control, context_owners)
+                .map_err(data_error)?;
+            (captured.page, Some(captured.state))
+        } else {
+            match &self.managed {
+                Some(managed) => {
+                    let captured = self
+                        .store
+                        .read_managed_tables_filtered(
+                            selected,
+                            managed,
+                            read,
+                            limits,
+                            control,
+                            context_owners,
+                        )
+                        .map_err(data_error)?;
+                    (captured.page, Some(captured.state))
+                }
+                None => (
+                    self.store
+                        .read_tables_filtered(selected, read, limits, control, context_owners)
+                        .map_err(data_error)?,
+                    None,
+                ),
             }
-            None => (
-                self.store
-                    .read_tables_filtered(
-                        &selection,
-                        read,
-                        limits,
-                        control,
-                        bounds.context_owners.as_ref(),
-                    )
-                    .map_err(data_error)?,
-                None,
-            ),
         };
         let overflow = || {
             data_error(araphor_data::Error::AnalysisInputTooLarge {
@@ -637,30 +668,6 @@ impl SourceSnapshot {
                 .and_then(|bytes| bytes.checked_add(added))
                 .ok_or_else(overflow)?;
         }
-        for (index, (schema, batches, _)) in &page.packages {
-            let source = self
-                .inputs
-                .as_ref()
-                .and_then(|inputs| inputs.retained.get(*index))
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "the captured package has no native input binding".into(),
-                    )
-                })?;
-            if schema != &source.schema || batches.iter().any(|batch| batch.schema_ref() != schema)
-            {
-                return Err(DataFusionError::Execution(
-                    "the captured package differs from its declared native schema".into(),
-                ));
-            }
-            added = schema
-                .fields()
-                .len()
-                .checked_mul(std::mem::size_of::<usize>())
-                .and_then(|bytes| bytes.checked_add(entry_bytes))
-                .and_then(|bytes| bytes.checked_add(added))
-                .ok_or_else(overflow)?;
-        }
         page.extraction.input_bytes = page
             .extraction
             .input_bytes
@@ -668,7 +675,6 @@ impl SourceSnapshot {
             .filter(|bytes| *bytes <= limits.input_bytes)
             .ok_or_else(overflow)?;
         let mut native = std::mem::take(&mut page.tables);
-        let packages = std::mem::take(&mut page.packages);
         let removals = std::mem::take(&mut page.removals);
         let mut tables = BTreeMap::new();
         let mut source_bytes = 0usize;
@@ -703,81 +709,17 @@ impl SourceSnapshot {
                 (schema, indices, batches, None),
             );
         }
-        for (index, (schema, batches, coverage)) in packages {
-            let source = self
-                .inputs
-                .as_ref()
-                .and_then(|inputs| inputs.retained.get(index))
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "the captured package has no native input binding".into(),
-                    )
-                })?;
-            for batch in &batches {
-                self.memory.retain_input(batch, &reservation)?;
-            }
-            source_bytes = source_bytes.saturating_add(Captured::table_bytes(&schema, &batches));
-            let reference = &source.reference;
-            let input = sdk::Input {
-                data: sdk::Dataset {
-                    name: reference.output().output.clone(),
-                    batches: batches.clone(),
-                },
-                revision: sdk::Revision {
-                    owner: format!(
-                        "{}.{}",
-                        reference.output().package,
-                        reference.output().export
-                    ),
-                    id: format!(
-                        "{}:{}",
-                        reference.result().result_id,
-                        reference.result().commit_revision
-                    ),
-                    window: None,
-                },
-                coverage,
-            };
-            source_bytes = source_bytes
-                .saturating_add(std::mem::size_of::<sdk::Input>())
-                .saturating_add(input.metadata_bytes());
-            let indices = (0..schema.fields().len()).collect();
-            if tables
-                .insert(
-                    SourceOrigin::Package(source.slot),
-                    (schema, indices, batches, Some(Arc::new(input))),
-                )
-                .is_some()
-            {
-                return Err(DataFusionError::Internal(
-                    "the package source is bound twice".into(),
-                ));
-            }
-        }
         if let Some(managed) = &managed {
             for batch in managed.batches() {
                 self.memory.retain_input(batch, &reservation)?;
             }
         }
         let mut witnesses = std::mem::take(&mut page.extraction.witnesses);
-        let retained = self
-            .inputs
-            .as_ref()
-            .is_some_and(|inputs| !inputs.retained.is_empty());
         witnesses.sort_by(|left, right| {
             left.identity
                 .cmp(&right.identity)
                 .then(left.cursor.cmp(&right.cursor))
-                .then_with(|| {
-                    let expiry = |value: u64| {
-                        if retained && value == 0 {
-                            u64::MAX
-                        } else {
-                            value
-                        }
-                    };
-                    expiry(left.expires_utc_ns).cmp(&expiry(right.expires_utc_ns))
-                })
+                .then(left.expires_utc_ns.cmp(&right.expires_utc_ns))
         });
         witnesses
             .dedup_by(|left, right| left.identity == right.identity && left.cursor == right.cursor);

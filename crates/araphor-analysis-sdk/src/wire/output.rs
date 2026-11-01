@@ -17,16 +17,12 @@ impl Output {
         output: &crate::Output,
     ) -> Result<Self> {
         checked.validate_output(output)?;
-        Self::encode_parts(output, checked.model())
+        Self::encode_model(output, checked.model())
     }
 
     /// Encode output values with their declared schemas.
     /// The caller must validate the model and output contract.
     pub fn encode_model(output: &crate::Output, model: &crate::Model) -> Result<Self> {
-        Self::encode_parts(output, model)
-    }
-
-    fn encode_parts(output: &crate::Output, model: &crate::Model) -> Result<Self> {
         let datasets = output
             .datasets
             .iter()
@@ -92,18 +88,6 @@ impl Output {
         if output.allocated_bytes() > copy_bytes {
             return Err(Error::contract(ErrorCode::Limit, "output allocation bytes"));
         }
-        Ok(output)
-    }
-
-    pub fn decode_retained(
-        &self,
-        package: &Package,
-        export: &str,
-        inputs: &std::collections::BTreeMap<String, u64>,
-    ) -> Result<crate::Output> {
-        let model = package.wire_validator(export)?;
-        let output = self.decode_parts(model, None, ErrorCode::Incompatible)?;
-        package.validate_retained_output(export, inputs, &output)?;
         Ok(output)
     }
 

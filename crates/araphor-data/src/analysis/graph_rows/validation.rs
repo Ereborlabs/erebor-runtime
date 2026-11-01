@@ -1,35 +1,49 @@
 use super::*;
 use crate::GraphValidate as _;
 
+#[derive(Default)]
+struct CallSupport {
+    records: BTreeMap<u64, (crate::DiscoveryRecordIdV1, Option<u64>)>,
+    facts: BTreeMap<crate::AnalysisContextKeyV1, (FactAnchor, Option<u64>)>,
+}
+
+impl CallSupport {
+    fn covers(until: Option<u64>, end: Option<u64>) -> bool {
+        until.is_none_or(|until| end.is_some_and(|end| until >= end))
+    }
+}
+
 impl GraphRows {
     pub(in crate::analysis) fn validate_history(
         reader: &Connection,
         root: &std::path::Path,
     ) -> Result<()> {
+        let lineage = format!("SELECT EXISTS(SELECT 1 FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) WHERE {})",Self::LINEAGE_INVALID);
         for query in [
+            lineage.as_str(),
             "SELECT EXISTS(SELECT 1 FROM graph_sources s LEFT JOIN source_receipts r USING(stream_key) WHERE r.stream_key IS NULL OR r.tenant_id<>s.tenant_id)",
             "SELECT EXISTS(SELECT 1 FROM graph_evidence e LEFT JOIN graph_sources s USING(source_ref) WHERE s.source_ref IS NULL OR e.durable_cursor=0)",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_scopes s LEFT JOIN graph_sources src USING(source_ref) WHERE src.source_ref IS NULL OR src.tenant_id<>s.tenant_id OR s.created_revision=0 OR s.first_cursor=0 OR (s.producer_kind=0 AND (s.instance_id='' OR s.package_id='' OR s.package_revision='' OR s.image_digest='')))",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) WHERE s.producer_kind<>0 AND v.selected_state_ref IS NOT NULL)",
-            "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v LEFT JOIN graph_producer_scopes s USING(scope_id) LEFT JOIN graph_producer_versions b ON b.result_id=v.base_result_id WHERE s.scope_id IS NULL OR v.commit_revision<s.created_revision OR (v.base_result_id IS NOT NULL AND (b.result_id IS NULL OR b.commit_revision>=v.commit_revision)))",
+            "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v LEFT JOIN graph_producer_scopes s USING(scope_id) WHERE s.scope_id IS NULL)",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) LEFT JOIN analysis_results r ON r.result_id=v.result_id WHERE s.producer_kind=0 AND (r.result_id IS NULL OR r.processor_id<>'managed-package-v1' OR r.tenant_id<>s.tenant_id OR r.commit_revision<>v.commit_revision))",
-            "SELECT EXISTS(SELECT 1 FROM graph_producer_members m LEFT JOIN graph_producer_scopes s USING(scope_id) LEFT JOIN graph_producer_versions opened ON opened.scope_id=m.scope_id AND opened.commit_revision=m.valid_from LEFT JOIN graph_producer_versions closed ON closed.scope_id=m.scope_id AND closed.commit_revision=m.valid_to WHERE s.scope_id IS NULL OR opened.result_id IS NULL OR (m.valid_to IS NOT NULL AND (m.valid_to<=m.valid_from OR closed.result_id IS NULL)) OR (s.producer_kind=0 AND (m.member_kind NOT IN (2,3,4,8) OR m.anchor_record_id IS NULL)) OR (s.producer_kind=1 AND m.member_kind NOT IN (2,3,4,6)) OR (s.producer_kind=2 AND m.member_kind NOT IN (0,1,7)))",
+            "SELECT EXISTS(SELECT 1 FROM graph_producer_members m LEFT JOIN graph_producer_scopes s USING(scope_id) LEFT JOIN graph_producer_versions opened ON opened.scope_id=m.scope_id AND opened.commit_revision=m.valid_from LEFT JOIN graph_producer_versions closed ON closed.scope_id=m.scope_id AND closed.commit_revision=m.valid_to WHERE s.scope_id IS NULL OR opened.result_id IS NULL OR (m.valid_to IS NOT NULL AND (m.valid_to<=m.valid_from OR closed.result_id IS NULL)) OR (s.producer_kind=0 AND (m.member_kind NOT IN (2,3,4,8,9,10) OR m.anchor_record_id IS NULL)) OR (s.producer_kind=1 AND m.member_kind NOT IN (2,3,4,6)) OR (s.producer_kind=2 AND m.member_kind NOT IN (0,1,7)))",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_members m JOIN graph_producer_scopes s USING(scope_id) WHERE s.producer_kind<>0 AND (m.anchor_record_id IS NOT NULL OR m.anchor_fact IS NOT NULL OR m.reason_code IS NOT NULL))",
+            "SELECT EXISTS(SELECT 1 FROM graph_producer_members WHERE member_kind IN (9,10) AND (unit_ref=0 OR anchor_fact IS NOT NULL OR reason_code IS NOT NULL OR ordinal<>0))",
             "SELECT EXISTS(SELECT 1 FROM (SELECT valid_from,lag(valid_from) OVER(PARTITION BY scope_id,unit_ref,member_kind,member_key ORDER BY valid_from) AS previous,lag(valid_to) OVER(PARTITION BY scope_id,unit_ref,member_kind,member_key ORDER BY valid_from) AS previous_to FROM graph_producer_members) ranges WHERE previous IS NOT NULL AND (previous_to IS NULL OR previous_to>valid_from))",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_members a JOIN graph_producer_members b ON a.scope_id=b.scope_id AND a.unit_ref<b.unit_ref AND a.member_kind=b.member_kind AND a.member_key=b.member_key WHERE a.value_ref<>b.value_ref AND (a.valid_to IS NULL OR b.valid_from<a.valid_to) AND (b.valid_to IS NULL OR a.valid_from<b.valid_to))",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_members m JOIN graph_producer_scopes s USING(scope_id) LEFT JOIN graph_evidence unit ON unit.evidence_id=m.unit_ref WHERE m.unit_ref<>0 AND (s.producer_kind<>0 OR unit.evidence_id IS NULL OR unit.source_ref<>s.source_ref))",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_members m JOIN graph_producer_scopes s USING(scope_id) LEFT JOIN graph_evidence e ON e.evidence_id=m.anchor_record_id WHERE m.anchor_record_id IS NOT NULL AND (e.evidence_id IS NULL OR e.source_ref<>s.source_ref))",
-            "SELECT EXISTS(SELECT 1 FROM graph_producer_members m LEFT JOIN graph_evidence e ON e.evidence_id=m.value_ref LEFT JOIN graph_position_values p ON p.value_ref=m.value_ref LEFT JOIN graph_subject_values s ON s.subject_id=m.value_ref LEFT JOIN graph_edge_values edge ON edge.edge_id=m.value_ref LEFT JOIN graph_finding_values f ON f.value_id=m.value_ref LEFT JOIN graph_branch_values branch ON branch.branch_id=m.value_ref LEFT JOIN graph_fact_values fact ON fact.fact_id=m.value_ref WHERE (member_kind=0 AND e.evidence_id IS NULL) OR (member_kind=1 AND p.value_ref IS NULL) OR (member_kind=2 AND s.subject_id IS NULL) OR (member_kind=3 AND edge.edge_id IS NULL) OR (member_kind=4 AND f.value_id IS NULL) OR (member_kind=6 AND branch.branch_id IS NULL) OR (member_kind=7 AND fact.fact_id IS NULL))",
+            "SELECT EXISTS(SELECT 1 FROM graph_producer_members m LEFT JOIN graph_evidence e ON e.evidence_id=m.value_ref LEFT JOIN graph_position_values p ON p.value_ref=m.value_ref LEFT JOIN graph_subject_values s ON s.subject_id=m.value_ref LEFT JOIN graph_edge_values edge ON edge.edge_id=m.value_ref LEFT JOIN graph_finding_values f ON f.value_id=m.value_ref LEFT JOIN graph_branch_values branch ON branch.branch_id=m.value_ref LEFT JOIN graph_fact_values fact ON fact.fact_id=m.value_ref WHERE (member_kind=0 AND e.evidence_id IS NULL) OR (member_kind IN (1,9) AND p.value_ref IS NULL) OR (member_kind=2 AND s.subject_id IS NULL) OR (member_kind=3 AND edge.edge_id IS NULL) OR (member_kind=4 AND f.value_id IS NULL) OR (member_kind=6 AND branch.branch_id IS NULL) OR (member_kind=7 AND fact.fact_id IS NULL))",
             "SELECT EXISTS(SELECT 1 FROM graph_versions v LEFT JOIN analysis_results r USING(result_id) LEFT JOIN graph_producer_versions metadata ON metadata.result_id=v.metadata_result_id LEFT JOIN graph_producer_scopes s ON s.scope_id=metadata.scope_id LEFT JOIN graph_sources src ON src.source_ref=s.source_ref WHERE r.result_id IS NULL OR r.processor_id<>'graph-findings' OR r.commit_revision<>v.commit_revision OR metadata.result_id IS NULL OR metadata.commit_revision<>v.commit_revision OR s.producer_kind<>2 OR s.tenant_id<>r.tenant_id OR src.stream_key<>r.stream_key)",
             "SELECT EXISTS(SELECT 1 FROM graph_result_producers b LEFT JOIN graph_versions graph ON graph.result_id=b.result_id LEFT JOIN graph_producer_versions v ON v.result_id=b.producer_result_id LEFT JOIN graph_producer_scopes s USING(scope_id) LEFT JOIN graph_sources src USING(source_ref) LEFT JOIN analysis_results r ON r.result_id=b.result_id WHERE graph.result_id IS NULL OR v.result_id IS NULL OR v.commit_revision>graph.commit_revision OR s.tenant_id<>r.tenant_id OR src.stream_key<>r.stream_key)",
             "SELECT EXISTS(SELECT 1 FROM graph_result_producers b JOIN graph_producer_versions v ON v.result_id=b.producer_result_id GROUP BY b.result_id,v.scope_id HAVING count(*)<>1)",
-            "SELECT EXISTS(SELECT 1 FROM graph_result_producers b JOIN graph_producer_versions v ON v.result_id=b.producer_result_id JOIN graph_producer_scopes s USING(scope_id) JOIN analysis_results graph ON graph.result_id=b.result_id WHERE s.producer_kind=0 AND NOT EXISTS(SELECT 1 FROM managed_edges edge WHERE edge.tenant_id=graph.tenant_id AND edge.result_id=b.result_id AND edge.dependency_id=b.producer_result_id AND edge.commit_revision=graph.commit_revision AND edge.kind='input'))",
+            "SELECT EXISTS(SELECT 1 FROM graph_result_producers b JOIN graph_producer_versions v ON v.result_id=b.producer_result_id JOIN graph_producer_scopes s USING(scope_id) JOIN analysis_results graph ON graph.result_id=b.result_id WHERE s.producer_kind=0 AND NOT EXISTS(SELECT 1 FROM managed_edges edge WHERE edge.tenant_id=graph.tenant_id AND edge.result_id=b.result_id AND edge.dependency_id=b.producer_result_id AND edge.commit_revision=graph.commit_revision))",
             "SELECT EXISTS(SELECT 1 FROM graph_versions v WHERE NOT EXISTS(SELECT 1 FROM graph_result_producers b WHERE b.result_id=v.result_id AND b.producer_result_id=v.metadata_result_id))",
             "SELECT EXISTS(SELECT g.result_id FROM graph_versions g LEFT JOIN graph_result_producers b ON b.result_id=g.result_id LEFT JOIN graph_producer_versions v ON v.result_id=b.producer_result_id LEFT JOIN graph_producer_scopes s USING(scope_id) GROUP BY g.result_id,g.metadata_result_id,g.derive_branches,g.commit_revision HAVING count(*) FILTER(WHERE s.producer_kind=2)<>1 OR count(*) FILTER(WHERE s.producer_kind=2 AND v.result_id<>g.metadata_result_id)>0 OR (g.derive_branches AND (count(*) FILTER(WHERE s.producer_kind=1)>0 OR count(*) FILTER(WHERE s.producer_kind=0)=0)) OR (NOT g.derive_branches AND (count(*) FILTER(WHERE s.producer_kind=0)>0 OR count(*) FILTER(WHERE s.producer_kind=1)<>1 OR count(*) FILTER(WHERE s.producer_kind=1 AND v.commit_revision<>g.commit_revision)>0)))",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_members m JOIN graph_producer_scopes owner USING(scope_id) JOIN graph_subject_values s ON s.subject_id=m.value_ref WHERE m.member_kind=2 AND s.tenant_id<>owner.tenant_id)",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_members m JOIN graph_producer_scopes owner USING(scope_id) JOIN graph_evidence e ON e.evidence_id=m.value_ref WHERE m.member_kind=0 AND e.source_ref<>owner.source_ref)",
             "SELECT EXISTS(SELECT 1 FROM graph_position_values v LEFT JOIN graph_evidence e USING(evidence_id) WHERE e.evidence_id IS NULL OR v.commit_revision=0)",
-            "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) LEFT JOIN graph_producer_versions b ON b.result_id=v.base_result_id WHERE (v.commit_revision=s.created_revision AND v.base_result_id IS NOT NULL) OR (v.commit_revision>s.created_revision AND (b.result_id IS NULL OR b.scope_id<>v.scope_id OR b.commit_revision>=v.commit_revision)))",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v WHERE v.subject_count<>(SELECT count(DISTINCT member_key) FROM graph_producer_members m WHERE m.scope_id=v.scope_id AND m.member_kind=2 AND m.valid_from<=v.commit_revision AND (m.valid_to IS NULL OR m.valid_to>v.commit_revision)) OR v.edge_count<>(SELECT count(DISTINCT member_key) FROM graph_producer_members m WHERE m.scope_id=v.scope_id AND m.member_kind=3 AND m.valid_from<=v.commit_revision AND (m.valid_to IS NULL OR m.valid_to>v.commit_revision)) OR v.finding_count<>(SELECT count(DISTINCT member_key) FROM graph_producer_members m WHERE m.scope_id=v.scope_id AND m.member_kind=4 AND m.valid_from<=v.commit_revision AND (m.valid_to IS NULL OR m.valid_to>v.commit_revision)) OR v.state_count<>(SELECT count(DISTINCT member_key) FROM graph_producer_members m WHERE m.scope_id=v.scope_id AND m.member_kind=8 AND m.valid_from<=v.commit_revision AND (m.valid_to IS NULL OR m.valid_to>v.commit_revision)))",
         ] {
             let invalid:bool=reader.query_row(query,[],|row|row.get(0)).context(AnalysisDatabaseSnafu {operation:"validate Graph history"})?;
@@ -112,25 +126,144 @@ impl GraphRows {
 
     pub(in crate::analysis) fn validate_call_members(
         reader: &Connection,
+        root: &std::path::Path,
         scope: u64,
         revision: u64,
-        evaluation: &sdk::Evaluation,
+        captured: u64,
     ) -> Result<()> {
-        let basis = super::basis::CallBasis::new(evaluation)?;
-        let mut units = BTreeMap::new();
-        for unit in Unit::decode(
-            &evaluation
-                .input("units")
-                .context(crate::AnalysisContractSnafu)?
-                .data,
-        )
-        .context(crate::AnalysisContractSnafu)?
-        {
-            if units.insert(unit.record.clone(), unit).is_some() {
-                return Err(Self::invalid("graph duplicate unit"));
+        if captured == 0 || captured > revision {
+            return Err(Self::invalid("graph call captured revision"));
+        }
+        let (call, cpu): (String,u32) = reader.query_row("SELECT version.result_id,receipt.cpu_id FROM graph_producer_versions version JOIN graph_producer_scopes owner USING(scope_id) JOIN graph_sources source USING(source_ref) JOIN source_versions receipt ON receipt.stream_key=source.stream_key AND receipt.tenant_id=owner.tenant_id AND receipt.commit_revision<=? WHERE version.scope_id=? AND version.commit_revision=? AND owner.producer_kind=0 ORDER BY receipt.commit_revision DESC LIMIT 1",params![captured,scope,revision],|row|Ok((row.get(0)?,row.get(1)?)))
+            .context(AnalysisDatabaseSnafu { operation: "read Graph call dependency owner" })?;
+        let selected = "member.scope_id=? AND member.valid_from<=? AND (member.valid_to IS NULL OR member.valid_to>?) AND member.unit_ref IN (SELECT unit_ref FROM graph_producer_members WHERE scope_id=? AND valid_from=?)";
+        let mut support = BTreeMap::<u64, CallSupport>::new();
+        let mut statement = reader.prepare(&format!("SELECT member.unit_ref,member.member_key,member.anchor_record_id,member.anchor_fact,member.reason_code,member.ordinal,position.evidence_id,position.commit_revision,source.identity,evidence.cpu_id,evidence.durable_cursor,evidence.source_ref,owner.source_ref,member.valid_to FROM graph_producer_members member JOIN graph_producer_scopes owner USING(scope_id) LEFT JOIN graph_position_values position ON position.value_ref=member.value_ref LEFT JOIN graph_evidence evidence ON evidence.evidence_id=position.evidence_id LEFT JOIN graph_sources source ON source.source_ref=evidence.source_ref WHERE {selected} AND member.member_kind=9"))
+            .context(AnalysisDatabaseSnafu { operation: "prepare Graph record support" })?;
+        let mut rows = statement
+            .query(params![scope, revision, revision, scope, revision])
+            .context(AnalysisDatabaseSnafu {
+                operation: "read Graph record support",
+            })?;
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "advance Graph record support",
+        })? {
+            let unit: u64 = Self::column(row, 0)?;
+            let evidence: u64 = Self::column(row, 6)?;
+            let position: u64 = Self::column(row, 7)?;
+            let record = crate::DiscoveryRecordIdV1 {
+                stream: Self::decode_value(&Self::column::<Vec<u8>>(row, 8)?)?,
+                cpu_id: Self::column(row, 9)?,
+                durable_cursor: Self::column(row, 10)?,
+            };
+            if unit == 0
+                || record.durable_cursor == 0
+                || record.cpu_id != cpu
+                || position == 0
+                || position > captured
+                || Self::column::<Vec<u8>>(row, 1)? != Self::member_key(&record)?
+                || Self::column::<Option<u64>>(row, 2)? != Some(evidence)
+                || Self::column::<Option<Vec<u8>>>(row, 3)?.is_some()
+                || Self::column::<Option<String>>(row, 4)?.is_some()
+                || Self::column::<u32>(row, 5)? != 0
+                || Self::column::<u64>(row, 11)? != Self::column::<u64>(row, 12)?
+                || support
+                    .entry(unit)
+                    .or_default()
+                    .records
+                    .insert(evidence, (record, Self::column(row, 13)?))
+                    .is_some()
+            {
+                return Err(Self::invalid("graph call record dependency"));
             }
         }
-        let mut statement = reader.prepare("SELECT source.identity,unit.cpu_id,unit.durable_cursor,anchor.cpu_id,anchor.durable_cursor,member.anchor_fact FROM graph_producer_members member JOIN graph_producer_scopes owner USING(scope_id) JOIN graph_sources source ON source.source_ref=owner.source_ref LEFT JOIN graph_evidence unit ON unit.evidence_id=member.unit_ref AND unit.source_ref=owner.source_ref LEFT JOIN graph_evidence anchor ON anchor.evidence_id=member.anchor_record_id AND anchor.source_ref=owner.source_ref WHERE member.scope_id=? AND member.valid_from=? AND member.member_kind IN (2,3,4,8)")
+        drop(rows);
+        drop(statement);
+        let mut statement = reader.prepare(&format!("SELECT member.unit_ref,member.member_key,member.anchor_record_id,member.anchor_fact,member.reason_code,member.ordinal,context.tenant_id,context.owner_id,context.entity_key,context.lifetime_key,context.owner_revision,context.valid_from_utc_ns,context.valid_until_utc_ns,context.sensitivity,context.body,context.commit_revision,reference.commit_revision,member.valid_to FROM graph_producer_members member LEFT JOIN context_versions context ON context.version_key=member.member_key AND context.commit_revision=member.value_ref LEFT JOIN context_refs reference ON reference.ref_id=? AND reference.tenant_id=context.tenant_id AND reference.owner_id=context.owner_id AND reference.entity_key=context.entity_key AND reference.lifetime_key=context.lifetime_key AND reference.owner_revision=context.owner_revision WHERE {selected} AND member.member_kind=10"))
+            .context(AnalysisDatabaseSnafu { operation: "prepare Graph fact support" })?;
+        let mut rows = statement
+            .query(params![call, scope, revision, revision, scope, revision])
+            .context(AnalysisDatabaseSnafu {
+                operation: "read Graph fact support",
+            })?;
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "advance Graph fact support",
+        })? {
+            let key = crate::AnalysisContextKeyV1 {
+                tenant_id: Self::column::<Vec<u8>>(row, 6)?
+                    .try_into()
+                    .map_err(|_| Self::invalid("graph dependency tenant"))?,
+                owner_id: Self::column(row, 7)?,
+                entity_key: Self::column(row, 8)?,
+                lifetime_key: Self::column(row, 9)?,
+                owner_revision: Self::column(row, 10)?,
+            };
+            let (context, committed) = super::super::AnalysisStore::decode_context_row(
+                root,
+                key.clone(),
+                (
+                    Self::column(row, 11)?,
+                    Self::column(row, 12)?,
+                    Self::column(row, 13)?,
+                    Self::column(row, 14)?,
+                    Self::column(row, 15)?,
+                ),
+            )?;
+            let fact = crate::GraphFactV1::try_from(&context)?;
+            let unit: u64 = Self::column(row, 0)?;
+            let evidence: u64 = Self::column(row, 2)?;
+            let until: Option<u64> = Self::column(row, 17)?;
+            let support = support
+                .get_mut(&unit)
+                .ok_or_else(|| Self::invalid("graph fact dependency unit"))?;
+            if committed > captured
+                || Self::column::<u64>(row, 16)? != committed
+                || Self::column::<Vec<u8>>(row, 1)? != super::super::context::version_key(&key)?
+                || Self::column::<Option<Vec<u8>>>(row, 3)?.is_some()
+                || Self::column::<Option<String>>(row, 4)?.is_some()
+                || Self::column::<u32>(row, 5)? != 0
+                || support.records.get(&evidence).is_none_or(|(record, end)| {
+                    record != &fact.record_id || !CallSupport::covers(*end, until)
+                })
+                || support
+                    .facts
+                    .insert(
+                        key.clone(),
+                        (
+                            FactAnchor {
+                                record: fact.record_id,
+                                key,
+                                sensitivity: context.sensitivity,
+                                value: fact.value,
+                            },
+                            until,
+                        ),
+                    )
+                    .is_some()
+            {
+                return Err(Self::invalid("graph call fact dependency"));
+            }
+        }
+        drop(rows);
+        drop(statement);
+        for (unit, support) in &support {
+            let (_, until) = support
+                .records
+                .get(unit)
+                .ok_or_else(|| Self::invalid("graph call unit support"))?;
+            if support
+                .records
+                .values()
+                .any(|(_, end)| !CallSupport::covers(*until, *end))
+                || support
+                    .facts
+                    .values()
+                    .any(|(_, end)| !CallSupport::covers(*until, *end))
+            {
+                return Err(Self::invalid("graph call support interval"));
+            }
+        }
+        let mut statement = reader.prepare("SELECT member.unit_ref,source.identity,anchor.cpu_id,anchor.durable_cursor,member.anchor_fact,member.valid_to,member.anchor_record_id FROM graph_producer_members member JOIN graph_producer_scopes owner USING(scope_id) JOIN graph_sources source ON source.source_ref=owner.source_ref LEFT JOIN graph_evidence anchor ON anchor.evidence_id=member.anchor_record_id AND anchor.source_ref=owner.source_ref WHERE member.scope_id=? AND member.valid_from=? AND member.member_kind IN (2,3,4,8)")
             .context(AnalysisDatabaseSnafu { operation: "prepare Graph call anchor validation" })?;
         let mut rows =
             statement
@@ -143,14 +276,9 @@ impl GraphRows {
         })? {
             let source =
                 Self::decode_value::<crate::EvidenceIntakeIdentityV1>(&Self::column::<Vec<u8>>(
-                    row, 0,
+                    row, 1,
                 )?)?;
-            let record = crate::DiscoveryRecordIdV1 {
-                stream: source.clone(),
-                cpu_id: Self::column(row, 1)?,
-                durable_cursor: Self::column(row, 2)?,
-            };
-            let bytes: Option<Vec<u8>> = Self::column(row, 5)?;
+            let bytes: Option<Vec<u8>> = Self::column(row, 4)?;
             let fact = bytes
                 .as_deref()
                 .map(Self::decode_value::<FactAnchor>)
@@ -161,15 +289,32 @@ impl GraphRows {
             let anchor = Anchor {
                 record: crate::DiscoveryRecordIdV1 {
                     stream: source,
-                    cpu_id: Self::column(row, 3)?,
-                    durable_cursor: Self::column(row, 4)?,
+                    cpu_id: Self::column(row, 2)?,
+                    durable_cursor: Self::column(row, 3)?,
                 },
                 fact,
             };
-            let unit = units
-                .get(&record)
+            let unit: u64 = Self::column(row, 0)?;
+            let support = support
+                .get(&unit)
                 .ok_or_else(|| Self::invalid("graph call member unit"))?;
-            basis.local_for(unit, &anchor)?;
+            let until: Option<u64> = Self::column(row, 5)?;
+            let record: u64 = Self::column(row, 6)?;
+            if support
+                .records
+                .get(&unit)
+                .is_none_or(|(_, end)| !CallSupport::covers(*end, until))
+                || support.records.get(&record).is_none_or(|(record, end)| {
+                    record != &anchor.record || !CallSupport::covers(*end, until)
+                })
+                || anchor.fact.as_ref().is_some_and(|fact| {
+                    support.facts.get(&fact.key).is_none_or(|(value, end)| {
+                        value != fact || !CallSupport::covers(*end, until)
+                    })
+                })
+            {
+                return Err(Self::invalid("graph call member support"));
+            }
         }
         Ok(())
     }

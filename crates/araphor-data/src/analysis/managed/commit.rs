@@ -17,8 +17,7 @@ struct Packet {
     call: u64,
     id: String,
     record: Record,
-    output: sdk::wire::Output,
-    inputs: Vec<sdk::wire::Dataset>,
+    checkpoint: Option<sdk::wire::Checkpoint>,
 }
 
 impl AnalysisStore {
@@ -135,11 +134,7 @@ impl AnalysisStore {
             captured.instance.clone(),
             Some(self.revision.subscribe()),
             captured.prior.clone(),
-            captured.execution.as_ref().map(|execution| {
-                std::sync::Arc::new(super::execution::Retention::new(std::sync::Arc::clone(
-                    execution,
-                )))
-            }),
+            captured.execution.clone(),
             captured.source.clone(),
         ))
     }
@@ -149,7 +144,6 @@ impl AnalysisStore {
         "managed_instances",
         "managed_attempts",
         "managed_edges",
-        "managed_arrow",
         "analysis_results",
         "evidence_refs",
         "context_refs",
@@ -179,14 +173,13 @@ impl AnalysisStore {
         check: impl FnOnce() -> Result<()>,
     ) -> Result<ManagedReceipt> {
         let evidence = match &input.attempt.5 {
-            Some(source) => source.frame.freeze_evidence(
+            Some(source) => source.freeze_evidence(
                 &input.attempt.0.capture,
                 input.attempt.request().witness_expiry,
             )?,
             None => SourceEvidence {
                 witnesses: input.attempt.0.capture.witnesses.clone(),
                 contexts: input.attempt.0.capture.contexts.clone(),
-                support: Vec::new(),
             },
         };
         let mut writer = self.writer()?;
@@ -202,12 +195,8 @@ impl AnalysisStore {
         let retained = self.retain_managed(&transaction, input, &receipt, &mut verified)?;
         let source_proof = input.attempt.5.as_ref().map(|frame| {
             (
-                std::sync::Arc::clone(&frame.frame),
-                std::sync::Arc::new(super::source::ManagedSourceProof {
-                    result: receipt.selected.clone(),
-                    witnesses: evidence.witnesses,
-                    contexts: evidence.contexts,
-                }),
+                std::sync::Arc::clone(frame),
+                std::sync::Arc::new(receipt.selected.clone()),
             )
         });
         if let Some((frame, proof)) = &source_proof {
@@ -277,7 +266,7 @@ impl AnalysisStore {
             return crate::AnalysisConflictSnafu.fail();
         }
         self.check_managed_claim(input.attempt)?;
-        let (packets, mut step, selected, mut receipt) =
+        let (packets, mut step, mut receipt) =
             self.prepare_managed(transaction, &attempt, input, revision, evidence)?;
         let mut verified = self.check_managed_capture(
             transaction,
@@ -341,8 +330,6 @@ impl AnalysisStore {
             spec,
             &receipt.selected.result_id,
             step,
-            selected,
-            input.attempt.5.as_ref().map(|source| source.frame.as_ref()),
             revision,
         )?;
         Self::insert_references(
@@ -489,7 +476,7 @@ impl AnalysisStore {
         input: &ManagedCommit<'_>,
         revision: u64,
         evidence: &SourceEvidence,
-    ) -> Result<(Vec<Packet>, Step, sdk::wire::Dataset, ManagedReceipt)> {
+    ) -> Result<(Vec<Packet>, Step, ManagedReceipt)> {
         let current =
             Self::managed_instance_from(reader, attempt.capture.tenant, &attempt.capture.instance)?
                 .ok_or_else(|| Code::Missing.error("managed publication instance"))?;
@@ -514,22 +501,6 @@ impl AnalysisStore {
             if !spec.manifest.calls.contains_key(&returned.call) || ids.contains_key(&returned.call)
             {
                 return Err(Code::Invalid.error("managed returned calls"));
-            }
-            if let Some(reference) = returned.retained {
-                if !attempt.retains(spec, returned.call, reference)
-                    || input.attempt.3.get(&returned.call).is_none_or(|prior| {
-                        !prior.reusable
-                            || prior.retained.is_none()
-                            || prior.result != reference.result_id
-                            || prior.revision != reference.commit_revision
-                    })
-                    || Self::validate_managed_failure(reader, &current)?
-                        .is_some_and(|failure| failure.progress == current.progress)
-                {
-                    return Err(Code::Conflict.error("managed retained call"));
-                }
-                ids.insert(returned.call, reference.clone());
-                continue;
             }
             let id = crate::InputRevision::of(&(
                 spec.tenant,
@@ -561,20 +532,12 @@ impl AnalysisStore {
             let checked = descriptor
                 .check_evaluation(evaluation)
                 .context(crate::AnalysisContractSnafu)?;
-            let input_basis = if let Some(changes) = returned.changes {
-                if changes.base.is_some() {
-                    InputBasis::Complete
-                } else {
-                    InputBasis::None
-                }
-            } else {
-                if evaluation.checkpoint.is_some() {
-                    InputBasis::Complete
-                } else {
-                    InputBasis::None
-                }
-            };
-            let mut expected = input
+            let reset = checked
+                .model()
+                .change_inputs
+                .as_ref()
+                .is_some_and(|changes| changes.is_reset(evaluation).unwrap_or(false));
+            let expected = input
                 .attempt
                 .3
                 .get(&returned.call)
@@ -583,19 +546,11 @@ impl AnalysisStore {
                         checked.model(),
                         &evaluation.inputs,
                         evaluation.parameters.as_ref(),
-                        attempt.request.rebuild,
+                        attempt.request.rebuild || reset,
                     )
                 })
                 .transpose()?
                 .unwrap_or_default();
-            if checked
-                .model()
-                .change_inputs
-                .as_ref()
-                .is_some_and(|changes| changes.is_reset(evaluation).unwrap_or(false))
-            {
-                expected = (None, Vec::new());
-            }
             let same =
                 match (&expected.0, &evaluation.checkpoint) {
                     (None, None) => true,
@@ -620,23 +575,6 @@ impl AnalysisStore {
             {
                 return Err(Code::Conflict.error("managed captured checkpoint"));
             }
-            if returned.retained.is_some() {
-                let retained = input
-                    .attempt
-                    .3
-                    .get(&returned.call)
-                    .and_then(|prior| prior.retained.as_ref())
-                    .ok_or_else(|| Code::Invalid.error("managed retained call"))?;
-                if !retained.matches(evaluation)
-                    || sdk::wire::Output::encode_checked(&checked, returned.output)
-                        .context(crate::AnalysisContractSnafu)?
-                        != sdk::wire::Output::encode_checked(&checked, &retained.output)
-                            .context(crate::AnalysisContractSnafu)?
-                {
-                    return Err(Code::Conflict.error("managed retained call output"));
-                }
-                continue;
-            }
             let mut context = ResultContext::new(
                 &attempt.request.id,
                 attempt.request.time_utc_ns,
@@ -645,20 +583,6 @@ impl AnalysisStore {
             context.context = evaluation.context.clone();
             context.target = declaration.target.clone();
             context.artifact = declaration.artifact.clone();
-            let parameters = evaluation
-                .parameters
-                .as_ref()
-                .map(|batch| {
-                    sdk::wire::Dataset::encode(
-                        &sdk::Dataset {
-                            name: "parameters".into(),
-                            batches: vec![batch.clone()],
-                        },
-                        &checked.model().parameters,
-                    )
-                    .context(crate::AnalysisContractSnafu)
-                })
-                .transpose()?;
             let mut dependencies = attempt.capture.dependencies.clone();
             dependencies.extend(
                 declaration
@@ -668,56 +592,45 @@ impl AnalysisStore {
             );
             dependencies.sort_by(|left, right| left.result_id.cmp(&right.result_id));
             dependencies.dedup();
-            let input_shapes = evaluation
-                .inputs
-                .iter()
-                .map(|input| RecordInput {
-                    name: input.data.name.clone(),
-                    rows: input.data.rows(),
-                    batches: input.data.batches.len(),
-                })
-                .collect();
-            let inputs = evaluation
-                .inputs
-                .iter()
-                .map(|input| {
-                    let port = checked
-                        .model()
-                        .inputs
-                        .iter()
-                        .find(|port| port.port.name == input.data.name)
-                        .ok_or_else(|| Code::Invalid.error("managed input port"))?;
-                    sdk::wire::Dataset::encode(&input.data, &port.port.schema)
-                        .context(crate::AnalysisContractSnafu)
-                })
-                .collect::<Result<Vec<_>>>()?;
             let changes = Self::prepare_changes(input, returned, checked.model())?;
             let record = Record {
                 instance: spec.id.clone(),
                 call: returned.call,
                 attempt: attempt.request.id.clone(),
-                declaration: declaration.clone(),
                 context,
-                input_basis,
-                parameters,
-                inputs: input_shapes,
                 changes,
                 dependencies,
                 witnesses: evidence.witnesses.clone(),
                 contexts: evidence.contexts.clone(),
             };
-            Self::check_change_record(reader, spec.tenant, &record, checked.model(), attempt)?;
-            let output = sdk::wire::Output::encode_checked(&checked, returned.output)
+            Self::check_change_record(
+                reader,
+                spec.tenant,
+                &record,
+                declaration,
+                checked.model(),
+                attempt,
+            )?;
+            checked
+                .validate_output(returned.output)
                 .context(crate::AnalysisContractSnafu)?;
+            let checkpoint = returned
+                .output
+                .checkpoint
+                .as_ref()
+                .map(|state| {
+                    sdk::wire::Checkpoint::encode(state, checked.model())
+                        .context(crate::AnalysisContractSnafu)
+                })
+                .transpose()?;
             packets.push(Packet {
                 call: returned.call,
                 id: ids[&returned.call].result_id.clone(),
                 record,
-                output,
-                inputs,
+                checkpoint,
             });
         }
-        let selected = Self::encode_selected(input.selected, input.selected_schema)?;
+        Self::check_selected(input.selected, input.selected_schema)?;
         let mut dependencies = attempt.capture.dependencies.clone();
         dependencies.extend(ids.values().cloned());
         dependencies.sort_by(|left, right| left.result_id.cmp(&right.result_id));
@@ -729,15 +642,6 @@ impl AnalysisStore {
             dependencies,
             witnesses: evidence.witnesses.clone(),
             contexts: evidence.contexts.clone(),
-            source: match (&attempt.capture.source, &input.attempt.5) {
-                (None, None) => None,
-                (Some(contract), Some(source)) if *contract == source.frame.record.contract => {
-                    let mut record = source.frame.record.clone();
-                    record.support = evidence.support.clone();
-                    Some(record)
-                }
-                _ => return Err(Code::Invalid.error("managed source buffers")),
-            },
         };
         let id =
             crate::InputRevision::of(&(spec.tenant, &spec.id, &attempt.request.id, None::<u64>))
@@ -758,66 +662,19 @@ impl AnalysisStore {
             results: ids,
             graph: None,
         };
-        Ok((packets, step, selected, receipt))
+        Ok((packets, step, receipt))
     }
 
     fn insert_managed(
         &self,
         transaction: &Transaction<'_>,
         spec: &ManagedSpec,
-        mut packet: Packet,
+        packet: Packet,
         revision: u64,
         segments: &[u64],
     ) -> Result<()> {
-        for (slot, data) in packet.inputs.iter_mut().enumerate() {
-            Self::insert_managed_arrow(
-                transaction,
-                &packet.id,
-                "input",
-                slot,
-                &mut data.arrow_ipc,
-            )?;
-        }
-        for (slot, data) in packet.output.datasets.iter_mut().enumerate() {
-            Self::insert_managed_arrow(
-                transaction,
-                &packet.id,
-                "output",
-                slot,
-                &mut data.arrow_ipc,
-            )?;
-        }
-        for (slot, reason) in packet.output.reasons.iter_mut().enumerate() {
-            Self::insert_managed_arrow(
-                transaction,
-                &packet.id,
-                "reason",
-                slot,
-                &mut reason.details,
-            )?;
-        }
-        if let Some(checkpoint) = &mut packet.output.checkpoint {
-            for (slot, data) in checkpoint.datasets.iter_mut().enumerate() {
-                Self::insert_managed_arrow(
-                    transaction,
-                    &packet.id,
-                    "checkpoint",
-                    slot,
-                    &mut data.arrow_ipc,
-                )?;
-            }
-        }
-        if let Some(data) = &mut packet.record.parameters {
-            Self::insert_managed_arrow(
-                transaction,
-                &packet.id,
-                "parameters",
-                0,
-                &mut data.arrow_ipc,
-            )?;
-        }
         transaction.execute("INSERT INTO analysis_results (result_id, tenant_id, processor_id, body, request_meta, commit_revision) VALUES (?, ?, 'managed-package-v1', ?, ?, ?)",
-            params![packet.id, spec.tenant.as_slice(), ManagedCodec::encode(&packet.output).context(crate::ManagedEncodingSnafu)?, ManagedCodec::encode(&packet.record).context(crate::ManagedEncodingSnafu)?, revision])
+            params![packet.id, spec.tenant.as_slice(), ManagedCodec::encode(&packet.checkpoint).context(crate::ManagedEncodingSnafu)?, ManagedCodec::encode(&packet.record).context(crate::ManagedEncodingSnafu)?, revision])
             .context(AnalysisDatabaseSnafu { operation: "insert complete managed result" })?;
         Self::insert_managed_edges(
             transaction,
@@ -843,42 +700,12 @@ impl AnalysisStore {
         spec: &ManagedSpec,
         id: &str,
         step: Step,
-        mut selected: sdk::wire::Dataset,
-        source: Option<&super::source::ManagedSourceFrame>,
         revision: u64,
     ) -> Result<()> {
-        Self::insert_managed_arrow(transaction, id, "selected", 0, &mut selected.arrow_ipc)?;
-        if let Some(source) = source {
-            for (slot, mut table) in source.encode()?.into_iter().enumerate() {
-                Self::insert_managed_arrow(transaction, id, "source", slot, &mut table.arrow_ipc)?;
-            }
-        }
         transaction.execute("INSERT INTO analysis_results (result_id, tenant_id, processor_id, body, request_meta, commit_revision) VALUES (?, ?, 'managed-definition-v1', ?, ?, ?)",
-            params![id, spec.tenant.as_slice(), ManagedCodec::encode(&selected).context(crate::ManagedEncodingSnafu)?, ManagedCodec::encode(&step).context(crate::ManagedEncodingSnafu)?, revision])
+            params![id, spec.tenant.as_slice(), Vec::<u8>::new(), ManagedCodec::encode(&step).context(crate::ManagedEncodingSnafu)?, revision])
             .context(AnalysisDatabaseSnafu { operation: "insert selected managed relation" })?;
         Self::insert_managed_edges(transaction, spec.tenant, id, &step.dependencies)?;
-        if let Some(parent) = step
-            .source
-            .as_ref()
-            .and_then(|source| match &source.contract.read {
-                super::source::ManagedSourceRead::Initial => None,
-                super::source::ManagedSourceRead::Changes(parent) => Some(&parent.result),
-            })
-        {
-            transaction
-                .execute(
-                    "INSERT INTO managed_edges VALUES (?, ?, ?, ?, 'source')",
-                    params![
-                        spec.tenant.as_slice(),
-                        id,
-                        parent.result_id,
-                        parent.commit_revision
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "retain managed source basis",
-                })?;
-        }
         Ok(())
     }
 
@@ -891,7 +718,7 @@ impl AnalysisStore {
         for dependency in dependencies {
             transaction
                 .execute(
-                    "INSERT INTO managed_edges VALUES (?, ?, ?, ?, 'input')",
+                    "INSERT INTO managed_edges VALUES (?, ?, ?, ?)",
                     params![
                         tenant.as_slice(),
                         id,
@@ -903,25 +730,6 @@ impl AnalysisStore {
                     operation: "insert managed result edge",
                 })?;
         }
-        Ok(())
-    }
-
-    fn insert_managed_arrow(
-        transaction: &Transaction<'_>,
-        id: &str,
-        role: &str,
-        slot: usize,
-        ipc: &mut Vec<u8>,
-    ) -> Result<()> {
-        transaction
-            .execute(
-                "INSERT INTO managed_arrow VALUES (?, ?, ?, ?)",
-                params![id, role, slot as u64, ipc.as_slice()],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "insert binary managed Arrow payload",
-            })?;
-        ipc.clear();
         Ok(())
     }
 }

@@ -106,7 +106,7 @@ fn retained_provenance_survives_expiry() -> TestResult {
     let cursor = AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
     let requests = AnalysisTableRequests::from([("events".into(), Some(BTreeSet::from([cursor])))]);
     let captured = store
-        .read_managed_tables(
+        .read_managed_tables_filtered(
             &fixture.instance.grant.selection,
             &ManagedRead {
                 source: None,
@@ -120,12 +120,12 @@ fn retained_provenance_survives_expiry() -> TestResult {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )?
         .state;
     assert_eq!(captured.contract.dependencies, vec![generic.clone()]);

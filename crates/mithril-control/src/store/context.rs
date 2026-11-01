@@ -827,7 +827,6 @@ mod tests {
             araphor_data::AnalysisTableRead {
                 requests: &columns,
                 event_ranges: None,
-                inputs: None,
                 mode: araphor_data::AnalysisReadModeV1::Complete,
                 now: 1,
             },

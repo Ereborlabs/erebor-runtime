@@ -75,6 +75,11 @@ impl Detector {
             include_str!("units/selection.sql"),
             support = support
         ));
+        model.inputs[1].source = sdk::InputSource::Query(
+            "SELECT prior.* FROM before.units prior JOIN affected \
+             ON prior.record = affected.record ORDER BY prior.record"
+                .into(),
+        );
         model.inputs[3].source = sdk::InputSource::Lookup(include_str!("units/records.sql").into());
         model.inputs[4].source = sdk::InputSource::Lookup(include_str!("units/facts.sql").into());
         model.inputs[5].source = sdk::InputSource::Query(

@@ -31,6 +31,12 @@ async fn retained_runs_check_authority() -> TestResult {
     assert!(retained > 0 && retained < CAPACITY);
     assert_eq!(instance.prepared.images().count(), 1);
     assert_eq!(fixture.progress("retained-authority")?, 0);
+    let original = fixture
+        .query
+        .store()
+        .package_revision([1; 16], "runtime-fixture", "1")?
+        .ok_or("original package revision")?
+        .artifact;
     fixture.query.store().fault_write(
         "UPDATE package_revisions SET artifact = 'invalid'::BLOB",
         &[],
@@ -64,7 +70,40 @@ async fn retained_runs_check_authority() -> TestResult {
         let receipt = instance
             .run(request(id), &AnalysisReadControl::default())
             .await?;
-        assert_eq!(fixture.selected("retained-authority", id)?, [expected]);
+        let before = fixture.query.store().meta()?;
+        assert!(fixture.selected("retained-authority", id).await.is_err());
+        assert_eq!(fixture.query.store().meta()?, before);
+        assert_eq!(fixture.query.memory().input_reserved(), retained);
+        fixture.query.store().fault_write(
+            "UPDATE package_revisions SET artifact = ? WHERE tenant_id = ? AND package_id = 'runtime-fixture' AND revision = '1'",
+            &[&original, &[1u8; 16].as_slice()],
+        )?;
+        let replay = Instance::replay_result(
+            Arc::clone(&fixture.query),
+            fixture.authority.clone(),
+            None,
+            fixture.grant.clone(),
+            "retained-authority",
+            &receipt.selected.result_id,
+            &AnalysisReadControl::default(),
+        )
+        .await?;
+        assert_eq!(values(&replay.batches)?, [expected]);
+        let state = replay
+            .calls
+            .values()
+            .next()
+            .ok_or("restored package call")?
+            .output()
+            .checkpoint
+            .as_ref()
+            .ok_or("restored checkpoint")?;
+        assert_eq!(values(&state.datasets[0].batches)?, [expected]);
+        drop(replay);
+        fixture.query.store().fault_write(
+            "UPDATE package_revisions SET artifact = 'invalid'::BLOB WHERE tenant_id = ? AND package_id = 'runtime-fixture' AND revision = '1'",
+            &[&[1u8; 16].as_slice()],
+        )?;
         assert_eq!(receipt.results.len(), 1);
         assert_eq!(
             fixture.progress("retained-authority")?,
@@ -168,7 +207,39 @@ async fn retained_runs_check_authority() -> TestResult {
     let receipt = instance
         .run(request("restored"), &AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("retained-authority", "restored")?, [33]);
+    let before = fixture.query.store().meta()?;
+    assert!(fixture
+        .selected("retained-authority", "restored")
+        .await
+        .is_err());
+    assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(fixture.query.memory().input_reserved(), retained);
+    fixture.query.store().fault_write(
+        "UPDATE package_revisions SET artifact = ? WHERE tenant_id = ? AND package_id = 'runtime-fixture' AND revision = '1'",
+        &[&original, &[1u8; 16].as_slice()],
+    )?;
+    let replay = Instance::replay_result(
+        Arc::clone(&fixture.query),
+        fixture.authority.clone(),
+        None,
+        fixture.grant.clone(),
+        "retained-authority",
+        &receipt.selected.result_id,
+        &AnalysisReadControl::default(),
+    )
+    .await?;
+    assert_eq!(values(&replay.batches)?, [33]);
+    let state = replay
+        .calls
+        .values()
+        .next()
+        .ok_or("restored package call")?
+        .output()
+        .checkpoint
+        .as_ref()
+        .ok_or("restored checkpoint")?;
+    assert_eq!(values(&state.datasets[0].batches)?, [33]);
+    drop(replay);
     assert_eq!(
         fixture.progress("retained-authority")?,
         receipt.commit_revision

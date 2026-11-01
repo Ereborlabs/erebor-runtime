@@ -43,7 +43,10 @@ async fn timed_results_keep_history() -> TestResult {
     let mut input = request("before-expiry");
     input.time_utc_ns = 10_000_000_000;
     let first = instance.run(input, &control).await?;
-    assert_eq!(fixture.selected("timed-history", &first.attempt)?, [1]);
+    assert_eq!(
+        fixture.selected("timed-history", &first.attempt).await?,
+        [1]
+    );
     let deadline = first
         .frontier
         .as_ref()
@@ -63,36 +66,30 @@ async fn timed_results_keep_history() -> TestResult {
     let current = instance.admitted().clone();
     assert!(!current.running);
     let reference = first.results.values().next().ok_or("timed call result")?;
-    let araphor_data::ManagedOutput::Call {
-        result: original, ..
-    } = fixture.query.store().managed_output(
+    let original = fixture.query.store().managed_result(
         &current,
         &reference.result_id,
         deadline - 1,
         &control,
-    )?
-    else {
-        return Err("package output variant".into());
-    };
+    )?;
     assert!(original.current);
     let before = fixture.query.store().meta()?;
     for now in [deadline, deadline + 1] {
-        let araphor_data::ManagedOutput::Call {
-            result: expired, ..
-        } = fixture
-            .query
-            .store()
-            .managed_output(&current, &reference.result_id, now, &control)?
-        else {
-            return Err("package output variant".into());
-        };
+        let expired =
+            fixture
+                .query
+                .store()
+                .managed_result(&current, &reference.result_id, now, &control)?;
         assert!(!expired.current);
-        assert_eq!(expired.output, original.output);
-        assert_eq!(expired.context, original.context);
-        assert_eq!(expired.commit_revision, original.commit_revision);
+        let mut expected = original.clone();
+        expected.current = false;
+        assert_eq!(
+            serde_json::to_value(&expired)?,
+            serde_json::to_value(&expected)?
+        );
     }
     let reader = Arc::new(Reader::new(fixture.grant.clone()));
-    let araphor_data::PackageResponseV1::Result(expired) = Instance::read_output(
+    let expired = Instance::read_result(
         Arc::clone(&fixture.query),
         reader.clone(),
         reader.grant.clone(),
@@ -100,13 +97,13 @@ async fn timed_results_keep_history() -> TestResult {
         &reference.result_id,
         &control,
     )
-    .await?
-    else {
-        return Err("package output variant".into());
-    };
+    .await?;
     assert!(!expired.current);
-    assert_eq!(expired.output, original.output);
-    assert_eq!(expired.context, original.context);
+    assert_eq!(expired.result, original.result);
+    assert_eq!(call_context(&expired)?, call_context(&original)?);
+    assert_eq!(expired.source, original.source);
+    assert_eq!(expired.prior, original.prior);
+    assert_eq!(expired.receipt, original.receipt);
     assert_eq!(
         Instance::read_history(
             Arc::clone(&fixture.query),
@@ -139,15 +136,21 @@ async fn timed_results_keep_history() -> TestResult {
         .ok_or("renewed native frontier")?
         .next_change
         .is_none());
-    assert_eq!(fixture.selected("timed-history", &second.attempt)?, [0]);
-    assert_eq!(fixture.selected("timed-history", &first.attempt)?, [1]);
+    assert_eq!(
+        fixture.selected("timed-history", &second.attempt).await?,
+        [0]
+    );
+    assert_eq!(
+        fixture.selected("timed-history", &first.attempt).await?,
+        [1]
+    );
     let reference = second
         .results
         .values()
         .next()
         .ok_or("renewed call result")?;
     let before = fixture.query.store().meta()?;
-    let araphor_data::PackageResponseV1::Result(fresh) = Instance::read_output(
+    let fresh = Instance::read_result(
         Arc::clone(&fixture.query),
         reader.clone(),
         reader.grant.clone(),
@@ -155,12 +158,9 @@ async fn timed_results_keep_history() -> TestResult {
         &reference.result_id,
         &control,
     )
-    .await?
-    else {
-        return Err("package output variant".into());
-    };
+    .await?;
     assert!(fresh.current);
-    assert_eq!(fresh.context.context.id, "after-expiry");
+    assert_eq!(call_context(&fresh)?.context.id, "after-expiry");
     assert_eq!(
         Instance::read_history(
             Arc::clone(&fixture.query),
@@ -185,7 +185,7 @@ async fn timed_results_keep_history() -> TestResult {
 }
 
 #[tokio::test]
-async fn timed_inspection_precedes_arrow() -> TestResult {
+async fn timed_inspection_precedes_integrity() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     let instance = fixture.timed_instance().await?;
     let control = AnalysisReadControl::default();
@@ -201,14 +201,14 @@ async fn timed_inspection_precedes_arrow() -> TestResult {
     );
     let reference = receipt.results.values().next().ok_or("timed result")?;
     fixture.query.store().fault_write(
-        "UPDATE managed_arrow SET ipc = 'invalid'::BLOB WHERE result_id = ? AND role = 'output'",
+        "UPDATE analysis_results SET commit_revision = commit_revision + 1 WHERE result_id = ?",
         &[&reference.result_id],
     )?;
     let before = fixture.query.store().meta()?;
     let held = fixture.query.memory().input_reserved();
     let reader = Arc::new(Reader::new(fixture.grant.clone()));
     reader.allowed.store(false, Ordering::SeqCst);
-    let error = Instance::read_output(
+    let error = Instance::read_result(
         Arc::clone(&fixture.query),
         reader.clone(),
         reader.grant.clone(),
@@ -226,7 +226,7 @@ async fn timed_inspection_precedes_arrow() -> TestResult {
     assert_eq!(reader.checks.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.query.memory().input_reserved(), held);
     reader.allowed.store(true, Ordering::SeqCst);
-    let error = Instance::read_output(
+    let error = Instance::read_result(
         Arc::clone(&fixture.query),
         reader.clone(),
         reader.grant.clone(),
@@ -240,10 +240,16 @@ async fn timed_inspection_precedes_arrow() -> TestResult {
     assert!(matches!(
         error,
         crate::Error::Data {
-            source: araphor_data::Error::AnalysisContract { .. }
+            source: araphor_data::Error::Package {
+                code: Code::Invalid,
+                ..
+            }
         } | crate::Error::Query {
             source: araphor_query::Error::Data {
-                source: araphor_data::Error::AnalysisContract { .. }
+                source: araphor_data::Error::Package {
+                    code: Code::Invalid,
+                    ..
+                }
             }
         }
     ));

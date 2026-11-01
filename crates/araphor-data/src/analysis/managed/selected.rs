@@ -1,5 +1,3 @@
-use std::io::Cursor;
-
 use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
@@ -87,8 +85,7 @@ impl AnalysisStore {
             || receipt.results.iter().any(|(call, reference)| {
                 !spec.manifest.calls.contains_key(call)
                     || reference.result_id.is_empty()
-                    || (reference.commit_revision != revision
-                        && !attempt.retains(&spec, *call, reference))
+                    || reference.commit_revision != revision
             })
         {
             return Err(Code::Invalid.error("retained managed selected contract"));
@@ -114,55 +111,20 @@ impl AnalysisStore {
             return Err(Code::Invalid.error("managed selected dependencies"));
         }
         for (call, reference) in &receipt.results {
-            let (record, _, saved) =
-                Self::managed_header_from(reader, tenant, &reference.result_id)?;
-            let retained = attempt.retains(&spec, *call, reference);
+            let (record, saved) = Self::managed_meta_from(reader, tenant, &reference.result_id)?;
             if saved != reference.commit_revision
-                || (!retained && saved != revision)
+                || saved != revision
                 || record.call != *call
-                || (!retained && record.attempt != step.attempt)
+                || record.attempt != step.attempt
                 || record.instance != step.instance
-                || spec.manifest.calls.get(call) != Some(&record.declaration)
             {
                 return Err(Code::Invalid.error("managed selected call binding"));
-            }
-            if retained {
-                Self::validate_managed_header(
-                    reader,
-                    tenant,
-                    &reference.result_id,
-                    &record,
-                    saved,
-                )?;
             }
         }
         Ok((attempt, spec.manifest.selected_schema))
     }
 
-    pub(super) fn decode_selected_record(
-        packet: &sdk::wire::Dataset,
-        schema: &sdk::Schema,
-        rows: u64,
-    ) -> Result<sdk::Dataset> {
-        let data = Self::decode_selected(packet)?;
-        if data.rows() != rows
-            || data
-                .batches
-                .iter()
-                .any(|batch| batch.schema().as_ref() != schema)
-        {
-            return Err(Code::Invalid.error("managed selected result schema"));
-        }
-        Ok(data)
-    }
-
-    pub(super) fn encode_selected(
-        data: &sdk::Dataset,
-        schema: &sdk::Schema,
-    ) -> Result<sdk::wire::Dataset> {
-        let mut buffer = Vec::new();
-        let mut writer = arrow_ipc::writer::StreamWriter::try_new(&mut buffer, schema)
-            .context(crate::PackageArrowSnafu)?;
+    pub(super) fn check_selected(data: &sdk::Dataset, schema: &sdk::Schema) -> Result<()> {
         let mut rows = 0_u64;
         for batch in &data.batches {
             rows = rows
@@ -177,56 +139,7 @@ impl AnalysisStore {
                     .validate_full()
                     .context(crate::PackageArrowSnafu)?;
             }
-            writer.write(batch).context(crate::PackageArrowSnafu)?;
         }
-        writer.finish().context(crate::PackageArrowSnafu)?;
-        drop(writer);
-        Ok(sdk::wire::Dataset {
-            name: data.name.clone(),
-            arrow_ipc: buffer,
-        })
-    }
-
-    pub(super) fn decode_selected(packet: &sdk::wire::Dataset) -> Result<sdk::Dataset> {
-        // Selected storage uses the native writer's uncompressed format.
-        packet
-            .validate_envelope()
-            .context(crate::AnalysisContractSnafu)?;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut input = Cursor::new(&packet.arrow_ipc);
-            let mut reader = arrow_ipc::reader::StreamReader::try_new(&mut input, None)
-                .context(crate::PackageArrowSnafu)?;
-            let schema = reader.schema();
-            let mut batches = Vec::new();
-            let mut rows = 0_u64;
-            for batch in &mut reader {
-                let batch = batch.context(crate::PackageArrowSnafu)?;
-                rows = rows
-                    .checked_add(batch.num_rows() as u64)
-                    .ok_or_else(|| Code::Invalid.error("native selected row count"))?;
-                for column in batch.columns() {
-                    column
-                        .to_data()
-                        .validate_full()
-                        .context(crate::PackageArrowSnafu)?;
-                }
-                batches.push(batch);
-            }
-            if !reader.is_finished() {
-                return Err(Code::Invalid.error("native selected IPC stream"));
-            }
-            drop(reader);
-            if input.position() != packet.arrow_ipc.len() as u64 {
-                return Err(Code::Invalid.error("native selected trailing bytes"));
-            }
-            if batches.is_empty() {
-                batches.push(sdk::RecordBatch::new_empty(schema));
-            }
-            Ok(sdk::Dataset {
-                name: packet.name.clone(),
-                batches,
-            })
-        }))
-        .map_err(|_| Code::Invalid.error("native selected IPC stream"))?
+        Ok(())
     }
 }

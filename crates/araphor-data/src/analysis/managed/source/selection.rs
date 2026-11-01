@@ -1,5 +1,6 @@
 use std::ops::RangeBounds as _;
 
+use duckdb::OptionalExt as _;
 use sdk::arrow_array::{Array, BinaryArray, StringArray, UInt32Array, UInt64Array};
 
 use super::*;
@@ -8,16 +9,36 @@ use crate::{
 };
 
 impl SourceScope {
-    pub(super) fn new(capture: &super::super::model::Capture, contract: SourceContract) -> Self {
-        Self {
-            tenant: capture.tenant,
-            instance: capture.instance.clone(),
-            generation: capture.generation,
-            store: capture.store,
-            schema: capture.schema,
-            recovery: capture.recovery,
-            contract,
+    pub fn check_basis(&self, prior: &Self) -> Result<()> {
+        if self.tenant != prior.tenant
+            || self.instance != prior.instance
+            || self.generation != prior.generation
+            || self.store != prior.store
+            || self.schema != prior.schema
+            || self.recovery != prior.recovery
+            || self.read.after() != Some(prior.position)
+        {
+            return Err(Code::Conflict.error("managed source index basis"));
         }
+        for name in ["events", "context_versions"] {
+            if !self.tables.get(name).is_some_and(Option::is_some) {
+                continue;
+            }
+            if !prior.tables.get(name).is_some_and(Option::is_some) {
+                return Err(Code::Conflict.error("managed source index gap"));
+            }
+            let request = BTreeMap::from([(name.to_owned(), Some(BTreeSet::new()))]);
+            if self.selection.project(&request)? != prior.selection.project(&request)? {
+                return Err(Code::Conflict.error("managed source index selection"));
+            }
+            if name == "context_versions" && self.context_owners != prior.context_owners {
+                return Err(Code::Conflict.error("managed source index owners"));
+            }
+            if name == "events" && self.event_ranges != prior.event_ranges {
+                return Err(Code::Conflict.error("managed source index ranges"));
+            }
+        }
+        Ok(())
     }
 
     fn same_owner(&self, other: &Self) -> bool {
@@ -27,22 +48,19 @@ impl SourceScope {
             && self.store == other.store
             && self.schema == other.schema
             && self.recovery == other.recovery
-            && self.contract.selection == other.contract.selection
-            && self.contract.tables == other.contract.tables
-            && self.contract.event_ranges == other.contract.event_ranges
     }
 }
 
 impl ManagedSourceFrame {
     pub(super) fn new(
-        record: RecordSource,
         tables: Vec<sdk::Dataset>,
+        removals: BTreeMap<AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
         scope: Arc<SourceScope>,
     ) -> Self {
         Self {
             scope,
-            record,
             tables,
+            removals,
             proof: Arc::default(),
             selected: Arc::default(),
         }
@@ -72,23 +90,18 @@ impl ManagedSourceFrame {
                 {
                     return Err(Code::Invalid.error("managed source row position"));
                 }
-                let value = SourceRow::decode(table, batch, row)?;
-                value.check_scope(&self.record.contract.selection)?;
+                let value = SourceRow::decode(table, batch, row, position)?;
+                value.check_scope(&self.scope)?;
                 if table == "events" {
                     let received =
                         SourceRow::array::<UInt64Array>(batch, "received_utc_ns")?.value(row);
-                    let selection = &self.record.contract.selection;
+                    let selection = &self.scope.selection;
                     if !(selection.received_from, selection.received_until).contains(&received)
-                        || self
-                            .record
-                            .contract
-                            .event_ranges
-                            .as_ref()
-                            .is_some_and(|ranges| {
-                                !ranges
-                                    .iter()
-                                    .any(|(first, last)| (*first..=*last).contains(&received))
-                            })
+                        || self.scope.event_ranges.as_ref().is_some_and(|ranges| {
+                            !ranges
+                                .iter()
+                                .any(|(first, last)| (*first..=*last).contains(&received))
+                        })
                     {
                         return Err(Code::Invalid.error("managed source row time"));
                     }
@@ -107,9 +120,11 @@ impl ManagedSourceFrame {
         if !self.scope.same_owner(&rows.scope) {
             return Err(Code::Conflict.error("managed source row scope"));
         }
-        let mut support = None;
+        if rows.selected_position > rows.scope.position {
+            return Err(Code::Invalid.error("managed source row position"));
+        }
         if !Arc::ptr_eq(&self.proof, &rows.proof) {
-            let parent = match &self.record.contract.read {
+            let parent = match &self.scope.read {
                 ManagedSourceRead::Changes(parent) => parent,
                 ManagedSourceRead::Initial => {
                     return Err(Code::Conflict.error("managed source row basis"));
@@ -118,62 +133,24 @@ impl ManagedSourceFrame {
             let proof = rows
                 .proof
                 .get()
-                .filter(|proof| proof.result.commit_revision <= parent.result.commit_revision)
+                .filter(|proof| proof.commit_revision <= parent.result.commit_revision)
                 .ok_or_else(|| Code::Conflict.error("managed source row proof"))?;
-            if rows.scope.contract.position > parent.position {
+            if proof.commit_revision == 0 || rows.scope.position > parent.position {
                 return Err(Code::Conflict.error("managed source row basis"));
-            }
-            let mut selected = SourceSupport {
-                origin: ManagedSourceRef {
-                    result: proof.result.clone(),
-                    position: rows.scope.contract.position,
-                },
-                witnesses: Vec::with_capacity(rows.witnesses.len()),
-                contexts: Vec::with_capacity(rows.contexts.len()),
-            };
-            for witness in &rows.witnesses {
-                selected.witnesses.push(
-                    proof
-                        .witnesses
-                        .binary_search_by(|saved| {
-                            saved
-                                .identity
-                                .cmp(&witness.identity)
-                                .then(saved.cursor.cmp(&witness.cursor))
-                        })
-                        .map_err(|_| Code::Invalid.error("managed source row witness"))?,
-                );
-            }
-            for context in &rows.contexts {
-                selected.contexts.push(
-                    proof
-                        .contexts
-                        .binary_search_by(|saved| {
-                            saved
-                                .key
-                                .cmp(&context.key)
-                                .then(saved.commit_revision.cmp(&context.commit_revision))
-                        })
-                        .map_err(|_| Code::Invalid.error("managed source row context"))?,
-                );
-            }
-            if !selected.witnesses.is_empty() || !selected.contexts.is_empty() {
-                support = Some(selected);
             }
         }
         for witness in &rows.witnesses {
-            if self
-                .record
-                .removals
-                .get(&witness.identity)
-                .is_some_and(|ranges| {
-                    ranges.iter().any(|range| {
-                        (range.first_cursor..=range.last_cursor).contains(&witness.cursor)
-                    })
-                })
-            {
+            self.scope.check_witness(witness)?;
+            if self.removals.get(&witness.identity).is_some_and(|ranges| {
+                ranges
+                    .iter()
+                    .any(|range| (range.first_cursor..=range.last_cursor).contains(&witness.cursor))
+            }) {
                 return Err(Code::Conflict.error("retired managed source row"));
             }
+        }
+        for context in &rows.contexts {
+            self.scope.check_context(context)?;
         }
         let mut selected = self
             .selected
@@ -181,25 +158,6 @@ impl ManagedSourceFrame {
             .map_err(|_| Code::Conflict.error("managed source selection lock"))?;
         if selected.frozen {
             return Err(Code::Conflict.error("frozen managed source selection"));
-        }
-        if let Some(support) = support {
-            let saved = selected
-                .support
-                .entry(support.origin.result.result_id.clone())
-                .or_insert_with(|| SourceSupport {
-                    origin: support.origin.clone(),
-                    witnesses: Vec::new(),
-                    contexts: Vec::new(),
-                });
-            if saved.origin != support.origin {
-                return Err(Code::Conflict.error("managed source support origin"));
-            }
-            saved.witnesses.extend(support.witnesses);
-            saved.witnesses.sort_unstable();
-            saved.witnesses.dedup();
-            saved.contexts.extend(support.contexts);
-            saved.contexts.sort_unstable();
-            saved.contexts.dedup();
         }
         for witness in &rows.witnesses {
             selected
@@ -221,7 +179,18 @@ impl ManagedSourceFrame {
         capture: &super::super::model::Capture,
         expiry: u64,
     ) -> Result<SourceEvidence> {
-        if self.scope.as_ref() != &SourceScope::new(capture, self.record.contract.clone()) {
+        if self.scope.tenant != capture.tenant
+            || self.scope.instance != capture.instance
+            || self.scope.generation != capture.generation
+            || self.scope.store != capture.store
+            || self.scope.schema != capture.schema
+            || self.scope.recovery != capture.recovery
+            || self.scope.position
+                != (StorePositionV1 {
+                    commit_revision: capture.revision,
+                    ordinal: u32::MAX,
+                })
+        {
             return Err(Code::Conflict.error("managed source selection owner"));
         }
         let mut selected = self
@@ -246,7 +215,6 @@ impl ManagedSourceFrame {
         Ok(SourceEvidence {
             witnesses: witnesses.into_values().collect(),
             contexts: contexts.into_values().collect(),
-            support: selected.support.values().cloned().collect(),
         })
     }
 }
@@ -254,7 +222,7 @@ impl ManagedSourceFrame {
 impl ManagedSourceBlock {
     pub fn witness(&self, row: usize) -> Option<&AnalysisWitnessV1> {
         match self.rows.get(row)? {
-            SourceRow::Event(witness) => Some(witness),
+            SourceRow::Event(witness, _) => Some(witness),
             SourceRow::Context(_) => None,
         }
     }
@@ -262,16 +230,25 @@ impl ManagedSourceBlock {
     pub fn select(&self, indices: &[usize]) -> Result<ManagedSourceRows> {
         let mut witnesses = BTreeMap::new();
         let mut contexts = BTreeMap::new();
+        let mut selected_position = StorePositionV1 {
+            commit_revision: 0,
+            ordinal: 0,
+        };
         for index in indices {
             match self
                 .rows
                 .get(*index)
                 .ok_or_else(|| Code::Invalid.error("managed source row index"))?
             {
-                SourceRow::Event(witness) => {
+                SourceRow::Event(witness, position) => {
+                    selected_position = selected_position.max(*position);
                     witnesses.insert((witness.identity.clone(), witness.cursor), witness.clone());
                 }
                 SourceRow::Context(context) => {
+                    selected_position = selected_position.max(StorePositionV1 {
+                        commit_revision: context.commit_revision,
+                        ordinal: u32::MAX,
+                    });
                     contexts.insert(
                         (context.key.clone(), context.commit_revision),
                         context.clone(),
@@ -284,6 +261,7 @@ impl ManagedSourceBlock {
             proof: Arc::clone(&self.proof),
             witnesses: witnesses.into_values().collect(),
             contexts: contexts.into_values().collect(),
+            selected_position,
         })
     }
 }
@@ -296,39 +274,22 @@ impl ManagedSourceRows {
     pub fn contexts(&self) -> &[AnalysisContextRefV1] {
         &self.contexts
     }
-
-    pub fn position(&self) -> StorePositionV1 {
-        self.scope.contract.position
-    }
 }
 
 impl SourceRow {
-    fn check_scope(&self, selection: &AnalysisSelectionV1) -> Result<()> {
-        let valid = match self {
-            Self::Event(witness) => match &witness.identity {
-                AnalysisStreamIdentityV1::Evidence(source) => {
-                    source.valid()
-                        && selection.includes_source(source)
-                        && witness.cursor != 0
-                        && (selection.cursor_from, selection.cursor_until).contains(&witness.cursor)
-                }
-                AnalysisStreamIdentityV1::Diagnostic(_) => false,
-            },
-            Self::Context(context) => {
-                context.key.valid()
-                    && context.key.tenant_id == selection.tenant_id
-                    && (selection.contexts.is_all()
-                        || selection.contexts.as_slice().contains(&context.key))
-                    && context.commit_revision != 0
-            }
-        };
-        if !valid {
-            return Err(Code::Invalid.error("managed source row selection"));
+    fn check_scope(&self, contract: &SourceScope) -> Result<()> {
+        match self {
+            Self::Event(witness, _) => contract.check_witness(witness),
+            Self::Context(context) => contract.check_context(context),
         }
-        Ok(())
     }
 
-    fn decode(table: &str, batch: &sdk::RecordBatch, row: usize) -> Result<Self> {
+    fn decode(
+        table: &str,
+        batch: &sdk::RecordBatch,
+        row: usize,
+        position: StorePositionV1,
+    ) -> Result<Self> {
         let bytes = |name| -> Result<Vec<u8>> {
             Ok(Self::array::<BinaryArray>(batch, name)?.value(row).to_vec())
         };
@@ -345,19 +306,22 @@ impl SourceRow {
                 .map_err(|_| Code::Invalid.error("managed source identity"))
         };
         match table {
-            "events" => Ok(Self::Event(AnalysisWitnessV1 {
-                identity: EvidenceIntakeIdentityV1 {
-                    tenant_id: identity("tenant_id")?,
-                    node_id: text("node_id")?,
-                    node_boot_id: identity("node_boot_id")?,
-                    label_epoch: number("label_epoch")?,
-                    source_id: identity("source_id")?,
-                    source_epoch: number("source_epoch")?,
-                }
-                .into(),
-                cursor: number("source_cursor")?,
-                expires_utc_ns: 0,
-            })),
+            "events" => Ok(Self::Event(
+                AnalysisWitnessV1 {
+                    identity: EvidenceIntakeIdentityV1 {
+                        tenant_id: identity("tenant_id")?,
+                        node_id: text("node_id")?,
+                        node_boot_id: identity("node_boot_id")?,
+                        label_epoch: number("label_epoch")?,
+                        source_id: identity("source_id")?,
+                        source_epoch: number("source_epoch")?,
+                    }
+                    .into(),
+                    cursor: number("source_cursor")?,
+                    expires_utc_ns: 0,
+                },
+                position,
+            )),
             "context_versions" => Ok(Self::Context(AnalysisContextRefV1 {
                 key: AnalysisContextKeyV1 {
                     tenant_id: identity("tenant_id")?,
@@ -388,117 +352,102 @@ impl AnalysisStore {
         step: &Step,
     ) -> Result<()> {
         let capture = &attempt.capture;
-        if step.source.as_ref().map(|source| &source.contract) != capture.source.as_ref() {
-            return Err(Code::Invalid.error("managed selected source contract"));
+        let scope = Self::managed_version_from(
+            reader,
+            capture.tenant,
+            &capture.instance,
+            capture.generation,
+        )?
+        .destination
+        .selection(&capture.grant.selection)?;
+        if step
+            .witnesses
+            .windows(2)
+            .any(|pair| (&pair[0].identity, pair[0].cursor) >= (&pair[1].identity, pair[1].cursor))
+            || step
+                .contexts
+                .windows(2)
+                .any(|pair| pair[0].key >= pair[1].key)
+            || capture
+                .witnesses
+                .iter()
+                .any(|value| !step.witnesses.contains(value))
+            || capture
+                .contexts
+                .iter()
+                .any(|value| !step.contexts.contains(value))
+        {
+            return Err(Code::Invalid.error("managed source evidence order"));
         }
-        let mut witnesses = BTreeMap::new();
-        let mut contexts = BTreeMap::new();
-        if let Some(source) = &step.source {
-            let scope = SourceScope::new(capture, source.contract.clone());
-            let mut previous = None;
-            for support in &source.support {
-                let parent = match &source.contract.read {
-                    ManagedSourceRead::Changes(parent) => parent,
-                    ManagedSourceRead::Initial => {
-                        return Err(Code::Invalid.error("initial source support"))
+        let selected = &attempt
+            .receipt
+            .as_ref()
+            .ok_or_else(|| Code::Invalid.error("managed source evidence receipt"))?
+            .selected;
+        for witness in &step.witnesses {
+            if !capture.witnesses.contains(witness) {
+                let valid = match &witness.identity {
+                    AnalysisStreamIdentityV1::Evidence(source) => {
+                        source.valid()
+                            && scope.includes_source(source)
+                            && witness.cursor != 0
+                            && (scope.cursor_from, scope.cursor_until).contains(&witness.cursor)
                     }
+                    AnalysisStreamIdentityV1::Diagnostic(_) => false,
                 };
-                let id = &support.origin.result.result_id;
-                if previous.is_some_and(|old| old >= id)
-                    || support.origin.position > parent.position
-                    || support.origin.result.commit_revision > parent.result.commit_revision
-                    || support.origin.result.commit_revision >= attempt.registered
-                    || support.witnesses.windows(2).any(|pair| pair[0] >= pair[1])
-                    || support.contexts.windows(2).any(|pair| pair[0] >= pair[1])
-                    || (support.witnesses.is_empty() && support.contexts.is_empty())
-                {
-                    return Err(Code::Invalid.error("managed source support indices"));
+                if !valid || witness.expires_utc_ns != attempt.request.witness_expiry {
+                    return Err(Code::Invalid.error("managed source witness expiry"));
                 }
-                previous = Some(id);
-                let (metadata, revision): (Vec<u8>, u64) = reader.query_row(
-                    "SELECT request_meta, commit_revision FROM analysis_results
-                     WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-definition-v1'",
-                    params![capture.tenant.as_slice(), id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                ).context(AnalysisDatabaseSnafu { operation: "read selected source support" })?;
-                let origin: Step =
-                    ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
-                Self::check_source_header(reader, capture.tenant, id, &origin, revision)?;
-                let record = origin
-                    .source
-                    .as_ref()
-                    .ok_or_else(|| Code::Missing.error("managed source support record"))?;
-                let saved = Self::managed_attempt_from(
-                    reader,
-                    capture.tenant,
-                    &origin.instance,
-                    &origin.attempt,
-                )?
-                .ok_or_else(|| Code::Missing.error("managed source support attempt"))?;
-                if revision != support.origin.result.commit_revision
-                    || record.contract.position != support.origin.position
-                    || origin.instance != capture.instance
-                    || saved.capture.source.as_ref() != Some(&record.contract)
-                    || !scope.same_owner(&SourceScope::new(&saved.capture, record.contract.clone()))
-                    || saved.terminal.is_some()
-                    || saved.registered >= revision
-                    || saved.receipt.as_ref().is_none_or(|receipt| {
-                        receipt.selected != support.origin.result
-                            || receipt.commit_revision != revision
-                            || receipt.instance != origin.instance
-                            || receipt.attempt != origin.attempt
-                    })
-                {
-                    return Err(Code::Invalid.error("managed source support authority"));
-                }
-                for index in &support.witnesses {
-                    let mut witness = origin
-                        .witnesses
-                        .get(*index)
-                        .cloned()
-                        .ok_or_else(|| Code::Invalid.error("managed source support witness"))?;
-                    SourceRow::Event(witness.clone()).check_scope(&source.contract.selection)?;
-                    if source
-                        .removals
-                        .get(&witness.identity)
-                        .is_some_and(|ranges| {
-                            ranges.iter().any(|range| {
-                                (range.first_cursor..=range.last_cursor).contains(&witness.cursor)
-                            })
-                        })
-                    {
-                        return Err(Code::Invalid.error("retired managed source support"));
+            }
+            let native: Option<(u64, bool)> = reader.query_row(
+                "SELECT e.expires_utc_ns, s.segment_id IS NOT NULL FROM evidence_refs e
+                 LEFT JOIN segments s ON s.segment_id = e.segment_id AND s.state = 'Live'
+                    AND s.tenant_id = e.tenant_id AND s.stream_key = e.stream_key
+                    AND e.durable_cursor BETWEEN s.first_cursor AND s.last_cursor
+                 WHERE e.ref_id = ? AND e.tenant_id = ? AND e.stream_key = ? AND e.durable_cursor = ?",
+                params![selected.result_id, capture.tenant.as_slice(), witness.identity.key(), witness.cursor],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).optional().context(AnalysisDatabaseSnafu { operation: "read canonical source witness" })?;
+            match native {
+                Some((expiry, true)) if expiry == witness.expires_utc_ns => {}
+                Some(_) => return Err(Code::Invalid.error("managed source witness binding")),
+                None => {
+                    // Replay must read the old event from the journal.
+                    let expired: bool = reader
+                        .query_row(
+                            "SELECT ? <= epoch_ns(current_timestamp)::UBIGINT",
+                            params![witness.expires_utc_ns],
+                            |row| row.get(0),
+                        )
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "check expired source witness",
+                        })?;
+                    if !expired {
+                        return Err(Code::Missing.error("managed source witness binding"));
                     }
-                    witness.expires_utc_ns = attempt.request.witness_expiry;
-                    witnesses.insert((witness.identity.clone(), witness.cursor), witness);
-                }
-                for index in &support.contexts {
-                    let context = origin
-                        .contexts
-                        .get(*index)
-                        .cloned()
-                        .ok_or_else(|| Code::Invalid.error("managed source support context"))?;
-                    SourceRow::Context(context.clone()).check_scope(&source.contract.selection)?;
-                    if context.commit_revision > record.contract.position.commit_revision {
-                        return Err(Code::Invalid.error("managed source support context cut"));
-                    }
-                    contexts.insert((context.key.clone(), context.commit_revision), context);
                 }
             }
         }
-        for witness in &capture.witnesses {
-            witnesses.insert((witness.identity.clone(), witness.cursor), witness.clone());
-        }
-        for context in &capture.contexts {
-            contexts.insert(
-                (context.key.clone(), context.commit_revision),
-                context.clone(),
-            );
-        }
-        if !witnesses.into_values().eq(step.witnesses.iter().cloned())
-            || !contexts.into_values().eq(step.contexts.iter().cloned())
-        {
-            return Err(Code::Invalid.error("managed selected source evidence"));
+        for context in &step.contexts {
+            if !capture.contexts.contains(context)
+                && (!context.key.valid()
+                    || context.key.tenant_id != scope.tenant_id
+                    || (!scope.contexts.is_all()
+                        && !scope.contexts.as_slice().contains(&context.key))
+                    || context.commit_revision == 0)
+            {
+                return Err(Code::Invalid.error("managed source context scope"));
+            }
+            let stored: Option<u64> = reader.query_row(
+                "SELECT commit_revision FROM context_versions WHERE tenant_id = ? AND owner_id = ?
+                    AND entity_key = ? AND lifetime_key = ? AND owner_revision = ?",
+                params![context.key.tenant_id.as_slice(), context.key.owner_id, context.key.entity_key,
+                    context.key.lifetime_key, context.key.owner_revision], |row| row.get(0),
+            ).optional().context(AnalysisDatabaseSnafu { operation: "read canonical source context" })?;
+            if stored != Some(context.commit_revision) || context.commit_revision > capture.revision
+            {
+                return Err(Code::Invalid.error("managed source context binding"));
+            }
         }
         Ok(())
     }

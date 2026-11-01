@@ -40,7 +40,7 @@ CREATE TABLE graph_producer_members (
     reason_code VARCHAR, ordinal UINTEGER NOT NULL,
     valid_from UBIGINT NOT NULL, valid_to UBIGINT,
     PRIMARY KEY (scope_id, unit_ref, member_kind, member_key, valid_from),
-    CHECK (member_kind IN (0,1,2,3,4,6,7,8)), CHECK (valid_to IS NULL OR valid_to > valid_from)
+    CHECK (member_kind IN (0,1,2,3,4,6,7,8,9,10)), CHECK (valid_to IS NULL OR valid_to > valid_from)
 );
 CREATE INDEX graph_producer_lookup ON graph_producer_members (scope_id, member_kind, member_key);
 CREATE TABLE graph_versions (
@@ -58,7 +58,8 @@ CREATE VIEW graph_selected_members AS
     JOIN graph_producer_versions v ON v.result_id = b.producer_result_id
     JOIN graph_producer_members m ON m.scope_id = v.scope_id
         AND m.valid_from <= v.commit_revision
-        AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision);
+        AND (m.valid_to IS NULL OR m.valid_to > v.commit_revision)
+    WHERE m.member_kind NOT IN (9,10);
 CREATE TABLE graph_position_values (
     value_ref UBIGINT PRIMARY KEY, evidence_id UBIGINT NOT NULL,
     commit_revision UBIGINT NOT NULL, ordinal UINTEGER NOT NULL,

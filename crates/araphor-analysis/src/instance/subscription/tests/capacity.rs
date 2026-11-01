@@ -90,7 +90,10 @@ async fn occupied_step(
             result.map_err(|error| format!("healthy SQL did not finish: {error}"))??
         },
     };
-    assert_eq!(fixture.selected("healthy-slot", &receipt.attempt)?, [17]);
+    assert_eq!(
+        fixture.selected("healthy-slot", &receipt.attempt).await?,
+        [17]
+    );
     assert!(!offered.is_finished());
     let current = fixture
         .query
@@ -111,8 +114,8 @@ async fn occupied_step(
     assert!(fixture
         .query
         .store()
-        .managed_selected([1; 16], "waiting-slot", &original.id, &control)?
-        .is_none());
+        .managed_attempt([1; 16], "waiting-slot", &original.id, &control)?
+        .is_none_or(|attempt| attempt.receipt().is_none()));
 
     let waiting = if cancel_waiter {
         waiting_control.cancel()?;
@@ -164,7 +167,7 @@ async fn occupied_step(
     assert_eq!(receipt.attempt, original.id);
     assert_eq!(receipt.frontier, original.frontier);
     assert_eq!(
-        fixture.selected("waiting-slot", &receipt.attempt)?,
+        fixture.selected("waiting-slot", &receipt.attempt).await?,
         [original.time_utc_ns]
     );
     assert_eq!(receipt.results.len(), 1);

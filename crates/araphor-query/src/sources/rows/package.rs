@@ -68,27 +68,11 @@ impl SourceSnapshot {
             .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))?
             .tables
             .get(origin)
-            .ok_or_else(|| DataFusionError::Execution("the materialized input is absent".into()))?
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!("the materialized input is absent: {origin:?}"))
+            })?
             .3;
         Ok(input.as_ref().map(Arc::clone))
-    }
-
-    pub(crate) fn package_indices(
-        &self,
-        origins: &std::collections::BTreeSet<SourceOrigin>,
-    ) -> std::collections::BTreeSet<usize> {
-        self.inputs
-            .as_ref()
-            .map(|inputs| {
-                inputs
-                    .retained
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, source)| origins.contains(&SourceOrigin::Package(source.slot)))
-                    .map(|(index, _)| index)
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 }
 
@@ -114,7 +98,6 @@ mod tests {
         let source = SourceSnapshot::new(
             store,
             AnalysisSelectionV1::tenant([1; 16]),
-            None,
             AnalysisExtractLimits {
                 input_bytes: 16 * 1024,
                 ..Default::default()
@@ -179,7 +162,6 @@ mod tests {
         let source = SourceSnapshot::new(
             store,
             AnalysisSelectionV1::tenant([1; 16]),
-            None,
             AnalysisExtractLimits::default(),
             control.within(None)?,
             None,

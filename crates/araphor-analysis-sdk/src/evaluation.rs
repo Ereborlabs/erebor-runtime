@@ -66,7 +66,7 @@ pub struct Evaluation {
 }
 
 impl Evaluation {
-    pub fn encoding_scratch_bytes(&self) -> Result<usize> {
+    pub fn batches(&self) -> impl Iterator<Item = &RecordBatch> {
         self.inputs
             .iter()
             .flat_map(|input| &input.data.batches)
@@ -77,10 +77,23 @@ impl Evaluation {
                     checkpoint.datasets.iter().flat_map(|data| &data.batches)
                 }),
             )
-            .try_fold(0_usize, |bytes, batch| {
-                crate::wire::Dataset::encoding_scratch(batch)
-                    .map(|scratch| bytes.saturating_add(scratch))
-            })
+    }
+
+    pub fn metadata_bytes(&self) -> usize {
+        self.allocated_bytes().saturating_sub(
+            self.batches()
+                .flat_map(RecordBatch::columns)
+                .fold(0usize, |bytes, array| {
+                    bytes.saturating_add(array.get_buffer_memory_size())
+                }),
+        )
+    }
+
+    pub fn encoding_scratch_bytes(&self) -> Result<usize> {
+        self.batches().try_fold(0_usize, |bytes, batch| {
+            crate::wire::Dataset::encoding_scratch(batch)
+                .map(|scratch| bytes.saturating_add(scratch))
+        })
     }
 
     pub fn allocated_bytes(&self) -> usize {
@@ -155,6 +168,24 @@ pub struct Output {
 }
 
 impl Output {
+    pub fn batches(&self) -> impl Iterator<Item = &RecordBatch> {
+        self.datasets
+            .iter()
+            .chain(self.checkpoint.iter().flat_map(|state| &state.datasets))
+            .flat_map(|data| &data.batches)
+            .chain(self.reasons.iter().map(|reason| &reason.details))
+    }
+
+    pub fn metadata_bytes(&self) -> usize {
+        self.allocated_bytes().saturating_sub(
+            self.batches()
+                .flat_map(RecordBatch::columns)
+                .fold(0usize, |bytes, array| {
+                    bytes.saturating_add(array.get_buffer_memory_size())
+                }),
+        )
+    }
+
     pub fn allocated_bytes(&self) -> usize {
         let mut bytes = Dataset::allocation(&self.datasets);
         bytes = bytes.saturating_add(

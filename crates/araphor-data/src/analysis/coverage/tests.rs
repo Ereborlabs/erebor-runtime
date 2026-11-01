@@ -1,6 +1,7 @@
 use super::*;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+type SourceState = (u32, u64, u64, u64, u64);
 
 fn report(source: &EvidenceIntakeIdentityV1, revision: u64) -> ValidatedCoverageV1 {
     ValidatedCoverageV1 {
@@ -16,6 +17,200 @@ fn position(revision: u64) -> StorePositionV1 {
         commit_revision: revision,
         ordinal: u32::MAX,
     }
+}
+
+fn source_state(
+    store: &AnalysisStore,
+    source: &EvidenceIntakeIdentityV1,
+    revision: u64,
+) -> TestResult<Option<SourceState>> {
+    Ok(store.read_snapshot(|reader| {
+        reader.query_row(
+            "SELECT cpu_id, contiguous_cursor, coverage_revision, retained_floor, commit_revision
+             FROM source_versions WHERE stream_key = ? AND commit_revision <= ?
+             ORDER BY commit_revision DESC LIMIT 1",
+            params![source.key(), revision],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).optional().context(AnalysisDatabaseSnafu { operation: "read test source history" })
+    })?)
+}
+
+#[test]
+fn source_receipts_keep_history() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let limits = RetentionLimitsV1 {
+        raw_max_age_ns: Some(50),
+        ..Default::default()
+    };
+    let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+    let source = crate::analysis::tests::identity();
+    let registration = store.register_processor(
+        &crate::ProcessorScopeV1 {
+            processor_id: "source-history".into(),
+            method_version: 1,
+            identity: source.clone(),
+        },
+        crate::ProcessorClassV1::Optional,
+        1,
+    )?;
+    assert!(registration > 0);
+    assert_eq!(source_state(&store, &source, registration)?, None);
+    store.accept_validated_coverage(report(&source, 7))?;
+    let coverage = store.meta()?.commit_revision;
+    assert!(coverage > registration);
+    assert_eq!(source_state(&store, &source, registration)?, None);
+    assert_eq!(
+        source_state(&store, &source, coverage)?,
+        Some((1, 0, 7, 0, coverage))
+    );
+    store.accept_validated_batch(
+        source.clone(),
+        crate::ValidatedEvidenceBatchV1 {
+            cpu_id: 1,
+            first_cursor: 1,
+            last_cursor: 2,
+            intake_utc_ns: 100,
+            framed_records: b"ab".to_vec().into(),
+            frame_ends: vec![1, 2],
+        },
+    )?;
+    let accepted = store.meta()?.commit_revision;
+    assert_eq!(
+        source_state(&store, &source, accepted)?,
+        Some((1, 2, 7, 0, accepted))
+    );
+    store.accept_validated_coverage(report(&source, 9))?;
+    let updated = store.meta()?.commit_revision;
+    assert_eq!(
+        source_state(&store, &source, updated)?,
+        Some((1, 2, 9, 0, updated))
+    );
+    store.accept_validated_coverage(report(&source, 9))?;
+    assert_eq!(store.meta()?.commit_revision, updated);
+    store.checkpoint()?;
+    let expired = EvidenceRetentionOwner::new(&store).retain(&source, 201)?;
+    assert_eq!(expired.removed_records, 2);
+    assert_eq!(expired.retained_floor, 2);
+    assert!(expired.commit_revision > updated);
+    assert_eq!(
+        source_state(&store, &source, expired.commit_revision)?,
+        Some((1, 2, 9, 2, expired.commit_revision))
+    );
+    assert_eq!(
+        source_state(&store, &source, coverage)?,
+        Some((1, 0, 7, 0, coverage))
+    );
+    assert_eq!(
+        source_state(&store, &source, accepted)?,
+        Some((1, 2, 7, 0, accepted))
+    );
+    assert_eq!(
+        source_state(&store, &source, updated)?,
+        Some((1, 2, 9, 0, updated))
+    );
+    assert!(matches!(
+        store.read_page(&source, 1),
+        Err(crate::Error::RetainedRangeExpired { .. })
+    ));
+    drop(store);
+    let reopened = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+    assert_eq!(source_state(&reopened, &source, registration)?, None);
+    assert_eq!(
+        source_state(&reopened, &source, coverage)?,
+        Some((1, 0, 7, 0, coverage))
+    );
+    assert_eq!(
+        source_state(&reopened, &source, accepted)?,
+        Some((1, 2, 7, 0, accepted))
+    );
+    assert_eq!(
+        source_state(&reopened, &source, updated)?,
+        Some((1, 2, 9, 0, updated))
+    );
+    let receipt = reopened
+        .source_receipt(&source)?
+        .ok_or("reopened source receipt")?;
+    assert_eq!(
+        (
+            receipt.cpu_id,
+            receipt.contiguous_cursor,
+            receipt.coverage_revision,
+            receipt.retained_floor
+        ),
+        (1, 2, 9, 2)
+    );
+    let versions = reopened.read_snapshot(|reader| {
+        reader
+            .query_row(
+                "SELECT count(*) FROM source_versions WHERE stream_key = ?",
+                params![source.key()],
+                |row| row.get::<_, u64>(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "count test source history",
+            })
+    })?;
+    assert_eq!(versions, 4);
+    Ok(())
+}
+
+#[test]
+fn source_history_rejects_corruption() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let source = crate::analysis::tests::identity();
+    store.accept_validated_coverage(report(&source, 7))?;
+    let first = store.meta()?.commit_revision;
+    store.accept_validated_coverage(report(&source, 9))?;
+    let mut writer = store.writer()?;
+    AnalysisStore::validate_state(writer.get()?, &root)?;
+    for mutation in [
+        "UPDATE source_versions SET identity_json = '{}' WHERE commit_revision = ?",
+        "UPDATE source_versions SET tenant_id = X'00' WHERE commit_revision = ?",
+        "UPDATE source_versions SET cpu_id = 2 WHERE commit_revision = ?",
+        "UPDATE source_versions SET contiguous_cursor = 1 WHERE commit_revision = ?",
+        "UPDATE source_versions SET retained_floor = 1 WHERE commit_revision = ?",
+        "UPDATE source_versions SET coverage_revision = 8 WHERE commit_revision = ?",
+        "UPDATE source_versions SET commit_revision = 0 WHERE commit_revision = ?",
+        "UPDATE source_versions SET commit_revision = 99 WHERE commit_revision = ?",
+        "DELETE FROM source_versions WHERE commit_revision = ?",
+    ] {
+        let transaction = writer.get_mut()?.transaction()?;
+        assert_eq!(
+            transaction.execute(mutation, params![first])?,
+            1,
+            "{mutation}"
+        );
+        assert!(
+            AnalysisStore::validate_state(&transaction, &root).is_err(),
+            "{mutation}"
+        );
+        transaction.rollback()?;
+    }
+    AnalysisStore::validate_state(writer.get()?, &root)?;
+    Ok(())
+}
+
+#[test]
+fn source_schema_requires_history() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let valid = Connection::open_in_memory()?;
+    valid.execute_batch(AnalysisStore::SOURCE_SCHEMA)?;
+    AnalysisStore::validate_source_schema(&valid, directory.path())?;
+    for schema in [
+        AnalysisStore::SOURCE_SCHEMA.replace("commit_revision DESC", "commit_revision ASC"),
+        AnalysisStore::SOURCE_SCHEMA
+            .replace(",\n    PRIMARY KEY (stream_key, commit_revision)", ""),
+        AnalysisStore::SOURCE_SCHEMA.replace("cpu_id UINTEGER NOT NULL", "cpu_id UINTEGER"),
+    ] {
+        assert_ne!(schema, AnalysisStore::SOURCE_SCHEMA);
+        let invalid = Connection::open_in_memory()?;
+        invalid.execute_batch(&schema)?;
+        assert!(AnalysisStore::validate_source_schema(&invalid, directory.path()).is_err());
+    }
+    Ok(())
 }
 
 #[test]

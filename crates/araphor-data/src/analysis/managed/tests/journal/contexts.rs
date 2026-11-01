@@ -241,7 +241,6 @@ fn context_changes_apply_scope() -> TestResult {
         AnalysisTableRead {
             requests: &journal.requests,
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Changes(seed),
             now: 10,
         },

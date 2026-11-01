@@ -73,7 +73,7 @@ async fn retained_images_use_plans() -> TestResult {
         .collect::<Vec<_>>();
     assert_eq!(values, vec![9]);
     let replay = session
-        .replay_call(&retained, id, returned.evaluation().clone())
+        .execute_definition(&retained, Invocation::default())
         .await?;
     let replayed = &replay.calls[&id];
     let descriptor = &package.artifacts[0].descriptor;

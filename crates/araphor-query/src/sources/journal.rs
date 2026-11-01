@@ -102,7 +102,6 @@ impl Changes {
         let capture = SourceSnapshot::new(
             Arc::clone(engine.store()),
             self.run.session.selection().clone(),
-            None,
             AnalysisExtractLimits {
                 scan_bytes: engine.limits().scan_bytes,
                 input_bytes: engine.limits().input_bytes,
@@ -477,6 +476,7 @@ mod tests {
         let mut source = SourceData {
             image: None,
             read: 0,
+            owners: Vec::new(),
             key: None,
             origin: SourceOrigin::Durable("events".into()),
             schema: Arc::clone(canonical),

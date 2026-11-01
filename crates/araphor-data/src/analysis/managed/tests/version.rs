@@ -20,7 +20,7 @@ pub(super) fn capture(
     rebuild: bool,
 ) -> TestResult<ManagedCapture> {
     Ok(store
-        .read_managed_tables(
+        .read_managed_tables_filtered(
             &current.grant.selection,
             &ManagedRead {
                 source: None,
@@ -34,12 +34,12 @@ pub(super) fn capture(
             AnalysisTableRead {
                 requests: &AnalysisTableRequests::new(),
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )?
         .state)
 }
@@ -121,14 +121,10 @@ fn versions_keep_state_history() -> TestResult {
             .managed_result(&changed, old_result, 10, &AnalysisReadControl::default())?
             .current
     );
-    let saved = store.managed_evaluation(&changed, old_result, &AnalysisReadControl::default())?;
-    assert_eq!(saved.inputs.len(), evaluations[0].inputs.len());
-    for (saved, original) in saved.inputs.iter().zip(&evaluations[0].inputs) {
-        assert_eq!(saved.data.name, original.data.name);
-        assert_eq!(saved.data.batches, original.data.batches);
-        assert_eq!(saved.revision, original.revision);
-        assert_eq!(saved.coverage, original.coverage);
-    }
+    let saved = store.managed_result(&changed, old_result, 10, &AnalysisReadControl::default())?;
+    assert_eq!(call_context(&saved)?.context, evaluations[0].context);
+    assert!(call_context(&saved)?.matches(&evaluations[0].inputs));
+    assert_eq!(saved.receipt, first_receipt);
     let rollback = store.prepare_managed_version(&changed, &current.spec, || Ok(()))?;
     assert_eq!(rollback.generation, current.generation);
     let selected = capture(&store, &changed, &rollback, false)?;

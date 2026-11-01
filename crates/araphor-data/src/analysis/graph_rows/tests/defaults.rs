@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    AnalysisExtractLimits, AnalysisExtractionV1, AnalysisInputTables, AnalysisReadModeV1,
-    AnalysisSelectionV1, AnalysisStore, AnalysisTableRead, GraphTraversalV1, ProcessorClassV1,
+    AnalysisExtractLimits, AnalysisExtractionV1, AnalysisReadModeV1, AnalysisSelectionV1,
+    AnalysisStore, AnalysisTableRead, GraphTraversalV1, ProcessorClassV1,
 };
 
 #[test]
@@ -395,7 +395,6 @@ fn native_witness_defaults() -> TestResult {
         &fixture.store,
         std::slice::from_ref(&request.result_id),
         AnalysisExtractLimits::default(),
-        true,
     )?;
     assert_eq!(captured.witnesses, request.witnesses);
     assert_eq!(fixture.store.meta()?, before);
@@ -412,7 +411,6 @@ fn native_witness_defaults() -> TestResult {
             &reopened,
             std::slice::from_ref(&request.result_id),
             AnalysisExtractLimits::default(),
-            true,
         )?
         .witnesses,
         request.witnesses
@@ -516,7 +514,6 @@ fn provenance_read(
     store: &AnalysisStore,
     results: &[String],
     limits: AnalysisExtractLimits,
-    inherit: bool,
 ) -> crate::Result<AnalysisExtractionV1> {
     let mut selection = AnalysisSelectionV1::new([1; 16], Vec::new());
     selection.results = results.to_vec();
@@ -527,10 +524,6 @@ fn provenance_read(
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: inherit.then_some(AnalysisInputTables {
-                    authorized: &selection,
-                    outputs: &[],
-                }),
                 mode: AnalysisReadModeV1::Metadata,
                 now: 10,
             },
@@ -586,15 +579,8 @@ fn extracted_provenance_defaults() -> TestResult {
     }
     let before = fixture.store.meta()?;
     let changes = fixture.store.subscribe_revision();
-    let direct = provenance_read(
-        &fixture.store,
-        &ids,
-        AnalysisExtractLimits::default(),
-        false,
-    )?;
-    assert!(direct.witnesses.is_empty());
-    assert_eq!(direct.references.len(), 65);
-    let captured = provenance_read(&fixture.store, &ids, AnalysisExtractLimits::default(), true)?;
+    assert_eq!(fixture.store.package_result_refs([1; 16], &ids)?.len(), 65);
+    let captured = provenance_read(&fixture.store, &ids, AnalysisExtractLimits::default())?;
     assert_eq!(
         captured
             .references
@@ -617,15 +603,14 @@ fn extracted_provenance_defaults() -> TestResult {
         );
     }
     assert_eq!(captured.witnesses, request.witnesses);
-    let bytes = direct
+    let bytes = captured
         .input_bytes
-        .checked_add(original.request_meta()?.len() - 1)
+        .checked_sub(1)
         .ok_or("configured input bytes")?;
     let bounded = AnalysisExtractLimits {
         input_bytes: bytes,
         ..Default::default()
     };
-    provenance_read(&fixture.store, &ids, bounded, false)?;
     for (limits, expected) in [
         (bounded, "selected input bytes"),
         (
@@ -637,7 +622,7 @@ fn extracted_provenance_defaults() -> TestResult {
         ),
     ] {
         assert!(
-            matches!(provenance_read(&fixture.store, &ids, limits, true), Err(crate::Error::AnalysisInputTooLarge { resource, .. }) if resource == expected)
+            matches!(provenance_read(&fixture.store, &ids, limits), Err(crate::Error::AnalysisInputTooLarge { resource, .. }) if resource == expected)
         );
         assert_eq!(fixture.store.meta()?, before);
         assert!(!changes.has_changed()?);
@@ -648,7 +633,7 @@ fn extracted_provenance_defaults() -> TestResult {
     drop(fixture._graph);
     drop(fixture.store);
     let reopened = AnalysisStore::open(path)?;
-    let captured = provenance_read(&reopened, &ids, AnalysisExtractLimits::default(), true)?;
+    let captured = provenance_read(&reopened, &ids, AnalysisExtractLimits::default())?;
     assert_eq!(
         captured
             .references
@@ -691,7 +676,7 @@ fn extracted_provenance_defaults() -> TestResult {
             params![changed.request_meta()?, original.result_id],
         )?;
         assert!(matches!(
-            provenance_read(&reopened, std::slice::from_ref(&original.result_id), AnalysisExtractLimits::default(), true),
+            provenance_read(&reopened, std::slice::from_ref(&original.result_id), AnalysisExtractLimits::default()),
             Err(crate::Error::AnalysisState { reason, .. }) if reason == expected
         ));
         reopened.writer_access()?.get()?.execute(
@@ -700,7 +685,7 @@ fn extracted_provenance_defaults() -> TestResult {
         )?;
     }
     assert_eq!(
-        provenance_read(&reopened, &ids, AnalysisExtractLimits::default(), true)?.witnesses,
+        provenance_read(&reopened, &ids, AnalysisExtractLimits::default())?.witnesses,
         request.witnesses
     );
     Ok(())

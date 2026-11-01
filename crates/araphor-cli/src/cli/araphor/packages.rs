@@ -224,15 +224,10 @@ enum InstanceCommand {
     Inspect { instance: String },
     /// List original successful receipts without running the instance.
     History { instance: String },
-    /// Read every output, evidence link, reason, and checkpoint of an exact retained call.
+    /// Read the recorded call or selected-result references without execution.
     Read { instance: String, result: String },
-    /// Run one local SELECT over an exact result or the current selected output.
-    #[command(allow_missing_positional = true)]
-    Query {
-        instance: String,
-        result: Option<String>,
-        sql: String,
-    },
+    /// Execute an exact recorded call or selected result without publication.
+    Replay { instance: String, result: String },
 }
 
 impl InstanceArgs {
@@ -315,15 +310,12 @@ impl InstanceArgs {
                 instance_id: instance.clone(),
                 result_id: result.clone(),
             },
-            InstanceCommand::Query {
-                instance,
-                result,
-                sql,
-            } => PackageRequestV1::QueryInstanceResult {
-                instance_id: instance.clone(),
-                result_id: result.clone(),
-                sql: sql.clone(),
-            },
+            InstanceCommand::Replay { instance, result } => {
+                PackageRequestV1::ReplayInstanceResult {
+                    instance_id: instance.clone(),
+                    result_id: result.clone(),
+                }
+            }
         };
         Ok(Prepared::Package(wire::PackageOperationRequest {
             definition: operation.encode().context(PackageSnafu)?,
@@ -588,6 +580,16 @@ mod tests {
             vec!["araphor", "instance"],
             vec!["araphor", "instance", "inspect"],
             vec!["araphor", "instance", "query", "counts"],
+            vec![
+                "araphor", "instance", "query", "counts", "saved", "SELECT 1",
+            ],
+            vec!["araphor", "instance", "replay", "counts"],
+            vec![
+                "araphor", "instance", "replay", "counts", "saved", "SELECT 1",
+            ],
+            vec![
+                "araphor", "instance", "replay", "counts", "saved", "--follow",
+            ],
             vec!["araphor", "instance", "start", "counts"],
             vec!["araphor", "instance", "read", "counts"],
             vec!["araphor", "instance", "history"],
@@ -615,23 +617,7 @@ mod tests {
             vec!["araphor", "instance", "inspect", "counts"],
             vec!["araphor", "instance", "history", "counts"],
             vec!["araphor", "instance", "read", "counts", "saved"],
-            vec![
-                "araphor",
-                "instance",
-                "query",
-                "counts",
-                "SELECT value FROM selected",
-            ],
-            vec![
-                "araphor",
-                "instance",
-                "query",
-                "counts",
-                "saved",
-                "SELECT value FROM rows",
-            ],
         ] {
-            let latest = args.len() == 5 && args[2] == "query";
             let cli = Cli::try_parse_from(args)?;
             let Command::Investigate(command) = cli.command else {
                 return Err("instance command absent".into());
@@ -655,25 +641,33 @@ mod tests {
                     assert_eq!(instance_id, "counts");
                     assert_eq!(result_id, "saved");
                 }
-                PackageRequestV1::QueryInstanceResult {
-                    instance_id,
-                    result_id,
-                    sql,
-                } => {
-                    assert_eq!(instance_id, "counts");
-                    assert_eq!(result_id.as_deref(), (!latest).then_some("saved"));
-                    assert_eq!(
-                        sql,
-                        if latest {
-                            "SELECT value FROM selected"
-                        } else {
-                            "SELECT value FROM rows"
-                        }
-                    );
-                }
                 _ => return Err("instance operation changed".into()),
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn instance_replay_is_explicit() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let cli = Cli::try_parse_from(["araphor", "instance", "replay", "counts", "saved"])?;
+        let Command::Investigate(command) = cli.command else {
+            return Err("instance command absent".into());
+        };
+        let Prepared::Package(request) = command.prepare()? else {
+            return Err("instance request absent".into());
+        };
+        assert!(request.selection.is_none());
+        let operation = PackageRequestV1::from_bytes(&request.definition)?;
+        assert_eq!(operation.action(), araphor_data::PackageActionV1::Run);
+        let PackageRequestV1::ReplayInstanceResult {
+            instance_id,
+            result_id,
+        } = operation
+        else {
+            return Err("replay request absent".into());
+        };
+        assert_eq!(instance_id, "counts");
+        assert_eq!(result_id, "saved");
         Ok(())
     }
 

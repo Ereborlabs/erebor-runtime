@@ -1131,6 +1131,11 @@ impl RawRead {
     }
 }
 
+pub(super) struct RawSourceState {
+    pub covered: u64,
+    pub pending: Vec<super::AnalysisGapV1>,
+}
+
 pub(super) struct RawJournal {
     pub root: PathBuf,
     pub segments: BTreeMap<u64, RawSegment>,
@@ -1440,36 +1445,83 @@ impl RawJournal {
         Ok(None)
     }
 
-    pub(super) fn pending_gaps(
+    pub(super) fn source_state(
         &self,
         receipt: &AnalysisSourceReceiptV1,
         revision: u64,
+        expired: &[super::AnalysisGapV1],
+        retired: &[super::AnalysisGapV1],
         control: &super::AnalysisReadControl,
-    ) -> Result<Vec<super::AnalysisGapV1>> {
-        let Some(mut next) = receipt.contiguous_cursor.checked_add(1) else {
-            return Ok(Vec::new());
-        };
+        budget: (usize, usize),
+    ) -> Result<RawSourceState> {
         let key = receipt.identity.key();
-        let mut gaps = Vec::new();
-        for (_, &(id, index)) in self.ranges.range((key.clone(), next)..=(key, u64::MAX)) {
+        let live = self
+            .ranges
+            .range((key.clone(), 0)..=(key, u64::MAX))
+            .filter_map(|(_, &(id, index))| {
+                let span = &self.entries[&id].commit.spans[index];
+                (id <= revision).then_some((span.first, span.last))
+            });
+        let expired = expired
+            .iter()
+            .map(|span| (span.first_cursor, span.last_cursor));
+        let retired = retired
+            .iter()
+            .map(|span| (span.first_cursor, span.last_cursor));
+        let ranges = Self::merge_ranges(Self::merge_ranges(live, expired), retired);
+        let mut state = RawSourceState {
+            covered: 0,
+            pending: Vec::new(),
+        };
+        let mut previous = 0;
+        let mut next = receipt.contiguous_cursor.checked_add(1);
+        let mut allocated = 0;
+        for (first, last) in ranges {
             control.check()?;
-            if id > revision {
-                continue;
+            if first == 0 || last < first || first <= previous {
+                return Err(self.invalid("the accepted source ranges overlap or are invalid"));
             }
-            let span = &self.entries[&id].commit.spans[index];
-            if span.first > next {
-                gaps.push(super::AnalysisGapV1 {
-                    first_cursor: next,
-                    last_cursor: span.first - 1,
-                    commit_revision: revision,
-                });
+            previous = last;
+            if first <= receipt.contiguous_cursor {
+                state.covered = state
+                    .covered
+                    .checked_add(last.min(receipt.contiguous_cursor) - first + 1)
+                    .ok_or_else(|| self.invalid("the accepted source count overflows"))?;
             }
-            let Some(end) = span.last.checked_add(1) else {
-                break;
-            };
-            next = end;
+            if let Some(begin) = next.filter(|_| last > receipt.contiguous_cursor) {
+                if first > begin {
+                    allocated += super::AnalysisExtractionV1::grow(
+                        &mut state.pending,
+                        budget.0.saturating_add(allocated),
+                        budget.1,
+                    )?;
+                    state.pending.push(super::AnalysisGapV1 {
+                        first_cursor: begin,
+                        last_cursor: first - 1,
+                        commit_revision: revision,
+                    });
+                }
+                next = last.checked_add(1);
+            }
         }
-        Ok(gaps)
+        Ok(state)
+    }
+
+    fn merge_ranges(
+        left: impl Iterator<Item = (u64, u64)>,
+        right: impl Iterator<Item = (u64, u64)>,
+    ) -> impl Iterator<Item = (u64, u64)> {
+        let (mut left, mut right) = (left.peekable(), right.peekable());
+        std::iter::from_fn(move || {
+            if left
+                .peek()
+                .is_some_and(|value| right.peek().is_none_or(|other| value <= other))
+            {
+                left.next()
+            } else {
+                right.next()
+            }
+        })
     }
 
     pub(super) fn segment_entries(
@@ -2603,7 +2655,7 @@ pub(super) mod tests {
             let receipt = store.read_trace_receipt(connection, identity)?;
             assert_eq!((receipt.last_sequence, receipt.output_bytes), (1, 1));
             assert!(receipt.terminal.is_none());
-            connection.execute("UPDATE trace_receipts SET last_sequence = ?, output_bytes = ? WHERE stream_key = ?",
+            connection.execute("UPDATE trace_versions SET last_sequence = ?, output_bytes = ? WHERE stream_key = ? AND version_revision = (SELECT max(v.version_revision) FROM trace_versions v WHERE v.stream_key = trace_versions.stream_key)",
                 duckdb::params![u64::MAX, u64::MAX, RawIdentity::Diagnostic(identity.clone()).key()])?;
             assert!(matches!(
                 store.read_trace_receipt(connection, identity),

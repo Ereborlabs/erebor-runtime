@@ -29,7 +29,10 @@ async fn public_control_keeps_identity() -> TestResult {
         return Err("finite receipt variant".into());
     };
     assert_eq!(receipts.len(), 1);
-    assert_eq!(fixture.selected("shared-control", "operator-step")?, [6]);
+    assert_eq!(
+        fixture.selected("shared-control", "operator-step").await?,
+        [6]
+    );
     let attempt = fixture
         .query
         .store()
@@ -112,8 +115,11 @@ async fn public_control_keeps_identity() -> TestResult {
         .managed_instance([1; 16], "shared-control", &control)?
         .ok_or("current instance")?;
     assert_eq!(current.grant, saved);
-    assert_eq!(fixture.selected("shared-control", "original")?, [3]);
-    assert_eq!(fixture.selected("shared-control", "operator-step")?, [6]);
+    assert_eq!(fixture.selected("shared-control", "original").await?, [3]);
+    assert_eq!(
+        fixture.selected("shared-control", "operator-step").await?,
+        [6]
+    );
     let before = fixture.query.store().meta()?;
     let mut narrow = operator.clone();
     narrow.selection.nodes.push("other-node".into());
@@ -327,7 +333,7 @@ async fn operator_revocation_fences_publication() -> TestResult {
             .managed_instance([1; 16], "operator-fence", &control)?,
         Some(current)
     );
-    assert_eq!(fixture.selected("operator-fence", "original")?, [3]);
+    assert_eq!(fixture.selected("operator-fence", "original").await?, [3]);
     let attempt = fixture
         .query
         .store()
@@ -339,8 +345,8 @@ async fn operator_revocation_fences_publication() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected([1; 16], "operator-fence", "rejected", &control)?
-        .is_none());
+        .managed_attempt([1; 16], "operator-fence", "rejected", &control)?
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     assert_eq!(
         fixture.query.store().managed_history(
             &fixture.grant.selection,

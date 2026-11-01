@@ -25,7 +25,6 @@ use crate::sources::{ReadMode, ScanBounds, SourceSnapshot};
 use crate::Error;
 
 mod limits;
-mod local;
 mod views;
 
 struct Fixture {

@@ -46,6 +46,7 @@ impl fmt::Debug for PackageCall {
 
 #[derive(Clone, Debug)]
 pub(crate) struct SqlCall {
+    pub(crate) end: usize,
     pub(crate) inputs: Vec<usize>,
     pub(crate) parameters: Option<usize>,
     pub(crate) prior: Vec<usize>,
@@ -59,6 +60,25 @@ pub(crate) struct SqlCall {
 #[derive(Clone, Debug)]
 pub(crate) struct ChangeCall {
     pub(crate) lookups: LookupInputs,
+    pub(crate) ports: Vec<ChangePort>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ChangePort {
+    pub(crate) before: usize,
+    pub(crate) after: usize,
+    pub(crate) affected: usize,
+    pub(crate) reset: usize,
+    pub(crate) reset_keys: usize,
+    pub(crate) difference: Option<BagDifference>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BagDifference {
+    pub(crate) base: usize,
+    pub(crate) target: usize,
+    pub(crate) removed: usize,
+    pub(crate) inserted: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -90,7 +110,7 @@ impl PackageCall {
                     changes
                         .ports
                         .len()
-                        .saturating_mul(std::mem::size_of::<usize>())
+                        .saturating_mul(std::mem::size_of::<ChangePort>())
                         .saturating_add(model.inputs.len().saturating_mul(
                             std::mem::size_of::<(usize, usize)>() + std::mem::size_of::<usize>(),
                         ))
@@ -198,12 +218,29 @@ impl PackageCall {
                     .transpose()?
                     .unwrap_or(false),
                 LogicalPlan::TableScan(scan) => {
-                    if let Some(plan) = scan.source.get_logical_plan() {
+                    let provider = datafusion::datasource::source_as_provider(&scan.source).ok();
+                    let port = provider.as_ref().and_then(|provider| {
+                        provider
+                            .as_any()
+                            .downcast_ref::<crate::sources::SourcePort>()
+                    });
+                    let plan = scan.source.get_logical_plan();
+                    if port.is_some() || plan.is_some() {
                         let identity = Arc::as_ptr(&scan.source) as *const () as usize;
                         if !views.insert(identity) {
                             return datafusion::common::plan_err!("recursive source view");
                         }
-                        let result = Self::any_in_views(plan.as_ref(), test, views)?;
+                        let mut result = false;
+                        if let Some(port) = port {
+                            for input in port.inputs() {
+                                result = Self::any_in_views(input, test, views)?;
+                                if result {
+                                    break;
+                                }
+                            }
+                        } else if let Some(plan) = plan {
+                            result = Self::any_in_views(plan.as_ref(), test, views)?;
+                        }
                         views.remove(&identity);
                         result
                     } else {
@@ -239,6 +276,12 @@ impl PackageCall {
     }
     pub fn descriptor(&self) -> &sdk::Package {
         &self.bundle.bundle().artifacts[self.artifact].descriptor
+    }
+    pub(crate) fn model(&self) -> Option<&sdk::Model> {
+        self.descriptor()
+            .exports
+            .iter()
+            .find(|model| model.name == self.export)
     }
     pub fn output(&self) -> &str {
         &self.output

@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::*;
@@ -7,7 +6,7 @@ use crate::tests::files_count::FilesCount;
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 #[test]
-fn retained_output_preserves_contract() -> TestResult {
+fn output_preserves_contract() -> TestResult {
     let mut package = FilesCount::package();
     let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);
     package.exports[0].checkpoint = Some(CheckpointSpec {
@@ -41,14 +40,13 @@ fn retained_output_preserves_contract() -> TestResult {
         details: batch,
     });
     package.validate_output(&evaluation, &output)?;
-    let inputs = BTreeMap::from([("events".into(), 3)]);
     let packet = wire::Output::encode(&package, &evaluation, &output)?;
-    let retained = packet.decode_retained(&package, &evaluation.export, &inputs)?;
-    assert_eq!(retained.evidence, output.evidence);
-    assert_eq!(retained.datasets[0].batches, output.datasets[0].batches);
-    assert_eq!(retained.reasons[0].details, output.reasons[0].details);
+    let decoded = packet.decode(&package, &evaluation)?;
+    assert_eq!(decoded.evidence, output.evidence);
+    assert_eq!(decoded.datasets[0].batches, output.datasets[0].batches);
+    assert_eq!(decoded.reasons[0].details, output.reasons[0].details);
     assert_eq!(
-        retained
+        decoded
             .checkpoint
             .as_ref()
             .map(|value| value.datasets[0].batches.clone()),
@@ -75,29 +73,9 @@ fn retained_output_preserves_contract() -> TestResult {
                     vec![RecordBatch::new_empty(Arc::new(Schema::empty()))]
             }
         }
-        let live = package
-            .validate_output(&evaluation, &invalid)
-            .err()
-            .ok_or("live contract accepted invalid output")?;
-        let retained = package
-            .validate_retained_output(&evaluation.export, &inputs, &invalid)
-            .err()
-            .ok_or("retained contract accepted invalid output")?;
-        assert_eq!(retained.code(), live.code(), "case {case}");
-        assert_eq!(retained.to_string(), live.to_string(), "case {case}");
-    }
-    for inputs in [
-        BTreeMap::new(),
-        BTreeMap::from([("other".into(), 3)]),
-        BTreeMap::from([("events".into(), 3), ("other".into(), 0)]),
-    ] {
-        assert_eq!(
-            package
-                .validate_retained_output(&evaluation.export, &inputs, &output)
-                .err()
-                .ok_or("invalid names accepted")?
-                .code(),
-            ErrorCode::Invalid
+        assert!(
+            package.validate_output(&evaluation, &invalid).is_err(),
+            "case {case}"
         );
     }
     Ok(())

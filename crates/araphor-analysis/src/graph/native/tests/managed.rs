@@ -191,12 +191,13 @@ async fn graph_conversion_failure_finishes() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             fixture.source.tenant_id,
             "conversion",
             &input.id,
             &fixture.control,
         )?
+        .and_then(|attempt| attempt.receipt().cloned())
         .is_none());
     let prepared = fixture.prepare("").await?;
     let mut other_grant = prepared.grant.clone();
@@ -433,7 +434,6 @@ async fn managed_restores_native_inputs() -> TestResult {
         araphor_data::AnalysisTableRead {
             requests: &branch_requests,
             event_ranges: None,
-            inputs: None,
             mode: araphor_data::AnalysisReadModeV1::Complete,
             now: request("branch-read")?.time_utc_ns,
         },
@@ -496,11 +496,15 @@ async fn managed_restores_native_inputs() -> TestResult {
         .results
         .first_key_value()
         .ok_or("Graph detector result")?;
-    let original = fixture.query.store().managed_evaluation(
-        restored.admitted(),
-        &reference.result_id,
-        &fixture.control,
-    )?;
+    let original_replay = fixture
+        .replay_result(restored.admitted(), &reference.result_id, &fixture.control)
+        .await?;
+    let original = original_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed Graph call")?
+        .evaluation();
     let before = fixture.query.store().meta()?;
     let replay = restored
         .replay(&reference.result_id, &fixture.control)
@@ -521,7 +525,7 @@ async fn managed_restores_native_inputs() -> TestResult {
         assert_eq!(actual.coverage, original.coverage);
     }
     assert_eq!(fixture.query.store().meta()?, before);
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);
     assert_eq!(
         fixture
             .query
@@ -1133,7 +1137,6 @@ async fn managed_expiry_reads_history() -> TestResult {
     let read = || araphor_data::AnalysisTableRead {
         requests: &columns,
         event_ranges: None,
-        inputs: None,
         mode: araphor_data::AnalysisReadModeV1::Complete,
         now,
     };
@@ -1156,12 +1159,13 @@ async fn managed_expiry_reads_history() -> TestResult {
         .witnesses
         .iter()
         .all(|witness| witness.expires_utc_ns == now));
-    let historical = fixture.query.store().read_managed_tables(
+    let historical = fixture.query.store().read_managed_tables_filtered(
         &selection,
         &managed,
         read(),
         araphor_data::AnalysisExtractLimits::default(),
         &fixture.control,
+        None,
     )?;
     assert!(historical.page.extraction.witnesses.is_empty());
     assert_eq!(
@@ -1214,18 +1218,18 @@ async fn managed_expiry_reads_history() -> TestResult {
         assert!(fixture
             .query
             .store()
-            .read_managed_tables(
+            .read_managed_tables_filtered(
                 &selection,
                 &managed,
                 araphor_data::AnalysisTableRead {
                     requests: &forbidden,
                     event_ranges: None,
-                    inputs: None,
                     mode: araphor_data::AnalysisReadModeV1::Complete,
                     now,
                 },
                 araphor_data::AnalysisExtractLimits::default(),
                 &fixture.control,
+                None,
             )
             .is_err());
     }
@@ -1256,7 +1260,7 @@ async fn managed_expiry_reads_history() -> TestResult {
         &fixture.control,
     )
     .await?;
-    let ordinary = fixture.query.store().read_managed_tables(
+    let ordinary = fixture.query.store().read_managed_tables_filtered(
         &selection,
         &araphor_data::ManagedRead {
             source: None,
@@ -1270,6 +1274,7 @@ async fn managed_expiry_reads_history() -> TestResult {
         read(),
         araphor_data::AnalysisExtractLimits::default(),
         &fixture.control,
+        None,
     )?;
     assert!(!ordinary.page.extraction.witnesses.is_empty());
     let mut request = request("ordinary-expired-body")?;

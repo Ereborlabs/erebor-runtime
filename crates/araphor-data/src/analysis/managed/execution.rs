@@ -5,7 +5,6 @@ use araphor_analysis_sdk as sdk;
 use duckdb::Connection;
 
 use super::model::*;
-use super::source::ManagedSourceRef;
 use crate::{AnalysisStore, AnalysisStoreMetaV1, Result, ResultContext};
 
 #[derive(Debug, Default)]
@@ -18,18 +17,6 @@ pub(super) struct Committed {
     meta: AnalysisStoreMetaV1,
     instance: ManagedInstance,
     calls: BTreeMap<u64, Arc<ManagedPrior>>,
-    source: Option<SourceHead>,
-}
-
-#[derive(Debug)]
-struct SourceHead {
-    reference: ManagedSourceRef,
-    members: Arc<std::collections::BTreeSet<Vec<u8>>>,
-}
-
-#[derive(Debug)]
-pub(in crate::analysis) struct Retention {
-    owner: Arc<ManagedExecution>,
 }
 
 impl ManagedExecution {
@@ -61,27 +48,6 @@ impl ManagedExecution {
         *self.state.lock().unwrap_or_else(|error| error.into_inner()) = Some(state);
     }
 
-    pub(super) fn source_members(
-        &self,
-        instance: &ManagedInstance,
-        meta: &AnalysisStoreMetaV1,
-        reference: &ManagedSourceRef,
-    ) -> Option<Arc<std::collections::BTreeSet<Vec<u8>>>> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let state = state.as_ref().filter(|state| {
-            &state.instance == instance
-                && state.meta.store_uuid == meta.store_uuid
-                && state.meta.schema_version == meta.schema_version
-                && state.meta.recovery_epoch == meta.recovery_epoch
-                && state.meta.commit_revision <= meta.commit_revision
-        })?;
-        let source = state
-            .source
-            .as_ref()
-            .filter(|source| &source.reference == reference)?;
-        Some(Arc::clone(&source.members))
-    }
-
     pub fn metadata_bytes(&self) -> usize {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.as_ref().map_or(0, |state| {
@@ -96,11 +62,6 @@ impl ManagedExecution {
                         .map(|prior| prior.metadata_bytes())
                         .sum::<usize>(),
                 )
-                .saturating_add(state.source.as_ref().map_or(0, |source| {
-                    size_of::<SourceHead>()
-                        .saturating_add(source.reference.result.result_id.capacity())
-                        .saturating_add(super::source::SourceCapture::member_bytes(&source.members))
-                }))
         })
     }
 }
@@ -159,49 +120,31 @@ impl ManagedPrior {
                         state
                             .changes
                             .as_ref()
-                            .map_or(0, ManagedChanges::allocated_bytes),
+                            .map_or(0, ManagedChanges::metadata_bytes),
                     )
             }))
     }
 
-    fn metadata_bytes(&self) -> usize {
-        let buffers = self
-            .parameters
+    pub(super) fn batches(&self) -> impl Iterator<Item = &sdk::RecordBatch> {
+        self.parameters
             .iter()
             .chain(self.checkpoint.iter().flat_map(|state| &state.datasets))
-            .chain(self.retained.iter().flat_map(|state| {
-                state
-                    .evaluation
-                    .inputs
-                    .iter()
-                    .map(|input| &input.data)
-                    .chain(state.output.datasets.iter())
-                    .chain(
-                        state
-                            .output
-                            .checkpoint
-                            .iter()
-                            .flat_map(|state| &state.datasets),
-                    )
-            }))
             .flat_map(|data| &data.batches)
-            .chain(self.retained.iter().flat_map(|state| {
-                state
-                    .evaluation
-                    .parameters
+            .chain(
+                self.retained
                     .iter()
-                    .chain(state.output.reasons.iter().map(|reason| &reason.details))
-            }))
-            .flat_map(sdk::RecordBatch::columns)
-            .map(|array| array.get_buffer_memory_size())
-            .sum::<usize>();
-        self.allocated_bytes().saturating_sub(buffers)
+                    .flat_map(|state| state.evaluation.batches().chain(state.output.batches())),
+            )
     }
-}
 
-impl Retention {
-    pub(super) fn new(owner: Arc<ManagedExecution>) -> Self {
-        Self { owner }
+    pub(super) fn metadata_bytes(&self) -> usize {
+        self.allocated_bytes().saturating_sub(
+            self.batches()
+                .flat_map(sdk::RecordBatch::columns)
+                .fold(0usize, |bytes, array| {
+                    bytes.saturating_add(array.get_buffer_memory_size())
+                }),
+        )
     }
 }
 
@@ -213,15 +156,12 @@ impl AnalysisStore {
         receipt: &ManagedReceipt,
         verified: &mut crate::analysis::context::VerifiedPackages,
     ) -> Result<Option<(Arc<ManagedExecution>, Committed)>> {
-        let Some(retention) = &input.attempt.4 else {
+        let Some(owner) = &input.attempt.4 else {
             return Ok(None);
         };
         let mut calls = input.attempt.3.clone();
         let instance = input.attempt.instance();
         for returned in input.returns {
-            if returned.retained.is_some() {
-                continue;
-            }
             let declaration = &instance.spec.manifest.calls[&returned.call];
             self.verify_package_revision(
                 reader,
@@ -258,7 +198,6 @@ impl AnalysisStore {
                         output: returned.output.clone(),
                         changes: returned.changes.cloned(),
                     })),
-                    reusable: false,
                 }),
             );
         }
@@ -274,15 +213,7 @@ impl AnalysisStore {
             },
             instance,
             calls,
-            source: input.attempt.5.as_ref().map(|frame| SourceHead {
-                reference: ManagedSourceRef {
-                    result: receipt.selected.clone(),
-                    position: frame.frame.position(),
-                },
-                members: Arc::clone(&frame.members),
-            }),
         };
-        let owner = Arc::clone(&retention.owner);
-        Ok(Some((owner, state)))
+        Ok(Some((Arc::clone(owner), state)))
     }
 }

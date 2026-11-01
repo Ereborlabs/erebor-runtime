@@ -275,12 +275,6 @@ mod tests {
                 stripped.checkpoint = None;
                 stripped.previous_outputs.clear();
                 assert!(stripped.decode(&package).is_err());
-                let mut restored = stripped.decode_inputs(&package)?;
-                assert!(package.check_evaluation(&restored).is_err());
-                restored.checkpoint = evaluation.checkpoint.clone();
-                restored.previous_outputs = evaluation.previous_outputs.clone();
-                package.check_evaluation(&restored)?;
-                assert!(checked.encode()?.decode_inputs(&package).is_err());
             }
             assert_eq!(
                 decoded.inputs[1].data.batches,
@@ -293,19 +287,6 @@ mod tests {
             for name in ["before", "reset"] {
                 output.evidence[0].input.dataset = name.into();
                 assert!(checked.validate_output(&output).is_err());
-                assert!(package
-                    .validate_retained_output(
-                        "sum",
-                        &[
-                            ("after".into(), 1),
-                            ("before".into(), 1),
-                            ("reset".into(), 1),
-                            ("affected".into(), 1)
-                        ]
-                        .into(),
-                        &output
-                    )
-                    .is_err());
             }
         }
         Ok(())

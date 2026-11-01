@@ -20,7 +20,6 @@ pub(super) struct PortScope<'a> {
     pub(super) slot: usize,
     invocation: Option<(&'a str, u64)>,
     pub(super) selection: AnalysisSelectionV1,
-    pub(super) packages: std::collections::BTreeSet<usize>,
     window: Option<(i64, i64)>,
     reads: Option<Vec<araphor_data::ManagedSourceRows>>,
 }
@@ -40,26 +39,11 @@ impl Inputs {
     }
 
     fn event_source(plan: &datafusion::logical_expr::LogicalPlan) -> bool {
-        use datafusion::common::tree_node::TreeNodeRecursion;
-        let mut found = false;
-        let _result = plan.apply_with_subqueries(|plan| {
-            if let datafusion::logical_expr::LogicalPlan::TableScan(scan) = plan {
-                if let Ok(provider) = datafusion::datasource::source_as_provider(&scan.source) {
-                    if let Some(source) = provider
-                        .as_any()
-                        .downcast_ref::<crate::sources::SourceProvider>()
-                    {
-                        found |= source.origin.durable() == Some("events");
-                    }
-                }
-            }
-            Ok(if found {
-                TreeNodeRecursion::Stop
-            } else {
-                TreeNodeRecursion::Continue
-            })
-        });
-        found
+        crate::planner::SourceDemand::collect(plan, false).is_ok_and(|origins| {
+            origins
+                .iter()
+                .any(|origin| origin.durable() == Some("events"))
+        })
     }
 
     pub(crate) fn check_supplied(&self, supplied: &[sdk::Input]) -> Result<()> {
@@ -151,10 +135,10 @@ impl Inputs {
         &self,
         data: sdk::Dataset,
         source: &SourceSnapshot,
-        (call, slot, invocation): (u64, usize, &str),
+        (call, slot, child, invocation): (u64, usize, usize, &str),
         physical: &Arc<dyn ExecutionPlan>,
         inherited: &[&sdk::Input],
-        memory: &Memory,
+        owner: &crate::definition::CallContext,
     ) -> Result<sdk::Input> {
         let port = self.plans.get(slot).ok_or_else(|| {
             InvalidSnafu {
@@ -188,21 +172,31 @@ impl Inputs {
             });
         }
         let snapshot = source.snapshot().context(SqlSnafu)?;
+        let bounds = source
+            .input_bounds(physical, Some(owner))
+            .context(SqlSnafu)?;
         let mut bound = Vec::new();
         for origin in &port.origins {
-            if matches!(origin, SourceOrigin::Port(_) | SourceOrigin::Package(_)) {
+            if matches!(origin, SourceOrigin::Port(id) if child != slot && !bounds.ports.contains(id))
+            {
+                continue;
+            }
+            if let SourceOrigin::Port(id) = origin {
                 if let Some(input) = source.captured_input(origin).context(SqlSnafu)? {
-                    bound.push(input);
+                    bound.push((*id, input));
                 }
             }
         }
         let sources = port
             .origins
             .iter()
-            .filter_map(|origin| origin.durable().map(|name| (name.to_owned(), None)))
+            .filter_map(|origin| {
+                origin
+                    .durable()
+                    .map(|name| (name.to_owned(), Some(Default::default())))
+            })
             .collect();
-        let selection = SourceSnapshot::selection(&snapshot.selection, &sources)?;
-        let bounds = source.input_bounds(physical).context(SqlSnafu)?;
+        let selection = snapshot.selection.project(&sources)?;
         let selection =
             if sources.contains_key("trace_output") || sources.contains_key("trace_measurements") {
                 selection
@@ -216,8 +210,9 @@ impl Inputs {
                 slot,
                 invocation: Some((invocation, call)),
                 selection,
-                packages: source.package_indices(&port.origins),
-                reads: source.input_reads(physical).context(SqlSnafu)?,
+                reads: source
+                    .input_reads(physical, bound.iter().map(|(id, _)| *id))
+                    .context(SqlSnafu)?,
                 window: snapshot
                     .windows
                     .iter()
@@ -229,8 +224,8 @@ impl Inputs {
             inherited
                 .iter()
                 .copied()
-                .chain(bound.iter().map(|input| input.as_ref())),
-            memory,
+                .chain(bound.iter().map(|(_, input)| input.as_ref())),
+            owner.memory(),
         )
     }
 
@@ -290,9 +285,16 @@ impl Inputs {
                 AnalysisReferenceOriginV1::Graph => has_graph,
                 AnalysisReferenceOriginV1::Notification => has("notifications"),
                 AnalysisReferenceOriginV1::ExplicitResult => true,
-                AnalysisReferenceOriginV1::Package(index) => scope.packages.contains(index),
             };
         let mut contexts = Vec::new();
+        let indexed_context = !port.changes
+            && scope.reads.is_some()
+            && has("context_versions")
+            && snapshot
+                .managed()
+                .and_then(|managed| managed.source())
+                .and_then(|frame| frame.projection().get("context_versions"))
+                .is_some_and(Option::is_some);
         let mut results = Vec::new();
         let mut graph_count = 0;
         let mut graph_coverage = sdk::Coverage {
@@ -302,9 +304,11 @@ impl Inputs {
         for reference in &snapshot.page.extraction.references {
             match reference {
                 AnalysisReferenceV1::Context { reference, origins }
-                    if origins
-                        .iter()
-                        .any(|origin| includes(origin, Some(&reference.key))) =>
+                    if origins.iter().any(|origin| {
+                        includes(origin, Some(&reference.key))
+                            && !(indexed_context
+                                && matches!(origin, AnalysisReferenceOriginV1::Context))
+                    }) =>
                 {
                     contexts.push(reference);
                 }
@@ -332,6 +336,11 @@ impl Inputs {
                     }
                 }
                 _ => {}
+            }
+        }
+        if indexed_context {
+            if let Some(reads) = &scope.reads {
+                contexts.extend(reads.iter().flat_map(|rows| rows.contexts()));
             }
         }
         contexts.sort_by(|left, right| {
@@ -477,24 +486,58 @@ impl Inputs {
         ))?;
         hash.update(provenance.as_bytes());
         if let Some(reads) = &scope.reads {
-            let frame = snapshot
-                .managed()
-                .and_then(|managed| managed.source())
-                .ok_or_else(|| {
-                    araphor_data::PackageErrorCodeV1::Incomplete.error("indexed input source")
-                })?;
-            let selected = reads
+            let mut witnesses = reads
                 .iter()
-                .map(|rows| (rows.position(), rows.witnesses(), rows.contexts()))
+                .flat_map(|rows| rows.witnesses())
                 .collect::<Vec<_>>();
-            hash.update(
-                araphor_data::InputRevision::of_native(&(
-                    frame.read(),
-                    frame.position(),
-                    selected,
-                ))?
-                .as_bytes(),
-            );
+            witnesses.sort_by(|left, right| {
+                (&left.identity, left.cursor, left.expires_utc_ns).cmp(&(
+                    &right.identity,
+                    right.cursor,
+                    right.expires_utc_ns,
+                ))
+            });
+            witnesses.dedup();
+            if port.changes {
+                let frame = snapshot
+                    .managed()
+                    .and_then(|managed| managed.source())
+                    .ok_or_else(|| {
+                        araphor_data::PackageErrorCodeV1::Incomplete.error("indexed input source")
+                    })?;
+                let mut contexts = reads
+                    .iter()
+                    .flat_map(|rows| rows.contexts())
+                    .collect::<Vec<_>>();
+                contexts.sort_by(|left, right| {
+                    left.key
+                        .cmp(&right.key)
+                        .then(left.commit_revision.cmp(&right.commit_revision))
+                });
+                contexts.dedup();
+                hash.update(
+                    araphor_data::InputRevision::of_native(&(
+                        frame.read(),
+                        frame.position(),
+                        witnesses,
+                        contexts,
+                    ))?
+                    .as_bytes(),
+                );
+            } else {
+                let meta = &snapshot.page.extraction.meta;
+                hash.update(
+                    araphor_data::InputRevision::of_native(&(
+                        meta.store_uuid,
+                        meta.schema_version,
+                        meta.recovery_epoch,
+                        scope.invocation.map(|(_, call)| (call, scope.slot)),
+                        &data.name,
+                        witnesses,
+                    ))?
+                    .as_bytes(),
+                );
+            }
         }
         if !inherited.is_empty() {
             let revisions = inherited
@@ -513,7 +556,7 @@ impl Inputs {
                 .build()
             })?
             .schema();
-        if scope.reads.is_some() || (port.changes && snapshot.managed().is_some()) {
+        if port.changes && snapshot.managed().is_some() {
             let (invocation, call) = scope.invocation.ok_or_else(|| {
                 InvalidSnafu {
                     field: "change input invocation",
@@ -688,7 +731,6 @@ mod supplied {
         for origins in [
             Vec::new(),
             vec![SourceOrigin::Durable("events".into())],
-            vec![SourceOrigin::Package(0)],
             vec![
                 SourceOrigin::Local("fixture".into()),
                 SourceOrigin::Durable("context_versions".into()),
@@ -760,7 +802,6 @@ mod supplied {
         let selected = PortScope {
             reads: None,
             invocation: None,
-            packages: Default::default(),
             slot: 0,
             window: None,
             selection: snapshot.selection.clone(),

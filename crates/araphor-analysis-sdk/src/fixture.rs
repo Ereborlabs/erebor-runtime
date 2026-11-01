@@ -29,7 +29,7 @@ impl Package {
     ) -> Result<FixtureReport> {
         Self::text(&fixture.implementation)?;
         Self::text(&fixture.revision)?;
-        let model = self.validator(&fixture.evaluation)?;
+        let model = self.wire_validator(&fixture.evaluation.export)?;
         model.input(&fixture.evaluation)?;
         let output = algorithm(&fixture.evaluation)?;
         model.output(&fixture.evaluation, &output)?;

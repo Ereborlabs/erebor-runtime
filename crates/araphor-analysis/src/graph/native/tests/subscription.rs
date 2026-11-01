@@ -23,7 +23,6 @@ async fn drains_captured_backlog() -> TestResult {
         .await?;
     let job = fixture.running_graph(job).await?;
     let projection = &job.graph_owner().ok_or("Running Graph owner")?.projection;
-    assert_eq!(projection.prepared.as_ref().map(Vec::len), Some(6));
     let observed = projection.observe_capture();
     let mut stream = job.subscribe(
         Arc::new(AnalysisReadControl::default()),
@@ -100,11 +99,15 @@ async fn drains_captured_backlog() -> TestResult {
                     .ok_or("Graph package call")?
                     .descriptor();
                 let detector = algorithm::Detector::from_id(&package.id)?;
-                let evaluation = fixture.query.store().managed_evaluation(
-                    job.admitted(),
-                    &reference.result_id,
-                    &fixture.control,
-                )?;
+                let evaluation_replay = fixture
+                    .replay_result(job.admitted(), &reference.result_id, &fixture.control)
+                    .await?;
+                let evaluation = evaluation_replay
+                    .calls
+                    .values()
+                    .next()
+                    .ok_or("replayed Graph call")?
+                    .evaluation();
                 let records = algorithm::Observation::decode(&evaluation.input("records")?.data)?;
                 let units = algorithm::Unit::decode(&evaluation.input("units")?.data)?;
                 let removals = algorithm::Unit::decode(&evaluation.input("unit_removals")?.data)?;
@@ -114,7 +117,7 @@ async fn drains_captured_backlog() -> TestResult {
                         .change_inputs
                         .as_ref()
                         .ok_or("change contract")?
-                        .is_reset(&evaluation)?,
+                        .is_reset(evaluation)?,
                     consumed == 1
                 );
                 assert!(evaluation.checkpoint.is_none());
@@ -142,17 +145,18 @@ async fn drains_captured_backlog() -> TestResult {
                     u64::try_from(evaluation.context.time_utc_ns)?,
                     &fixture.control,
                 )?;
-                let replayed = detector.evaluate(&evaluation)?;
+                assert_eq!(result.result, *reference);
+                let actual = evaluation_replay
+                    .calls
+                    .get(&call)
+                    .ok_or("replayed Graph output")?
+                    .output();
+                let replayed = detector.evaluate(evaluation)?;
                 assert_eq!(
-                    araphor_analysis_sdk::wire::Output::encode(package, &evaluation, &replayed)?,
-                    araphor_analysis_sdk::wire::Output::encode(
-                        package,
-                        &evaluation,
-                        &result.output
-                    )?,
+                    araphor_analysis_sdk::wire::Output::encode(package, evaluation, &replayed)?,
+                    araphor_analysis_sdk::wire::Output::encode(package, evaluation, actual)?,
                 );
-                let contribution = result
-                    .output
+                let contribution = actual
                     .datasets
                     .iter()
                     .find(|data| data.name == "contributions")
@@ -160,15 +164,15 @@ async fn drains_captured_backlog() -> TestResult {
                 let contribution = algorithm::Contribution::decode(contribution)?;
                 assert_eq!(contribution.len(), 1);
                 assert_eq!(contribution[0].record, units[0].record);
-                assert!(result.output.checkpoint.is_none());
+                assert!(actual.checkpoint.is_none());
             }
             previous = Some(id);
         }
-        assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 12);
         assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
         let mut next = Box::pin(stream.next());
         assert!(futures_util::poll!(next.as_mut()).is_pending());
-        assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 12);
         assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
         drop(next);
         Ok(())

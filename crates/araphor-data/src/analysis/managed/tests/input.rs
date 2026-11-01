@@ -2,7 +2,6 @@ use super::*;
 
 mod current;
 mod origins;
-mod reads;
 mod scope;
 
 struct Saved {
@@ -11,7 +10,6 @@ struct Saved {
     fixture: Arc<Fixture>,
     context: crate::AnalysisContextRefV1,
     receipt: ManagedReceipt,
-    inputs: [(Arc<crate::ManagedInputRef>, Arc<sdk::Schema>); 1],
     requests: AnalysisTableRequests,
 }
 
@@ -51,11 +49,14 @@ impl Saved {
             AnalysisSelectionV1::tenant([1; 16]),
         )?);
         let cursor = AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
-        let requests =
-            AnalysisTableRequests::from([("events".into(), Some(BTreeSet::from([cursor])))]);
+        let requests = AnalysisTableRequests::from([
+            ("events".into(), Some(BTreeSet::from([cursor]))),
+            ("context_versions".into(), Some(BTreeSet::new())),
+            ("traces".into(), Some(BTreeSet::new())),
+        ]);
         let capture = store
-            .read_managed_tables(
-                &fixture.instance.grant.selection,
+            .read_managed_tables_filtered(
+                &fixture.instance.grant.selection.project(&requests)?,
                 &ManagedRead {
                     source: None,
                     execution: None,
@@ -68,12 +69,12 @@ impl Saved {
                 AnalysisTableRead {
                     requests: &requests,
                     event_ranges: None,
-                    inputs: None,
                     mode: AnalysisReadModeV1::Complete,
                     now: 10,
                 },
                 AnalysisExtractLimits::default(),
                 &AnalysisReadControl::default(),
+                None,
             )?
             .state;
         let mut input = request("saved-first");
@@ -85,21 +86,12 @@ impl Saved {
         ];
         let outputs = [fixture.output(7)?, fixture.output(3)?];
         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
-        let (pin, port) = store.managed_input(
-            &fixture.instance.grant.selection,
-            &fixture.instance.spec.id,
-            &receipt.results[&10],
-            "rows",
-            AnalysisExtractLimits::default(),
-            &AnalysisReadControl::default(),
-        )?;
         Ok(Self {
             _directory: directory,
             store,
             fixture,
             context,
             receipt,
-            inputs: [(Arc::new(pin), Arc::new(port.schema))],
             requests,
         })
     }
@@ -128,8 +120,8 @@ impl Saved {
         let instance = self.fixture.current(&self.store)?;
         Ok(self
             .store
-            .read_managed_tables(
-                &instance.grant.selection,
+            .read_managed_tables_filtered(
+                &instance.grant.selection.project(&self.requests)?,
                 &ManagedRead {
                     source: None,
                     execution: None,
@@ -142,113 +134,25 @@ impl Saved {
                 AnalysisTableRead {
                     requests: &self.requests,
                     event_ranges: None,
-                    inputs: None,
                     mode: AnalysisReadModeV1::Complete,
                     now: 10,
                 },
                 AnalysisExtractLimits::default(),
                 &AnalysisReadControl::default(),
+                None,
             )?
             .state)
     }
 
-    fn read(
-        &self,
-        selection: &AnalysisSelectionV1,
-        authorized: &AnalysisSelectionV1,
-        outputs: &[(Arc<crate::ManagedInputRef>, Arc<sdk::Schema>)],
-        mode: AnalysisReadModeV1,
-        limits: AnalysisExtractLimits,
-        control: &AnalysisReadControl,
-    ) -> crate::Result<crate::AnalysisPositionPageV1> {
-        self.store.read_tables(
-            selection,
-            AnalysisTableRead {
-                requests: &self.requests,
-                event_ranges: None,
-                inputs: Some(crate::AnalysisInputTables {
-                    authorized,
-                    outputs,
-                }),
-                mode,
-                now: 10,
-            },
-            limits,
-            control,
-        )
-    }
-}
-
-#[test]
-fn retained_header_skips_ipc() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let store = AnalysisStore::open(directory.path().join("store"))?;
-    let fixture = Fixture::admit(&store)?;
-    let capture = fixture.capture(&store, false)?;
-    let request = request("header");
-    let attempt = store.register_managed_attempt(&capture, &request, || Ok(()))?;
-    let evaluations = [
-        fixture.evaluation(&request, 10, None)?,
-        fixture.evaluation(&request, 11, None)?,
-    ];
-    let outputs = [fixture.output(2)?, fixture.output(3)?];
-    let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
-    let reference = &receipt.results[&10];
-    store
-        .writer()?
-        .get_mut()?
-        .execute(
-            "UPDATE managed_arrow SET ipc = ? WHERE result_id = ?",
-            params![b"invalid IPC".as_slice(), reference.result_id],
-        )
-        .context(crate::AnalysisDatabaseSnafu {
-            operation: "corrupt test managed payload",
-        })?;
-    let before = store.meta()?;
-    let (pin, port) = store.managed_input(
-        &fixture.instance.grant.selection,
-        &fixture.instance.spec.id,
-        reference,
-        "rows",
-        AnalysisExtractLimits::default(),
-        &AnalysisReadControl::default(),
-    )?;
-    assert_eq!(pin.result(), reference);
-    assert_eq!(pin.output().package, "managed-fixture");
-    assert_eq!(port.schema, fixture.model.outputs[0].schema);
-    let inputs = [(Arc::new(pin), Arc::new(port.schema))];
-    let requests = AnalysisTableRequests::new();
-    for mode in [AnalysisReadModeV1::Metadata, AnalysisReadModeV1::Complete] {
-        let read = store.read_tables(
-            &fixture.instance.grant.selection,
-            AnalysisTableRead {
-                requests: &requests,
-                event_ranges: None,
-                inputs: Some(crate::AnalysisInputTables {
-                    authorized: &fixture.instance.grant.selection,
-                    outputs: &inputs,
-                }),
-                mode,
-                now: 10,
-            },
-            AnalysisExtractLimits::default(),
-            &AnalysisReadControl::default(),
+    fn permits(&self) -> TestResult {
+        assert_eq!(
+            self.store
+                .read_slots
+                .as_ref()
+                .ok_or("reader admissions absent")?
+                .available_permits(),
+            2
         );
-        if matches!(mode, AnalysisReadModeV1::Metadata) {
-            let page = read?;
-            assert!(page.packages.is_empty());
-            assert_eq!(
-                page.extraction
-                    .references
-                    .iter()
-                    .filter_map(|entry| entry.result())
-                    .collect::<Vec<_>>(),
-                [reference]
-            );
-        } else {
-            assert!(matches!(read, Err(crate::Error::AnalysisContract { .. })));
-        }
+        Ok(())
     }
-    assert_eq!(store.meta()?, before);
-    Ok(())
 }

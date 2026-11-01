@@ -42,10 +42,7 @@ use crate::sources::{ArrowSnapshot, ReadMode, ScanBounds, SourceSnapshot};
 use crate::{BusySnafu, InvalidSnafu, Result, SqlSnafu};
 
 mod admission;
-mod local;
 mod tables;
-
-pub use local::LocalOutput;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -605,8 +602,11 @@ impl Engine {
             tables: Arc::default(),
             calls: None,
             managed: None,
+            reference: None,
+            replay_frontier: None,
+            nested_permit: None,
+            definition: None,
             source_index: None,
-            inputs: None,
             workers: None,
             context_init: None,
             output_rows: self.limits.output_rows,
@@ -748,18 +748,10 @@ pub(crate) enum TableBinding {
     Provider(Arc<dyn TableProvider>),
 }
 
-impl TableBinding {
-    pub(crate) fn provider(&self) -> Arc<dyn TableProvider> {
-        match self {
-            Self::Rows { table, .. } => table.clone(),
-            Self::Provider(provider) => Arc::clone(provider),
-        }
-    }
-}
-
 pub(crate) type LocalTables = BTreeMap<String, TableBinding>;
 
 type ContextInit = dyn Fn(&mut SessionConfig) + Send + Sync;
+type ReplayFrontier = (u64, Option<(u64, Arc<crate::definition::CallResult>)>);
 
 #[derive(Clone)]
 pub struct Session {
@@ -771,8 +763,11 @@ pub struct Session {
     pub(crate) tables: Arc<LocalTables>,
     pub(crate) calls: Option<Arc<crate::definition::CallContext>>,
     pub(crate) managed: Option<araphor_data::ManagedRead>,
+    pub(crate) reference: Option<araphor_data::ManagedAttempt>,
+    pub(crate) replay_frontier: Option<ReplayFrontier>,
+    pub(crate) nested_permit: Option<Arc<Permit>>,
+    pub(crate) definition: Option<Arc<crate::definition::PreparedDefinition>>,
     pub(crate) source_index: Option<Arc<crate::sources::SourceIndex>>,
-    pub(crate) inputs: Option<Arc<crate::sources::InputCapture>>,
     pub(crate) workers: Option<araphor_package_runtime::TaskTracker>,
     context_init: Option<Arc<ContextInit>>,
     output_rows: usize,
@@ -832,6 +827,22 @@ impl CapturedPhysical {
 }
 
 impl Session {
+    pub(crate) fn evaluation_permit(&self) -> Result<Arc<Permit>> {
+        if let Some(permit) = &self.nested_permit {
+            let tenant = self.engine.tenant(self.selection.tenant_id)?;
+            if !permit.evaluation || !Arc::ptr_eq(&permit._tenant, &tenant) {
+                return InvalidSnafu {
+                    field: "nested evaluation permit",
+                }
+                .fail();
+            }
+            return Ok(Arc::clone(permit));
+        }
+        Ok(Arc::new(
+            self.engine.reserve_evaluation(self.selection.tenant_id)?,
+        ))
+    }
+
     pub fn operation(&self, control: &AnalysisReadControl, now: u64) -> Result<Self> {
         let mut session = self.at(self.selection.clone(), now);
         session.control = Arc::new(control.within(None)?);
@@ -845,6 +856,12 @@ impl Session {
         self.context_init = Some(Arc::new(initializer));
     }
 
+    pub(crate) fn initialize_context(&self, config: &mut SessionConfig) {
+        if let Some(initializer) = &self.context_init {
+            initializer(config);
+        }
+    }
+
     pub(crate) async fn metadata(
         &self,
         sources: &AnalysisTableRequests,
@@ -854,7 +871,6 @@ impl Session {
         let capture = SourceSnapshot::new(
             Arc::clone(self.engine.store()),
             self.selection.clone(),
-            None,
             AnalysisExtractLimits {
                 scan_bytes: self.engine.limits.scan_bytes,
                 input_bytes: self.engine.limits.input_bytes,
@@ -887,8 +903,11 @@ impl Session {
             tables: Arc::clone(&self.tables),
             calls: None,
             managed: None,
+            reference: self.reference.clone(),
+            replay_frontier: self.replay_frontier.clone(),
+            nested_permit: self.nested_permit.clone(),
+            definition: self.definition.clone(),
             source_index: None,
-            inputs: None,
             workers: self.workers.clone(),
             context_init: self.context_init.clone(),
             output_rows: self.output_rows,
@@ -1010,60 +1029,6 @@ impl Session {
         self.control.check()?;
         let provider = crate::definition::PackageCall::defer_view(provider).context(SqlSnafu)?;
         Arc::make_mut(&mut self.tables).insert(name.to_owned(), TableBinding::Provider(provider));
-        Ok(())
-    }
-
-    pub async fn register_retained(
-        &mut self,
-        name: &str,
-        instance: &str,
-        reference: araphor_data::analysis::PackageResultRefV1,
-        dataset: &str,
-    ) -> Result<()> {
-        self.control.check()?;
-        if name.is_empty() || name.chars().any(char::is_control) {
-            return InvalidSnafu {
-                field: "retained table alias",
-            }
-            .fail();
-        }
-        let store = Arc::clone(self.engine.store());
-        let selection = self.selection.clone();
-        let instance = instance.to_owned();
-        let dataset = dataset.to_owned();
-        let read = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
-        let limits = AnalysisExtractLimits {
-            input_bytes: self.engine.limits.input_bytes,
-            ..Default::default()
-        };
-        let (reference, port) = Engine::blocking(Arc::clone(&read), self.token()?, move || {
-            Ok(store.managed_input(&selection, &instance, &reference, &dataset, limits, &read)?)
-        })
-        .await?;
-        let bytes = reference
-            .allocation_bytes()
-            .and_then(|bytes| {
-                port.allocated_bytes()
-                    .checked_sub(port.name.capacity())
-                    .and_then(|schema| bytes.checked_add(schema))
-            })
-            .and_then(|bytes| {
-                bytes.checked_add(std::mem::size_of::<araphor_analysis_sdk::Schema>())
-            })
-            .and_then(|bytes| {
-                bytes.checked_add(std::mem::size_of::<crate::sources::RetainedSource>())
-            })
-            .and_then(|bytes| {
-                bytes.checked_add(std::mem::size_of::<crate::sources::SourceProvider>())
-            })
-            .ok_or_else(|| {
-                araphor_data::PackageErrorCodeV1::Limit.error("retained table metadata")
-            })?;
-        let memory = self.memory.reserve_input(bytes).context(SqlSnafu)?;
-        let schema = Arc::new(port.schema);
-        let table = crate::sources::SourceProvider::retained(reference, schema, memory)?;
-        self.control.check()?;
-        Arc::make_mut(&mut self.tables).insert(name.into(), TableBinding::Provider(table));
         Ok(())
     }
 
@@ -1271,41 +1236,6 @@ impl Session {
         Ok(state)
     }
 
-    pub async fn prepare_reusable_inputs(
-        &self,
-        plans: &[LogicalPlan],
-    ) -> Result<Option<Vec<Arc<dyn ExecutionPlan>>>> {
-        for plan in plans {
-            if crate::definition::PackageCall::contains(plan).context(SqlSnafu)?
-                || !crate::stream::physical::SubscribeExec::reusable(
-                    plan,
-                    &mut std::collections::BTreeSet::new(),
-                )
-                .context(SqlSnafu)?
-                || crate::follow::Window::clocks(plan)? != 0
-            {
-                return Ok(None);
-            }
-        }
-        let mut state = self.state()?;
-        let config = state
-            .config()
-            .clone()
-            .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", false);
-        *state.config_mut() = config;
-        let mut physical = Vec::with_capacity(plans.len());
-        for plan in plans {
-            let compiled = self.physical(plan, &state).await?;
-            if datafusion::physical_plan::execution_plan::reset_plan_states(Arc::clone(&compiled))
-                .is_err()
-            {
-                return Ok(None);
-            }
-            physical.push(compiled);
-        }
-        Ok(Some(physical))
-    }
-
     pub(crate) async fn physical(
         &self,
         plan: &LogicalPlan,
@@ -1397,16 +1327,46 @@ impl Session {
     ) -> Result<CapturedPhysical> {
         self.control.check()?;
         let reservation = self.output_reservation(&physical)?;
+        let mut hydration = self.clone();
+        hydration.nested_permit = Some(Arc::clone(&permit));
+        if hydration.definition.is_none() {
+            hydration.definition = context
+                .session_config()
+                .get_extension::<crate::stream::Run>()
+                .and_then(|run| {
+                    run.managed
+                        .as_ref()
+                        .map(|(definition, _)| Arc::new(definition.clone()))
+                });
+        }
+        let mut requests = sources.clone();
+        let run = context
+            .session_config()
+            .get_extension::<crate::stream::Run>();
+        let mut bounds = SourceSnapshot::requests(
+            &mut requests,
+            std::slice::from_ref(&physical),
+            run.as_deref(),
+            self.calls.as_deref(),
+        )
+        .context(SqlSnafu)?;
+        if let Some(calls) = &self.calls {
+            for (source, _, _, clock) in &mut bounds.windows {
+                *clock = calls.window_clock(*source).context(SqlSnafu)?;
+            }
+        }
         let mut managed = self.managed.clone();
         let mut read = read;
         let source_index = if let Some(index) = &self.source_index {
             Some(Arc::clone(index))
-        } else if managed.is_some()
-            && crate::sources::SourceLookup::required(&physical).context(SqlSnafu)?
+        } else if (managed.is_some() || self.reference.is_some())
+            && crate::sources::SourceLookup::required(&physical, self.calls.as_deref())
+                .context(SqlSnafu)?
         {
             Some(
                 crate::sources::SourceIndex::new(
-                    crate::sources::SourceLookup::keys(&physical).context(SqlSnafu)?,
+                    crate::sources::SourceLookup::keys(&physical, self.calls.as_deref())
+                        .context(SqlSnafu)?,
                     Arc::clone(&self.memory),
                 )
                 .context(SqlSnafu)?,
@@ -1414,56 +1374,147 @@ impl Session {
         } else {
             None
         };
+        SourceSnapshot::project_requests(&mut requests, &mut bounds, source_index.is_some())
+            .context(SqlSnafu)?;
         if let Some(index) = &source_index {
-            let managed = managed.as_mut().ok_or_else(|| {
-                araphor_data::PackageErrorCodeV1::Invalid.error("managed source owner")
-            })?;
-            if index.reference().context(SqlSnafu)?.is_none() && !managed.rebuild {
+            let head = index.reference().context(SqlSnafu)?;
+            let parent = if let Some(reference) = &self.reference {
+                let store = Arc::clone(&self.engine.store);
+                let reference = reference.clone();
+                let control = Arc::clone(&self.control);
+                Engine::blocking(Arc::clone(&control), self.token()?, move || {
+                    store
+                        .managed_parent(&reference, &control)
+                        .map_err(Into::into)
+                })
+                .await?
+            } else {
+                let managed = managed.as_ref().ok_or_else(|| {
+                    araphor_data::PackageErrorCodeV1::Invalid.error("managed source owner")
+                })?;
+                if head.is_none() && !managed.rebuild {
+                    let store = Arc::clone(&self.engine.store);
+                    let instance = managed.instance.clone();
+                    let control = Arc::clone(&self.control);
+                    Engine::blocking(Arc::clone(&control), self.token()?, move || {
+                        Ok(store
+                            .managed_resume(instance.spec.tenant, &instance.spec.id, &control)?
+                            .source)
+                    })
+                    .await?
+                } else {
+                    head.clone()
+                }
+            };
+            if head.is_some() && head != parent {
+                return Err(araphor_data::PackageErrorCodeV1::Conflict
+                    .error("replay source parent")
+                    .into());
+            }
+            if let Some(parent) = parent.as_ref().filter(|_| head.is_none()) {
+                let owner = self
+                    .reference
+                    .as_ref()
+                    .map(|reference| reference.instance())
+                    .or_else(|| managed.as_ref().map(|managed| &managed.instance))
+                    .ok_or_else(|| {
+                        araphor_data::PackageErrorCodeV1::Missing.error("source parent owner")
+                    })?
+                    .clone();
+                let parent = parent.clone();
+                let requests = requests.clone();
+                let ranges = bounds.events.clone();
+                let owners = bounds.context_owners.clone();
                 let index = Arc::clone(index);
                 let store = Arc::clone(&self.engine.store);
-                let instance = managed.instance.clone();
                 let control = Arc::clone(&self.control);
                 let memory = Arc::clone(&self.memory);
+                let limits = AnalysisExtractLimits {
+                    scan_bytes: self.engine.limits.scan_bytes,
+                    input_bytes: self.engine.limits.input_bytes,
+                    keys: self.engine.limits.extract_keys,
+                    ..Default::default()
+                };
                 Engine::blocking(Arc::clone(&control), self.token()?, move || {
-                    let resume =
-                        store.managed_resume(instance.spec.tenant, &instance.spec.id, &control)?;
-                    if let Some(reference) = resume.source {
-                        let decode = memory.reserve_input(0).context(SqlSnafu)?;
-                        let restored = store.managed_source_history::<crate::Error>(
-                            &instance,
-                            &reference,
+                    let restored = (|| {
+                        let (reference, call, _) = store.managed_reference(
+                            &owner,
+                            &parent.result.result_id,
+                            0,
                             &control,
-                            |bytes| decode.try_resize(bytes).context(SqlSnafu),
-                            |frame| {
-                                for batch in frame.datasets().iter().flat_map(|data| &data.batches)
-                                {
-                                    memory.retain_input(batch, &decode).context(SqlSnafu)?;
-                                }
-                                index.restore(frame, &control).context(SqlSnafu)
-                            },
-                        );
-                        if restored.is_err() {
-                            index.discard_restore().context(SqlSnafu)?;
+                        )?;
+                        if call.is_some()
+                            || reference
+                                .receipt()
+                                .is_none_or(|receipt| receipt.selected != parent.result)
+                        {
+                            return Err(araphor_data::PackageErrorCodeV1::Invalid
+                                .error("source parent reference")
+                                .into());
                         }
-                        restored?;
+                        let selection = reference
+                            .instance()
+                            .spec
+                            .destination
+                            .selection(&reference.instance().grant.selection)?;
+                        let selection = selection.project(&requests)?;
+                        let decode = memory.prepare_input(limits.input_bytes).context(SqlSnafu)?;
+                        let bound = if memory.input_capacity().is_some()
+                            || limits.input_bytes != usize::MAX
+                        {
+                            decode.size()
+                        } else {
+                            usize::MAX
+                        };
+                        let page = store.read_managed_reference(
+                            &selection,
+                            &reference,
+                            araphor_data::AnalysisTableRead {
+                                requests: &requests,
+                                event_ranges: ranges.as_deref(),
+                                mode: araphor_data::AnalysisReadModeV1::Complete,
+                                now: reference.request().time_utc_ns,
+                            },
+                            AnalysisExtractLimits {
+                                input_bytes: bound,
+                                ..limits
+                            },
+                            &control,
+                            owners.as_ref(),
+                        )?;
+                        let frame = page.state.source().cloned().ok_or_else(|| {
+                            araphor_data::PackageErrorCodeV1::Missing.error("source parent frame")
+                        })?;
+                        if frame.position() != parent.position {
+                            return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                .error("source parent position")
+                                .into());
+                        }
+                        for batch in frame.datasets().iter().flat_map(|data| &data.batches) {
+                            memory.retain_input(batch, &decode).context(SqlSnafu)?;
+                        }
+                        index.restore(frame, &control).context(SqlSnafu)
+                    })();
+                    if restored.is_err() {
+                        index.discard_restore().context(SqlSnafu)?;
                     }
-                    Ok(())
+                    restored
                 })
                 .await?;
             }
-            let reference = index.reference().context(SqlSnafu)?;
-            read = reference.as_ref().map_or(Read::Snapshot, |reference| {
-                Read::Changes(reference.position)
-            });
-            managed.source = Some(reference.map_or(
-                araphor_data::ManagedSourceRead::Initial,
-                araphor_data::ManagedSourceRead::Changes,
-            ));
+            read = parent
+                .as_ref()
+                .map_or(Read::Snapshot, |parent| Read::Changes(parent.position));
+            if let Some(managed) = &mut managed {
+                managed.source = Some(parent.map_or(
+                    araphor_data::ManagedSourceRead::Initial,
+                    araphor_data::ManagedSourceRead::Changes,
+                ));
+            }
         }
         let snapshot = SourceSnapshot::new(
             Arc::clone(&self.engine.store),
             self.selection.clone(),
-            self.inputs.clone(),
             AnalysisExtractLimits {
                 scan_bytes: self.engine.limits.scan_bytes,
                 input_bytes: self.engine.limits.input_bytes,
@@ -1476,20 +1527,26 @@ impl Session {
             Arc::clone(&self.memory),
             managed,
         );
+        if let Some(reference) = &self.reference {
+            snapshot
+                .bind_reference(reference.clone())
+                .context(SqlSnafu)?;
+        }
         if let Some(index) = &source_index {
             snapshot.bind_index(Arc::clone(index)).context(SqlSnafu)?;
         }
         let mut config = context.session_config().clone();
         config.set_extension(Arc::clone(&permit));
         config.set_extension(Arc::clone(&snapshot));
+        let mut replay = hydration.at(hydration.selection.clone(), hydration.now);
+        replay.reference = None;
+        config.set_extension(Arc::new(replay));
         config.set_extension(
             self.calls
                 .clone()
                 .unwrap_or_else(|| self.call_context(crate::definition::Invocation::default())),
         );
-        if let Some(initializer) = &self.context_init {
-            initializer(&mut config);
-        }
+        self.initialize_context(&mut config);
         let context = TaskContext::new(
             context.task_id(),
             context.session_id(),
@@ -1499,57 +1556,37 @@ impl Session {
             context.window_functions().clone(),
             context.runtime_env(),
         );
-        let mode = match read {
-            Read::Snapshot => ReadMode::Snapshot,
-            Read::Changes(after) => ReadMode::Changes(after),
-            Read::Page(after) => ReadMode::Page(after),
-        };
-        let mut requests = sources.clone();
-        let run = context
-            .session_config()
-            .get_extension::<crate::stream::Run>();
-        let mut bounds = SourceSnapshot::requests(
-            &mut requests,
-            std::slice::from_ref(&physical),
-            run.as_deref(),
-        )
-        .context(SqlSnafu)?;
-        if let Some(calls) = &self.calls {
-            for (source, _, _, clock) in &mut bounds.windows {
-                *clock = calls.window_clock(*source).context(SqlSnafu)?;
+        let mode = if self.reference.is_some()
+            && source_index.is_none()
+            && !requests.values().any(Option::is_some)
+        {
+            ReadMode::Metadata
+        } else {
+            match read {
+                Read::Snapshot => ReadMode::Snapshot,
+                Read::Changes(after) => ReadMode::Changes(after),
+                Read::Page(after) => ReadMode::Page(after),
             }
-        }
-        let retained = self
-            .inputs
-            .as_ref()
-            .is_some_and(|inputs| !inputs.retained.is_empty());
-        if retained && (self.managed.is_some() || run.as_ref().is_some_and(|run| run.follow)) {
-            return Err(araphor_data::PackageErrorCodeV1::Unsupported
-                .error("retained source publication")
-                .into());
-        }
-        if bounds.packages.iter().any(|slot| {
-            !self
-                .inputs
-                .as_ref()
-                .is_some_and(|inputs| inputs.retained.iter().any(|source| source.slot == *slot))
-        }) {
-            return Err(araphor_data::PackageErrorCodeV1::Invalid
-                .error("retained source admission")
-                .into());
-        }
+        };
         let mut recovery = run
             .filter(|run| run.follow && run.managed.is_some())
             .map(|run| {
                 crate::stream::recovery::SourceRecovery::new(run, self, self.now, requests.clone())
             });
-        let captured = self
-            .capture(snapshot, requests, bounds, mode, Arc::clone(&permit))
-            .await
-            .map_err(|error| match recovery.take() {
-                Some(recovery) => recovery.failed(error),
-                None => error,
-            })?;
+        self.capture(
+            Arc::clone(&snapshot),
+            requests,
+            bounds,
+            mode,
+            Arc::clone(&permit),
+        )
+        .await
+        .map_err(|error| match recovery.take() {
+            Some(recovery) => recovery.failed(error),
+            None => error,
+        })?;
+        hydration.hydrate_source(&snapshot, &physical).await?;
+        let captured = snapshot.snapshot().context(SqlSnafu)?;
         Ok(CapturedPhysical {
             physical,
             context,
@@ -1569,12 +1606,17 @@ impl Session {
         bounds: ScanBounds,
         mode: ReadMode,
         permit: Arc<Permit>,
-    ) -> Result<Arc<ArrowSnapshot>> {
+    ) -> Result<()> {
         let control = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
         let scope = self.token()?;
         Engine::blocking(control, scope, move || {
             let _permit = permit;
-            snapshot.capture(&requests, bounds, mode).context(SqlSnafu)
+            drop(
+                snapshot
+                    .capture(&requests, bounds, mode)
+                    .context(SqlSnafu)?,
+            );
+            Ok(())
         })
         .await
     }

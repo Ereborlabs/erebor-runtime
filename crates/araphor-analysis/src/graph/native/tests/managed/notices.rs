@@ -222,20 +222,29 @@ async fn unchanged_notice_keeps_graph() -> TestResult {
             .pending
     );
     assert_eq!(reused.results.len(), first.results.len());
+    assert_eq!(
+        entered.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 2);
     for (call, reference) in &reused.results {
         assert_ne!(Some(reference), first.results.get(call));
-        let evaluation = fixture.query.store().managed_evaluation(
-            job.admitted(),
-            &reference.result_id,
-            &fixture.control,
-        )?;
+        let evaluation_replay = fixture
+            .replay_result(job.admitted(), &reference.result_id, &fixture.control)
+            .await?;
+        let evaluation = evaluation_replay
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed Graph call")?
+            .evaluation();
         let owner = job.graph_owner().ok_or("Graph owner")?;
         let model = &owner.calls[call].descriptor().exports[0];
         assert!(!model
             .change_inputs
             .as_ref()
             .ok_or("changes")?
-            .is_reset(&evaluation)?);
+            .is_reset(evaluation)?);
         for port in ["units", "unit_removals", "records", "facts"] {
             assert_eq!(evaluation.input(port)?.data.rows(), 0, "{port}");
         }
@@ -247,19 +256,26 @@ async fn unchanged_notice_keeps_graph() -> TestResult {
             u64::try_from(evaluation.context.time_utc_ns)?,
             &fixture.control,
         )?;
+        assert_eq!(result.result, *reference);
+        let actual = evaluation_replay
+            .calls
+            .get(call)
+            .ok_or("replayed Graph output")?
+            .output();
         let replayed =
-            Detector::from_id(&owner.calls[call].descriptor().id)?.evaluate(&evaluation)?;
+            Detector::from_id(&owner.calls[call].descriptor().id)?.evaluate(evaluation)?;
         assert_eq!(
-            sdk::wire::Output::encode_model(&result.output, model)?,
+            sdk::wire::Output::encode_model(actual, model)?,
             sdk::wire::Output::encode_model(&replayed, model)?
         );
     }
     assert_eq!(reused.graph.as_ref(), Some(&initial_graph));
+    assert_eq!(entered.try_iter().count(), reused.results.len());
     assert_eq!(
         entered.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
     );
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 5);
     assert_eq!(
         fixture
             .query
@@ -310,29 +326,30 @@ async fn unchanged_notice_keeps_graph() -> TestResult {
         &fixture.control,
     )?;
     assert_eq!(history, [first.clone(), reused.clone()]);
+    let selected = fixture.query.store().managed_result(
+        &saved,
+        &reused.selected.result_id,
+        request("inspect")?.time_utc_ns,
+        &fixture.control,
+    )?;
+    assert_eq!(selected.result, reused.selected);
     assert!(matches!(
-        fixture.query.store().managed_query_output(
-            &saved.grant.selection,
-            &saved.spec.id,
-            None,
-            request("inspect")?.time_utc_ns,
-            &fixture.control,
-        )?,
-        araphor_data::ManagedOutput::Selected { .. }
+        selected.kind,
+        araphor_data::InstanceResultKindV1::Selected
     ));
     for reference in reused.results.values() {
-        let araphor_data::ManagedOutput::Call { result, .. } =
-            fixture.query.store().managed_output(
-                &saved,
-                &reference.result_id,
-                request("inspect-call")?.time_utc_ns,
-                &fixture.control,
-            )?
-        else {
-            return Err("Retained Graph call returned selected output".into());
-        };
+        let result = fixture.query.store().managed_result(
+            &saved,
+            &reference.result_id,
+            request("inspect-call")?.time_utc_ns,
+            &fixture.control,
+        )?;
+        assert!(matches!(
+            result.kind,
+            araphor_data::InstanceResultKindV1::Call { .. }
+        ));
         assert!(result.current);
-        assert_eq!(result.commit_revision, reference.commit_revision);
+        assert_eq!(result.result.commit_revision, reference.commit_revision);
     }
     let idle = fixture.query.store().meta()?;
     assert!(
@@ -341,7 +358,7 @@ async fn unchanged_notice_keeps_graph() -> TestResult {
             .is_err()
     );
     assert_eq!(fixture.query.store().meta()?, idle);
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 5);
     assert_eq!(
         entered.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)

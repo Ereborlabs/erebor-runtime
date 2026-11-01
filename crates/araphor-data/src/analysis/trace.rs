@@ -13,6 +13,8 @@ use crate::{
 
 const TRACE_PAGE_ROWS: usize = 16;
 
+mod history;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TraceBindingV1 {
@@ -120,7 +122,7 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
     ) -> Result<()> {
         let mut statement = snapshot
-            .prepare("SELECT read_revoked FROM traces WHERE tenant_id = ? AND request_id = ?")
+            .prepare("SELECT read_revoked FROM trace_states WHERE tenant_id = ? AND request_id = ? ORDER BY revision DESC LIMIT 1")
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare current trace reads",
             })?;
@@ -234,21 +236,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(super) const TRACE_SCHEMA: &'static str = "CREATE TABLE traces (
-        tenant_id BLOB NOT NULL,
-        request_id BLOB NOT NULL,
-        source BLOB NOT NULL,
-        source_sha256 BLOB NOT NULL,
-        bindings VARCHAR NOT NULL,
-        authority BLOB NOT NULL,
-        accepted_unix_ns UBIGINT NOT NULL,
-        deadline_unix_ns UBIGINT NOT NULL,
-        host_sensitive BOOLEAN NOT NULL,
-        revision UBIGINT NOT NULL,
-        cancel_requested BOOLEAN NOT NULL,
-        read_revoked BOOLEAN NOT NULL,
-        PRIMARY KEY (tenant_id, request_id)
-    )";
+    pub(super) const TRACE_SCHEMA: &'static str = include_str!("trace/schema.sql");
 
     pub fn accept_trace(&self, intent: &TraceIntentV1) -> Result<TraceStateV1> {
         intent.validate()?;
@@ -279,7 +267,7 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the trace intent revision is exhausted"))?;
         transaction
             .execute(
-                "INSERT INTO traces VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, false)",
+                "INSERT INTO trace_intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     intent.tenant_id.as_slice(),
                     intent.request_id.as_slice(),
@@ -290,13 +278,24 @@ impl AnalysisStore {
                     intent.accepted_unix_ns,
                     intent.deadline_unix_ns,
                     intent.host_sensitive,
-                    revision,
                 ],
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "insert immutable trace intent",
             })?;
-        self.reserve_trace(&transaction, intent)?;
+        transaction
+            .execute(
+                "INSERT INTO trace_states VALUES (?, ?, ?, false, false)",
+                params![
+                    intent.tenant_id.as_slice(),
+                    intent.request_id.as_slice(),
+                    revision
+                ],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "insert trace state",
+            })?;
+        self.reserve_trace(&transaction, intent, revision)?;
         self.check_revision_limits(&transaction, intent.tenant_id)?;
         Self::record_revision(&transaction, revision, &["traces"])?;
         self.commit_metadata(transaction, "commit trace intent")?;
@@ -414,15 +413,13 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the trace state revision is exhausted"))?;
         transaction
             .execute(
-                "UPDATE traces SET revision = ?, cancel_requested = ?, read_revoked = ?
-             WHERE tenant_id = ? AND request_id = ? AND revision = ?",
+                "INSERT INTO trace_states VALUES (?, ?, ?, ?, ?)",
                 params![
+                    next.tenant_id.as_slice(),
+                    next.request_id.as_slice(),
                     revision,
                     next.cancel_requested,
                     next.read_revoked,
-                    next.tenant_id.as_slice(),
-                    next.request_id.as_slice(),
-                    expected
                 ],
             )
             .context(AnalysisDatabaseSnafu {
@@ -572,8 +569,9 @@ impl AnalysisStore {
         loop {
             let mut statement = reader
                 .prepare(
-                    "SELECT rowid, tenant_id, request_id, revision FROM traces
-                 WHERE rowid > ? ORDER BY rowid LIMIT 16",
+                    "SELECT i.rowid, t.tenant_id, t.request_id, t.revision
+                 FROM trace_intents i JOIN traces t USING (tenant_id, request_id)
+                 WHERE i.rowid > ? ORDER BY i.rowid LIMIT 16",
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare trace recovery page",
@@ -626,10 +624,10 @@ impl AnalysisStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::analysis) mod tests {
     use super::*;
 
-    fn intent(request: u8) -> Result<TraceIntentV1> {
+    pub(in crate::analysis) fn intent(request: u8) -> Result<TraceIntentV1> {
         let source = TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
         Ok(TraceIntentV1 {
             tenant_id: [1; 16],
@@ -740,10 +738,10 @@ mod tests {
         let root = directory.path().join("data");
         let store = AnalysisStore::open(&root)?;
         store.accept_trace(&intent(3)?)?;
-        store
-            .writer()?
-            .get_mut()?
-            .execute("UPDATE traces SET authority = ?", params![b"".as_slice()])?;
+        store.writer()?.get_mut()?.execute(
+            "UPDATE trace_intents SET authority = ?",
+            params![b"".as_slice()],
+        )?;
         assert!(store.trace_intent([1; 16], [3; 16]).is_err());
         assert!(store.trace_intents([1; 16], None).is_err());
         drop(store);
@@ -974,7 +972,6 @@ mod tests {
                 AnalysisTableRead {
                     requests: &columns,
                     event_ranges: None,
-                    inputs: None,
                     mode: AnalysisReadModeV1::Metadata,
                     now: 100,
                 },

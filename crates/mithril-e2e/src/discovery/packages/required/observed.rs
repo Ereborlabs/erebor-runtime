@@ -1,10 +1,13 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
-use araphor_analysis_sdk::wire;
+use araphor_data::analysis::PackageResultRefV1;
 use araphor_data::{
     AnalysisProcessorResultV1, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
     EvidenceIntakeIdentityV1, FindingStateV1, GraphPhysicalResultV1, GraphSnapshotV1,
-    ManagedGraphOperation, ManagedOutput, ManagedReceipt, NotificationFailureV1,
+    InstanceResultKindV1, ManagedGraphOperation, ManagedReceipt, NotificationFailureV1,
     NotificationGrantV1, NotificationObligationV1, NotificationSinkResultV1, PackageErrorCodeV1,
     PackageReadinessV1, ProcessorClassV1, ProcessorScopeV1, ProcessorStateV1, ResultContext,
     GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
@@ -25,7 +28,7 @@ pub(super) struct Saved {
     graph: GraphSnapshotV1,
     head: AnalysisProcessorResultV1,
     receipt: ManagedReceipt,
-    outputs: BTreeMap<u64, (ResultContext, wire::Output)>,
+    results: BTreeMap<u64, (ResultContext, PackageResultRefV1)>,
     obligation: NotificationObligationV1,
 }
 
@@ -37,29 +40,81 @@ fn scope(source: &EvidenceIntakeIdentityV1) -> ProcessorScopeV1 {
     }
 }
 
-fn outputs(
+fn results(
     fixture: &Fixture,
     tenant: [u8; 16],
     receipt: &ManagedReceipt,
-) -> Result<BTreeMap<u64, (ResultContext, wire::Output)>> {
+    graph: &GraphSnapshotV1,
+) -> Result<BTreeMap<u64, (ResultContext, PackageResultRefV1)>> {
     let data = fixture
         .control
         .analysis_store()
-        .ok_or("required output data")?;
+        .ok_or("required result data")?;
     let control = AnalysisReadControl::default();
     let instance = data
         .managed_instance(tenant, &receipt.instance, &control)?
-        .ok_or("required output instance")?;
+        .ok_or("required result instance")?;
+    let packages = receipt
+        .results
+        .keys()
+        .map(|call| {
+            let declaration = instance
+                .spec
+                .manifest
+                .calls
+                .get(call)
+                .ok_or("required result declaration")?;
+            Ok((
+                declaration.package.package_id.clone(),
+                declaration.package.revision.clone(),
+            ))
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    assert_eq!(
+        graph
+            .packages
+            .iter()
+            .map(|package| (
+                package.package_id.clone(),
+                package.package_version.to_string()
+            ))
+            .collect::<BTreeSet<_>>(),
+        packages,
+    );
+    assert_eq!(graph.packages.len(), packages.len());
     receipt
         .results
         .iter()
         .map(|(call, reference)| {
-            let ManagedOutput::Call { result, .. } =
-                data.managed_output(&instance, &reference.result_id, now()?, &control)?
+            let result = data.managed_result(&instance, &reference.result_id, now()?, &control)?;
+            assert_eq!(result.instance_id, receipt.instance);
+            assert_eq!(result.result, *reference);
+            assert_eq!(result.receipt, *receipt);
+            let InstanceResultKindV1::Call {
+                call: actual,
+                image,
+                package,
+                export,
+                context,
+            } = result.kind
             else {
-                return Err("required call output".into());
+                return Err("required call reference".into());
             };
-            Ok((*call, (result.context, result.output)))
+            let declaration = instance
+                .spec
+                .manifest
+                .calls
+                .get(call)
+                .ok_or("required call declaration")?;
+            assert_eq!(actual, *call);
+            assert_eq!(image, declaration.image);
+            assert_eq!(package, declaration.package);
+            assert_eq!(export, declaration.export);
+            assert_eq!(context.target, declaration.target);
+            assert_eq!(context.artifact, declaration.artifact);
+            assert_eq!(context.target, "wasm");
+            assert!(context.artifact.is_some());
+            Ok((*call, (context, result.result)))
         })
         .collect()
 }
@@ -179,21 +234,14 @@ impl Saved {
             .values()
             .all(|reference| reference.commit_revision == head.commit_revision));
         assert_eq!(receipt.selected.commit_revision, receipt.commit_revision);
-        let saved = outputs(fixture, tenant, &receipt)?;
+        let saved = results(fixture, tenant, &receipt, &graph)?;
         assert_eq!(saved.len(), 3);
-        assert!(saved
-            .values()
-            .all(|(context, _)| context.target == "wasm" && context.artifact.is_some()));
-        assert!(saved.values().all(|(_, output)| output
-            .checkpoint
-            .as_ref()
-            .is_some_and(|checkpoint| checkpoint.version == 1)));
         Ok(Self {
             source,
             graph,
             head,
             receipt,
-            outputs: saved,
+            results: saved,
             obligation,
         })
     }
@@ -261,7 +309,10 @@ impl Saved {
             data.graph_result(tenant, &self.head.result_id)?,
             Some(self.graph.clone())
         );
-        assert_eq!(outputs(fixture, tenant, &self.receipt)?, self.outputs);
+        assert_eq!(
+            results(fixture, tenant, &self.receipt, &self.graph)?,
+            self.results
+        );
         Ok(())
     }
 
@@ -336,14 +387,15 @@ impl Saved {
             committed.selected.commit_revision,
             committed.commit_revision
         );
-        assert!(outputs(fixture, tenant, committed)?
-            .values()
-            .all(|(_, output)| output.checkpoint.is_some()));
+        assert_eq!(results(fixture, tenant, committed, &graph)?.len(), 3);
         assert_eq!(
             data.graph_result(tenant, &self.head.result_id)?,
             Some(self.graph.clone())
         );
-        assert_eq!(outputs(fixture, tenant, &self.receipt)?, self.outputs);
+        assert_eq!(
+            results(fixture, tenant, &self.receipt, &self.graph)?,
+            self.results
+        );
         assert!(data
             .managed_history(
                 &AnalysisSelectionV1::tenant(tenant),

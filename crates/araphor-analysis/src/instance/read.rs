@@ -3,11 +3,10 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use araphor_data::{
-    AnalysisReadControl, AnalysisStore, ManagedInstance, ManagedOutput, ManagedReceipt,
-    ManagedResult, ManagedStatus, PackageActionV1, PackageAuthorization,
-    PackageErrorCodeV1 as Code, PackageGrantV1, PackageResponseV1,
+    AnalysisReadControl, InstanceResultV1, ManagedReceipt, ManagedStatus, PackageActionV1,
+    PackageAuthorization, PackageErrorCodeV1 as Code, PackageGrantV1,
 };
-use araphor_query::execution::{Engine, LocalOutput};
+use araphor_query::execution::Engine;
 
 use super::Instance;
 use crate::Result;
@@ -72,117 +71,26 @@ impl Instance {
         instance: &str,
         id: &str,
         control: &AnalysisReadControl,
-    ) -> Result<ManagedResult> {
-        let (query, grant) = (&query, &grant);
-        Self::inspect(authority.as_ref(), grant, control, |read| async move {
-            Self::retained(
-                query,
-                grant,
-                instance,
-                id,
-                Self::read_time()?,
-                read,
-                AnalysisStore::managed_result,
-            )
-            .await
-        })
-        .await
-    }
-
-    pub async fn read_output(
-        query: Arc<Engine>,
-        authority: Arc<dyn PackageAuthorization>,
-        grant: PackageGrantV1,
-        instance: &str,
-        id: &str,
-        control: &AnalysisReadControl,
-    ) -> Result<PackageResponseV1> {
-        let (query, grant) = (&query, &grant);
-        Self::inspect(authority.as_ref(), grant, control, |read| async move {
-            let retained = Self::retained(
-                query,
-                grant,
-                instance,
-                id,
-                Self::read_time()?,
-                read,
-                AnalysisStore::managed_output,
-            )
-            .await?;
-            Ok(match retained {
-                ManagedOutput::Call { result, .. } => PackageResponseV1::Result(result),
-                ManagedOutput::Selected { packet, .. } => PackageResponseV1::Output(packet),
-            })
-        })
-        .await
-    }
-
-    pub async fn query_result(
-        query: Arc<Engine>,
-        authority: Arc<dyn PackageAuthorization>,
-        grant: PackageGrantV1,
-        instance: &str,
-        id: Option<&str>,
-        sql: &str,
-        control: &AnalysisReadControl,
-    ) -> Result<LocalOutput> {
-        let (query, grant) = (&query, &grant);
-        Self::inspect(authority.as_ref(), grant, control, |read| async move {
-            let now = Self::read_time()?;
+    ) -> Result<InstanceResultV1> {
+        Self::inspect(authority.as_ref(), &grant, control, |read| {
             let store = Arc::clone(query.store());
-            let selection = grant.selection.clone();
+            let grant = grant.clone();
             let instance = instance.to_owned();
-            let id = id.map(str::to_owned);
-            let stage = Arc::clone(&read);
-            let retained =
-                Engine::blocking(Arc::clone(&read), (), move || {
-                    Ok(store.managed_query_output(
-                        &selection,
-                        &instance,
-                        id.as_deref(),
-                        now,
-                        &stage,
-                    )?)
+            let id = id.to_owned();
+            async move {
+                let now = Self::read_time()?;
+                let control = Arc::clone(&read);
+                Ok(Engine::blocking(read, (), move || {
+                    let mut stored = store
+                        .managed_instance(grant.selection.tenant_id, &instance, &control)?
+                        .ok_or_else(|| Code::Missing.error("managed instance"))?;
+                    stored.grant = grant;
+                    Ok(store.managed_result(&stored, &id, now, &control)?)
                 })
-                .await?;
-            let datasets = match retained {
-                ManagedOutput::Call { data, .. } => data.datasets,
-                ManagedOutput::Selected { data, .. } => vec![data],
-            };
-            let session = query.session(grant.selection.clone(), &read, now)?;
-            Ok(session.query_local(&datasets, sql).await?)
+                .await?)
+            }
         })
         .await
-    }
-
-    async fn retained<T: Send + 'static>(
-        query: &Arc<Engine>,
-        grant: &PackageGrantV1,
-        instance: &str,
-        id: &str,
-        now: u64,
-        control: Arc<AnalysisReadControl>,
-        output: fn(
-            &AnalysisStore,
-            &ManagedInstance,
-            &str,
-            u64,
-            &AnalysisReadControl,
-        ) -> araphor_data::Result<T>,
-    ) -> Result<T> {
-        let store = Arc::clone(query.store());
-        let grant = grant.clone();
-        let instance = instance.to_owned();
-        let id = id.to_owned();
-        let read = Arc::clone(&control);
-        Ok(Engine::blocking(control, (), move || {
-            let mut stored = store
-                .managed_instance(grant.selection.tenant_id, &instance, &read)?
-                .ok_or_else(|| Code::Missing.error("managed instance"))?;
-            stored.grant = grant;
-            Ok(output(&store, &stored, &id, now, &read)?)
-        })
-        .await?)
     }
 
     pub(crate) async fn inspect<T, F: Future<Output = Result<T>>>(
@@ -225,7 +133,7 @@ impl Instance {
         result
     }
 
-    fn read_time() -> Result<u64> {
+    pub(super) fn read_time() -> Result<u64> {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .ok()

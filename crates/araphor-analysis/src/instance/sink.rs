@@ -322,7 +322,6 @@ impl DataSink for Publication {
                         call: *call,
                         evaluation: returned.evaluation(),
                         output: returned.output(),
-                        retained: returned.retained(),
                         changes: returned.changes(),
                     })
                     .collect::<Vec<_>>();

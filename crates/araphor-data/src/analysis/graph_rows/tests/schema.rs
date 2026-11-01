@@ -6,7 +6,7 @@ fn standalone_graph_rejects_managed_producer_binding() -> TestResult {
     let source = &fixture.snapshot.scope.identity;
     let writer = Connection::open_in_memory()?;
     writer.execute_batch(&GraphRows::schema())?;
-    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT,kind VARCHAR)")?;
+    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT)")?;
     writer.execute(
         "INSERT INTO source_receipts VALUES(?,?,?)",
         params![
@@ -26,6 +26,7 @@ fn standalone_graph_rejects_managed_producer_binding() -> TestResult {
     writer.execute("INSERT INTO analysis_results VALUES('call',?,'managed-package-v1',?,1),('standalone',?,'graph-findings',?,2)",params![source.tenant_id.as_slice(),source.key(),source.tenant_id.as_slice(),source.key()])?;
     writer.execute("INSERT INTO graph_producer_scopes VALUES(1,?,1,0,'instance',1,'package','revision','image',1,1),(2,?,1,2,NULL,NULL,NULL,NULL,NULL,1,2),(3,?,1,1,NULL,NULL,NULL,NULL,NULL,1,2)",params![source.tenant_id.as_slice(),source.tenant_id.as_slice(),source.tenant_id.as_slice()])?;
     writer.execute("INSERT INTO graph_producer_versions VALUES('call',1,1,NULL,0,0,0,0,NULL),('standalone:metadata',2,2,NULL,0,0,0,0,NULL),('standalone:publication',3,2,NULL,0,0,0,0,NULL)",[])?;
+    araphor_graph::StateRows::finish(&writer, 1, 1, &GraphPackageStateV1::Waiting)?;
     writer.execute(
         "INSERT INTO graph_versions VALUES('standalone',2,'standalone:metadata',false,false)",
         [],
@@ -258,7 +259,7 @@ fn unit_history_keeps_shared_values_and_rejects_conflicts() -> TestResult {
     let source = &fixture.snapshot.scope.identity;
     let mut writer = Connection::open_in_memory()?;
     writer.execute_batch(&GraphRows::schema())?;
-    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT,kind VARCHAR)")?;
+    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT)")?;
     let record = fixture.snapshot.input_manifest.evidence[0].clone();
     writer.execute(
         "INSERT INTO source_receipts VALUES(?,?,?)",
@@ -312,6 +313,7 @@ fn unit_history_keeps_shared_values_and_rejects_conflicts() -> TestResult {
             params![result, source.tenant_id.as_slice(), source.key(), revision],
         )?;
         araphor_graph::Contributions::apply(&writer, 1, revision, &replacements, false)?;
+        araphor_graph::StateRows::finish(&writer, 1, revision, &GraphPackageStateV1::Waiting)?;
         assert_eq!(
             writer.query_row(
                 "SELECT subject_count FROM graph_producer_versions WHERE result_id=?",
@@ -345,6 +347,7 @@ fn unit_history_keeps_shared_values_and_rejects_conflicts() -> TestResult {
         "UPDATE graph_producer_scopes SET producer_kind=1,instance_id=NULL,call_id=NULL,package_id=NULL,package_revision=NULL,image_digest=NULL".into(),
         format!("INSERT INTO graph_producer_members SELECT * REPLACE(2::UBIGINT AS valid_from,4::UBIGINT AS valid_to) FROM graph_producer_members WHERE unit_ref={first} AND valid_from=1"),
         "UPDATE graph_producer_versions SET subject_count=2 WHERE commit_revision=1".into(),
+        "UPDATE graph_producer_versions SET base_result_id='shared' WHERE commit_revision=4".into(),
     ] {
         let transaction = writer.transaction()?;
         transaction.execute_batch(&fault)?;

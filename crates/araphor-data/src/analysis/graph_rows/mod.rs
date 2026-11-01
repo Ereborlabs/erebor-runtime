@@ -70,6 +70,8 @@ enum MemberKind {
     Branch = 6,
     Fact = 7,
     UnitState = 8,
+    UnitRecord = 9,
+    UnitFact = 10,
 }
 
 impl TryFrom<u8> for MemberKind {
@@ -84,6 +86,8 @@ impl TryFrom<u8> for MemberKind {
             6 => Ok(Self::Branch),
             7 => Ok(Self::Fact),
             8 => Ok(Self::UnitState),
+            9 => Ok(Self::UnitRecord),
+            10 => Ok(Self::UnitFact),
             _ => Err(GraphRows::invalid("graph member kind")),
         }
     }

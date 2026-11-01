@@ -95,9 +95,9 @@ impl Runtime {
             .resume
             .as_ref()
             .map_or(0, |cursor| cursor.read_revision());
-        let keys = crate::sources::SourceLookup::keys(&physical.input).context(SqlSnafu)?;
+        let keys = crate::sources::SourceLookup::keys(&physical.input, None).context(SqlSnafu)?;
         let required = run.managed.is_some()
-            && crate::sources::SourceLookup::required(&physical.input).context(SqlSnafu)?;
+            && crate::sources::SourceLookup::required(&physical.input, None).context(SqlSnafu)?;
         if required && run.follow && !reusable {
             return Err(crate::Error::Sql {
                 source: DataFusionError::NotImplemented(
@@ -626,7 +626,6 @@ impl Runtime {
             .control()
             .query_async(self.run.session.check_read(&snapshot))
             .await?;
-        self.snapshot = Some(Arc::clone(&snapshot));
         Ok(Event {
             calls: Default::default(),
             output: Output {

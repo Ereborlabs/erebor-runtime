@@ -8,25 +8,6 @@ pub(super) struct IpcFrames<'a> {
 }
 
 impl<'a> IpcFrames<'a> {
-    pub(super) fn validate_envelope(bytes: &'a [u8]) -> Result<()> {
-        let mut frames = Self { bytes, batches: 0 };
-        while let Some((message, _, _)) = frames.next()? {
-            match message.header_type() {
-                MessageHeader::RecordBatch => {
-                    Self::uncompressed(message.header_as_record_batch().ok_or_else(Self::invalid)?)?
-                }
-                MessageHeader::DictionaryBatch => {
-                    let dictionary = message
-                        .header_as_dictionary_batch()
-                        .ok_or_else(Self::invalid)?;
-                    Self::uncompressed(dictionary.data().ok_or_else(Self::invalid)?)?;
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
     pub(super) fn validate(bytes: &'a [u8]) -> Result<usize> {
         let mut frames = Self { bytes, batches: 0 };
         while let Some((message, _, _)) = frames.next()? {

@@ -129,6 +129,23 @@ fn profile_gaps_commit_atomically() -> TestResult {
     assert!(notices.has_changed()?);
     notices.borrow_and_update();
     assert_ne!(receipt.commit_revision, fixture.gap.commit_revision);
+    assert_eq!(
+        store.reader()?.get()?.query_row(
+            "SELECT commit_revision, accepted_revision FROM processor_gaps
+             WHERE processor_id = 'discovery'",
+            [],
+            |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+        )?,
+        (fixture.gap.commit_revision, receipt.commit_revision)
+    );
+    assert_eq!(
+        store.reader()?.get()?.query_row(
+            "SELECT count(*) FROM processor_gaps WHERE accepted_revision <= ?",
+            params![before.commit_revision],
+            |row| row.get::<_, u64>(0),
+        )?,
+        0
+    );
     assert_eq!(store.processor_gaps(&profile.scope, 0)?, [fixture.gap]);
     let health = store
         .processor_health(&profile.scope)?
@@ -261,8 +278,14 @@ fn profile_clips_expired_range() -> TestResult {
     input.consumed_cursor = 2;
     let first =
         store.commit_working_profile(input, PreparedProfile::new(profile.clone())?, None)?;
+    let previous = PackageResultRefV1 {
+        result_id: profile.profile_id.clone(),
+        commit_revision: first.commit_revision,
+    };
+    let first_body = store.read_result(profile.scope.identity.tenant_id, &profile.profile_id)?;
     assert_eq!(store.processor_gaps(&profile.scope, 0)?, profile.gaps);
     profile.revision += 1;
+    profile.profile_id = "profile-next".into();
     profile.updated_utc_ns += 1;
     profile.gaps.push(AnalysisGapV1 {
         first_cursor: 3,
@@ -275,8 +298,12 @@ fn profile_clips_expired_range() -> TestResult {
     store.commit_working_profile(
         input,
         PreparedProfile::new(profile.clone())?,
-        Some(first.commit_revision),
+        Some(previous.clone()),
     )?;
+    assert_eq!(
+        store.read_result(profile.scope.identity.tenant_id, &previous.result_id)?,
+        first_body
+    );
     assert_eq!(store.processor_gaps(&profile.scope, 0)?, profile.gaps);
     let health = store
         .processor_health(&profile.scope)?

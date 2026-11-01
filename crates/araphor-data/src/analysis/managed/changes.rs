@@ -6,6 +6,61 @@ use super::model::*;
 use crate::{AnalysisReadControl, AnalysisStore, PackageErrorCodeV1 as Code, Result};
 
 impl AnalysisStore {
+    pub fn managed_changes(
+        &self,
+        reference: &ManagedAttempt,
+        call: u64,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<ManagedChanges>> {
+        let instance = reference.instance();
+        let receipt = reference
+            .receipt()
+            .ok_or_else(|| Code::Invalid.error("managed change receipt"))?;
+        let result = receipt
+            .results
+            .get(&call)
+            .ok_or_else(|| Code::Missing.error("managed change call"))?;
+        if reference.terminal().is_some()
+            || result.commit_revision != receipt.commit_revision
+            || receipt.selected.commit_revision != receipt.commit_revision
+        {
+            return Err(Code::Conflict.error("managed change publication"));
+        }
+        let mut reader = self.reader_until(control)?;
+        control.run(&mut reader, |reader| {
+            let (record, revision) =
+                Self::managed_meta_from(reader, instance.spec.tenant, &result.result_id)?;
+            if revision != result.commit_revision
+                || record.call != call
+                || record.instance != instance.spec.id
+                || record.attempt != reference.request().id
+            {
+                return Err(Code::Conflict.error("managed change reference"));
+            }
+            let (_, saved, spec) = Self::validate_managed_header(
+                reader,
+                instance.spec.tenant,
+                &result.result_id,
+                &record,
+                revision,
+            )?;
+            if saved != reference.0
+                || spec != instance.spec
+                || Self::managed_edges(reader, instance.spec.tenant, &result.result_id)?
+                    != record.dependencies
+            {
+                return Err(Code::Conflict.error("managed change owner"));
+            }
+            saved
+                .capture
+                .grant
+                .permitted_by(&instance.grant.selection)?;
+            Ok(record
+                .changes
+                .map(|changes| ManagedChanges { base: changes.base }))
+        })
+    }
+
     pub(super) fn prepare_changes(
         input: &ManagedCommit<'_>,
         returned: &ManagedReturn<'_>,
@@ -18,9 +73,6 @@ impl AnalysisStore {
                 Ok(None)
             };
         };
-        if returned.retained.is_some() {
-            return Err(Code::Invalid.error("retained change call"));
-        }
         let reset = contract
             .is_reset(returned.evaluation)
             .context(crate::AnalysisContractSnafu)?;
@@ -41,6 +93,7 @@ impl AnalysisStore {
         reader: &Connection,
         tenant: [u8; 16],
         record: &Record,
+        declaration: &ManagedCall,
         model: &sdk::Model,
         attempt: &Attempt,
     ) -> Result<()> {
@@ -51,12 +104,6 @@ impl AnalysisStore {
                 Ok(())
             };
         };
-        if !matches!(
-            (record.input_basis, changes.base.is_some()),
-            (InputBasis::None, false) | (InputBasis::Complete, true)
-        ) {
-            return Err(Code::Invalid.error("managed change input basis"));
-        }
         if let Some(base) = &changes.base {
             let expected = attempt
                 .capture
@@ -69,10 +116,12 @@ impl AnalysisStore {
             {
                 return Err(Code::Conflict.error("managed historical base"));
             }
-            let (old, _, revision) = Self::managed_header_from(reader, tenant, &base.result_id)?;
+            let (old, revision) = Self::managed_meta_from(reader, tenant, &base.result_id)?;
+            let (_, owner) =
+                Self::managed_call_owner(reader, tenant, &base.result_id, revision, &old)?;
             if old.call != record.call
                 || old.instance != record.instance
-                || old.declaration != record.declaration
+                || owner.manifest.calls.get(&record.call) != Some(declaration)
                 || revision != base.commit_revision
                 || old.changes.is_none()
             {
@@ -80,37 +129,5 @@ impl AnalysisStore {
             }
         }
         Ok(())
-    }
-
-    pub(super) fn managed_changes_from(
-        _reader: &Connection,
-        _id: &str,
-        record: &Record,
-        control: &AnalysisReadControl,
-    ) -> Result<Option<RecordChanges>> {
-        control.check()?;
-        Ok(record.changes.clone())
-    }
-}
-
-impl RecordChanges {
-    pub(super) fn decoding_bytes(&self, control: &AnalysisReadControl) -> Result<usize> {
-        control.check()?;
-        Ok(std::mem::size_of::<Self>().saturating_add(
-            self.base
-                .as_ref()
-                .map_or(0, |base| base.result_id.capacity()),
-        ))
-    }
-
-    pub(super) fn decode(
-        &self,
-        _model: &sdk::Model,
-        control: &AnalysisReadControl,
-    ) -> Result<ManagedChanges> {
-        control.check()?;
-        Ok(ManagedChanges {
-            base: self.base.clone(),
-        })
     }
 }

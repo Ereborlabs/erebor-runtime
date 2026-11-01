@@ -46,6 +46,13 @@ pub(super) type Bundles = [(Arc<PackageBundle>, Arc<MemoryReservation>)];
 
 type InputPlans = BTreeMap<String, (LogicalPlan, BTreeSet<SourceOrigin>)>;
 
+struct PlannedInputs {
+    plans: Vec<LogicalPlan>,
+    origins: Vec<BTreeSet<SourceOrigin>>,
+    lookups: LookupInputs,
+    resets: Vec<LogicalPlan>,
+}
+
 pub(super) struct Packages {
     pub(super) state: SessionState,
     pub(super) demand: Arc<crate::planner::SourceDemand>,
@@ -457,7 +464,12 @@ impl Packages {
                     .map_err(|source| DataFusionError::External(Box::new(source)))
                     .context(SqlSnafu)?;
             }
-            let (inputs, origins, lookups) = self.inputs(
+            let PlannedInputs {
+                plans: inputs,
+                origins,
+                lookups,
+                resets,
+            } = self.inputs(
                 context.context_provider(),
                 model,
                 if key == root {
@@ -489,11 +501,12 @@ impl Packages {
             };
             let mut children = inputs;
             children.extend(params);
-            let changes = self.changes(model, lookups);
-            let sql = sql.map(|(sql, plans)| {
+            let sql = sql.map(|(mut sql, plans)| {
                 children.extend(plans);
+                sql.end = children.len();
                 sql
             });
+            let changes = self.changes(model, lookups, resets, &mut children)?;
             let id = self
                 .calls
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -563,68 +576,95 @@ impl Packages {
             })
     }
 
+    fn check_input_phase(
+        model: &sdk::Model,
+        slot: usize,
+        dependencies: &BTreeSet<usize>,
+        ports: &BTreeMap<usize, usize>,
+    ) -> Result<()> {
+        let generated = |name: &str| {
+            model
+                .change_inputs
+                .as_ref()
+                .is_some_and(|changes| changes.generated(name))
+        };
+        let input = &model.inputs[slot];
+        if !matches!(&input.source, sdk::InputSource::Lookup(_))
+            && !generated(&input.port.name)
+            && dependencies.iter().any(|id| {
+                let dependency = &model.inputs[ports[id]];
+                matches!(&dependency.source, sdk::InputSource::Lookup(_))
+                    || generated(&dependency.port.name)
+            })
+        {
+            return InvalidSnafu {
+                field: "lookup input phase",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
     fn inputs(
         &self,
         provider: &dyn ContextProvider,
         model: &sdk::Model,
         supplied: &InputPlans,
         exports: &Exports,
-    ) -> Result<(Vec<LogicalPlan>, Vec<BTreeSet<SourceOrigin>>, LookupInputs)> {
+    ) -> Result<PlannedInputs> {
+        let mut complete = self.complete_inputs(provider, model, supplied, exports)?;
         if model.change_inputs.is_some() {
-            return self.change_plans(provider, model, supplied, exports);
+            return self.change_plans(provider, model, complete);
         }
-        let mut tables = self.sources.clone();
-        let mut ports = BTreeMap::new();
-        let has_lookups = model
+        let (plans, origins) = model
             .inputs
             .iter()
-            .any(|input| matches!(&input.source, sdk::InputSource::Lookup(_)));
+            .map(|input| {
+                complete.remove(&input.port.name).ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "package input plan",
+                    }
+                    .build()
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .unzip();
+        Ok(PlannedInputs {
+            plans,
+            origins,
+            lookups: LookupInputs::default(),
+            resets: Vec::new(),
+        })
+    }
+
+    fn complete_inputs(
+        &self,
+        provider: &dyn ContextProvider,
+        model: &sdk::Model,
+        supplied: &InputPlans,
+        exports: &Exports,
+    ) -> Result<InputPlans> {
+        let mut tables = self.sources.clone();
+        let mut ports = BTreeMap::new();
+        let changes = model.change_inputs.as_ref();
         for (slot, input) in model.inputs.iter().enumerate() {
-            if !has_lookups
-                && model
-                    .change_inputs
-                    .as_ref()
-                    .is_some_and(|changes| changes.generated(&input.port.name))
-            {
-                continue;
-            }
-            if !has_lookups
+            if changes.is_none()
                 && !supplied.contains_key(&input.port.name)
                 && matches!(&input.source, sdk::InputSource::Table(sdk::TableRef::Named(name))
                     if name == &input.port.name)
             {
                 continue;
             }
-            let (id, source) = if has_lookups {
-                let (id, source) = Self::port(Arc::new(input.port.schema.clone()))?;
-                let plan = Inputs::scan(&input.port.name, source, &input.port.schema)?;
-                let plan = self.indexed(&plan)?;
-                (
-                    id,
-                    Arc::new(ViewTable::new(plan, None)) as Arc<dyn TableProvider>,
-                )
-            } else {
-                Self::port(Session::indexed_schema(&input.port.schema)?)?
-            };
+            let (id, source) = Self::port(Session::indexed_schema(&input.port.schema)?)?;
             ports.insert(id, slot);
             tables.insert(input.port.name.clone(), source);
         }
         let mut pending = Vec::new();
         for (slot, input) in model.inputs.iter().enumerate() {
-            if model
-                .change_inputs
-                .as_ref()
-                .is_some_and(|changes| changes.generated(&input.port.name))
+            if changes.is_some_and(|changes| changes.generated(&input.port.name))
+                || matches!(&input.source, sdk::InputSource::Lookup(_))
             {
-                let provider = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(
-                    input.port.schema.clone(),
-                )));
-                pending.push((
-                    slot,
-                    Inputs::scan(&input.port.name, provider, &input.port.schema)?,
-                    BTreeSet::new(),
-                    BTreeSet::new(),
-                ));
                 continue;
             }
             let local = !supplied.contains_key(&input.port.name)
@@ -696,12 +736,10 @@ impl Packages {
                 })
                 .context(SqlSnafu)?;
             }
+            Self::check_input_phase(model, slot, &dependencies, &ports)?;
             pending.push((slot, plan, dependencies, origins));
         }
-        let mut plans = BTreeMap::new();
-        let mut scopes = BTreeMap::<usize, BTreeSet<SourceOrigin>>::new();
-        let mut lookups = LookupInputs::default();
-        let mut lookup_bindings = BTreeSet::new();
+        let mut plans = BTreeMap::<usize, (LogicalPlan, BTreeSet<SourceOrigin>)>::new();
         while !pending.is_empty() {
             let next = pending
                 .iter()
@@ -716,45 +754,21 @@ impl Packages {
                 })?;
             let (slot, mut plan, dependencies, mut origins) = pending.remove(next);
             let input = &model.inputs[slot];
-            let lookup = matches!(&input.source, sdk::InputSource::Lookup(_));
-            if !lookup
-                && dependencies.iter().any(|id| {
-                    let dependency = &model.inputs[ports[id]];
-                    matches!(&dependency.source, sdk::InputSource::Lookup(_))
-                        || model
-                            .change_inputs
-                            .as_ref()
-                            .is_some_and(|changes| changes.generated(&dependency.port.name))
-                })
-            {
-                return InvalidSnafu {
-                    field: "lookup input phase",
-                }
-                .fail();
-            }
-            if lookup {
-                lookups.order.push(slot);
-                lookup_bindings.extend(dependencies.iter().copied());
-            }
             if !dependencies.is_empty() {
                 let mut bindings = BTreeMap::new();
                 let mut bound_origins = BTreeMap::new();
                 for id in dependencies {
                     let dependency = ports[&id];
-                    if !lookup {
-                        origins.remove(&SourceOrigin::Port(id));
-                    }
-                    origins.extend(scopes[&dependency].iter().cloned());
-                    bound_origins.insert(id, &scopes[&dependency]);
-                    if !lookup {
-                        bindings.insert(
-                            id,
-                            provider_as_source(Arc::new(ViewTable::new(
-                                self.indexed(&plans[&dependency])?,
-                                None,
-                            ))),
-                        );
-                    }
+                    origins.remove(&SourceOrigin::Port(id));
+                    origins.extend(plans[&dependency].1.iter().cloned());
+                    bound_origins.insert(id, &plans[&dependency].1);
+                    bindings.insert(
+                        id,
+                        provider_as_source(Arc::new(ViewTable::new(
+                            self.indexed(&plans[&dependency].0)?,
+                            None,
+                        ))),
+                    );
                 }
                 plan = plan
                     .transform_up_with_subqueries(|node| {
@@ -762,14 +776,9 @@ impl Packages {
                             if let Some(call) =
                                 extension.node.as_any().downcast_ref::<PackageCall>()
                             {
-                                let model = call
-                                    .descriptor()
-                                    .exports
-                                    .iter()
-                                    .find(|model| model.name == call.export())
-                                    .ok_or_else(|| {
-                                        DataFusionError::Internal("package export is absent".into())
-                                    })?;
+                                let model = call.model().ok_or_else(|| {
+                                    DataFusionError::Internal("package export is absent".into())
+                                })?;
                                 let scope = call
                                     .input_scope
                                     .bind_ports(
@@ -827,20 +836,12 @@ impl Packages {
             self.demand
                 .record(&origins, id.into_iter())
                 .context(SqlSnafu)?;
-            plans.insert(slot, plan);
-            scopes.insert(slot, origins);
+            plans.insert(slot, (plan, origins));
         }
-        Ok((
-            plans.into_values().collect(),
-            scopes.into_values().collect(),
-            {
-                lookups.bindings = lookup_bindings
-                    .into_iter()
-                    .map(|id| (id, ports[&id]))
-                    .collect();
-                lookups
-            },
-        ))
+        Ok(plans
+            .into_iter()
+            .map(|(slot, plan)| (model.inputs[slot].port.name.clone(), plan))
+            .collect())
     }
 
     fn input_plan(
@@ -941,6 +942,7 @@ impl Packages {
     ) -> Result<(SqlCall, Vec<LogicalPlan>)> {
         let mut tables = BTreeMap::<String, Arc<dyn TableProvider>>::new();
         let mut bindings = SqlCall {
+            end: 0,
             inputs: Vec::new(),
             parameters: None,
             prior: Vec::new(),

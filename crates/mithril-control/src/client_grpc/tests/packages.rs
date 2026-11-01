@@ -489,17 +489,6 @@ async fn package_rpc_authority_trust() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn package_response_encoding() -> TestResult {
-    let response = PackageResponseV1::Image(bundle().metadata()?);
-    let bytes = ClientGrpcOwner::package_response(&response)?;
-    assert_eq!(
-        serde_json::to_value(PackageResponseV1::from_bytes(&bytes)?)?,
-        serde_json::to_value(&response)?
-    );
-    Ok(())
-}
-
 #[tokio::test]
 async fn image_rpc_install_is_not_execution() -> TestResult {
     let fixture = Fixture::new()?;

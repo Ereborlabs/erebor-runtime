@@ -25,7 +25,7 @@ async fn restart_skips_input_capacity() -> TestResult {
     let receipt = tokio::time::timeout(Duration::from_secs(30), first.next())
         .await?
         .ok_or("initial restart receipt")??;
-    assert_eq!(fixture.selected("restart", &receipt.attempt)?, [1]);
+    assert_eq!(fixture.selected("restart", &receipt.attempt).await?, [1]);
     assert_eq!(receipt.results.len(), 1);
     assert_eq!(
         first
@@ -42,23 +42,28 @@ async fn restart_skips_input_capacity() -> TestResult {
     assert_eq!(saved.instance.lifecycle, lifecycle);
     assert!(saved.instance.running);
     let reference = receipt.results.values().next().ok_or("checkpoint result")?;
-    let result = store.managed_result(
+    let metadata = store.managed_result(
         instance.admitted(),
         &reference.result_id,
         u64::MAX,
         &control,
     )?;
-    let checkpoint = result
-        .output
-        .checkpoint
-        .as_ref()
-        .ok_or("saved checkpoint")?;
+    let replay = fixture
+        .replay_result(instance.admitted(), &reference.result_id, &control)
+        .await?;
+    let result = replay
+        .calls
+        .values()
+        .next()
+        .ok_or("restored call")?
+        .output();
+    let checkpoint = result.checkpoint.as_ref().ok_or("saved checkpoint")?;
     assert_eq!(checkpoint.version, 1);
     assert_eq!(checkpoint.datasets.len(), 1);
     assert_eq!(values(&checkpoint.datasets[0].batches)?, [1]);
     let model = &package.artifacts[0].descriptor.exports[0];
-    let encoded = sdk::wire::Output::encode_model(&result.output, model)?;
-    drop(result);
+    let encoded = sdk::wire::Output::encode_model(result, model)?;
+    drop(replay);
     let before = store.meta()?;
     let mut resumed = instance.subscribe(
         Arc::new(AnalysisReadControl::default()),
@@ -88,18 +93,17 @@ async fn restart_skips_input_capacity() -> TestResult {
         .managed_attempt([1; 16], "restart", &receipt.attempt, &control)?
         .ok_or("retained restart attempt")?;
     assert_eq!(attempt.receipt(), Some(&receipt));
-    let result = store.managed_result(
+    let inspected = store.managed_result(
         instance.admitted(),
         &reference.result_id,
         u64::MAX,
         &control,
     )?;
-    assert_eq!(result.commit_revision, receipt.commit_revision);
-    assert_eq!(
-        sdk::wire::Output::encode_model(&result.output, model)?,
-        encoded
-    );
-    drop(result);
+    assert_eq!(inspected.result, metadata.result);
+    assert_eq!(call_context(&inspected)?, call_context(&metadata)?);
+    assert_eq!(inspected.source, metadata.source);
+    assert_eq!(inspected.receipt, metadata.receipt);
+    drop(inspected);
     fixture.context(2)?;
     let changed_meta = store.meta()?;
     let error = tokio::time::timeout(Duration::from_secs(30), next)
@@ -131,21 +135,31 @@ async fn restart_skips_input_capacity() -> TestResult {
     assert_eq!(store.meta()?, changed_meta);
     assert_eq!(store.managed_resume([1; 16], "restart", &control)?, saved);
     assert_eq!(fixture.progress("restart")?, receipt.commit_revision);
-    assert_eq!(fixture.selected("restart", &receipt.attempt)?, [1]);
     let result = store.managed_result(
         instance.admitted(),
         &reference.result_id,
         u64::MAX,
         &control,
     )?;
-    assert_eq!(result.commit_revision, receipt.commit_revision);
-    assert_eq!(
-        sdk::wire::Output::encode_model(&result.output, model)?,
-        encoded
-    );
+    assert_eq!(result.result, metadata.result);
+    assert_eq!(call_context(&result)?, call_context(&metadata)?);
+    assert_eq!(result.source, metadata.source);
+    assert_eq!(result.receipt, metadata.receipt);
     drop(result);
     drop(pressure);
     assert_eq!(fixture.query.memory().input_reserved(), retained);
+    let replay = fixture
+        .replay_result(instance.admitted(), &reference.result_id, &control)
+        .await?;
+    let output = replay
+        .calls
+        .values()
+        .next()
+        .ok_or("unchanged replay call")?
+        .output();
+    assert_eq!(sdk::wire::Output::encode_model(output, model)?, encoded);
+    assert_eq!(values(&replay.batches)?, [1]);
+    drop(replay);
     let mut resumed = instance.subscribe(
         Arc::new(AnalysisReadControl::default()),
         u64::MAX,
@@ -156,19 +170,28 @@ async fn restart_skips_input_capacity() -> TestResult {
         .ok_or("changed restart receipt")??;
     assert_ne!(changed.attempt, receipt.attempt);
     assert!(changed.commit_revision > receipt.commit_revision);
-    assert_eq!(fixture.selected("restart", &changed.attempt)?, [2]);
-    let result = store.managed_result(
-        instance.admitted(),
-        &changed
-            .results
-            .values()
-            .next()
-            .ok_or("changed checkpoint")?
-            .result_id,
-        u64::MAX,
-        &control,
-    )?;
-    let checkpoint = result.output.checkpoint.as_ref().ok_or("next checkpoint")?;
+    assert_eq!(fixture.selected("restart", &changed.attempt).await?, [2]);
+    let result = fixture
+        .replay_result(
+            instance.admitted(),
+            &changed
+                .results
+                .values()
+                .next()
+                .ok_or("changed checkpoint")?
+                .result_id,
+            &control,
+        )
+        .await?;
+    let checkpoint = result
+        .calls
+        .values()
+        .next()
+        .ok_or("changed replay call")?
+        .output()
+        .checkpoint
+        .as_ref()
+        .ok_or("next checkpoint")?;
     assert_eq!(checkpoint.version, 1);
     assert_eq!(checkpoint.datasets.len(), 1);
     assert_eq!(values(&checkpoint.datasets[0].batches)?, [2]);

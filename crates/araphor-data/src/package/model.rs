@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use araphor_analysis_sdk as sdk;
@@ -259,10 +260,9 @@ pub enum PackageRequestV1 {
         instance_id: String,
         result_id: String,
     },
-    QueryInstanceResult {
+    ReplayInstanceResult {
         instance_id: String,
-        result_id: Option<String>,
-        sql: String,
+        result_id: String,
     },
 }
 
@@ -276,6 +276,7 @@ impl PackageRequestV1 {
             | Self::StartInstance { .. }
             | Self::StopInstance { .. }
             | Self::RunInstance { .. }
+            | Self::ReplayInstanceResult { .. }
             | Self::RenewInstance { .. }
             | Self::RecreateInstance { .. } => PackageActionV1::Run,
             Self::UpdateInstance { .. } => PackageActionV1::Update,
@@ -284,8 +285,7 @@ impl PackageRequestV1 {
             | Self::InspectImage { .. }
             | Self::InspectInstance { .. }
             | Self::InspectInstanceHistory { .. }
-            | Self::ReadInstanceResult { .. }
-            | Self::QueryInstanceResult { .. } => PackageActionV1::Inspect,
+            | Self::ReadInstanceResult { .. } => PackageActionV1::Inspect,
         }
     }
 }
@@ -326,14 +326,32 @@ impl TryFrom<crate::ManagedStatus> for InstanceStatusV1 {
 #[serde(deny_unknown_fields)]
 pub struct InstanceResultV1 {
     pub instance_id: String,
-    pub result_id: String,
-    pub image: araphor_discovery_definition::ImagePin,
-    pub package: super::PackageRefV1,
-    pub export: String,
-    pub context: ResultContext,
-    pub commit_revision: u64,
+    pub result: crate::analysis::PackageResultRefV1,
+    pub definition_revision: String,
+    pub generation: u64,
+    pub source: crate::AnalysisStoreMetaV1,
+    pub time_utc_ns: u64,
+    pub prior: BTreeMap<u64, Option<crate::analysis::PackageResultRefV1>>,
+    pub receipt: crate::ManagedReceipt,
     pub current: bool,
-    pub output: sdk::wire::Output,
+    pub kind: InstanceResultKindV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The response already boxes one metadata record."
+)]
+pub enum InstanceResultKindV1 {
+    Call {
+        call: u64,
+        image: araphor_discovery_definition::ImagePin,
+        package: super::PackageRefV1,
+        export: String,
+        context: ResultContext,
+    },
+    Selected,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -353,6 +371,7 @@ pub enum PackageResponseV1 {
     Instance(InstanceStatusV1),
     History(Vec<crate::ManagedReceipt>),
     Output(sdk::wire::Dataset),
+    Replayed(sdk::wire::Output),
     Result(Box<InstanceResultV1>),
 }
 
@@ -487,6 +506,85 @@ mod inspection_tests {
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
     #[test]
+    fn result_references_roundtrip() -> TestResult {
+        let selected = crate::analysis::PackageResultRefV1 {
+            result_id: "selected".into(),
+            commit_revision: 17,
+        };
+        let call = crate::analysis::PackageResultRefV1 {
+            result_id: "call".into(),
+            commit_revision: 17,
+        };
+        let package = PackageRefV1 {
+            package_id: "fixture".into(),
+            revision: "r1".into(),
+        };
+        let receipt = crate::ManagedReceipt {
+            frontier: None,
+            instance: "counts".into(),
+            attempt: "first".into(),
+            commit_revision: 17,
+            selected: selected.clone(),
+            results: BTreeMap::from([(3, call.clone())]),
+            graph: None,
+        };
+        for (reference, kind) in [
+            (selected, InstanceResultKindV1::Selected),
+            (
+                call,
+                InstanceResultKindV1::Call {
+                    call: 3,
+                    image: araphor_discovery_definition::ImagePin {
+                        image: package.clone(),
+                        digest: format!("sha256:{}", "0".repeat(64)),
+                    },
+                    package,
+                    export: "evaluate".into(),
+                    context: ResultContext::new("first", 10, &[]),
+                },
+            ),
+        ] {
+            let result = InstanceResultV1 {
+                instance_id: "counts".into(),
+                result: reference,
+                definition_revision: format!("sha256:{}", "1".repeat(64)),
+                generation: 2,
+                source: crate::AnalysisStoreMetaV1 {
+                    store_uuid: uuid::Uuid::from_bytes([7; 16]),
+                    schema_version: 4,
+                    recovery_epoch: 6,
+                    commit_revision: 9,
+                },
+                time_utc_ns: 10,
+                prior: BTreeMap::from([(3, None)]),
+                receipt: receipt.clone(),
+                current: false,
+                kind,
+            };
+            let expected = serde_json::to_value(&result)?;
+            let bytes = PackageResponseV1::Result(Box::new(result)).encode()?;
+            let PackageResponseV1::Result(actual) = PackageResponseV1::from_bytes(&bytes)? else {
+                return Err("result reference variant".into());
+            };
+            assert_eq!(serde_json::to_value(actual)?, expected);
+            for field in [
+                "output",
+                "grant",
+                "witnesses",
+                "contexts",
+                "parameters",
+                "manifest",
+            ] {
+                assert!(expected.get(field).is_none(), "{field}");
+            }
+            let mut trailing = bytes;
+            trailing.push(0);
+            assert!(PackageResponseV1::from_bytes(&trailing).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn status_hides_saved_authority() -> TestResult {
         let definition: araphor_discovery_definition::Definition =
             serde_json::from_value(serde_json::json!({
@@ -594,6 +692,34 @@ mod inspection_tests {
             return Err("binary output variant".into());
         };
         assert_eq!(returned, data);
+        let row = sdk::RowRef {
+            dataset: data.name.clone(),
+            row: 0,
+        };
+        let output = sdk::wire::Output {
+            datasets: vec![data.clone()],
+            evidence: vec![sdk::EvidenceLink {
+                output: row.clone(),
+                input: sdk::RowRef {
+                    dataset: "source".into(),
+                    row: 1,
+                },
+            }],
+            reasons: vec![sdk::wire::ReasonValue {
+                output: row,
+                code: "fixture.reason".into(),
+                details: vec![254; 32],
+            }],
+            checkpoint: Some(sdk::wire::Checkpoint {
+                version: 7,
+                datasets: vec![data],
+            }),
+        };
+        let bytes = PackageResponseV1::Replayed(output.clone()).encode()?;
+        let PackageResponseV1::Replayed(returned) = PackageResponseV1::from_bytes(&bytes)? else {
+            return Err("binary replay variant".into());
+        };
+        assert_eq!(returned, output);
         Ok(())
     }
 

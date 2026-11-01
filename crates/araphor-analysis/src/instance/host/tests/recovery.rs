@@ -118,7 +118,9 @@ async fn source_capture_recovers_on_change() -> TestResult {
         )?;
         let receipt = stream.next().await.ok_or("recovered result absent")??;
         assert_eq!(
-            fixture.selected("capture-recovery", &receipt.attempt)?,
+            fixture
+                .selected("capture-recovery", &receipt.attempt)
+                .await?,
             [1, 1]
         );
         stream
@@ -182,7 +184,7 @@ async fn host_recovers_source_capture() -> TestResult {
         })
         .await??;
         assert_eq!(fixture.progress("capture-host")?, prior.commit_revision);
-        assert_eq!(fixture.selected("capture-host", &prior.attempt)?, [1]);
+        assert_eq!(fixture.selected("capture-host", &prior.attempt).await?, [1]);
         fixture
             .query
             .store()
@@ -262,7 +264,7 @@ async fn host_recovers_failed_frontier() -> TestResult {
             .run(request, &AnalysisReadControl::default())
             .await?;
         assert_eq!(
-            fixture.selected("source-recovery", &prior.attempt)?,
+            fixture.selected("source-recovery", &prior.attempt).await?,
             [u64::from(!timed)]
         );
         if timed {
@@ -401,23 +403,33 @@ async fn host_recovers_failed_frontier() -> TestResult {
                 .find(|receipt| receipt.commit_revision == progress)
                 .ok_or("recovered receipt")?;
             assert_eq!(
-                fixture.selected("source-recovery", &prior.attempt)?,
+                fixture.selected("source-recovery", &prior.attempt).await?,
                 [u64::from(!timed)]
             );
             assert_eq!(
-                fixture.selected("source-recovery", &current.attempt)?,
+                fixture
+                    .selected("source-recovery", &current.attempt)
+                    .await?,
                 [if timed { 0 } else { 3 }]
             );
-            let evaluation = fixture.query.store().managed_evaluation(
-                instance.admitted(),
-                &current
-                    .results
-                    .values()
-                    .next()
-                    .ok_or("recovered Call")?
-                    .result_id,
-                &AnalysisReadControl::default(),
-            )?;
+            let evaluation_replay = fixture
+                .replay_result(
+                    instance.admitted(),
+                    &current
+                        .results
+                        .values()
+                        .next()
+                        .ok_or("recovered Call")?
+                        .result_id,
+                    &AnalysisReadControl::default(),
+                )
+                .await?;
+            let evaluation = evaluation_replay
+                .calls
+                .values()
+                .next()
+                .ok_or("replayed recovered call")?
+                .evaluation();
             let parameters = evaluation
                 .parameters
                 .as_ref()

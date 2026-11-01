@@ -52,7 +52,6 @@ fn native_projection_requires_admission() -> TestResult {
                 .collect(),
             memory: Arc::clone(&memory),
             limits,
-            prepared: None,
             projections: Default::default(),
             observed: Default::default(),
         };
@@ -910,12 +909,13 @@ async fn graph_malformed_report_rejected() -> TestResult {
         )?
         .is_none());
     assert!(store
-        .managed_selected(
+        .managed_attempt(
             fixture.source.tenant_id,
             &owner.admitted().spec.id,
             "invalid",
             &fixture.control
         )?
+        .and_then(|attempt| attempt.receipt().cloned())
         .is_none());
     assert_eq!(
         store.retained_counts(fixture.source.tenant_id)?,

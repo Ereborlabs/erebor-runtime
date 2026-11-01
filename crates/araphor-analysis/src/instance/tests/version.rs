@@ -246,9 +246,8 @@ async fn replaced_history(implementation: &str) -> TestResult {
         &control,
     )?;
     assert_eq!(first.results.len(), 1);
-    assert_eq!(fixture.selected("versioned", "first")?, [7]);
-    assert_eq!(saved.context.target, implementation);
-    assert_eq!(values(&saved.output.datasets[0].batches)?, [7]);
+    assert_eq!(fixture.selected("versioned", "first").await?, [7]);
+    assert_eq!(call_context(&saved)?.target, implementation);
     let status = Instance::read_status(
         Arc::clone(&fixture.query),
         fixture.authority.clone(),
@@ -466,13 +465,11 @@ async fn replaced_history(implementation: &str) -> TestResult {
         10,
         &control,
     )?;
-    assert_eq!(retained.context, saved.context);
-    let model = &package.artifacts[0].descriptor.exports[0];
-    assert_eq!(
-        sdk::wire::Output::encode_model(&retained.output, model)?,
-        sdk::wire::Output::encode_model(&saved.output, model)?
-    );
-    assert_eq!(retained.commit_revision, saved.commit_revision);
+    assert_eq!(call_context(&retained)?, call_context(&saved)?);
+    assert_eq!(retained.result, saved.result);
+    assert_eq!(retained.source, saved.source);
+    assert_eq!(retained.prior, saved.prior);
+    assert_eq!(retained.receipt, saved.receipt);
     let history =
         fixture
             .query
@@ -520,23 +517,23 @@ async fn replaced_history(implementation: &str) -> TestResult {
     let wasm_saved = query
         .store()
         .managed_result(wasm.admitted(), &wasm_id, 10, &control)?;
-    assert_eq!(wasm_saved.context.target, "wasm");
+    assert_eq!(call_context(&wasm_saved)?.target, "wasm");
     let before = query.store().meta()?;
-    let latest = Instance::query_result(
+    let selected = Instance::read_result(
         Arc::clone(&query),
         authority.clone(),
         grant.clone(),
         "versioned",
-        None,
-        "SELECT value FROM selected",
+        &second.selected.result_id,
         &control,
     )
     .await?;
-    assert_eq!(
-        values(&latest.data.batches)?,
-        values(&wasm_saved.output.datasets[0].batches)?
-    );
-    drop(latest);
+    assert_eq!(selected.result, second.selected);
+    assert_eq!(selected.receipt, second);
+    assert!(matches!(
+        &selected.kind,
+        araphor_data::InstanceResultKindV1::Selected
+    ));
     assert_eq!(query.store().meta()?, before);
     let restored = host
         .rollback(
@@ -557,11 +554,11 @@ async fn replaced_history(implementation: &str) -> TestResult {
     let history = query
         .store()
         .managed_history(&grant.selection, "versioned", &control)?;
-    let latest = history
+    let current_receipt = history
         .iter()
         .find(|receipt| receipt.commit_revision == current.progress)
         .ok_or("restored receipt")?;
-    let current_id = latest
+    let current_id = current_receipt
         .results
         .values()
         .next()
@@ -571,23 +568,23 @@ async fn replaced_history(implementation: &str) -> TestResult {
     let current_saved = query
         .store()
         .managed_result(&current, &current_id, 10, &control)?;
-    assert_eq!(current_saved.context.target, implementation);
+    assert_eq!(call_context(&current_saved)?.target, implementation);
     let before = query.store().meta()?;
-    let latest = Instance::query_result(
+    let selected = Instance::read_result(
         Arc::clone(&query),
         authority.clone(),
         grant.clone(),
         "versioned",
-        None,
-        "SELECT value FROM selected",
+        &current_receipt.selected.result_id,
         &control,
     )
     .await?;
-    assert_eq!(
-        values(&latest.data.batches)?,
-        values(&current_saved.output.datasets[0].batches)?
-    );
-    drop(latest);
+    assert_eq!(selected.result, current_receipt.selected);
+    assert_eq!(selected.receipt, *current_receipt);
+    assert!(matches!(
+        &selected.kind,
+        araphor_data::InstanceResultKindV1::Selected
+    ));
     assert_eq!(query.store().meta()?, before);
     drop((wasm, restored, host, query));
 
@@ -626,21 +623,21 @@ async fn replaced_history(implementation: &str) -> TestResult {
     assert_eq!(removed.generation, generation);
     assert_eq!(removed.progress, current.progress);
     let before = query.store().meta()?;
-    let latest = Instance::query_result(
+    let selected = Instance::read_result(
         Arc::clone(&query),
         authority.clone(),
         grant.clone(),
         "versioned",
-        None,
-        "SELECT value FROM selected",
+        &current_receipt.selected.result_id,
         &control,
     )
     .await?;
-    assert_eq!(
-        values(&latest.data.batches)?,
-        values(&current_saved.output.datasets[0].batches)?
-    );
-    drop(latest);
+    assert_eq!(selected.result, current_receipt.selected);
+    assert_eq!(selected.receipt, *current_receipt);
+    assert!(matches!(
+        &selected.kind,
+        araphor_data::InstanceResultKindV1::Selected
+    ));
     let status = Instance::read_status(
         Arc::clone(&query),
         authority.clone(),
@@ -687,14 +684,10 @@ async fn replaced_history(implementation: &str) -> TestResult {
         .await?,
         history
     );
-    for (id, saved, model) in [
-        (&reference.result_id, &saved, model),
-        (
-            &wasm_id,
-            &wasm_saved,
-            &wasm_image.artifacts[0].descriptor.exports[0],
-        ),
-        (&current_id, &current_saved, model),
+    for (id, saved) in [
+        (&reference.result_id, &saved),
+        (&wasm_id, &wasm_saved),
+        (&current_id, &current_saved),
     ] {
         let retained = Instance::read_result(
             Arc::clone(&query),
@@ -706,15 +699,16 @@ async fn replaced_history(implementation: &str) -> TestResult {
         )
         .await?;
         assert!(!retained.current);
-        if id == &reference.result_id {
-            assert_eq!(values(&retained.output.datasets[0].batches)?, [7]);
-        }
-        assert_eq!(retained.context, saved.context);
-        assert_eq!(retained.commit_revision, saved.commit_revision);
+        assert_eq!(retained.result, saved.result);
+        assert_eq!(retained.source, saved.source);
+        assert_eq!(retained.prior, saved.prior);
+        assert_eq!(retained.receipt, saved.receipt);
         assert_eq!(
-            sdk::wire::Output::encode_model(&retained.output, model)?,
-            sdk::wire::Output::encode_model(&saved.output, model)?,
+            serde_json::to_value(&retained.kind)?,
+            serde_json::to_value(&saved.kind)?
         );
+        assert_eq!(retained.definition_revision, saved.definition_revision);
+        assert_eq!(retained.generation, saved.generation);
     }
     drop((reopened, host));
     let permits = (0..4)
@@ -846,7 +840,7 @@ async fn versions_check_actions() -> TestResult {
             .managed_instance([1; 16], "actions", &control)?,
         Some(updated.admitted().clone())
     );
-    assert_eq!(fixture.selected("actions", &first.attempt)?, [3]);
+    assert_eq!(fixture.selected("actions", &first.attempt).await?, [3]);
     Ok(())
 }
 
@@ -923,6 +917,7 @@ async fn versions_fence_revoked_run() -> TestResult {
         ).await?;
         let control = AnalysisReadControl::default();
         let first = instance.run(request("first"), &control).await?;
+        assert_eq!(fixture.selected("final-run", &first.attempt).await?, [3]);
         let generation = instance.admitted().generation;
         let definition = target(
             &fixture,
@@ -1003,7 +998,17 @@ async fn versions_fence_revoked_run() -> TestResult {
             )?,
             history
         );
-        assert_eq!(fixture.selected("final-run", &first.attempt)?, [3]);
+        let retained = Instance::read_result(
+            Arc::clone(&fixture.query),
+            actions.clone(),
+            fixture.grant.clone(),
+            "final-run",
+            &first.selected.result_id,
+            &control,
+        )
+        .await?;
+        assert_eq!(retained.result, first.selected);
+        assert_eq!(retained.receipt, first);
         let old = fixture
             .query
             .store()
@@ -1199,15 +1204,32 @@ async fn versions_capture_joined_state() -> TestResult {
     assert_eq!(history.len(), 2);
     let original = history.first().ok_or("joined original")?;
     let current = history.last().ok_or("joined target")?;
-    assert_eq!(fixture.selected("joined-state", &original.attempt)?, [3]);
-    assert_eq!(fixture.selected("joined-state", &current.attempt)?, [6]);
+    assert_eq!(
+        fixture.selected("joined-state", &original.attempt).await?,
+        [3]
+    );
+    assert_eq!(
+        fixture.selected("joined-state", &current.attempt).await?,
+        [6]
+    );
     let reference = current.results.values().next().ok_or("joined result")?;
-    let evaluation = fixture.query.store().managed_evaluation(
-        updated.admitted(),
-        &reference.result_id,
-        &AnalysisReadControl::default(),
-    )?;
-    let checkpoint = evaluation.checkpoint.ok_or("joined consumed checkpoint")?;
+    let evaluation_replay = fixture
+        .replay_result(
+            updated.admitted(),
+            &reference.result_id,
+            &AnalysisReadControl::default(),
+        )
+        .await?;
+    let evaluation = evaluation_replay
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed call")?
+        .evaluation();
+    let checkpoint = evaluation
+        .checkpoint
+        .as_ref()
+        .ok_or("joined consumed checkpoint")?;
     assert_eq!(values(&checkpoint.datasets[0].batches)?, [3]);
     let stopped = host
         .stop(
@@ -1233,10 +1255,12 @@ async fn versions_capture_joined_state() -> TestResult {
         &AnalysisReadControl::default(),
     )?;
     assert_eq!(
-        fixture.selected(
-            "joined-state",
-            &history.last().ok_or("continued target")?.attempt
-        )?,
+        fixture
+            .selected(
+                "joined-state",
+                &history.last().ok_or("continued target")?.attempt
+            )
+            .await?,
         [9]
     );
     stop.send_replace(true);
@@ -1303,7 +1327,10 @@ async fn failed_versions_keep_running() -> TestResult {
             araphor_data::PackageReadinessV1::Ready
         ));
         assert_eq!(status.status_progress, first.commit_revision);
-        assert_eq!(fixture.selected("failed-version", &first.attempt)?, [3]);
+        assert_eq!(
+            fixture.selected("failed-version", &first.attempt).await?,
+            [3]
+        );
         fixture.context(2)?;
         progress(&fixture, "failed-version", first.commit_revision).await?;
         let history = fixture.query.store().managed_history(
@@ -1313,10 +1340,12 @@ async fn failed_versions_keep_running() -> TestResult {
         )?;
         assert_eq!(history.len(), 2);
         assert_eq!(
-            fixture.selected(
-                "failed-version",
-                &history.last().ok_or("continued old")?.attempt
-            )?,
+            fixture
+                .selected(
+                    "failed-version",
+                    &history.last().ok_or("continued old")?.attempt
+                )
+                .await?,
             [6]
         );
         stop.send_replace(true);
@@ -1413,7 +1442,10 @@ async fn version_cancellation_joins_workers() -> TestResult {
             )?,
             Some(original)
         );
-        assert_eq!(fixture.selected("cancel-version", &first.attempt)?, [3]);
+        assert_eq!(
+            fixture.selected("cancel-version", &first.attempt).await?,
+            [3]
+        );
         if mode != "shutdown" {
             fixture.context(2)?;
             progress(&fixture, "cancel-version", first.commit_revision).await?;
@@ -1424,10 +1456,12 @@ async fn version_cancellation_joins_workers() -> TestResult {
             )?;
             assert_eq!(history.len(), 2);
             assert_eq!(
-                fixture.selected(
-                    "cancel-version",
-                    &history.last().ok_or("cancelled target")?.attempt
-                )?,
+                fixture
+                    .selected(
+                        "cancel-version",
+                        &history.last().ok_or("cancelled target")?.attempt
+                    )
+                    .await?,
                 [6]
             );
             stop.send_replace(true);
@@ -1523,12 +1557,19 @@ async fn retained_replay_uses_generation() -> TestResult {
         .values()
         .next()
         .ok_or("original replay result")?;
-    let original = fixture.query.store().managed_result(
-        instance.admitted(),
-        &reference.result_id,
-        10,
-        &AnalysisReadControl::default(),
-    )?;
+    let original = fixture
+        .replay_result(
+            instance.admitted(),
+            &reference.result_id,
+            &AnalysisReadControl::default(),
+        )
+        .await?;
+    assert_eq!(values(&original.batches)?, [3]);
+    let original = original
+        .calls
+        .values()
+        .next()
+        .ok_or("original replay call")?;
     let next = image("sql", "2")?;
     fixture.install(&next)?;
     let definition = target(&fixture, r#"SELECT * FROM "runtime-fixture"."2".accumulate(input => (SELECT CAST(99 AS BIGINT UNSIGNED) AS value))"#, "").await?;
@@ -1577,6 +1618,7 @@ async fn retained_replay_uses_generation() -> TestResult {
     let replayed = Instance::replay_result(
         Arc::clone(&fixture.query),
         actions,
+        None,
         fixture.grant.clone(),
         "retained-replay",
         &reference.result_id,
@@ -1589,7 +1631,7 @@ async fn retained_replay_uses_generation() -> TestResult {
         .values()
         .next()
         .ok_or("historical replay call")?;
-    assert_eq!(call.evaluation().context, original.context.context);
+    assert_eq!(call.evaluation().context, original.evaluation().context);
     assert_eq!(call.evaluation().context.id, input.id);
     assert_eq!(
         call.evaluation().context.time_utc_ns,
@@ -1598,7 +1640,10 @@ async fn retained_replay_uses_generation() -> TestResult {
     assert_eq!(call.evaluation().context.seed, input.seed);
     assert_eq!(
         sdk::wire::Output::encode_model(call.output(), &old.artifacts[0].descriptor.exports[0])?,
-        sdk::wire::Output::encode_model(&original.output, &old.artifacts[0].descriptor.exports[0])?
+        sdk::wire::Output::encode_model(
+            original.output(),
+            &old.artifacts[0].descriptor.exports[0]
+        )?
     );
     assert_eq!(fixture.query.store().meta()?, before);
     assert_eq!(
@@ -1634,7 +1679,7 @@ async fn retained_replay_checks_inspect() -> TestResult {
         .next()
         .ok_or("retained inspect result")?;
     fixture.query.store().fault_write(
-        "UPDATE managed_arrow SET ipc = 'invalid'::BLOB WHERE result_id = ? AND role = 'input'",
+        "UPDATE analysis_results SET commit_revision = commit_revision + 1 WHERE result_id = ?",
         &[&reference.result_id],
     )?;
     let actions = Actions::new(&fixture);
@@ -1645,6 +1690,7 @@ async fn retained_replay_checks_inspect() -> TestResult {
     let error = Instance::replay_result(
         Arc::clone(&fixture.query),
         actions.clone(),
+        None,
         fixture.grant.clone(),
         "retained-inspect",
         &reference.result_id,
@@ -1652,7 +1698,7 @@ async fn retained_replay_checks_inspect() -> TestResult {
     )
     .await
     .err()
-    .ok_or("denied replay inspected payload")?;
+    .ok_or("denied replay inspected metadata")?;
     assert_eq!(
         error.status_code(),
         erebor_runtime_error::StatusCode::PermissionDenied
@@ -1667,6 +1713,7 @@ async fn retained_replay_checks_inspect() -> TestResult {
     let error = Instance::replay_result(
         Arc::clone(&fixture.query),
         actions,
+        None,
         fixture.grant.clone(),
         "retained-inspect",
         &reference.result_id,
@@ -1674,7 +1721,7 @@ async fn retained_replay_checks_inspect() -> TestResult {
     )
     .await
     .err()
-    .ok_or("corrupt replay input accepted")?;
+    .ok_or("corrupt replay reference accepted")?;
     assert_ne!(
         error.status_code(),
         erebor_runtime_error::StatusCode::PermissionDenied
@@ -1768,6 +1815,7 @@ async fn replay_checks_final_authority() -> TestResult {
         let error = Instance::replay_result(
             Arc::clone(&fixture.query),
             authority.clone(),
+            None,
             fixture.grant.clone(),
             "final-replay",
             &reference.result_id,
@@ -1850,11 +1898,16 @@ async fn native_caps_keep_receipt() -> TestResult {
         .query
         .store()
         .managed_result(&prior, &reference.result_id, 10, &control)?;
-    assert_eq!(saved.context.target, "wasm");
-    assert!(saved.output.checkpoint.is_some());
-    assert_eq!(fixture.selected("native-cap", &receipt.attempt)?, [3]);
+    assert_eq!(call_context(&saved)?.target, "wasm");
+    let baseline = fixture
+        .replay_result(&prior, &reference.result_id, &control)
+        .await?;
+    let baseline = baseline.calls.values().next().ok_or("prior Wasm replay")?;
+    assert!(baseline.output().checkpoint.is_some());
+    assert_eq!(values(&baseline.output().datasets[0].batches)?, [3]);
+    assert_eq!(fixture.selected("native-cap", &receipt.attempt).await?, [3]);
     let model = &wasm.artifacts[0].descriptor.exports[0];
-    let packet = sdk::wire::Output::encode_model(&saved.output, model)?;
+    let packet = sdk::wire::Output::encode_model(baseline.output(), model)?;
     let host = InstanceHost::new(Arc::clone(&fixture.query), fixture.authority.clone());
     let before = fixture.query.store().meta()?;
     let error = host
@@ -1907,10 +1960,20 @@ async fn native_caps_keep_receipt() -> TestResult {
             .store()
             .managed_result(&prior, &reference.result_id, 10, &control)?;
     assert!(unchanged.current);
-    assert_eq!(unchanged.context, saved.context);
-    assert_eq!(unchanged.commit_revision, saved.commit_revision);
+    assert_eq!(call_context(&unchanged)?, call_context(&saved)?);
+    assert_eq!(unchanged.result, saved.result);
+    assert_eq!(unchanged.source, saved.source);
+    assert_eq!(unchanged.receipt, saved.receipt);
+    let replayed = fixture
+        .replay_result(&prior, &reference.result_id, &control)
+        .await?;
+    let replayed = replayed
+        .calls
+        .values()
+        .next()
+        .ok_or("unchanged Wasm replay")?;
     assert_eq!(
-        sdk::wire::Output::encode_model(&unchanged.output, model)?,
+        sdk::wire::Output::encode_model(replayed.output(), model)?,
         packet
     );
     assert_eq!(

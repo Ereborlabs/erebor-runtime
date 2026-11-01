@@ -1,5 +1,6 @@
 use super::*;
 use crate::analysis::graph_rows::{tests::fixture::CommitFixture, CanonicalGraph, GraphRows};
+use crate::PackageErrorCodeV1 as Code;
 
 fn fixture() -> TestResult<(CommitFixture, Fixture)> {
     fixture_with_unused_call(false)
@@ -223,7 +224,7 @@ fn read(graph: &CommitFixture, mode: &ManagedRead) -> TestResult<ManagedCapture>
     let cursor = AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
     Ok(graph
         .store
-        .read_managed_tables(
+        .read_managed_tables_filtered(
             &mode.instance.grant.selection,
             mode,
             AnalysisTableRead {
@@ -232,12 +233,12 @@ fn read(graph: &CommitFixture, mode: &ManagedRead) -> TestResult<ManagedCapture>
                     Some(BTreeSet::from([cursor])),
                 )]),
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )?
         .state)
 }
@@ -375,7 +376,6 @@ fn publish(
             call,
             evaluation,
             output,
-            retained: None,
             changes: if call == 13 { changes.as_ref() } else { None },
         })
         .collect::<Vec<_>>();
@@ -448,29 +448,37 @@ fn graph_follow_retains_prefix() -> TestResult {
                 })
             );
             assert!(matches!(
-                graph.store.managed_query_output(
-                    &fixture.instance.grant.selection,
-                    &fixture.instance.spec.id,
-                    Some(&receipt.selected.result_id),
-                    10,
-                    &AnalysisReadControl::default(),
-                )?,
-                ManagedOutput::Selected { .. }
+                graph
+                    .store
+                    .managed_result(
+                        &fixture.current(&graph.store)?,
+                        &receipt.selected.result_id,
+                        10,
+                        &AnalysisReadControl::default(),
+                    )?
+                    .kind,
+                crate::InstanceResultKindV1::Selected
             ));
-            let ManagedOutput::Call { result, data } = graph.store.managed_query_output(
-                &fixture.instance.grant.selection,
-                &fixture.instance.spec.id,
-                Some(&receipt.results[&10].result_id),
+            let result = graph.store.managed_result(
+                &fixture.current(&graph.store)?,
+                &receipt.results[&10].result_id,
                 10,
                 &AnalysisReadControl::default(),
-            )?
-            else {
-                return Err("retained call output absent".into());
-            };
+            )?;
             assert!(!result.current);
+            assert_eq!(result.result, receipt.results[&10]);
+            assert_eq!(result.receipt, receipt);
             assert_eq!(
-                sdk::wire::Output::encode_model(&data, &fixture.model)?,
-                sdk::wire::Output::encode_model(&fixture.output(2)?, &fixture.model)?
+                fixture
+                    .checkpoint(&graph.store, &receipt.results[&10])?
+                    .datasets[0]
+                    .batches,
+                fixture
+                    .output(2)?
+                    .checkpoint
+                    .ok_or("fixture checkpoint")?
+                    .datasets[0]
+                    .batches
             );
             assert_eq!(
                 receipt.frontier.as_ref(),
@@ -540,17 +548,19 @@ fn graph_empty_step_has_no_publication() -> TestResult {
     assert!(after.0.commit_revision > before.0.commit_revision);
     assert_eq!(after.1, before.1);
     assert!(matches!(
-        graph.store.managed_query_output(
-            &fixture.instance.grant.selection,
-            &fixture.instance.spec.id,
-            Some(&receipt.selected.result_id),
-            10,
-            &AnalysisReadControl::default(),
-        )?,
-        ManagedOutput::Selected { .. }
+        graph
+            .store
+            .managed_result(
+                &fixture.current(&graph.store)?,
+                &receipt.selected.result_id,
+                10,
+                &AnalysisReadControl::default(),
+            )?
+            .kind,
+        crate::InstanceResultKindV1::Selected
     ));
     let writer = graph.store.writer()?;
-    let (mut step, _, revision) = AnalysisStore::managed_step_from(
+    let (mut step, revision) = AnalysisStore::managed_step_header(
         writer.get()?,
         fixture.instance.spec.tenant,
         &receipt.selected.result_id,
@@ -646,14 +656,16 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
             .is_err());
         }
         assert!(matches!(
-            graph.store.managed_query_output(
-                &fixture.instance.grant.selection,
-                &fixture.instance.spec.id,
-                Some(&receipt.selected.result_id),
-                10,
-                &AnalysisReadControl::default(),
-            )?,
-            ManagedOutput::Selected { .. }
+            graph
+                .store
+                .managed_result(
+                    &fixture.current(&graph.store)?,
+                    &receipt.selected.result_id,
+                    10,
+                    &AnalysisReadControl::default(),
+                )?
+                .kind,
+            crate::InstanceResultKindV1::Selected
         ));
         {
             let mut writer = graph.store.writer()?;
@@ -732,10 +744,9 @@ fn graph_selected_rejects_wrong_publication_binding() -> TestResult {
         }
         assert!(graph
             .store
-            .managed_query_output(
-                &fixture.instance.grant.selection,
-                &fixture.instance.spec.id,
-                Some(&receipt.selected.result_id),
+            .managed_result(
+                &fixture.current(&graph.store)?,
+                &receipt.selected.result_id,
                 10,
                 &AnalysisReadControl::default(),
             )

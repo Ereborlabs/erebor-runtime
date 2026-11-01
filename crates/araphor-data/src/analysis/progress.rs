@@ -9,8 +9,11 @@ use crate::{
 };
 
 mod graph;
+#[cfg(test)]
+mod history;
 mod notices;
 mod profile;
+mod schema;
 
 pub use profile::{DiscoveryProducer, PreparedProfile, ProfileCommit};
 
@@ -150,7 +153,6 @@ pub struct AnalysisGapV1 {
 #[derive(Clone, Copy)]
 pub(in crate::analysis) enum ResultHead<'a> {
     Unchecked,
-    Working(u64),
     Current(Option<&'a super::PackageResultRefV1>),
 }
 
@@ -403,7 +405,7 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
         transaction
             .execute(
-                "INSERT INTO processor_progress VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, false, '', '', 0, 0, '')",
+                "INSERT INTO processor_versions VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, false, '', '', 0, 0, '', ?)",
                 params![
                     scope.processor_id,
                     scope.method_version,
@@ -414,6 +416,7 @@ impl AnalysisStore {
                     start_cursor - 1,
                     start_cursor,
                     start_cursor - 1,
+                    revision,
                 ],
             )
             .context(AnalysisDatabaseSnafu {
@@ -511,13 +514,19 @@ impl AnalysisStore {
             last_cursor,
             commit_revision: revision,
         };
-        Self::insert_processor_gaps(&transaction, scope, std::slice::from_ref(&gap))?;
+        Self::insert_processor_gaps(&transaction, scope, std::slice::from_ref(&gap), revision)?;
         transaction
             .execute(
-                "UPDATE processor_progress SET resume_floor = ?
+                "INSERT INTO processor_versions
+                 SELECT processor_id, method_version, tenant_id, stream_key, class,
+                    consumed_cursor, ?, coverage_revision, context_revision,
+                    start_cursor, required_floor, retired, retirement_id, retirement_reason,
+                    retirement_cursor, retirement_revision, result_id, ?
+                 FROM processor_progress
                  WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
                 params![
                     last_cursor,
+                    revision,
                     scope.processor_id,
                     scope.method_version,
                     scope.identity.tenant_id.as_slice(),
@@ -549,10 +558,11 @@ impl AnalysisStore {
         transaction: &duckdb::Transaction<'_>,
         scope: &ProcessorScopeV1,
         gaps: &[AnalysisGapV1],
+        revision: u64,
     ) -> Result<()> {
         let key = scope.identity.key();
         let mut statement = transaction
-            .prepare("INSERT INTO processor_gaps VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .prepare("INSERT INTO processor_gaps VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare optional missing ranges",
             })?;
@@ -566,6 +576,7 @@ impl AnalysisStore {
                     gap.first_cursor,
                     gap.last_cursor,
                     gap.commit_revision,
+                    revision,
                 ])
                 .context(AnalysisDatabaseSnafu {
                     operation: "record optional missing range",
@@ -578,20 +589,34 @@ impl AnalysisStore {
         if input.scope.processor_id == crate::GRAPH_PROCESSOR {
             return self.reject("the graph result requires a guarded graph commit");
         }
-        self.commit_progress(input, None, true, None, &[], &mut || Ok(()))
+        self.commit_progress(
+            input,
+            ResultHead::Unchecked,
+            true,
+            None,
+            &[],
+            &mut || Ok(()),
+        )
     }
 
     #[cfg(test)]
     fn commit_working(
         &self,
         input: &AnalysisResultCommitV1,
-        previous: Option<u64>,
+        previous: Option<super::PackageResultRefV1>,
     ) -> Result<AnalysisResultReceiptV1> {
         if input.scope.processor_id != crate::DISCOVERY_PROCESSOR {
             return self.reject("the working result owner is invalid");
         }
         let profile = crate::DiscoveryProfileV1::try_from(input.body.as_slice())?;
-        self.commit_progress(input, previous, true, Some(&profile), &[], &mut || Ok(()))
+        self.commit_progress(
+            input,
+            ResultHead::Current(previous.as_ref()),
+            true,
+            Some(&profile),
+            &[],
+            &mut || Ok(()),
+        )
     }
 
     #[cfg(test)]
@@ -605,13 +630,20 @@ impl AnalysisStore {
         if !profile.sealed {
             return self.reject("the historical profile is not sealed");
         }
-        self.commit_progress(input, None, false, Some(&profile), &[], &mut || Ok(()))
+        self.commit_progress(
+            input,
+            ResultHead::Unchecked,
+            false,
+            Some(&profile),
+            &[],
+            &mut || Ok(()),
+        )
     }
 
     fn commit_progress(
         &self,
         input: &AnalysisResultCommitV1,
-        previous: Option<u64>,
+        expected: ResultHead<'_>,
         advance: bool,
         profile: Option<&crate::DiscoveryProfileV1>,
         contexts: &[super::AnalysisContextVersionV1],
@@ -624,17 +656,22 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "begin analysis result",
             })?;
-        let write = self.progress_rows(
-            &transaction,
-            input,
-            previous.map_or(ResultHead::Unchecked, ResultHead::Working),
-            advance,
-            profile,
-            contexts,
-        )?;
+        let write =
+            self.progress_rows(&transaction, input, expected, advance, profile, contexts)?;
         if !write.commit {
             check()?;
             return Ok(write.receipt);
+        }
+        if let (Some(profile), ResultHead::Current(Some(previous))) = (profile, expected) {
+            let body = self
+                .read_result_from(
+                    &transaction,
+                    input.scope.identity.tenant_id,
+                    &previous.result_id,
+                )?
+                .ok_or_else(|| self.state_error("the previous profile is absent"))?;
+            let previous = crate::DiscoveryProfileV1::try_from(body.as_slice())?;
+            self.check_profile_transition(profile, &previous, false)?;
         }
         if !write.relations.is_empty() {
             self.check_revision_limits(&transaction, input.scope.identity.tenant_id)?;
@@ -672,10 +709,6 @@ impl AnalysisStore {
         profile: Option<&crate::DiscoveryProfileV1>,
         contexts: &[super::AnalysisContextVersionV1],
     ) -> Result<ProgressWrite> {
-        let previous = match expected {
-            ResultHead::Working(revision) => Some(revision),
-            _ => None,
-        };
         if profile.is_some_and(|profile| {
             profile.scope != input.scope
                 || profile.profile_id != input.result_id
@@ -774,7 +807,7 @@ impl AnalysisStore {
                 .max()
                 .unwrap_or(0)
         {
-            if existing.is_some() && previous.is_none() {
+            if existing.is_some() {
                 return AnalysisConflictSnafu.fail();
             }
             return self.reject("the result context revision differs from its captured references");
@@ -803,7 +836,6 @@ impl AnalysisStore {
         }
         .context(JsonSnafu { path: &path })?;
 
-        let replacing = existing.is_some() && previous.is_some();
         if let Some((tenant, stored, retained, revision)) = existing {
             let (Some(tenant), Some(stored), Some(retained)) = (tenant, stored, retained) else {
                 return self.reject("the retained analysis result exceeds its byte bound");
@@ -821,24 +853,6 @@ impl AnalysisStore {
                     commit: false,
                 });
             }
-            if tenant != input.scope.identity.tenant_id
-                || previous != Some(revision)
-                || Self::managed_profile_version(
-                    transaction,
-                    input.scope.identity.tenant_id,
-                    &input.result_id,
-                )?
-            {
-                return AnalysisConflictSnafu.fail();
-            }
-            let profile = crate::DiscoveryProfileV1::try_from(retained.as_slice())?;
-            if profile.sealed
-                || profile.scope != input.scope
-                || profile.profile_id != input.result_id
-            {
-                return AnalysisConflictSnafu.fail();
-            }
-        } else if previous.is_some() {
             return AnalysisConflictSnafu.fail();
         }
         let progress: Option<(u64, u64, bool, String, Option<u64>, String)> = transaction
@@ -864,7 +878,6 @@ impl AnalysisStore {
             .is_some_and(|(consumed, resumed, retired, result, revision, _)| {
                 !retired
                     && (*consumed).max(*resumed) == input.expected_cursor
-                    && (!replacing || result == &input.result_id)
                     && match expected {
                         ResultHead::Current(Some(head)) => {
                             result == &head.result_id && *revision == Some(head.commit_revision)
@@ -977,72 +990,31 @@ impl AnalysisStore {
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        if replacing {
-            transaction
-                .execute(
-                    "DELETE FROM evidence_refs WHERE ref_id = ?",
-                    params![input.result_id],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "replace working witnesses",
-                })?;
-            transaction
-                .execute(
-                    "DELETE FROM context_refs WHERE ref_id = ?",
-                    params![input.result_id],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "replace working contexts",
-                })?;
-            transaction
-                .execute(
-                    "UPDATE analysis_results SET body = ?, request_meta = ?, commit_revision = ?,
-                 stream_key = ?, method_version = ?, interval_id = ?, profile_revision = ?,
-                 facts_revision = ?, coverage_revision = ?, first_cursor = ? WHERE result_id = ?",
-                    params![
-                        body,
-                        request.as_slice(),
-                        revision,
-                        header.stream_key.as_deref(),
-                        header.method_version,
-                        header.interval_id,
-                        header.profile_revision,
-                        header.facts_revision,
-                        header.coverage_revision,
-                        header.first_cursor,
-                        input.result_id
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "update working result",
-                })?;
-        } else {
-            transaction
-                .execute(
-                    "INSERT INTO analysis_results (result_id, tenant_id, processor_id, body,
+        transaction
+            .execute(
+                "INSERT INTO analysis_results (result_id, tenant_id, processor_id, body,
                         request_meta, commit_revision, stream_key, method_version, interval_id,
                         profile_revision, facts_revision, coverage_revision, first_cursor)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        input.result_id,
-                        input.scope.identity.tenant_id.as_slice(),
-                        input.scope.processor_id,
-                        body,
-                        request.as_slice(),
-                        revision,
-                        header.stream_key.as_deref(),
-                        header.method_version,
-                        header.interval_id,
-                        header.profile_revision,
-                        header.facts_revision,
-                        header.coverage_revision,
-                        header.first_cursor,
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert analysis result",
-                })?;
-        }
+                params![
+                    input.result_id,
+                    input.scope.identity.tenant_id.as_slice(),
+                    input.scope.processor_id,
+                    body,
+                    request.as_slice(),
+                    revision,
+                    header.stream_key.as_deref(),
+                    header.method_version,
+                    header.interval_id,
+                    header.profile_revision,
+                    header.facts_revision,
+                    header.coverage_revision,
+                    header.first_cursor,
+                ],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "insert analysis result",
+            })?;
         Self::insert_references(
             transaction,
             &input.result_id,
@@ -1052,21 +1024,24 @@ impl AnalysisStore {
         )?;
         if advance {
             if !gaps.is_empty() {
-                Self::insert_processor_gaps(transaction, &input.scope, gaps)?;
+                Self::insert_processor_gaps(transaction, &input.scope, gaps, revision)?;
             }
             transaction
             .execute(
-                "UPDATE processor_progress SET consumed_cursor = ?, coverage_revision = ?,
-                 context_revision = ?, required_floor = ?, result_id = ?,
-                 resume_floor = GREATEST(resume_floor, ?)
+                "INSERT INTO processor_versions
+                 SELECT processor_id, method_version, tenant_id, stream_key, class,
+                    ?, GREATEST(resume_floor, ?), ?, ?, start_cursor, ?, retired,
+                    retirement_id, retirement_reason, retirement_cursor, retirement_revision, ?, ?
+                 FROM processor_progress
                  WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
                 params![
                     input.consumed_cursor,
+                    gaps.last().map_or(0, |gap| gap.last_cursor),
                     input.coverage_revision,
                     context_revision,
                     input.consumed_cursor,
                     input.result_id,
-                    gaps.last().map_or(0, |gap| gap.last_cursor),
+                    revision,
                     input.scope.processor_id,
                     input.scope.method_version,
                     input.scope.identity.tenant_id.as_slice(),

@@ -127,7 +127,8 @@ impl AnalysisStore {
         let mut expiry = writer
             .prepare(
                 "SELECT EXISTS(SELECT 1 FROM expired_ranges WHERE segment_id = ? AND stream_key = ?
-             AND tenant_id = ? AND first_cursor <= ? AND last_cursor >= ?)",
+             AND tenant_id = ? AND first_cursor <= ? AND last_cursor >= ?
+             AND source_revision = ? AND received_utc_ns = ?)",
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare segment expiry coverage",
@@ -145,7 +146,9 @@ impl AnalysisStore {
                                 entry.identity.key().as_slice(),
                                 entry.identity.tenant().as_slice(),
                                 span.first,
-                                span.last
+                                span.last,
+                                entry.commit.revision,
+                                entry.commit.intake,
                             ],
                             |row| row.get(0),
                         )
@@ -246,7 +249,7 @@ mod tests {
         writer.execute_batch(
             "UPDATE segments SET state = 'Deleting';
              INSERT INTO expired_ranges
-             SELECT segment_id, stream_key, tenant_id, 1, 1, 1 FROM segments",
+             SELECT segment_id, stream_key, tenant_id, 1, 1, 1, 1, last_intake_utc_ns FROM segments",
         )?;
         assert!(matches!(
             AnalysisStore::remove_segments(writer, &store.root, &raw, &BTreeSet::from([1, 2])),

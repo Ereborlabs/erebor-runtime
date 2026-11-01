@@ -97,7 +97,6 @@ impl Journal {
             AnalysisTableRead {
                 requests: &self.requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Changes(after),
                 now: 10,
             },

@@ -1,4 +1,4 @@
-use araphor_analysis_sdk::{arrow_array::UInt64Array, Dataset};
+use araphor_analysis_sdk::{self as sdk, arrow_array::UInt64Array, Dataset};
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisReadControl, AnalysisSelectionV1,
     ContextSensitivityV1, InstanceStatusV1, ManagedReceipt,
@@ -106,11 +106,21 @@ fn values(data: &Dataset, column: &str) -> Result<Vec<u64>> {
     Ok(result)
 }
 
-fn checkpoint(fixture: &Fixture, receipt: &ManagedReceipt) -> Result<araphor_data::ManagedResult> {
+fn call_context(result: &araphor_data::InstanceResultV1) -> Result<&araphor_data::ResultContext> {
+    let araphor_data::InstanceResultKindV1::Call { context, .. } = &result.kind else {
+        return Err("count call context".into());
+    };
+    Ok(context)
+}
+
+async fn checkpoint(
+    fixture: &Fixture,
+    client: &AraphorClient,
+    receipt: &ManagedReceipt,
+) -> Result<(araphor_data::InstanceResultV1, sdk::wire::Output)> {
     let data = fixture.control.analysis_store().ok_or("checkpoint store")?;
-    let control = AnalysisReadControl::default();
     let current = data
-        .managed_instance([1; 16], &receipt.instance, &control)?
+        .managed_instance([1; 16], &receipt.instance, &AnalysisReadControl::default())?
         .ok_or("saved instance")?;
     let (call, _) = current
         .spec
@@ -124,11 +134,33 @@ fn checkpoint(fixture: &Fixture, receipt: &ManagedReceipt) -> Result<araphor_dat
         })
         .ok_or("declared count call")?;
     let reference = receipt.results.get(call).ok_or("count call receipt")?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_nanos()
-        .try_into()?;
-    Ok(data.managed_result(&current, &reference.result_id, now, &control)?)
+    let before = data.meta()?;
+    let PackageResponseV1::Result(metadata) = request(
+        client,
+        PackageRequestV1::ReadInstanceResult {
+            instance_id: receipt.instance.clone(),
+            result_id: reference.result_id.clone(),
+        },
+    )
+    .await?
+    else {
+        return Err("count call reference".into());
+    };
+    assert_eq!(metadata.result, *reference);
+    assert_eq!(metadata.receipt, *receipt);
+    let PackageResponseV1::Replayed(packet) = request(
+        client,
+        PackageRequestV1::ReplayInstanceResult {
+            instance_id: receipt.instance.clone(),
+            result_id: reference.result_id.clone(),
+        },
+    )
+    .await?
+    else {
+        return Err("count call replay".into());
+    };
+    assert_eq!(data.meta()?, before);
+    Ok((*metadata, packet))
 }
 
 #[tokio::test]
@@ -136,6 +168,7 @@ async fn public_instance_reacts() -> Result<()> {
     let tls = MtlsFixture::new(false)?;
     let oidc = OidcFixture::start(&tls.files, "instance-operator").await?;
     let bundle = Denials::bundle("public-1", 2, false);
+    let model = bundle.artifacts[0].descriptor.exports[0].clone();
     let mut auth = oidc.auth(
         "https://localhost:44444",
         Some([1; 16]),
@@ -182,12 +215,13 @@ async fn public_instance_reacts() -> Result<()> {
             assert_eq!(first.results.len(), 2);
             assert_eq!(first.selected.commit_revision, first.commit_revision);
             assert!(first.results.values().all(|reference| reference.commit_revision == first.commit_revision));
-            let saved = checkpoint(&fixture, &first)?;
-            assert_eq!(saved.context.target, "sql");
-            let initial = saved.context.clone();
-            assert_eq!(saved.commit_revision, first.commit_revision);
-            assert_eq!(values(&saved.output.datasets[0], "count")?, [2]);
-            let state = saved.output.checkpoint.ok_or("first checkpoint")?;
+            let (saved, packet) = checkpoint(&fixture, &client, &first).await?;
+            let output = packet.decode_model(&model)?;
+            assert_eq!(call_context(&saved)?.target, "sql");
+            let initial = call_context(&saved)?.clone();
+            assert_eq!(saved.result.commit_revision, first.commit_revision);
+            assert_eq!(values(&output.datasets[0], "count")?, [2]);
+            let state = output.checkpoint.ok_or("first checkpoint")?;
             assert_eq!(state.version, 1);
             assert_eq!(state.datasets.len(), 1);
             assert_eq!(state.datasets[0].name, "state");
@@ -197,26 +231,31 @@ async fn public_instance_reacts() -> Result<()> {
             assert_eq!(second.results.len(), 2);
             assert_eq!(second.selected.commit_revision, second.commit_revision);
             assert!(second.results.values().all(|reference| reference.commit_revision == second.commit_revision));
-            let saved = checkpoint(&fixture, &second)?;
-            assert_eq!(saved.commit_revision, second.commit_revision);
-            assert_ne!(saved.context.inputs, initial.inputs);
-            assert_eq!(values(&saved.output.datasets[0], "count")?, [3]);
-            let state = saved.output.checkpoint.ok_or("second checkpoint")?;
+            let (saved, packet) = checkpoint(&fixture, &client, &second).await?;
+            let output = packet.decode_model(&model)?;
+            assert_eq!(saved.result.commit_revision, second.commit_revision);
+            assert_ne!(call_context(&saved)?.inputs, initial.inputs);
+            assert_eq!(values(&output.datasets[0], "count")?, [3]);
+            let state = output.checkpoint.ok_or("second checkpoint")?;
             assert_eq!(state.version, 1);
             assert_eq!(state.datasets.len(), 1);
             assert_eq!(state.datasets[0].name, "state");
             assert_eq!(values(&state.datasets[0], "runs")?, [1]);
-            let earlier = checkpoint(&fixture, &first)?;
+            let (earlier, packet) = checkpoint(&fixture, &client, &first).await?;
+            let earlier_output = packet.decode_model(&model)?;
             assert!(!earlier.current);
-            assert_eq!(earlier.context, initial);
-            assert_eq!(earlier.commit_revision, first.commit_revision);
-            assert_eq!(values(&earlier.output.datasets[0], "count")?, [2]);
-            let state = earlier.output.checkpoint.ok_or("retained checkpoint")?;
+            assert_eq!(call_context(&earlier)?, &initial);
+            assert_eq!(earlier.result.commit_revision, first.commit_revision);
+            assert_eq!(values(&earlier_output.datasets[0], "count")?, [2]);
+            let state = earlier_output.checkpoint.ok_or("retained checkpoint")?;
             assert_eq!(state.version, 1);
             assert_eq!(state.datasets.len(), 1);
             assert_eq!(state.datasets[0].name, "state");
             assert_eq!(values(&state.datasets[0], "runs")?, [1]);
-            let PackageResponseV1::Output(output) = request(&client, PackageRequestV1::ReadInstanceResult { instance_id: admitted.id.clone(), result_id: second.selected.result_id.clone() }).await? else { return Err("selected output".into()); };
+            let PackageResponseV1::Result(reference) = request(&client, PackageRequestV1::ReadInstanceResult { instance_id: admitted.id.clone(), result_id: second.selected.result_id.clone() }).await? else { return Err("selected reference".into()); };
+            assert_eq!(reference.result, second.selected);
+            assert_eq!(reference.receipt, second);
+            let PackageResponseV1::Output(output) = request(&client, PackageRequestV1::ReplayInstanceResult { instance_id: admitted.id.clone(), result_id: second.selected.result_id.clone() }).await? else { return Err("selected replay".into()); };
             assert_eq!(values(&output.decode_any()?, "count")?, [3]);
             let stopped = instance(request(&client, PackageRequestV1::StopInstance { instance_id: admitted.id.clone(), expected_lifecycle: running.lifecycle }).await?)?;
             assert!(!stopped.running);
@@ -246,9 +285,11 @@ async fn public_instance_reacts() -> Result<()> {
             assert_eq!(status.progress, stopped.progress);
             let PackageResponseV1::History(history) = request(&client, PackageRequestV1::InspectInstanceHistory { instance_id: stopped.id }).await? else { return Err("reopened history".into()); };
             assert_eq!(history, expected);
-            let saved = checkpoint(&fixture, &receipt)?;
-            assert_eq!(values(&saved.output.datasets[0], "count")?, [3]);
-            let state = saved.output.checkpoint.ok_or("reopened checkpoint")?;
+            let (saved, packet) = checkpoint(&fixture, &client, &receipt).await?;
+            let output = packet.decode_model(&model)?;
+            assert_eq!(saved.result.commit_revision, receipt.commit_revision);
+            assert_eq!(values(&output.datasets[0], "count")?, [3]);
+            let state = output.checkpoint.ok_or("reopened checkpoint")?;
             assert_eq!(state.version, 1);
             assert_eq!(state.datasets.len(), 1);
             assert_eq!(state.datasets[0].name, "state");
@@ -271,6 +312,7 @@ async fn public_receipt_reopens() -> Result<()> {
     let tls = MtlsFixture::new(false)?;
     let oidc = OidcFixture::start(&tls.files, "receipt-operator").await?;
     let bundle = Denials::bundle("public-1", 2, false);
+    let model = bundle.artifacts[0].descriptor.exports[0].clone();
     let mut auth = oidc.auth(
         "https://localhost:44444",
         Some([1; 16]),
@@ -305,10 +347,11 @@ async fn public_receipt_reopens() -> Result<()> {
             let PackageResponseV1::History(repeated) = request(&client, run.clone()).await? else { return Err("repeated receipts".into()); };
             assert_eq!(repeated, receipts);
             assert_eq!(fixture.control.analysis_store().ok_or("retry store")?.meta()?, before);
-            let saved = checkpoint(&fixture, &receipts[0])?;
-            assert_eq!(saved.commit_revision, receipts[0].commit_revision);
-            assert_eq!(values(&saved.output.datasets[0], "count")?, [2]);
-            let state = saved.output.checkpoint.ok_or("finite checkpoint")?;
+            let (saved, packet) = checkpoint(&fixture, &client, &receipts[0]).await?;
+            let output = packet.decode_model(&model)?;
+            assert_eq!(saved.result.commit_revision, receipts[0].commit_revision);
+            assert_eq!(values(&output.datasets[0], "count")?, [2]);
+            let state = output.checkpoint.ok_or("finite checkpoint")?;
             assert_eq!(state.version, 1);
             assert_eq!(state.datasets.len(), 1);
             assert_eq!(state.datasets[0].name, "state");
@@ -328,9 +371,11 @@ async fn public_receipt_reopens() -> Result<()> {
             let PackageResponseV1::History(repeated) = request(&client, run).await? else { return Err("reopened receipt".into()); };
             assert_eq!(repeated, receipts);
             assert_eq!(fixture.control.analysis_store().ok_or("reopened store")?.meta()?, before);
-            let saved = checkpoint(&fixture, &receipts[0])?;
-            assert_eq!(values(&saved.output.datasets[0], "count")?, [2]);
-            let state = saved.output.checkpoint.ok_or("saved checkpoint")?;
+            let (saved, packet) = checkpoint(&fixture, &client, &receipts[0]).await?;
+            let output = packet.decode_model(&model)?;
+            assert_eq!(saved.result.commit_revision, receipts[0].commit_revision);
+            assert_eq!(values(&output.datasets[0], "count")?, [2]);
+            let state = output.checkpoint.ok_or("saved checkpoint")?;
             assert_eq!(state.version, 1);
             assert_eq!(state.datasets.len(), 1);
             assert_eq!(state.datasets[0].name, "state");

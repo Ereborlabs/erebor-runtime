@@ -89,8 +89,13 @@ impl Output {
                 serde_json::to_vec_pretty(&document).context(EncodeSnafu)
             }
             PackageResponseV1::Result(result) => {
-                let reasons = result
-                    .output
+                if matches!(self.mode, OutputMode::Jsonl) {
+                    return Self::json("instance_result", result);
+                }
+                serde_json::to_vec_pretty(result).context(EncodeSnafu)
+            }
+            PackageResponseV1::Replayed(output) => {
+                let reasons = output
                     .reasons
                     .iter()
                     .map(|reason| {
@@ -101,8 +106,7 @@ impl Output {
                         }))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let checkpoint = result
-                    .output
+                let checkpoint = output
                     .checkpoint
                     .as_ref()
                     .map(|state| -> Result<_> {
@@ -113,23 +117,13 @@ impl Output {
                     })
                     .transpose()?;
                 let document = serde_json::json!({
-                    "instance_id": &result.instance_id,
-                    "result_id": &result.result_id,
-                    "image": &result.image,
-                    "package": &result.package,
-                    "export": &result.export,
-                    "context": &result.context,
-                    "commit_revision": result.commit_revision,
-                    "current": result.current,
-                    "output": {
-                        "datasets": Self::output_rows(&result.output.datasets)?,
-                        "evidence": &result.output.evidence,
-                        "reasons": reasons,
-                        "checkpoint": checkpoint
-                    }
+                    "datasets": Self::output_rows(&output.datasets)?,
+                    "evidence": &output.evidence,
+                    "reasons": reasons,
+                    "checkpoint": checkpoint
                 });
                 if matches!(self.mode, OutputMode::Jsonl) {
-                    return Self::json("instance_output", &document);
+                    return Self::json("instance_replay", &document);
                 }
                 serde_json::to_vec_pretty(&document).context(EncodeSnafu)
             }
@@ -283,7 +277,50 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn raw_output_keeps_auxiliaries() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn result_output_keeps_references() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let reference = araphor_data::analysis::PackageResultRefV1 {
+            result_id: "selected".into(),
+            commit_revision: 17,
+        };
+        let result = araphor_data::InstanceResultV1 {
+            instance_id: "counts".into(),
+            result: reference.clone(),
+            definition_revision: format!("sha256:{}", "1".repeat(64)),
+            generation: 2,
+            source: araphor_data::AnalysisStoreMetaV1 {
+                store_uuid: uuid::Uuid::from_bytes([7; 16]),
+                schema_version: 4,
+                recovery_epoch: 6,
+                commit_revision: 9,
+            },
+            time_utc_ns: 10,
+            prior: std::collections::BTreeMap::from([(3, None)]),
+            receipt: araphor_data::ManagedReceipt {
+                frontier: None,
+                instance: "counts".into(),
+                attempt: "first".into(),
+                commit_revision: 17,
+                selected: reference,
+                results: Default::default(),
+                graph: None,
+            },
+            current: false,
+            kind: araphor_data::InstanceResultKindV1::Selected,
+        };
+        for mode in [OutputMode::Jsonl, OutputMode::Table] {
+            let bytes = Output::new(Some(mode), false)
+                .package(PackageResponseV1::Result(Box::new(result.clone())))?;
+            let document: serde_json::Value = serde_json::from_slice(&bytes)?;
+            let frame = document.get("frame").unwrap_or(&document);
+            assert_eq!(frame, &serde_json::to_value(&result)?);
+            assert!(frame.get("output").is_none());
+            assert!(frame.get("grant").is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn replay_output_keeps_auxiliaries() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use araphor_analysis_sdk as sdk;
         let schema = sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]);
         let details = sdk::Schema::new(vec![sdk::Field::new("detail", sdk::DataType::Utf8, false)]);
@@ -382,52 +419,21 @@ mod tests {
         };
         let package = sdk::Package::new("fixture", "r1", vec![model.clone()]);
         let packet = sdk::wire::Output::encode(&package, &evaluation, &output)?;
-        let mut context = araphor_data::ResultContext::new("first", 10, &evaluation.inputs);
-        context.context = evaluation.context.clone();
-        let image = araphor_data::PackageRefV1 {
-            package_id: "fixture".into(),
-            revision: "r1".into(),
-        };
-        let result = araphor_data::InstanceResultV1 {
-            instance_id: "counts".into(),
-            result_id: "exact-result".into(),
-            image: araphor_discovery_definition::ImagePin {
-                image: image.clone(),
-                digest: format!("sha256:{}", "0".repeat(64)),
-            },
-            package: image,
-            export: "read".into(),
-            context,
-            commit_revision: 17,
-            current: false,
-            output: packet,
-        };
         for mode in [OutputMode::Jsonl, OutputMode::Table] {
-            let response = PackageResponseV1::Result(Box::new(result.clone()));
+            let response = PackageResponseV1::Replayed(packet.clone());
             let bytes = Output::new(Some(mode), false).package(response)?;
             let document: serde_json::Value = serde_json::from_slice(&bytes)?;
             let frame = document.get("frame").unwrap_or(&document);
-            assert_eq!(frame["instance_id"], "counts");
-            assert_eq!(frame["result_id"], "exact-result");
-            assert_eq!(frame["image"], serde_json::to_value(&result.image)?);
-            assert_eq!(frame["package"], serde_json::to_value(&result.package)?);
-            assert_eq!(frame["export"], "read");
-            assert_eq!(frame["commit_revision"], 17);
-            assert_eq!(frame["current"], false);
-            assert_eq!(frame["context"], serde_json::to_value(&result.context)?);
             assert_eq!(
-                frame["output"]["datasets"],
+                frame["datasets"],
                 serde_json::json!({"rows":[{"value":1}],"other":[{"value":2}]})
             );
+            assert_eq!(frame["evidence"], serde_json::to_value(&output.evidence)?);
             assert_eq!(
-                frame["output"]["evidence"],
-                serde_json::to_value(&output.evidence)?
-            );
-            assert_eq!(
-                frame["output"]["checkpoint"],
+                frame["checkpoint"],
                 serde_json::json!({"version":7,"datasets":{"state":[{"value":1}]}})
             );
-            let reasons = frame["output"]["reasons"].as_array().ok_or("reason rows")?;
+            let reasons = frame["reasons"].as_array().ok_or("reason rows")?;
             assert_eq!(reasons.len(), 2);
             for (reason, expected) in reasons.iter().zip(&output.reasons) {
                 assert_eq!(reason["output"], serde_json::to_value(&expected.output)?);
@@ -436,21 +442,16 @@ mod tests {
             }
         }
         for role in ["reason", "checkpoint"] {
-            let mut invalid = result.clone();
+            let mut invalid = packet.clone();
             if role == "reason" {
-                invalid.output.reasons[0].details.truncate(3);
+                invalid.reasons[0].details.truncate(3);
             } else {
-                invalid
-                    .output
-                    .checkpoint
-                    .as_mut()
-                    .ok_or("checkpoint")?
-                    .datasets[0]
+                invalid.checkpoint.as_mut().ok_or("checkpoint")?.datasets[0]
                     .arrow_ipc
                     .truncate(3);
             }
             assert!(Output::new(Some(OutputMode::Jsonl), false)
-                .package(PackageResponseV1::Result(Box::new(invalid)))
+                .package(PackageResponseV1::Replayed(invalid))
                 .is_err());
         }
         Ok(())

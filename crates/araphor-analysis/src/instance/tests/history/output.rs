@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn raw_output_checks_scope() -> TestResult {
+async fn call_reference_checks_scope() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     let (_, receipt) = historical(&fixture, "history").await?;
     fixture.admit("foreign", "SELECT 1").await?;
@@ -15,7 +15,7 @@ async fn raw_output_checks_scope() -> TestResult {
         .unwrap_or_else(|error| error.into_inner())
         .clear();
     let before = fixture.query.store().meta()?;
-    let araphor_data::PackageResponseV1::Result(output) = Instance::read_output(
+    let output = Instance::read_result(
         Arc::clone(&fixture.query),
         reader.clone(),
         reader.grant.clone(),
@@ -23,23 +23,15 @@ async fn raw_output_checks_scope() -> TestResult {
         id,
         &AnalysisReadControl::default(),
     )
-    .await?
-    else {
-        return Err("package output variant".into());
+    .await?;
+    let araphor_data::InstanceResultKindV1::Call { context, .. } = &output.kind else {
+        return Err("call reference variant".into());
     };
-    assert_eq!(output.context.context.id, "first");
+    assert_eq!(context.context.id, "first");
     assert!(!output.current);
-    assert_eq!(output.output.evidence.len(), 1);
-    assert_eq!(output.output.reasons.len(), 1);
-    assert_eq!(
-        output
-            .output
-            .checkpoint
-            .as_ref()
-            .ok_or("checkpoint")?
-            .version,
-        1
-    );
+    assert_eq!(output.result.result_id, *id);
+    assert_eq!(output.receipt, receipt);
+    assert!(serde_json::to_value(&output)?.get("output").is_none());
     for case in 0..6 {
         let mut grant = reader.grant.clone();
         let mut authority = Arc::clone(&reader);
@@ -58,7 +50,7 @@ async fn raw_output_checks_scope() -> TestResult {
             4 => instance = "foreign",
             _ => grant.expires_utc_ns = Some(1),
         }
-        let error = Instance::read_output(
+        let error = Instance::read_result(
             Arc::clone(&fixture.query),
             authority,
             grant,
@@ -68,7 +60,7 @@ async fn raw_output_checks_scope() -> TestResult {
         )
         .await
         .err()
-        .ok_or("unauthorized raw output")?;
+        .ok_or("unauthorized call reference")?;
         let expected = if case == 3 {
             Code::Missing
         } else {
@@ -84,7 +76,7 @@ async fn raw_output_checks_scope() -> TestResult {
 }
 
 #[tokio::test]
-async fn raw_output_checks_disclosure() -> TestResult {
+async fn result_reference_checks_disclosure() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     let (_, receipt) = historical(&fixture, "history").await?;
     for id in [
@@ -95,7 +87,7 @@ async fn raw_output_checks_disclosure() -> TestResult {
         let mut reader = Reader::new(fixture.grant.clone());
         reader.deny_at = 2;
         let reader = Arc::new(reader);
-        let error = Instance::read_output(
+        let error = Instance::read_result(
             Arc::clone(&fixture.query),
             reader.clone(),
             reader.grant.clone(),
@@ -113,7 +105,7 @@ async fn raw_output_checks_disclosure() -> TestResult {
         assert_eq!(reader.checks.load(Ordering::SeqCst), 2);
         let reader = Arc::new(Reader::new(fixture.grant.clone()));
         reader.announce.store(true, Ordering::SeqCst);
-        Instance::read_output(
+        Instance::read_result(
             Arc::clone(&fixture.query),
             reader.clone(),
             reader.grant.clone(),
@@ -126,7 +118,7 @@ async fn raw_output_checks_disclosure() -> TestResult {
         reader.announce.store(true, Ordering::SeqCst);
         reader.revoke.store(true, Ordering::SeqCst);
         let parent = AnalysisReadControl::default();
-        let error = Instance::read_output(
+        let error = Instance::read_result(
             Arc::clone(&fixture.query),
             reader.clone(),
             reader.grant.clone(),
@@ -145,7 +137,7 @@ async fn raw_output_checks_disclosure() -> TestResult {
         let cancelled = AnalysisReadControl::default();
         cancelled.cancel()?;
         let reader = Arc::new(Reader::new(fixture.grant.clone()));
-        let error = Instance::read_output(
+        let error = Instance::read_result(
             Arc::clone(&fixture.query),
             reader.clone(),
             reader.grant.clone(),

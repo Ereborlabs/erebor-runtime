@@ -7,9 +7,9 @@ use araphor_data::{AnalysisReadControl, AnalysisTableRequests, PackageErrorCodeV
 use araphor_discovery_definition::{Definition, ResolvedDefinition};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::catalog::TableProvider as _;
-use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::logical_expr::LogicalPlan;
+use futures_util::future::{BoxFuture, FutureExt};
 use futures_util::TryStreamExt as _;
 use snafu::ResultExt as _;
 
@@ -26,7 +26,7 @@ mod tests;
 
 pub use call::PackageCall;
 pub(crate) use physical::CallContext;
-pub use physical::{CallResult, CallReuse, ExecutionReceipt, Invocation};
+pub use physical::{CallResult, ExecutionReceipt, Invocation};
 
 #[derive(Clone)]
 pub struct PreparedDefinition {
@@ -45,7 +45,6 @@ struct DefinitionAdmission {
     sources: AnalysisTableRequests,
     tenant: [u8; 16],
     images: Arc<package::Bundles>,
-    retained: Option<Arc<crate::sources::InputCapture>>,
     _memory: MemoryReservation,
 }
 
@@ -379,7 +378,6 @@ impl Engine {
                 (name.clone(), provider)
             })
             .collect();
-        let registered = Arc::clone(&tables);
         let mut packages =
             package::Packages::new(self, bundles, tenant, providers, Arc::clone(&memory))?;
         packages.state.config_mut().set_extension(tables);
@@ -393,59 +391,42 @@ impl Engine {
             .await?;
         // Seal after native parameter binding reconstructs child schemas.
         let plan = PackageCall::seal(plan).context(SqlSnafu)?;
-        let admitted = |table: &Arc<dyn datafusion::catalog::TableProvider>| {
-            table
-                .as_any()
-                .downcast_ref::<crate::sources::SourceProvider>()
-                .and_then(crate::sources::SourceProvider::retained_source)
-                .filter(|source| {
-                    origins.contains(&crate::sources::SourceOrigin::Package(source.slot))
-                })
-                .cloned()
-        };
-        let count = registered
-            .values()
-            .filter(|table| admitted(&table.provider()).is_some())
-            .count();
-        let source_bytes = count
-            .checked_mul(std::mem::size_of::<Arc<crate::sources::RetainedSource>>())
-            .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
-        let bytes = source_bytes
-            .checked_add(if count == 0 {
-                0
-            } else {
-                std::mem::size_of::<crate::sources::InputCapture>()
-            })
-            .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
-        let transient = source_bytes
-            .checked_add(source_bytes)
-            .map(|transient| transient.max(bytes))
-            .ok_or_else(|| PackageErrorCodeV1::Limit.error("definition retained sources"))?;
-        let bindings_memory = memory.reserve_input(transient).context(SqlSnafu)?;
-        let mut bindings = Vec::with_capacity(count);
-        for table in registered
-            .values()
-            .map(crate::execution::TableBinding::provider)
-        {
-            if let Some(source) = admitted(&table) {
-                bindings.push(source);
-            }
-        }
-        let retained_sources: Arc<[Arc<crate::sources::RetainedSource>]> = bindings.into();
-        bindings_memory.try_resize(bytes).context(SqlSnafu)?;
-        let inputs = (!retained_sources.is_empty()).then(|| {
-            Arc::new(crate::sources::InputCapture {
-                retained: retained_sources,
-                _memory: bindings_memory,
-            })
-        });
         let sources = origins
             .into_iter()
             .filter_map(|source| source.durable().map(|name| (name.to_owned(), None)))
             .collect();
+        let image_count = packages.bundles.len();
+        let image_bytes = image_count
+            .checked_mul(std::mem::size_of::<(
+                Arc<araphor_package::PackageBundle>,
+                Arc<MemoryReservation>,
+            )>())
+            .ok_or_else(|| PackageErrorCodeV1::Limit.error("retained image closure"))?;
+        retained.try_grow(image_bytes).context(SqlSnafu)?;
+        let mut images = Vec::with_capacity(image_count);
+        for entry in packages.bundles.iter() {
+            if let Some((prior, _)) = images.iter().find(
+                |(prior, _): &&(Arc<araphor_package::PackageBundle>, Arc<MemoryReservation>)| {
+                    prior.bundle().root == entry.0.bundle().root
+                },
+            ) {
+                if prior.digest() != entry.0.digest() {
+                    return Err(PackageErrorCodeV1::Conflict
+                        .error("retained image pin")
+                        .into());
+                }
+            } else {
+                images.push(entry.clone());
+            }
+        }
+        let images: Arc<package::Bundles> = images.into();
         resolved.images = packages.pins()?;
         retained
-            .try_resize(DefinitionAdmission::allocation_bytes(&resolved, &sources)?)
+            .try_resize(
+                DefinitionAdmission::allocation_bytes(&resolved, &sources)?
+                    .checked_add(image_bytes)
+                    .ok_or_else(|| PackageErrorCodeV1::Limit.error("retained image closure"))?,
+            )
             .context(SqlSnafu)?;
         let validation =
             crate::parser::Parser::stack(|| state.optimize(&plan)).context(SqlSnafu)?;
@@ -461,8 +442,7 @@ impl Engine {
                 resolved,
                 sources,
                 tenant,
-                images: Arc::clone(&packages.bundles),
-                retained: inputs,
+                images,
                 _memory: retained,
             }),
         })
@@ -582,69 +562,68 @@ impl Session {
             .await
     }
 
-    async fn capture_invocation(
-        &self,
-        definition: &PreparedDefinition,
+    fn capture_invocation<'a>(
+        &'a self,
+        definition: &'a PreparedDefinition,
         invocation: Invocation,
         managed: Option<araphor_data::ManagedRead>,
-    ) -> Result<CapturedExecution> {
-        self.control().check()?;
-        definition.check_invocation(self.selection(), &invocation, managed.as_ref())?;
-        let mut session = self.clone();
-        session.managed = managed;
-        session.inputs = definition.admission.retained.clone();
-        session.control = Arc::new(self.control().operation()?);
-        let pending = PendingRead {
-            control: Arc::clone(session.control()),
-            active: true,
-        };
-        let calls = session.call_context(invocation);
-        session.calls = Some(Arc::clone(&calls));
-        let result = {
-            let capture = async {
-                let permit = Arc::new(
-                    session
-                        .engine()
-                        .reserve_evaluation(session.selection().tenant_id)?,
-                );
-                session
-                    .capture_plan(
-                        &definition.plan,
-                        definition.sources(),
-                        Read::Snapshot,
-                        permit,
-                    )
-                    .await
+    ) -> BoxFuture<'a, Result<CapturedExecution>> {
+        async move {
+            self.control().check()?;
+            definition.check_invocation(self.selection(), &invocation, managed.as_ref())?;
+            let mut session = self.clone();
+            session.definition = Some(Arc::new(definition.clone()));
+            session.managed = managed;
+            session.control = Arc::new(self.control().operation()?);
+            let pending = PendingRead {
+                control: Arc::clone(session.control()),
+                active: true,
             };
-            tokio::pin!(capture);
-            tokio::select! {
-                result = &mut capture => result,
-                stopped = self.control().query_async(std::future::pending::<Result<CapturedPhysical>>()) => {
+            let calls = session.call_context(invocation);
+            session.calls = Some(Arc::clone(&calls));
+            let result = {
+                let capture = async {
+                    let permit = session.evaluation_permit()?;
+                    session
+                        .capture_plan(
+                            &definition.plan,
+                            definition.sources(),
+                            Read::Snapshot,
+                            permit,
+                        )
+                        .await
+                };
+                tokio::pin!(capture);
+                tokio::select! {
+                    result = &mut capture => result,
+                    stopped = self.control().query_async(std::future::pending::<Result<CapturedPhysical>>()) => {
+                        let _cancelled = session.control().cancel();
+                        let _finished = capture.await;
+                        stopped
+                    }
+                }
+            };
+            let result = result.and_then(|captured| {
+                self.control().check()?;
+                Ok(captured)
+            });
+            match result {
+                Ok(captured) => Ok(CapturedExecution::new(
+                    captured,
+                    session,
+                    calls,
+                    Arc::clone(self.control()),
+                    pending,
+                )),
+                Err(error) => {
                     let _cancelled = session.control().cancel();
-                    let _finished = capture.await;
-                    stopped
+                    calls.finish().await;
+                    self.control().check()?;
+                    Err(error)
                 }
             }
-        };
-        let result = result.and_then(|captured| {
-            self.control().check()?;
-            Ok(captured)
-        });
-        match result {
-            Ok(captured) => Ok(CapturedExecution::new(
-                captured,
-                session,
-                calls,
-                Arc::clone(self.control()),
-                pending,
-            )),
-            Err(error) => {
-                let _cancelled = session.control().cancel();
-                calls.finish().await;
-                self.control().check()?;
-                Err(error)
-            }
         }
+        .boxed()
     }
 }
 
@@ -667,11 +646,6 @@ impl PreparedDefinition {
             .fail();
         }
         if let Some(managed) = managed {
-            if self.admission.retained.is_some() {
-                return Err(PackageErrorCodeV1::Unsupported
-                    .error("retained source publication")
-                    .into());
-            }
             if !invocation.inputs.is_empty()
                 || !invocation.checkpoints.is_empty()
                 || !invocation.previous_outputs.is_empty()
@@ -706,66 +680,48 @@ impl PreparedDefinition {
             .copied()
             .collect::<BTreeSet<_>>();
         if !checkpoints.is_empty() || !inputs.is_empty() || !previous.is_empty() {
-            self.plan
-                .apply_with_subqueries(|plan| {
-                    if let LogicalPlan::Extension(extension) = plan {
-                        if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
-                            if inputs.remove(&call.id()) {
-                                call.input_scope
-                                    .check_supplied(&invocation.inputs[&call.id()])
-                                    .map_err(|error| {
-                                        datafusion::common::DataFusionError::External(Box::new(
-                                            error,
-                                        ))
-                                    })?;
-                            }
-                            if checkpoints.remove(&call.id())
-                                && call
-                                    .descriptor()
-                                    .exports
-                                    .iter()
-                                    .find(|model| model.name == call.export())
-                                    .is_none_or(|model| model.checkpoint.is_none())
-                            {
-                                return Err(datafusion::common::DataFusionError::External(
-                                    Box::new(
-                                        PackageErrorCodeV1::Invalid
-                                            .error("invocation checkpoint export"),
-                                    ),
-                                ));
-                            }
-                            if previous.remove(&call.id()) {
-                                let model = call
-                                    .descriptor()
-                                    .exports
-                                    .iter()
-                                    .find(|model| model.name == call.export())
-                                    .filter(|model| {
-                                        model
-                                            .checkpoint
-                                            .as_ref()
-                                            .is_some_and(|spec| spec.resume_input_changes)
-                                    })
-                                    .filter(|_| invocation.checkpoints.contains_key(&call.id()))
-                                    .ok_or_else(|| {
-                                        datafusion::common::DataFusionError::External(Box::new(
-                                            PackageErrorCodeV1::Invalid
-                                                .error("invocation previous output export"),
-                                        ))
-                                    })?;
-                                sdk::Dataset::validate_all(
-                                    &invocation.previous_outputs[&call.id()],
-                                    &model.outputs,
-                                )
-                                .map_err(|error| {
-                                    datafusion::common::DataFusionError::External(Box::new(error))
-                                })?;
-                            }
-                        }
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })
-                .context(SqlSnafu)?;
+            PackageCall::any(&self.plan, &mut |call| {
+                if inputs.remove(&call.id()) {
+                    call.input_scope
+                        .check_supplied(&invocation.inputs[&call.id()])
+                        .map_err(|error| {
+                            datafusion::common::DataFusionError::External(Box::new(error))
+                        })?;
+                }
+                if checkpoints.remove(&call.id())
+                    && call.model().is_none_or(|model| model.checkpoint.is_none())
+                {
+                    return Err(datafusion::common::DataFusionError::External(Box::new(
+                        PackageErrorCodeV1::Invalid.error("invocation checkpoint export"),
+                    )));
+                }
+                if previous.remove(&call.id()) {
+                    let model = call
+                        .model()
+                        .filter(|model| {
+                            model
+                                .checkpoint
+                                .as_ref()
+                                .is_some_and(|spec| spec.resume_input_changes)
+                        })
+                        .filter(|_| invocation.checkpoints.contains_key(&call.id()))
+                        .ok_or_else(|| {
+                            datafusion::common::DataFusionError::External(Box::new(
+                                PackageErrorCodeV1::Invalid
+                                    .error("invocation previous output export"),
+                            ))
+                        })?;
+                    sdk::Dataset::validate_all(
+                        &invocation.previous_outputs[&call.id()],
+                        &model.outputs,
+                    )
+                    .map_err(|error| {
+                        datafusion::common::DataFusionError::External(Box::new(error))
+                    })?;
+                }
+                Ok(false)
+            })
+            .context(SqlSnafu)?;
             if !checkpoints.is_empty() {
                 return Err(PackageErrorCodeV1::Invalid
                     .error("invocation checkpoint call")

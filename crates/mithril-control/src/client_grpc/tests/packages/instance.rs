@@ -59,7 +59,7 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn selected_rpc_reads_sql_prql() -> TestResult {
+async fn selected_rpc_refs_and_replay() -> TestResult {
     for (program, rows) in [
         (
             Program::Sql {
@@ -114,7 +114,7 @@ async fn selected_rpc_reads_sql_prql() -> TestResult {
         fixture.service.auth.replace_package_managers(Vec::new())?;
         let store = &fixture.service.data()?.store;
         let before = store.meta()?;
-        let PackageResponseV1::Output(packet) = fixture
+        let PackageResponseV1::Result(result) = fixture
             .package(
                 PackageRequestV1::ReadInstanceResult {
                     instance_id: "selected".into(),
@@ -124,7 +124,43 @@ async fn selected_rpc_reads_sql_prql() -> TestResult {
             )
             .await?
         else {
-            return Err("selected raw variant".into());
+            return Err("selected reference variant".into());
+        };
+        assert_eq!(result.result, receipt.selected);
+        assert_eq!(result.receipt, receipt);
+        assert!(matches!(
+            &result.kind,
+            araphor_data::InstanceResultKindV1::Selected
+        ));
+        assert!(serde_json::to_value(&result)?.get("output").is_none());
+        let replay = PackageRequestV1::ReplayInstanceResult {
+            instance_id: "selected".into(),
+            result_id: receipt.selected.result_id.clone(),
+        };
+        for secure in [false, true] {
+            let error = fixture
+                .package(replay.clone(), secure)
+                .await
+                .err()
+                .ok_or("read authority executed replay")?;
+            assert_eq!(
+                error.code(),
+                if secure {
+                    tonic::Code::PermissionDenied
+                } else {
+                    tonic::Code::Unauthenticated
+                }
+            );
+        }
+        fixture
+            .service
+            .auth
+            .replace_package_managers(vec![crate::InvestigateGrant {
+                subject: "alice".into(),
+                tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+            }])?;
+        let PackageResponseV1::Output(packet) = fixture.package(replay, true).await? else {
+            return Err("replayed selected variant".into());
         };
         let data = packet.decode_any()?;
         assert_eq!(data.name, "selected");
@@ -133,44 +169,16 @@ async fn selected_rpc_reads_sql_prql() -> TestResult {
             data.batches[0].schema_ref().as_ref(),
             &instance.admitted().spec.manifest.selected_schema
         );
-        for result_id in [Some(receipt.selected.result_id.clone()), None] {
-            let PackageResponseV1::Output(packet) = fixture
-                .package(
-                    PackageRequestV1::QueryInstanceResult {
-                        instance_id: "selected".into(),
-                        result_id,
-                        sql: "SELECT value, __row_index FROM selected".into(),
-                    },
-                    false,
-                )
-                .await?
-            else {
-                return Err("selected query variant".into());
-            };
-            let queried = packet.decode_any()?;
-            assert_eq!(queried.name, "query");
-            assert_eq!(queried.rows(), rows);
-            assert_eq!(queried.batches[0].num_columns(), 2);
-            if rows != 0 {
-                assert_eq!(
-                    queried.batches[0]
-                        .column(0)
-                        .as_any()
-                        .downcast_ref::<arrow_array::UInt64Array>()
-                        .ok_or("selected value")?
-                        .value(0),
-                    7
-                );
-                assert_eq!(
-                    queried.batches[0]
-                        .column(1)
-                        .as_any()
-                        .downcast_ref::<arrow_array::UInt64Array>()
-                        .ok_or("selected index")?
-                        .value(0),
-                    0
-                );
-            }
+        if rows != 0 {
+            assert_eq!(
+                data.batches[0]
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow_array::UInt64Array>()
+                    .ok_or("selected value")?
+                    .value(0),
+                7
+            );
         }
         let error = fixture
             .package(
@@ -369,64 +377,33 @@ async fn instance_rpc_inspects_history() -> TestResult {
     assert!(document.get("grant").is_none());
     assert!(document.get("manifest").is_none());
     assert!(!serde_json::to_string(&status)?.contains("alice"));
-    let response = fixture
+    let PackageResponseV1::Result(result) = fixture
         .package(
-            PackageRequestV1::QueryInstanceResult {
+            PackageRequestV1::ReadInstanceResult {
                 instance_id: "counts".into(),
-                result_id: Some(reference.result_id.clone()),
-                sql: "SELECT count, __row_index FROM rows".into(),
+                result_id: reference.result_id.clone(),
             },
             false,
         )
-        .await?;
-    let PackageResponseV1::Output(output) = response else {
-        return Err("retained selected rows variant".into());
+        .await?
+    else {
+        return Err("retained reference variant".into());
     };
-    let data = output.decode_any()?;
-    assert_eq!(data.name, "query");
-    assert_eq!(data.rows(), 1);
-    assert_eq!(data.batches[0].num_columns(), 2);
-    for (column, value) in [(0, 3), (1, 0)] {
-        assert_eq!(
-            data.batches[0]
-                .column(column)
-                .as_any()
-                .downcast_ref::<arrow_array::UInt64Array>()
-                .ok_or("unsigned column")?
-                .value(0),
-            value
-        );
-    }
+    assert_eq!(result.result, *reference);
+    assert_eq!(result.receipt, receipts[0]);
+    assert!(!result.current);
     let error = fixture
         .package(
-            PackageRequestV1::QueryInstanceResult {
+            PackageRequestV1::ReadInstanceResult {
                 instance_id: other.admitted().spec.id.clone(),
-                result_id: Some(reference.result_id.clone()),
-                sql: "SELECT * FROM rows".into(),
+                result_id: reference.result_id.clone(),
             },
             false,
         )
         .await
         .err()
-        .ok_or("foreign instance result returned")?;
+        .ok_or("foreign instance reference returned")?;
     assert_eq!(error.code(), tonic::Code::PermissionDenied);
-    for sql in [
-        "SELECT * FROM events",
-        "WITH unused AS (SELECT * FROM events) SELECT * FROM rows",
-        "DELETE FROM rows",
-    ] {
-        assert!(fixture
-            .package(
-                PackageRequestV1::QueryInstanceResult {
-                    instance_id: "counts".into(),
-                    result_id: Some(reference.result_id.clone()),
-                    sql: sql.into(),
-                },
-                false
-            )
-            .await
-            .is_err());
-    }
     assert_eq!(store.meta()?, before);
     assert!(
         !store
@@ -438,7 +415,7 @@ async fn instance_rpc_inspects_history() -> TestResult {
 }
 
 #[tokio::test]
-async fn raw_rpc_keeps_auxiliaries() -> TestResult {
+async fn replay_rpc_keeps_auxiliaries() -> TestResult {
     use araphor_analysis_sdk as sdk;
     let fixture = Fixture::new()?;
     fixture
@@ -544,26 +521,60 @@ async fn raw_rpc_keeps_auxiliaries() -> TestResult {
         return Err("complete call packet variant".into());
     };
     assert_eq!(result.instance_id, "complete");
-    assert_eq!(result.result_id, reference.result_id);
-    assert_eq!(result.image, pin);
-    assert_eq!(result.package, result.image.image);
-    assert_eq!(result.export, "count");
-    assert_eq!(result.commit_revision, reference.commit_revision);
+    assert_eq!(result.result, *reference);
     assert!(!result.current);
-    assert_eq!(result.context.target, "sql");
-    assert_eq!(result.context.artifact, None);
-    assert_eq!(result.context.context.id, requests[0].id);
-    assert_eq!(
-        result.context.context.time_utc_ns,
-        requests[0].time_utc_ns as i64
-    );
-    assert_eq!(result.context.context.seed, Some(7));
-    assert_eq!(result.context.inputs.len(), 1);
-    assert_eq!(result.context.input_coverage.len(), 1);
-    assert_eq!(result.output.datasets.len(), 2);
-    assert_eq!(result.output.evidence.len(), 2);
-    assert_eq!(result.output.reasons.len(), 2);
-    let output = result.output.decode_model(&model)?;
+    assert_eq!(result.receipt, receipts[0]);
+    let araphor_data::InstanceResultKindV1::Call {
+        image,
+        package,
+        export,
+        context,
+        ..
+    } = &result.kind
+    else {
+        return Err("call reference kind".into());
+    };
+    assert_eq!(*image, pin);
+    assert_eq!(*package, image.image);
+    assert_eq!(export, "count");
+    assert_eq!(context.target, "sql");
+    assert_eq!(context.artifact, None);
+    assert_eq!(context.context.id, requests[0].id);
+    assert_eq!(context.context.time_utc_ns, requests[0].time_utc_ns as i64);
+    assert_eq!(context.context.seed, Some(7));
+    assert_eq!(context.inputs.len(), 1);
+    assert_eq!(context.input_coverage.len(), 1);
+    let replay = PackageRequestV1::ReplayInstanceResult {
+        instance_id: "complete".into(),
+        result_id: reference.result_id.clone(),
+    };
+    let error = fixture
+        .package(replay.clone(), true)
+        .await
+        .err()
+        .ok_or("Inspect authority executed call replay")?;
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
+    fixture
+        .service
+        .auth
+        .replace_package_managers(vec![crate::InvestigateGrant {
+            subject: "alice".into(),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }])?;
+    fixture
+        .service
+        .auth
+        .replace_package_trust(vec![crate::PackageTrustPinV1 {
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+            bundle_digest: pin.digest.clone(),
+        }])?;
+    let PackageResponseV1::Replayed(packet) = fixture.package(replay, true).await? else {
+        return Err("replayed call variant".into());
+    };
+    assert_eq!(packet.datasets.len(), 2);
+    assert_eq!(packet.evidence.len(), 2);
+    assert_eq!(packet.reasons.len(), 2);
+    let output = packet.decode_model(&model)?;
     for (name, expected) in [("rows", 3), ("other", 4)] {
         let data = output
             .datasets

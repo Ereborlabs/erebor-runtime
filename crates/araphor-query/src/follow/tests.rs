@@ -198,7 +198,7 @@ impl Fixture {
                 valid_from_utc_ns: None,
                 valid_until_utc_ns: None,
                 sensitivity: value.sensitivity,
-                body: serde_json::to_vec(&value).unwrap(),
+                body: value.encode().unwrap(),
             })
             .unwrap();
     }
@@ -1421,7 +1421,8 @@ async fn native_append_execution() {
     );
     let canonical = &SourceSnapshot::schemas()["events"];
     let mut requests = BTreeMap::from([("events".to_owned(), None)]);
-    let bounds = SourceSnapshot::requests(&mut requests, &[Arc::clone(children[0])], None).unwrap();
+    let bounds =
+        SourceSnapshot::requests(&mut requests, &[Arc::clone(children[0])], None, None).unwrap();
     assert_eq!(
         requests["events"],
         Some(

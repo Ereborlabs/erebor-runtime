@@ -250,19 +250,26 @@ impl<'a> EvidenceRetentionOwner<'a> {
                                 .entry(identity.tenant())
                                 .and_modify(|floor| *floor = (*floor).max(position))
                                 .or_insert(position);
-                            intervals.push([span.first, span.last]);
+                            intervals.push([
+                                span.first,
+                                span.last,
+                                entry.commit.revision,
+                                entry.commit.intake,
+                            ]);
                         }
                     }
                     let ranges = serde_json::to_string(&intervals).context(crate::JsonSnafu {
                         path: &self.store.root,
                     })?;
                     transaction.execute("INSERT INTO expired_ranges
-                        WITH spans AS (SELECT span[1] AS first, span[2] AS last
+                        WITH spans AS (SELECT span[1] AS first, span[2] AS last,
+                            span[3] AS source_revision, span[4] AS received_utc_ns
                             FROM (SELECT unnest(CAST(? AS UBIGINT[][])) AS span)),
-                        ordered AS (SELECT *, MAX(last) OVER (ORDER BY first ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prior FROM spans),
+                        ordered AS (SELECT *, MAX(last) OVER (PARTITION BY source_revision, received_utc_ns ORDER BY first ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prior FROM spans),
                         grouped AS (SELECT *, SUM(CASE WHEN prior::HUGEINT + 1 = first THEN 0 ELSE 1 END)
-                            OVER (ORDER BY first) AS group_id FROM ordered)
-                        SELECT ?, ?, ?, MIN(first), MAX(last), ? FROM grouped GROUP BY group_id",
+                            OVER (PARTITION BY source_revision, received_utc_ns ORDER BY first) AS group_id FROM ordered)
+                        SELECT ?, ?, ?, MIN(first), MAX(last), ?, source_revision, received_utc_ns
+                        FROM grouped GROUP BY source_revision, received_utc_ns, group_id",
                         params![ranges, id, key.as_slice(), tenant.as_slice(), revision])
                         .context(AnalysisDatabaseSnafu { operation: "record expired segment interval" })?;
                     transaction.execute("UPDATE segments SET state = 'Deleting', sealed = true WHERE segment_id = ? AND state = 'Live'", params![id])
@@ -306,16 +313,30 @@ impl<'a> EvidenceRetentionOwner<'a> {
                     transaction.execute("DELETE FROM evidence_refs WHERE stream_key = ? AND tenant_id = ? AND expires_utc_ns <= ?",
                         params![key.as_slice(), identity.tenant().as_slice(), now]).context(AnalysisDatabaseSnafu { operation: "remove expired witness references" })?;
                     if floor > before {
-                        transaction
-                            .execute(
-                                &format!(
-                                    "UPDATE {receipts} SET retained_floor = ? WHERE stream_key = ?"
-                                ),
-                                params![floor, key.as_slice()],
-                            )
-                            .context(AnalysisDatabaseSnafu {
-                                operation: "advance retained segment floor",
+                        if let Some(source) = identity.evidence() {
+                            let mut receipt = AnalysisStore::read_receipt_from(
+                                &transaction,
+                                &self.store.root,
+                                source,
+                                &key,
+                            )?
+                            .ok_or_else(|| {
+                                self.store
+                                    .state_error("the retained source receipt is absent")
                             })?;
+                            receipt.retained_floor = floor;
+                            AnalysisStore::record_source(
+                                &transaction,
+                                &self.store.root,
+                                &receipt,
+                                revision,
+                            )?;
+                        } else {
+                            transaction.execute(
+                                "INSERT INTO trace_versions SELECT stream_key, identity_json, tenant_id, last_sequence, output_bytes, terminal, ?, commit_revision, ? FROM trace_receipts WHERE stream_key = ?",
+                                params![floor, revision, key.as_slice()],
+                            ).context(AnalysisDatabaseSnafu { operation: "advance retained segment floor" })?;
+                        }
                         relations.push(receipts);
                     }
                     relations.push(relation);

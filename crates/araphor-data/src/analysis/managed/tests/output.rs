@@ -18,74 +18,49 @@ impl Fixture {
 }
 
 #[test]
-fn raw_output_keeps_packet() -> TestResult {
+fn call_reference_keeps_pin() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
-    let mut receipts = Vec::new();
-    for id in ["first", "second"] {
-        let capture = fixture.capture(&store, false)?;
-        let request = request(id);
-        let attempt = store.register_managed_attempt(&capture, &request, || Ok(()))?;
-        let evaluations = [
-            fixture.evaluation(&request, 10, Some(&capture))?,
-            fixture.evaluation(&request, 11, Some(&capture))?,
-        ];
-        let outputs = [fixture.output(2)?, fixture.output(3)?];
-        receipts.push(fixture.publish(&store, &attempt, &evaluations, &outputs)?);
-    }
+    let first = fixture.selected_receipt(&store, "first")?;
+    fixture.selected_receipt(&store, "second")?;
     let control = AnalysisReadControl::default();
     let current = fixture.current(&store)?;
     let before = store.meta()?;
-    for (call, reference) in &receipts[0].results {
-        let expected = {
-            let mut reader = store.reader_until(&control)?;
-            control.run(&mut reader, |reader| {
-                AnalysisStore::managed_record_from(reader, [1; 16], &reference.result_id)
-            })?
-        };
-        let ManagedOutput::Call { result, .. } =
-            store.managed_output(&current, &reference.result_id, 10, &control)?
+    for (call, reference) in &first.results {
+        let result = store.managed_result(&current, &reference.result_id, 10, &control)?;
+        let crate::InstanceResultKindV1::Call {
+            image,
+            package,
+            export,
+            context,
+            call: id,
+        } = &result.kind
         else {
-            return Err("package output variant".into());
+            return Err("call reference kind".into());
         };
-        assert_eq!(result.output, expected.1);
+        assert_eq!(id, call);
         assert_eq!(result.instance_id, current.spec.id);
-        assert_eq!(result.result_id, reference.result_id);
-        assert_eq!(result.commit_revision, reference.commit_revision);
-        assert_eq!(result.commit_revision, expected.2);
-        assert_eq!(result.context, expected.0.context);
-        assert_eq!(result.image, current.spec.manifest.calls[call].image);
-        assert_eq!(result.package, current.spec.manifest.calls[call].package);
-        assert_eq!(result.export, "count");
-        assert_eq!(result.context.target, "sql");
-        assert_eq!(result.context.artifact, None);
-        assert_eq!(result.context.context.id, "first");
-        assert!(!result.current);
-        assert_eq!(result.output.datasets.len(), 1);
-        assert_eq!(result.output.evidence.len(), 1);
-        assert_eq!(result.output.reasons.len(), 1);
-        assert_eq!(result.output.checkpoint.as_ref().ok_or("state")?.version, 1);
-        let decoded = result.output.decode_model(&fixture.model)?;
-        assert_eq!(decoded.datasets[0].batches[0].num_rows(), 1);
+        assert_eq!(&result.result, reference);
+        assert_eq!(result.receipt, first);
+        assert_eq!(image, &current.spec.manifest.calls[call].image);
+        assert_eq!(package, &current.spec.manifest.calls[call].package);
+        assert_eq!(export, "count");
+        assert_eq!(context.target, "sql");
+        assert_eq!(context.artifact, None);
+        assert_eq!(context.context.id, "first");
         assert_eq!(
-            decoded.checkpoint.as_ref().ok_or("decoded state")?.datasets[0].batches,
-            decoded.datasets[0].batches
+            result.definition_revision,
+            current.spec.definition.digest()?
         );
-        let encoded = crate::PackageResponseV1::Result(result.clone()).encode()?;
-        assert!(!encoded
-            .windows(b"definition-grant".len())
-            .any(|bytes| bytes == b"definition-grant"));
-        let crate::PackageResponseV1::Result(returned) =
-            crate::PackageResponseV1::from_bytes(&encoded)?
-        else {
-            return Err("retained packet variant".into());
-        };
-        assert_eq!(returned.output, result.output);
+        assert_eq!(result.generation, current.generation);
+        assert_eq!(result.source.store_uuid, before.store_uuid);
+        assert!(result.source.commit_revision < result.result.commit_revision);
+        assert!(!result.current);
         let cancelled = AnalysisReadControl::default();
         cancelled.cancel()?;
         assert!(matches!(
-            store.managed_output(&current, &reference.result_id, 10, &cancelled),
+            store.managed_result(&current, &reference.result_id, 10, &cancelled),
             Err(crate::Error::AnalysisReadCancelled { .. })
         ));
     }
@@ -94,48 +69,37 @@ fn raw_output_keeps_packet() -> TestResult {
 }
 
 #[test]
-fn selected_output_keeps_packet() -> TestResult {
+fn selected_reference_keeps_receipt() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
     let receipt = fixture.selected_receipt(&store, "original")?;
     fixture.selected_receipt(&store, "later")?;
-    let control = AnalysisReadControl::default();
     let current = fixture.current(&store)?;
     let before = store.meta()?;
-    let expected = {
-        let mut reader = store.reader_until(&control)?;
-        control.run(&mut reader, |reader| {
-            AnalysisStore::managed_step_from(reader, [1; 16], &receipt.selected.result_id)
-        })?
-    };
-    let ManagedOutput::Selected { packet, data } =
-        store.managed_output(&current, &receipt.selected.result_id, 10, &control)?
-    else {
-        return Err("selected output variant".into());
-    };
-    assert_eq!(packet, expected.1);
-    assert_eq!(data.rows(), expected.0.rows);
-    assert_eq!(
-        data.batches[0].schema_ref().as_ref(),
-        &current.spec.manifest.selected_schema
-    );
-    let encoded = crate::PackageResponseV1::Output(packet.clone()).encode()?;
-    let crate::PackageResponseV1::Output(returned) =
-        crate::PackageResponseV1::from_bytes(&encoded)?
-    else {
-        return Err("selected wire variant".into());
-    };
-    assert_eq!(returned, packet);
+    let result = store.managed_result(
+        &current,
+        &receipt.selected.result_id,
+        10,
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(result.result, receipt.selected);
+    assert_eq!(result.receipt, receipt);
+    assert!(matches!(
+        &result.kind,
+        crate::InstanceResultKindV1::Selected
+    ));
+    assert_eq!(Fixture::rows(&store, &receipt.selected)?, 1);
+    assert!(!result.current);
     assert!(store
-        .managed_output(&current, "missing", 10, &control)
+        .managed_result(&current, "missing", 10, &AnalysisReadControl::default())
         .is_err());
     assert_eq!(store.meta()?, before);
     Ok(())
 }
 
 #[test]
-fn selected_scope_precedes_payload() -> TestResult {
+fn selected_scope_precedes_integrity() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit_scope(&store, false, AnalysisSelectionV1::tenant([1; 16]))?;
@@ -145,14 +109,14 @@ fn selected_scope_precedes_payload() -> TestResult {
     {
         let mut writer = store.writer()?;
         writer.get_mut()?.execute(
-            "UPDATE managed_arrow SET ipc = 'invalid'::BLOB WHERE result_id = ?",
+            "UPDATE analysis_results SET commit_revision = commit_revision + 1 WHERE result_id = ?",
             params![receipt.selected.result_id],
         )?;
     }
     let before = store.meta()?;
     current.grant.selection = AnalysisSelectionV1::new([1; 16], Vec::new());
     assert!(matches!(
-        store.managed_output(&current, &receipt.selected.result_id, 10, &control),
+        store.managed_result(&current, &receipt.selected.result_id, 10, &control),
         Err(crate::Error::Package {
             code: crate::PackageErrorCodeV1::Denied,
             ..
@@ -160,7 +124,7 @@ fn selected_scope_precedes_payload() -> TestResult {
     ));
     current.grant.selection = AnalysisSelectionV1::tenant([1; 16]);
     assert!(store
-        .managed_output(&current, &receipt.selected.result_id, 10, &control)
+        .managed_result(&current, &receipt.selected.result_id, 10, &control)
         .is_err());
     assert_eq!(store.meta()?, before);
     Ok(())
@@ -169,10 +133,9 @@ fn selected_scope_precedes_payload() -> TestResult {
 #[test]
 fn selected_rejects_corruption() -> TestResult {
     for corruption in [
-        "ipc",
-        "role",
-        "schema",
-        "rows",
+        "revision",
+        "instance",
+        "attempt",
         "receipt",
         "generation",
         "edges",
@@ -186,55 +149,40 @@ fn selected_rejects_corruption() -> TestResult {
         let control = AnalysisReadControl::default();
         let current = fixture.current(&store)?;
         {
-            let mut writer = store.writer()?;
-            let writer = writer.get_mut()?;
+            let mut guard = store.writer()?;
+            let writer = guard.get_mut()?;
             match corruption {
-                "ipc" => {
-                    writer.execute(
-                        "UPDATE managed_arrow SET ipc = 'invalid'::BLOB WHERE result_id = ?",
-                        params![receipt.selected.result_id],
-                    )?;
-                }
-                "role" => {
-                    writer.execute(
-                        "UPDATE managed_arrow SET role = 'output' WHERE result_id = ?",
-                        params![receipt.selected.result_id],
-                    )?;
+                "revision" => {
+                    assert_eq!(writer.execute("UPDATE analysis_results SET commit_revision = commit_revision + 1 WHERE result_id = ?", params![receipt.selected.result_id])?, 1);
                 }
                 "edges" => {
-                    writer.execute(
-                        "DELETE FROM managed_edges WHERE result_id = ?",
-                        params![receipt.selected.result_id],
-                    )?;
+                    assert_eq!(
+                        writer.execute(
+                            "DELETE FROM managed_edges WHERE result_id = ?",
+                            params![receipt.selected.result_id]
+                        )?,
+                        2
+                    );
                 }
-                "schema" => {
-                    let schema = sdk::Schema::new(vec![sdk::Field::new(
-                        "other",
-                        sdk::DataType::UInt64,
-                        false,
-                    )]);
-                    let data = sdk::Dataset {
-                        name: "selected".into(),
-                        batches: vec![Fixture::batch(&schema, 2)?],
-                    };
-                    let packet = AnalysisStore::encode_selected(&data, &schema)?;
-                    writer.execute(
-                        "UPDATE managed_arrow SET ipc = ? WHERE result_id = ?",
-                        params![packet.arrow_ipc, receipt.selected.result_id],
-                    )?;
-                }
-                "rows" => {
+                "instance" | "attempt" => {
                     let bytes: Vec<u8> = writer.query_row(
                         "SELECT request_meta FROM analysis_results WHERE result_id = ?",
                         params![receipt.selected.result_id],
                         |row| row.get(0),
                     )?;
                     let mut step: model::Step = ManagedCodec::decode(&bytes)?;
-                    step.rows += 1;
-                    writer.execute(
-                        "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
-                        params![ManagedCodec::encode(&step)?, receipt.selected.result_id],
-                    )?;
+                    if corruption == "instance" {
+                        step.instance = "foreign".into();
+                    } else {
+                        step.attempt = "missing".into();
+                    }
+                    assert_eq!(
+                        writer.execute(
+                            "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
+                            params![ManagedCodec::encode(&step)?, receipt.selected.result_id]
+                        )?,
+                        1
+                    );
                 }
                 _ => {
                     let bytes: Vec<u8> = writer.query_row("SELECT contract FROM managed_attempts WHERE instance_id = 'counter' AND attempt_id = 'corrupt'", [], |row| row.get(0))?;
@@ -250,30 +198,18 @@ fn selected_rejects_corruption() -> TestResult {
                         attempt.capture.generation += 1;
                     } else {
                         let receipt = attempt.receipt.as_mut().ok_or("receipt")?;
-                        let reference = receipt.results.remove(&10).ok_or("call result")?;
+                        let reference = receipt.results.remove(&10).ok_or("call")?;
                         receipt.results.insert(99, reference);
                     }
-                    writer.execute("UPDATE managed_attempts SET contract = ? WHERE instance_id = 'counter' AND attempt_id = 'corrupt'", params![ManagedCodec::encode(&attempt)?])?;
+                    assert_eq!(writer.execute("UPDATE managed_attempts SET contract = ? WHERE instance_id = 'counter' AND attempt_id = 'corrupt'", params![ManagedCodec::encode(&attempt)?])?, 1);
                 }
             }
         }
         assert!(
             store
-                .managed_output(&current, &receipt.selected.result_id, 10, &control)
+                .managed_result(&current, &receipt.selected.result_id, 10, &control)
                 .is_err(),
             "{corruption}"
-        );
-        assert!(
-            store
-                .managed_query_output(
-                    &current.grant.selection,
-                    &current.spec.id,
-                    None,
-                    10,
-                    &control
-                )
-                .is_err(),
-            "latest {corruption}"
         );
         drop(store);
         assert!(AnalysisStore::open(&root).is_err(), "{corruption}");
@@ -328,20 +264,25 @@ fn selected_uses_saved_schema() -> TestResult {
     )?;
     let current = fixture.current(&store)?;
     assert_eq!(current.generation, target.generation);
-    for (reference, schema) in [
+    for (reference, expected) in [
         (&original.selected, &fixture.model.outputs[0].schema),
         (&changed.selected, &schema),
     ] {
-        let ManagedOutput::Selected { data, .. } = store.managed_output(
+        let result = store.managed_result(
             &current,
             &reference.result_id,
             10,
             &AnalysisReadControl::default(),
-        )?
-        else {
-            return Err("selected output variant".into());
-        };
-        assert_eq!(data.batches[0].schema_ref().as_ref(), schema);
+        )?;
+        let version = store.managed_version(
+            [1; 16],
+            &current.spec.id,
+            result.generation,
+            &AnalysisReadControl::default(),
+        )?;
+        assert_eq!(&version.manifest.selected_schema, expected);
+        assert_eq!(&result.result, reference);
+        assert_eq!(result.definition_revision, version.definition.digest()?);
     }
     Ok(())
 }
@@ -356,8 +297,10 @@ fn selected_rejects_call_swap() -> TestResult {
     let current = fixture.current(&store)?;
     let control = AnalysisReadControl::default();
     assert!(matches!(
-        store.managed_output(&current, &receipt.selected.result_id, 10, &control)?,
-        ManagedOutput::Selected { .. }
+        store
+            .managed_result(&current, &receipt.selected.result_id, 10, &control)?
+            .kind,
+        crate::InstanceResultKindV1::Selected
     ));
     {
         let mut writer = store.writer()?;
@@ -389,80 +332,56 @@ fn selected_rejects_call_swap() -> TestResult {
             params![ManagedCodec::encode(&attempt)?],
         )?;
     }
-    for corrupt in [false, true] {
-        if corrupt {
-            let mut writer = store.writer()?;
-            writer.get_mut()?.execute(
-                "UPDATE managed_arrow SET ipc = 'invalid'::BLOB WHERE result_id = ? AND role = 'selected'",
-                params![receipt.selected.result_id],
-            )?;
-        }
-        let before = store.meta()?;
-        assert!(matches!(
-            store.managed_output(&current, &receipt.selected.result_id, 10, &control),
-            Err(crate::Error::Package {
-                code: crate::PackageErrorCodeV1::Invalid,
-                field: "managed selected call binding",
-                ..
-            })
-        ));
-        assert_eq!(store.meta()?, before);
-    }
+    let before = store.meta()?;
+    assert!(matches!(
+        store.managed_result(&current, &receipt.selected.result_id, 10, &control),
+        Err(crate::Error::Package {
+            code: crate::PackageErrorCodeV1::Invalid,
+            field: "managed selected call binding",
+            ..
+        })
+    ));
+    assert_eq!(store.meta()?, before);
     drop(store);
     assert!(AnalysisStore::open(&root).is_err());
     Ok(())
 }
 
 #[test]
-fn latest_output_binds_receipt() -> TestResult {
+fn successful_receipt_keeps_head() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
     let control = AnalysisReadControl::default();
     let selection = &fixture.instance.grant.selection;
     let name = &fixture.instance.spec.id;
-    let before = store.meta()?;
-    assert!(matches!(
-        store.managed_query_output(selection, name, None, 10, &control),
-        Err(crate::Error::Package {
-            code: crate::PackageErrorCodeV1::Missing,
-            field: "managed current result",
-            ..
-        })
-    ));
-    assert_eq!(store.meta()?, before);
+    assert!(Fixture::receipt(&store, [1; 16], name, "first", &control)?.is_none());
     let mut receipts = Vec::new();
     for (id, value) in [("first", 2), ("later", 7)] {
         let capture = fixture.capture(&store, false)?;
-        let request = request(id);
-        let attempt = store.register_managed_attempt(&capture, &request, || Ok(()))?;
+        let input = request(id);
+        let attempt = store.register_managed_attempt(&capture, &input, || Ok(()))?;
         let receipt = fixture.publish(
             &store,
             &attempt,
             &[
-                fixture.evaluation(&request, 10, Some(&capture))?,
-                fixture.evaluation(&request, 11, Some(&capture))?,
+                fixture.evaluation(&input, 10, Some(&capture))?,
+                fixture.evaluation(&input, 11, Some(&capture))?,
             ],
             &[fixture.output(value)?, fixture.output(value + 1)?],
         )?;
+        let current = fixture.current(&store)?;
         let before = store.meta()?;
-        let ManagedOutput::Selected { data, .. } =
-            store.managed_query_output(selection, name, None, 10, &control)?
-        else {
-            return Err("latest selected output variant".into());
-        };
-        assert_eq!(data.rows(), 1);
+        let result = store.managed_result(&current, &receipt.selected.result_id, 10, &control)?;
+        assert_eq!(result.result, receipt.selected);
+        assert_eq!(result.receipt, receipt);
+        assert_eq!(Fixture::rows(&store, &receipt.selected)?, 1);
         assert_eq!(
-            data.batches[0]
-                .column(0)
-                .as_any()
-                .downcast_ref::<sdk::arrow_array::UInt64Array>()
-                .ok_or("latest value")?
-                .value(0),
-            value
+            fixture.checkpoint(&store, &receipt.results[&10])?.datasets[0].batches,
+            fixture.output(value)?.checkpoint.ok_or("state")?.datasets[0].batches
         );
         assert!(matches!(
-            store.managed_query_output(selection, name, Some(""), 10, &control),
+            store.managed_result(&current, "", 10, &control),
             Err(crate::Error::Package {
                 code: crate::PackageErrorCodeV1::Missing,
                 ..
@@ -488,20 +407,18 @@ fn latest_output_binds_receipt() -> TestResult {
         }
     ));
     let before = store.meta()?;
-    let ManagedOutput::Selected { data, .. } =
-        store.managed_query_output(selection, name, None, 10, &control)?
-    else {
-        return Err("failed latest selected output variant".into());
-    };
+    let result = store.managed_result(
+        &status.instance,
+        &receipts[1].selected.result_id,
+        10,
+        &control,
+    )?;
+    assert_eq!(result.receipt, receipts[1]);
     assert_eq!(
-        data.batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<sdk::arrow_array::UInt64Array>()
-            .ok_or("retained latest value")?
-            .value(0),
-        7
+        Fixture::receipt(&store, [1; 16], name, "later", &control)?,
+        Some(receipts[1].clone())
     );
+    assert!(Fixture::receipt(&store, [1; 16], name, "failed", &control)?.is_none());
     let retained = store.managed_status(selection, name, &control)?;
     assert_eq!(retained.instance, status.instance);
     assert_eq!(retained.status_progress, status.status_progress);
@@ -516,31 +433,41 @@ fn latest_output_binds_receipt() -> TestResult {
     let cancelled = AnalysisReadControl::default();
     cancelled.cancel()?;
     assert!(matches!(
-        store.managed_query_output(selection, name, None, 10, &cancelled),
+        store.managed_result(
+            &status.instance,
+            &receipts[1].selected.result_id,
+            10,
+            &cancelled
+        ),
         Err(crate::Error::AnalysisReadCancelled { .. })
     ));
     {
-        let mut writer = store.writer()?;
-        let writer = writer.get_mut()?;
+        let mut guard = store.writer()?;
+        let writer = guard.get_mut()?;
         let bytes: Vec<u8> = writer.query_row(
             "SELECT contract FROM managed_attempts WHERE instance_id = ? AND attempt_id = 'later'",
             params![name],
             |row| row.get(0),
         )?;
         let mut attempt: model::Attempt = ManagedCodec::decode(&bytes)?;
-        let receipt = attempt.receipt.as_mut().ok_or("current receipt")?;
-        assert_eq!(*receipt, receipts[1]);
-        receipt.selected.result_id = receipts[0].selected.result_id.clone();
-        writer.execute(
-            "UPDATE managed_attempts SET contract = ? WHERE instance_id = ? AND attempt_id = 'later'",
-            params![ManagedCodec::encode(&attempt)?, name],
-        )?;
+        assert_eq!(attempt.receipt.as_ref(), Some(&receipts[1]));
+        attempt
+            .receipt
+            .as_mut()
+            .ok_or("receipt")?
+            .selected
+            .result_id = receipts[0].selected.result_id.clone();
+        assert_eq!(writer.execute("UPDATE managed_attempts SET contract = ? WHERE instance_id = ? AND attempt_id = 'later'", params![ManagedCodec::encode(&attempt)?, name])?, 1);
     }
     assert!(matches!(
-        store.managed_query_output(selection, name, None, 10, &control),
+        store.managed_result(
+            &status.instance,
+            &receipts[1].selected.result_id,
+            10,
+            &control
+        ),
         Err(crate::Error::Package {
             code: crate::PackageErrorCodeV1::Invalid,
-            field: "managed current receipt",
             ..
         })
     ));
@@ -563,23 +490,12 @@ fn selected_edges_reject_corruption() -> TestResult {
         let replacement = &second.results[&10];
         assert_ne!(original.result_id, replacement.result_id);
         assert_ne!(original.commit_revision, replacement.commit_revision);
-        let ManagedOutput::Call { result: call, .. } =
-            store.managed_output(&current, &original.result_id, 10, &control)?
-        else {
-            return Err("historical call absent".into());
-        };
+        let call = store.managed_result(&current, &original.result_id, 10, &control)?;
         assert!(!call.current);
-        assert_eq!(call.commit_revision, original.commit_revision);
-        assert_eq!(
-            call.output,
-            sdk::wire::Output::encode_model(&fixture.output(2)?, &fixture.model)?
-        );
-        let ManagedOutput::Selected { data, .. } =
-            store.managed_output(&current, &first.selected.result_id, 10, &control)?
-        else {
-            return Err("historical selected output absent".into());
-        };
-        assert_eq!(data.batches, fixture.output(2)?.datasets[0].batches);
+        assert_eq!(&call.result, original);
+        let selected = store.managed_result(&current, &first.selected.result_id, 10, &control)?;
+        assert_eq!(selected.result, first.selected);
+        assert_eq!(selected.receipt, first);
         let mut expected = first.results.values().cloned().collect::<Vec<_>>();
         expected.sort_by(|left, right| left.result_id.cmp(&right.result_id));
         let before = store.meta()?;
@@ -615,7 +531,7 @@ fn selected_edges_reject_corruption() -> TestResult {
                 _ => {
                     assert_eq!(
                         writer.execute(
-                            "INSERT INTO managed_edges VALUES (?, ?, ?, ?, 'input')",
+                            "INSERT INTO managed_edges VALUES (?, ?, ?, ?)",
                             params![
                                 [1u8; 16].as_slice(),
                                 first.selected.result_id,
@@ -647,37 +563,22 @@ fn selected_edges_reject_corruption() -> TestResult {
                 assert!(valid);
             }
         }
-        for result in [
-            store.managed_output(&current, &first.selected.result_id, 10, &control),
-            store.managed_query_output(
-                &current.grant.selection,
-                &current.spec.id,
-                Some(&first.selected.result_id),
-                10,
-                &control,
+        assert!(
+            matches!(
+                store.managed_result(&current, &first.selected.result_id, 10, &control),
+                Err(crate::Error::Package {
+                    code: crate::PackageErrorCodeV1::Invalid,
+                    field: "managed selected edges",
+                    ..
+                })
             ),
-        ] {
-            assert!(
-                matches!(
-                    result,
-                    Err(crate::Error::Package {
-                        code: crate::PackageErrorCodeV1::Invalid,
-                        field: "managed selected edges",
-                        ..
-                    })
-                ),
-                "{fault}"
-            );
-        }
-        let ManagedOutput::Call {
-            result: retained, ..
-        } = store.managed_output(&current, &original.result_id, 10, &control)?
-        else {
-            return Err("historical call lost after edge fault".into());
-        };
-        assert_eq!(retained.output, call.output);
-        assert_eq!(retained.context, call.context);
-        assert_eq!(retained.commit_revision, call.commit_revision);
+            "{fault}"
+        );
+        let retained = store.managed_result(&current, &original.result_id, 10, &control)?;
+        assert_eq!(
+            serde_json::to_value(&retained)?,
+            serde_json::to_value(&call)?
+        );
         assert_eq!(store.meta()?, before);
         drop(store);
         let reopened = AnalysisStore::open(&root);

@@ -6,6 +6,88 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 struct Fixture;
 
+#[test]
+fn dependencies_keep_native_history() -> TestResult {
+    let writer = Connection::open_in_memory()?;
+    Fixture::schema(&writer)?;
+    let records = Member {
+        kind: 9,
+        key: vec![1],
+        value: 11,
+        record: Some(101),
+        fact: None,
+        reason: None,
+        ordinal: 0,
+    };
+    let facts = Member {
+        kind: 10,
+        key: vec![2],
+        value: 12,
+        record: Some(101),
+        fact: None,
+        reason: None,
+        ordinal: 0,
+    };
+    Fixture::publish(
+        &writer,
+        1,
+        &[Fixture::unit(101, vec![records.clone(), facts.clone()])],
+        false,
+    )?;
+    Fixture::publish(
+        &writer,
+        2,
+        &[Fixture::unit(101, vec![records, facts])],
+        false,
+    )?;
+    Fixture::publish(&writer, 3, &[Fixture::unit(101, Vec::new())], false)?;
+    assert_eq!(Fixture::counts(&writer, 1)?, [0; 4]);
+    assert_eq!(Fixture::counts(&writer, 2)?, [0; 4]);
+    assert_eq!(Fixture::counts(&writer, 3)?, [0; 4]);
+    assert_eq!(writer.query_row("SELECT count(*) FROM graph_producer_members WHERE member_kind IN (9,10) AND valid_from=1 AND valid_to=3",[],|row|row.get::<_,u64>(0))?,2);
+    writer.execute_batch("INSERT INTO graph_result_producers VALUES('selected','version-1')")?;
+    assert_eq!(
+        writer.query_row(
+            "SELECT count(*) FROM graph_selected_members WHERE result_id='selected'",
+            [],
+            |row| row.get::<_, u64>(0)
+        )?,
+        0
+    );
+    for fault in [
+        Member {
+            kind: 9,
+            key: vec![1],
+            value: 11,
+            record: Some(101),
+            fact: Some(vec![0]),
+            reason: None,
+            ordinal: 0,
+        },
+        Member {
+            kind: 10,
+            key: vec![2],
+            value: 12,
+            record: Some(101),
+            fact: None,
+            reason: Some("reason".into()),
+            ordinal: 0,
+        },
+        Member {
+            kind: 9,
+            key: vec![1],
+            value: 11,
+            record: Some(101),
+            fact: None,
+            reason: None,
+            ordinal: 1,
+        },
+    ] {
+        assert!(Fixture::publish(&writer, 4, &[Fixture::unit(101, vec![fault])], false).is_err());
+    }
+    Ok(())
+}
+
 impl Fixture {
     fn schema(writer: &Connection) -> TestResult {
         writer.execute_batch(include_str!(
@@ -67,6 +149,12 @@ impl Fixture {
         let result: TestResult = (|| {
             Self::version(writer, revision)?;
             Contributions::apply(writer, 1, revision, replacements, reset)?;
+            super::StateRows::finish(
+                writer,
+                1,
+                revision,
+                &araphor_analysis_builtins::graph::GraphPackageStateV1::Waiting,
+            )?;
             Ok(())
         })();
         writer.execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" })?;

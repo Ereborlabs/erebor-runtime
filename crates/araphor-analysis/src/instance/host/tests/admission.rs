@@ -59,7 +59,6 @@ impl Fixture {
                 araphor_data::AnalysisTableRead {
                     requests: &requests,
                     event_ranges: None,
-                    inputs: None,
                     mode: araphor_data::AnalysisReadModeV1::Complete,
                     now: 1,
                 },
@@ -454,7 +453,10 @@ async fn opening_waits_component_cache() -> TestResult {
     let receipt = waiting
         .run(crate::instance::tests::request("cache-retry"), &read)
         .await?;
-    assert_eq!(fixture.selected("cache-waiting", &receipt.attempt)?, [7]);
+    assert_eq!(
+        fixture.selected("cache-waiting", &receipt.attempt).await?,
+        [7]
+    );
     let permits = [
         fixture.query.reserve_evaluation([1; 16])?,
         fixture.query.reserve_evaluation([1; 16])?,
@@ -581,12 +583,13 @@ async fn preparation_failure_keeps_intent() -> TestResult {
     );
     assert_eq!(
         reopened
-            .managed_selected(
+            .managed_attempt(
                 [1; 16],
                 "a-preparation",
                 "before-preparation",
                 &AnalysisReadControl::default()
             )?
+            .and_then(|attempt| attempt.receipt().cloned())
             .ok_or("prior output after preparation failure")?
             .commit_revision,
         prior.commit_revision
@@ -785,7 +788,9 @@ async fn admitted_busy_retries_capacity() -> TestResult {
                 )
                 .await?;
             assert_eq!(
-                fixture.selected("admitted-capacity", &receipt.attempt)?,
+                fixture
+                    .selected("admitted-capacity", &receipt.attempt)
+                    .await?,
                 vec![1; 4096]
             );
             fixture.context(2)?;
@@ -951,11 +956,15 @@ async fn admitted_busy_retries_capacity() -> TestResult {
             let receipt = history.last().ok_or("capacity fresh receipt")?;
             assert_eq!(receipt.commit_revision, progress);
             assert_eq!(
-                fixture.selected("admitted-capacity", &prior.attempt)?,
+                fixture
+                    .selected("admitted-capacity", &prior.attempt)
+                    .await?,
                 vec![1; 4096]
             );
             assert_eq!(
-                fixture.selected("admitted-capacity", &receipt.attempt)?,
+                fixture
+                    .selected("admitted-capacity", &receipt.attempt)
+                    .await?,
                 vec![3; 4096]
             );
         } else if action == "finite" {
@@ -970,7 +979,8 @@ async fn admitted_busy_retries_capacity() -> TestResult {
                 )
                 .await?;
             assert!(fixture
-                .selected("admitted-capacity", &receipt.attempt)?
+                .selected("admitted-capacity", &receipt.attempt)
+                .await?
                 .is_empty());
             let (observed, release_next) = gate()?;
             drop(pressure);
@@ -1039,7 +1049,8 @@ async fn admitted_busy_retries_capacity() -> TestResult {
             let receipt = history.first().ok_or("source capacity receipt")?;
             assert_eq!(receipt.commit_revision, progress);
             assert!(fixture
-                .selected("admitted-capacity", &receipt.attempt)?
+                .selected("admitted-capacity", &receipt.attempt)
+                .await?
                 .is_empty());
             assert_eq!(memory.capacity_epoch(), epoch);
             drop(pressure);
@@ -1055,7 +1066,9 @@ async fn admitted_busy_retries_capacity() -> TestResult {
             let receipt = history.first().ok_or("admitted capacity receipt")?;
             assert_eq!(receipt.commit_revision, progress);
             assert_eq!(
-                fixture.selected("admitted-capacity", &receipt.attempt)?,
+                fixture
+                    .selected("admitted-capacity", &receipt.attempt)
+                    .await?,
                 vec![3; 4096]
             );
         }

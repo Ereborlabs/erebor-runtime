@@ -58,7 +58,6 @@ impl crate::GraphProgram {
             feedback,
             DefinitionRef::Fresh(&definition),
             facts,
-            false,
         )
         .await?;
         Ok(Self {

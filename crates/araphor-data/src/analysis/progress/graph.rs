@@ -86,13 +86,16 @@ impl AnalysisStore {
             None,
             None,
         )?;
-        if write.changed {
+        let changed = !write.relations.is_empty();
+        if changed {
             self.check_revision_limits(&transaction, input.scope.identity.tenant_id)?;
-            self.check_witnesses(
-                &transaction,
-                input.scope.identity.tenant_id,
-                input.created_utc_ns,
-            )?;
+            if write.changed {
+                self.check_witnesses(
+                    &transaction,
+                    input.scope.identity.tenant_id,
+                    input.created_utc_ns,
+                )?;
+            }
             Self::record_revision(&transaction, revision, &write.relations)?;
             #[cfg(any(test, feature = "test-fixtures"))]
             self.crash_at("result.before");
@@ -102,6 +105,9 @@ impl AnalysisStore {
         check()?;
         if !write.changed {
             self.commit_metadata(transaction, "commit unchanged Graph notice")?;
+            if changed {
+                self.revision.send_replace(revision);
+            }
             return Ok(write.receipt);
         }
         self.commit_metadata(transaction, "commit direct Graph publication")?;
@@ -567,13 +573,16 @@ impl AnalysisStore {
                     if context_write.is_some() {
                         return Err(Code::Invalid.error("unchanged Graph context versions"));
                     }
-                    self.notice_rows(
+                    let changed = self.notice_rows(
                         transaction,
                         &input.scope,
-                        prior_id,
-                        prior_revision,
+                        &PackageResultRefV1 {
+                            result_id: prior_id.to_owned(),
+                            commit_revision: prior_revision,
+                        },
                         notice,
                         input.coverage_revision,
+                        Some(revision),
                     )?;
                     return Ok(GraphResultWrite {
                         receipt: AnalysisResultReceiptV1 {
@@ -584,7 +593,8 @@ impl AnalysisStore {
                             result_id: prior_id.to_owned(),
                             commit_revision: prior_revision,
                         },
-                        relations: Vec::new(),
+                        relations: changed
+                            .map_or_else(Vec::new, |_| vec!["result_notices", "analysis_results"]),
                         changed: false,
                     });
                 }
@@ -628,26 +638,30 @@ impl AnalysisStore {
                     commit_revision: prior_revision,
                 };
                 if GraphRows::unchanged(transaction, &prior, metadata, &references, changes)? {
-                    self.notice_rows(
+                    let changed = self.notice_rows(
                         transaction,
                         &input.scope,
-                        &prior.result_id,
-                        prior.commit_revision,
+                        &prior,
                         notice,
                         input.coverage_revision,
+                        Some(revision),
                     )?;
+                    let mut relations = vec![
+                        "analysis_results",
+                        "graph_producer_scopes",
+                        "graph_producer_versions",
+                        "graph_producer_members",
+                    ];
+                    if changed.is_some() {
+                        relations.push("result_notices");
+                    }
                     return Ok(GraphResultWrite {
                         receipt: AnalysisResultReceiptV1 {
                             commit_revision: prior.commit_revision,
                             consumed_cursor: input.consumed_cursor,
                         },
                         reference: prior,
-                        relations: vec![
-                            "analysis_results",
-                            "graph_producer_scopes",
-                            "graph_producer_versions",
-                            "graph_producer_members",
-                        ],
+                        relations,
                         changed: true,
                     });
                 }
@@ -712,13 +726,19 @@ impl AnalysisStore {
         if advance {
             transaction
                 .execute(
-                    "UPDATE processor_progress SET consumed_cursor = ?, coverage_revision = ?, context_revision = ?, required_floor = ?, result_id = ? WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
+                    "INSERT INTO processor_versions
+                     SELECT processor_id, method_version, tenant_id, stream_key, class,
+                        ?, resume_floor, ?, ?, start_cursor, ?, retired, retirement_id,
+                        retirement_reason, retirement_cursor, retirement_revision, ?, ?
+                     FROM processor_progress
+                     WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
                     params![
                         input.consumed_cursor,
                         input.coverage_revision,
                         context_revision,
                         input.consumed_cursor,
                         input.result_id,
+                        revision,
                         crate::GRAPH_PROCESSOR,
                         input.scope.method_version,
                         tenant.as_slice(),

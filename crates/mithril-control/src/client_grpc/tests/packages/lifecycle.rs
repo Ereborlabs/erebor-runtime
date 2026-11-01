@@ -168,7 +168,7 @@ async fn instance_rpc_controls_lifecycle() -> TestResult {
         matches!(fixture.package(run, true).await?, PackageResponseV1::History(repeated) if repeated == receipts)
     );
     assert_eq!(store.meta()?, before);
-    let PackageResponseV1::Output(packet) = fixture
+    let PackageResponseV1::Result(result) = fixture
         .package(
             PackageRequestV1::ReadInstanceResult {
                 instance_id: saved.spec.id.clone(),
@@ -178,7 +178,21 @@ async fn instance_rpc_controls_lifecycle() -> TestResult {
         )
         .await?
     else {
-        return Err("public selected output".into());
+        return Err("public selected reference".into());
+    };
+    assert_eq!(result.result, receipts[0].selected);
+    assert_eq!(result.receipt, receipts[0]);
+    let PackageResponseV1::Output(packet) = fixture
+        .package(
+            PackageRequestV1::ReplayInstanceResult {
+                instance_id: saved.spec.id.clone(),
+                result_id: receipts[0].selected.result_id.clone(),
+            },
+            true,
+        )
+        .await?
+    else {
+        return Err("public selected replay".into());
     };
     assert_eq!(
         packet

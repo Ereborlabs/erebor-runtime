@@ -66,7 +66,8 @@ async fn profile_conversion_failure_finishes() -> TestResult {
         .is_empty());
     assert!(fixture
         .store
-        .managed_selected(fixture.source.tenant_id, "conversion", &input.id, &control)?
+        .managed_attempt(fixture.source.tenant_id, "conversion", &input.id, &control)?
+        .and_then(|attempt| attempt.receipt().cloned())
         .is_none());
     let before = fixture.store.meta()?;
     assert!(matches!(
@@ -191,7 +192,9 @@ impl Fixture {
             .await?)
     }
 
-    fn catalog_facts(&mut self) -> TestResult<Vec<araphor_data::AnalysisContextVersionV1>> {
+    pub(super) fn catalog_facts(
+        &mut self,
+    ) -> TestResult<Vec<araphor_data::AnalysisContextVersionV1>> {
         use araphor_data::{
             AnalysisContextKeyV1, AnalysisContextVersionV1, CompiledPolicyContextV1,
             ContainerKindV1, ContextSensitivityV1, EvidenceDecisionCatalogV1,
@@ -550,7 +553,7 @@ async fn managed_profile_versions() -> TestResult {
         fixture.store.commit_working_profile(
             rewrite,
             araphor_data::analysis::PreparedProfile::new(mutable)?,
-            Some(original_ref[0].commit_revision),
+            Some(original_ref[0].clone()),
         ),
         Err(araphor_data::Error::AnalysisConflict { .. })
     ));
@@ -852,11 +855,13 @@ async fn sealed_repair_keeps_head() -> TestResult {
                 .values()
                 .next()
                 .ok_or("repair call receipt")?;
-            let evaluation = fixture.store.managed_evaluation(
-                running.admitted(),
-                &result.result_id,
-                &control,
-            )?;
+            let evaluation_replay = running.replay(&result.result_id, &control).await?;
+            let evaluation = evaluation_replay
+                .calls
+                .values()
+                .next()
+                .ok_or("replayed discovery call")?
+                .evaluation();
             for name in ["targets", "compiled_policies"] {
                 let input = evaluation
                     .inputs

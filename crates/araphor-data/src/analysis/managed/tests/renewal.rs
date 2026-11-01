@@ -103,17 +103,12 @@ fn renewal_keeps_history() -> TestResult {
         .ok_or("committed attempt")?;
     assert_eq!(committed.receipt(), Some(&receipt));
     let current = fixture.current(&store)?;
-    let ManagedOutput::Call {
-        result: original, ..
-    } = store.managed_output(
+    let original = store.managed_result(
         &current,
         &receipt.results[&10].result_id,
         10,
         &AnalysisReadControl::default(),
-    )?
-    else {
-        return Err("package output variant".into());
-    };
+    )?;
     let running =
         store.set_managed_running([1; 16], "counter", current.lifecycle, true, || Ok(()))?;
     let stopped = store.suspend_managed(&running, || Ok(()))?;
@@ -192,20 +187,17 @@ fn renewal_keeps_history() -> TestResult {
         store.managed_history(&grant.selection, "counter", &AnalysisReadControl::default())?,
         std::slice::from_ref(&receipt)
     );
-    let ManagedOutput::Call {
-        result: retained, ..
-    } = store.managed_output(
+    let retained = store.managed_result(
         &renewed,
         &receipt.results[&10].result_id,
         10,
         &AnalysisReadControl::default(),
-    )?
-    else {
-        return Err("package output variant".into());
-    };
-    assert_eq!(retained.context, original.context);
-    assert_eq!(retained.output, original.output);
-    assert_eq!(retained.commit_revision, original.commit_revision);
+    )?;
+    assert_eq!(call_context(&retained)?, call_context(&original)?);
+    assert_eq!(retained.result, original.result);
+    assert_eq!(retained.source, original.source);
+    assert_eq!(retained.prior, original.prior);
+    assert_eq!(retained.receipt, original.receipt);
     assert_eq!(
         serde_json::to_value(
             store

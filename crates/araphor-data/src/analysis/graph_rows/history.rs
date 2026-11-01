@@ -32,6 +32,16 @@ pub(super) struct ProducerPin<'a> {
 }
 
 impl GraphRows {
+    pub(super) const LINEAGE_INVALID: &'static str = "v.commit_revision<s.created_revision
+        OR (v.commit_revision=s.created_revision AND (v.base_result_id IS NOT NULL
+            OR EXISTS(SELECT 1 FROM graph_producer_versions prior
+                WHERE prior.scope_id=v.scope_id AND prior.commit_revision<v.commit_revision)))
+        OR (v.commit_revision>s.created_revision AND (v.base_result_id IS NULL
+            OR v.base_result_id IS DISTINCT FROM (SELECT prior.result_id
+                FROM graph_producer_versions prior WHERE prior.scope_id=v.scope_id
+                    AND prior.commit_revision<v.commit_revision
+                ORDER BY prior.commit_revision DESC LIMIT 1)))";
+
     pub(in crate::analysis) fn commit(
         writer: &Connection,
         result: &PackageResultRefV1,
@@ -344,6 +354,11 @@ impl GraphRows {
             || row.9 != 0
         {
             return Err(Self::invalid("graph call scope"));
+        }
+        let invalid: bool = writer.query_row(&format!("SELECT {} FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) WHERE v.result_id=?",Self::LINEAGE_INVALID),params![result.result_id],|row|row.get(0))
+            .context(AnalysisDatabaseSnafu { operation: "check Graph call lineage" })?;
+        if invalid {
+            return Err(Self::invalid("graph call base"));
         }
         Ok(row.0)
     }

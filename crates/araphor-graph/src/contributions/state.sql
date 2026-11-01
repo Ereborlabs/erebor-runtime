@@ -1,11 +1,16 @@
 CREATE SEQUENCE graph_unit_state_values_seq;
 CREATE TABLE graph_unit_state_values (
-    value_ref UBIGINT PRIMARY KEY, unit_ref UBIGINT NOT NULL, state_tag VARCHAR NOT NULL, state_declared VARCHAR,
-    position_revision UBIGINT NOT NULL, position_ordinal UINTEGER NOT NULL,
+    value_ref UBIGINT PRIMARY KEY, unit_ref UBIGINT, state_tag VARCHAR NOT NULL, state_declared VARCHAR,
+    position_revision UBIGINT, position_ordinal UINTEGER,
     fact_tenant BLOB, fact_owner VARCHAR, fact_entity BLOB, fact_lifetime BLOB,
     fact_revision UBIGINT, fact_hash BLOB,
     value_hash BLOB NOT NULL CHECK (octet_length(value_hash)=32),
-    CHECK (unit_ref>0 AND position_revision>0 AND state_tag<>''),
+    CHECK (state_tag<>''),
+    CHECK ((unit_ref IS NULL AND position_revision IS NULL AND position_ordinal IS NULL
+            AND fact_tenant IS NULL AND fact_owner IS NULL AND fact_entity IS NULL
+            AND fact_lifetime IS NULL AND fact_revision IS NULL AND fact_hash IS NULL)
+        OR (unit_ref IS NOT NULL AND unit_ref>0 AND position_revision IS NOT NULL
+            AND position_revision>0 AND position_ordinal IS NOT NULL)),
     CHECK ((fact_tenant IS NULL AND fact_owner IS NULL AND fact_entity IS NULL
         AND fact_lifetime IS NULL AND fact_revision IS NULL AND fact_hash IS NULL)
         OR (fact_tenant IS NOT NULL AND octet_length(fact_tenant)=16

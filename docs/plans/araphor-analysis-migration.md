@@ -1769,6 +1769,10 @@ passes qualification. Complete migration and the final Rust gate remain
 
 ## Exact saved outputs in native inputs
 
+**Historical result.** The current
+[journal-reference requirement](araphor-reactive-execution-latency.md#central-journal-references)
+supersedes this contract. The unused host alias API and its tests are retired.
+
 A finite native definition can now read one exact saved package dataset.
 `Session::register_retained` registers its table alias. Data creates the exact
 result reference from stored metadata without loading Arrow IPC. The existing
@@ -3679,11 +3683,11 @@ and the earlier Query result keep their recorded source state.
 
 | Saved-input duty | Current native assertion owner |
 | --- | --- |
-| One read snapshot during concurrent native publication | [retained_snapshot](../../crates/araphor-data/src/analysis/managed/tests/input/reads.rs) keeps original raw rows, saved rows, references, witnesses, and metadata; a later explicit current reference reads the next result. |
+| One read snapshot during concurrent native publication | [retained_snapshot](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-data/src/analysis/managed/tests/input/reads.rs) keeps original raw rows, saved rows, references, witnesses, and metadata; a later explicit current reference reads the next result. |
 | Current storage and retained-record binding | [current_reads_check_storage](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) checks Metadata and Complete binding/source guards and stopped finite reads. [retained_record_checks_identity](../../crates/araphor-data/src/analysis/managed/tests/input/current.rs) checks admission and full hydration identity. |
 | Saved historical scope | [history_keeps_saved_scope](../../crates/araphor-data/src/analysis/managed/tests/input/scope.rs) checks narrow-scope rejection, foreign-tenant non-disclosure, original broad history, remove/recreate generation fences, reopen, and old alias rejection. |
-| Header and payload preflight | [retained_payload_bound](../../crates/araphor-data/src/analysis/managed/tests/input/reads.rs) checks the byte limit before corrupt IPC decode; [retained_header_skips_ipc](../../crates/araphor-data/src/analysis/managed/tests/input.rs) keeps metadata reads separate from payload decode. |
-| Read cancellation and retry | [retained_cancellation](../../crates/araphor-data/src/analysis/managed/tests/input/reads.rs) checks the actual read hook, typed cancellation, valid parent, released reader permits, and a valid new child. |
+| Header and payload preflight | [retained_payload_bound](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-data/src/analysis/managed/tests/input/reads.rs) checks the byte limit before corrupt IPC decode; [retained_header_skips_ipc](../../crates/araphor-data/src/analysis/managed/tests/input.rs) keeps metadata reads separate from payload decode. |
+| Read cancellation and retry | [retained_cancellation](https://github.com/Ereborlabs/erebor-runtime/blob/3f9bbd3a4/crates/araphor-data/src/analysis/managed/tests/input/reads.rs) checks the actual read hook, typed cancellation, valid parent, released reader permits, and a valid new child. |
 | Exact inherited reference origins | [retained_origins_merge_refs](../../crates/araphor-data/src/analysis/managed/tests/input/origins.rs) checks equal aliases, explicit result/context origins, exact revisions, and the earliest inherited witness. |
 
 Renewal preserves selection. A changed scope uses remove/recreate. The native

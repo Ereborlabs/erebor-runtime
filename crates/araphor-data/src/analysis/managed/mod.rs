@@ -4,12 +4,11 @@ mod codec;
 mod commit;
 mod execution;
 mod history;
-mod input;
 mod lifecycle;
 mod model;
 mod read;
+mod reference;
 mod removal;
-mod replay;
 mod schema;
 mod selected;
 mod source;
@@ -17,12 +16,11 @@ mod status;
 mod version;
 
 pub use execution::ManagedExecution;
-pub use input::ManagedInputRef;
 pub use lifecycle::ManagedLease;
 pub use model::*;
 pub use source::{
-    ManagedSourceBlock, ManagedSourceFrame, ManagedSourceMetadata, ManagedSourceProof,
-    ManagedSourceRead, ManagedSourceRef, ManagedSourceRows, ManagedSourceState,
+    ManagedSourceBlock, ManagedSourceFrame, ManagedSourceRead, ManagedSourceRef, ManagedSourceRows,
+    SourceScope,
 };
 
 #[cfg(test)]

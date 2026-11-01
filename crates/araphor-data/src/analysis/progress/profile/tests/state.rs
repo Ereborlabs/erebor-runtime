@@ -27,7 +27,6 @@ fn read_state(
         AnalysisTableRead {
             requests: &BTreeMap::from([("discovery_state".into(), Some(projected))]),
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Complete,
             now: 100,
         },
@@ -416,13 +415,16 @@ fn notice_keeps_frozen_profile() -> TestResult {
         None,
     )?;
     let head = store.processor_result(&profile.scope)?;
-    let health = store.processor_health(&profile.scope)?;
+    let mut health = store.processor_health(&profile.scope)?;
     let meta = store.meta()?;
     let frozen = store.frozen_result(&profile.profile_id)?;
     assert_eq!(frozen.2, receipt.commit_revision);
     let notices = vec![(profile.profile_id.clone(), receipt.commit_revision)];
     assert_eq!(store.profile_notices(&profile.scope, 2, 2)?, notices);
     store.mark_notice(&profile, receipt.commit_revision, 2, 2)?;
+    let noticed = store.meta()?;
+    assert_eq!(noticed.commit_revision, meta.commit_revision + 1);
+    health.as_mut().ok_or("profile health")?.read_revision = noticed.commit_revision;
     assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
     store.mark_notice(&profile, receipt.commit_revision, 1, 1)?;
     assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
@@ -432,13 +434,13 @@ fn notice_keeps_frozen_profile() -> TestResult {
     assert_eq!(store.frozen_result(&profile.profile_id)?, frozen);
     assert_eq!(store.processor_result(&profile.scope)?, head);
     assert_eq!(store.processor_health(&profile.scope)?, health);
-    assert_eq!(store.meta()?, meta);
+    assert_eq!(store.meta()?, noticed);
     drop(store);
     let reopened = AnalysisStore::open(&root)?;
     assert_eq!(reopened.frozen_result(&profile.profile_id)?, frozen);
     assert_eq!(reopened.processor_result(&profile.scope)?, head);
     assert_eq!(reopened.processor_health(&profile.scope)?, health);
-    assert_eq!(reopened.meta()?, meta);
+    assert_eq!(reopened.meta()?, noticed);
     assert!(reopened.profile_notices(&profile.scope, 2, 2)?.is_empty());
     assert_eq!(reopened.profile_notices(&profile.scope, 3, 2)?, notices);
     Ok(())

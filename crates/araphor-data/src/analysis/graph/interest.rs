@@ -146,7 +146,7 @@ impl AnalysisStore {
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the Graph revision is exhausted"))?;
-        transaction.execute("INSERT INTO processor_progress VALUES (?, ?, ?, ?, 'required', ?, ?, 0, 0, ?, ?, false, '', '', 0, 0, '')",params![GRAPH_PROCESSOR,GRAPH_SCHEMA_VERSION,source.tenant_id.as_slice(),source.key(),floor,floor,start,floor]).context(AnalysisDatabaseSnafu {operation:"insert Graph registration"})?;
+        transaction.execute("INSERT INTO processor_versions VALUES (?, ?, ?, ?, 'required', ?, ?, 0, 0, ?, ?, false, '', '', 0, 0, '', ?)",params![GRAPH_PROCESSOR,GRAPH_SCHEMA_VERSION,source.tenant_id.as_slice(),source.key(),floor,floor,start,floor,revision]).context(AnalysisDatabaseSnafu {operation:"insert Graph registration"})?;
         self.check_revision_limits(&transaction, source.tenant_id)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
         check()?;

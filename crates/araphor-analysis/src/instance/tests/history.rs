@@ -89,6 +89,11 @@ async fn historical(fixture: &Fixture, name: &str) -> TestResult<(Arc<Instance>,
 async fn historical_inspect_keeps_result() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     let (instance, receipt) = historical(&fixture, "history").await?;
+    let captured = fixture
+        .query
+        .store()
+        .managed_attempt([1; 16], "history", "first", &AnalysisReadControl::default())?
+        .ok_or("historical attempt")?;
     let reader = Arc::new(Reader::new(fixture.grant.clone()));
     fixture.authority.set(false);
     fixture
@@ -98,8 +103,7 @@ async fn historical_inspect_keeps_result() -> TestResult {
         .unwrap_or_else(|error| error.into_inner())
         .clear();
     let meta = fixture.query.store().meta()?;
-    let mut original = Vec::new();
-    for reference in receipt.results.values() {
+    for (call, reference) in &receipt.results {
         let saved = Instance::read_result(
             Arc::clone(&fixture.query),
             reader.clone(),
@@ -109,65 +113,62 @@ async fn historical_inspect_keeps_result() -> TestResult {
             &AnalysisReadControl::default(),
         )
         .await?;
-        assert_eq!(saved.commit_revision, reference.commit_revision);
-        assert_eq!(saved.context.context.id, "first");
+        assert_eq!(&saved.result, reference);
+        assert_eq!(call_context(&saved)?.context.id, "first");
         assert!(!saved.current);
-        assert_eq!(saved.output.evidence.len(), 1);
-        assert_eq!(saved.output.reasons.len(), 1);
+        assert_eq!(saved.receipt, receipt);
+        assert_eq!(saved.source.store_uuid, meta.store_uuid);
+        assert_eq!(saved.source.schema_version, meta.schema_version);
+        assert_eq!(saved.source.recovery_epoch, meta.recovery_epoch);
+        assert_eq!(saved.source.commit_revision, captured.captured_revision());
         assert_eq!(
-            values(&saved.output.datasets[0].batches)?,
-            values(
-                &saved
-                    .output
-                    .checkpoint
-                    .as_ref()
-                    .ok_or("checkpoint")?
-                    .datasets[0]
-                    .batches
-            )?
+            saved.definition_revision,
+            instance.admitted().spec.definition.digest()?
         );
-        original.extend(values(&saved.output.datasets[0].batches)?);
-        let selected = Instance::query_result(
+        assert!(
+            matches!(&saved.kind, araphor_data::InstanceResultKindV1::Call { call: id, .. } if id == call)
+        );
+        let returned = Instance::read_result(
             Arc::clone(&fixture.query),
             reader.clone(),
             reader.grant.clone(),
             "history",
-            Some(&reference.result_id),
-            "SELECT * FROM data",
+            &reference.result_id,
             &AnalysisReadControl::default(),
         )
         .await?;
-        assert_eq!(selected.data.name, "query");
         assert_eq!(
-            values(&selected.data.batches)?,
-            values(&saved.output.datasets[0].batches)?
+            serde_json::to_value(&returned)?,
+            serde_json::to_value(&saved)?
         );
-        assert_eq!(selected.data.batches[0].num_columns(), 2);
-        assert_eq!(
-            selected.data.batches[0]
-                .column(1)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or("row index")?
-                .values()
-                .as_ref(),
-            &[0]
-        );
+        let document = serde_json::to_value(&returned)?;
+        for field in [
+            "output",
+            "grant",
+            "witnesses",
+            "contexts",
+            "parameters",
+            "manifest",
+        ] {
+            assert!(document.get(field).is_none(), "{field}");
+        }
     }
-    original.sort_unstable();
-    assert_eq!(original, [10, 20]);
-    let latest = Instance::query_result(
+    let selected = Instance::read_result(
         Arc::clone(&fixture.query),
         reader.clone(),
         reader.grant.clone(),
         "history",
-        None,
-        "SELECT value FROM selected ORDER BY value",
+        &receipt.selected.result_id,
         &AnalysisReadControl::default(),
     )
     .await?;
-    assert_eq!(values(&latest.data.batches)?, [20, 40]);
-    drop(latest);
+    assert_eq!(selected.result, receipt.selected);
+    assert_eq!(selected.receipt, receipt);
+    assert!(matches!(
+        &selected.kind,
+        araphor_data::InstanceResultKindV1::Selected
+    ));
+    assert!(!selected.current);
     assert_eq!(instance.admitted().spec.manifest.calls.len(), 2);
     assert_eq!(fixture.query.store().meta()?, meta);
     assert!(reader.checks.load(Ordering::SeqCst) >= 8);
@@ -175,47 +176,46 @@ async fn historical_inspect_keeps_result() -> TestResult {
 }
 
 #[tokio::test]
-async fn historical_query_uses_sql_limit() -> TestResult {
+async fn historical_inspect_skips_execution() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
-    let image = bundle("sql")?;
-    fixture.install(&image)?;
+    fixture.install(&bundle("sql")?)?;
     let instance = fixture.admit("history", r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(7 AS BIGINT UNSIGNED) AS value))"#).await?;
     let receipt = instance
         .run(request("once"), &AnalysisReadControl::default())
         .await?;
-    let id = &receipt.results.values().next().ok_or("result")?.result_id;
+    let reference = receipt.results.values().next().ok_or("result")?;
     let reader = Arc::new(Reader::new(fixture.grant.clone()));
     let before = fixture.query.store().meta()?;
+    let held = fixture.query.memory().input_reserved();
     let saved = Instance::read_result(
         Arc::clone(&fixture.query),
         reader.clone(),
         reader.grant.clone(),
         "history",
-        id,
+        &reference.result_id,
         &AnalysisReadControl::default(),
     )
     .await?;
-    assert_eq!(saved.context.context.id, "once");
-    assert_eq!(saved.output.datasets[0].rows(), 1);
-    assert_eq!(values(&saved.output.datasets[0].batches)?, [7]);
-    for (sql, expected) in [
-        ("SELECT value FROM data UNION ALL SELECT value FROM data UNION ALL SELECT value FROM data", vec![7, 7, 7]),
-        ("SELECT value FROM data UNION ALL SELECT value FROM data UNION ALL SELECT value FROM data LIMIT 2", vec![7, 7]),
-        ("SELECT value FROM data", vec![7]),
-    ] {
-        let selected = Instance::query_result(
-            Arc::clone(&fixture.query),
-            reader.clone(),
-            reader.grant.clone(),
-            "history",
-            Some(id),
-            sql,
-            &AnalysisReadControl::default(),
-        )
-        .await?;
-        assert_eq!(values(&selected.data.batches)?, expected);
-    }
+    assert_eq!(saved.result, *reference);
+    assert_eq!(call_context(&saved)?.context.id, "once");
+    let error = Instance::replay_result(
+        Arc::clone(&fixture.query),
+        reader.clone(),
+        None,
+        reader.grant.clone(),
+        "history",
+        &reference.result_id,
+        &AnalysisReadControl::default(),
+    )
+    .await
+    .err()
+    .ok_or("Inspect authority executed replay")?;
+    assert_eq!(
+        error.status_code(),
+        erebor_runtime_error::StatusCode::PermissionDenied
+    );
     assert_eq!(fixture.query.store().meta()?, before);
+    assert_eq!(fixture.query.memory().input_reserved(), held);
     Ok(())
 }
 
@@ -301,22 +301,16 @@ async fn historical_inspect_checks_disclosure() -> TestResult {
         erebor_runtime_error::StatusCode::PermissionDenied
     );
     assert_eq!(reader.checks.load(Ordering::SeqCst), 2);
-    for result in [Some(id.as_str()), None] {
-        let sql = if result.is_some() {
-            "SELECT * FROM data"
-        } else {
-            "SELECT * FROM selected"
-        };
+    for result in [id.as_str(), receipt.selected.result_id.as_str()] {
         let mut denied = Reader::new(fixture.grant.clone());
         denied.deny_at = 2;
         let denied = Arc::new(denied);
-        let error = Instance::query_result(
+        let error = Instance::read_result(
             Arc::clone(&fixture.query),
             denied.clone(),
             denied.grant.clone(),
             "history",
             result,
-            sql,
             &AnalysisReadControl::default(),
         )
         .await
@@ -329,13 +323,12 @@ async fn historical_inspect_checks_disclosure() -> TestResult {
         assert_eq!(denied.checks.load(Ordering::SeqCst), 2);
         let reader = Arc::new(Reader::new(fixture.grant.clone()));
         reader.announce.store(true, Ordering::SeqCst);
-        Instance::query_result(
+        Instance::read_result(
             Arc::clone(&fixture.query),
             reader.clone(),
             reader.grant.clone(),
             "history",
             result,
-            sql,
             &AnalysisReadControl::default(),
         )
         .await?;
@@ -343,13 +336,12 @@ async fn historical_inspect_checks_disclosure() -> TestResult {
         reader.announce.store(true, Ordering::SeqCst);
         reader.revoke.store(true, Ordering::SeqCst);
         let active = AnalysisReadControl::default();
-        let error = Instance::query_result(
+        let error = Instance::read_result(
             Arc::clone(&fixture.query),
             reader.clone(),
             reader.grant.clone(),
             "history",
             result,
-            sql,
             &active,
         )
         .await
@@ -383,7 +375,7 @@ async fn historical_inspect_checks_disclosure() -> TestResult {
 }
 
 #[tokio::test]
-async fn historical_query_preserves_indices() -> TestResult {
+async fn historical_replay_is_explicit() -> TestResult {
     let fixture = Fixture::new(araphor_query::execution::Limits {
         input_capacity: Some(1024 * 1024),
         output_capacity: Some(1024 * 1024),
@@ -393,6 +385,7 @@ async fn historical_query_preserves_indices() -> TestResult {
     })?;
     let mut image = bundle("sql")?;
     image.artifacts[0].descriptor.exports[0].outputs[0].evidence_required = false;
+    let model = image.artifacts[0].descriptor.exports[0].clone();
     let PackageImplementationV1::Sql { program, .. } = &mut image.artifacts[0].implementations[0]
     else {
         return Err("SQL fixture".into());
@@ -407,74 +400,25 @@ async fn historical_query_preserves_indices() -> TestResult {
         .run(request("rows"), &AnalysisReadControl::default())
         .await?;
     let id = &receipt.results.values().next().ok_or("result")?.result_id;
-    let reader = Arc::new(Reader::new(fixture.grant.clone()));
-    let selected = Instance::query_result(
+    let before = fixture.query.store().meta()?;
+    let araphor_data::PackageResponseV1::Replayed(packet) = Instance::replay_response(
         Arc::clone(&fixture.query),
-        reader.clone(),
-        reader.grant.clone(),
+        fixture.authority.clone(),
+        None,
+        fixture.grant.clone(),
         "indices",
-        Some(id),
-        "SELECT * FROM data WHERE value > 1 ORDER BY value",
+        id,
         &AnalysisReadControl::default(),
     )
-    .await?;
-    assert_eq!(values(&selected.data.batches)?, [2, 3]);
-    let indices = selected
-        .data
-        .batches
-        .iter()
-        .flat_map(|batch| {
-            batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .into_iter()
-                .flat_map(|column| column.values().iter().copied())
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(indices, [1, 2]);
-    drop(selected);
-    let empty = Instance::query_result(
-        Arc::clone(&fixture.query),
-        reader.clone(),
-        reader.grant.clone(),
-        "indices",
-        Some(id),
-        "SELECT * FROM data WHERE FALSE",
-        &AnalysisReadControl::default(),
-    )
-    .await?;
-    assert_eq!(empty.data.batches.len(), 1);
-    assert_eq!(empty.data.batches[0].num_rows(), 0);
-    assert_eq!(empty.data.batches[0].schema().field(0).name(), "value");
-    assert_eq!(
-        empty.data.batches[0].schema().field(1).name(),
-        "__row_index"
-    );
-    drop(empty);
-    for sql in [
-        "SELECT * FROM events",
-        "WITH unused AS (SELECT * FROM coverage) SELECT * FROM data",
-        "CREATE TABLE stolen AS SELECT * FROM data",
-    ] {
-        let error = Instance::query_result(
-            Arc::clone(&fixture.query),
-            reader.clone(),
-            reader.grant.clone(),
-            "indices",
-            Some(id),
-            sql,
-            &AnalysisReadControl::default(),
-        )
-        .await
-        .err()
-        .ok_or("undeclared historical query succeeded")?;
-        assert_eq!(
-            error.status_code(),
-            erebor_runtime_error::StatusCode::InvalidArguments,
-            "{sql}: {error:?}"
-        );
-    }
+    .await?
+    else {
+        return Err("replayed call variant".into());
+    };
+    let output = packet.decode_model(&model)?;
+    assert_eq!(values(&output.datasets[0].batches)?, [1, 2, 3]);
+    drop(output);
+    drop(packet);
+    assert_eq!(fixture.query.store().meta()?, before);
     drop(fixture.query.reserve_evaluation([1; 16])?);
     drop(instance);
     drop(fixture.query.memory().reserve_input(1024 * 1024)?);

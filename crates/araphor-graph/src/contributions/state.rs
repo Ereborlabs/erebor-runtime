@@ -179,6 +179,10 @@ impl StateRows {
             return Ok(None);
         };
         if let Some(value) = head {
+            if count == 0 {
+                Self::default(writer, value)?;
+                return Ok(None);
+            }
             return Self::selected(writer, scope, prior, value).map(Some);
         }
         if count > 0 {
@@ -276,18 +280,72 @@ impl StateRows {
         Ok(())
     }
 
-    pub fn current(
+    pub fn finish(
         writer: &Connection,
         scope: u64,
         revision: u64,
-        default: GraphPackageStateV1,
+        default: &GraphPackageStateV1,
     ) -> Result<GraphPackageStateV1> {
-        let value:Option<u64>=writer.query_row("SELECT selected_state_ref FROM graph_producer_versions WHERE scope_id=? AND commit_revision=?",params![scope,revision],|row|row.get(0))
-            .context(DatabaseSnafu { operation: "read selected unit state" })?;
-        match value {
-            Some(value) => Ok(Self::selected(writer, scope, revision, value)?.state.state),
-            None => Ok(default),
+        let count: u64 = writer.query_row("SELECT state_count FROM graph_producer_versions version JOIN graph_producer_scopes scope USING(scope_id) WHERE version.scope_id=? AND version.commit_revision=? AND scope.producer_kind=0",params![scope,revision],|row|row.get(0))
+            .context(DatabaseSnafu { operation: "read final unit state count" })?;
+        if count == 0 {
+            let (tag, declared) = default.native_fields();
+            GraphPackageStateV1::from_native(tag.clone(), declared.clone())
+                .context(ContractSnafu)?;
+            let hash = Self::default_hash(default)?;
+            let (count, value): (u64, Option<u64>) = writer.query_row("SELECT count(*),min(value_ref) FROM graph_unit_state_values WHERE value_hash=?",params![hash],|row|Ok((row.get(0)?,row.get(1)?)))
+                .context(DatabaseSnafu { operation: "find default state value" })?;
+            let value = match (count, value) {
+                (0, None) => {
+                    writer.query_row("INSERT INTO graph_unit_state_values(value_ref,state_tag,state_declared,value_hash) VALUES(nextval('graph_unit_state_values_seq'),?,?,?) RETURNING value_ref",params![tag,declared,hash],|row|row.get(0))
+                        .context(DatabaseSnafu { operation: "intern default state value" })?
+                }
+                (1, Some(value)) if Self::default(writer, value)? == *default => value,
+                _ => return InvalidSnafu { field: "default state value collision" }.fail(),
+            };
+            writer.execute("UPDATE graph_producer_versions SET selected_state_ref=? WHERE scope_id=? AND commit_revision=?",params![value,scope,revision])
+                .context(DatabaseSnafu { operation: "record default unit state" })?;
         }
+        Self::current(writer, scope, revision)
+    }
+
+    pub fn current(reader: &Connection, scope: u64, revision: u64) -> Result<GraphPackageStateV1> {
+        let (value, count):(Option<u64>,u64)=reader.query_row("SELECT selected_state_ref,state_count FROM graph_producer_versions version JOIN graph_producer_scopes scope USING(scope_id) WHERE version.scope_id=? AND version.commit_revision=? AND scope.producer_kind=0",params![scope,revision],|row|Ok((row.get(0)?,row.get(1)?)))
+            .context(DatabaseSnafu { operation: "read selected unit state" })?;
+        let value = value.ok_or_else(|| {
+            InvalidSnafu {
+                field: "selected unit state is absent",
+            }
+            .build()
+        })?;
+        if count == 0 {
+            Self::default(reader, value)
+        } else {
+            Ok(Self::selected(reader, scope, revision, value)?.state.state)
+        }
+    }
+
+    fn default(reader: &Connection, value: u64) -> Result<GraphPackageStateV1> {
+        let (tag, declared, empty, hash):(String,Option<String>,bool,Vec<u8>)=reader.query_row("SELECT state_tag,state_declared,unit_ref IS NULL AND position_revision IS NULL AND position_ordinal IS NULL AND fact_tenant IS NULL AND fact_owner IS NULL AND fact_entity IS NULL AND fact_lifetime IS NULL AND fact_revision IS NULL AND fact_hash IS NULL,value_hash FROM graph_unit_state_values WHERE value_ref=?",params![value],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)))
+            .context(DatabaseSnafu { operation: "read default state value" })?;
+        let state = GraphPackageStateV1::from_native(tag, declared).context(ContractSnafu)?;
+        if !empty || hash != Self::default_hash(&state)? {
+            return InvalidSnafu {
+                field: "default state native value",
+            }
+            .fail();
+        }
+        Ok(state)
+    }
+
+    fn default_hash(state: &GraphPackageStateV1) -> Result<Vec<u8>> {
+        Ok(Self::hash(&Self::encode(&(
+            None::<u64>,
+            state.native_fields(),
+            None::<Position>,
+            None::<AnalysisContextKeyV1>,
+            None::<Vec<u8>>,
+        ))?))
     }
 
     fn fallback(writer: &Connection, scope: u64, revision: u64) -> Result<Option<StateHead>> {
@@ -370,7 +428,11 @@ impl StateRows {
         while let Some(row) = rows.next().context(DatabaseSnafu {
             operation: "advance unit state validation",
         })? {
-            Self::decode(row)?;
+            if Self::column::<Option<u64>>(row, 1)?.is_none() {
+                Self::default(writer, Self::column(row, 0)?)?;
+            } else {
+                Self::decode(row)?;
+            }
         }
         drop(rows);
         drop(statement);
@@ -391,7 +453,7 @@ impl StateRows {
         drop(statement);
         let mut statement = writer
             .prepare(
-                "SELECT scope_id,commit_revision,selected_state_ref FROM graph_producer_versions",
+                "SELECT version.scope_id,version.commit_revision,version.selected_state_ref,scope.producer_kind,version.state_count FROM graph_producer_versions version JOIN graph_producer_scopes scope USING(scope_id)",
             )
             .context(DatabaseSnafu {
                 operation: "prepare unit state index validation",
@@ -405,7 +467,21 @@ impl StateRows {
             let scope = Self::column(row, 0)?;
             let revision = Self::column(row, 1)?;
             let selected: Option<u64> = Self::column(row, 2)?;
-            if Self::fallback(writer, scope, revision)?.map(|head| head.value) != selected {
+            let expected = Self::fallback(writer, scope, revision)?.map(|head| head.value);
+            let kind: u8 = Self::column(row, 3)?;
+            let count: u64 = Self::column(row, 4)?;
+            if kind == 0 && count == 0 && expected.is_none() {
+                let value = selected.ok_or_else(|| {
+                    InvalidSnafu {
+                        field: "default unit state is absent",
+                    }
+                    .build()
+                })?;
+                Self::default(writer, value)?;
+            } else if expected != selected
+                || (kind == 0 && (count == 0) != expected.is_none())
+                || (kind != 0 && selected.is_some())
+            {
                 return InvalidSnafu {
                     field: "unit state index mismatch",
                 }

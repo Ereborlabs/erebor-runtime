@@ -28,6 +28,11 @@ pub struct ProfileCommit {
     pub notice: Option<(u64, u64)>,
 }
 
+enum ProfileWrite {
+    Result(ProgressWrite, Option<super::super::PackageResultRefV1>),
+    Notice(bool),
+}
+
 impl PreparedProfile {
     pub fn new(profile: DiscoveryProfileV1) -> Result<Self> {
         profile.validate()?;
@@ -70,6 +75,43 @@ impl PreparedProfile {
 }
 
 impl AnalysisStore {
+    pub(super) fn check_profile_transition(
+        &self,
+        profile: &DiscoveryProfileV1,
+        previous: &DiscoveryProfileV1,
+        historical: bool,
+    ) -> Result<()> {
+        if profile.profile_id == previous.profile_id
+            || profile.scope != previous.scope
+            || profile.updated_utc_ns < previous.updated_utc_ns
+            || if historical {
+                !profile.sealed
+                    || Some(profile.revision) != previous.revision.checked_add(1)
+                    || profile.created_utc_ns != previous.created_utc_ns
+                    || profile.facts_revision < previous.facts_revision
+                    || profile.coverage_revision < previous.coverage_revision
+                    || profile.input_bytes != previous.input_bytes
+                    || profile.incomplete != previous.incomplete
+                    || profile.gaps != previous.gaps
+                    || !previous
+                        .context_refs
+                        .iter()
+                        .all(|reference| profile.context_refs.contains(reference))
+            } else if previous.sealed {
+                profile.interval_id == previous.interval_id
+                    || profile.revision != 1
+                    || profile.created_utc_ns < previous.updated_utc_ns
+            } else {
+                profile.interval_id != previous.interval_id
+                    || Some(profile.revision) != previous.revision.checked_add(1)
+                    || profile.created_utc_ns != previous.created_utc_ns
+            }
+        {
+            return self.reject("the immutable profile transition is invalid");
+        }
+        Ok(())
+    }
+
     pub fn commit_managed_profile(
         &self,
         managed: &ManagedCommit<'_>,
@@ -104,7 +146,7 @@ impl AnalysisStore {
         let mut profile_receipt = None;
         let receipt = self.commit_managed_projection(
             managed,
-            |transaction, _, publication, _, _| {
+            |transaction, revision, publication, _, _| {
                 let declaration = &managed.attempt.instance().spec.manifest.calls[call];
                 let descriptor =
                     Self::managed_contract(transaction, source.tenant_id, declaration)?;
@@ -133,11 +175,20 @@ impl AnalysisStore {
                     .results
                     .get(call)
                     .ok_or_else(|| Code::Incomplete.error("managed profile result"))?;
-                let Some((write, origin)) =
-                    self.profile_rows(transaction, packet, managed.attempt)?
-                else {
-                    return Ok((Vec::new(), None));
-                };
+                let (write, origin) =
+                    match self.profile_rows(transaction, packet, managed.attempt, revision)? {
+                        ProfileWrite::Result(write, origin) => (write, origin),
+                        ProfileWrite::Notice(changed) => {
+                            return Ok((
+                                if changed {
+                                    vec!["result_notices", "analysis_results"]
+                                } else {
+                                    Vec::new()
+                                },
+                                None,
+                            ))
+                        }
+                    };
                 Self::insert_managed_edges(
                     transaction,
                     source.tenant_id,
@@ -152,12 +203,13 @@ impl AnalysisStore {
         Ok((receipt, profile_receipt))
     }
 
-    pub(in crate::analysis) fn profile_rows(
+    fn profile_rows(
         &self,
         transaction: &duckdb::Transaction<'_>,
         mut packet: ProfileCommit,
         attempt: &crate::ManagedAttempt,
-    ) -> Result<Option<(ProgressWrite, Option<super::super::PackageResultRefV1>)>> {
+        revision: u64,
+    ) -> Result<ProfileWrite> {
         if packet.request.scope.processor_id != crate::DISCOVERY_PROCESSOR
             || !packet.request.body.is_empty()
             || !packet.request.witnesses.is_empty()
@@ -178,12 +230,12 @@ impl AnalysisStore {
                     )?
                     .ok_or_else(|| Code::Missing.error("previous profile"))?;
                 let previous = DiscoveryProfileV1::try_from(body.as_slice())?;
-                let revision: u64 = transaction.query_row(
+                let saved_revision: u64 = transaction.query_row(
                     "SELECT commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
                     params![profile.scope.identity.tenant_id.as_slice(), head.result_id],
                     |row| row.get(0),
                 ).context(crate::AnalysisDatabaseSnafu { operation: "read previous profile revision" })?;
-                if revision != head.commit_revision {
+                if saved_revision != head.commit_revision {
                     return Err(Code::Conflict.error("previous profile revision"));
                 }
                 historical = previous.sealed && profile.interval_id == previous.interval_id;
@@ -229,15 +281,15 @@ impl AnalysisStore {
                     }) {
                         return Err(Code::Conflict.error("profile notice frontier"));
                     }
-                    self.notice_rows(
+                    let changed = self.notice_rows(
                         transaction,
                         &profile.scope,
-                        &head.result_id,
-                        head.commit_revision,
+                        head,
                         facts,
                         coverage,
+                        Some(revision),
                     )?;
-                    return Ok(None);
+                    return Ok(ProfileWrite::Notice(changed.is_some()));
                 }
                 if historical {
                     let current = attempt.instance();
@@ -251,34 +303,7 @@ impl AnalysisStore {
                         return Err(Code::Denied.error("historical profile producer"));
                     }
                 }
-                if profile.profile_id == previous.profile_id
-                    || profile.scope != previous.scope
-                    || profile.updated_utc_ns < previous.updated_utc_ns
-                    || if historical {
-                        !profile.sealed
-                            || Some(profile.revision) != previous.revision.checked_add(1)
-                            || profile.created_utc_ns != previous.created_utc_ns
-                            || profile.facts_revision < previous.facts_revision
-                            || profile.coverage_revision < previous.coverage_revision
-                            || profile.input_bytes != previous.input_bytes
-                            || profile.incomplete != previous.incomplete
-                            || profile.gaps != previous.gaps
-                            || !previous
-                                .context_refs
-                                .iter()
-                                .all(|reference| profile.context_refs.contains(reference))
-                    } else if previous.sealed {
-                        profile.interval_id == previous.interval_id
-                            || profile.revision != 1
-                            || profile.created_utc_ns < previous.updated_utc_ns
-                    } else {
-                        profile.interval_id != previous.interval_id
-                            || Some(profile.revision) != previous.revision.checked_add(1)
-                            || profile.created_utc_ns != previous.created_utc_ns
-                    }
-                {
-                    return self.reject("the immutable profile transition is invalid");
-                }
+                self.check_profile_transition(profile, &previous, historical)?;
                 if profile.sealed
                     && !previous.sealed
                     && packet.request.expected_cursor == packet.request.consumed_cursor
@@ -350,14 +375,14 @@ impl AnalysisStore {
             Some(&packet.profile.profile),
             &packet.profile.contexts,
         )
-        .map(|write| Some((write, origin)))
+        .map(|write| ProfileWrite::Result(write, origin))
     }
 
     pub fn commit_working_profile(
         &self,
         input: AnalysisResultCommitV1,
         prepared: PreparedProfile,
-        previous: Option<u64>,
+        previous: Option<super::super::PackageResultRefV1>,
     ) -> Result<AnalysisResultReceiptV1> {
         self.commit_working_profile_guarded(input, prepared, previous, || Ok(()))
     }
@@ -366,7 +391,7 @@ impl AnalysisStore {
         &self,
         mut input: AnalysisResultCommitV1,
         prepared: PreparedProfile,
-        previous: Option<u64>,
+        previous: Option<super::super::PackageResultRefV1>,
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<AnalysisResultReceiptV1> {
         if input.scope.processor_id != crate::DISCOVERY_PROCESSOR {
@@ -378,7 +403,7 @@ impl AnalysisStore {
         input.body = prepared.body;
         self.commit_progress(
             &input,
-            previous,
+            ResultHead::Current(previous.as_ref()),
             true,
             Some(&prepared.profile),
             &prepared.contexts,
@@ -414,7 +439,7 @@ impl AnalysisStore {
         input.body = prepared.body;
         self.commit_progress(
             &input,
-            None,
+            ResultHead::Unchecked,
             false,
             Some(&prepared.profile),
             &prepared.contexts,

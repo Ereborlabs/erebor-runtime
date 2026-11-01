@@ -69,18 +69,7 @@ pub struct CallResult {
     changes: Option<araphor_data::ManagedChanges>,
     _input: Arc<MemoryReservation>,
     _output: Arc<MemoryReservation>,
-}
-
-pub struct CallReuse {
-    allows: Arc<dyn Fn(&PackageCall) -> bool + Send + Sync>,
-}
-
-impl CallReuse {
-    pub fn new(allows: impl Fn(&PackageCall) -> bool + Send + Sync + 'static) -> Self {
-        Self {
-            allows: Arc::new(allows),
-        }
-    }
+    _metadata: Option<MemoryReservation>,
 }
 
 #[derive(Clone, Debug)]
@@ -141,9 +130,9 @@ impl ExecutionReceipt {
             let proof = view
                 .frame()
                 .proof()
-                .filter(|proof| proof.result.commit_revision == revision)
+                .filter(|proof| proof.commit_revision == revision)
                 .ok_or_else(|| internal("the source publication acknowledgement differs"))?;
-            view.commit(&proof.result)?;
+            view.commit(proof)?;
         }
         if completed {
             context
@@ -201,8 +190,11 @@ impl Origin {
     }
 
     fn matches(&self, call: &PackageCall) -> bool {
-        Arc::ptr_eq(&self.admission, &call.admission)
-            && self.tenant == call.tenant
+        Arc::ptr_eq(&self.admission, &call.admission) && self.same_call(call)
+    }
+
+    fn same_call(&self, call: &PackageCall) -> bool {
+        self.tenant == call.tenant
             && self.image == call.pin
             && self.model.package == call.package
             && self.model.export == call.export
@@ -288,8 +280,126 @@ impl fmt::Debug for CallContext {
 }
 
 impl CallContext {
+    pub(crate) fn cached(&self, call: &PackageCall) -> Result<bool> {
+        let calls = self
+            .calls
+            .lock()
+            .map_err(|_| internal("package result lock is poisoned"))?;
+        match calls.get(&call.id) {
+            Some(CallState::Complete(origin, result)) => {
+                if !origin.matches(call) {
+                    return Err(internal("cached package origin differs"));
+                }
+                let result = result
+                    .as_ref()
+                    .map_err(|error| DataFusionError::Shared(Arc::clone(error)))?;
+                if !result.belongs_to(call) {
+                    return Err(internal("cached package result differs"));
+                }
+                Ok(true)
+            }
+            Some(CallState::Running(origin, _)) => {
+                if !origin.matches(call) {
+                    return Err(internal("running package origin differs"));
+                }
+                Ok(false)
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) fn seed(
+        &self,
+        call: &PackageCall,
+        result: Arc<CallResult>,
+        reference: &araphor_data::analysis::PackageResultRefV1,
+    ) -> Result<()> {
+        self.control.check().map_err(external)?;
+        if !result.origin.same_call(call)
+            || result.evaluation.export != call.export
+            || reference.result_id.is_empty()
+            || reference.commit_revision == 0
+            || result
+                .retained
+                .as_ref()
+                .is_some_and(|prior| prior != reference)
+        {
+            return Err(internal("retained package identity differs"));
+        }
+        let mut calls = self
+            .calls
+            .lock()
+            .map_err(|_| internal("package result lock is poisoned"))?;
+        if self.workers.is_closed() {
+            return Err(internal("package execution is closed"));
+        }
+        if let Some(prior) = calls.get(&call.id) {
+            return match prior {
+                CallState::Complete(origin, Ok(result))
+                    if origin.matches(call)
+                        && result.belongs_to(call)
+                        && result.retained.as_ref() == Some(reference) =>
+                {
+                    Ok(())
+                }
+                _ => Err(internal("retained package cache conflicts")),
+            };
+        }
+        let origin = &result.origin;
+        let heaps = [
+            origin.image.image.package_id.capacity(),
+            origin.image.image.revision.capacity(),
+            origin.image.digest.capacity(),
+            origin.model.package.package_id.capacity(),
+            origin.model.package.revision.capacity(),
+            origin.model.export.capacity(),
+        ]
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+        .ok_or_else(limit)?;
+        let bytes = result
+            .evaluation
+            .metadata_bytes()
+            .checked_add(result.output.metadata_bytes())
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    result
+                        .changes
+                        .as_ref()
+                        .map_or(0, araphor_data::ManagedChanges::metadata_bytes),
+                )
+            })
+            .and_then(|bytes| {
+                heaps
+                    .checked_mul(2)
+                    .and_then(|heaps| bytes.checked_add(heaps))
+            })
+            .and_then(|bytes| bytes.checked_add(reference.result_id.capacity()))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<CallResult>()))
+            .ok_or_else(limit)?;
+        let metadata = self.memory.reserve_input(bytes)?;
+        let mut origin = result.origin.clone();
+        origin.admission = Arc::clone(&call.admission);
+        let result = Arc::new(CallResult {
+            evaluation: result.evaluation.clone(),
+            output: result.output.clone(),
+            origin,
+            retained: Some(reference.clone()),
+            changes: result.changes.clone(),
+            _input: Arc::clone(&result._input),
+            _output: Arc::clone(&result._output),
+            _metadata: Some(metadata),
+        });
+        calls.insert(call.id, CallState::Complete(Origin::new(call), Ok(result)));
+        Ok(())
+    }
+
     pub(crate) fn invocation(&self) -> &Invocation {
         &self.invocation
+    }
+
+    pub(crate) fn memory(&self) -> &Memory {
+        &self.memory
     }
 
     pub fn new(
@@ -587,6 +697,10 @@ impl fmt::Debug for PackageExec {
 }
 
 impl PackageExec {
+    pub(crate) fn logical_call(&self) -> &PackageCall {
+        &self.call
+    }
+
     pub(crate) fn has_changes(&self) -> bool {
         self.call.changes.is_some()
     }
@@ -701,10 +815,7 @@ impl PackageExec {
         }
         let model = self
             .call
-            .descriptor()
-            .exports
-            .iter()
-            .find(|model| model.name == self.call.export)
+            .model()
             .ok_or_else(|| internal("package export is absent"))?;
         let input = Arc::new(owner.memory.reserve_input(0)?);
         let mut inputs = Vec::with_capacity(model.inputs.len());
@@ -713,7 +824,7 @@ impl PackageExec {
                 continue;
             }
             inputs.push(
-                self.read_input(slot, port, &owner, &context, &input, &source)
+                self.read_input((slot, slot), port, &owner, &context, &input, &source)
                     .await?,
             );
         }
@@ -755,10 +866,20 @@ impl PackageExec {
                             .error("managed package declaration"),
                     ));
                 }
+                let view = source.source_view()?;
                 managed
                     .prior(self.call.id)
                     .map(|prior| {
-                        prior.state(model, &inputs, parameters.as_ref(), managed.rebuild())
+                        let reset = model.change_inputs.is_some()
+                            && view
+                                .as_ref()
+                                .is_none_or(|view| view.version() != prior.revision);
+                        prior.state(
+                            model,
+                            &inputs,
+                            parameters.as_ref(),
+                            managed.rebuild() || reset,
+                        )
                     })
                     .transpose()
                     .map_err(external)?
@@ -831,59 +952,17 @@ impl PackageExec {
                 "package input bytes".into(),
             ));
         }
-        for batch in evaluation
-            .checkpoint
-            .iter()
-            .flat_map(|checkpoint| &checkpoint.datasets)
-            .chain(&evaluation.previous_outputs)
-            .flat_map(|data| &data.batches)
-        {
+        for batch in evaluation.batches() {
             owner.memory.retain_input(batch, &input)?;
         }
         input.try_resize(
-            input_metadata(&evaluation).saturating_add(
+            evaluation.metadata_bytes().saturating_add(
                 changes
                     .as_ref()
                     .map_or(0, araphor_data::ManagedChanges::metadata_bytes),
             ),
         )?;
-        let retained = snapshot
-            .managed()
-            .filter(|_| self.call.sql.is_none())
-            .and_then(|managed| managed.prior(self.call.id))
-            .filter(|prior| prior.reusable)
-            .filter(|prior| {
-                prior
-                    .retained
-                    .as_ref()
-                    .is_some_and(|saved| saved.matches(&evaluation))
-            })
-            .filter(|_| {
-                context
-                    .session_config()
-                    .get_extension::<CallReuse>()
-                    .is_some_and(|reuse| (reuse.allows)(&self.call))
-            });
-        let reference = retained.map(|prior| araphor_data::analysis::PackageResultRefV1 {
-            result_id: prior.result.clone(),
-            commit_revision: prior.revision,
-        });
-        // Keep admission until retained output replaces the exchange reservation.
-        let (_admission, output, output_memory) = if let Some(prior) = retained {
-            let checked = self
-                .call
-                .descriptor()
-                .check_evaluation(&evaluation)
-                .map_err(external)?;
-            let output = prior
-                .retained
-                .as_ref()
-                .ok_or_else(|| internal("retained call is absent"))?
-                .output
-                .clone();
-            checked.validate_output(&output).map_err(external)?;
-            (None, output, Arc::new(owner.memory.reserve_output(0)?))
-        } else if self.call.sql.is_some() {
+        let (_admission, output, output_memory) = if self.call.sql.is_some() {
             let output_memory = Arc::new(owner.memory.reserve_output(0)?);
             let checked = self
                 .call
@@ -903,38 +982,25 @@ impl PackageExec {
             (admission, output, memory)
         };
         owner.control.check().map_err(external)?;
-        for batch in output
-            .datasets
-            .iter()
-            .chain(
-                output
-                    .checkpoint
-                    .iter()
-                    .flat_map(|checkpoint| &checkpoint.datasets),
-            )
-            .flat_map(|data| &data.batches)
-            .chain(output.reasons.iter().map(|reason| &reason.details))
-        {
+        for batch in output.batches() {
             owner.memory.retain_output(batch, &output_memory)?;
         }
-        output_memory.try_resize(output_metadata(&output))?;
-        if let Some(reference) = &reference {
-            output_memory.try_grow(reference.result_id.capacity())?;
-        }
+        output_memory.try_resize(output.metadata_bytes())?;
         Ok(CallResult {
             evaluation,
             output,
             origin: Origin::new(&self.call),
-            retained: reference,
+            retained: None,
             changes,
             _input: input,
             _output: output_memory,
+            _metadata: None,
         })
     }
 
     async fn read_input(
         &self,
-        slot: usize,
+        (slot, child): (usize, usize),
         port: &sdk::InputPort,
         owner: &CallContext,
         context: &Arc<TaskContext>,
@@ -944,11 +1010,11 @@ impl PackageExec {
         let data = sdk::Dataset {
             name: port.port.name.clone(),
             batches: self
-                .collect(slot, &port.port.schema, owner, context, input, true)
+                .collect(child, &port.port.schema, owner, context, input, true)
                 .await?,
         };
         let mut completed = Vec::new();
-        self.call.children[slot].apply_with_subqueries(|plan| {
+        self.call.children[child].apply_with_subqueries(|plan| {
             if let LogicalPlan::Extension(extension) = plan {
                 if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
                     if let Some(result) = owner.completed(call.id)? {
@@ -968,15 +1034,15 @@ impl PackageExec {
             .input_for(
                 data,
                 source,
-                (self.call.id, slot, &owner.invocation.id),
-                &self.children[slot],
+                (self.call.id, slot, child, &owner.invocation.id),
+                &self.children[child],
                 &inherited,
-                &owner.memory,
+                owner,
             )
             .map_err(external)
     }
 
-    fn parameters(batches: Vec<sdk::RecordBatch>) -> Result<sdk::RecordBatch> {
+    pub(crate) fn parameters(batches: Vec<sdk::RecordBatch>) -> Result<sdk::RecordBatch> {
         let invalid = || external(sdk::Error::contract(sdk::ErrorCode::Invalid, "parameters"));
         let mut batches = batches.into_iter().filter(|batch| batch.num_rows() != 0);
         let batch = batches
@@ -1003,6 +1069,17 @@ impl PackageExec {
             .children
             .get(slot)
             .ok_or_else(|| internal("package physical child is absent"))?;
+        Self::collect_plan(plan, schema, owner, context, memory, input).await
+    }
+
+    pub(super) async fn collect_plan(
+        plan: &Arc<dyn ExecutionPlan>,
+        schema: &sdk::Schema,
+        owner: &CallContext,
+        context: &Arc<TaskContext>,
+        memory: &MemoryReservation,
+        input: bool,
+    ) -> Result<Vec<sdk::RecordBatch>> {
         let mut stream = execute_stream(Arc::clone(plan), Arc::clone(context))?;
         let exceeded = || {
             if input {
@@ -1068,51 +1145,6 @@ impl CallContext {
             _ => Ok(None),
         }
     }
-}
-
-fn input_metadata(evaluation: &sdk::Evaluation) -> usize {
-    evaluation.allocated_bytes().saturating_sub(
-        evaluation
-            .inputs
-            .iter()
-            .flat_map(|input| &input.data.batches)
-            .chain(evaluation.parameters.iter())
-            .chain(
-                evaluation
-                    .previous_outputs
-                    .iter()
-                    .flat_map(|data| &data.batches),
-            )
-            .chain(
-                evaluation
-                    .checkpoint
-                    .iter()
-                    .flat_map(|checkpoint| &checkpoint.datasets)
-                    .flat_map(|data| &data.batches),
-            )
-            .flat_map(sdk::RecordBatch::columns)
-            .map(|array| array.get_buffer_memory_size())
-            .sum::<usize>(),
-    )
-}
-
-fn output_metadata(output: &sdk::Output) -> usize {
-    output.allocated_bytes().saturating_sub(
-        output
-            .datasets
-            .iter()
-            .chain(
-                output
-                    .checkpoint
-                    .iter()
-                    .flat_map(|checkpoint| &checkpoint.datasets),
-            )
-            .flat_map(|data| &data.batches)
-            .chain(output.reasons.iter().map(|reason| &reason.details))
-            .flat_map(sdk::RecordBatch::columns)
-            .map(|array| array.get_buffer_memory_size())
-            .sum::<usize>(),
-    )
 }
 
 fn external(error: impl std::error::Error + Send + Sync + 'static) -> DataFusionError {

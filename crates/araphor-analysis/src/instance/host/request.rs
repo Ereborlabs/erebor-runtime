@@ -243,8 +243,8 @@ impl InstanceHost {
                 PackageRequestV1::ReadInstanceResult {
                     instance_id,
                     result_id,
-                } => {
-                    Instance::read_output(
+                } => PackageResponseV1::Result(Box::new(
+                    Instance::read_result(
                         query,
                         authority,
                         grant.clone(),
@@ -252,26 +252,21 @@ impl InstanceHost {
                         result_id,
                         control,
                     )
-                    .await?
-                }
-                PackageRequestV1::QueryInstanceResult {
+                    .await?,
+                )),
+                PackageRequestV1::ReplayInstanceResult {
                     instance_id,
                     result_id,
-                    sql,
                 } => {
-                    let output = Instance::query_result(
+                    Instance::replay_response(
                         query,
                         authority,
+                        self.graph_facts.clone(),
                         grant.clone(),
                         instance_id,
-                        result_id.as_deref(),
-                        sql,
+                        result_id,
                         control,
                     )
-                    .await?;
-                    Engine::blocking(Arc::new(control.within(None)?), (), move || {
-                        PackageResponseV1::try_from(&output.data).map_err(Into::into)
-                    })
                     .await?
                 }
                 _ => return Err(Code::Unsupported.error("instance operation").into()),

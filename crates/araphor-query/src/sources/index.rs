@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use araphor_data::{
-    AnalysisStreamIdentityV1, ManagedSourceBlock, ManagedSourceFrame, ManagedSourceRead,
-    ManagedSourceRef, ManagedSourceRows,
+    AnalysisStreamIdentityV1, AnalysisTableRead, ManagedSourceBlock, ManagedSourceFrame,
+    ManagedSourceRead, ManagedSourceRef, ManagedSourceRows, SourceScope,
 };
 use datafusion::arrow::array::{Array, RecordBatch, UInt64Array};
 use datafusion::arrow::compute::take;
@@ -17,7 +17,7 @@ use datafusion::physical_plan::joins::HashExpr;
 use super::SourceSnapshot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SourceImage {
+pub enum SourceImage {
     Before,
     After,
     Inserted,
@@ -43,6 +43,7 @@ pub(crate) struct SourceIndex {
 #[derive(Debug, Default)]
 struct IndexState {
     head: Option<ManagedSourceRef>,
+    scope: Option<(Arc<SourceScope>, Arc<MemoryReservation>)>,
     next: u64,
     tables: BTreeMap<String, IndexedTable>,
     leases: BTreeMap<u64, usize>,
@@ -73,6 +74,7 @@ struct SourceBlock {
     born: u64,
     hashes: Arc<BTreeMap<usize, Arc<UInt64Array>>>,
     _memory: Arc<MemoryReservation>,
+    _scope: Arc<MemoryReservation>,
 }
 
 pub(crate) struct SourceView {
@@ -84,6 +86,7 @@ pub(crate) struct SourceView {
     next: u64,
     control: araphor_data::AnalysisReadControl,
     _staging: MemoryReservation,
+    _scope: Arc<MemoryReservation>,
 }
 
 pub(crate) struct SourceRows {
@@ -96,6 +99,14 @@ impl SourceIndex {
         keys: Vec<SourceKey>,
         memory: Arc<crate::memory::Memory>,
     ) -> Result<Arc<Self>> {
+        if keys
+            .iter()
+            .any(|key| !AnalysisTableRead::source_rows(&key.table))
+        {
+            return Err(DataFusionError::NotImplemented(
+                "retained key for a non-row source".into(),
+            ));
+        }
         let bytes = size_of::<Self>()
             .saturating_add(keys.capacity().saturating_mul(size_of::<SourceKey>()))
             .saturating_add(
@@ -132,7 +143,7 @@ impl SourceIndex {
         };
         Ok(self.lock()?.head.as_ref()
             == Some(&ManagedSourceRef {
-                result: proof.result.clone(),
+                result: proof.as_ref().clone(),
                 position: frame.position(),
             }))
     }
@@ -166,7 +177,20 @@ impl SourceIndex {
             .as_ref()
             .map_or(0, |parent| parent.result.commit_revision);
         let mut next = state.next;
+        if parent.is_some() {
+            let (scope, _) = state.scope.as_ref().ok_or_else(Self::conflict)?;
+            frame
+                .scope()
+                .check_basis(scope)
+                .map_err(SourceSnapshot::data_error)?;
+        }
         for data in frame.datasets() {
+            if !AnalysisTableRead::source_rows(&data.name) {
+                continue;
+            }
+            if parent.is_some() && !state.tables.contains_key(&data.name) {
+                return Err(Self::conflict());
+            }
             if let Some(table) = state.tables.get(&data.name) {
                 let columns = frame
                     .projection()
@@ -181,6 +205,10 @@ impl SourceIndex {
                 }
             }
         }
+        let scope = Arc::new(
+            self.memory
+                .reserve_input(frame.scope().allocated_bytes().ok_or_else(Self::limit)?)?,
+        );
         *state.leases.entry(version).or_default() += 1;
         drop(state);
         let mut view = SourceView {
@@ -192,10 +220,14 @@ impl SourceIndex {
             next,
             control,
             _staging: staging,
+            _scope: scope,
         };
         let frame = &view.frame;
         for data in frame.datasets() {
-            if !matches!(data.name.as_str(), "events" | "context_versions") {
+            if AnalysisTableRead::source_header(&data.name) {
+                continue;
+            }
+            if !AnalysisTableRead::source_rows(&data.name) {
                 return Err(DataFusionError::NotImplemented(format!(
                     "retained source changes for {}",
                     data.name,
@@ -244,6 +276,7 @@ impl SourceIndex {
                     born: 0,
                     hashes: Arc::default(),
                     _memory: Arc::new(memory),
+                    _scope: Arc::clone(&view._scope),
                 };
                 for key in self.keys.iter().filter(|key| key.table == data.name) {
                     let projection = key
@@ -307,22 +340,22 @@ impl SourceIndex {
 
     pub(crate) fn restore(
         self: &Arc<Self>,
-        frame: ManagedSourceFrame,
+        frame: Arc<ManagedSourceFrame>,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<()> {
-        let reference = frame
-            .proof()
-            .ok_or_else(|| {
-                DataFusionError::Execution("the restored source proof is absent".into())
-            })?
-            .result
-            .clone();
-        let view = self.stage(Arc::new(frame), control)?;
+        let reference = frame.proof().cloned().ok_or_else(|| {
+            DataFusionError::Execution("the restored source proof is absent".into())
+        })?;
+        let view = self.stage(frame, control)?;
         view.commit(&reference)
     }
 
     fn conflict() -> DataFusionError {
         DataFusionError::Execution("the committed source basis differs".into())
+    }
+
+    fn limit() -> DataFusionError {
+        DataFusionError::ResourcesExhausted("retained source allocation overflowed".into())
     }
 }
 
@@ -373,14 +406,17 @@ impl IndexedTable {
         })
     }
 
-    fn lookup(&self, index: usize, hashes: &BTreeSet<u64>) -> Result<BTreeSet<RowAddress>> {
+    fn lookup<'a>(
+        &'a self,
+        index: usize,
+        hashes: &'a BTreeSet<u64>,
+    ) -> Result<impl Iterator<Item = RowAddress> + 'a> {
         let buckets = self.buckets.get(&index).ok_or_else(|| {
             DataFusionError::Internal("the retained source key index is absent".into())
         })?;
         Ok(hashes
             .iter()
-            .flat_map(|hash| buckets.get(hash).into_iter().flatten().copied())
-            .collect())
+            .flat_map(move |hash| buckets.get(hash).into_iter().flatten().copied()))
     }
 
     fn reclaim(&mut self, address: RowAddress) {
@@ -423,7 +459,7 @@ impl IndexedTable {
 }
 
 impl SourceView {
-    fn version(&self) -> u64 {
+    pub(crate) fn version(&self) -> u64 {
         self.parent
             .as_ref()
             .map_or(0, |parent| parent.result.commit_revision)
@@ -433,13 +469,53 @@ impl SourceView {
         &self.frame
     }
 
+    pub(super) fn image_at(
+        &self,
+        revision: u64,
+        selected: Option<&araphor_data::analysis::PackageResultRefV1>,
+    ) -> Result<SourceImage> {
+        if let Some(parent) = self
+            .parent
+            .as_ref()
+            .filter(|parent| Some(&parent.result) == selected)
+        {
+            return if parent.position.commit_revision == revision {
+                Ok(SourceImage::Before)
+            } else {
+                Err(SourceIndex::conflict())
+            };
+        }
+        if revision == self.frame.position().commit_revision {
+            return Ok(SourceImage::After);
+        }
+        Err(SourceIndex::conflict())
+    }
+
+    pub(super) fn check_before(&self, reference: &araphor_data::ManagedAttempt) -> Result<()> {
+        if !matches!(self.frame.read(), ManagedSourceRead::Changes(parent) if Some(parent) == self.parent.as_ref())
+        {
+            return Err(SourceIndex::conflict());
+        }
+        self.frame
+            .check_before(reference)
+            .map_err(SourceSnapshot::data_error)
+    }
+
+    pub(super) fn before_key(&self, key: &SourceKey) -> Option<&SourceKey> {
+        self.index.keys.iter().find(|admitted| {
+            admitted.table == key.table
+                && admitted.columns == key.columns
+                && admitted.hash.on_columns() == key.hash.on_columns()
+        })
+    }
+
     pub(crate) fn commit(
         &self,
         reference: &araphor_data::analysis::PackageResultRefV1,
     ) -> Result<()> {
         self.frame
             .proof()
-            .filter(|proof| &proof.result == reference)
+            .filter(|proof| proof.as_ref() == reference)
             .ok_or_else(|| {
                 DataFusionError::Execution("the source acknowledgement differs".into())
             })?;
@@ -491,12 +567,14 @@ impl SourceView {
                     born: reference.commit_revision,
                     hashes: block.hashes.clone(),
                     _memory: Arc::clone(&block._memory),
+                    _scope: Arc::clone(&block._scope),
                 });
                 table.insert(*id, block);
             }
         }
         state.next = self.next;
         state.head = Some(next);
+        state.scope = Some((Arc::clone(self.frame.scope()), Arc::clone(&self._scope)));
         Ok(())
     }
 
@@ -507,63 +585,116 @@ impl SourceView {
         key: Option<(usize, &BTreeSet<u64>)>,
         columns: &[usize],
         schema: &SchemaRef,
+        metadata: &MemoryReservation,
     ) -> Result<SourceRows> {
         self.control.check().map_err(SourceSnapshot::data_error)?;
+        let scratch = self.index.memory.reserve_input(0)?;
+        let buffers = self.index.memory.reserve_input(0)?;
         let state = self.index.lock()?;
         let pending = self
             .tables
             .get(name)
             .ok_or_else(|| DataFusionError::Execution("the source image table is absent".into()))?;
         let prior = state.tables.get(name);
-        let mut addresses = BTreeSet::new();
+        let mut grouped = BTreeMap::<u64, Vec<usize>>::new();
+        let mut add = |address: RowAddress| -> Result<()> {
+            if let std::collections::btree_map::Entry::Vacant(entry) = grouped.entry(address.block)
+            {
+                scratch.try_grow(
+                    size_of::<(u64, Vec<usize>, Arc<SourceBlock>)>()
+                        .checked_mul(2)
+                        .ok_or_else(SourceIndex::limit)?,
+                )?;
+                entry.insert(Vec::new());
+            }
+            let rows = grouped
+                .get_mut(&address.block)
+                .ok_or_else(SourceIndex::conflict)?;
+            if rows.len() == rows.capacity() {
+                let added = rows.capacity().max(4);
+                scratch.try_grow(
+                    added
+                        .checked_mul(size_of::<usize>())
+                        .ok_or_else(SourceIndex::limit)?,
+                )?;
+                rows.reserve_exact(added);
+            }
+            rows.push(address.row);
+            Ok(())
+        };
         if matches!(
             image,
             SourceImage::Before | SourceImage::After | SourceImage::Removed
         ) {
             if let Some(prior) = prior {
-                let selected = match key {
-                    Some((index, hashes)) => prior.lookup(index, hashes)?,
-                    None if image == SourceImage::Removed => {
-                        self.removed.get(name).cloned().unwrap_or_default()
-                    }
-                    None => {
-                        return Err(DataFusionError::NotImplemented(
-                            "a retained source scan requires native join keys".into(),
-                        ))
-                    }
-                };
-                addresses.extend(selected.into_iter().filter(|address| {
-                    prior.visible(*address, self.version())
+                let mut select = |address| -> Result<()> {
+                    self.control.check().map_err(SourceSnapshot::data_error)?;
+                    if prior.visible(address, self.version())
                         && match image {
                             SourceImage::After => !self
                                 .removed
                                 .get(name)
-                                .is_some_and(|rows| rows.contains(address)),
+                                .is_some_and(|rows| rows.contains(&address)),
                             SourceImage::Removed => self
                                 .removed
                                 .get(name)
-                                .is_some_and(|rows| rows.contains(address)),
+                                .is_some_and(|rows| rows.contains(&address)),
                             _ => true,
                         }
-                }));
+                    {
+                        add(address)?;
+                    }
+                    Ok(())
+                };
+                match key {
+                    Some((index, hashes)) => {
+                        prior.lookup(index, hashes)?.try_for_each(&mut select)?
+                    }
+                    None if image == SourceImage::Removed => {
+                        self.removed
+                            .get(name)
+                            .into_iter()
+                            .flat_map(|rows| rows.iter().copied())
+                            .try_for_each(&mut select)?;
+                    }
+                    None => {
+                        prior
+                            .blocks
+                            .iter()
+                            .flat_map(|(id, block)| {
+                                (0..block.batch.num_rows())
+                                    .map(move |row| RowAddress { block: *id, row })
+                            })
+                            .try_for_each(&mut select)?;
+                    }
+                }
             }
         }
         if matches!(image, SourceImage::After | SourceImage::Inserted) {
-            let selected = match key {
+            let mut select = |address| -> Result<()> {
+                self.control.check().map_err(SourceSnapshot::data_error)?;
+                add(address)
+            };
+            match key {
                 Some((index, hashes)) if !pending.blocks.is_empty() => {
-                    pending.lookup(index, hashes)?
+                    pending.lookup(index, hashes)?.try_for_each(&mut select)?;
                 }
-                Some(_) => BTreeSet::new(),
+                Some(_) => {}
                 None => pending
                     .blocks
                     .iter()
                     .flat_map(|(id, block)| {
                         (0..block.batch.num_rows()).map(move |row| RowAddress { block: *id, row })
                     })
-                    .collect(),
-            };
-            addresses.extend(selected);
+                    .try_for_each(&mut select)?,
+            }
         }
+        scratch.try_grow(
+            columns
+                .len()
+                .checked_mul(size_of::<usize>())
+                .ok_or_else(SourceIndex::limit)?,
+        )?;
         let projection = columns
             .iter()
             .map(|column| {
@@ -579,13 +710,11 @@ impl SourceView {
                 "the indexed source schema differs".into(),
             ));
         }
-        let mut grouped = BTreeMap::<u64, Vec<usize>>::new();
-        for address in addresses {
-            grouped.entry(address.block).or_default().push(address.row);
-        }
         let blocks = grouped
             .into_iter()
-            .map(|(id, rows)| {
+            .map(|(id, mut rows)| {
+                rows.sort_unstable();
+                rows.dedup();
                 let block = pending
                     .blocks
                     .get(&id)
@@ -595,30 +724,87 @@ impl SourceView {
             })
             .collect::<Result<Vec<_>>>()?;
         drop(state);
-        let mut result = SourceRows {
-            batches: Vec::new(),
-            origins: Vec::new(),
-        };
-        for (block, rows) in blocks {
-            self.control.check().map_err(SourceSnapshot::data_error)?;
-            let indices = UInt64Array::from(rows.iter().map(|row| *row as u64).collect::<Vec<_>>());
-            let arrays = projection
-                .iter()
-                .map(|column| take(block.batch.column(*column).as_ref(), &indices, None))
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            result.batches.push(RecordBatch::try_new_with_options(
-                Arc::clone(schema),
-                arrays,
-                &RecordBatchOptions::new().with_row_count(Some(rows.len())),
-            )?);
-            result.origins.push(
-                block
+        let mut charged = 0usize;
+        let result: Result<SourceRows> = (|| {
+            let bytes = blocks
+                .len()
+                .checked_mul(
+                    (size_of::<RecordBatch>() + 2 * size_of::<ManagedSourceRows>())
+                        .checked_add(
+                            projection
+                                .len()
+                                .checked_mul(size_of::<datafusion::arrow::array::ArrayRef>())
+                                .ok_or_else(SourceIndex::limit)?,
+                        )
+                        .ok_or_else(SourceIndex::limit)?,
+                )
+                .ok_or_else(SourceIndex::limit)?;
+            metadata.try_grow(bytes)?;
+            charged = bytes;
+            let mut result = SourceRows {
+                batches: Vec::with_capacity(blocks.len()),
+                origins: Vec::with_capacity(blocks.len()),
+            };
+            for (block, rows) in blocks {
+                self.control.check().map_err(SourceSnapshot::data_error)?;
+                let (temporary, retained) = block
                     .handles
-                    .select(&rows)
-                    .map_err(SourceSnapshot::data_error)?,
-            );
+                    .selection_bytes(&rows)
+                    .ok_or_else(SourceIndex::limit)?;
+                let retained = if matches!(image, SourceImage::After | SourceImage::Inserted) {
+                    retained
+                        .checked_add(temporary)
+                        .ok_or_else(SourceIndex::limit)?
+                } else {
+                    retained
+                };
+                let next = charged
+                    .checked_add(retained)
+                    .ok_or_else(SourceIndex::limit)?;
+                metadata.try_grow(retained)?;
+                charged = next;
+                scratch.try_grow(temporary)?;
+                let selection = scratch.split(temporary);
+                let batch = if rows.len() == block.batch.num_rows()
+                    && rows.iter().enumerate().all(|(index, row)| index == *row)
+                {
+                    block.batch.project(&projection)?
+                } else {
+                    let bytes = rows
+                        .len()
+                        .checked_mul(size_of::<u64>())
+                        .ok_or_else(SourceIndex::limit)?;
+                    let indices = self.index.memory.reserve_input(bytes)?;
+                    let positions =
+                        UInt64Array::from(rows.iter().map(|row| *row as u64).collect::<Vec<_>>());
+                    let arrays = projection
+                        .iter()
+                        .map(|column| take(block.batch.column(*column).as_ref(), &positions, None))
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    let batch = RecordBatch::try_new_with_options(
+                        Arc::clone(schema),
+                        arrays,
+                        &RecordBatchOptions::new().with_row_count(Some(rows.len())),
+                    )?;
+                    self.index.memory.retain_input(&batch, &buffers)?;
+                    drop(indices);
+                    batch
+                };
+                result.batches.push(batch);
+                result.origins.push(
+                    block
+                        .handles
+                        .select(&rows)
+                        .map_err(SourceSnapshot::data_error)?,
+                );
+                drop(selection);
+            }
+            Ok(result)
+        })();
+        if result.is_err() {
+            metadata.shrink(charged);
         }
-        Ok(result)
+        result
     }
 }
 

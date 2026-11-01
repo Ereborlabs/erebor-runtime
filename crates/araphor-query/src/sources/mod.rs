@@ -2,12 +2,12 @@ use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use araphor_data::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
-    AnalysisTableRequests, StorePositionV1,
+    AnalysisTableRead, AnalysisTableRequests, StorePositionV1,
 };
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -39,10 +39,11 @@ mod index;
 mod keys;
 pub(crate) use keys::{KeyRead, SourceJoin, SourceLookup};
 mod journal;
-pub(crate) use index::{SourceImage, SourceIndex, SourceKey, SourceView};
+pub use index::SourceImage;
+pub(crate) use index::{SourceIndex, SourceKey, SourceView};
 mod port;
 mod rows;
-pub use port::{PortSource, SourceDependenciesExec, SourcePort};
+pub use port::{PortSource, SourcePort};
 mod schema;
 #[cfg(test)]
 mod tests;
@@ -55,7 +56,6 @@ pub(crate) use rows::{Captured, CapturedRequests};
 pub(crate) enum SourceOrigin {
     Durable(String),
     Port(usize),
-    Package(usize),
     Local(String),
 }
 
@@ -63,14 +63,9 @@ impl SourceOrigin {
     pub(crate) fn durable(&self) -> Option<&str> {
         match self {
             Self::Durable(name) => Some(name),
-            Self::Port(_) | Self::Package(_) | Self::Local(_) => None,
+            Self::Port(_) | Self::Local(_) => None,
         }
     }
-}
-
-pub(crate) struct InputCapture {
-    pub(crate) retained: Arc<[Arc<RetainedSource>]>,
-    pub(crate) _memory: datafusion::execution::memory_pool::MemoryReservation,
 }
 
 #[derive(Clone, Copy)]
@@ -93,7 +88,7 @@ pub(crate) struct ScanBounds {
     pub(crate) fields: BTreeMap<&'static str, Interval>,
     pub(crate) events: Option<Vec<(u64, u64)>>,
     pub(crate) windows: Vec<WindowBound>,
-    pub(crate) packages: BTreeSet<usize>,
+    pub(crate) ports: BTreeSet<usize>,
     pub(crate) context_owners: Option<BTreeSet<String>>,
 }
 
@@ -108,6 +103,7 @@ struct ScanFrame {
     window: Option<crate::follow::Window>,
     events: bool,
     range: Option<(u64, u64)>,
+    fulfilled: bool,
 }
 
 struct SourceScan<'a> {
@@ -119,6 +115,8 @@ struct SourceScan<'a> {
     window: Option<crate::follow::Window>,
     moving: bool,
     context_seen: bool,
+    calls: Option<&'a crate::definition::CallContext>,
+    skipped: bool,
 }
 
 impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
@@ -154,6 +152,21 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
         let package = node
             .as_any()
             .downcast_ref::<crate::definition::physical::PackageExec>();
+        if package
+            .map(|package| {
+                self.calls
+                    .map_or(Ok(false), |calls| calls.cached(package.logical_call()))
+            })
+            .transpose()?
+            .unwrap_or(false)
+        {
+            self.skipped = true;
+            self.frames.push(ScanFrame {
+                fulfilled: true,
+                ..Default::default()
+            });
+            return Ok(TreeNodeRecursion::Jump);
+        }
         let inputs = package
             .map(|package| package.event_inputs(self.moving))
             .transpose()?
@@ -168,8 +181,8 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
             ..Default::default()
         };
         if let Some(source) = SourceData::from_plan(node.as_ref()) {
-            if let SourceOrigin::Package(slot) = source.origin {
-                self.bounds.packages.insert(slot);
+            if let SourceOrigin::Port(slot) = source.origin {
+                self.bounds.ports.insert(slot);
             }
             if let Some(name) = source.origin.durable() {
                 self.requests
@@ -220,11 +233,6 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
             }
         }
         self.frames.push(frame);
-        if let Some(port) = node.as_any().downcast_ref::<SourceDependenciesExec>() {
-            for source in port.sources() {
-                source.visit(self)?;
-            }
-        }
         Ok(TreeNodeRecursion::Continue)
     }
 
@@ -232,7 +240,7 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
         let frame = self.frames.pop().ok_or_else(|| {
             DataFusionError::Internal("the physical source scope is absent".into())
         })?;
-        self.complete |= frame.required && !frame.events;
+        self.complete |= frame.required && !frame.events && !frame.fulfilled;
         if frame.scoped || self.frames.is_empty() {
             if let (Some(range), Some(ranges)) = (frame.range, &mut self.bounds.events) {
                 ranges.push(range);
@@ -254,6 +262,7 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
         }
         if let Some(parent) = self.frames.last_mut() {
             parent.events |= frame.events;
+            parent.fulfilled |= frame.fulfilled;
         }
         Ok(TreeNodeRecursion::Continue)
     }
@@ -262,8 +271,8 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
 pub struct SourceSnapshot {
     store: Arc<AnalysisStore>,
     selection: AnalysisSelectionV1,
-    inputs: Option<Arc<InputCapture>>,
     managed: Option<araphor_data::ManagedRead>,
+    reference: OnceLock<araphor_data::ManagedAttempt>,
     limits: AnalysisExtractLimits,
     control: AnalysisReadControl,
     extract_timeout: Option<Duration>,
@@ -290,6 +299,7 @@ impl SourceSnapshot {
         requests: &mut AnalysisTableRequests,
         plans: &[Arc<dyn ExecutionPlan>],
         run: Option<&crate::stream::Run>,
+        calls: Option<&crate::definition::CallContext>,
     ) -> Result<ScanBounds> {
         let events = requests.contains_key("events").then(Vec::new);
         let mut scan = SourceScan {
@@ -304,9 +314,17 @@ impl SourceSnapshot {
             window: run.and_then(|run| run.window.clone()),
             moving: run.is_some_and(|run| run.follow || run.managed.is_some()),
             context_seen: false,
+            calls,
+            skipped: false,
         };
         for plan in plans {
             plan.visit(&mut scan)?;
+        }
+        if scan.skipped {
+            scan.requests.retain(|_, columns| columns.is_some());
+            if !scan.requests.contains_key("events") {
+                scan.bounds.events = None;
+            }
         }
         if scan.complete {
             scan.bounds.fields.remove("source_cursor");
@@ -330,6 +348,46 @@ impl SourceSnapshot {
         Ok(scan.bounds)
     }
 
+    pub(crate) fn project_requests(
+        requests: &mut AnalysisTableRequests,
+        bounds: &mut ScanBounds,
+        indexed: bool,
+    ) -> Result<()> {
+        if !requests
+            .get("context_versions")
+            .is_some_and(Option::is_some)
+        {
+            bounds.context_owners = None;
+        }
+        if indexed && bounds.events.is_some() {
+            bounds.events = Some(vec![(0, u64::MAX)]);
+        }
+        if !indexed {
+            return Ok(());
+        }
+        bounds.fields.clear();
+        for (name, columns) in requests {
+            if let Some(columns) = columns {
+                let schema = &Self::schemas()[name];
+                if let Some(names) = schema
+                    .fields()
+                    .first()
+                    .and_then(|field| field.metadata().get("araphor.join_keys"))
+                {
+                    for name in names.split(',') {
+                        columns.insert(schema.index_of(name)?);
+                    }
+                }
+                for name in ["commit_revision", "ordinal", "received_utc_ns"] {
+                    if let Ok(index) = schema.index_of(name) {
+                        columns.insert(index);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn extend_bounds(
         bounds: &mut BTreeMap<&'static str, Interval>,
         added: &BTreeMap<&'static str, Interval>,
@@ -348,7 +406,6 @@ impl SourceSnapshot {
     pub(crate) fn new(
         store: Arc<AnalysisStore>,
         selection: AnalysisSelectionV1,
-        inputs: Option<Arc<InputCapture>>,
         limits: AnalysisExtractLimits,
         control: AnalysisReadControl,
         extract_timeout: Option<Duration>,
@@ -359,8 +416,8 @@ impl SourceSnapshot {
         Arc::new(Self {
             store,
             selection,
-            inputs,
             managed,
+            reference: OnceLock::new(),
             limits,
             control,
             extract_timeout,
@@ -381,7 +438,6 @@ impl SourceSnapshot {
                 let provider: Arc<dyn TableProvider> = Arc::new(SourceProvider {
                     origin: SourceOrigin::Durable(name.clone()),
                     schema: Arc::clone(schema),
-                    retained: None,
                     image: None,
                 });
                 (name.clone(), provider)
@@ -395,43 +451,7 @@ impl SourceSnapshot {
         mut bounds: ScanBounds,
         mode: ReadMode,
     ) -> Result<Arc<ArrowSnapshot>> {
-        let mut selected = requests.clone();
-        let indexed = self
-            .index
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source index lock is poisoned".into()))?
-            .is_some();
-        if indexed {
-            bounds.fields.clear();
-            if bounds.events.is_some() {
-                bounds.events = Some(vec![(0, u64::MAX)]);
-            }
-            for (name, columns) in &mut selected {
-                if let Some(columns) = columns {
-                    let schema = &Self::schemas()[name];
-                    if let Some(names) = schema
-                        .fields()
-                        .first()
-                        .and_then(|field| field.metadata().get("araphor.join_keys"))
-                    {
-                        for name in names.split(',') {
-                            columns.insert(schema.index_of(name)?);
-                        }
-                    }
-                    for name in ["commit_revision", "ordinal", "received_utc_ns"] {
-                        if let Ok(index) = schema.index_of(name) {
-                            columns.insert(index);
-                        }
-                    }
-                }
-            }
-        }
-        let requests = &selected;
-        if let Some(ranges) = bounds
-            .events
-            .as_deref()
-            .or_else(|| self.inputs.as_ref().map(|_| &[][..]))
-        {
+        if let Some(ranges) = bounds.events.as_deref() {
             let window = ranges
                 .iter()
                 .copied()
@@ -568,12 +588,64 @@ impl SourceSnapshot {
         Ok(())
     }
 
+    pub(crate) fn bind_reference(&self, reference: araphor_data::ManagedAttempt) -> Result<()> {
+        self.reference.set(reference).map_err(|_| {
+            DataFusionError::Execution("the journal reference is already bound".into())
+        })
+    }
+
     pub(crate) fn source_view(&self) -> Result<Option<Arc<SourceView>>> {
         Ok(self
             .view
             .lock()
             .map_err(|_| DataFusionError::Internal("source view lock is poisoned".into()))?
             .clone())
+    }
+
+    fn point_image(&self, view: &SourceView) -> Result<SourceImage> {
+        view.image_at(
+            self.snapshot()?.page.extraction.meta.commit_revision,
+            self.reference
+                .get()
+                .and_then(|reference| reference.receipt().map(|receipt| &receipt.selected)),
+        )
+    }
+
+    pub fn check_point(
+        &self,
+        plans: &[Arc<dyn ExecutionPlan>],
+        context: &TaskContext,
+    ) -> Result<()> {
+        let point = match self.source_view()? {
+            Some(view) => self.point_image(&view)?,
+            None => SourceImage::After,
+        };
+        let calls = context
+            .session_config()
+            .get_extension::<crate::definition::CallContext>();
+        for plan in plans {
+            plan.apply(|node| {
+                if let (Some(package), Some(calls)) = (
+                    node.as_any()
+                        .downcast_ref::<crate::definition::physical::PackageExec>(),
+                    calls.as_ref(),
+                ) {
+                    if calls.cached(package.logical_call())? {
+                        return Ok(TreeNodeRecursion::Jump);
+                    }
+                }
+                if SourceData::from_plan(node.as_ref()).is_some_and(|source| {
+                    source.origin.durable().is_some()
+                        && source.image.is_some_and(|image| image != point)
+                }) {
+                    return Err(DataFusionError::Execution(
+                        "the composite source image differs from its captured point".into(),
+                    ));
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        Ok(())
     }
 
     fn record_read(
@@ -609,6 +681,7 @@ impl SourceSnapshot {
     pub(crate) fn input_reads(
         &self,
         plan: &Arc<dyn ExecutionPlan>,
+        covered: impl Iterator<Item = usize> + Clone,
     ) -> Result<Option<Vec<araphor_data::ManagedSourceRows>>> {
         if self.source_view()?.is_none() {
             return Ok(None);
@@ -616,7 +689,9 @@ impl SourceSnapshot {
         let mut ids = BTreeSet::new();
         plan.apply(|node| {
             if let Some(source) = SourceData::from_plan(node.as_ref()) {
-                ids.insert(source.read);
+                if !covered.clone().any(|owner| source.owners.contains(&owner)) {
+                    ids.insert(source.read);
+                }
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
@@ -677,16 +752,7 @@ impl SourceSnapshot {
 pub struct SourceProvider {
     pub(crate) origin: SourceOrigin,
     schema: SchemaRef,
-    retained: Option<Arc<RetainedSource>>,
     image: Option<SourceImage>,
-}
-
-#[derive(Debug)]
-pub(crate) struct RetainedSource {
-    pub(crate) slot: usize,
-    pub(crate) reference: Arc<araphor_data::ManagedInputRef>,
-    pub(crate) schema: SchemaRef,
-    _memory: datafusion::execution::memory_pool::MemoryReservation,
 }
 
 impl SourceProvider {
@@ -699,7 +765,6 @@ impl SourceProvider {
         Ok(Arc::new(Self {
             origin: self.origin.clone(),
             schema: Arc::clone(&self.schema),
-            retained: self.retained.clone(),
             image: Some(image),
         }))
     }
@@ -742,7 +807,6 @@ impl SourceProvider {
         Arc::new(Self {
             origin: SourceOrigin::Local(name.to_owned()),
             schema,
-            retained: None,
             image: None,
         })
     }
@@ -751,7 +815,6 @@ impl SourceProvider {
         Arc::new(Self {
             origin: SourceOrigin::Port(port),
             schema,
-            retained: None,
             image: None,
         })
     }
@@ -766,30 +829,6 @@ impl SourceProvider {
                 }
                 .build()
             })
-    }
-
-    pub(crate) fn retained(
-        reference: araphor_data::ManagedInputRef,
-        schema: SchemaRef,
-        memory: datafusion::execution::memory_pool::MemoryReservation,
-    ) -> crate::Result<Arc<dyn TableProvider>> {
-        let slot = Self::identity()?;
-        let retained = Arc::new(RetainedSource {
-            slot,
-            reference: Arc::new(reference),
-            schema: Arc::clone(&schema),
-            _memory: memory,
-        });
-        Ok(Arc::new(Self {
-            origin: SourceOrigin::Package(slot),
-            schema,
-            retained: Some(retained),
-            image: None,
-        }))
-    }
-
-    pub(crate) fn retained_source(&self) -> Option<&Arc<RetainedSource>> {
-        self.retained.as_ref()
     }
 
     fn bounds(
@@ -928,6 +967,7 @@ impl TableProvider for SourceProvider {
             fetch: limit,
             image: self.image,
             read: Self::identity().map_err(|error| DataFusionError::External(Box::new(error)))?,
+            owners: Vec::new(),
             key: None,
         }))
     }
@@ -943,6 +983,7 @@ pub(crate) struct SourceData {
     fetch: Option<usize>,
     image: Option<SourceImage>,
     read: usize,
+    owners: Vec<usize>,
     key: Option<KeyRead>,
 }
 
@@ -996,48 +1037,66 @@ impl DataSource for SourceData {
             ));
         }
         if let (Some(view), Some(name)) = (snapshot.source_view()?, self.origin.durable()) {
-            use futures_util::TryStreamExt as _;
-            let schema = Arc::clone(&self.schema);
-            let columns = self.indices.clone();
-            let name = name.to_owned();
-            let key = self.key.clone();
-            let image = self.image.unwrap_or(SourceImage::After);
-            let read = self.read;
-            let fetch = self.fetch;
-            let stream = futures_util::stream::once(async move {
-                let hashes = if let Some(key) = &key {
-                    let slot = snapshot.key_slot(key.slot)?;
-                    Some(
-                        snapshot
-                            .control
-                            .query_async(slot.hashes())
-                            .await
-                            .map_err(SourceSnapshot::data_error)?,
+            if !AnalysisTableRead::source_rows(name) {
+                if !AnalysisTableRead::source_header(name) {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "retained source changes for {name}"
+                    )));
+                }
+                let point = snapshot.point_image(&view)?;
+                if self.image.is_some_and(|image| image != point) {
+                    return Err(DataFusionError::Execution(
+                        "the canonical header image differs from its captured point".into(),
+                    ));
+                }
+            } else {
+                use futures_util::TryStreamExt as _;
+                let schema = Arc::clone(&self.schema);
+                let columns = self.indices.clone();
+                let name = name.to_owned();
+                let key = self.key.clone();
+                let image = self.image.map_or_else(|| snapshot.point_image(&view), Ok)?;
+                let read = self.read;
+                let fetch = self.fetch;
+                let stream = futures_util::stream::once(async move {
+                    let hashes = if let Some(key) = &key {
+                        let slot = snapshot.key_slot(key.slot)?;
+                        Some(
+                            snapshot
+                                .control
+                                .query_async(slot.hashes())
+                                .await
+                                .map_err(SourceSnapshot::data_error)?,
+                        )
+                    } else {
+                        None
+                    };
+                    snapshot
+                        .control
+                        .check()
+                        .map_err(SourceSnapshot::data_error)?;
+                    let keys = key
+                        .as_ref()
+                        .zip(hashes.as_deref())
+                        .map(|(key, hashes)| (key.key.id, hashes));
+                    let receipt = snapshot.snapshot()?;
+                    let rows =
+                        view.read(&name, image, keys, &columns, &schema, receipt.metadata())?;
+                    snapshot.record_read(read, image, rows.origins)?;
+                    Ok::<_, DataFusionError>(
+                        MemoryStream::try_new(rows.batches, schema, None)?.with_fetch(fetch),
                     )
-                } else {
-                    None
-                };
-                snapshot
-                    .control
-                    .check()
-                    .map_err(SourceSnapshot::data_error)?;
-                let keys = key
-                    .as_ref()
-                    .zip(hashes.as_deref())
-                    .map(|(key, hashes)| (key.key.id, hashes));
-                let rows = view.read(&name, image, keys, &columns, &schema)?;
-                snapshot.record_read(read, image, rows.origins)?;
-                Ok::<_, DataFusionError>(
-                    MemoryStream::try_new(rows.batches, schema, None)?.with_fetch(fetch),
-                )
-            })
-            .try_flatten();
-            return Ok(Box::pin(RecordBatchStreamAdapter::new(
-                Arc::clone(&self.schema),
-                stream,
-            )));
+                })
+                .try_flatten();
+                return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&self.schema),
+                    stream,
+                )));
+            }
         }
-        if matches!(self.image, Some(SourceImage::Before | SourceImage::Removed)) {
+        if matches!(self.image, Some(SourceImage::Before | SourceImage::Removed))
+            && snapshot.source_view()?.is_none()
+        {
             return Ok(Box::pin(MemoryStream::try_new(
                 Vec::new(),
                 Arc::clone(&self.schema),

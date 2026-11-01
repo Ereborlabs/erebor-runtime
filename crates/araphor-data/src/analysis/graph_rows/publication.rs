@@ -115,8 +115,7 @@ impl GraphRows {
                     .ok_or_else(|| Self::invalid("graph unit change contract"))?
                     .is_reset(returned.evaluation)
                     .context(crate::AnalysisContractSnafu)?;
-                if returned.retained.is_some()
-                    || reset != changes.base.is_none()
+                if reset != changes.base.is_none()
                     || (!reset && changes.base.as_ref() != prior)
                     || (rebuild && !reset)
                 {

@@ -76,7 +76,6 @@ fn read(
         AnalysisTableRead {
             requests: &columns,
             event_ranges: None,
-            inputs: None,
             mode,
             now: 0,
         },

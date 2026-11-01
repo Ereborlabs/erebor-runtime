@@ -6,11 +6,10 @@ use araphor_data::{AnalysisSelectionV1, AnalysisStore, AnalysisTableRequests};
 use datafusion::common::ScalarValue;
 use datafusion::datasource::MemTable;
 use datafusion::execution::SessionState;
-use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 
-use super::{ScanBounds, SourceDependenciesExec, SourceSnapshot};
+use super::{ScanBounds, SourceSnapshot};
 use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
 use crate::planner::Planner;
@@ -36,7 +35,7 @@ impl Fixture {
 
     fn requests(plans: &[Arc<dyn ExecutionPlan>]) -> (AnalysisTableRequests, ScanBounds) {
         let mut requests = BTreeMap::from([("events".to_owned(), None)]);
-        let bounds = SourceSnapshot::requests(&mut requests, plans, None).unwrap();
+        let bounds = SourceSnapshot::requests(&mut requests, plans, None, None).unwrap();
         (requests, bounds)
     }
 
@@ -65,7 +64,7 @@ async fn context_owner_filter_keeps_unrestricted_scans() {
         )
         .await;
     let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
-    let bounds = SourceSnapshot::requests(&mut requests, &[filtered], None).unwrap();
+    let bounds = SourceSnapshot::requests(&mut requests, &[filtered], None, None).unwrap();
     assert_eq!(bounds.context_owners, Some(owners));
 
     let filtered_union = fixture
@@ -76,7 +75,7 @@ async fn context_owner_filter_keeps_unrestricted_scans() {
         )
         .await;
     let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
-    let bounds = SourceSnapshot::requests(&mut requests, &[filtered_union], None).unwrap();
+    let bounds = SourceSnapshot::requests(&mut requests, &[filtered_union], None, None).unwrap();
     assert_eq!(
         bounds.context_owners,
         Some(BTreeSet::from(["policy".to_owned(), "target".to_owned()]))
@@ -89,7 +88,7 @@ async fn context_owner_filter_keeps_unrestricted_scans() {
         )
         .await;
     let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
-    let bounds = SourceSnapshot::requests(&mut requests, &[mixed_or], None).unwrap();
+    let bounds = SourceSnapshot::requests(&mut requests, &[mixed_or], None, None).unwrap();
     assert_eq!(bounds.context_owners, None);
 
     let union = fixture
@@ -100,7 +99,7 @@ async fn context_owner_filter_keeps_unrestricted_scans() {
         )
         .await;
     let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
-    let bounds = SourceSnapshot::requests(&mut requests, &[union], None).unwrap();
+    let bounds = SourceSnapshot::requests(&mut requests, &[union], None, None).unwrap();
     assert_eq!(bounds.context_owners, None);
 
     let other = fixture
@@ -114,7 +113,7 @@ async fn context_owner_filter_keeps_unrestricted_scans() {
         ("context_versions".to_owned(), None),
         ("context".to_owned(), None),
     ]);
-    let bounds = SourceSnapshot::requests(&mut requests, &[other], None).unwrap();
+    let bounds = SourceSnapshot::requests(&mut requests, &[other], None, None).unwrap();
     assert_eq!(bounds.context_owners, None);
 }
 
@@ -237,7 +236,8 @@ async fn local_source_has_no_bounds() {
         .await;
     let mut requests = AnalysisTableRequests::new();
     let bounds =
-        SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical), None).unwrap();
+        SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical), None, None)
+            .unwrap();
     assert!(requests.is_empty());
     assert!(bounds.fields.is_empty());
 }
@@ -275,48 +275,11 @@ async fn physical_projection_requests() {
 }
 
 #[tokio::test]
-async fn hidden_source_requests_match_physical_tree() {
-    let fixture = Fixture::new();
-    let physical = fixture
-        .plan(
-            "SELECT source_cursor FROM events WHERE received_utc_ns >= 1000 AND received_utc_ns < 3000",
-            vec![],
-        )
-        .await;
-    let direct = Fixture::requests(std::slice::from_ref(&physical));
-    let port: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(physical.schema()));
-    let hidden: Arc<dyn ExecutionPlan> = Arc::new(SourceDependenciesExec::new(
-        Arc::clone(&port),
-        vec![physical],
-    ));
-    assert!(port.children().is_empty());
-    assert_eq!(hidden.children().len(), 1);
-    assert_eq!(Fixture::requests(&[hidden]), direct);
-    let events = &SourceSnapshot::schemas()["events"];
-    assert_eq!(
-        direct.0["events"],
-        Some(BTreeSet::from([
-            events.index_of("source_cursor").unwrap(),
-            events.index_of("received_utc_ns").unwrap(),
-        ]))
-    );
-    assert_eq!(
-        direct.1.fields["received_utc_ns"].lower(),
-        &ScalarValue::UInt64(Some(1000))
-    );
-    assert_eq!(
-        direct.1.fields["received_utc_ns"].upper(),
-        &ScalarValue::UInt64(Some(2999))
-    );
-}
-
-#[tokio::test]
 async fn input_bounds_require_capture() {
     let fixture = Fixture::new();
     let source = SourceSnapshot::new(
         Arc::clone(fixture._engine.store()),
         AnalysisSelectionV1::tenant([1; 16]),
-        None,
         Default::default(),
         Default::default(),
         None,
@@ -327,10 +290,11 @@ async fn input_bounds_require_capture() {
     let physical = fixture
         .plan("SELECT owner_id FROM context_versions", vec![])
         .await;
-    assert!(source.input_bounds(&physical).is_err());
+    assert!(source.input_bounds(&physical, None).is_err());
     let mut requests = BTreeMap::from([("context_versions".to_owned(), None)]);
     let bounds =
-        SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical), None).unwrap();
+        SourceSnapshot::requests(&mut requests, std::slice::from_ref(&physical), None, None)
+            .unwrap();
     let captured = source
         .capture(&requests, bounds, super::ReadMode::Snapshot)
         .unwrap();
@@ -342,11 +306,11 @@ async fn input_bounds_require_capture() {
             Ok(())
         })
         .unwrap();
-    assert!(source.input_bounds(&physical).is_ok());
+    assert!(source.input_bounds(&physical, None).is_ok());
     let events = fixture
         .plan("SELECT source_cursor FROM events", vec![])
         .await;
-    let error = source.input_bounds(&events).unwrap_err();
+    let error = source.input_bounds(&events, None).unwrap_err();
     assert!(
         matches!(error, datafusion::common::DataFusionError::Execution(message)
         if message == "the physical source was not admitted")

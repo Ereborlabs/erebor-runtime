@@ -71,7 +71,7 @@ impl AnalysisStore {
                 "SELECT EXISTS(SELECT 1 FROM managed_edges e JOIN analysis_results r
                 ON r.tenant_id = e.tenant_id AND r.result_id = e.dependency_id
                     AND r.commit_revision = e.commit_revision
-                WHERE e.tenant_id = ? AND e.result_id = ? AND e.kind = 'input'
+                WHERE e.tenant_id = ? AND e.result_id = ?
                     AND r.processor_id = 'managed-package-v1')",
                 params![tenant.as_slice(), id],
                 |row| row.get(0),

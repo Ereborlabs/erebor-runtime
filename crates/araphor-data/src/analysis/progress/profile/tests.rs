@@ -1,4 +1,5 @@
 use super::*;
+use crate::analysis::PackageResultRefV1;
 use crate::{
     BehaviorSnapshotV1, DiscoveryProofKindV1, EvidenceIntakeIdentityV1, ProcessorClassV1,
     ProcessorScopeV1, ValidatedEvidenceBatchV1, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
@@ -9,6 +10,7 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 mod contexts;
 mod gaps;
 mod native;
+mod notices;
 mod state;
 
 fn profile() -> DiscoveryProfileV1 {
@@ -103,6 +105,7 @@ fn profile_guard_rolls_back() -> TestResult {
     let mut previous = None;
     let mut notices = store.subscribe_revision();
     for revision in 1..=2 {
+        profile.profile_id = format!("profile-{revision}");
         profile.revision = revision;
         profile.updated_utc_ns = 10 + revision;
         let before = store.meta()?;
@@ -117,7 +120,7 @@ fn profile_guard_rolls_back() -> TestResult {
             store.commit_working_profile_guarded(
                 commit(&profile),
                 PreparedProfile::new(profile.clone())?,
-                previous,
+                previous.clone(),
                 || control.check()
             ),
             Err(crate::Error::AnalysisReadCancelled { .. })
@@ -128,21 +131,24 @@ fn profile_guard_rolls_back() -> TestResult {
         let receipt = store.commit_working_profile_guarded(
             commit(&profile),
             PreparedProfile::new(profile.clone())?,
-            previous,
+            previous.clone(),
             || Ok(()),
         )?;
         assert_eq!(
             store.dependency_revision(&selected, &crate::AnalysisReadControl::default())?,
             (store.meta()?, receipt.commit_revision)
         );
-        previous = Some(receipt.commit_revision);
+        previous = Some(PackageResultRefV1 {
+            result_id: profile.profile_id.clone(),
+            commit_revision: receipt.commit_revision,
+        });
         notices.borrow_and_update();
         let committed = store.meta()?;
         assert!(matches!(
             store.commit_working_profile_guarded(
                 commit(&profile),
                 PreparedProfile::new(profile.clone())?,
-                previous,
+                previous.clone(),
                 || control.check()
             ),
             Err(crate::Error::AnalysisReadCancelled { .. })
@@ -182,6 +188,7 @@ fn profile_handoff_matches_bytes() -> TestResult {
         let mut previous = None;
         let mut receipts = Vec::new();
         for step in 0..3 {
+            profile.profile_id = format!("profile-{step}");
             profile.revision = step + 1;
             profile.updated_utc_ns = 10 + step;
             profile.sealed = step == 2;
@@ -196,14 +203,14 @@ fn profile_handoff_matches_bytes() -> TestResult {
                 if profile.sealed {
                     store.commit_sealed_profile(input.clone(), prepared)?
                 } else {
-                    store.commit_working_profile(input.clone(), prepared, previous)?
+                    store.commit_working_profile(input.clone(), prepared, previous.clone())?
                 }
             } else {
                 input.body = bytes.clone();
                 if profile.sealed {
                     store.commit_profile(&input)?
                 } else {
-                    store.commit_working(&input, previous)?
+                    store.commit_working(&input, previous.clone())?
                 }
             };
             let revision = store.meta()?.commit_revision;
@@ -219,7 +226,10 @@ fn profile_handoff_matches_bytes() -> TestResult {
                 assert_eq!(retry, receipt);
                 assert_eq!(store.meta()?.commit_revision, revision);
             } else {
-                previous = Some(receipt.commit_revision);
+                previous = Some(PackageResultRefV1 {
+                    result_id: profile.profile_id.clone(),
+                    commit_revision: receipt.commit_revision,
+                });
             }
             let (request, body): (Vec<u8>, Vec<u8>) = store.reader()?.get()?.query_row(
                 "SELECT request_meta, body FROM analysis_results WHERE result_id = ?",
@@ -233,7 +243,7 @@ fn profile_handoff_matches_bytes() -> TestResult {
         let head = store.processor_result(&profile.scope)?;
         assert_eq!(
             head.as_ref().map(|head| head.result_id.as_str()),
-            Some("profile-a")
+            Some("profile-1")
         );
         let revision = store.meta()?.commit_revision;
         drop(store);

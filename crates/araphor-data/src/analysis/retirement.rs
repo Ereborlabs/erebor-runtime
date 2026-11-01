@@ -84,7 +84,7 @@ impl AnalysisStore {
         if consumed < accepted {
             transaction
                 .execute(
-                    "INSERT INTO processor_gaps VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO processor_gaps VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         scope.processor_id,
                         scope.method_version,
@@ -92,6 +92,7 @@ impl AnalysisStore {
                         key.as_slice(),
                         consumed + 1,
                         accepted,
+                        revision,
                         revision
                     ],
                 )
@@ -99,13 +100,29 @@ impl AnalysisStore {
                     operation: "record retired missing input",
                 })?;
         }
-        transaction.execute(
-            "UPDATE processor_progress SET retired = true, retirement_id = ?, retirement_reason = ?,
-                retirement_cursor = ?, retirement_revision = ?
+        transaction
+            .execute(
+                "INSERT INTO processor_versions
+             SELECT processor_id, method_version, tenant_id, stream_key, class,
+                consumed_cursor, resume_floor, coverage_revision, context_revision,
+                start_cursor, required_floor, true, ?, ?, ?, ?, result_id, ?
+             FROM processor_progress
              WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
-            params![input.change_id, input.reason, accepted, revision,
-                scope.processor_id, scope.method_version, tenant, key.as_slice()],
-        ).context(AnalysisDatabaseSnafu { operation: "retire required processor" })?;
+                params![
+                    input.change_id,
+                    input.reason,
+                    accepted,
+                    revision,
+                    revision,
+                    scope.processor_id,
+                    scope.method_version,
+                    tenant,
+                    key.as_slice()
+                ],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "retire required processor",
+            })?;
         self.check_revision_limits(&transaction, scope.identity.tenant_id)?;
         let relations: &[&str] = if consumed < accepted {
             &["processor_progress", "processor_gaps"]
@@ -307,9 +324,9 @@ mod tests {
     #[test]
     fn analysis_store_retirement_recovery() -> TestResult {
         for fault in [
-            "UPDATE processor_progress SET retirement_cursor = 9",
+            "UPDATE processor_versions SET retirement_cursor = 9 WHERE retired",
             "DELETE FROM processor_gaps",
-            "UPDATE processor_progress SET retired = false",
+            "UPDATE processor_versions SET retired = false WHERE retired",
         ] {
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("analysis");

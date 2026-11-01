@@ -671,6 +671,7 @@ async fn state_follows_processor_head() {
         witnesses: Vec::new(),
         context_refs: Vec::new(),
     };
+    let first_id = profile.profile_id.clone();
     let committed = fixture
         .store
         .commit_working_profile(
@@ -681,22 +682,27 @@ async fn state_follows_processor_head() {
         .unwrap();
     let first = next(&mut subscription).await;
     profile.revision += 1;
+    profile.profile_id = "native-state-2".into();
     profile.updated_utc_ns += 1;
+    let second_id = profile.profile_id.clone();
     let refreshed = fixture
         .store
         .commit_working_profile(
             input(&profile),
             araphor_data::analysis::PreparedProfile::new(profile).unwrap(),
-            Some(committed.commit_revision),
+            Some(araphor_data::analysis::PackageResultRefV1 {
+                result_id: first_id.clone(),
+                commit_revision: committed.commit_revision,
+            }),
         )
         .unwrap();
     let second = next(&mut subscription).await;
-    for (update, receipt, revision) in [(&first, committed, 1), (&second, refreshed, 2)] {
+    for (update, receipt, id, revision) in [
+        (&first, committed, first_id, 1),
+        (&second, refreshed, second_id, 2),
+    ] {
         assert_eq!(update.operation, Operation::Replace);
-        assert_eq!(
-            values(update, 2),
-            [ScalarValue::Utf8(Some("native-state".into()))]
-        );
+        assert_eq!(values(update, 2), [ScalarValue::Utf8(Some(id.clone()))]);
         assert_eq!(
             values(update, 3),
             [ScalarValue::UInt64(Some(receipt.commit_revision))]
@@ -705,7 +711,7 @@ async fn state_follows_processor_head() {
         assert_eq!(values(update, 6), [ScalarValue::UInt64(Some(0))]);
         let refs = update.snapshot.results().collect::<Vec<_>>();
         assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0].result_id, "native-state");
+        assert_eq!(refs[0].result_id, id);
         assert_eq!(refs[0].commit_revision, receipt.commit_revision);
     }
     assert_eq!(values(&absent, 1), [ScalarValue::Boolean(Some(false))]);

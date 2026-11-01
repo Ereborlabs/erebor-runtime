@@ -326,6 +326,9 @@ impl RuntimeFixture {
         package: &sdk::Package,
         evaluation: &sdk::Evaluation,
     ) -> sdk::Result<sdk::wire::Output> {
+        if Self::cancelled() {
+            return Err(sdk::Error::contract(sdk::ErrorCode::Failed, "cancelled"));
+        }
         let prior = evaluation
             .checkpoint
             .as_ref()
@@ -442,7 +445,12 @@ impl RuntimeFixture {
             sdk::Port::new("input", schema.clone()).into(),
             sdk::Port::new("removed", schema.clone()).into(),
             sdk::ChangeInputs::reset_port("reset").into(),
-            sdk::InputPort { port: sdk::Port::new("affected", schema), source: sdk::InputSource::Query("SELECT value FROM inserted.input UNION SELECT value FROM removed.input".into()) },
+            sdk::InputPort {
+                port: sdk::Port::new("affected", schema),
+                source: sdk::InputSource::Query(
+                    "SELECT value FROM inserted.input UNION SELECT value FROM removed.input".into(),
+                ),
+            },
         ];
         changes.change_inputs = Some(sdk::ChangeInputs {
             reset: "reset".into(),

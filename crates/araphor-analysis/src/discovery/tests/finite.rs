@@ -35,7 +35,8 @@ pub(super) fn assert_failed_profile(
     assert!(attempt.receipt().is_none());
     assert!(fixture
         .store
-        .managed_selected(tenant, instance, id, &control)?
+        .managed_attempt(tenant, instance, id, &control)?
+        .and_then(|attempt| attempt.receipt().cloned())
         .is_none());
     assert_eq!(
         fixture
@@ -281,12 +282,13 @@ async fn native_retirement_rejects_captured() -> TestResult {
     assert!(attempt.receipt().is_none());
     assert!(fixture
         .store
-        .managed_selected(
+        .managed_attempt(
             fixture.source.tenant_id,
             &saved.spec.id,
             &request.id,
             &control
         )?
+        .and_then(|attempt| attempt.receipt().cloned())
         .is_none());
     drop((instance, gate));
     fixture.released()?;

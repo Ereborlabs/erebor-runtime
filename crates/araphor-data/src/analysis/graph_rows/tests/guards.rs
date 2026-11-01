@@ -253,6 +253,7 @@ fn graph_notice_checks_authority() -> TestResult {
     let notice = fixture
         .store
         .graph_notice(scope, id, receipt.commit_revision)?;
+    let frozen = fixture.store.frozen_result(id)?;
     let before = fixture.store.meta()?;
     let control = std::sync::Arc::new(crate::AnalysisReadControl::default());
     let cancelled = std::sync::Arc::clone(&control);
@@ -284,11 +285,38 @@ fn graph_notice_checks_authority() -> TestResult {
         .store
         .mark_graph_notice(scope, id, receipt.commit_revision, 7, 1, || Ok(()))?;
     assert_eq!(
+        fixture.store.meta()?.commit_revision,
+        before.commit_revision + 1
+    );
+    assert_eq!(
         fixture
             .store
             .graph_notice(scope, id, receipt.commit_revision)?,
         Some((7, 1))
     );
+    fixture
+        .store
+        .mark_graph_notice(scope, id, receipt.commit_revision, 3, 0, || Ok(()))?;
+    assert_eq!(
+        fixture
+            .store
+            .graph_notice(scope, id, receipt.commit_revision)?,
+        Some((3, 1))
+    );
+    assert_eq!(fixture.store.frozen_result(id)?, frozen);
+    let current = fixture.store.meta()?;
+    assert_eq!(current.commit_revision, before.commit_revision + 2);
+    assert!(fixture
+        .store
+        .mark_graph_notice(scope, id, receipt.commit_revision, 3, 1, || {
+            crate::AnalysisConflictSnafu.fail()
+        })
+        .is_err());
+    assert_eq!(fixture.store.meta()?, current);
+    fixture
+        .store
+        .mark_graph_notice(scope, id, receipt.commit_revision, 3, 1, || Ok(()))?;
+    assert_eq!(fixture.store.meta()?, current);
     assert_eq!(
         fixture
             .store

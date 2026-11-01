@@ -59,7 +59,6 @@ fn assert_frontier(completed: bool) -> TestResult {
         .zip(&outputs)
         .enumerate()
         .map(|(index, (evaluation, output))| ManagedReturn {
-            retained: None,
             changes: None,
             call: 10 + index as u64,
             evaluation,
@@ -112,13 +111,17 @@ fn assert_frontier(completed: bool) -> TestResult {
         store.managed_history(&current.grant.selection, "counter", &control)?,
         std::slice::from_ref(&receipt)
     );
-    assert!(store
-        .managed_selected([1; 16], "counter", &input.id, &control)?
-        .is_some());
+    assert!(Fixture::receipt(&store, [1; 16], "counter", &input.id, &control)?.is_some());
     assert_eq!(
         store.managed_resume([1; 16], "counter", &AnalysisReadControl::default())?,
         ManagedResume {
-            source: None,
+            source: Some(ManagedSourceRef {
+                result: receipt.selected.clone(),
+                position: crate::StorePositionV1 {
+                    commit_revision: captured.revision(),
+                    ordinal: u32::MAX,
+                },
+            }),
             instance: current,
             frontier,
             completed: receipt.commit_revision
@@ -289,15 +292,15 @@ fn pending_frontier_settles_startup() -> TestResult {
         crate::PackageReadinessV1::Inactive
     ));
     assert_eq!(status.status_progress, 0);
-    assert!(store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            &input.id,
-            &AnalysisReadControl::default()
-        )?
-        .is_none());
-    let rows: (u64, u64) = store.read_snapshot(|reader| reader.query_row("SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_arrow)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read settled native output absence" }))?;
+    assert!(Fixture::receipt(
+        &store,
+        [1; 16],
+        "counter",
+        &input.id,
+        &AnalysisReadControl::default()
+    )?
+    .is_none());
+    let rows: (u64, u64) = store.read_snapshot(|reader| reader.query_row("SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_edges)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read settled native output absence" }))?;
     assert_eq!(rows, (0, 0));
     let mut checked = false;
     assert_eq!(
@@ -388,7 +391,6 @@ fn finite_result_rejects_resume() -> TestResult {
         .zip(&outputs)
         .enumerate()
         .map(|(index, (evaluation, output))| ManagedReturn {
-            retained: None,
             changes: None,
             call: 10 + index as u64,
             evaluation,
@@ -495,32 +497,20 @@ fn frontier_expiry_keeps_history() -> TestResult {
         let current = fixture.current(&store)?;
         assert!(!current.running);
         let reference = &receipt.results[&10];
-        let ManagedOutput::Call {
-            result: original, ..
-        } = store.managed_output(&current, &reference.result_id, 29, &control)?
-        else {
-            return Err("package output variant".into());
-        };
+        let original = store.managed_result(&current, &reference.result_id, 29, &control)?;
         assert!(original.current);
         let before = store.meta()?;
         for now in [29, 30, 31] {
             let expected = next_change.is_none_or(|deadline| now < deadline);
             for reference in receipt.results.values() {
-                let ManagedOutput::Call { result, .. } =
-                    store.managed_output(&current, &reference.result_id, now, &control)?
-                else {
-                    return Err("package output variant".into());
-                };
+                let result = store.managed_result(&current, &reference.result_id, now, &control)?;
                 assert_eq!(result.current, expected);
             }
-            let ManagedOutput::Call { result, .. } =
-                store.managed_output(&current, &reference.result_id, now, &control)?
-            else {
-                return Err("package output variant".into());
-            };
-            assert_eq!(result.output, original.output);
-            assert_eq!(result.context, original.context);
-            assert_eq!(result.commit_revision, original.commit_revision);
+            let result = store.managed_result(&current, &reference.result_id, now, &control)?;
+            assert_eq!(result.result, original.result);
+            assert_eq!(call_context(&result)?, call_context(&original)?);
+            assert_eq!(result.receipt, original.receipt);
+            assert_eq!(result.source, original.source);
             let mut reader = store.reader_until(&control)?;
             let fresh = control.run(&mut reader, |reader| {
                 store.managed_current(
@@ -547,11 +537,7 @@ fn frontier_expiry_keeps_history() -> TestResult {
             store.managed_history(&fixture.instance.grant.selection, "counter", &control)?,
             std::slice::from_ref(&receipt)
         );
-        let ManagedOutput::Call { result, .. } =
-            store.managed_output(&current, &reference.result_id, 31, &control)?
-        else {
-            return Err("package output variant".into());
-        };
+        let result = store.managed_result(&current, &reference.result_id, 31, &control)?;
         assert_eq!(result.current, next_change.is_none());
         assert_eq!(
             store

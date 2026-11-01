@@ -41,12 +41,59 @@ mod version;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+fn call_context(result: &crate::InstanceResultV1) -> TestResult<&crate::ResultContext> {
+    let crate::InstanceResultKindV1::Call { context, .. } = &result.kind else {
+        return Err("call reference kind".into());
+    };
+    Ok(context)
+}
+
 struct Fixture {
     instance: ManagedInstance,
     model: sdk::Model,
 }
 
 impl Fixture {
+    fn receipt(
+        store: &AnalysisStore,
+        tenant: [u8; 16],
+        instance: &str,
+        attempt: &str,
+        control: &AnalysisReadControl,
+    ) -> crate::Result<Option<ManagedReceipt>> {
+        Ok(store
+            .managed_attempt(tenant, instance, attempt, control)?
+            .and_then(|attempt| attempt.receipt().cloned()))
+    }
+
+    fn rows(
+        store: &AnalysisStore,
+        reference: &crate::analysis::PackageResultRefV1,
+    ) -> crate::Result<u64> {
+        store.read_snapshot(|reader| {
+            let (step, revision) =
+                AnalysisStore::managed_step_header(reader, [1; 16], &reference.result_id)?;
+            if revision != reference.commit_revision {
+                return Err(crate::PackageErrorCodeV1::Invalid.error("test selected reference"));
+            }
+            Ok(step.rows)
+        })
+    }
+
+    fn checkpoint(
+        &self,
+        store: &AnalysisStore,
+        reference: &crate::analysis::PackageResultRefV1,
+    ) -> TestResult<sdk::Checkpoint> {
+        let (_, state, revision) = store.read_snapshot(|reader| {
+            AnalysisStore::managed_state_from(reader, [1; 16], &reference.result_id)
+        })?;
+        assert_eq!(revision, reference.commit_revision);
+        Ok(state
+            .ok_or("canonical checkpoint")?
+            .decode_model(&self.model)?)
+    }
+
     fn current(&self, store: &AnalysisStore) -> TestResult<ManagedInstance> {
         store
             .managed_instance(
@@ -189,8 +236,8 @@ impl Fixture {
             )?
             .ok_or("instance absent")?;
         let requests = AnalysisTableRequests::new();
-        let page = store.read_managed_tables(
-            &instance.grant.selection,
+        let page = store.read_managed_tables_filtered(
+            &instance.grant.selection.project(&requests)?,
             &ManagedRead {
                 source: None,
                 execution,
@@ -203,12 +250,12 @@ impl Fixture {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )?;
         assert!(page.page.tables.is_empty());
         assert!(page.page.extraction.references.is_empty());
@@ -344,7 +391,6 @@ impl Fixture {
             .zip(outputs)
             .enumerate()
             .map(|(index, (evaluation, output))| ManagedReturn {
-                retained: None,
                 changes: None,
                 call: 10 + index as u64,
                 evaluation,
@@ -381,7 +427,7 @@ fn request(id: &str) -> ManagedRequest {
 }
 
 #[test]
-fn retained_outputs_keep_descriptor() -> TestResult {
+fn call_references_keep_descriptor() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
@@ -398,17 +444,42 @@ fn retained_outputs_keep_descriptor() -> TestResult {
         &evaluations,
         &[fixture.output(12)?, fixture.output(103)?],
     )?;
-    for reference in receipt.results.values() {
+    for (call, reference) in &receipt.results {
         let result = store.managed_result(
             &fixture.instance,
             &reference.result_id,
             10,
             &AnalysisReadControl::default(),
         )?;
-        assert_eq!(result.context.context.id, request.id);
+        let crate::InstanceResultKindV1::Call {
+            image,
+            package,
+            export,
+            context,
+            ..
+        } = &result.kind
+        else {
+            return Err("call reference kind".into());
+        };
+        let expected = &fixture.instance.spec.manifest.calls[call];
+        assert_eq!(context.context.id, request.id);
         assert_eq!(
-            result.output.datasets[0].batches[0].schema().as_ref(),
-            &fixture.model.outputs[0].schema
+            (image, package, export),
+            (&expected.image, &expected.package, &expected.export)
+        );
+        assert_eq!(result.result, *reference);
+        assert_eq!(result.receipt, receipt);
+        assert_eq!(
+            fixture.checkpoint(&store, reference)?.datasets[0].batches[0]
+                .schema()
+                .as_ref(),
+            &fixture
+                .model
+                .checkpoint
+                .as_ref()
+                .ok_or("checkpoint declaration")?
+                .datasets[0]
+                .schema
         );
     }
     Ok(())
@@ -486,50 +557,43 @@ fn managed_calls_commit_atomically() -> TestResult {
             &AnalysisReadControl::default(),
         )?;
         assert!(retained.current);
-        assert_eq!(retained.commit_revision, receipt.commit_revision);
-        let expected = &outputs[(call - 10) as usize];
+        assert_eq!(retained.result, receipt.results[&call]);
+        assert_eq!(retained.receipt, receipt);
         assert_eq!(
-            retained.output.datasets[0].batches,
-            expected.datasets[0].batches
-        );
-        assert_eq!(retained.output.evidence, expected.evidence);
-        assert_eq!(
-            retained.output.reasons[0].details,
-            expected.reasons[0].details
+            call_context(&retained)?.context,
+            evaluations[(call - 10) as usize].context
         );
         assert_eq!(
-            retained
-                .output
-                .checkpoint
-                .ok_or("retained checkpoint absent")?
+            fixture
+                .checkpoint(&store, &receipt.results[&call])?
                 .datasets[0]
                 .batches,
-            expected
+            outputs[(call - 10) as usize]
                 .checkpoint
                 .as_ref()
-                .ok_or("checkpoint absent")?
+                .ok_or("expected checkpoint")?
                 .datasets[0]
                 .batches
         );
     }
-    let selected = store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            "step-1",
-            &AnalysisReadControl::default(),
-        )?
-        .ok_or("selected result absent")?;
-    assert_eq!(selected.data.batches, outputs[0].datasets[0].batches);
-    assert_eq!(selected.commit_revision, receipt.commit_revision);
-    assert!(store
-        .managed_selected(
-            [2; 16],
-            "counter",
-            "step-1",
-            &AnalysisReadControl::default()
-        )?
-        .is_none());
+    let selected = Fixture::receipt(
+        &store,
+        [1; 16],
+        "counter",
+        "step-1",
+        &AnalysisReadControl::default(),
+    )?
+    .ok_or("selected result absent")?;
+    assert_eq!(selected, receipt);
+    assert_eq!(Fixture::rows(&store, &selected.selected)?, 1);
+    assert!(Fixture::receipt(
+        &store,
+        [2; 16],
+        "counter",
+        "step-1",
+        &AnalysisReadControl::default()
+    )?
+    .is_none());
     let next = fixture.capture(&store, false)?;
     assert_eq!(next.instance().progress, receipt.commit_revision);
     assert_ne!(
@@ -564,45 +628,9 @@ fn managed_calls_commit_atomically() -> TestResult {
             .datasets[0]
             .batches
     );
-    let (headers, payloads, attempts): (u64, u64, u64) = store.read_snapshot(|reader| reader.query_row(
-        "SELECT (SELECT count(*) FROM analysis_results WHERE processor_id LIKE 'managed-%' AND decode(body) LIKE '%\"arrow_ipc\":[]%'), (SELECT count(*) FROM managed_arrow), (SELECT count(*) FROM managed_attempts)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).context(crate::AnalysisDatabaseSnafu { operation: "read managed BLOB qualification" }))?;
-    assert_eq!((headers, payloads, attempts), (3, 11, 1));
-    let roles = store.read_snapshot(|reader| {
-        let mut statement = reader
-            .prepare(
-                "SELECT role, count(*), max(slot) FROM managed_arrow GROUP BY role ORDER BY role",
-            )
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "prepare managed Arrow roles",
-            })?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u64>(1)?,
-                    row.get::<_, u64>(2)?,
-                ))
-            })
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "read managed Arrow roles",
-            })?
-            .collect::<duckdb::Result<Vec<_>>>()
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "decode managed Arrow roles",
-            })?;
-        Ok(rows)
-    })?;
-    assert_eq!(
-        roles,
-        vec![
-            ("checkpoint".into(), 2, 0),
-            ("input".into(), 2, 0),
-            ("output".into(), 2, 0),
-            ("parameters".into(), 2, 0),
-            ("reason".into(), 2, 0),
-            ("selected".into(), 1, 0),
-        ]
-    );
+    let (results, attempts): (u64, u64) = store.read_snapshot(|reader| reader.query_row(
+        "SELECT (SELECT count(*) FROM analysis_results WHERE processor_id LIKE 'managed-%'), (SELECT count(*) FROM managed_attempts)", [], |row| Ok((row.get(0)?, row.get(1)?))).context(crate::AnalysisDatabaseSnafu { operation: "read managed publication counts" }))?;
+    assert_eq!((results, attempts), (3, 1));
     let second = request("step-2");
     let second_attempt = store.register_managed_attempt(&next, &second, || Ok(()))?;
     let second_evaluations = [
@@ -646,28 +674,21 @@ fn managed_calls_commit_atomically() -> TestResult {
             &AnalysisReadControl::default(),
         )?;
         assert!(!retained.current);
-        assert_eq!(retained.commit_revision, receipt.commit_revision);
-        let expected = &outputs[(call - 10) as usize];
+        assert_eq!(retained.result, receipt.results[&call]);
+        assert_eq!(retained.receipt, receipt);
         assert_eq!(
-            retained.output.datasets[0].batches,
-            expected.datasets[0].batches
-        );
-        assert_eq!(retained.output.evidence, expected.evidence);
-        assert_eq!(
-            retained.output.reasons[0].details,
-            expected.reasons[0].details
+            call_context(&retained)?.context,
+            evaluations[(call - 10) as usize].context
         );
         assert_eq!(
-            retained
-                .output
-                .checkpoint
-                .ok_or("historical checkpoint absent")?
+            fixture
+                .checkpoint(&reopened, &receipt.results[&call])?
                 .datasets[0]
                 .batches,
-            expected
+            outputs[(call - 10) as usize]
                 .checkpoint
                 .as_ref()
-                .ok_or("expected historical checkpoint absent")?
+                .ok_or("expected checkpoint")?
                 .datasets[0]
                 .batches
         );
@@ -697,19 +718,16 @@ fn managed_calls_commit_atomically() -> TestResult {
                 .batches
         );
     }
-    let historical_selected = reopened
-        .managed_selected(
-            [1; 16],
-            "counter",
-            "step-1",
-            &AnalysisReadControl::default(),
-        )?
-        .ok_or("historical selected result absent")?;
-    assert_eq!(historical_selected.commit_revision, receipt.commit_revision);
-    assert_eq!(
-        historical_selected.data.batches,
-        outputs[0].datasets[0].batches
-    );
+    let historical_selected = Fixture::receipt(
+        &reopened,
+        [1; 16],
+        "counter",
+        "step-1",
+        &AnalysisReadControl::default(),
+    )?
+    .ok_or("historical selected result absent")?;
+    assert_eq!(historical_selected, receipt);
+    assert_eq!(Fixture::rows(&reopened, &historical_selected.selected)?, 1);
     for pin in &fixture.instance.spec.definition.images {
         let image = reopened
             .package_image(
@@ -775,14 +793,12 @@ fn managed_failure_is_atomic() -> TestResult {
     outputs[1].evidence[0].input.row = 0;
     let returns = [
         ManagedReturn {
-            retained: None,
             changes: None,
             call: 10,
             evaluation: &evaluations[0],
             output: &outputs[0],
         },
         ManagedReturn {
-            retained: None,
             changes: None,
             call: 11,
             evaluation: &evaluations[1],
@@ -1060,7 +1076,7 @@ fn managed_sql_checks_authority() -> TestResult {
     })?;
     let requests = AnalysisTableRequests::new();
     let captured = store
-        .read_managed_tables(
+        .read_managed_tables_filtered(
             &grant.selection,
             &ManagedRead {
                 source: None,
@@ -1074,12 +1090,12 @@ fn managed_sql_checks_authority() -> TestResult {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )?
         .state;
     let input = request("pure-step");
@@ -1114,32 +1130,22 @@ fn managed_sql_checks_authority() -> TestResult {
     })?;
     assert!(receipt.results.is_empty());
     assert_eq!(checked, 5);
-    assert_eq!(
-        store
-            .managed_selected(
-                [1; 16],
-                "pure",
-                "pure-step",
-                &AnalysisReadControl::default()
-            )?
-            .ok_or("pure selected result absent")?
-            .data
-            .batches,
-        selected.batches
-    );
+    let saved = Fixture::receipt(
+        &store,
+        [1; 16],
+        &spec.id,
+        &input.id,
+        &AnalysisReadControl::default(),
+    )?
+    .ok_or("pure selected receipt")?;
+    assert_eq!(saved, receipt);
+    assert_eq!(Fixture::rows(&store, &saved.selected)?, selected.rows());
     Ok(())
 }
 
 #[test]
-fn managed_recovery_checks_outputs() -> TestResult {
-    for corruption in [
-        "ipc",
-        "evidence",
-        "checkpoint",
-        "parameters",
-        "edge",
-        "context",
-    ] {
+fn managed_recovery_checks_references() -> TestResult {
+    for corruption in ["body", "checkpoint", "edge", "context"] {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("store");
         let store = AnalysisStore::open(&root)?;
@@ -1151,78 +1157,81 @@ fn managed_recovery_checks_outputs() -> TestResult {
             fixture.evaluation(&input, 10, None)?,
             fixture.evaluation(&input, 11, None)?,
         ];
-        let outputs = [fixture.output(2)?, fixture.output(3)?];
-        let receipt = fixture.publish(&store, &attempt, &eval, &outputs)?;
+        let receipt = fixture.publish(
+            &store,
+            &attempt,
+            &eval,
+            &[fixture.output(2)?, fixture.output(3)?],
+        )?;
         let id = &receipt.results[&10].result_id;
         {
-            let mut writer = store.writer()?;
-            let writer = writer.get_mut()?;
-            match corruption {
-                "ipc" => {
+            let mut guard = store.writer()?;
+            let writer = guard.get_mut()?;
+            if corruption == "body" {
+                assert_eq!(
                     writer.execute(
-                        "UPDATE managed_arrow SET ipc = ? WHERE result_id = ? AND role = 'output'",
-                        params![b"broken".as_slice(), id],
-                    )?;
-                }
-                "parameters" => {
-                    writer.execute(
-                        "DELETE FROM managed_arrow WHERE result_id = ? AND role = 'parameters'",
-                        params![id],
-                    )?;
-                }
-                "edge" => {
+                        "UPDATE analysis_results SET body = X'00' WHERE result_id = ?",
+                        params![id]
+                    )?,
+                    1
+                );
+            } else if corruption == "edge" {
+                assert_eq!(
                     writer.execute(
                         "DELETE FROM managed_edges WHERE result_id = ?",
-                        params![receipt.selected.result_id],
-                    )?;
-                }
-                "context" => {
-                    let mut record: model::Record = ManagedCodec::decode(&writer.query_row(
-                        "SELECT request_meta FROM analysis_results WHERE result_id = ?",
-                        params![id],
-                        |row| row.get::<_, Vec<u8>>(0),
-                    )?)?;
-                    record.context.target = "wasm32-wasip2".into();
-                    writer.execute(
-                        "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
-                        params![ManagedCodec::encode(&record)?, id],
-                    )?;
-                }
-                _ => {
-                    let mut output: sdk::wire::Output = ManagedCodec::decode(&writer.query_row(
-                        "SELECT body FROM analysis_results WHERE result_id = ?",
-                        params![id],
-                        |row| row.get::<_, Vec<u8>>(0),
-                    )?)?;
-                    if corruption == "evidence" {
-                        output.evidence[0].input.row = 1;
-                    } else {
-                        output
-                            .checkpoint
-                            .as_mut()
-                            .ok_or("checkpoint absent")?
-                            .version = 2;
-                    }
+                        params![receipt.selected.result_id]
+                    )?,
+                    2
+                );
+            } else if corruption == "checkpoint" {
+                let (_, mut state, _) = AnalysisStore::managed_state_from(writer, [1; 16], id)?;
+                state.as_mut().ok_or("checkpoint")?.version += 1;
+                assert_eq!(
                     writer.execute(
                         "UPDATE analysis_results SET body = ? WHERE result_id = ?",
-                        params![ManagedCodec::encode(&output)?, id],
-                    )?;
-                }
+                        params![ManagedCodec::encode(&state)?, id]
+                    )?,
+                    1
+                );
+            } else {
+                let bytes: Vec<u8> = writer.query_row(
+                    "SELECT request_meta FROM analysis_results WHERE result_id = ?",
+                    params![id],
+                    |row| row.get(0),
+                )?;
+                let mut record: model::Record = ManagedCodec::decode(&bytes)?;
+                record.context.target = "wasm32-wasip2".into();
+                assert_eq!(
+                    writer.execute(
+                        "UPDATE analysis_results SET request_meta = ? WHERE result_id = ?",
+                        params![ManagedCodec::encode(&record)?, id]
+                    )?,
+                    1
+                );
             }
         }
-        if corruption != "edge" {
+        if matches!(corruption, "body" | "checkpoint") {
+            assert!(fixture.capture(&store, false).is_err(), "{corruption}");
+        } else {
+            let reference = if corruption == "edge" {
+                &receipt.selected
+            } else {
+                &receipt.results[&10]
+            };
             assert!(
                 store
-                    .managed_output(&fixture.instance, id, 10, &AnalysisReadControl::default())
+                    .managed_result(
+                        &fixture.instance,
+                        &reference.result_id,
+                        10,
+                        &AnalysisReadControl::default()
+                    )
                     .is_err(),
-                "raw corruption {corruption}"
+                "{corruption}"
             );
         }
         drop(store);
-        assert!(
-            AnalysisStore::open(&root).is_err(),
-            "corruption {corruption}"
-        );
+        assert!(AnalysisStore::open(&root).is_err(), "{corruption}");
     }
     Ok(())
 }
@@ -1282,17 +1291,14 @@ fn managed_commit_crashes() -> TestResult {
             Ok(rows)
         })
     };
-    let arrows = |store: &AnalysisStore| {
+    let rows = |store: &AnalysisStore| {
         store.read_snapshot(|reader| {
-            let mut statement = reader.prepare(
-                "SELECT result_id, role, slot, ipc FROM managed_arrow ORDER BY result_id, role, slot",
-            ).context(crate::AnalysisDatabaseSnafu { operation: "prepare crash Arrow rows" })?;
-            let rows = statement.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, u64>(2)?, row.get::<_, Vec<u8>>(3)?))
-            }).context(crate::AnalysisDatabaseSnafu { operation: "read crash Arrow rows" })?
+            let mut statement = reader.prepare("SELECT result_id, processor_id, commit_revision, body, request_meta FROM analysis_results ORDER BY result_id")
+                .context(crate::AnalysisDatabaseSnafu { operation: "prepare crash canonical rows" })?;
+            statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, u64>(2)?, row.get::<_, Vec<u8>>(3)?, row.get::<_, Vec<u8>>(4)?)))
+                .context(crate::AnalysisDatabaseSnafu { operation: "read crash canonical rows" })?
                 .collect::<duckdb::Result<Vec<_>>>()
-                .context(crate::AnalysisDatabaseSnafu { operation: "decode crash Arrow rows" })?;
-            Ok(rows)
+                .context(crate::AnalysisDatabaseSnafu { operation: "decode crash canonical rows" })
         })
     };
     for upgrade in [false, true] {
@@ -1327,7 +1333,7 @@ fn managed_commit_crashes() -> TestResult {
             };
             assert_eq!(fixture.current(&store)?, prior);
             let prior_heads = heads(&store)?;
-            let prior_arrows = arrows(&store)?;
+            let prior_rows = rows(&store)?;
             drop(store);
             let status = std::process::Command::new(std::env::current_exe()?)
                 .args([
@@ -1356,7 +1362,7 @@ fn managed_commit_crashes() -> TestResult {
             }
             let current = fixture.current(&store)?;
             let captured = fixture.capture(&store, false)?;
-            let retained_arrows = arrows(&store)?;
+            let retained_rows = rows(&store)?;
             if point == "managed.after" {
                 let receipt = pending.receipt().ok_or("committed receipt absent")?.clone();
                 assert_eq!(pending.receipt(), Some(&receipt));
@@ -1415,88 +1421,57 @@ fn managed_commit_crashes() -> TestResult {
                             .datasets[0]
                             .batches,
                     );
-                    let ManagedOutput::Call { result, .. } =
-                        store.managed_output(&current, &reference.result_id, 10, &control)?
-                    else {
-                        return Err("new crash call absent".into());
-                    };
+                    let result =
+                        store.managed_result(&current, &reference.result_id, 10, &control)?;
                     assert!(result.current);
-                    assert_eq!(result.commit_revision, receipt.commit_revision);
-                    assert_eq!(
-                        result.output,
-                        sdk::wire::Output::encode_model(&fixture.output(value)?, &fixture.model)?
-                    );
-                    let evaluation =
-                        store.managed_evaluation(&current, &reference.result_id, &control)?;
+                    assert_eq!(result.result, *reference);
+                    assert_eq!(result.receipt, receipt);
                     let expected = fixture.evaluation(&request("crash"), call, None)?;
-                    assert_eq!(evaluation.context, expected.context);
-                    assert_eq!(evaluation.inputs.len(), 1);
-                    assert_eq!(evaluation.inputs[0].data.name, expected.inputs[0].data.name);
+                    assert_eq!(call_context(&result)?.context, expected.context);
+                    assert!(call_context(&result)?.matches(&expected.inputs));
                     assert_eq!(
-                        evaluation.inputs[0].data.batches,
-                        expected.inputs[0].data.batches
+                        result.prior.get(&call).and_then(Option::as_ref),
+                        original.as_ref().map(|receipt| &receipt.results[&call])
                     );
-                    assert_eq!(evaluation.inputs[0].revision, expected.inputs[0].revision);
-                    assert_eq!(evaluation.inputs[0].coverage, expected.inputs[0].coverage);
-                    assert_eq!(evaluation.parameters, expected.parameters);
-                    if upgrade {
-                        let old = if call == 10 { 12 } else { 103 };
-                        let checkpoint = evaluation
-                            .checkpoint
-                            .as_ref()
-                            .ok_or("continued checkpoint absent")?;
-                        assert_eq!(checkpoint.version, 1);
-                        assert_eq!(checkpoint.datasets.len(), 1);
-                        assert_eq!(
-                            checkpoint.datasets[0].batches,
-                            fixture
-                                .output(old)?
-                                .checkpoint
-                                .ok_or("expected prior state absent")?
-                                .datasets[0]
-                                .batches
-                        );
-                    } else {
-                        assert!(evaluation.checkpoint.is_none());
-                    }
-                    for role in ["checkpoint", "input", "output", "parameters", "reason"] {
-                        expected_shapes.push((reference.result_id.clone(), role.to_owned(), 0_u64));
-                    }
+                    expected_shapes.push((
+                        reference.result_id.clone(),
+                        "managed-package-v1".to_owned(),
+                        receipt.commit_revision,
+                    ));
                 }
                 expected_shapes.push((
                     receipt.selected.result_id.clone(),
-                    "selected".into(),
-                    0_u64,
+                    "managed-definition-v1".into(),
+                    receipt.commit_revision,
                 ));
                 expected_shapes.sort();
-                let original_ids = prior_arrows
+                let original_ids = prior_rows
                     .iter()
                     .map(|row| row.0.as_str())
                     .collect::<BTreeSet<_>>();
-                let original_rows = retained_arrows
+                let original_rows = retained_rows
                     .iter()
                     .filter(|row| original_ids.contains(row.0.as_str()))
                     .cloned()
                     .collect::<Vec<_>>();
-                assert_eq!(original_rows, prior_arrows);
-                let new_rows = retained_arrows
+                assert_eq!(original_rows, prior_rows);
+                let new_rows = retained_rows
                     .iter()
                     .filter(|row| !original_ids.contains(row.0.as_str()))
                     .collect::<Vec<_>>();
-                assert!(new_rows.iter().all(|row| !row.3.is_empty()));
+                assert!(new_rows
+                    .iter()
+                    .all(|row| !row.3.is_empty() && !row.4.is_empty()));
                 let shapes = new_rows
                     .iter()
                     .map(|row| (row.0.clone(), row.1.clone(), row.2))
                     .collect::<Vec<_>>();
                 assert_eq!(shapes, expected_shapes);
                 assert_eq!(
-                    store
-                        .managed_selected([1; 16], "counter", "crash", &control)?
-                        .ok_or("crash selected absent")?
-                        .data
-                        .batches,
-                    fixture.output(2)?.datasets[0].batches
+                    Fixture::receipt(&store, [1; 16], "counter", "crash", &control)?,
+                    Some(receipt.clone())
                 );
+                assert_eq!(Fixture::rows(&store, &receipt.selected)?, 1);
                 let mut history = original.iter().cloned().collect::<Vec<_>>();
                 history.push(receipt);
                 assert_eq!(
@@ -1507,10 +1482,8 @@ fn managed_commit_crashes() -> TestResult {
                 assert!(pending.receipt().is_none());
                 assert_eq!(current, prior);
                 assert_eq!(heads(&store)?, prior_heads);
-                assert_eq!(retained_arrows, prior_arrows);
-                assert!(store
-                    .managed_selected([1; 16], "counter", "crash", &control)?
-                    .is_none());
+                assert_eq!(retained_rows, prior_rows);
+                assert!(Fixture::receipt(&store, [1; 16], "counter", "crash", &control)?.is_none());
                 assert_eq!(
                     store.managed_history(&current.grant.selection, "counter", &control)?,
                     original.iter().cloned().collect::<Vec<_>>()
@@ -1545,30 +1518,30 @@ fn managed_commit_crashes() -> TestResult {
                     .ok_or("original receipt absent")?;
                 assert_eq!(retained.receipt(), Some(original));
                 for (call, value) in [(10, 12), (11, 103)] {
-                    let ManagedOutput::Call { result, .. } = store.managed_output(
+                    let result = store.managed_result(
                         &current,
                         &original.results[&call].result_id,
                         10,
                         &control,
-                    )?
-                    else {
-                        return Err("original call lost".into());
-                    };
-                    assert_eq!(result.commit_revision, original.commit_revision);
+                    )?;
+                    assert_eq!(result.result, original.results[&call]);
+                    assert_eq!(result.receipt, *original);
                     assert_eq!(
-                        result.output,
-                        sdk::wire::Output::encode_model(&fixture.output(value)?, &fixture.model)?
+                        fixture.checkpoint(&store, &result.result)?.datasets[0].batches,
+                        fixture
+                            .output(value)?
+                            .checkpoint
+                            .ok_or("original checkpoint")?
+                            .datasets[0]
+                            .batches
                     );
                     assert_eq!(result.current, point == "managed.before");
                 }
                 assert_eq!(
-                    store
-                        .managed_selected([1; 16], "counter", "original", &control)?
-                        .ok_or("original selected lost")?
-                        .data
-                        .batches,
-                    fixture.output(12)?.datasets[0].batches
+                    Fixture::receipt(&store, [1; 16], "counter", "original", &control)?,
+                    Some(original.clone())
                 );
+                assert_eq!(Fixture::rows(&store, &original.selected)?, 1);
             }
             if point == "managed.before" && !upgrade {
                 assert!(captured.prior(10).is_none());
@@ -1667,7 +1640,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
             .ok_or("native instance absent")?;
         let requests = AnalysisTableRequests::new();
         let capture = store
-            .read_managed_tables(
+            .read_managed_tables_filtered(
                 &grant.selection,
                 &ManagedRead {
                     source: None,
@@ -1681,12 +1654,12 @@ fn managed_native_selected_roundtrip() -> TestResult {
                 AnalysisTableRead {
                     requests: &requests,
                     event_ranges: None,
-                    inputs: None,
                     mode: AnalysisReadModeV1::Complete,
                     now: 10,
                 },
                 AnalysisExtractLimits::default(),
                 &AnalysisReadControl::default(),
+                None,
             )?
             .state;
         let input = request(&format!("native-{index}"));
@@ -1702,171 +1675,45 @@ fn managed_native_selected_roundtrip() -> TestResult {
             },
             || Ok(()),
         )?;
-        let retained = store
-            .managed_selected(
-                [1; 16],
-                &spec.id,
-                &input.id,
-                &AnalysisReadControl::default(),
-            )?
-            .ok_or("native selected result absent")?;
-        assert_eq!(retained.data.batches, selected.batches);
-        assert_eq!(retained.data.rows(), batch.num_rows() as u64);
-        let ManagedOutput::Selected { data, .. } = store.managed_output(
+        let retained = Fixture::receipt(
+            &store,
+            [1; 16],
+            &spec.id,
+            &input.id,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("native selected result absent")?;
+        assert_eq!(retained, receipt);
+        assert_eq!(
+            Fixture::rows(&store, &receipt.selected)?,
+            batch.num_rows() as u64
+        );
+        let result = store.managed_result(
             attempt.instance(),
             &receipt.selected.result_id,
             10,
             &AnalysisReadControl::default(),
-        )?
-        else {
-            return Err("native selected output variant".into());
-        };
-        assert_eq!(data.batches, selected.batches);
-        if index < 2 {
-            let packet = sdk::wire::Dataset::encode(&selected, batch.schema_ref())?;
-            assert!(packet.decode_any().is_err());
-        }
+        )?;
+        assert_eq!(result.result, receipt.selected);
+        assert!(matches!(
+            &result.kind,
+            crate::InstanceResultKindV1::Selected
+        ));
         receipts.push((spec.id, input.id, receipt, selected));
     }
     drop(store);
     let store = AnalysisStore::open(&root)?;
     for (instance, attempt, receipt, selected) in receipts {
-        let retained = store
-            .managed_selected(
-                [1; 16],
-                &instance,
-                &attempt,
-                &AnalysisReadControl::default(),
-            )?
-            .ok_or("recovered native result absent")?;
-        assert_eq!(retained.commit_revision, receipt.commit_revision);
-        assert_eq!(retained.data.batches, selected.batches);
-    }
-    Ok(())
-}
-
-#[test]
-fn native_selection_row_overflow() -> TestResult {
-    let rows = usize::try_from(i64::MAX)?;
-    assert!(u64::try_from(rows)?.checked_mul(3).is_none());
-    let schema = Arc::new(sdk::Schema::empty());
-    let batch = sdk::RecordBatch::try_new_with_options(
-        Arc::clone(&schema),
-        Vec::new(),
-        &sdk::arrow_array::RecordBatchOptions::new().with_row_count(Some(rows)),
-    )?;
-    let mut ipc = Vec::new();
-    let mut writer = arrow_ipc::writer::StreamWriter::try_new(&mut ipc, &schema)?;
-    for _ in 0..3 {
-        writer.write(&batch)?;
-    }
-    writer.finish()?;
-    drop(writer);
-    assert!(ipc.len() < 4096);
-    let packet = sdk::wire::Dataset {
-        name: "selected".into(),
-        arrow_ipc: ipc,
-    };
-    assert!(AnalysisStore::decode_selected(&packet).is_err());
-    Ok(())
-}
-
-#[test]
-fn native_selection_rejects_corruption() -> TestResult {
-    use arrow_ipc::writer::{
-        write_message, DictionaryTracker, EncodedData, IpcDataGenerator, IpcWriteOptions,
-    };
-
-    let options = IpcWriteOptions::default();
-    for (length, surplus, compressed, dictionary) in [
-        (0, true, false, false),
-        (-1, false, false, false),
-        (i64::MAX, false, false, false),
-        (0, false, true, false),
-        (0, false, true, true),
-    ] {
-        let mut ipc = Vec::new();
-        let mut dictionaries = DictionaryTracker::new(false);
-        let schema = IpcDataGenerator::default().schema_to_bytes_with_dictionary_tracker(
-            &sdk::Schema::empty(),
-            &mut dictionaries,
-            &options,
-        );
-        write_message(&mut ipc, schema, &options)?;
-        let mut builder = flatbuffers::FlatBufferBuilder::new();
-        let nodes = builder.create_vector::<arrow_ipc::FieldNode>(&[]);
-        let buffers = builder.create_vector::<arrow_ipc::Buffer>(&[]);
-        let variadic = surplus.then(|| builder.create_vector(&[1_i64]));
-        let compression = compressed.then(|| {
-            arrow_ipc::BodyCompression::create(
-                &mut builder,
-                &arrow_ipc::BodyCompressionArgs::default(),
-            )
-        });
-        let batch = arrow_ipc::RecordBatch::create(
-            &mut builder,
-            &arrow_ipc::RecordBatchArgs {
-                nodes: Some(nodes),
-                buffers: Some(buffers),
-                variadicBufferCounts: variadic,
-                compression,
-                ..Default::default()
-            },
-        );
-        let (header_type, header) = if dictionary {
-            let dictionary = arrow_ipc::DictionaryBatch::create(
-                &mut builder,
-                &arrow_ipc::DictionaryBatchArgs {
-                    data: Some(batch),
-                    ..Default::default()
-                },
-            );
-            (
-                arrow_ipc::MessageHeader::DictionaryBatch,
-                dictionary.as_union_value(),
-            )
-        } else {
-            (
-                arrow_ipc::MessageHeader::RecordBatch,
-                batch.as_union_value(),
-            )
-        };
-        let message = arrow_ipc::Message::create(
-            &mut builder,
-            &arrow_ipc::MessageArgs {
-                version: arrow_ipc::MetadataVersion::V5,
-                header_type,
-                header: Some(header),
-                bodyLength: length,
-                ..Default::default()
-            },
-        );
-        builder.finish(message, None);
-        write_message(
-            &mut ipc,
-            EncodedData {
-                ipc_message: builder.finished_data().to_vec(),
-                arrow_data: Vec::new(),
-            },
-            &options,
-        )?;
-        assert!(ipc.len() < 4096);
-        let packet = sdk::wire::Dataset {
-            name: "selected".into(),
-            arrow_ipc: ipc,
-        };
-        assert_eq!(packet.validate_envelope().is_ok(), surplus);
-        let error = AnalysisStore::decode_selected(&packet)
-            .err()
-            .ok_or("malformed native IPC was accepted")?;
-        let expected = if surplus {
-            "native selected IPC stream"
-        } else if compressed {
-            "compressed arrow stream"
-        } else {
-            "arrow framing"
-        };
-        assert!(format!("{error:?}").contains(expected), "{error:?}");
+        let retained = Fixture::receipt(
+            &store,
+            [1; 16],
+            &instance,
+            &attempt,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("recovered native result absent")?;
+        assert_eq!(retained, receipt);
+        assert_eq!(Fixture::rows(&store, &receipt.selected)?, selected.rows());
     }
     Ok(())
 }
@@ -1899,7 +1746,7 @@ fn managed_registration_keeps_cut() -> TestResult {
     let instance = fixture.instance.clone();
     let requests = AnalysisTableRequests::new();
     let captured = store
-        .read_managed_tables(
+        .read_managed_tables_filtered(
             &grant.selection,
             &ManagedRead {
                 source: None,
@@ -1913,12 +1760,12 @@ fn managed_registration_keeps_cut() -> TestResult {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )?
         .state;
     let input = request("context-step");
@@ -1934,7 +1781,7 @@ fn managed_registration_keeps_cut() -> TestResult {
         .managed_instance([1; 16], &spec.id, &AnalysisReadControl::default())?
         .ok_or("contextual instance absent")?;
     let captured = store
-        .read_managed_tables(
+        .read_managed_tables_filtered(
             &grant.selection,
             &ManagedRead {
                 source: None,
@@ -1948,12 +1795,12 @@ fn managed_registration_keeps_cut() -> TestResult {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )?
         .state;
     let input = request("changed-context");
@@ -1999,7 +1846,7 @@ fn managed_witness_lifetime_check() -> TestResult {
     let cursor = AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
     let requests = AnalysisTableRequests::from([("events".into(), Some(BTreeSet::from([cursor])))]);
     let capture = store
-        .read_managed_tables(
+        .read_managed_tables_filtered(
             &grant.selection,
             &ManagedRead {
                 source: None,
@@ -2013,12 +1860,12 @@ fn managed_witness_lifetime_check() -> TestResult {
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
-                inputs: None,
                 mode: AnalysisReadModeV1::Complete,
                 now: 10,
             },
             AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
+            None,
         )?
         .state;
     let mut input = request("witness");
@@ -2031,14 +1878,12 @@ fn managed_witness_lifetime_check() -> TestResult {
     let outputs = [fixture.output(2)?, fixture.output(3)?];
     let returns = [
         ManagedReturn {
-            retained: None,
             changes: None,
             call: 10,
             evaluation: &evaluations[0],
             output: &outputs[0],
         },
         ManagedReturn {
-            retained: None,
             changes: None,
             call: 11,
             evaluation: &evaluations[1],
@@ -2129,56 +1974,6 @@ fn managed_witness_lifetime_check() -> TestResult {
             )?
             .current
     );
-    let (pin, port) = store.managed_input(
-        &grant.selection,
-        &spec.id,
-        &receipt.results[&10],
-        "rows",
-        AnalysisExtractLimits::default(),
-        &AnalysisReadControl::default(),
-    )?;
-    let inputs = [(Arc::new(pin), Arc::new(port.schema))];
-    let requests = AnalysisTableRequests::new();
-    let before = store.meta()?;
-    for now in [19, 20, 21] {
-        let page = store.read_tables(
-            &AnalysisSelectionV1::new([1; 16], Vec::new()),
-            AnalysisTableRead {
-                requests: &requests,
-                event_ranges: None,
-                inputs: Some(crate::AnalysisInputTables {
-                    authorized: &grant.selection,
-                    outputs: &inputs,
-                }),
-                mode: AnalysisReadModeV1::Complete,
-                now,
-            },
-            AnalysisExtractLimits::default(),
-            &AnalysisReadControl::default(),
-        )?;
-        assert_eq!(page.packages.len(), 1);
-        assert_eq!(page.extraction.witnesses.len(), 1);
-        assert_eq!(page.extraction.witnesses[0].expires_utc_ns, 20);
-        let (schema, batches, coverage) = page.packages.get(&0).ok_or("retained input")?;
-        assert_eq!(schema.as_ref(), &fixture.model.outputs[0].schema);
-        assert_eq!(batches, &outputs[0].datasets[0].batches);
-        assert_eq!(
-            coverage,
-            &sdk::Coverage {
-                state: if now == 19 {
-                    sdk::CoverageState::Complete
-                } else {
-                    sdk::CoverageState::Unknown
-                },
-                limits: if now == 19 {
-                    Vec::new()
-                } else {
-                    vec!["source evidence retention expired".into()]
-                },
-            }
-        );
-        assert_eq!(store.meta()?, before);
-    }
     assert_eq!(
         store
             .source_status(&source)?

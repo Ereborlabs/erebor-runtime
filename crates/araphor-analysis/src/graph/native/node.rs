@@ -2,7 +2,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use araphor_query::sources::{PortSource, SourceDependenciesExec, SourceSnapshot};
+use araphor_query::sources::{PortSource, SourceImage, SourceSnapshot};
 use datafusion::common::Result;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
@@ -12,7 +12,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use futures_util::{stream, TryStreamExt as _};
+use futures_util::{stream, StreamExt as _, TryStreamExt as _};
 
 use super::Projection;
 
@@ -38,10 +38,13 @@ impl PortSource for Port {
         &self,
         slot: usize,
         inputs: &[Arc<dyn ExecutionPlan>],
+        image: Option<SourceImage>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::new(self.owner.ports[self.index].schema.clone());
+        let output = inputs
+            .last()
+            .ok_or_else(|| Projection::invalid("graph output reader"))?;
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema),
+            EquivalenceProperties::new(output.schema()),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
@@ -50,18 +53,11 @@ impl PortSource for Port {
             owner: Arc::clone(&self.owner),
             index: self.index,
             slot,
-            children: if self.owner.prepared.is_some() {
-                Vec::new()
-            } else {
-                inputs.to_vec()
-            },
+            children: inputs.to_vec(),
             properties,
+            image,
         });
-        Ok(if let Some(prepared) = &self.owner.prepared {
-            Arc::new(SourceDependenciesExec::new(port, prepared.clone()))
-        } else {
-            port
-        })
+        Ok(port)
     }
 }
 
@@ -72,6 +68,7 @@ struct PortExec {
     slot: usize,
     children: Vec<Arc<dyn ExecutionPlan>>,
     properties: Arc<PlanProperties>,
+    image: Option<SourceImage>,
 }
 
 impl fmt::Debug for PortExec {
@@ -113,7 +110,11 @@ impl ExecutionPlan for PortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() != self.children.len() {
+        if children.len() != self.children.len()
+            || children
+                .last()
+                .is_none_or(|output| output.schema() != self.schema())
+        {
             return Err(Projection::invalid("graph physical inputs"));
         }
         Ok(Arc::new(Self {
@@ -129,9 +130,21 @@ impl ExecutionPlan for PortExec {
         if partition != 0 {
             return Err(Projection::invalid("graph input partition"));
         }
+        if matches!(
+            self.image,
+            Some(SourceImage::Inserted | SourceImage::Removed)
+        ) {
+            return datafusion::common::not_impl_err!(
+                "graph input changes require root dependencies"
+            );
+        }
         let plan = self.clone();
         let stream = stream::once(async move {
-            let captured = plan.owner.capture(&plan.children, &context).await?;
+            let (output, inputs) = plan
+                .children
+                .split_last()
+                .ok_or_else(|| Projection::invalid("graph output reader"))?;
+            let captured = plan.owner.capture(inputs, &context).await?;
             let input = &captured.inputs[plan.index];
             let source = context
                 .session_config()
@@ -143,13 +156,11 @@ impl ExecutionPlan for PortExec {
                 input.data.batches.clone(),
                 Some(input),
             )?;
-            let batches = input.data.batches.clone();
-            Ok::<_, datafusion::common::DataFusionError>(stream::iter(batches.into_iter().map(
-                move |batch| {
-                    let _held = &captured;
-                    Ok(batch)
-                },
-            )))
+            let stream = output.execute(partition, context)?;
+            Ok::<_, datafusion::common::DataFusionError>(stream.map(move |batch| {
+                let _held = &captured;
+                batch
+            }))
         })
         .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(

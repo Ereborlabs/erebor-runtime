@@ -1,9 +1,6 @@
 use super::codec::ManagedCodec;
 use super::execution::ManagedExecution;
-use super::source::{
-    ManagedSourceFrame, ManagedSourceRead, ManagedSourceRef, RecordSource, SourceCapture,
-    SourceContract,
-};
+use super::source::{ManagedSourceFrame, ManagedSourceRead, ManagedSourceRef};
 use std::collections::{BTreeMap, BTreeSet};
 
 use araphor_analysis_sdk as sdk;
@@ -386,7 +383,6 @@ pub struct ManagedPrior {
     pub parameters: Option<sdk::Dataset>,
     pub checkpoint: Option<sdk::Checkpoint>,
     pub retained: Option<std::sync::Arc<RetainedCall>>,
-    pub reusable: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -408,29 +404,6 @@ impl ManagedChanges {
                 .as_ref()
                 .map_or(0, |base| base.result_id.capacity()),
         )
-    }
-
-    pub fn allocated_bytes(&self) -> usize {
-        self.metadata_bytes()
-    }
-}
-
-impl RetainedCall {
-    pub fn matches(&self, evaluation: &sdk::Evaluation) -> bool {
-        self.evaluation.export == evaluation.export
-            && self.evaluation.parameters == evaluation.parameters
-            && self.evaluation.inputs.len() == evaluation.inputs.len()
-            && self
-                .evaluation
-                .inputs
-                .iter()
-                .zip(&evaluation.inputs)
-                .all(|(left, right)| {
-                    left.data.name == right.data.name
-                        && left.data.batches == right.data.batches
-                        && left.revision == right.revision
-                        && left.coverage == right.coverage
-                })
     }
 }
 
@@ -469,22 +442,7 @@ impl ManagedPrior {
         let Some(checkpoint) = &self.checkpoint else {
             return Ok((None, Vec::new()));
         };
-        let Some(spec) = &model.checkpoint else {
-            return Ok((None, Vec::new()));
-        };
-        if checkpoint.version != spec.version
-            || checkpoint.datasets.len() != spec.datasets.len()
-            || checkpoint.datasets.iter().any(|data| {
-                spec.datasets
-                    .iter()
-                    .find(|port| port.name == data.name)
-                    .is_none_or(|port| {
-                        data.batches
-                            .iter()
-                            .any(|batch| batch.schema().as_ref() != &port.schema)
-                    })
-            })
-        {
+        if model.validate_checkpoint(Some(checkpoint), false).is_err() {
             return Ok((None, Vec::new()));
         }
         let previous = if continuation {
@@ -494,27 +452,8 @@ impl ManagedPrior {
                 .ok_or_else(|| Code::Invalid.error("managed prior outputs"))?
                 .output
                 .datasets;
-            if datasets.len() != model.outputs.len()
-                || datasets
-                    .iter()
-                    .map(|data| &data.name)
-                    .collect::<BTreeSet<_>>()
-                    .len()
-                    != datasets.len()
-                || datasets.iter().any(|data| {
-                    model
-                        .outputs
-                        .iter()
-                        .find(|port| port.name == data.name)
-                        .is_none_or(|port| {
-                            data.batches
-                                .iter()
-                                .any(|batch| batch.schema().as_ref() != &port.schema)
-                        })
-                })
-            {
-                return Err(Code::Invalid.error("managed prior outputs"));
-            }
+            sdk::Dataset::validate_all(datasets, &model.outputs)
+                .map_err(|_| Code::Invalid.error("managed prior outputs"))?;
             datasets.clone()
         } else {
             Vec::new()
@@ -548,7 +487,6 @@ pub(super) struct Capture {
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
     pub traces: Vec<[u8; 16]>,
-    pub source: Option<SourceContract>,
 }
 
 impl Capture {
@@ -573,12 +511,90 @@ pub struct ManagedCapture {
     pub(super) contract: Capture,
     pub(super) prior: BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
     pub(super) bytes: usize,
-    pub(super) source: Option<SourceCapture>,
+    pub(super) source: Option<std::sync::Arc<ManagedSourceFrame>>,
 }
 
 impl ManagedCapture {
+    pub fn discard_prior(&mut self, call: u64) -> usize {
+        let before = self.metadata_bytes();
+        if let Some(prior) = self.prior.remove(&call) {
+            self.bytes = self.bytes.saturating_sub(prior.allocated_bytes());
+        }
+        before.saturating_sub(self.metadata_bytes())
+    }
+
+    pub fn hydrate_prior(
+        &mut self,
+        call: u64,
+        model: &sdk::Model,
+        parameters: Option<sdk::Dataset>,
+        retained: Option<std::sync::Arc<RetainedCall>>,
+    ) -> Result<usize> {
+        let prior = self
+            .prior
+            .get_mut(&call)
+            .ok_or_else(|| Code::Missing.error("managed prior reference"))?;
+        if prior.retained.is_some()
+            || self
+                .instance
+                .spec
+                .manifest
+                .calls
+                .get(&call)
+                .is_none_or(|declaration| declaration.export != model.name)
+        {
+            return Err(Code::Invalid.error("managed prior hydration"));
+        }
+        match (&parameters, model.parameters.fields().is_empty()) {
+            (None, true) => {}
+            (Some(data), false)
+                if data.name == "parameters" && data.batches.len() == 1 && data.rows() == 1 =>
+            {
+                data.validate(&sdk::Port::new("parameters", model.parameters.clone()))
+                    .map_err(|_| Code::Invalid.error("managed prior parameters"))?;
+            }
+            _ => return Err(Code::Invalid.error("managed prior parameters")),
+        }
+        if let Some(saved) = &retained {
+            let same = match (&prior.checkpoint, &saved.output.checkpoint) {
+                (None, None) => true,
+                (Some(left), Some(right)) => {
+                    left.version == right.version
+                        && left.datasets.len() == right.datasets.len()
+                        && left
+                            .datasets
+                            .iter()
+                            .zip(&right.datasets)
+                            .all(|(left, right)| {
+                                left.name == right.name && left.batches == right.batches
+                            })
+                }
+                _ => false,
+            };
+            if !same
+                || saved.evaluation.export != model.name
+                || saved.evaluation.context != prior.context.context
+                || !prior.context.matches(&saved.evaluation.inputs)
+                || saved.evaluation.parameters.as_ref()
+                    != parameters.as_ref().and_then(|data| data.batches.first())
+            {
+                return Err(Code::Conflict.error("managed prior evaluation"));
+            }
+            sdk::Dataset::validate_all(&saved.output.datasets, &model.outputs)
+                .map_err(|_| Code::Invalid.error("managed prior outputs"))?;
+        }
+        let before = prior.allocated_bytes();
+        let metadata = prior.metadata_bytes();
+        let prior = std::sync::Arc::make_mut(prior);
+        prior.parameters = parameters;
+        prior.retained = retained;
+        let added = prior.allocated_bytes().saturating_sub(before);
+        self.bytes = self.bytes.saturating_add(added);
+        Ok(prior.metadata_bytes().saturating_sub(metadata))
+    }
+
     pub fn source(&self) -> Option<&std::sync::Arc<ManagedSourceFrame>> {
-        self.source.as_ref().map(|source| &source.frame)
+        self.source.as_ref()
     }
     pub fn follows_graph(&self) -> bool {
         self.contract.follows_graph(&self.instance.spec)
@@ -607,36 +623,6 @@ impl ManagedCapture {
     pub fn rebuild(&self) -> bool {
         self.contract.rebuild
     }
-    pub fn allocated_bytes(&self) -> usize {
-        self.bytes
-    }
-    pub fn datasets(&self) -> impl Iterator<Item = &sdk::Dataset> {
-        self.source
-            .iter()
-            .flat_map(|source| source.frame.datasets())
-            .chain(self.prior.values().flat_map(|prior| {
-                prior
-                    .parameters
-                    .iter()
-                    .chain(prior.checkpoint.iter().flat_map(|state| &state.datasets))
-                    .chain(prior.retained.iter().flat_map(|retained| {
-                        retained
-                            .evaluation
-                            .inputs
-                            .iter()
-                            .map(|input| &input.data)
-                            .chain(retained.evaluation.previous_outputs.iter())
-                            .chain(retained.output.datasets.iter())
-                            .chain(
-                                retained
-                                    .output
-                                    .checkpoint
-                                    .iter()
-                                    .flat_map(|state| &state.datasets),
-                            )
-                    }))
-            }))
-    }
     pub fn metadata_bytes(&self) -> usize {
         self.bytes.saturating_sub(
             self.batches()
@@ -648,17 +634,11 @@ impl ManagedCapture {
     }
 
     pub fn batches(&self) -> impl Iterator<Item = &sdk::RecordBatch> {
-        self.datasets()
+        self.source
+            .iter()
+            .flat_map(|source| source.datasets())
             .flat_map(|data| &data.batches)
-            .chain(self.prior.values().flat_map(|prior| {
-                prior.retained.iter().flat_map(|retained| {
-                    retained
-                        .evaluation
-                        .parameters
-                        .iter()
-                        .chain(retained.output.reasons.iter().map(|reason| &reason.details))
-                })
-            }))
+            .chain(self.prior.values().flat_map(|prior| prior.batches()))
     }
 }
 
@@ -739,11 +719,19 @@ pub struct ManagedAttempt(
     pub(super) ManagedInstance,
     pub(super) Option<tokio::sync::watch::Receiver<u64>>,
     pub(super) BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
-    pub(super) Option<std::sync::Arc<super::execution::Retention>>,
-    pub(super) Option<SourceCapture>,
+    pub(super) Option<std::sync::Arc<ManagedExecution>>,
+    pub(super) Option<std::sync::Arc<ManagedSourceFrame>>,
 );
 
 impl ManagedAttempt {
+    pub fn source_meta(&self) -> crate::AnalysisStoreMetaV1 {
+        crate::AnalysisStoreMetaV1 {
+            store_uuid: self.0.capture.store,
+            schema_version: self.0.capture.schema,
+            recovery_epoch: self.0.capture.recovery,
+            commit_revision: self.0.capture.revision,
+        }
+    }
     pub fn prior_result(&self, call: u64) -> Option<&PackageResultRefV1> {
         self.0.capture.prior.get(&call).and_then(Option::as_ref)
     }
@@ -782,42 +770,24 @@ impl ManagedAttempt {
     }
 }
 
+impl From<&ManagedAttempt> for ManagedCapture {
+    fn from(reference: &ManagedAttempt) -> Self {
+        Self {
+            execution: None,
+            instance: reference.1.clone(),
+            contract: reference.0.capture.clone(),
+            prior: reference.3.clone(),
+            bytes: 0,
+            source: None,
+        }
+    }
+}
+
 pub struct ManagedReturn<'a> {
     pub call: u64,
     pub evaluation: &'a sdk::Evaluation,
     pub output: &'a sdk::Output,
-    pub retained: Option<&'a PackageResultRefV1>,
     pub changes: Option<&'a ManagedChanges>,
-}
-
-impl Attempt {
-    pub(super) fn retains(
-        &self,
-        spec: &ManagedSpec,
-        call: u64,
-        reference: &PackageResultRefV1,
-    ) -> bool {
-        self.request.frontier.is_some()
-            && !self.request.rebuild
-            && self.capture.generation == self.capture.expected_generation
-            && matches!(
-                &spec.destination,
-                ManagedDestination::Graph {
-                    calls,
-                    operation: ManagedGraphOperation::Evaluate,
-                    ..
-                } if calls.contains(&call)
-            )
-            && spec
-                .manifest
-                .calls
-                .get(&call)
-                .is_some_and(|declaration| matches!(declaration.target.as_str(), "wasm" | "native"))
-            && self.capture.prior.get(&call).and_then(Option::as_ref) == Some(reference)
-            && reference.commit_revision > 0
-            && reference.commit_revision <= self.capture.progress
-            && reference.commit_revision < self.registered
-    }
 }
 
 pub struct ManagedCommit<'a> {
@@ -830,30 +800,12 @@ pub struct ManagedCommit<'a> {
     pub selected_schema: &'a sdk::Schema,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub(super) struct RecordInput {
-    pub name: String,
-    pub rows: u64,
-    pub batches: usize,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(in crate::analysis) enum InputBasis {
-    None,
-    Complete,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct Record {
     pub instance: String,
     pub call: u64,
     pub attempt: String,
-    pub declaration: ManagedCall,
     pub context: ResultContext,
-    pub input_basis: InputBasis,
-    pub parameters: Option<sdk::wire::Dataset>,
-    pub inputs: Vec<RecordInput>,
     pub changes: Option<RecordChanges>,
     pub dependencies: Vec<PackageResultRefV1>,
     pub witnesses: Vec<AnalysisWitnessV1>,
@@ -865,14 +817,6 @@ pub(super) struct RecordChanges {
     pub base: Option<PackageResultRefV1>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ManagedResult {
-    pub context: ResultContext,
-    pub output: sdk::Output,
-    pub commit_revision: u64,
-    pub current: bool,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct Step {
     pub instance: String,
@@ -881,23 +825,4 @@ pub(super) struct Step {
     pub dependencies: Vec<PackageResultRefV1>,
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
-    pub source: Option<RecordSource>,
-}
-
-#[derive(Clone, Debug)]
-pub enum ManagedOutput {
-    Call {
-        result: Box<crate::InstanceResultV1>,
-        data: sdk::Output,
-    },
-    Selected {
-        packet: sdk::wire::Dataset,
-        data: sdk::Dataset,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub struct ManagedSelected {
-    pub data: sdk::Dataset,
-    pub commit_revision: u64,
 }

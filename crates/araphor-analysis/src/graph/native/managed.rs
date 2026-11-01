@@ -31,15 +31,8 @@ impl GraphPublication {
         Arc::ptr_eq(&self.projection.facts, facts)
     }
 
-    pub(crate) fn replay_tables(session: &mut Session) -> Result<()> {
-        for (alias, port) in super::Projection::source_ports() {
-            let table: Arc<dyn datafusion::catalog::TableProvider> = Arc::new(
-                datafusion::datasource::empty::EmptyTable::new(Arc::new(port.schema.clone())),
-            );
-            session.register_table(&port.name, Arc::clone(&table))?;
-            session.register_table(alias, table)?;
-        }
-        Ok(())
+    pub(crate) fn facts(&self) -> Arc<dyn GraphFacts> {
+        Arc::clone(&self.projection.facts)
     }
 
     pub async fn admit_expiry(
@@ -205,7 +198,6 @@ impl GraphPublication {
             feedback,
             DefinitionRef::Retained(&definition),
             facts,
-            true,
         )
         .await?;
         if owner.prepared.resolved() != &definition {

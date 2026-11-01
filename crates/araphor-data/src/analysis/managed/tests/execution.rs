@@ -29,22 +29,27 @@ fn execution_retains_only_committed_state() -> TestResult {
         let cold = cold.prior(call).ok_or("cold prior")?;
         assert_eq!(warm.result, receipt.results[&call].result_id);
         assert_eq!(warm.context, cold.context);
+        assert!(cold.retained.is_none());
+        let checkpoint = warm.checkpoint.as_ref().ok_or("warm checkpoint")?;
+        let stored = cold.checkpoint.as_ref().ok_or("cold checkpoint")?;
+        assert_eq!(
+            sdk::wire::Checkpoint::encode(checkpoint, &fixture.model)?,
+            sdk::wire::Checkpoint::encode(stored, &fixture.model)?
+        );
         let warm = warm.retained.as_ref().ok_or("warm output")?;
-        let cold = cold.retained.as_ref().ok_or("cold output")?;
         assert!(Arc::ptr_eq(
             outputs[(call - 10) as usize].datasets[0].batches[0].column(0),
             warm.output.datasets[0].batches[0].column(0)
         ));
         assert!(!Arc::ptr_eq(
-            warm.output.datasets[0].batches[0].column(0),
-            cold.output.datasets[0].batches[0].column(0)
+            checkpoint.datasets[0].batches[0].column(0),
+            stored.datasets[0].batches[0].column(0)
         ));
-        assert!(warm.matches(&cold.evaluation));
         assert!(warm.evaluation.checkpoint.is_none());
         assert!(warm.evaluation.previous_outputs.is_empty());
         assert_eq!(
             warm.output.datasets[0].batches,
-            cold.output.datasets[0].batches
+            outputs[(call - 10) as usize].datasets[0].batches
         );
     }
     let next = request("retained-next");
@@ -105,12 +110,7 @@ fn execution_checks_heads_and_recovery_epoch() -> TestResult {
         )?);
     }
     let warm = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
-    let last = warm
-        .prior(10)
-        .ok_or("last prior")?
-        .retained
-        .as_ref()
-        .ok_or("last output")?;
+    let last = warm.prior(10).ok_or("last prior")?;
     let first = &receipts[0].results[&10];
     store.writer()?.get_mut()?.execute(
         "UPDATE managed_calls SET state_revision=?,result_id=? WHERE tenant_id=? AND instance_id=? AND call_id=10",
@@ -119,16 +119,11 @@ fn execution_checks_heads_and_recovery_epoch() -> TestResult {
     let changed = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
     let previous = changed.prior(10).ok_or("changed prior")?;
     assert_eq!(previous.result, first.result_id);
-    assert!(!Arc::ptr_eq(
-        previous.retained.as_ref().ok_or("changed output")?,
-        last
-    ));
-    let before = changed
-        .prior(11)
-        .ok_or("retained prior")?
-        .retained
-        .as_ref()
-        .ok_or("retained output")?;
+    assert_ne!(previous.result, last.result);
+    assert!(previous.retained.is_none());
+    assert!(previous.checkpoint.is_some());
+    let before = changed.prior(11).ok_or("retained prior")?;
+    assert!(before.retained.is_some());
     let latest = &receipts[1].results[&10];
     store.writer()?.get_mut()?.execute(
         "UPDATE managed_calls SET state_revision=?,result_id=? WHERE tenant_id=? AND instance_id=? AND call_id=10",
@@ -157,14 +152,18 @@ fn execution_checks_heads_and_recovery_epoch() -> TestResult {
         false,
         Some(Arc::new(ManagedExecution::default())),
     )?;
-    let after = recovered
-        .prior(11)
-        .ok_or("recovered prior")?
-        .retained
-        .as_ref()
-        .ok_or("recovered output")?;
-    assert!(!Arc::ptr_eq(before, after));
-    assert!(before.matches(&after.evaluation));
+    let after = recovered.prior(11).ok_or("recovered prior")?;
+    assert!(after.retained.is_none());
+    let before = before.checkpoint.as_ref().ok_or("prior checkpoint")?;
+    let after = after.checkpoint.as_ref().ok_or("recovered checkpoint")?;
+    assert_eq!(
+        sdk::wire::Checkpoint::encode(before, &fixture.model)?,
+        sdk::wire::Checkpoint::encode(after, &fixture.model)?
+    );
+    assert!(!Arc::ptr_eq(
+        before.datasets[0].batches[0].column(0),
+        after.datasets[0].batches[0].column(0)
+    ));
     Ok(())
 }
 

@@ -89,9 +89,10 @@ impl DiscoveryOwner {
             else {
                 return Err(Code::Invalid.error("discovery replay destination").into());
             };
-            let (replayed, prepared, saved) = Instance::replay_retained(
+            let (replayed, prepared, _call, saved) = Instance::replay_retained(
                 query,
                 Arc::clone(authority),
+                None,
                 grant,
                 &producer.spec.id,
                 &producer.result.result_id,
@@ -126,34 +127,8 @@ impl DiscoveryOwner {
         let (snapshot, prepared, _saved, _decoded) = match replayed {
             Ok(replayed) => replayed,
             Err(error) => {
-                let reason = match &error {
-                    crate::Error::Data { source }
-                    | crate::Error::Query {
-                        source: araphor_query::Error::Data { source },
-                    } => {
-                        let source = match source {
-                            araphor_data::Error::StoredArtifact { source, .. } => source.as_ref(),
-                            source => source,
-                        };
-                        match source {
-                            araphor_data::Error::Package {
-                                code: Code::Missing,
-                                field,
-                                ..
-                            } => match *field {
-                                "managed input payload"
-                                | "managed evaluation payload"
-                                | "managed prior payload" => "FROZEN_INPUT_UNAVAILABLE",
-                                "managed SDK descriptor"
-                                | "definition image"
-                                | "retained definition image"
-                                | "installed image artifact" => "FROZEN_PACKAGES_UNAVAILABLE",
-                                _ => return Err(error),
-                            },
-                            _ => return Err(error),
-                        }
-                    }
-                    _ => return Err(error),
+                let Some(reason) = Self::replay_reason(&error) else {
+                    return Err(error);
                 };
                 return Self::unavailable(authority.as_ref(), grant, profile, reason, control);
             }
@@ -169,6 +144,42 @@ impl DiscoveryOwner {
             },
         )
         .map_err(Into::into)
+    }
+
+    fn replay_reason(error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            let data = error.downcast_ref::<araphor_data::Error>().or_else(|| {
+                error
+                    .downcast_ref::<Arc<araphor_data::Error>>()
+                    .map(Arc::as_ref)
+            });
+            if let Some(data) = data {
+                match data {
+                    araphor_data::Error::RetainedRangeExpired { .. }
+                    | araphor_data::Error::AnalysisReplayExpired { .. } => {
+                        return Some("JOURNAL_INPUT_UNAVAILABLE")
+                    }
+                    araphor_data::Error::Package {
+                        code: Code::Missing,
+                        field,
+                        ..
+                    } if matches!(
+                        *field,
+                        "managed SDK descriptor"
+                            | "definition image"
+                            | "retained definition image"
+                            | "installed image artifact"
+                    ) =>
+                    {
+                        return Some("FROZEN_PACKAGES_UNAVAILABLE")
+                    }
+                    _ => {}
+                }
+            }
+            current = error.source();
+        }
+        None
     }
 
     fn unavailable(
@@ -211,5 +222,58 @@ impl DiscoveryOwner {
                 .unwrap_or(0),
             reason: reason.into(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expiry_follows_error_chain() {
+        for shared in [false, true] {
+            let error = araphor_data::Error::RetainedRangeExpired {
+                first_cursor: 1,
+                last_cursor: 3,
+                location: snafu::location!(),
+            };
+            let error: Box<dyn std::error::Error + Send + Sync> = if shared {
+                Box::new(Arc::new(error))
+            } else {
+                Box::new(error)
+            };
+            let error = crate::Error::Query {
+                source: araphor_query::Error::Sql {
+                    source: datafusion::common::DataFusionError::External(error),
+                },
+            };
+            assert_eq!(
+                DiscoveryOwner::replay_reason(&error),
+                Some("JOURNAL_INPUT_UNAVAILABLE")
+            );
+        }
+        let error = crate::Error::Data {
+            source: araphor_data::Error::AnalysisReplayExpired {
+                position: araphor_data::StorePositionV1 {
+                    commit_revision: 1,
+                    ordinal: 0,
+                },
+                floor: araphor_data::StorePositionV1 {
+                    commit_revision: 2,
+                    ordinal: 0,
+                },
+                location: snafu::location!(),
+            },
+        };
+        assert_eq!(
+            DiscoveryOwner::replay_reason(&error),
+            Some("JOURNAL_INPUT_UNAVAILABLE")
+        );
+        for code in [Code::Missing, Code::Invalid] {
+            let error = crate::Error::Data {
+                source: code.error("canonical context"),
+            };
+            assert_eq!(DiscoveryOwner::replay_reason(&error), None);
+        }
     }
 }

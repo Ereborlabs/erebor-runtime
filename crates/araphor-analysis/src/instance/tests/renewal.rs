@@ -9,24 +9,19 @@ async fn renewal_keeps_checkpoint() -> TestResult {
     let first = instance
         .run(request("first"), &AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("renewal", "first")?, [3]);
+    assert_eq!(fixture.selected("renewal", "first").await?, [3]);
     let reference = first
         .results
         .values()
         .next()
         .ok_or("original call result")?
         .clone();
-    let araphor_data::ManagedOutput::Call {
-        result: original, ..
-    } = fixture.query.store().managed_output(
+    let original = fixture.query.store().managed_result(
         instance.admitted(),
         &reference.result_id,
         10,
         &AnalysisReadControl::default(),
-    )?
-    else {
-        return Err("package output variant".into());
-    };
+    )?;
     let stored = fixture
         .query
         .store()
@@ -80,17 +75,32 @@ async fn renewal_keeps_checkpoint() -> TestResult {
     let second = renewed
         .run(request("second"), &AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("renewal", "second")?, [6]);
+    let replay = renewed
+        .replay(&second.selected.result_id, &AnalysisReadControl::default())
+        .await?;
+    assert_eq!(values(&replay.batches)?, [6]);
+    drop(replay);
     let mut rebuild = request("rebuild");
     rebuild.rebuild = true;
     let rebuilt = renewed
         .run(rebuild, &AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("renewal", "rebuild")?, [3]);
+    let replay = renewed
+        .replay(&rebuilt.selected.result_id, &AnalysisReadControl::default())
+        .await?;
+    assert_eq!(values(&replay.batches)?, [3]);
+    drop(replay);
     let continued = renewed
         .run(request("continued"), &AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("renewal", "continued")?, [6]);
+    let replay = renewed
+        .replay(
+            &continued.selected.result_id,
+            &AnalysisReadControl::default(),
+        )
+        .await?;
+    assert_eq!(values(&replay.batches)?, [6]);
+    drop(replay);
     let definition = renewed.admitted().spec.definition.clone();
     drop(renewed);
     drop(instance);
@@ -130,7 +140,7 @@ async fn renewal_keeps_checkpoint() -> TestResult {
         .managed_attempt([1; 16], "renewal", "first", &AnalysisReadControl::default())?
         .ok_or("reopened attempt")?;
     assert_eq!(loaded.instance().grant, stored.grant);
-    let araphor_data::PackageResponseV1::Result(retained) = Instance::read_output(
+    let retained = Instance::read_result(
         Arc::clone(&query),
         authority.clone(),
         grant.clone(),
@@ -138,13 +148,12 @@ async fn renewal_keeps_checkpoint() -> TestResult {
         &reference.result_id,
         &AnalysisReadControl::default(),
     )
-    .await?
-    else {
-        return Err("package output variant".into());
-    };
-    assert_eq!(retained.output, original.output);
-    assert_eq!(retained.context, original.context);
-    assert_eq!(retained.commit_revision, original.commit_revision);
+    .await?;
+    assert_eq!(retained.result, original.result);
+    assert_eq!(call_context(&retained)?, call_context(&original)?);
+    assert_eq!(retained.source, original.source);
+    assert_eq!(retained.prior, original.prior);
+    assert_eq!(retained.receipt, original.receipt);
     assert_eq!(
         Instance::read_history(
             Arc::clone(&query),
@@ -161,7 +170,7 @@ async fn renewal_keeps_checkpoint() -> TestResult {
         .run(request("first"), &AnalysisReadControl::default())
         .await
         .is_err());
-    assert!(Instance::read_output(
+    assert!(Instance::read_result(
         Arc::clone(&query),
         authority,
         grant,

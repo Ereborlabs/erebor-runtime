@@ -34,12 +34,7 @@ impl AnalysisStore {
         CREATE TABLE managed_edges (
             tenant_id BLOB NOT NULL, result_id VARCHAR NOT NULL, dependency_id VARCHAR NOT NULL,
             commit_revision UBIGINT NOT NULL,
-            kind VARCHAR NOT NULL CHECK (kind IN ('input', 'source')),
-            PRIMARY KEY (result_id, dependency_id, kind)
-        );
-        CREATE TABLE managed_arrow (
-            result_id VARCHAR NOT NULL, role VARCHAR NOT NULL, slot UBIGINT NOT NULL, ipc BLOB NOT NULL,
-            PRIMARY KEY (result_id, role, slot)
+            PRIMARY KEY (result_id, dependency_id)
         );";
 
     pub(in crate::analysis) fn validate_managed(reader: &Connection, root: &Path) -> Result<()> {
@@ -164,11 +159,13 @@ impl AnalysisStore {
                     (saved, None::<super::super::PackageResultRefV1>),
                 );
                 if let Some(id) = result {
-                    let (record, _, saved) = Self::managed_record_from(reader, tenant, &id)?;
+                    let (record, saved) = Self::managed_meta_from(reader, tenant, &id)?;
+                    let (_, owner) = Self::managed_call_owner(reader, tenant, &id, saved, &record)?;
                     if revision != saved
                         || record.instance != instance.spec.id
                         || record.call != call
-                        || instance.spec.manifest.calls.get(&call) != Some(&record.declaration)
+                        || instance.spec.manifest.calls.get(&call)
+                            != owner.manifest.calls.get(&call)
                     {
                         return Self::reject_path(root, "the managed call state differs");
                     }
@@ -185,11 +182,6 @@ impl AnalysisStore {
             UNION ALL SELECT 1 FROM managed_edges e LEFT JOIN analysis_results r ON e.result_id = r.result_id AND e.tenant_id = r.tenant_id
                 LEFT JOIN analysis_results d ON e.dependency_id = d.result_id AND e.tenant_id = d.tenant_id
                 WHERE r.result_id IS NULL OR d.result_id IS NULL OR e.commit_revision <> d.commit_revision
-                    OR e.kind NOT IN ('input', 'source')
-                    OR (e.kind = 'source' AND (r.processor_id <> 'managed-definition-v1'
-                        OR d.processor_id <> 'managed-definition-v1' OR d.commit_revision >= r.commit_revision))
-            UNION ALL SELECT 1 FROM managed_arrow a LEFT JOIN analysis_results r USING (result_id)
-                WHERE r.result_id IS NULL OR r.processor_id NOT IN ('managed-package-v1', 'managed-definition-v1')
         )", [], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "validate managed references" })?;
         if invalid {
             return Self::reject_path(root, "the managed references are invalid");
@@ -310,14 +302,22 @@ impl AnalysisStore {
             {
                 return Self::reject_path(root, "the managed captured contract is invalid");
             }
+            Self::check_managed_progress(reader, capture)?;
             for (call, prior) in &capture.prior {
                 if let Some(reference) = prior {
-                    let (record, _, revision) =
-                        Self::managed_record_from(reader, tenant, &reference.result_id)?;
+                    let (record, revision) =
+                        Self::managed_meta_from(reader, tenant, &reference.result_id)?;
+                    let (_, owner) = Self::managed_call_owner(
+                        reader,
+                        tenant,
+                        &reference.result_id,
+                        revision,
+                        &record,
+                    )?;
                     if record.call != *call
                         || !program.same_call(&previous, *call)
                         || record.instance != instance
-                        || program.manifest.calls.get(call) != Some(&record.declaration)
+                        || program.manifest.calls.get(call) != owner.manifest.calls.get(call)
                         || revision != reference.commit_revision
                         || revision > capture.progress
                     {
@@ -458,8 +458,8 @@ impl AnalysisStore {
                         }
                     }
                 }
-                let (step, selected, revision) =
-                    Self::managed_step_from(reader, tenant, &receipt.selected.result_id)?;
+                let (step, revision) =
+                    Self::managed_step_header(reader, tenant, &receipt.selected.result_id)?;
                 if receipt.selected.commit_revision != receipt.commit_revision
                     || revision != receipt.commit_revision
                     || step.instance != instance
@@ -467,14 +467,13 @@ impl AnalysisStore {
                 {
                     return Self::reject_path(root, "the managed selected relation differs");
                 }
-                let (_, schema) = Self::validate_selected_header(
+                Self::validate_selected_header(
                     reader,
                     tenant,
                     &receipt.selected.result_id,
                     &step,
                     revision,
                 )?;
-                Self::decode_selected_record(&selected, &schema, step.rows)?;
             }
         }
         if progress
@@ -508,38 +507,31 @@ impl AnalysisStore {
                 .try_into()
                 .map_err(|_| crate::PackageErrorCodeV1::Invalid.error("managed result tenant"))?;
             if processor == "managed-package-v1" {
-                let (record, output, saved) = Self::managed_record_from(reader, tenant, &id)?;
-                let output =
-                    Self::validate_managed_record(reader, tenant, &id, &record, &output, saved)?;
-                let mut owner = Self::managed_instance_from(reader, tenant, &record.instance)?
-                    .ok_or_else(|| {
-                        crate::PackageErrorCodeV1::Missing.error("managed evaluation owner")
-                    })?;
-                let attempt =
-                    Self::managed_attempt_from(reader, tenant, &record.instance, &record.attempt)?
-                        .ok_or_else(|| {
-                            crate::PackageErrorCodeV1::Missing.error("managed evaluation attempt")
-                        })?;
-                let evaluated = Self::managed_version_from(
-                    reader,
-                    tenant,
-                    &record.instance,
-                    attempt.capture.generation,
-                )?;
-                owner.spec = evaluated.clone();
-                owner.generation = attempt.capture.generation;
-                owner.grant = attempt.capture.grant.clone();
-                let control = crate::AnalysisReadControl::default();
-                let evaluation =
-                    Self::saved_evaluation_from(reader, &owner, &id, &control)?.decode(&control)?;
-                let descriptor = Self::managed_contract(reader, tenant, &record.declaration)?;
+                let (record, checkpoint, saved) = Self::managed_state_from(reader, tenant, &id)?;
+                if saved != revision {
+                    return Self::reject_path(root, "the managed result revision differs");
+                }
+                let (descriptor, attempt, evaluated) =
+                    Self::validate_managed_header(reader, tenant, &id, &record, saved)?;
+                let declaration = &evaluated.manifest.calls[&record.call];
                 let model = descriptor
                     .exports
                     .iter()
-                    .find(|model| model.name == record.declaration.export)
+                    .find(|model| model.name == declaration.export)
                     .ok_or_else(|| {
-                        crate::PackageErrorCodeV1::Missing.error("Graph recovery model")
+                        crate::PackageErrorCodeV1::Missing.error("managed recovery model")
                     })?;
+                let checkpoint = checkpoint
+                    .as_ref()
+                    .map(|state| {
+                        state
+                            .decode_model(model)
+                            .context(crate::AnalysisContractSnafu)
+                    })
+                    .transpose()?;
+                model
+                    .validate_checkpoint(checkpoint.as_ref(), true)
+                    .context(crate::AnalysisContractSnafu)?;
                 let unit = matches!(&evaluated.destination, super::ManagedDestination::Graph {calls,..} if calls.contains(&record.call))
                     && araphor_analysis_builtins::graph::Detector::supports_units(model);
                 let base: Option<Option<String>> = reader
@@ -567,29 +559,12 @@ impl AnalysisStore {
                     )?;
                     crate::analysis::graph_rows::GraphRows::validate_call_members(
                         reader,
+                        root,
                         scope,
                         revision,
-                        &evaluation,
+                        attempt.capture.revision,
                     )?;
-                    let state = output
-                        .datasets
-                        .iter()
-                        .find(|data| data.name == "state")
-                        .ok_or_else(|| {
-                            crate::PackageErrorCodeV1::Missing.error("Graph unit state output")
-                        })?;
-                    let states =
-                        araphor_analysis_builtins::graph::GraphPackageStateV1::decode(state)
-                            .context(crate::AnalysisContractSnafu)?;
-                    let [default] = states.as_slice() else {
-                        return Self::reject_path(root, "the Graph unit default state differs");
-                    };
-                    let selected = araphor_graph::StateRows::current(
-                        reader,
-                        scope,
-                        revision,
-                        default.clone(),
-                    )?;
+                    let selected = araphor_graph::StateRows::current(reader, scope, revision)?;
                     let mut published = reader.prepare("SELECT result_id FROM graph_result_producers WHERE producer_result_id=?")
                         .context(AnalysisDatabaseSnafu { operation: "prepare Graph package state recovery" })?;
                     let graphs = published
@@ -615,9 +590,7 @@ impl AnalysisStore {
                             .snapshot
                             .packages
                             .iter()
-                            .find(|package| {
-                                package.package_id == record.declaration.package.package_id
-                            })
+                            .find(|package| package.package_id == declaration.package.package_id)
                             .ok_or_else(|| {
                                 crate::PackageErrorCodeV1::Missing.error("Graph package state pin")
                             })?;
@@ -632,10 +605,11 @@ impl AnalysisStore {
                     return Self::reject_path(root, "a generic call has a native Graph version");
                 }
             } else {
-                let (step, packet, _) = Self::managed_step_from(reader, tenant, &id)?;
-                let (_, schema) =
-                    Self::validate_selected_header(reader, tenant, &id, &step, revision)?;
-                Self::decode_selected_record(&packet, &schema, step.rows)?;
+                let (step, saved) = Self::managed_step_header(reader, tenant, &id)?;
+                if saved != revision {
+                    return Self::reject_path(root, "the managed selected revision differs");
+                }
+                Self::validate_selected_header(reader, tenant, &id, &step, revision)?;
             }
         }
         Ok(())

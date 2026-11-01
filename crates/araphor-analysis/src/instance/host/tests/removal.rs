@@ -143,7 +143,12 @@ async fn removal_needs_only_remove() -> TestResult {
     )
     .await?;
     assert!(!output.current);
-    assert!(output.output.checkpoint.is_some());
+    assert_eq!(output.receipt, receipt);
+    assert!(matches!(
+        output.kind,
+        araphor_data::InstanceResultKindV1::Call { .. }
+    ));
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 0);
     let before = fixture.query.store().meta()?;
     assert_eq!(
         host.remove(
@@ -298,7 +303,7 @@ async fn recreation_changes_scope_explicitly() -> TestResult {
     let latest = next
         .run(request("new-scope"), &AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("recreated", "new-scope")?, vec![10]);
+    assert_eq!(fixture.selected("recreated", "new-scope").await?, vec![10]);
     let id = &receipt
         .results
         .values()
@@ -329,7 +334,10 @@ async fn recreation_changes_scope_explicitly() -> TestResult {
     )
     .await?;
     assert!(!old.current);
-    assert_eq!(old.context.context.id, "old-scope");
+    let araphor_data::InstanceResultKindV1::Call { context, .. } = old.kind else {
+        return Err("historical call metadata".into());
+    };
+    assert_eq!(context.context.id, "old-scope");
     assert_eq!(
         Instance::read_history(
             Arc::clone(&fixture.query),
@@ -424,11 +432,11 @@ async fn removal_keeps_shared_instance() -> TestResult {
     let first_receipt = first.run(request("first-original"), &control).await?;
     let second_receipt = second.run(request("second-original"), &control).await?;
     assert_eq!(
-        fixture.selected("first-shared", "first-original")?,
+        fixture.selected("first-shared", "first-original").await?,
         vec![10]
     );
     assert_eq!(
-        fixture.selected("second-shared", "second-original")?,
+        fixture.selected("second-shared", "second-original").await?,
         vec![10]
     );
     let host = InstanceHost::new(Arc::clone(&fixture.query), fixture.authority.clone());
@@ -462,7 +470,10 @@ async fn removal_keeps_shared_instance() -> TestResult {
         .is_some());
     assert!(fixture.admit("new-shared", sql).await.is_err());
     let next = second.run(request("second-next"), &control).await?;
-    assert_eq!(fixture.selected("second-shared", "second-next")?, vec![20]);
+    assert_eq!(
+        fixture.selected("second-shared", "second-next").await?,
+        vec![20]
+    );
     assert_eq!(
         fixture
             .query
@@ -501,6 +512,18 @@ async fn removal_keeps_shared_instance() -> TestResult {
     )
     .await?;
     assert!(!retained.current);
-    assert!(retained.output.checkpoint.is_some());
+    let replayed = fixture
+        .replay_result(&removed, &reference.result_id, &control)
+        .await?;
+    let returned = replayed
+        .calls
+        .values()
+        .next()
+        .ok_or("removed shared replay")?;
+    assert_eq!(
+        crate::instance::tests::values(&returned.output().datasets[0].batches)?,
+        [10]
+    );
+    assert!(returned.output().checkpoint.is_some());
     Ok(())
 }

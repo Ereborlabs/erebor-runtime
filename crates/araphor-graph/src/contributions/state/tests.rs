@@ -95,6 +95,16 @@ impl Fixture {
         rows: &[Replacement],
         reset: bool,
     ) -> TestResult {
+        Self::publish_default(writer, revision, rows, reset, &GraphPackageStateV1::Waiting)
+    }
+
+    fn publish_default(
+        writer: &Connection,
+        revision: u64,
+        rows: &[Replacement],
+        reset: bool,
+        default: &GraphPackageStateV1,
+    ) -> TestResult {
         writer.execute_batch("BEGIN TRANSACTION")?;
         let result: TestResult = (|| {
             writer.execute(
@@ -106,6 +116,7 @@ impl Fixture {
                 ],
             )?;
             Contributions::apply(writer, 1, revision, rows, reset)?;
+            StateRows::finish(writer, 1, revision, default)?;
             Ok(())
         })();
         writer.execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" })?;
@@ -119,12 +130,7 @@ impl Fixture {
         }
     }
     fn current(writer: &Connection, revision: u64) -> TestResultValue<GraphPackageStateV1> {
-        Ok(StateRows::current(
-            writer,
-            1,
-            revision,
-            GraphPackageStateV1::Waiting,
-        )?)
+        Ok(StateRows::current(writer, 1, revision)?)
     }
 }
 
@@ -277,9 +283,15 @@ fn declared_state_retains_type() -> TestResult {
         Fixture::current(&writer, 3)?,
         GraphPackageStateV1::Declared("2".into())
     );
-    Fixture::publish(&writer, 4, &[], true)?;
+    Fixture::publish_default(
+        &writer,
+        4,
+        &[],
+        true,
+        &GraphPackageStateV1::Declared("0".into()),
+    )?;
     assert_eq!(
-        StateRows::current(&writer, 1, 4, GraphPackageStateV1::Declared("0".into()))?,
+        StateRows::current(&writer, 1, 4)?,
         GraphPackageStateV1::Declared("0".into())
     );
     let builtin = Fixture::state(&writer, 103, GraphPackageStateV1::Waiting, 1, None)?;
@@ -292,5 +304,56 @@ fn declared_state_retains_type() -> TestResult {
     )?;
     assert_ne!(builtin.members[0].value, declared.members[0].value);
     StateRows::validate(&writer)?;
+    Ok(())
+}
+
+#[test]
+fn empty_state_retains_value() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("defaults.duckdb");
+    let mut writer = Connection::open(&path)?;
+    Fixture::schema(&writer)?;
+    let states = [
+        GraphPackageStateV1::Declared("WAITING".into()),
+        GraphPackageStateV1::Waiting,
+        GraphPackageStateV1::Declared("DIRECT_PIVOT".into()),
+    ];
+    for (index, state) in states.iter().enumerate() {
+        Fixture::publish_default(&writer, index as u64 + 1, &[], index == 2, state)?;
+        assert_eq!(Fixture::current(&writer, index as u64 + 1)?, *state);
+    }
+    assert_eq!(writer.query_row("SELECT count(*) FROM graph_unit_state_values WHERE unit_ref IS NULL AND position_revision IS NULL AND position_ordinal IS NULL",[],|row|row.get::<_,u64>(0))?,3);
+    assert_eq!(
+        writer.query_row(
+            "SELECT count(DISTINCT selected_state_ref) FROM graph_producer_versions",
+            [],
+            |row| row.get::<_, u64>(0)
+        )?,
+        3
+    );
+    let unit = Fixture::state(&writer, 101, GraphPackageStateV1::NativeEffect, 1, None)?;
+    Fixture::publish(&writer, 4, &[unit], false)?;
+    Fixture::publish_default(&writer, 5, &[Fixture::empty(101)], false, &states[0])?;
+    assert_eq!(Fixture::current(&writer, 5)?, states[0]);
+    StateRows::validate(&writer)?;
+    for fault in [
+        "UPDATE graph_producer_versions SET selected_state_ref=NULL WHERE commit_revision=1",
+        "UPDATE graph_producer_versions SET selected_state_ref=(SELECT selected_state_ref FROM graph_producer_versions WHERE commit_revision=4) WHERE commit_revision=1",
+        "UPDATE graph_producer_versions SET state_count=1 WHERE commit_revision=1",
+        "UPDATE graph_unit_state_values SET value_hash=from_hex(repeat('00',32)) WHERE state_declared='WAITING'",
+        "UPDATE graph_unit_state_values SET state_tag='UNKNOWN' WHERE state_declared='WAITING'",
+        "UPDATE graph_unit_state_values SET state_declared='' WHERE state_declared='WAITING'",
+    ] {
+        let transaction = writer.transaction()?;
+        assert_eq!(transaction.execute(fault,[])?,1,"{fault}");
+        assert!(StateRows::validate(&transaction).is_err(),"accepted {fault}");
+    }
+    drop(writer);
+    let reader = Connection::open(&path)?;
+    StateRows::validate(&reader)?;
+    for (index, state) in states.iter().enumerate() {
+        assert_eq!(StateRows::current(&reader, 1, index as u64 + 1)?, *state);
+    }
+    assert_eq!(StateRows::current(&reader, 1, 5)?, states[0]);
     Ok(())
 }

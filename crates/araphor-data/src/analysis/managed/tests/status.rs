@@ -160,14 +160,14 @@ fn idle_failure_keeps_progress() -> TestResult {
     let saved = status(&store, &fixture)?;
     assert!(matches!(saved.readiness, Readiness::Inactive));
     assert_eq!(saved.status_progress, next.commit_revision);
-    assert!(store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            "before-denial",
-            &AnalysisReadControl::default()
-        )?
-        .is_some());
+    assert!(Fixture::receipt(
+        &store,
+        [1; 16],
+        "counter",
+        "before-denial",
+        &AnalysisReadControl::default()
+    )?
+    .is_some());
     Ok(())
 }
 
@@ -363,7 +363,7 @@ fn status_read_is_scoped_metadata() -> TestResult {
     let mut writer = store.writer()?;
     writer
         .get_mut()?
-        .execute("UPDATE managed_arrow SET ipc = 'invalid'::BLOB", [])?;
+        .execute("UPDATE analysis_results SET body = 'invalid'::BLOB WHERE processor_id = 'managed-package-v1'", [])?;
     writer.get_mut()?.execute(
         "UPDATE package_revisions SET artifact = 'invalid'::BLOB",
         [],
@@ -577,14 +577,14 @@ fn admission_failure_keeps_intent() -> TestResult {
             ..
         }
     ));
-    assert!(store
-        .managed_selected(
-            [1; 16],
-            "counter",
-            "before-admission",
-            &AnalysisReadControl::default()
-        )?
-        .is_some());
+    assert!(Fixture::receipt(
+        &store,
+        [1; 16],
+        "counter",
+        "before-admission",
+        &AnalysisReadControl::default()
+    )?
+    .is_some());
     let next = publish(&fixture, &store, "after-admission")?;
     let saved = status(&store, &fixture)?;
     assert!(matches!(saved.readiness, Readiness::Ready));

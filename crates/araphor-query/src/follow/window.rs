@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContex
 use snafu::ResultExt as _;
 
 use crate::definition::PackageCall;
-use crate::sources::SourceProvider;
+use crate::sources::{SourcePort, SourceProvider};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +37,7 @@ struct Windows {
     scans: Vec<Option<Window>>,
     filters: usize,
     invalid: bool,
+    views: BTreeSet<usize>,
 }
 
 impl<'n> TreeNodeVisitor<'n> for Windows {
@@ -45,7 +47,7 @@ impl<'n> TreeNodeVisitor<'n> for Windows {
         if let LogicalPlan::Extension(extension) = plan {
             if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
                 for child in &call.children {
-                    if let Err(error) = Window::from_plan(child) {
+                    if let Err(error) = Window::from_plan_in(child, &self.views) {
                         self.error = Some(error);
                         return Ok(TreeNodeRecursion::Stop);
                     }
@@ -99,6 +101,22 @@ impl<'n> TreeNodeVisitor<'n> for Windows {
             self.scans.push(window.clone());
         }
         self.stack.push(window);
+        if let LogicalPlan::TableScan(scan) = plan {
+            if let Ok(provider) = source_as_provider(&scan.source) {
+                if let Some(port) = provider.as_any().downcast_ref::<SourcePort>() {
+                    let identity = Arc::as_ptr(&scan.source) as *const () as usize;
+                    if !self.views.insert(identity) {
+                        return datafusion::common::plan_err!("recursive source view");
+                    }
+                    for input in port.inputs() {
+                        if input.visit_with_subqueries(self)? == TreeNodeRecursion::Stop {
+                            return Ok(TreeNodeRecursion::Stop);
+                        }
+                    }
+                    self.views.remove(&identity);
+                }
+            }
+        }
         Ok(TreeNodeRecursion::Continue)
     }
 
@@ -130,6 +148,13 @@ impl Window {
     }
 
     pub(crate) fn clocks(plan: &LogicalPlan) -> Result<usize> {
+        Self::clocks_in(plan, &mut BTreeSet::new()).context(SqlSnafu)
+    }
+
+    fn clocks_in(
+        plan: &LogicalPlan,
+        views: &mut BTreeSet<usize>,
+    ) -> datafusion::common::Result<usize> {
         let mut count = 0;
         plan.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expression| {
@@ -140,9 +165,22 @@ impl Window {
                     Ok(TreeNodeRecursion::Continue)
                 })
             })?;
+            if let LogicalPlan::TableScan(scan) = plan {
+                if let Ok(provider) = source_as_provider(&scan.source) {
+                    if let Some(port) = provider.as_any().downcast_ref::<SourcePort>() {
+                        let identity = Arc::as_ptr(&scan.source) as *const () as usize;
+                        if !views.insert(identity) {
+                            return datafusion::common::plan_err!("recursive source view");
+                        }
+                        for input in port.inputs() {
+                            count += Self::clocks_in(input, views)?;
+                        }
+                        views.remove(&identity);
+                    }
+                }
+            }
             Ok(TreeNodeRecursion::Continue)
-        })
-        .context(SqlSnafu)?;
+        })?;
         Ok(count)
     }
 
@@ -157,7 +195,14 @@ impl Window {
     }
 
     pub(crate) fn from_plan(plan: &LogicalPlan) -> Result<Option<Self>> {
-        let mut windows = Windows::default();
+        Self::from_plan_in(plan, &BTreeSet::new())
+    }
+
+    fn from_plan_in(plan: &LogicalPlan, views: &BTreeSet<usize>) -> Result<Option<Self>> {
+        let mut windows = Windows {
+            views: views.clone(),
+            ..Default::default()
+        };
         plan.visit_with_subqueries(&mut windows).context(SqlSnafu)?;
         if let Some(error) = windows.error.take() {
             return Err(error);

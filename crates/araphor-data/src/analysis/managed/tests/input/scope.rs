@@ -8,8 +8,6 @@ fn history_keeps_saved_scope() -> TestResult {
         mut store,
         fixture,
         receipt,
-        inputs,
-        requests,
         ..
     } = Saved::new()?;
     let control = AnalysisReadControl::default();
@@ -17,19 +15,8 @@ fn history_keeps_saved_scope() -> TestResult {
     let broad = original.grant.selection.clone();
     let call = &receipt.results[&10].result_id;
     let selected = &receipt.selected.result_id;
-    let ManagedOutput::Call {
-        result: expected, ..
-    } = store.managed_query_output(&broad, &original.spec.id, Some(call), 10, &control)?
-    else {
-        return Err("original call output absent".into());
-    };
-    let ManagedOutput::Selected {
-        data: expected_rows,
-        ..
-    } = store.managed_query_output(&broad, &original.spec.id, Some(selected), 10, &control)?
-    else {
-        return Err("original selected output absent".into());
-    };
+    let expected = store.managed_result(&original, call, 10, &control)?;
+    let expected_selected = store.managed_result(&original, selected, 10, &control)?;
     let removed = store.remove_managed(&original, || Ok(()))?;
     let mut grant = original.grant.clone();
     grant.revision += 1;
@@ -57,14 +44,10 @@ fn history_keeps_saved_scope() -> TestResult {
         assert_eq!(fixture.current(&store)?, recreated);
         for selection in [&grant.selection, &unrelated] {
             for id in [call, selected] {
+                let mut scoped = recreated.clone();
+                scoped.grant.selection = selection.clone();
                 assert!(matches!(
-                    store.managed_query_output(
-                        selection,
-                        &original.spec.id,
-                        Some(id),
-                        10,
-                        &control,
-                    ),
+                    store.managed_result(&scoped, id, 10, &control),
                     Err(crate::Error::Package {
                         code: Code::Denied,
                         field: "whole package scope",
@@ -73,36 +56,30 @@ fn history_keeps_saved_scope() -> TestResult {
                 ));
             }
         }
+        let mut foreign = recreated.clone();
+        foreign.spec.tenant = [2; 16];
+        foreign.grant.selection = AnalysisSelectionV1::tenant([2; 16]);
         assert!(matches!(
-            store.managed_query_output(
-                &AnalysisSelectionV1::tenant([2; 16]),
-                &original.spec.id,
-                Some(call),
-                10,
-                &control,
-            ),
+            store.managed_result(&foreign, call, 10, &control),
             Err(crate::Error::Package {
                 code: Code::Missing,
-                field: "managed instance",
                 ..
             })
         ));
-        let ManagedOutput::Call { result, .. } =
-            store.managed_query_output(&broad, &original.spec.id, Some(call), 10, &control)?
-        else {
-            return Err("historical call output absent".into());
-        };
+        let mut permitted = recreated.clone();
+        permitted.grant.selection = broad.clone();
+        let result = store.managed_result(&permitted, call, 10, &control)?;
         assert!(!result.current);
-        assert_eq!(result.output, expected.output);
-        assert_eq!(result.context, expected.context);
-        assert_eq!(result.commit_revision, expected.commit_revision);
-        let ManagedOutput::Selected { data, .. } =
-            store.managed_query_output(&broad, &original.spec.id, Some(selected), 10, &control)?
-        else {
-            return Err("historical selected output absent".into());
-        };
-        assert_eq!(data.name, expected_rows.name);
-        assert_eq!(data.batches, expected_rows.batches);
+        let mut expected = expected.clone();
+        expected.current = false;
+        assert_eq!(
+            serde_json::to_value(&result)?,
+            serde_json::to_value(&expected)?
+        );
+        let selected_result = store.managed_result(&permitted, selected, 10, &control)?;
+        assert_eq!(selected_result.result, expected_selected.result);
+        assert_eq!(selected_result.receipt, expected_selected.receipt);
+        assert_eq!(selected_result.source, expected_selected.source);
         assert_eq!(
             store.managed_history(&broad, &original.spec.id, &control)?,
             std::slice::from_ref(&receipt)
@@ -115,24 +92,6 @@ fn history_keeps_saved_scope() -> TestResult {
             .ok_or("original attempt absent")?;
         assert_eq!(retained.instance().grant, original.grant);
         assert_eq!(retained.receipt(), Some(&receipt));
-        assert!(matches!(
-            store.read_tables(
-                &broad,
-                AnalysisTableRead {
-                    requests: &requests,
-                    event_ranges: None,
-                    inputs: Some(crate::AnalysisInputTables {
-                        authorized: &broad,
-                        outputs: &inputs,
-                    }),
-                    mode: AnalysisReadModeV1::Complete,
-                    now: 10,
-                },
-                AnalysisExtractLimits::default(),
-                &control,
-            ),
-            Err(crate::Error::AnalysisConflict { .. })
-        ));
         assert_eq!(
             store
                 .read_slots

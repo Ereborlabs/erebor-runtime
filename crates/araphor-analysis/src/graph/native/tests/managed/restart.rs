@@ -379,20 +379,40 @@ async fn unit_calls_keep_declared_state() -> TestResult {
         query,
         control,
         source,
+        facts,
+        authority,
         _graph,
         _directory,
         ..
     } = fixture;
     drop(_graph);
     drop(query);
-    let reopened = AnalysisStore::open(_directory.path().join("data"))?;
+    let reopened = Arc::new(AnalysisStore::open(_directory.path().join("data"))?);
     assert_eq!(reopened.processor_result(&scope)?, Some(head.clone()));
     assert_eq!(
         reopened.graph_result(source.tenant_id, &head.result_id,)?,
         Some(original)
     );
     let resumed = reopened.managed_resume(source.tenant_id, "retained-burst", &control)?;
-    let saved = reopened.managed_evaluation(&resumed.instance, &fresh.result_id, &control)?;
+    let query = Engine::new(
+        Arc::clone(&reopened),
+        araphor_query::execution::Limits::default(),
+    )?;
+    let replayed = crate::Instance::replay_result(
+        query,
+        authority,
+        Some(facts),
+        resumed.instance.grant.clone(),
+        &resumed.instance.spec.id,
+        &fresh.result_id,
+        &control,
+    )
+    .await?;
+    let saved = replayed
+        .calls
+        .get(&burst)
+        .ok_or("reopened burst replay")?
+        .evaluation();
     assert_eq!(saved.export, "detect");
     for name in ["units", "unit_removals", "records", "facts"] {
         assert_eq!(saved.input(name)?.data.rows(), 0, "{name}");
@@ -479,6 +499,7 @@ async fn graph_call_reopen_rejects_corruption() -> TestResult {
         AnalysisStore::open(&root).is_err(),
         "duplicate native unit state"
     );
+    let now = request("inspect-base")?.time_utc_ns;
     let first_result = first.results.values().next().ok_or("first Graph call")?;
     let other_result = first
         .results
@@ -492,7 +513,12 @@ async fn graph_call_reopen_rejects_corruption() -> TestResult {
         &[&other_result.result_id, &first_result.result_id],
     )?;
     assert!(restored
-        .managed_evaluation(job.admitted(), &first_result.result_id, &fixture.control)
+        .managed_result(
+            job.admitted(),
+            &first_result.result_id,
+            now,
+            &fixture.control
+        )
         .is_err());
     let root = fixture._directory.path().join("graph-call-continued-base");
     let restored = AnalysisStore::restore(&backup, &root)?;
@@ -501,7 +527,7 @@ async fn graph_call_reopen_rejects_corruption() -> TestResult {
         &[],
     )?;
     assert!(second.results.values().any(|result| restored
-        .managed_evaluation(job.admitted(), &result.result_id, &fixture.control)
+        .managed_result(job.admitted(), &result.result_id, now, &fixture.control)
         .is_err()));
     Ok(())
 }
@@ -559,41 +585,14 @@ fn retained_calls(
     now: u64,
     control: &AnalysisReadControl,
 ) -> araphor_data::Result<serde_json::Value> {
-    use snafu::ResultExt as _;
-
     let mut calls = Vec::new();
     for (call, reference) in &receipt.results {
-        let declaration = &instance.spec.manifest.calls[call];
-        let descriptor = store
-            .package_revision(
-                instance.spec.tenant,
-                &declaration.package.package_id,
-                &declaration.package.revision,
-            )?
-            .ok_or_else(|| Code::Missing.error("retained Graph descriptor"))?
-            .decode_artifact()?
-            .descriptor;
-        let evaluation = store.managed_evaluation(instance, &reference.result_id, control)?;
-        let checked = descriptor
-            .check_evaluation(&evaluation)
-            .context(araphor_data::AnalysisContractSnafu)?;
-        let input = checked
-            .encode()
-            .context(araphor_data::AnalysisContractSnafu)?;
         let result = store.managed_result(instance, &reference.result_id, now, control)?;
-        let output = sdk::wire::Output::encode_checked(&checked, &result.output)
-            .context(araphor_data::AnalysisContractSnafu)?;
         calls.push(serde_json::json!({
             "call": call,
             "reference": reference,
+            "metadata": result,
             "frozen": store.frozen_result(&reference.result_id)?,
-            "evaluation": (
-                input.export_name, input.inputs, input.parameters,
-                input.context, input.checkpoint, input.previous_outputs,
-            ),
-            "context": result.context,
-            "output": output,
-            "revision": result.commit_revision,
             "evidence": store.package_evidence(
                 instance.spec.tenant, std::slice::from_ref(&reference.result_id),
             )?,
@@ -617,18 +616,15 @@ fn managed_cut(
     let history = store.managed_history(&instance.grant.selection, id, &control)?;
     let mut outputs = Vec::new();
     for receipt in &history {
-        let selected = store
-            .managed_selected(source.tenant_id, id, &receipt.attempt, &control)?
-            .ok_or_else(|| Code::Missing.error("Graph crash selected output"))?;
-        let araphor_data::ManagedOutput::Selected { packet, .. } =
-            store.managed_output(&instance, &receipt.selected.result_id, now, &control)?
-        else {
+        let selected =
+            store.managed_result(&instance, &receipt.selected.result_id, now, &control)?;
+        if !matches!(selected.kind, araphor_data::InstanceResultKindV1::Selected) {
             return Err(Code::Invalid.error("Graph crash selected kind"));
-        };
+        }
         outputs.push(serde_json::json!({
             "receipt": receipt,
-            "selected": packet,
-            "selected_revision": selected.commit_revision,
+            "selected": selected,
+            "selected_revision": receipt.selected.commit_revision,
             "frozen": store.frozen_result(&receipt.selected.result_id)?,
             "evidence": store.package_evidence(
                 source.tenant_id, std::slice::from_ref(&receipt.selected.result_id),

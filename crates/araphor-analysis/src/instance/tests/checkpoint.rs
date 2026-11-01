@@ -1,13 +1,16 @@
 use super::*;
 
-fn checkpoint_output(
+async fn checkpoint_output(
     fixture: &Fixture,
-    instance: &Instance,
+    instance: &Arc<Instance>,
     receipt: &ManagedReceipt,
     target: &str,
     value: u64,
-) -> TestResult<araphor_data::ManagedResult> {
-    assert_eq!(fixture.selected("checkpoint", &receipt.attempt)?, [value]);
+) -> TestResult<(araphor_data::InstanceResultV1, sdk::wire::Output)> {
+    assert_eq!(
+        fixture.selected("checkpoint", &receipt.attempt).await?,
+        [value]
+    );
     assert_eq!(receipt.results.len(), 1);
     let reference = receipt.results.values().next().ok_or("checkpoint result")?;
     let result = fixture.query.store().managed_result(
@@ -17,24 +20,33 @@ fn checkpoint_output(
         &AnalysisReadControl::default(),
     )?;
     assert_eq!(reference.commit_revision, receipt.commit_revision);
-    assert_eq!(result.commit_revision, receipt.commit_revision);
-    assert_eq!(result.context.target, target);
+    assert_eq!(result.result.commit_revision, receipt.commit_revision);
+    let context = call_context(&result)?;
+    assert_eq!(context.target, target);
     if target == "native" {
-        assert!(result.context.artifact.is_some());
+        assert!(context.artifact.is_some());
     }
-    assert_eq!(result.output.datasets.len(), 1);
-    assert_eq!(result.output.datasets[0].name, "data");
-    assert_eq!(values(&result.output.datasets[0].batches)?, [value]);
-    let checkpoint = result
-        .output
-        .checkpoint
-        .as_ref()
-        .ok_or("saved checkpoint")?;
+    let replay = instance
+        .replay(&reference.result_id, &AnalysisReadControl::default())
+        .await?;
+    let returned = replay.calls.values().next().ok_or("replayed call")?;
+    let output = returned.output();
+    assert_eq!(output.datasets.len(), 1);
+    assert_eq!(output.datasets[0].name, "data");
+    assert_eq!(values(&output.datasets[0].batches)?, [value]);
+    let checkpoint = output.checkpoint.as_ref().ok_or("saved checkpoint")?;
     assert_eq!(checkpoint.version, 1);
     assert_eq!(checkpoint.datasets.len(), 1);
     assert_eq!(checkpoint.datasets[0].name, "state");
     assert_eq!(values(&checkpoint.datasets[0].batches)?, [value]);
-    Ok(result)
+    let model = instance
+        .prepared
+        .images()
+        .flat_map(|bundle| &bundle.bundle().artifacts)
+        .flat_map(|artifact| &artifact.descriptor.exports)
+        .find(|model| model.name == returned.evaluation().export)
+        .ok_or("checkpoint model")?;
+    Ok((result, sdk::wire::Output::encode_model(output, model)?))
 }
 
 async fn checkpoint_replay(target: &str) -> TestResult {
@@ -53,7 +65,7 @@ async fn checkpoint_replay(target: &str) -> TestResult {
     let initial = instance
         .run(request("initial"), &AnalysisReadControl::default())
         .await?;
-    let installed = checkpoint_output(&fixture, &instance, &initial, target, 3)?;
+    let installed = checkpoint_output(&fixture, &instance, &initial, target, 3).await?;
     assert_eq!(fixture.progress("checkpoint")?, initial.commit_revision);
     if let PackageImplementationV1::Native {
         artifact,
@@ -61,8 +73,7 @@ async fn checkpoint_replay(target: &str) -> TestResult {
         ..
     } = &image.artifacts[0].implementations[0]
     {
-        let identity = installed
-            .context
+        let identity = call_context(&installed.0)?
             .artifact
             .as_ref()
             .ok_or("native artifact")?;
@@ -87,10 +98,9 @@ async fn checkpoint_replay(target: &str) -> TestResult {
     let first = instance
         .run(request("first"), &AnalysisReadControl::default())
         .await?;
-    let original = checkpoint_output(&fixture, &instance, &first, target, 6)?;
+    let original = checkpoint_output(&fixture, &instance, &first, target, 6).await?;
     assert_eq!(fixture.progress("checkpoint")?, first.commit_revision);
-    let model = &image.artifacts[0].descriptor.exports[0];
-    let packet = sdk::wire::Output::encode_model(&original.output, model)?;
+    let packet = original.1.clone();
     let before = fixture.query.store().meta()?;
     assert_eq!(
         instance
@@ -98,7 +108,7 @@ async fn checkpoint_replay(target: &str) -> TestResult {
             .await?,
         first
     );
-    checkpoint_output(&fixture, &instance, &first, target, 6)?;
+    checkpoint_output(&fixture, &instance, &first, target, 6).await?;
     assert_eq!(fixture.progress("checkpoint")?, first.commit_revision);
     assert_eq!(fixture.query.store().meta()?, before);
     let definition = instance.admitted().spec.definition.clone();
@@ -136,23 +146,20 @@ async fn checkpoint_replay(target: &str) -> TestResult {
             .await?,
         first
     );
-    checkpoint_output(&fixture, &instance, &first, target, 6)?;
+    checkpoint_output(&fixture, &instance, &first, target, 6).await?;
     assert_eq!(fixture.progress("checkpoint")?, first.commit_revision);
     assert_eq!(fixture.query.store().meta()?, before);
     let second = instance
         .run(request("second"), &AnalysisReadControl::default())
         .await?;
-    checkpoint_output(&fixture, &instance, &second, target, 9)?;
+    checkpoint_output(&fixture, &instance, &second, target, 9).await?;
     assert_ne!(second.results, first.results);
     assert_eq!(fixture.progress("checkpoint")?, second.commit_revision);
-    let retained = checkpoint_output(&fixture, &instance, &first, target, 6)?;
-    assert!(!retained.current);
-    assert_eq!(retained.context, original.context);
-    assert_eq!(retained.commit_revision, original.commit_revision);
-    assert_eq!(
-        sdk::wire::Output::encode_model(&retained.output, model)?,
-        packet
-    );
+    let retained = checkpoint_output(&fixture, &instance, &first, target, 6).await?;
+    assert!(!retained.0.current);
+    assert_eq!(call_context(&retained.0)?, call_context(&original.0)?);
+    assert_eq!(retained.0.result, original.0.result);
+    assert_eq!(retained.1, packet);
     let before = fixture.query.store().meta()?;
     assert_eq!(
         instance
@@ -167,7 +174,7 @@ async fn checkpoint_replay(target: &str) -> TestResult {
             .await?,
         second
     );
-    checkpoint_output(&fixture, &instance, &second, target, 9)?;
+    checkpoint_output(&fixture, &instance, &second, target, 9).await?;
     assert_eq!(fixture.progress("checkpoint")?, second.commit_revision);
     assert_eq!(fixture.query.store().meta()?, before);
     drop(fixture.query.reserve_evaluation([1; 16])?);
@@ -200,9 +207,8 @@ async fn native_overflow_keeps_checkpoint() -> TestResult {
     let receipt = instance
         .run(request("initial"), &AnalysisReadControl::default())
         .await?;
-    let stored = checkpoint_output(&fixture, &instance, &receipt, "native", u64::MAX)?;
-    let model = &image.artifacts[0].descriptor.exports[0];
-    let packet = sdk::wire::Output::encode_model(&stored.output, model)?;
+    let stored = checkpoint_output(&fixture, &instance, &receipt, "native", u64::MAX).await?;
+    let packet = stored.1.clone();
     let before = fixture
         .query
         .store()
@@ -244,14 +250,11 @@ async fn native_overflow_keeps_checkpoint() -> TestResult {
         .managed_instance([1; 16], "checkpoint", &AnalysisReadControl::default())?
         .ok_or("managed instance")?;
     assert_eq!(after, before);
-    let original = checkpoint_output(&fixture, &instance, &receipt, "native", u64::MAX)?;
-    assert!(original.current);
-    assert_eq!(original.context, stored.context);
-    assert_eq!(original.commit_revision, stored.commit_revision);
-    assert_eq!(
-        sdk::wire::Output::encode_model(&original.output, model)?,
-        packet
-    );
+    let original = checkpoint_output(&fixture, &instance, &receipt, "native", u64::MAX).await?;
+    assert!(original.0.current);
+    assert_eq!(call_context(&original.0)?, call_context(&stored.0)?);
+    assert_eq!(original.0.result, stored.0.result);
+    assert_eq!(original.1, packet);
     assert_eq!(
         fixture.query.store().managed_history(
             &fixture.grant.selection,
@@ -279,13 +282,13 @@ async fn native_overflow_keeps_checkpoint() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             [1; 16],
             "checkpoint",
             "overflow",
             &AnalysisReadControl::default()
         )?
-        .is_none());
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     let mut permits = Vec::new();
     for _ in 0..4 {
         permits.push(fixture.query.reserve_evaluation([1; 16])?);
@@ -327,14 +330,11 @@ async fn native_overflow_keeps_checkpoint() -> TestResult {
         &AnalysisReadControl::default(),
     )
     .await?;
-    let recovered = checkpoint_output(&fixture, &instance, &receipt, "native", u64::MAX)?;
-    assert!(recovered.current);
-    assert_eq!(recovered.context, stored.context);
-    assert_eq!(recovered.commit_revision, stored.commit_revision);
-    assert_eq!(
-        sdk::wire::Output::encode_model(&recovered.output, model)?,
-        packet
-    );
+    let recovered = checkpoint_output(&fixture, &instance, &receipt, "native", u64::MAX).await?;
+    assert!(recovered.0.current);
+    assert_eq!(call_context(&recovered.0)?, call_context(&stored.0)?);
+    assert_eq!(recovered.0.result, stored.0.result);
+    assert_eq!(recovered.1, packet);
     assert_eq!(fixture.progress("checkpoint")?, receipt.commit_revision);
     assert_eq!(
         fixture.query.store().managed_history(
@@ -360,13 +360,13 @@ async fn native_overflow_keeps_checkpoint() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             [1; 16],
             "checkpoint",
             "overflow",
             &AnalysisReadControl::default()
         )?
-        .is_none());
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     let fence = fixture.query.store().meta()?;
     let error = instance
         .run(request("overflow"), &AnalysisReadControl::default())
@@ -521,9 +521,9 @@ async fn native_faults_reopen() -> TestResult {
     fixture.install(&image)?;
     let instance = fixture.admit("checkpoint", r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(3 AS BIGINT UNSIGNED) AS value))"#).await?;
     let initial = instance.run(request("initial"), &control).await?;
-    checkpoint_output(&fixture, &instance, &initial, "native", 3)?;
+    checkpoint_output(&fixture, &instance, &initial, "native", 3).await?;
     let prior = instance.run(request("before-fault"), &control).await?;
-    checkpoint_output(&fixture, &instance, &prior, "native", 6)?;
+    checkpoint_output(&fixture, &instance, &prior, "native", 6).await?;
     let definition = instance.admitted().spec.definition.clone();
     drop(instance);
     let mut next = image.clone();
@@ -551,7 +551,6 @@ async fn native_faults_reopen() -> TestResult {
         destination: araphor_data::ManagedDestination::Selected,
     };
     drop(prepared);
-    let model = &image.artifacts[0].descriptor.exports[0];
     let mut candidate_generation = None;
     for mode in ["panic", "abort"] {
         let before = fixture
@@ -574,15 +573,12 @@ async fn native_faults_reopen() -> TestResult {
             &control,
         )?;
         assert_eq!(prior_history.len(), if mode == "panic" { 2 } else { 3 });
-        let stored = prior_history
-            .iter()
-            .zip([3, 6, 9])
-            .map(|(receipt, value)| {
-                let result = checkpoint_output(&fixture, &instance, receipt, "native", value)?;
-                let packet = sdk::wire::Output::encode_model(&result.output, model)?;
-                Ok((receipt.clone(), result.context, packet))
-            })
-            .collect::<TestResult<Vec<_>>>()?;
+        let mut stored = Vec::new();
+        for (receipt, value) in prior_history.iter().zip([3, 6, 9]) {
+            let (metadata, packet) =
+                checkpoint_output(&fixture, &instance, receipt, "native", value).await?;
+            stored.push((receipt.clone(), call_context(&metadata)?.clone(), packet));
+        }
         drop(instance);
         let Fixture {
             directory,
@@ -679,7 +675,7 @@ async fn native_faults_reopen() -> TestResult {
             ));
             assert_eq!(fixture.query.store().meta()?, fence);
             let recovered = instance.run(request("after-abort"), &control).await?;
-            checkpoint_output(&fixture, &instance, &recovered, "native", 12)?;
+            checkpoint_output(&fixture, &instance, &recovered, "native", 12).await?;
             assert!(recovered.commit_revision > current.progress);
             let current = fixture
                 .query
@@ -757,15 +753,14 @@ async fn native_faults_reopen() -> TestResult {
             recovered,
             "native",
             if mode == "panic" { 9 } else { 12 },
-        )?;
+        )
+        .await?;
         let fence = fixture.query.store().meta()?;
         for ((receipt, context, packet), value) in stored.iter().zip([3, 6, 9]) {
-            let result = checkpoint_output(&fixture, &instance, receipt, "native", value)?;
-            assert_eq!(&result.context, context);
-            assert_eq!(
-                &sdk::wire::Output::encode_model(&result.output, model)?,
-                packet
-            );
+            let (metadata, actual) =
+                checkpoint_output(&fixture, &instance, receipt, "native", value).await?;
+            assert_eq!(call_context(&metadata)?, context);
+            assert_eq!(&actual, packet);
             assert_eq!(
                 instance.run(request(&receipt.attempt), &control).await?,
                 *receipt

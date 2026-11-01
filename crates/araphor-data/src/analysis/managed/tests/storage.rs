@@ -58,32 +58,21 @@ fn verify_publication(store: &AnalysisStore, receipt: &ManagedReceipt) -> TestRe
         let mut count = 0;
         for row in rows {
             let (id, processor, body, metadata) = row.context(crate::AnalysisDatabaseSnafu { operation: "decode managed charge row" })?;
-            assert!(!id.is_empty() && !processor.is_empty() && !body.is_empty() && !metadata.is_empty());
+            assert!(!id.is_empty() && !processor.is_empty() && !metadata.is_empty());
+            if id == receipt.selected.result_id {
+                assert_eq!(processor, "managed-definition-v1");
+                assert!(body.is_empty());
+            } else {
+                let state = ManagedCodec::decode::<Option<sdk::wire::Checkpoint>>(&body)
+                    .context(crate::ManagedDecodingSnafu)?;
+                assert!(state.is_some());
+            }
             count += 1;
         }
         assert_eq!(count, 3);
-        let mut payloads = reader.prepare(
-            "SELECT result_id, role, ipc FROM managed_arrow WHERE result_id IN (?, ?, ?)",
-        ).context(crate::AnalysisDatabaseSnafu { operation: "prepare managed charge payloads" })?;
-        let payloads = payloads.query_map(
-            params![references[0].result_id, references[1].result_id, references[2].result_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Vec<u8>>(2)?)),
-        ).context(crate::AnalysisDatabaseSnafu { operation: "read managed charge payloads" })?;
-        let mut roles = BTreeMap::<String, usize>::new();
-        let mut large = 0;
-        for payload in payloads {
-            let (id, role, ipc) = payload.context(crate::AnalysisDatabaseSnafu { operation: "decode managed charge payload" })?;
-            assert!(!id.is_empty() && !role.is_empty() && !ipc.is_empty());
-            if role == "reason" && ipc.len() > 16 * 1024 * 1024 {
-                large += 1;
-            }
-            *roles.entry(role).or_default() += 1;
-        }
-        assert_eq!(large, 1);
-        assert_eq!(roles, BTreeMap::from([
-            ("checkpoint".into(), 2), ("input".into(), 2), ("output".into(), 2),
-            ("parameters".into(), 2), ("reason".into(), 2), ("selected".into(), 1),
-        ]));
+        let copies: u64 = reader.query_row("SELECT count(*) FROM information_schema.tables WHERE table_name = 'managed_arrow'", [], |row| row.get(0))
+            .context(crate::AnalysisDatabaseSnafu { operation: "check removed managed payload table" })?;
+        assert_eq!(copies, 0);
         let mut edges = reader.prepare(
             "SELECT result_id, dependency_id FROM managed_edges WHERE result_id IN (?, ?, ?)",
         ).context(crate::AnalysisDatabaseSnafu { operation: "prepare managed charge edges" })?;
@@ -232,13 +221,16 @@ fn large_contract_preserves_bytes() -> TestResult {
         )?
         .ok_or("pending attempt absent")?;
     assert_eq!(ManagedCodec::encode(&pending.0)?, pending_bytes);
-    let rows: (u64, u64) = store.read_snapshot(|reader| {
-        reader.query_row(
-        "SELECT (SELECT count(*) FROM analysis_results), (SELECT count(*) FROM managed_arrow)",
-        [], |row| Ok((row.get(0)?, row.get(1)?)),
-    ).context(crate::AnalysisDatabaseSnafu { operation: "read denied managed publication" })
+    let rows: u64 = store.read_snapshot(|reader| {
+        reader
+            .query_row("SELECT count(*) FROM analysis_results", [], |row| {
+                row.get(0)
+            })
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "read denied managed publication",
+            })
     })?;
-    assert_eq!(rows, (0, 0));
+    assert_eq!(rows, 0);
     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
     verify_publication(&store, &receipt)?;
     let ids = vec![receipt.results[&10].result_id.clone(); 65];
@@ -288,26 +280,14 @@ fn large_contract_preserves_bytes() -> TestResult {
                 10,
                 &AnalysisReadControl::default(),
             )?;
-            let expected = &outputs[(call - 10) as usize];
-            assert_eq!(saved.commit_revision, receipt.commit_revision);
+            assert_eq!(saved.result, receipt.results[&call]);
+            assert_eq!(saved.receipt, receipt);
             assert_eq!(
-                saved.output.datasets[0].batches,
-                expected.datasets[0].batches
-            );
-            assert_eq!(saved.output.evidence, expected.evidence);
-            assert_eq!(saved.output.reasons[0].details, expected.reasons[0].details);
-            assert_eq!(
-                saved
-                    .output
+                fixture.checkpoint(store, &saved.result)?.datasets[0].batches,
+                outputs[(call - 10) as usize]
                     .checkpoint
                     .as_ref()
-                    .ok_or("checkpoint absent")?
-                    .datasets[0]
-                    .batches,
-                expected
-                    .checkpoint
-                    .as_ref()
-                    .ok_or("expected checkpoint absent")?
+                    .ok_or("expected checkpoint")?
                     .datasets[0]
                     .batches
             );

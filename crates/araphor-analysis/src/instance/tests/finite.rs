@@ -64,8 +64,8 @@ async fn guest_failure_persists(target: &str, modes: &[(&str, Code)]) -> TestRes
         assert!(fixture
             .query
             .store()
-            .managed_selected([1; 16], mode, &input.id, &AnalysisReadControl::default())?
-            .is_none());
+            .managed_attempt([1; 16], mode, &input.id, &AnalysisReadControl::default())?
+            .is_none_or(|attempt| attempt.receipt().is_none()));
         assert_eq!(fixture.progress(mode)?, 0);
         assert_eq!(fixture.query.memory().input_reserved(), held);
         let permits = (0..4)
@@ -179,8 +179,8 @@ async fn guest_failure_persists(target: &str, modes: &[(&str, Code)]) -> TestRes
         assert!(fixture
             .query
             .store()
-            .managed_selected([1; 16], mode, &retry.id, &AnalysisReadControl::default())?
-            .is_none());
+            .managed_attempt([1; 16], mode, &retry.id, &AnalysisReadControl::default())?
+            .is_none_or(|attempt| attempt.receipt().is_none()));
         assert!(fixture
             .query
             .store()
@@ -240,7 +240,7 @@ async fn finite_sql_preserves_progress() -> TestResult {
     let receipt = instance
         .run(request("success"), &AnalysisReadControl::default())
         .await?;
-    assert_eq!(fixture.selected("sql-failure", "success")?, [7]);
+    assert_eq!(fixture.selected("sql-failure", "success").await?, [7]);
     fixture.context(2)?;
     let input = request("invalid-native-value");
     let error = instance
@@ -286,17 +286,17 @@ async fn finite_sql_preserves_progress() -> TestResult {
         }
     ));
     assert_eq!(status.status_progress, receipt.commit_revision);
-    assert_eq!(fixture.selected("sql-failure", "success")?, [7]);
+    assert_eq!(fixture.selected("sql-failure", "success").await?, [7]);
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             [1; 16],
             "sql-failure",
             &input.id,
             &AnalysisReadControl::default()
         )?
-        .is_none());
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     Ok(())
 }
 
@@ -355,13 +355,13 @@ async fn failed_publication_rolls_back() -> TestResult {
         assert!(fixture
             .query
             .store()
-            .managed_selected(
+            .managed_attempt(
                 [1; 16],
                 "publication",
                 &input.id,
                 &AnalysisReadControl::default()
             )?
-            .is_none());
+            .is_none_or(|attempt| attempt.receipt().is_none()));
         let before = fixture.query.store().meta()?;
         let error = instance
             .run(input, &AnalysisReadControl::default())
@@ -385,18 +385,11 @@ async fn failed_publication_rolls_back() -> TestResult {
             .await?;
         assert!(receipt.commit_revision > before.commit_revision);
         assert_eq!(fixture.progress("publication")?, receipt.commit_revision);
-        let selected = fixture
-            .query
-            .store()
-            .managed_selected(
-                [1; 16],
-                "publication",
-                &receipt.attempt,
-                &AnalysisReadControl::default(),
-            )?
-            .ok_or("healthy publication selected output")?;
-        assert_eq!(selected.data.batches.len(), 1);
-        let batch = &selected.data.batches[0];
+        let selected = instance
+            .replay(&receipt.selected.result_id, &AnalysisReadControl::default())
+            .await?;
+        assert_eq!(selected.batches.len(), 1);
+        let batch = &selected.batches[0];
         assert_eq!(batch.num_rows(), 1);
         let values = batch
             .column(0)
@@ -451,8 +444,8 @@ async fn finite_busy_keeps_attempt() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected([1; 16], "busy", &input.id, &AnalysisReadControl::default())?
-        .is_none());
+        .managed_attempt([1; 16], "busy", &input.id, &AnalysisReadControl::default())?
+        .is_none_or(|attempt| attempt.receipt().is_none()));
     drop(pressure);
     drop(fixture.query.reserve_evaluation([1; 16])?);
     drop(fixture.query.memory().reserve_output(OUTPUT)?);

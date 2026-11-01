@@ -65,7 +65,7 @@ impl AnalysisStore {
                                 PARTITION BY interval_id
                                 ORDER BY profile_revision DESC, commit_revision DESC, result_id DESC
                             ) AS rank
-                        FROM analysis_results
+                        FROM analysis_result_state
                         WHERE tenant_id = ? AND processor_id = ?
                           AND method_version = ? AND stream_key = ?
                     )
@@ -232,7 +232,7 @@ impl AnalysisStore {
             #[cfg(test)]
             control.test_snapshot()?;
             let (selection, _) = self.resolve_selection_filtered(
-                snapshot, selection, control, limits, context_owners,
+                snapshot, selection, control, limits, context_owners, None,
             )?;
             let selection = selection.as_ref();
             let mut revision = if graph_results {
@@ -391,11 +391,29 @@ impl AnalysisStore {
                     })?;
                 revision = revision.max(changed.unwrap_or(0));
             }
+            if tables.contains_key("discovery_state") {
+                let mut notices = snapshot.prepare(
+                    "SELECT MAX(n.commit_revision) FROM result_notices n
+                     JOIN analysis_results r ON r.tenant_id = n.tenant_id AND r.result_id = n.result_id
+                     WHERE r.tenant_id = ? AND r.processor_id = 'discovery'
+                        AND r.stream_key = ? AND n.commit_revision <= ?",
+                ).context(AnalysisDatabaseSnafu { operation: "prepare discovery notice dependencies" })?;
+                for source in selection.sources.as_slice() {
+                    control.check()?;
+                    let changed: Option<u64> = notices.query_row(
+                        params![source.tenant_id.as_slice(), source.key(), meta.commit_revision],
+                        |row| row.get(0),
+                    ).context(AnalysisDatabaseSnafu { operation: "read discovery notice dependencies" })?;
+                    revision = revision.max(changed.unwrap_or(0));
+                }
+            }
             let mut graphs = snapshot.prepare(
-                "SELECT MAX(GREATEST(commit_revision,
-                    CASE WHEN ? THEN LEAST(COALESCE(facts_revision, 0), ?) ELSE 0 END))
-                 FROM analysis_results WHERE tenant_id = ? AND processor_id = ?
-                    AND result_id = ? AND commit_revision <= ?",
+                "SELECT MAX(GREATEST(r.commit_revision,
+                    CASE WHEN ? THEN COALESCE((SELECT MAX(n.commit_revision)
+                        FROM result_notices n WHERE n.tenant_id = r.tenant_id
+                            AND n.result_id = r.result_id AND n.commit_revision <= ?), 0) ELSE 0 END))
+                 FROM analysis_results r WHERE r.tenant_id = ? AND r.processor_id = ?
+                    AND r.result_id = ? AND r.commit_revision <= ?",
             ).context(AnalysisDatabaseSnafu { operation: "prepare graph dependencies" })?;
             for id in selection.graphs.as_slice() {
                 control.check()?;
@@ -891,19 +909,21 @@ mod tests {
             fixture.request.coverage_revision,
             || Ok(()),
         )?;
+        let noticed = fixture.store.meta()?.commit_revision;
+        assert_eq!(noticed, current + 1);
         assert_eq!(
             fixture
                 .store
                 .dependency_revision_for(&selection, &notices, &control)?
                 .1,
-            current
+            noticed
         );
         assert_eq!(
             fixture
                 .store
                 .dependency_revision_for(&selection, &all, &control)?
                 .1,
-            current
+            noticed
         );
         assert_eq!(
             fixture

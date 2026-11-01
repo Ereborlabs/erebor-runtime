@@ -51,7 +51,7 @@ impl ClientGrpcOwner {
             | PackageRequestV1::InspectInstance { .. }
             | PackageRequestV1::InspectInstanceHistory { .. }
             | PackageRequestV1::ReadInstanceResult { .. }
-            | PackageRequestV1::QueryInstanceResult { .. }) => {
+            | PackageRequestV1::ReplayInstanceResult { .. }) => {
                 self.instance_request(grant.clone(), instance, control.clone())
                     .await?
             }
@@ -64,7 +64,7 @@ impl ClientGrpcOwner {
             }
         };
         let result = araphor_query::execution::Engine::blocking(control.clone(), (), move || {
-            Ok(Self::package_response(&response))
+            Ok(response.encode().map_err(Self::image_failure))
         })
         .await
         .map_err(Self::failure)??;
@@ -83,10 +83,6 @@ impl ClientGrpcOwner {
             ));
         }
         Ok(proto::PackageOperationReply { result })
-    }
-
-    pub(super) fn package_response(response: &PackageResponseV1) -> Result<Vec<u8>, Status> {
-        response.encode().map_err(Self::image_failure)
     }
 
     async fn definition_request(

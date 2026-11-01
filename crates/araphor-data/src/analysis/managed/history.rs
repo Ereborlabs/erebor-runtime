@@ -54,8 +54,7 @@ impl AnalysisStore {
                             || !receipt.matches_frontier(&attempt.request.frontier)
                             || receipt.selected.result_id.is_empty() || receipt.selected.commit_revision != completed
                             || receipt.results.iter().any(|(call, reference)| !spec.manifest.calls.contains_key(call)
-                                || reference.result_id.is_empty() || (reference.commit_revision != completed
-                                    && !attempt.retains(&spec, *call, reference)))
+                                || reference.result_id.is_empty() || reference.commit_revision != completed)
                         {
                             return Err(Code::Invalid.error("managed history receipt"));
                         }

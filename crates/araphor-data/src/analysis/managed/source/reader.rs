@@ -1,145 +1,65 @@
 use super::*;
 
 impl AnalysisStore {
-    pub(in crate::analysis::managed) fn check_source_header(
+    pub(in crate::analysis::managed) fn check_managed_progress(
         reader: &Connection,
-        tenant: [u8; 16],
-        id: &str,
-        step: &Step,
-        revision: u64,
+        capture: &super::super::model::Capture,
     ) -> Result<()> {
-        let mut statement = reader
-            .prepare_cached(
-                "SELECT dependency_id, commit_revision FROM managed_edges
-             WHERE tenant_id = ? AND result_id = ? AND kind = 'source'",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare managed source parent",
-            })?;
-        let parents = statement
-            .query_map(params![tenant.as_slice(), id], |row| {
-                Ok(PackageResultRefV1 {
-                    result_id: row.get(0)?,
-                    commit_revision: row.get(1)?,
-                })
-            })
-            .context(AnalysisDatabaseSnafu {
-                operation: "read managed source parent",
-            })?
-            .collect::<duckdb::Result<Vec<_>>>()
-            .context(AnalysisDatabaseSnafu {
-                operation: "decode managed source parent",
-            })?;
-        let expected = step
-            .source
-            .as_ref()
-            .and_then(|source| match &source.contract.read {
-                ManagedSourceRead::Initial => None,
-                ManagedSourceRead::Changes(parent) => Some(&parent.result),
-            });
-        if !parents.iter().eq(expected) {
-            return Err(Code::Invalid.error("managed source parent edge"));
-        }
-        let count: u64 = reader
-            .query_row(
-                "SELECT count(*) FROM managed_arrow WHERE result_id = ? AND role = 'source'",
-                params![id],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read managed source payload count",
-            })?;
-        let Some(source) = &step.source else {
-            if count != 0 {
-                return Err(Code::Invalid.error("unexpected managed source payload"));
-            }
-            return Ok(());
-        };
-        if source
-            .tables
-            .iter()
-            .any(|table| table.batches == 0 && table.rows != 0)
-            || count
-                != source
-                    .tables
-                    .iter()
-                    .filter(|table| table.batches != 0)
-                    .count() as u64
+        let progress: u64 = reader.query_row(
+            "SELECT COALESCE(MAX(r.commit_revision), 0) FROM managed_attempts a
+             JOIN analysis_results r ON r.tenant_id = a.tenant_id AND r.commit_revision = a.completed
+             WHERE a.tenant_id = ? AND a.instance_id = ? AND a.generation = ?
+                AND r.processor_id = 'managed-definition-v1' AND r.commit_revision <= ?",
+            params![capture.tenant.as_slice(), capture.instance, capture.expected_generation, capture.revision],
+            |row| row.get(0),
+        ).context(AnalysisDatabaseSnafu { operation: "validate captured success frontier" })?;
+        if capture.progress != progress
+            || capture.progress > capture.completed
+            || capture.completed > capture.revision
         {
-            return Err(Code::Invalid.error("managed source payload count"));
-        }
-        let attempt = Self::managed_attempt_from(reader, tenant, &step.instance, &step.attempt)?
-            .ok_or_else(|| Code::Missing.error("managed source attempt"))?;
-        if attempt.capture.source.as_ref() != Some(&source.contract)
-            || source.contract.position.commit_revision != attempt.capture.revision
-            || source.contract.position.ordinal != u32::MAX
-            || !source.contract.selection.valid()
-            || source.contract.selection.tenant_id != tenant
-            || attempt.capture.generation == 0
-            || attempt.capture.revision >= revision
-        {
-            return Err(Code::Invalid.error("managed source capture contract"));
-        }
-        if let ManagedSourceRead::Changes(parent) = &source.contract.read {
-            if parent.result.commit_revision != attempt.capture.progress
-                || parent.result.commit_revision >= revision
-                || parent.position.ordinal != u32::MAX
-                || parent.position > source.contract.position
-            {
-                return Err(Code::Invalid.error("managed source captured parent"));
-            }
-            let (metadata, saved): (Vec<u8>, u64) = reader
-                .query_row(
-                    "SELECT request_meta, commit_revision FROM analysis_results
-                 WHERE tenant_id = ? AND result_id = ? AND processor_id = 'managed-definition-v1'",
-                    params![tenant.as_slice(), parent.result.result_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read source parent contract",
-                })?;
-            let prior: Step =
-                ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
-            let record = prior
-                .source
-                .as_ref()
-                .ok_or_else(|| Code::Missing.error("managed source parent record"))?;
-            let old = Self::managed_attempt_from(reader, tenant, &prior.instance, &prior.attempt)?
-                .ok_or_else(|| Code::Missing.error("managed source parent attempt"))?;
-            if saved != parent.result.commit_revision
-                || prior.instance != step.instance
-                || record.contract.position != parent.position
-                || record.contract.selection != source.contract.selection
-                || record.contract.tables != source.contract.tables
-                || record.contract.event_ranges != source.contract.event_ranges
-                || old.capture.source.as_ref() != Some(&record.contract)
-                || old.capture.generation != attempt.capture.generation
-                || old.capture.store != attempt.capture.store
-                || old.capture.schema != attempt.capture.schema
-                || old.capture.recovery != attempt.capture.recovery
-                || old.terminal.is_some()
-                || old.receipt.as_ref().is_none_or(|receipt| {
-                    receipt.selected != parent.result
-                        || receipt.commit_revision != saved
-                        || receipt.attempt != prior.attempt
-                })
-            {
-                return Err(Code::Invalid.error("managed source parent contract"));
-            }
-        }
-        let names = source
-            .contract
-            .tables
-            .iter()
-            .filter(|(_, columns)| columns.is_some())
-            .map(|(name, _)| name.as_str());
-        if !names.eq(source.tables.iter().map(|table| table.name.as_str())) {
-            return Err(Code::Invalid.error("managed source captured tables"));
-        }
-        for table in &source.tables {
-            source.schema(&table.name)?;
+            return Err(Code::Invalid.error("managed captured progress"));
         }
         Ok(())
+    }
+
+    pub(in crate::analysis) fn managed_parent_from(
+        reader: &Connection,
+        reference: &super::super::model::ManagedAttempt,
+    ) -> Result<Option<ManagedSourceRef>> {
+        let capture = &reference.0.capture;
+        Self::check_managed_progress(reader, capture)?;
+        if capture.progress == 0
+            || capture.rebuild
+            || capture.generation != capture.expected_generation
+        {
+            return Ok(None);
+        }
+        let mut instance = reference.instance().clone();
+        instance.generation = capture.expected_generation;
+        instance.progress = capture.progress;
+        let (source, parent) = Self::managed_source_at(reader, &instance)?
+            .ok_or_else(|| Code::Missing.error("managed source parent"))?;
+        if parent.capture.store != capture.store
+            || parent.capture.schema != capture.schema
+            || parent.capture.recovery == 0
+            || parent.capture.recovery > capture.recovery
+            || parent.capture.grant.selection != capture.grant.selection
+            || source.result.commit_revision > capture.revision
+        {
+            return Err(Code::Conflict.error("managed source parent basis"));
+        }
+        Ok(Some(source))
+    }
+
+    pub fn managed_parent(
+        &self,
+        reference: &super::super::model::ManagedAttempt,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<ManagedSourceRef>> {
+        let mut reader = self.reader_until(control)?;
+        control.run(&mut reader, |reader| {
+            Self::managed_parent_from(reader, reference)
+        })
     }
 
     pub(in crate::analysis::managed) fn capture_source(
@@ -148,58 +68,91 @@ impl AnalysisStore {
         read: &AnalysisTableRead<'_>,
         selection: &AnalysisSelectionV1,
         meta: &AnalysisStoreMetaV1,
-    ) -> Result<Option<SourceContract>> {
+        context_owners: Option<&BTreeSet<String>>,
+    ) -> Result<Option<Arc<ManagedSourceFrame>>> {
         let Some(mode) = &request.source else {
             return Ok(None);
         };
         let head = Self::managed_source_head(reader, request.expected())?;
         match (mode, read.mode) {
             (ManagedSourceRead::Initial, AnalysisReadModeV1::Complete)
-                if head.is_none() || request.rebuild => {}
+                if head.is_none()
+                    || request.rebuild
+                    || request.instance.generation != request.expected().generation => {}
             (ManagedSourceRead::Changes(parent), AnalysisReadModeV1::Changes(after))
                 if head.as_ref() == Some(parent) && after == parent.position =>
             {
-                let (step, _, _) = Self::managed_step_header(
+                let (step, _) = Self::managed_step_header(
                     reader,
                     request.instance.spec.tenant,
                     &parent.result.result_id,
                 )?;
-                let (attempt, _) = Self::validate_selected_header(
+                let attempt = Self::managed_attempt_from(
                     reader,
                     request.instance.spec.tenant,
-                    &parent.result.result_id,
-                    &step,
-                    parent.result.commit_revision,
-                )?;
+                    &step.instance,
+                    &step.attempt,
+                )?
+                .ok_or_else(|| Code::Missing.error("managed source parent attempt"))?;
+                if attempt.terminal.is_some()
+                    || attempt.receipt.as_ref().is_none_or(|receipt| {
+                        receipt.selected != parent.result
+                            || receipt.commit_revision != parent.result.commit_revision
+                            || receipt.instance != step.instance
+                            || receipt.attempt != step.attempt
+                    })
+                {
+                    return Err(Code::Conflict.error("managed source parent receipt"));
+                }
                 if attempt.capture.store != meta.store_uuid
                     || attempt.capture.schema != meta.schema_version
-                    || attempt.capture.recovery != meta.recovery_epoch
+                    || attempt.capture.recovery == 0
+                    || attempt.capture.recovery > meta.recovery_epoch
                     || attempt.capture.generation != request.instance.generation
                 {
                     return Err(Code::Conflict.error("managed source store basis"));
                 }
-                let prior = step
-                    .source
-                    .ok_or_else(|| Code::Missing.error("managed source parent"))?;
-                if prior.contract.tables != *read.requests
-                    || prior.contract.selection != *selection
-                    || prior.contract.event_ranges.as_deref() != read.event_ranges
-                {
-                    return Err(Code::Conflict.error("managed source capture scope"));
-                }
             }
             _ => return Err(Code::Conflict.error("managed source read mode")),
         }
-        if read.inputs.is_some() {
-            return Err(Code::Unsupported.error("managed source model input"));
-        }
+        SourceScope::capture(
+            &request.instance,
+            meta,
+            mode.clone(),
+            read,
+            selection,
+            context_owners,
+        )?
+        .map(Some)
+        .ok_or_else(|| Code::Unsupported.error("managed source projection"))
+    }
+}
+
+impl SourceScope {
+    pub(in crate::analysis::managed) fn capture(
+        instance: &ManagedInstance,
+        meta: &AnalysisStoreMetaV1,
+        mode: ManagedSourceRead,
+        read: &AnalysisTableRead<'_>,
+        selection: &AnalysisSelectionV1,
+        context_owners: Option<&BTreeSet<String>>,
+    ) -> Result<Option<Arc<ManagedSourceFrame>>> {
         for (name, columns) in read.requests {
             let Some(columns) = columns else {
                 continue;
             };
-            let schema = Self::table_schemas()
+            let schema = AnalysisStore::table_schemas()
                 .get(name)
                 .ok_or_else(|| Code::Invalid.error("managed source schema"))?;
+            if AnalysisTableRead::source_header(name) {
+                schema
+                    .project(&columns.iter().copied().collect::<Vec<_>>())
+                    .context(crate::PackageArrowSnafu)?;
+                continue;
+            }
+            if !AnalysisTableRead::source_rows(name) {
+                return Ok(None);
+            }
             let field = schema
                 .fields()
                 .first()
@@ -210,19 +163,25 @@ impl AnalysisStore {
                 .ok_or_else(|| Code::Invalid.error("managed source keys"))?;
             for key in keys.split(',') {
                 if !columns.contains(&schema.index_of(key).context(crate::PackageArrowSnafu)?) {
-                    return Err(Code::Invalid.error("managed source key projection"));
+                    return Ok(None);
                 }
             }
             for name in ["commit_revision", "ordinal", "received_utc_ns"] {
                 if let Ok(index) = schema.index_of(name) {
                     if !columns.contains(&index) {
-                        return Err(Code::Invalid.error("managed source position projection"));
+                        return Ok(None);
                     }
                 }
             }
         }
-        Ok(Some(SourceContract {
-            read: mode.clone(),
+        let scope = Arc::new(Self {
+            tenant: instance.spec.tenant,
+            instance: instance.spec.id.clone(),
+            generation: instance.generation,
+            store: meta.store_uuid,
+            schema: meta.schema_version,
+            recovery: meta.recovery_epoch,
+            read: mode,
             position: StorePositionV1 {
                 commit_revision: meta.commit_revision,
                 ordinal: u32::MAX,
@@ -230,13 +189,93 @@ impl AnalysisStore {
             selection: selection.clone(),
             tables: read.requests.clone(),
             event_ranges: read.event_ranges.map(<[_]>::to_vec),
-        }))
+            context_owners: context_owners.cloned(),
+        });
+        Ok(Some(Arc::new(ManagedSourceFrame::new(
+            Vec::new(),
+            BTreeMap::new(),
+            scope,
+        ))))
     }
+}
 
+impl ManagedSourceFrame {
+    pub fn check_before(&self, reference: &super::super::model::ManagedAttempt) -> Result<()> {
+        let capture = &reference.0.capture;
+        let ManagedSourceRead::Changes(parent) = self.read() else {
+            return Err(Code::Conflict.error("managed before parent"));
+        };
+        if reference
+            .receipt()
+            .is_none_or(|receipt| receipt.selected != parent.result)
+            || parent.position
+                != (StorePositionV1 {
+                    commit_revision: capture.revision,
+                    ordinal: u32::MAX,
+                })
+            || self.scope.tenant != capture.tenant
+            || self.scope.instance != capture.instance
+            || self.scope.generation != capture.generation
+            || self.scope.store != capture.store
+            || self.scope.schema != capture.schema
+            || capture.recovery == 0
+            || capture.recovery > self.scope.recovery
+        {
+            return Err(Code::Conflict.error("managed before owner"));
+        }
+        Ok(())
+    }
+}
+
+impl super::super::model::ManagedCapture {
+    pub(in crate::analysis) fn seal_source(
+        &mut self,
+        page: &mut crate::AnalysisPositionPageV1,
+        control: &AnalysisReadControl,
+    ) -> Result<()> {
+        let Some(source) = self.source.as_mut() else {
+            return Ok(());
+        };
+        let frame =
+            Arc::get_mut(source).ok_or_else(|| Code::Conflict.error("shared source capture"))?;
+        frame.tables = frame
+            .scope
+            .tables
+            .iter()
+            .filter(|(_, columns)| columns.is_some())
+            .map(|(name, _)| sdk::Dataset {
+                name: name.clone(),
+                batches: page.tables.get(name).cloned().unwrap_or_default(),
+            })
+            .collect();
+        frame.removals = page.removals.clone();
+        frame.check_tables()?;
+        let buffers = frame
+            .datasets()
+            .iter()
+            .flat_map(|data| &data.batches)
+            .flat_map(sdk::RecordBatch::columns)
+            .map(|array| array.get_buffer_memory_size())
+            .sum::<usize>();
+        let bytes = frame.allocated_bytes();
+        page.extraction.charge(bytes.saturating_sub(buffers))?;
+        self.bytes = self.bytes.saturating_add(bytes);
+        control.check()
+    }
+}
+
+impl AnalysisStore {
     pub(in crate::analysis::managed) fn managed_source_head(
         reader: &Connection,
         instance: &ManagedInstance,
     ) -> Result<Option<ManagedSourceRef>> {
+        Ok(Self::managed_source_at(reader, instance)?.map(|(source, _)| source))
+    }
+
+    fn managed_source_at(
+        reader: &Connection,
+        instance: &ManagedInstance,
+    ) -> Result<Option<(ManagedSourceRef, Attempt)>> {
         if instance.progress == 0 {
             return Ok(None);
         }
@@ -257,6 +296,7 @@ impl AnalysisStore {
         let attempt: Attempt = ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
         let receipt = attempt
             .receipt
+            .as_ref()
             .filter(|receipt| {
                 receipt.instance == instance.spec.id
                     && receipt.attempt == attempt.request.id
@@ -268,7 +308,7 @@ impl AnalysisStore {
                     && attempt.terminal.is_none()
             })
             .ok_or_else(|| Code::Invalid.error("committed source receipt"))?;
-        let (step, _, revision) =
+        let (step, revision) =
             Self::managed_step_header(reader, instance.spec.tenant, &receipt.selected.result_id)?;
         if step.instance != instance.spec.id
             || step.attempt != receipt.attempt
@@ -276,214 +316,16 @@ impl AnalysisStore {
         {
             return Err(Code::Invalid.error("committed source step"));
         }
-        Ok(step.source.map(|source| ManagedSourceRef {
-            result: receipt.selected,
-            position: source.contract.position,
-        }))
-    }
-
-    pub fn managed_source_history<E: From<crate::Error>>(
-        &self,
-        instance: &ManagedInstance,
-        reference: &ManagedSourceRef,
-        control: &AnalysisReadControl,
-        mut reserve: impl FnMut(usize) -> std::result::Result<(), E>,
-        mut apply: impl FnMut(ManagedSourceFrame) -> std::result::Result<(), E>,
-    ) -> std::result::Result<(), E> {
-        instance.validate()?;
-        let mut reader = self.reader_until(control)?;
-        control
-            .run(&mut reader, |reader| {
-                let current =
-                    Self::managed_instance_from(reader, instance.spec.tenant, &instance.spec.id)?
-                        .filter(|current| current == instance)
-                        .ok_or_else(|| Code::Conflict.error("managed source owner"))?;
-                if Self::managed_source_head(reader, &current)?.as_ref() != Some(reference) {
-                    return Err(Code::Conflict.error("managed source head"));
-                }
-                let mut history = Vec::new();
-                let meta = Self::read_meta_from(reader, &self.root.join("analysis.duckdb"))?;
-                let mut next = reference.clone();
-                loop {
-                    control.check()?;
-                    let (step, _, revision) = Self::managed_step_header(
-                        reader,
-                        instance.spec.tenant,
-                        &next.result.result_id,
-                    )?;
-                    let (attempt, _) = Self::validate_selected_header(
-                        reader,
-                        instance.spec.tenant,
-                        &next.result.result_id,
-                        &step,
-                        revision,
-                    )?;
-                    if attempt.capture.generation != instance.generation
-                        || attempt.capture.store != meta.store_uuid
-                        || attempt.capture.schema != meta.schema_version
-                        || attempt.capture.recovery != meta.recovery_epoch
-                    {
-                        return Err(Code::Conflict.error("managed source store basis"));
-                    }
-                    let source = step
-                        .source
-                        .ok_or_else(|| Code::Missing.error("managed source basis"))?;
-                    if step.instance != instance.spec.id
-                        || revision != next.result.commit_revision
-                        || source.contract.position != next.position
-                    {
-                        return Err(Code::Invalid.error("managed source history"));
-                    }
-                    let parent = match &source.contract.read {
-                        ManagedSourceRead::Initial => None,
-                        ManagedSourceRead::Changes(parent) => {
-                            if parent.result.commit_revision >= revision
-                                || parent.position > next.position
-                            {
-                                return Err(Code::Invalid.error("managed source parent"));
-                            }
-                            Some(parent.clone())
-                        }
-                    };
-                    let scope =
-                        Arc::new(SourceScope::new(&attempt.capture, source.contract.clone()));
-                    history.push((
-                        next.result.clone(),
-                        source,
-                        step.witnesses,
-                        step.contexts,
-                        scope,
-                    ));
-                    let Some(parent) = parent else {
-                        break;
-                    };
-                    next = parent;
-                }
-                history.reverse();
-                let mut members = BTreeSet::new();
-                for (result, record, witnesses, contexts, scope) in history {
-                    for metadata in &record.metadata {
-                        let key = metadata.receipt.identity.key();
-                        if matches!(metadata.state, ManagedSourceState::Initial { .. })
-                            != !members.contains(&key)
-                        {
-                            return Err(Code::Invalid.error("managed source membership transition"));
-                        }
-                        members.insert(key);
-                    }
-                    let frame = match Self::managed_source_frame(
-                        reader,
-                        &result.result_id,
-                        record,
-                        scope,
-                        control,
-                        &mut reserve,
-                    ) {
-                        Ok(frame) => frame,
-                        Err(error) => return Ok(Err(error)),
-                    };
-                    frame.commit_proof(Arc::new(ManagedSourceProof {
-                        result,
-                        witnesses,
-                        contexts,
-                    }));
-                    if let Err(error) = apply(frame) {
-                        return Ok(Err(error));
-                    }
-                    if let Err(error) = reserve(0) {
-                        return Ok(Err(error));
-                    }
-                }
-                Ok(Ok(()))
-            })
-            .map_err(E::from)?
-    }
-
-    fn managed_source_frame<E: From<crate::Error>>(
-        reader: &Connection,
-        id: &str,
-        record: RecordSource,
-        scope: Arc<SourceScope>,
-        control: &AnalysisReadControl,
-        reserve: &mut impl FnMut(usize) -> std::result::Result<(), E>,
-    ) -> std::result::Result<ManagedSourceFrame, E> {
-        let mut statement = reader
-            .prepare_cached(
-                "SELECT slot, ipc FROM managed_arrow
-                 WHERE result_id = ? AND role = 'source' ORDER BY slot",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare managed source payloads",
-            })?;
-        let mut rows = statement
-            .query(params![id])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read managed source payloads",
-            })?;
-        let mut tables = Vec::with_capacity(record.tables.len());
-        let mut count = 0;
-        let mut held = 0usize;
-        for header in &record.tables {
-            control.check()?;
-            if header.batches == 0 {
-                if header.rows != 0 {
-                    return Err(Code::Invalid.error("managed source empty table").into());
-                }
-                tables.push(sdk::Dataset {
-                    name: header.name.clone(),
-                    batches: Vec::new(),
-                });
-                continue;
-            }
-            let row = rows
-                .next()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "advance managed source payloads",
-                })?
-                .ok_or_else(|| Code::Missing.error("managed source payload"))?;
-            let slot: usize = row.get(0).context(AnalysisDatabaseSnafu {
-                operation: "decode managed source slot",
-            })?;
-            let value = row.get_ref(1).context(AnalysisDatabaseSnafu {
-                operation: "borrow managed source bytes",
-            })?;
-            let duckdb::types::ValueRef::Blob(bytes) = value else {
-                return Err(Code::Invalid.error("managed source payload type").into());
-            };
-            if slot != count || bytes.is_empty() {
-                return Err(Code::Invalid.error("managed source payload slot").into());
-            }
-            let schema = record.schema(&header.name)?;
-            if sdk::wire::Dataset::batch_count_ipc(bytes).context(crate::AnalysisContractSnafu)?
-                != header.batches
-            {
-                return Err(Code::Invalid.error("managed source IPC batch count").into());
-            }
-            let bound =
-                sdk::wire::Dataset::decoding_bytes(bytes).context(crate::AnalysisContractSnafu)?;
-            reserve(
-                held.checked_add(bound)
-                    .ok_or_else(|| Code::Limit.error("managed source decode bytes"))?,
-            )?;
-            let data = sdk::wire::Dataset::decode_ipc(&header.name, bytes, Some(&schema))
-                .context(crate::AnalysisContractSnafu)?;
-            held = held
-                .checked_add(data.allocated_bytes())
-                .ok_or_else(|| Code::Limit.error("managed source frame bytes"))?;
-            reserve(held)?;
-            tables.push(data);
-            count += 1;
+        if attempt.capture.revision >= attempt.registered || attempt.registered >= revision {
+            return Err(Code::Invalid.error("committed source position"));
         }
-        if rows
-            .next()
-            .context(AnalysisDatabaseSnafu {
-                operation: "check managed source payload end",
-            })?
-            .is_some()
-        {
-            return Err(Code::Invalid.error("extra managed source payload").into());
-        }
-        record.check_tables(&tables)?;
-        Ok(ManagedSourceFrame::new(record, tables, scope))
+        let source = ManagedSourceRef {
+            result: receipt.selected.clone(),
+            position: StorePositionV1 {
+                commit_revision: attempt.capture.revision,
+                ordinal: u32::MAX,
+            },
+        };
+        Ok(Some((source, attempt)))
     }
 }

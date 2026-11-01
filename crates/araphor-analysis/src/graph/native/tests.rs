@@ -275,6 +275,24 @@ struct Fixture {
 }
 
 impl Fixture {
+    async fn replay_result(
+        &self,
+        instance: &araphor_data::ManagedInstance,
+        result: &str,
+        control: &AnalysisReadControl,
+    ) -> TestResult<araphor_query::definition::DefinitionOutput> {
+        Ok(crate::Instance::replay_result(
+            Arc::clone(&self.query),
+            self.authority.clone(),
+            Some(self.facts.clone()),
+            instance.grant.clone(),
+            &instance.spec.id,
+            result,
+            control,
+        )
+        .await?)
+    }
+
     fn assert_invalid_graph(
         &self,
         owner: &crate::Instance,
@@ -362,7 +380,8 @@ impl Fixture {
             .managed_history(&instance.grant.selection, id, &self.control)?
             .is_empty());
         assert!(store
-            .managed_selected(self.source.tenant_id, id, &input.id, &self.control)?
+            .managed_attempt(self.source.tenant_id, id, &input.id, &self.control)?
+            .and_then(|attempt| attempt.receipt().cloned())
             .is_none());
         assert_eq!(self.graph_history()?, *domain);
         assert!(store.graph_window_headers(&self.source, None)?.is_empty());
@@ -829,25 +848,34 @@ async fn captured_source(target: Target) -> TestResult {
     drop(captured);
     assert_eq!(first.results.len(), 3);
     for reference in first.results.values() {
-        let saved = fixture.query.store().managed_evaluation(
+        let replayed = fixture
+            .replay_result(instance.admitted(), &reference.result_id, &fixture.control)
+            .await?;
+        let evaluation = replayed
+            .calls
+            .values()
+            .next()
+            .ok_or("replayed Graph call")?
+            .evaluation();
+        assert_eq!(evaluation.inputs.len(), 5);
+        let result = fixture.query.store().managed_result(
             instance.admitted(),
             &reference.result_id,
+            managed::request("metadata")?.time_utc_ns,
             &fixture.control,
         )?;
-        assert_eq!(
-            saved
-                .inputs
-                .iter()
-                .map(|input| (
-                    input.data.name.clone(),
-                    input.revision.clone(),
-                    input.coverage.clone()
-                ))
-                .collect::<Vec<_>>(),
-            metadata
-        );
+        let araphor_data::InstanceResultKindV1::Call { context, .. } = result.kind else {
+            return Err("Graph call metadata".into());
+        };
+        assert!(context.matches(&evaluation.inputs));
+        for name in ["records", "facts"] {
+            assert_eq!(
+                evaluation.input(name)?.revision.window.as_ref(),
+                Some(range)
+            );
+        }
     }
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 4);
     let scope = araphor_data::ProcessorScopeV1 {
         processor_id: araphor_data::GRAPH_PROCESSOR.into(),
         method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
@@ -933,7 +961,7 @@ async fn captured_source(target: Target) -> TestResult {
             .checked_add(2)
             .ok_or("native commit revision overflow")?
     );
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 5);
     assert_eq!(
         fixture.query.store().processor_result(&scope)?,
         Some(graph_result.clone())
@@ -1337,12 +1365,13 @@ async fn final_cancel_rolls_back() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             fixture.source.tenant_id,
             "final-cancel",
             &input.id,
             &fixture.control
         )?
+        .and_then(|attempt| attempt.receipt().cloned())
         .is_none());
     assert!(
         matches!(fixture.query.store().managed_resume(fixture.source.tenant_id,
@@ -1518,7 +1547,6 @@ fn frame_copy_is_reserved() -> TestResult {
         AnalysisTableRead {
             requests: &requests,
             event_ranges: None,
-            inputs: None,
             mode: AnalysisReadModeV1::Complete,
             now: 1,
         },
@@ -2375,12 +2403,13 @@ async fn cancel_joins_projection_capacity() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .managed_selected(
+        .managed_attempt(
             fixture.source.tenant_id,
             "held-projection",
             &caller.id,
             &fixture.control
         )?
+        .and_then(|attempt| attempt.receipt().cloned())
         .is_none());
     assert_eq!(fixture.graph_history()?, before_domain);
     assert_eq!(
@@ -2549,12 +2578,13 @@ async fn rejects_missing_frozen_coverage() -> TestResult {
         )?
         .is_none());
     assert!(store
-        .managed_selected(
+        .managed_attempt(
             fixture.source.tenant_id,
             &owner.admitted().spec.id,
             "invalid",
             &fixture.control
         )?
+        .and_then(|attempt| attempt.receipt().cloned())
         .is_none());
     assert_eq!(
         store.retained_counts(fixture.source.tenant_id)?,
