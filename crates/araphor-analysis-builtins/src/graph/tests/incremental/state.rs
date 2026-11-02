@@ -24,19 +24,16 @@ fn insertions_rebind_native_rows() -> TestResult {
             }),
             Detector::Credentials => return Err("detector fixture".into()),
         };
-        let old_facts = vec![
+        let mut old_facts = vec![
             fact(0, value.clone()),
             fact(1, value.clone()),
             fact(0, value.clone()),
         ];
-        let (prior, work) = measured(detector, &input(detector, &old, &old_facts, 100)?)?;
+        UnitFixture::keys(&mut old_facts);
+        let prior = detector.evaluate(&input(detector, &old, &old_facts, 100)?)?;
         assert_eq!(
-            work,
-            if matches!(detector, Detector::Process) {
-                2
-            } else {
-                3
-            }
+            Contribution::decode(UnitFixture::data(&prior, "contributions")?)?.len(),
+            2
         );
         let mut added = record();
         added.observed_boottime_ns = 12;
@@ -46,26 +43,30 @@ fn insertions_rebind_native_rows() -> TestResult {
         if let FactValue::Kubernetes(stage) = &mut added_fact.value {
             stage.node_id = Some("worker".into());
         }
+        added_fact.key.entity_key = 3_u64.to_be_bytes().to_vec();
         let mut current_facts = vec![added_fact];
         for mut fact in old_facts {
             fact.record += 1;
             current_facts.push(fact);
         }
         let evaluation = input(detector, &current, &current_facts, 100)?;
-        let (output, work) = continued(detector, &evaluation, &prior)?;
-        assert_eq!(work, 1);
-        let subjects = SubjectChange::decode(&output.datasets[0])?;
-        assert_eq!(
-            subjects.len(),
-            if matches!(detector, Detector::Process) {
-                5
-            } else {
-                2
+        let output = detector.evaluate(&evaluation)?;
+        let subjects = SubjectChange::decode(UnitFixture::data(&output, "subjects")?)?;
+        let contributions = Contribution::decode(UnitFixture::data(&output, "contributions")?)?;
+        assert_eq!(contributions.len(), current.len());
+        for contribution in &contributions {
+            assert_eq!(
+                contribution.subjects.len(),
+                if matches!(detector, Detector::Process) {
+                    5
+                } else {
+                    2
+                }
+            );
+            for &row in &contribution.subjects {
+                assert_eq!(subjects[row as usize].anchor.record, contribution.record);
             }
-        );
-        assert!(subjects
-            .iter()
-            .all(|subject| subject.anchor.record == current[0].id));
+        }
         if matches!(detector, Detector::Process) {
             let expected = Anchor::from_positions(
                 1,
@@ -73,19 +74,29 @@ fn insertions_rebind_native_rows() -> TestResult {
                 &current.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
                 &current_facts,
             )?;
-            assert!(FindingChange::decode(&output.datasets[4])?
-                .iter()
-                .any(|finding| finding.anchor == expected));
-        } else {
-            assert!(RelationshipChange::decode(&output.datasets[2])?
-                .iter()
-                .any(|edge| edge.anchor.record == current[1].id && edge.anchor.fact.is_some()));
-            assert_eq!(
-                package_state(&output)?,
-                GraphPackageStateV1::KubernetesObject
+            assert!(
+                FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+                    .iter()
+                    .any(|finding| finding.anchor == expected)
             );
+        } else {
+            assert!(
+                RelationshipChange::decode(UnitFixture::data(&output, "relationships")?)?
+                    .iter()
+                    .any(|edge| edge.anchor.record == current[1].id && edge.anchor.fact.is_some())
+            );
+            for unit in &contributions {
+                let expected = if unit.record == current[0].id {
+                    GraphPackageStateV1::KubernetesScheduled
+                } else {
+                    GraphPackageStateV1::KubernetesObject
+                };
+                assert_eq!(
+                    unit.state.as_ref().map(|state| &state.state),
+                    Some(&expected)
+                );
+            }
         }
-        assert_eq!(continued(detector, &evaluation, &output)?.1, 0);
     }
     Ok(())
 }
@@ -95,7 +106,15 @@ fn inserted_state_keeps_last() -> TestResult {
     let detector = Detector::Process;
     let mut old = records(2);
     old[1].id.durable_cursor = 3;
-    let prior = detector.evaluate_snapshot(&input(detector, &old, &[], 100)?)?;
+    let prior = detector.evaluate(&input(detector, &old, &[], 100)?)?;
+    assert!(
+        Contribution::decode(UnitFixture::data(&prior, "contributions")?)?
+            .iter()
+            .all(|unit| unit
+                .state
+                .as_ref()
+                .is_some_and(|state| state.state == GraphPackageStateV1::NativeEffect))
+    );
     let mut added = record();
     added.id = identity(1);
     added.position.ordinal = 2;
@@ -112,34 +131,47 @@ fn inserted_state_keeps_last() -> TestResult {
         limits: vec!["POLICY_PROVENANCE_CONTRADICTED".into()],
     };
     let current = [old[0].clone(), added, old[1].clone()];
-    let (output, work) = continued(
+    let output = detector.evaluate(&input(
         detector,
-        &input(
-            detector,
-            &current,
-            &[fact(1, FactValue::Policy(policy))],
-            100,
-        )?,
-        &prior,
-    )?;
-    assert_eq!(work, 1);
-    assert_eq!(package_state(&output)?, GraphPackageStateV1::NativeEffect);
-    let progress = Progress::decode(&output.datasets[6])?;
+        &current,
+        &[fact(1, FactValue::Policy(policy))],
+        100,
+    )?)?;
+    let contributions = Contribution::decode(UnitFixture::data(&output, "contributions")?)?;
     assert_eq!(
-        progress
+        contributions
             .iter()
-            .map(|row| row.state.as_deref())
+            .map(|unit| unit.record.clone())
+            .collect::<Vec<_>>(),
+        current
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        contributions
+            .iter()
+            .map(|unit| unit
+                .state
+                .as_ref()
+                .map(|state| (state.state.clone(), state.position)))
             .collect::<Vec<_>>(),
         [
-            Some("NATIVE_EFFECT"),
-            Some("CONTRADICTED"),
-            Some("NATIVE_EFFECT")
+            Some((GraphPackageStateV1::NativeEffect, current[0].position)),
+            Some((GraphPackageStateV1::Contradicted, current[1].position)),
+            Some((GraphPackageStateV1::NativeEffect, current[2].position)),
         ]
     );
-    assert!(FindingChange::decode(&output.datasets[4])?
-        .iter()
-        .any(|finding| finding.anchor.record == current[1].id
-            && finding.reason_code == "HF-PROC-001.CONTRADICTION"));
+    assert_eq!(
+        GraphPackageStateV1::decode(UnitFixture::data(&output, "state")?)?,
+        [GraphPackageStateV1::Waiting]
+    );
+    assert!(
+        FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+            .iter()
+            .any(|finding| finding.anchor.record == current[1].id
+                && finding.reason_code == "HF-PROC-001.CONTRADICTION")
+    );
     Ok(())
 }
 
@@ -147,20 +179,15 @@ fn inserted_state_keeps_last() -> TestResult {
 fn restricted_fact_updates_findings() -> TestResult {
     let detector = Detector::Process;
     let old = records(2);
-    let prior = detector.evaluate_snapshot(&input(detector, &old, &[], 100)?)?;
-    let previous = FindingChange::decode(&prior.datasets[4])?;
+    let prior = detector.evaluate(&input(detector, &old, &[], 100)?)?;
+    let previous = FindingChange::decode(UnitFixture::data(&prior, "findings")?)?;
     assert!(previous
         .iter()
         .all(|finding| finding.sensitivity == ContextSensitivityV1::Tenant));
     let mut added = fact(2, context(ContextClass::OutsideAuthority));
     added.sensitivity = ContextSensitivityV1::HostRestricted;
-    let (output, work) = continued(
-        detector,
-        &input(detector, &records(3), &[added], 100)?,
-        &prior,
-    )?;
-    assert_eq!(work, 1);
-    let findings = FindingChange::decode(&output.datasets[4])?;
+    let output = detector.evaluate(&input(detector, &records(3), &[added], 100)?)?;
+    let findings = FindingChange::decode(UnitFixture::data(&output, "findings")?)?;
     for old in previous {
         let current = findings
             .iter()
@@ -175,113 +202,55 @@ fn restricted_fact_updates_findings() -> TestResult {
 }
 
 #[test]
-fn changed_inputs_rebuild_selectively() -> TestResult {
+fn changed_unit_support_changes_findings() -> TestResult {
     let detector = Detector::Process;
-    let old = records(3);
-    let facts = vec![
+    let records = records(2);
+    let mut facts = vec![
         fact(0, context(ContextClass::OutsideAuthority)),
-        fact(0, context(ContextClass::InMemory)),
-        fact(1, context(ContextClass::OutsideAuthority)),
+        fact(1, context(ContextClass::InMemory)),
     ];
-    let prior = detector.evaluate_snapshot(&input(detector, &old, &facts, 100)?)?;
-    for case in 0..8 {
-        let mut current = old.clone();
-        let mut selected = facts.clone();
-        let mut window = 100;
-        match case {
-            0 => current[0].proof_quality.temporal_coverage = TemporalCoverageV1::Gapped,
-            1 => selected.push(fact(0, context(ContextClass::PayloadUnobservable))),
-            2 => selected[0].key.owner_revision += 1,
-            3 => {
-                current.swap(0, 1);
-                for fact in &mut selected {
-                    fact.record = match fact.record {
-                        0 => 1,
-                        1 => 0,
-                        row => row,
-                    };
-                }
-            }
-            4 => {
-                current.remove(0);
-                selected.retain(|fact| fact.record != 0);
-                for fact in &mut selected {
-                    fact.record -= 1;
-                }
-            }
-            5 => window = 50,
-            6 => selected.swap(0, 1),
-            7 => selected[0].value = context(ContextClass::PayloadUnobservable),
-            _ => return Err("fallback fixture".into()),
-        }
-        let (_, work) = continued(
-            detector,
-            &input(detector, &current, &selected, window)?,
-            &prior,
-        )?;
-        assert_eq!(
-            work,
-            if case == 3 || case == 4 {
-                0
-            } else {
-                current.len()
-            },
-            "fallback {case}"
-        );
-    }
-    let empty = input(detector, &[], &[], 100)?;
-    let (output, work) = continued(detector, &empty, &prior)?;
-    assert_eq!(work, 0);
-    assert!(SubjectChange::decode(&output.datasets[0])?.is_empty());
-    assert!(Progress::decode(&output.datasets[6])?.is_empty());
-    let (_, work) = continued(detector, &input(detector, &old, &facts, 100)?, &output)?;
-    assert_eq!(work, old.len());
-    Ok(())
-}
-
-#[test]
-fn expired_records_reuse_survivors() -> TestResult {
-    let detector = Detector::Process;
-    let old = records(64);
-    for width in [1, 100, 10_000] {
-        let prior = detector.evaluate_snapshot(&input(detector, &old, &[], width)?)?;
-        let (_, work) = continued(detector, &input(detector, &old[1..], &[], width)?, &prior)?;
-        assert_eq!(work, 0, "window {width}");
-    }
-    Ok(())
-}
-
-#[test]
-fn expired_join_reuses_unrelated() -> TestResult {
-    let detector = Detector::Credentials;
-    let (mut old, facts) = credential_input()?;
-    for row in 3..43 {
-        let mut value = record();
-        value.id = identity(row);
-        value.position.ordinal = row as u32;
-        value.effect.task_cookie = row + 100;
-        value.process_instance_id = Some((row as u128).to_be_bytes());
-        value.observed_boottime_ns = row + 1_000;
-        old.push(value);
-    }
-    for width in [10, 100, 10_000] {
-        let prior = detector.evaluate_snapshot(&input(detector, &old, &facts, width)?)?;
-        let mut current = old.clone();
-        current.remove(1);
-        let mut selected = facts.clone();
-        selected.retain(|fact| fact.record != 1);
-        for fact in &mut selected {
-            if fact.record > 1 {
-                fact.record -= 1;
-            }
-        }
-        let (_, work) = continued(
-            detector,
-            &input(detector, &current, &selected, width)?,
-            &prior,
-        )?;
-        assert!(work < current.len() / 2, "window {width}: {work}");
-    }
+    UnitFixture::keys(&mut facts);
+    let prior = detector.evaluate(&input(detector, &records, &facts, 100)?)?;
+    let findings = FindingChange::decode(UnitFixture::data(&prior, "findings")?)?;
+    let original = findings
+        .iter()
+        .find(|finding| finding.reason_code == "HF-PROC-001.OUTSIDE_AUTHORITY")
+        .ok_or("outside finding")?;
+    let mut revised = facts.clone();
+    revised[0].key.owner_revision += 1;
+    let output = detector.evaluate(&input(detector, &records, &revised, 100)?)?;
+    let changed = FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+        .into_iter()
+        .find(|finding| finding.reason_code == original.reason_code)
+        .ok_or("revised finding")?;
+    assert_eq!(changed.finding_id, original.finding_id);
+    assert_ne!(changed.anchor, original.anchor);
+    assert_eq!(
+        changed.anchor.fact.as_ref().ok_or("revised anchor")?.key,
+        revised[0].key
+    );
+    revised[0].value = context(ContextClass::PayloadUnobservable);
+    let output = detector.evaluate(&input(detector, &records, &revised, 100)?)?;
+    let changed = FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+        .into_iter()
+        .find(|finding| finding.reason_code == "HF-PROC-001.PAYLOAD_UNOBSERVABLE")
+        .ok_or("changed context finding")?;
+    assert_eq!(
+        changed.anchor.fact.as_ref().ok_or("changed anchor")?.value,
+        revised[0].value
+    );
+    let mut gapped = records.clone();
+    gapped[0].proof_quality.temporal_coverage = TemporalCoverageV1::Gapped;
+    let output = detector.evaluate(&input(detector, &gapped, &facts, 100)?)?;
+    let changed = FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+        .into_iter()
+        .find(|finding| finding.anchor.record == records[0].id && finding.anchor.fact.is_none())
+        .ok_or("gapped effect finding")?;
+    assert_eq!(changed.state, FindingStateV1::CoverageInsufficient);
+    assert!(changed
+        .limits
+        .iter()
+        .any(|limit| limit == "SOURCE_COVERAGE_INSUFFICIENT"));
     Ok(())
 }
 
@@ -297,14 +266,16 @@ fn expired_authority_support_disappears() -> TestResult {
             *workload_binding = None;
         }
     }
-    let prior = detector.evaluate_snapshot(&input(detector, &old, &facts, 100)?)?;
-    let read = FindingChange::decode(&prior.datasets[4])?
+    let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
+    let read = FindingChange::decode(UnitFixture::data(&prior, "findings")?)?
         .into_iter()
         .find(|finding| finding.anchor.record == old[0].id)
         .ok_or("read finding")?;
-    assert!(RelationshipChange::decode(&prior.datasets[2])?
-        .iter()
-        .any(|edge| edge.key.edge_type == GraphEdgeTypeV1::CredentialAuthority));
+    assert!(
+        RelationshipChange::decode(UnitFixture::data(&prior, "relationships")?)?
+            .iter()
+            .any(|edge| edge.key.edge_type == GraphEdgeTypeV1::CredentialAuthority)
+    );
     for removed in [1, 2] {
         let mut current = old.clone();
         current.remove(removed);
@@ -319,32 +290,33 @@ fn expired_authority_support_disappears() -> TestResult {
                 fact
             })
             .collect::<Vec<_>>();
-        let record_count = current.len();
-        let current = input(detector, &current, &selected, 100)?;
-        let (output, work) = continued(detector, &current, &prior)?;
-        assert!(work < record_count, "removed {removed}: {work}");
-        let mut resumed = current.clone();
-        resumed.checkpoint = prior.checkpoint.clone();
-        resumed.previous_outputs = normalized_prior(&prior)?;
-        let delta = detector.evaluate_snapshot(&resumed)?;
-        assert!(FindingRemoval::decode(&delta.datasets[5])?
-            .iter()
-            .all(|finding| finding.finding_id != read.finding_id));
-        assert!(FindingChange::decode(&delta.datasets[4])?
-            .iter()
-            .all(|finding| finding.finding_id != read.finding_id));
-        assert!(FindingChange::decode(&output.datasets[4])?
-            .iter()
-            .any(|finding| finding == &read));
-        assert!(RelationshipChange::decode(&output.datasets[2])?
-            .iter()
-            .all(|edge| edge.key.edge_type != GraphEdgeTypeV1::CredentialAuthority));
-        assert!(SubjectChange::decode(&output.datasets[0])?
-            .iter()
-            .all(|subject| !matches!(
-                subject.key.authority,
-                GraphSubjectAuthorityV1::Provider { .. }
-            )));
+        let output = detector.evaluate(&input(detector, &current, &selected, 100)?)?;
+        let mut changed = UnitFixture::units(detector, &current, &selected);
+        changed.retain(|unit| unit.record != old[0].id);
+        let delta = UnitFixture::run(detector, &current, &selected, &changed)?;
+        assert!(
+            FindingChange::decode(UnitFixture::data(&delta, "findings")?)?
+                .iter()
+                .all(|finding| finding.finding_id != read.finding_id)
+        );
+        assert!(
+            FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+                .iter()
+                .any(|finding| finding == &read)
+        );
+        assert!(
+            RelationshipChange::decode(UnitFixture::data(&output, "relationships")?)?
+                .iter()
+                .all(|edge| edge.key.edge_type != GraphEdgeTypeV1::CredentialAuthority)
+        );
+        assert!(
+            SubjectChange::decode(UnitFixture::data(&output, "subjects")?)?
+                .iter()
+                .all(|subject| !matches!(
+                    subject.key.authority,
+                    GraphSubjectAuthorityV1::Provider { .. }
+                ))
+        );
     }
     Ok(())
 }
@@ -368,9 +340,9 @@ fn surviving_parent_reanchors_process() -> TestResult {
             proof_quality: proof(),
         },
     )];
-    let prior = detector.evaluate_snapshot(&input(detector, &old, &facts, 100)?)?;
+    let prior = detector.evaluate(&input(detector, &old, &facts, 100)?)?;
     assert_eq!(
-        SubjectChange::decode(&prior.datasets[0])?
+        SubjectChange::decode(UnitFixture::data(&prior, "subjects")?)?
             .iter()
             .find(|subject| subject.key == parent)
             .ok_or("old process")?
@@ -380,13 +352,8 @@ fn surviving_parent_reanchors_process() -> TestResult {
     );
     let mut remaining = facts[0].clone();
     remaining.record = 0;
-    let (output, work) = continued(
-        detector,
-        &input(detector, &old[1..], &[remaining.clone()], 100)?,
-        &prior,
-    )?;
-    assert_eq!(work, 0);
-    let subject = SubjectChange::decode(&output.datasets[0])?
+    let output = detector.evaluate(&input(detector, &old[1..], &[remaining.clone()], 100)?)?;
+    let subject = SubjectChange::decode(UnitFixture::data(&output, "subjects")?)?
         .into_iter()
         .find(|subject| subject.key == parent)
         .ok_or("reanchored process")?;
@@ -405,78 +372,40 @@ fn expired_state_and_sensitivity() -> TestResult {
         erebor_interceptor_abi::EffectPhysicalResultV1::UnknownAfterPreEffect as u32;
     let mut restricted = fact(1, context(ContextClass::InMemory));
     restricted.sensitivity = ContextSensitivityV1::HostRestricted;
+    restricted.key.entity_key = 1_u64.to_be_bytes().to_vec();
     let retained = fact(0, context(ContextClass::OutsideAuthority));
-    let prior = detector.evaluate_snapshot(&input(
+    let prior = detector.evaluate(&input(
         detector,
         &old,
         &[retained.clone(), restricted],
         100,
     )?)?;
-    assert_eq!(package_state(&prior)?, GraphPackageStateV1::NativeEffect);
-    let (output, work) = continued(
-        detector,
-        &input(detector, &old[..1], &[retained], 100)?,
-        &prior,
-    )?;
-    assert_eq!(work, 0);
-    assert_eq!(package_state(&output)?, GraphPackageStateV1::Waiting);
-    assert!(FindingChange::decode(&output.datasets[4])?
-        .iter()
-        .all(|finding| finding.sensitivity == ContextSensitivityV1::Tenant));
-    Ok(())
-}
-
-#[test]
-fn incompatible_progress_rebuilds() -> TestResult {
-    let detector = Detector::Process;
-    let current = input(detector, &records(2), &[], 100)?;
-    let prior = detector.evaluate_snapshot(&current)?;
-    for case in 0..5 {
-        let mut saved = prior.clone();
-        let dataset = &mut saved.datasets[6];
-        let mut progress = Progress::decode(dataset)?;
-        match case {
-            0 => {
-                progress.pop();
-            }
-            1 => progress[0].digest = vec![0; 31].into(),
-            2 => {
-                let mut digest = progress[0].digest.clone().into_vec();
-                digest[0] ^= 128;
-                progress[0].digest = digest.into();
-            }
-            3 => progress[0].state = Some("DIRECT_PIVOT".into()),
-            4 => progress[1].record = progress[0].record.clone(),
-            _ => return Err("progress fixture".into()),
-        }
-        *dataset = Progress::encode(&progress)?;
-        let mut admitted = current.clone();
-        admitted.checkpoint = saved.checkpoint.clone();
-        admitted.previous_outputs = normalized_prior(&saved)?;
-        detector.snapshot_descriptor().check_evaluation(&admitted)?;
-        if matches!(case, 1 | 3 | 4) {
-            assert!(
-                detector.evaluate_snapshot(&admitted).is_err(),
-                "progress {case}"
-            );
-        } else {
-            assert_eq!(
-                continued(detector, &current, &saved)?.1,
-                if case == 0 { 1 } else { 2 },
-                "progress {case}"
-            );
-        }
-    }
-    let mut invalid = current;
-    invalid.previous_outputs = normalized_prior(&prior)?;
-    invalid.checkpoint = prior.checkpoint;
-    detector.snapshot_descriptor().check_evaluation(&invalid)?;
-    let checkpoint = invalid.checkpoint.as_mut().ok_or("checkpoint")?;
-    let dataset = checkpoint.datasets.first_mut().ok_or("state")?;
-    dataset.batches = Manifest::encode(&[Manifest { window_ns: 100 }])?.batches;
-    assert!(detector
-        .snapshot_descriptor()
-        .check_evaluation(&invalid)
-        .is_err());
+    assert!(
+        Contribution::decode(UnitFixture::data(&prior, "contributions")?)?
+            .iter()
+            .find(|unit| unit.record == old[1].id)
+            .ok_or("effect unit")?
+            .state
+            .as_ref()
+            .is_some_and(|state| state.state == GraphPackageStateV1::NativeEffect)
+    );
+    assert!(
+        FindingChange::decode(UnitFixture::data(&prior, "findings")?)?
+            .iter()
+            .all(|finding| finding.sensitivity == ContextSensitivityV1::HostRestricted)
+    );
+    let output = detector.evaluate(&input(detector, &old[..1], &[retained], 100)?)?;
+    let contributions = Contribution::decode(UnitFixture::data(&output, "contributions")?)?;
+    assert_eq!(contributions.len(), 1);
+    assert!(contributions[0].state.is_none());
+    assert_eq!(
+        GraphPackageStateV1::decode(UnitFixture::data(&output, "state")?)?,
+        [GraphPackageStateV1::Waiting]
+    );
+    assert!(
+        FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+            .iter()
+            .all(|finding| finding.sensitivity == ContextSensitivityV1::Tenant)
+    );
     Ok(())
 }

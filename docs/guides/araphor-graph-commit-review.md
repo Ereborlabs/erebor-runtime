@@ -1234,3 +1234,30 @@ owner tests pass. The tests cover exact identity and native references,
 value history, return to an old value, duplicate rejection, rollback,
 strict binary decoding, lists, and labels. Public finding identity still
 uses its prior contract; its hash removal remains separate work.
+
+## Private Graph test engine retirement
+
+[UnitFixture](../../crates/araphor-analysis-builtins/src/graph/tests/units.rs) supplies the checked unit basis through the declared inputs
+  -> [Detector::evaluate](../../crates/araphor-analysis-builtins/src/graph/units.rs) receives the real package evaluation
+  -> [Computation::unit_output](../../crates/araphor-analysis-builtins/src/graph/units.rs) computes the package contributions
+  -> [Graph tests](../../crates/araphor-analysis-builtins/src/graph/tests.rs) check the actual package result
+
+The standalone retirement uses the six declared datasets: `units`,
+`unit_removals`, `reset`, `records`, `facts`, and `affected`. The fixture
+supplies a unit basis. It does not execute the unit-selection SQL. Detector
+assertions still check anchors, contexts, reasons, proof, and unit state.
+The authority case selects its exact authority anchor. It does not depend
+on output row order.
+
+The private snapshot descriptor, snapshot evaluator, hashed Progress rows,
+Resume owner, and previous-output merger are removed. No second test engine
+replaces these owners. The live Graph package-state serializer and fact
+anchor codec remain. This retirement does not remove public finding-ID or
+native package-state hashes. Those changes need separate qualification.
+
+Focused Linux qualification of the independent six-input source: **Done**.
+A fresh Builtin library build and all 53 Graph tests pass. The test run takes
+1.66 seconds. The separate seven-input working source passes the same
+53 checks in 1.50 seconds. These results do not measure event-to-finding
+latency or prove the pending native source work bounds. The independent
+source log is `/tmp/araphor-cdc-production-six-input-20261102.log`.

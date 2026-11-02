@@ -187,32 +187,11 @@ impl CredentialIndex {
 }
 
 impl Computation {
-    #[cfg(test)]
-    pub(super) fn credentials(&mut self, affected: &[bool]) -> sdk::Result<()> {
-        let index = CredentialIndex::new(self)?;
-        for (row, affected) in affected.iter().copied().enumerate() {
-            if affected {
-                self.progress[row].state = self.credential_event(row as u32, &index)?;
-            }
-        }
-        self.state = self
-            .progress
-            .iter()
-            .rev()
-            .find_map(|progress| progress.state.clone())
-            .unwrap_or_else(|| "WAITING".into());
-        Ok(())
-    }
-
     pub(super) fn credential_event(
         &mut self,
         row: u32,
         index: &CredentialIndex,
     ) -> sdk::Result<Option<String>> {
-        #[cfg(test)]
-        {
-            self.work += 1;
-        }
         if index.conflicted_reads.contains(&row) {
             self.subject(row, None)?;
             self.finding(

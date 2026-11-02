@@ -3,30 +3,6 @@ use std::collections::BTreeSet;
 use super::*;
 
 impl Computation {
-    #[cfg(test)]
-    pub(super) fn process(&mut self, affected: &[bool]) -> sdk::Result<()> {
-        for (row, affected) in affected.iter().copied().enumerate() {
-            if affected {
-                let state = self.process_record(row as u32)?;
-                self.progress[row].state = state;
-            }
-        }
-        for (row, affected) in affected.iter().copied().enumerate() {
-            if affected {
-                for index in self.fact_rows[row].clone() {
-                    self.process_context(index)?;
-                }
-            }
-        }
-        self.state = self
-            .progress
-            .iter()
-            .rev()
-            .find_map(|progress| progress.state.clone())
-            .unwrap_or_else(|| "WAITING".into());
-        Ok(())
-    }
-
     pub(super) fn process_unit(&mut self, row: u32) -> sdk::Result<Option<String>> {
         let state = self.process_record(row)?;
         for index in self.fact_rows[row as usize].clone() {
@@ -55,10 +31,6 @@ impl Computation {
     }
 
     fn process_record(&mut self, row: u32) -> sdk::Result<Option<String>> {
-        #[cfg(test)]
-        {
-            self.work += 1;
-        }
         let record = self.record(row)?.clone();
         self.subject(row, None)?;
         let cause = if record.exact_identity() {

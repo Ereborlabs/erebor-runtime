@@ -62,7 +62,7 @@ pub(super) fn fact(record: u32, value: FactValue) -> Fact {
 }
 
 pub(super) fn fixture(
-    _detector: Detector,
+    detector: Detector,
     records: &[Observation],
     facts: &[Fact],
 ) -> sdk::Result<sdk::Fixture> {
@@ -74,10 +74,24 @@ pub(super) fn fixture(
             ordinal: row as u32,
         };
     }
+    let units = UnitFixture::units(detector, &records, facts);
+    let package = detector.descriptor();
+    let changes = package.exports[0]
+        .change_inputs
+        .as_ref()
+        .ok_or_else(|| Computation::invalid("graph test changes"))?;
     let datasets = vec![
+        Unit::encode(&units)?,
+        Unit::encode_removals(&[])?,
+        changes.reset_input(true)?,
         Observation::encode(&records)?,
         Fact::encode(facts)?,
-        Manifest::encode(&[Manifest { window_ns: 100 }])?,
+        Unit::encode_affected(
+            &records
+                .iter()
+                .map(|record| record.id.clone())
+                .collect::<Vec<_>>(),
+        )?,
     ];
     Ok(sdk::Fixture {
         implementation: "shared-rust".into(),
@@ -115,11 +129,11 @@ pub(super) fn findings(
     detector: Detector,
     fixture: &sdk::Fixture,
 ) -> sdk::Result<(Vec<Finding>, sdk::Output)> {
-    let package = detector.snapshot_descriptor();
-    let report = package.test(fixture, |evaluation| detector.evaluate_snapshot(evaluation))?;
+    let package = detector.descriptor();
+    let report = package.test(fixture, |evaluation| detector.evaluate(evaluation))?;
     let records = Observation::decode(&fixture.evaluation.input("records")?.data)?;
     let facts = Fact::decode(&fixture.evaluation.input("facts")?.data)?;
-    let rows = FindingChange::decode(&report.output.datasets[4])?
+    let rows = FindingChange::decode(UnitFixture::data(&report.output, "findings")?)?
         .into_iter()
         .map(|change| {
             let record = records
@@ -149,46 +163,6 @@ pub(super) fn findings(
         })
         .collect::<sdk::Result<Vec<_>>>()?;
     Ok((rows, report.output))
-}
-
-pub(super) fn normalized_prior(output: &sdk::Output) -> sdk::Result<Vec<sdk::Dataset>> {
-    for name in [
-        "subject_removals",
-        "relationship_removals",
-        "finding_removals",
-        "progress_removals",
-    ] {
-        let data = output
-            .datasets
-            .iter()
-            .find(|data| data.name == name)
-            .ok_or_else(|| super::Computation::invalid("graph test output"))?;
-        let empty = match name {
-            "subject_removals" => SubjectRemoval::decode(data)?.is_empty(),
-            "relationship_removals" => RelationshipRemoval::decode(data)?.is_empty(),
-            "finding_removals" => FindingRemoval::decode(data)?.is_empty(),
-            _ => ProgressRemoval::decode(data)?.is_empty(),
-        };
-        if !empty {
-            return Err(super::Computation::invalid(
-                "graph test expected full output",
-            ));
-        }
-    }
-    let mut datasets = output.datasets.clone();
-    let findings = datasets
-        .iter_mut()
-        .find(|data| data.name == "findings")
-        .ok_or_else(|| super::Computation::invalid("graph test findings"))?;
-    let mut rows = FindingChange::decode(findings)?;
-    for row in &mut rows {
-        row.prior_reason = Some(FindingReasonV1::from_analysis_code(
-            &row.package_id,
-            &row.reason_code,
-        )?);
-    }
-    *findings = FindingChange::encode(&rows)?;
-    Ok(datasets)
 }
 
 pub(super) fn identity(cursor: u64) -> crate::discovery::DiscoveryRecordIdV1 {

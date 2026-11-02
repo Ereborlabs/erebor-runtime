@@ -2,7 +2,7 @@ use super::*;
 
 mod permutations;
 
-struct UnitFixture;
+pub(super) struct UnitFixture;
 
 impl UnitFixture {
     fn records(count: usize) -> Vec<Observation> {
@@ -16,14 +16,14 @@ impl UnitFixture {
             .collect()
     }
 
-    fn keys(facts: &mut [Fact]) {
+    pub(super) fn keys(facts: &mut [Fact]) {
         for (index, fact) in facts.iter_mut().enumerate() {
             fact.key.entity_key = (index as u64).to_be_bytes().to_vec();
         }
         facts.sort_by(|left, right| left.key.cmp(&right.key));
     }
 
-    fn units(detector: Detector, records: &[Observation], facts: &[Fact]) -> Vec<Unit> {
+    pub(super) fn units(detector: Detector, records: &[Observation], facts: &[Fact]) -> Vec<Unit> {
         let restricted = facts
             .iter()
             .any(|fact| fact.sensitivity == ContextSensitivityV1::HostRestricted);
@@ -43,32 +43,36 @@ impl UnitFixture {
                     })
                     .flatten()
                     .collect::<BTreeSet<_>>();
+                let mut support = records
+                    .iter()
+                    .enumerate()
+                    .filter(|(row, record)| base.contains(row) || references.contains(&record.id))
+                    .map(|(row, record)| {
+                        let mut keys = facts
+                            .iter()
+                            .filter(|fact| fact.record as usize == row)
+                            .map(|fact| fact.key.clone())
+                            .collect::<Vec<_>>();
+                        keys.sort();
+                        UnitSupport {
+                            record: record.id.clone(),
+                            proof: record.proof_quality,
+                            facts: keys,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                support.sort_by(|left, right| left.record.cmp(&right.record));
                 Unit {
                     record: record.id.clone(),
                     window_ns: 100,
                     restricted,
-                    support: records
-                        .iter()
-                        .enumerate()
-                        .filter(|(row, record)| {
-                            base.contains(row) || references.contains(&record.id)
-                        })
-                        .map(|(row, record)| UnitSupport {
-                            record: record.id.clone(),
-                            proof: record.proof_quality,
-                            facts: facts
-                                .iter()
-                                .filter(|fact| fact.record as usize == row)
-                                .map(|fact| fact.key.clone())
-                                .collect(),
-                        })
-                        .collect(),
+                    support,
                 }
             })
             .collect()
     }
 
-    fn run(
+    pub(super) fn run(
         detector: Detector,
         records: &[Observation],
         facts: &[Fact],
@@ -120,115 +124,12 @@ impl UnitFixture {
         })
     }
 
-    fn full(
-        detector: Detector,
-        records: &[Observation],
-        facts: &[Fact],
-    ) -> sdk::Result<sdk::Output> {
-        let mut computation = Computation::snapshot(
-            records.to_vec(),
-            facts.to_vec(),
-            Manifest { window_ns: 100 },
-            detector,
-        )?;
-        let affected = vec![true; records.len()];
-        match detector {
-            Detector::Process => computation.process(&affected)?,
-            Detector::Credentials => computation.credentials(&affected)?,
-            Detector::Kubernetes => computation.kubernetes(&affected)?,
-        }
-        computation.output()
-    }
-
-    fn data<'a>(output: &'a sdk::Output, name: &str) -> sdk::Result<&'a sdk::Dataset> {
+    pub(super) fn data<'a>(output: &'a sdk::Output, name: &str) -> sdk::Result<&'a sdk::Dataset> {
         output
             .datasets
             .iter()
             .find(|data| data.name == name)
             .ok_or_else(|| Computation::invalid("unit test dataset"))
-    }
-
-    fn earlier(left: &Anchor, right: &Anchor) -> bool {
-        let rank = |anchor: &Anchor| {
-            (
-                anchor.record.clone(),
-                anchor
-                    .fact
-                    .as_ref()
-                    .map(|fact| (fact.key.clone(), fact.record.clone())),
-            )
-        };
-        rank(left) < rank(right)
-    }
-
-    fn parity(detector: Detector, records: &[Observation], facts: &[Fact]) -> TestResult {
-        let expected = Self::full(detector, records, facts)?;
-        let actual = Self::run(
-            detector,
-            records,
-            facts,
-            &Self::units(detector, records, facts),
-        )?;
-        let mut subjects = BTreeMap::<GraphSubjectKeyV1, SubjectChange>::new();
-        for row in SubjectChange::decode(Self::data(&actual, "subjects")?)? {
-            if let Some(old) = subjects.get_mut(&row.key) {
-                if Self::earlier(&row.anchor, &old.anchor) {
-                    *old = row;
-                }
-            } else {
-                subjects.insert(row.key.clone(), row);
-            }
-        }
-        let expected_subjects = SubjectChange::decode(Self::data(&expected, "subjects")?)?
-            .into_iter()
-            .map(|row| (row.key.clone(), row))
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(subjects, expected_subjects);
-        let mut relationships = BTreeMap::<RelationshipIdentity, RelationshipChange>::new();
-        for row in RelationshipChange::decode(Self::data(&actual, "relationships")?)? {
-            if let Some(old) = relationships.get_mut(&row.key) {
-                let mut compared = row.clone();
-                compared.anchor = old.anchor.clone();
-                assert_eq!(&compared, old);
-                if Self::earlier(&row.anchor, &old.anchor) {
-                    old.anchor = row.anchor;
-                }
-            } else {
-                relationships.insert(row.key.clone(), row);
-            }
-        }
-        let expected_edges = RelationshipChange::decode(Self::data(&expected, "relationships")?)?
-            .into_iter()
-            .map(|row| (row.key.clone(), row))
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(relationships, expected_edges);
-        let findings = FindingChange::decode(Self::data(&actual, "findings")?)?
-            .into_iter()
-            .map(|row| (row.finding_id.clone(), row))
-            .collect::<BTreeMap<_, _>>();
-        let expected_findings = FindingChange::decode(Self::data(&expected, "findings")?)?
-            .into_iter()
-            .map(|row| (row.finding_id.clone(), row))
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(findings, expected_findings);
-        let contributions = Contribution::decode(Self::data(&actual, "contributions")?)?;
-        assert_eq!(contributions.len(), records.len());
-        for name in ["subjects", "relationships", "findings"] {
-            let mut owners = vec![0usize; Self::data(&actual, name)?.rows() as usize];
-            for contribution in &contributions {
-                let members = match name {
-                    "subjects" => &contribution.subjects,
-                    "relationships" => &contribution.relationships,
-                    _ => &contribution.findings,
-                };
-                for &member in members {
-                    *owners.get_mut(member as usize).ok_or("unit member row")? += 1;
-                }
-            }
-            assert!(owners.iter().all(|&count| count == 1));
-        }
-        assert!(actual.checkpoint.is_none());
-        Ok(())
     }
 }
 
@@ -291,7 +192,35 @@ fn process_units_keep_shared_subjects_and_context() -> TestResult {
         fact(1, context(ContextClass::InMemory)),
     ];
     UnitFixture::keys(&mut facts);
-    UnitFixture::parity(Detector::Process, &records, &facts)
+    let output = UnitFixture::run(
+        Detector::Process,
+        &records,
+        &facts,
+        &UnitFixture::units(Detector::Process, &records, &facts),
+    )?;
+    let findings = FindingChange::decode(UnitFixture::data(&output, "findings")?)?;
+    assert_eq!(findings.len(), 4);
+    assert!(findings
+        .iter()
+        .any(|finding| finding.reason_code == "HF-PROC-001.OUTSIDE_AUTHORITY"));
+    assert!(findings
+        .iter()
+        .any(|finding| finding.reason_code == "HF-PROC-001.IN_MEMORY_ONLY"));
+    let subjects = SubjectChange::decode(UnitFixture::data(&output, "subjects")?)?;
+    let rows = Contribution::decode(UnitFixture::data(&output, "contributions")?)?;
+    assert_eq!(rows.len(), 2);
+    let first = rows[0]
+        .subjects
+        .iter()
+        .map(|row| &subjects[*row as usize].key)
+        .collect::<BTreeSet<_>>();
+    let second = rows[1]
+        .subjects
+        .iter()
+        .map(|row| &subjects[*row as usize].key)
+        .collect::<BTreeSet<_>>();
+    assert!(!first.is_disjoint(&second));
+    Ok(())
 }
 
 #[test]
@@ -312,7 +241,6 @@ fn policy_references_change_unit_support() -> TestResult {
         fact(1, FactValue::Policy(next)),
     ];
     UnitFixture::keys(&mut facts);
-    UnitFixture::parity(Detector::Process, &records, &facts)?;
     let before = UnitFixture::units(Detector::Process, &records, &facts);
     assert_eq!(
         before[0]
@@ -328,7 +256,6 @@ fn policy_references_change_unit_support() -> TestResult {
     assert_ne!(before[0], after[0]);
     assert_eq!(before[2], after[1]);
     assert_eq!(after[0].support.len(), 1);
-    UnitFixture::parity(Detector::Process, &retained, &remaining)?;
     let output = UnitFixture::run(Detector::Process, &retained, &remaining, &after)?;
     let findings = FindingChange::decode(UnitFixture::data(&output, "findings")?)?;
     assert!(findings
@@ -343,13 +270,44 @@ fn credential_units_keep_late_support_and_proof_changes() -> TestResult {
     let mut records = Observation::decode(&fixture.evaluation.input("records")?.data)?;
     let mut facts = Fact::decode(&fixture.evaluation.input("facts")?.data)?;
     UnitFixture::keys(&mut facts);
-    UnitFixture::parity(Detector::Credentials, &records, &facts)?;
+    let output = UnitFixture::run(
+        Detector::Credentials,
+        &records,
+        &facts,
+        &UnitFixture::units(Detector::Credentials, &records, &facts),
+    )?;
+    assert!(
+        FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+            .iter()
+            .any(|finding| finding.state == FindingStateV1::Confirmed)
+    );
     let mut removed = facts.clone();
     removed.retain(|fact| !matches!(fact.value, FactValue::AuthorityUse { .. }));
-    UnitFixture::parity(Detector::Credentials, &records, &removed)?;
+    let output = UnitFixture::run(
+        Detector::Credentials,
+        &records,
+        &removed,
+        &UnitFixture::units(Detector::Credentials, &records, &removed),
+    )?;
+    assert!(
+        RelationshipChange::decode(UnitFixture::data(&output, "relationships")?)?
+            .iter()
+            .all(|edge| edge.key.edge_type != GraphEdgeTypeV1::CredentialAuthority)
+    );
     let mut downgraded = records.clone();
     downgraded[1].proof_quality.temporal_coverage = TemporalCoverageV1::Unknown;
-    UnitFixture::parity(Detector::Credentials, &downgraded, &facts)?;
+    let output = UnitFixture::run(
+        Detector::Credentials,
+        &downgraded,
+        &facts,
+        &UnitFixture::units(Detector::Credentials, &downgraded, &facts),
+    )?;
+    assert!(
+        FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+            .iter()
+            .filter(|finding| finding.anchor.record == records[2].id)
+            .all(|finding| finding.state != FindingStateV1::Confirmed)
+    );
     for (index, record) in records.iter_mut().enumerate() {
         record.position.ordinal = (index * 2) as u32;
     }
@@ -375,7 +333,18 @@ fn credential_units_keep_late_support_and_proof_changes() -> TestResult {
         }
         facts.push(added);
     }
-    UnitFixture::parity(Detector::Credentials, &records, &facts)
+    let output = UnitFixture::run(
+        Detector::Credentials,
+        &records,
+        &facts,
+        &UnitFixture::units(Detector::Credentials, &records, &facts),
+    )?;
+    assert!(
+        FindingChange::decode(UnitFixture::data(&output, "findings")?)?
+            .iter()
+            .any(|finding| finding.evidence.contains(&records[3].id))
+    );
+    Ok(())
 }
 
 #[test]
@@ -404,7 +373,6 @@ fn restriction_flag_updates_unit_without_local_fact() -> TestResult {
     classified.sensitivity = ContextSensitivityV1::HostRestricted;
     let mut facts = vec![classified];
     UnitFixture::keys(&mut facts);
-    UnitFixture::parity(Detector::Process, &records, &facts)?;
     let units = UnitFixture::units(Detector::Process, &records, &facts);
     let output = UnitFixture::run(Detector::Process, &records[..1], &[], &units[..1])?;
     let findings = FindingChange::decode(UnitFixture::data(&output, "findings")?)?;
@@ -440,7 +408,6 @@ fn kubernetes_state_uses_last_relevant_fact() -> TestResult {
         fact(0, context(ContextClass::OutsideAuthority)),
     ];
     UnitFixture::keys(&mut facts);
-    UnitFixture::parity(Detector::Kubernetes, &records, &facts)?;
     let units = UnitFixture::units(Detector::Kubernetes, &records, &facts);
     let output = UnitFixture::run(Detector::Kubernetes, &records, &facts, &units)?;
     let states = Contribution::decode(UnitFixture::data(&output, "contributions")?)?;
@@ -467,7 +434,6 @@ fn unit_states_keep_record_order_and_position_proof() -> TestResult {
     policy.state = PolicyProvenanceStateV1::Contradicted;
     let mut facts = vec![fact(1, FactValue::Policy(policy))];
     UnitFixture::keys(&mut facts);
-    UnitFixture::parity(Detector::Process, &records, &facts)?;
     let units = UnitFixture::units(Detector::Process, &records, &facts);
     let output = UnitFixture::run(Detector::Process, &records, &facts, &units)?;
     let contributions = Contribution::decode(UnitFixture::data(&output, "contributions")?)?;

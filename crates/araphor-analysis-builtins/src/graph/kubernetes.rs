@@ -1,29 +1,6 @@
 use super::*;
 
 impl Computation {
-    #[cfg(test)]
-    pub(super) fn kubernetes(&mut self, affected: &[bool]) -> sdk::Result<()> {
-        for (row, affected) in affected.iter().copied().enumerate() {
-            if affected {
-                for index in self.fact_rows[row].clone() {
-                    self.kubernetes_fact(index)?;
-                }
-            }
-        }
-        self.state = self
-            .facts
-            .iter()
-            .filter_map(|fact| match &fact.value {
-                FactValue::Kubernetes(stage) => Some((&fact.key, Self::kubernetes_state(stage))),
-                _ => None,
-            })
-            .max_by_key(|(key, _)| *key)
-            .map(|(_, state)| state)
-            .unwrap_or("KUBERNETES_PROOF_MISSING")
-            .into();
-        Ok(())
-    }
-
     pub(super) fn kubernetes_unit(&mut self, row: u32) -> sdk::Result<Option<UnitState>> {
         let mut state = None;
         for index in self.fact_rows[row as usize].clone() {
@@ -45,10 +22,6 @@ impl Computation {
         let stage = stage.clone();
         let record = self.facts[index].record;
         self.record(record)?;
-        #[cfg(test)]
-        {
-            self.work += 1;
-        }
         self.subject(record, None)?;
         let qualified = stage.proof_quality.kubernetes_qualified();
         let mut missing = Vec::new();

@@ -362,9 +362,6 @@ impl Anchor {
     }
 }
 
-#[cfg(test)]
-pub(super) type FindingAnchor = Anchor;
-
 impl Finding {
     pub fn into_finding(self, reason: FindingReasonV1) -> FindingV1 {
         FindingV1 {

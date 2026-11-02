@@ -803,60 +803,6 @@ impl TryFrom<MetadataRow> for Metadata {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg(test)]
-pub(super) struct ProgressRow {
-    pub record: RecordIdRow,
-    pub digest: ByteBuf,
-    pub state: Option<String>,
-}
-#[cfg(test)]
-impl From<&super::super::Progress> for ProgressRow {
-    fn from(value: &super::super::Progress) -> Self {
-        Self {
-            record: RecordIdRow::from(&value.record),
-            digest: value.digest.clone(),
-            state: value.state.clone(),
-        }
-    }
-}
-#[cfg(test)]
-impl TryFrom<ProgressRow> for super::super::Progress {
-    type Error = sdk::Error;
-    fn try_from(value: ProgressRow) -> sdk::Result<Self> {
-        Ok(Self {
-            record: value.record.try_into()?,
-            digest: value.digest,
-            state: value.state,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg(test)]
-pub(super) struct ProgressRemovalRow {
-    record: RecordIdRow,
-}
-#[cfg(test)]
-impl From<&ProgressRemoval> for ProgressRemovalRow {
-    fn from(value: &ProgressRemoval) -> Self {
-        Self {
-            record: RecordIdRow::from(&value.record),
-        }
-    }
-}
-#[cfg(test)]
-impl TryFrom<ProgressRemovalRow> for ProgressRemoval {
-    type Error = sdk::Error;
-    fn try_from(value: ProgressRemovalRow) -> sdk::Result<Self> {
-        Ok(Self {
-            record: value.record.try_into()?,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(super) struct FactAnchorRow {
     record: RecordIdRow,
     key: ContextKeyRow,

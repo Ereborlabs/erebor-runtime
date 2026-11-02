@@ -6,16 +6,12 @@ mod credential;
 mod edges;
 mod finding;
 mod finish;
-#[cfg(test)]
-mod incremental;
 mod kubernetes;
 mod model;
 mod native;
 mod observation;
 mod policy;
 mod process;
-#[cfg(test)]
-mod resume;
 mod units;
 
 pub use contract::ReasonDetails;
@@ -24,10 +20,6 @@ pub use model::*;
 pub const GRAPH_WINDOW_NS: u64 = 300_000_000_000;
 pub const GRAPH_WITNESS_TTL_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
-#[cfg(test)]
-use incremental::{Progress, ProgressRemoval};
-#[cfg(test)]
-use resume::{Resume, ResumeBasis};
 use GraphContextActionV1 as ContextClass;
 use GraphFactValueV1 as FactValue;
 use GraphReadPathV1 as ReadPath;
@@ -51,46 +43,9 @@ struct Computation {
     subject_indices: BTreeMap<GraphSubjectKeyV1, u32>,
     edges: BTreeMap<GraphEdgeKeyV1, Relationship>,
     findings: BTreeMap<String, Finding>,
-    #[cfg(test)]
-    prior_findings: BTreeMap<String, (FindingV1, FindingAnchor)>,
-    #[cfg(test)]
-    prior_subjects: BTreeMap<GraphSubjectKeyV1, SubjectChange>,
-    #[cfg(test)]
-    prior_edges: BTreeMap<RelationshipIdentity, RelationshipChange>,
-    #[cfg(test)]
-    prior_progress: BTreeMap<crate::discovery::DiscoveryRecordIdV1, Progress>,
-    #[cfg(test)]
-    state: String,
-    #[cfg(test)]
-    progress: Vec<Progress>,
-    #[cfg(test)]
-    work: usize,
 }
 
 impl Computation {
-    #[cfg(test)]
-    fn snapshot(
-        records: Vec<Observation>,
-        facts: Vec<Fact>,
-        manifest: Manifest,
-        detector: Detector,
-    ) -> sdk::Result<Self> {
-        let mut computation = Self::indexed(records, facts, manifest, detector)?;
-        computation.progress = computation
-            .records
-            .iter()
-            .zip(&computation.fact_rows)
-            .map(|(record, rows)| {
-                let basis = rows
-                    .iter()
-                    .map(|&index| &computation.facts[index])
-                    .collect::<Vec<_>>();
-                Progress::new(record, computation.manifest.window_ns, &basis)
-            })
-            .collect::<sdk::Result<_>>()?;
-        Ok(computation)
-    }
-
     fn indexed(
         records: Vec<Observation>,
         facts: Vec<Fact>,
@@ -141,24 +96,6 @@ impl Computation {
             subject_indices: BTreeMap::new(),
             edges: BTreeMap::new(),
             findings: BTreeMap::new(),
-            #[cfg(test)]
-            prior_findings: BTreeMap::new(),
-            #[cfg(test)]
-            prior_subjects: BTreeMap::new(),
-            #[cfg(test)]
-            prior_edges: BTreeMap::new(),
-            #[cfg(test)]
-            prior_progress: BTreeMap::new(),
-            #[cfg(test)]
-            progress: Vec::new(),
-            #[cfg(test)]
-            work: 0,
-            #[cfg(test)]
-            state: match detector {
-                Detector::Kubernetes => "KUBERNETES_PROOF_MISSING",
-                _ => "WAITING",
-            }
-            .into(),
         };
         Ok(computation)
     }

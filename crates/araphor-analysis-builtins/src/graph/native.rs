@@ -144,34 +144,6 @@ impl Manifest {
     }
 }
 
-#[cfg(test)]
-impl Progress {
-    pub fn port() -> sdk::Port {
-        static PORT: OnceLock<sdk::Port> = OnceLock::new();
-        port::<views::ProgressRow>("progress", &PORT)
-    }
-    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
-        encode(Self::port(), rows, views::ProgressRow::from)
-    }
-    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
-        decode::<views::ProgressRow, Self>(Self::port(), data, TryInto::try_into)
-    }
-}
-
-#[cfg(test)]
-impl ProgressRemoval {
-    pub fn port() -> sdk::Port {
-        static PORT: OnceLock<sdk::Port> = OnceLock::new();
-        port::<views::ProgressRemovalRow>("progress_removals", &PORT)
-    }
-    pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
-        encode(Self::port(), rows, views::ProgressRemovalRow::from)
-    }
-    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
-        decode::<views::ProgressRemovalRow, Self>(Self::port(), data, TryInto::try_into)
-    }
-}
-
 impl Serialize for GraphPackageStateV1 {
     fn serialize<S: serde::Serializer>(
         &self,
