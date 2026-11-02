@@ -32,7 +32,6 @@ pub(super) struct Runtime {
     revision: u64,
     captured: u64,
     position: Option<StorePositionV1>,
-    content: Option<[u8; 32]>,
     evaluated: u64,
     exhausted: bool,
     ended: bool,
@@ -124,7 +123,6 @@ impl Runtime {
             requests: None,
             cut: None,
             advance_window: false,
-            content: None,
             evaluated: 0,
             exhausted: true,
             ended: false,
@@ -317,9 +315,7 @@ impl Runtime {
                     Arc::clone(&self.context),
                 )
                 .context(SqlSnafu)?;
-                let output = output
-                    .complete(&session, stream, Some(&mut self.content))
-                    .await?;
+                let output = output.complete(&session, stream).await?;
                 drop(input);
                 output
             } else {
@@ -356,7 +352,7 @@ impl Runtime {
                     )
                     .await?;
                 if self.run.follow || self.run.managed.is_none() {
-                    captured.reserve_complete(self.run.follow)?;
+                    captured.reserve_complete()?;
                 }
                 let recovery = captured.recovery.take();
                 let captured = CapturedExecution::new(
@@ -477,11 +473,7 @@ impl Runtime {
                     _permit: Some(permit),
                     _control: control,
                 }
-                .complete(
-                    &session,
-                    stream,
-                    self.run.follow.then_some(&mut self.content),
-                )
+                .complete(&session, stream)
                 .await?;
                 pending.active = false;
                 output

@@ -58,11 +58,11 @@ async fn fixed_window_keeps_cut() {
     clock.set(3_000_000_000);
     let interim = next(&mut subscription).await;
     assert!(interim.completed_windows.is_empty());
-    assert!(interim.batches.is_none());
+    assert_eq!(values(&interim, 0), [ScalarValue::Int64(Some(1))]);
     clock.set(7_500_000_000);
     let closed = next(&mut subscription).await;
     assert_eq!(closed.completed_windows, [window]);
-    assert!(closed.batches.is_none());
+    assert_eq!(values(&closed, 0), [ScalarValue::Int64(Some(1))]);
     assert!(!Arc::ptr_eq(&closed.snapshot, &interim.snapshot));
     assert_eq!(closed.evaluated_utc_ns, 7_500_000_000);
     assert_eq!(closed.snapshot.time_utc_ns(), 7_500_000_000);
@@ -85,7 +85,7 @@ async fn fixed_window_keeps_cut() {
     assert!(!Arc::ptr_eq(&closed.snapshot, &later.snapshot));
     assert_eq!(closed.evaluated_utc_ns, 8_000_000_000);
     let current = next(&mut subscription).await;
-    assert!(current.batches.is_none());
+    assert_eq!(values(&current, 0), [ScalarValue::Int64(Some(1))]);
     assert_eq!(current.snapshot.windows[0].start_utc_ns, 8_000_000_000);
     subscription.cancel_and_join().await.unwrap();
 }

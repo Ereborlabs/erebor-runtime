@@ -728,3 +728,50 @@ Graph root dependencies and millisecond execution remain **Not done**. No new
 latency or storage-size improvement is claimed. Cache helper tests with
 invented publication references, host alias tests, and codec assertions for
 removed forwarding methods are removed. The real owner and RPC assertions remain.
+
+## Native result delivery after a commit
+
+Query uses committed source positions to select work. A completed native
+execution returns its result even when its rows equal the previous result.
+This change removes the output fingerprint and the scalar conversion of
+every output cell.
+
+[AnalysisStore::commit_raw](../../crates/araphor-data/src/analysis/raw.rs) Data commits a source position
+  -> [Progress::next](../../crates/araphor-query/src/stream/progress.rs) the subscription receives the source notification
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) the retained native plan executes at the captured cut
+  -> [Output::complete](../../crates/araphor-query/src/stream/physical/output.rs) Query retains the native batches and checks read authority
+  -> [Update](../../crates/araphor-query/src/follow/mod.rs) the subscription returns the result and committed progress
+
+[Output::complete](../../crates/araphor-query/src/stream/physical/output.rs) Execution fails or is cancelled
+  -> [Session::bounded](../../crates/araphor-query/src/execution.rs) Query releases the stream and its evaluation permit
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) Query preserves the existing failure path
+
+`Output` owns temporary result batches and their memory reservation. It does
+not own a content digest. Empty native results remain empty results. Native
+array types and batch boundaries remain intact. Configured row, byte, and
+memory limits still apply. A managed sink reserves count-delivery memory
+before its transaction can commit.
+
+`Cursor::binding` owns one private opaque request commitment. Plain queries
+bind the native plan, source names, exact selection, operation, and caller.
+Managed queries bind the admitted tenant, generation, and instance instead
+of fresh native source slots or a definition-content digest. The complete
+managed definition and grant checks still apply. The commitment does not
+sign a cursor or replace read authorization. It does not detect row changes.
+The client scope is encoded once and passed directly to this owner.
+
+Focused Linux qualification on 2026-11-02 passes seven existing output cases,
+committed progress, prepaid count delivery, fixed-window cuts, four cursor
+cases, and foreign managed binding rejection. Logs are in
+`/tmp/araphor-cdc-output-20261102.log`,
+`/tmp/araphor-cdc-progress-20261102.log`,
+`/tmp/araphor-cdc-prepay-20261102.log`,
+`/tmp/araphor-cdc-window-20261102-2.log`,
+`/tmp/araphor-cdc-cursor-20261102-2.log`, and
+`/tmp/araphor-cdc-resume-20261102-2.log`.
+
+The Graph, Control, restart, and multi-source checks did not finish within
+the 90-second diagnostic cutoff. They remain **Not done**. This output
+qualification does not prove complete incremental execution, a complete
+hash audit, or a latency improvement. Generic input receipts and native
+source-key replacement remain separate work.

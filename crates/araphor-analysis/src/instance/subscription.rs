@@ -114,12 +114,12 @@ impl Instance {
             let session = self
                 .session
                 .operation(&control.within(grant.remaining()?)?, 0)?;
-            let binding = self
-                .admitted
-                .spec
-                .definition
-                .digest()
-                .map_err(araphor_data::Error::from)?;
+            let binding = format!(
+                "{}:{}:{}",
+                uuid::Uuid::from_bytes(self.admitted.spec.tenant),
+                self.admitted.generation,
+                self.admitted.spec.id,
+            );
             let owner = Arc::clone(self);
             let query = session
                 .subscribe_managed(

@@ -14,7 +14,7 @@ use snafu::ResultExt as _;
 
 use crate::execution::{Engine, Permit, Session};
 use crate::sources::ArrowSnapshot;
-use crate::stream::physical::{Fingerprint, SubscribeExec};
+use crate::stream::physical::SubscribeExec;
 use crate::stream::{Event, Output, OutputStream, Run, StreamError};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
@@ -170,7 +170,13 @@ impl Subscription {
         } else {
             Operation::Replace
         };
-        let binding = Fingerprint::binding(&plan, requests, selection, operation, binding)?;
+        let binding = Cursor::binding(
+            managed.is_none().then_some(plan.as_ref()),
+            requests,
+            selection,
+            operation,
+            binding,
+        )?;
         if let Some(cursor) = &resume {
             cursor.check_binding(&binding, operation)?;
             cursor.check_windows(&plan, window.as_ref())?;

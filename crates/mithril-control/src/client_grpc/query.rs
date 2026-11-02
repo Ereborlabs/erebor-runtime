@@ -9,7 +9,6 @@ use araphor_query::follow::{
 };
 use araphor_query::Failure;
 use arrow_schema::SchemaRef;
-use sha2::{Digest as _, Sha256};
 use tokio::time::Instant;
 use tonic::Status;
 
@@ -39,7 +38,6 @@ impl ClientGrpcOwner {
         let scope =
             rmp_serde::to_vec_named(&(access.principal(), access.revision(), access.tenant_id()))
                 .map_err(|_| Status::internal("The query scope cannot be encoded."))?;
-        let binding = Sha256::digest(scope);
         let parameters = Parameters::try_from(request.parameters)?.0;
         let resume = Self::query_cursor(&request.bookmark)?;
         let control = Arc::new(
@@ -56,7 +54,7 @@ impl ClientGrpcOwner {
                 parameters,
                 selection,
                 control,
-                &binding,
+                &scope,
                 resume,
                 Arc::new(SystemClock::default()),
                 request.follow,

@@ -8,6 +8,7 @@ use datafusion::arrow::array::{
     Int64Array, RecordBatchOptions,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::ScalarValue;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures_util::{stream, StreamExt as _};
@@ -61,7 +62,7 @@ fn output(session: &Session, snapshot: Arc<ArrowSnapshot>) -> Result<Output> {
 }
 
 #[tokio::test]
-async fn logical_rows_ignore_batches() -> TestResult {
+async fn native_batches_are_preserved() -> TestResult {
     let (_directory, session, snapshot) = owner().await?;
     let schema = Arc::new(Schema::new_with_metadata(
         vec![Field::new("value", DataType::Int64, true)],
@@ -71,7 +72,6 @@ async fn logical_rows_ignore_batches() -> TestResult {
         Arc::clone(&schema),
         vec![Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]))],
     )?;
-    let mut previous = None;
     let first = output(&session, Arc::clone(&snapshot))?
         .complete(
             &session,
@@ -80,7 +80,6 @@ async fn logical_rows_ignore_batches() -> TestResult {
                 Arc::clone(&schema),
                 None,
             )?),
-            Some(&mut previous),
         )
         .await?;
     assert!(Arc::ptr_eq(&first.snapshot, &snapshot));
@@ -102,11 +101,13 @@ async fn logical_rows_ignore_batches() -> TestResult {
                 Arc::clone(&schema),
                 None,
             )?),
-            Some(&mut previous),
         )
         .await?;
-    assert!(split.batches.is_none());
-    assert_eq!(split._memory.size(), 0);
+    assert_eq!(
+        split.batches.as_ref().ok_or("split result")?,
+        &[batch.slice(0, 1), batch.slice(1, 2)]
+    );
+    assert!(split._memory.size() > 0);
     assert!(split._permit.is_none());
     drop(split);
     let changed = Arc::new(Schema::new_with_metadata(
@@ -121,7 +122,6 @@ async fn logical_rows_ignore_batches() -> TestResult {
                 Arc::clone(&changed),
                 None,
             )?),
-            Some(&mut previous),
         )
         .await?;
     assert!(empty
@@ -135,16 +135,14 @@ async fn logical_rows_ignore_batches() -> TestResult {
         .complete(
             &session,
             Box::pin(MemoryStream::try_new(Vec::new(), changed, None)?),
-            Some(&mut previous),
         )
         .await?;
-    assert!(empty.batches.is_none());
+    assert!(empty.batches.as_ref().ok_or("empty result")?.is_empty());
     drop(empty);
     let schema_change = output(&session, snapshot)?
         .complete(
             &session,
             Box::pin(MemoryStream::try_new(Vec::new(), schema, None)?),
-            Some(&mut previous),
         )
         .await?;
     assert!(schema_change
@@ -164,7 +162,6 @@ async fn zero_columns_keep_rows() -> TestResult {
         Vec::new(),
         &RecordBatchOptions::new().with_row_count(Some(3)),
     )?;
-    let mut previous = None;
     let first = output(&session, Arc::clone(&snapshot))?
         .complete(
             &session,
@@ -173,7 +170,6 @@ async fn zero_columns_keep_rows() -> TestResult {
                 Arc::clone(&schema),
                 None,
             )?),
-            Some(&mut previous),
         )
         .await?;
     let batches = first.batches.as_ref().ok_or("zero-column result")?;
@@ -188,10 +184,12 @@ async fn zero_columns_keep_rows() -> TestResult {
                 Arc::clone(&schema),
                 None,
             )?),
-            Some(&mut previous),
         )
         .await?;
-    assert!(same.batches.is_none());
+    let batches = same.batches.as_ref().ok_or("split zero-column result")?;
+    assert_eq!(batches.len(), 2);
+    assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
     drop(same);
     let changed = output(&session, snapshot)?
         .complete(
@@ -201,7 +199,6 @@ async fn zero_columns_keep_rows() -> TestResult {
                 schema,
                 None,
             )?),
-            Some(&mut previous),
         )
         .await?;
     assert_eq!(
@@ -229,7 +226,6 @@ async fn finite_keeps_native_arrays() -> TestResult {
         .complete(
             &session,
             Box::pin(MemoryStream::try_new(vec![batch.clone()], schema, None)?),
-            None,
         )
         .await?;
     let batches = completed.batches.as_ref().ok_or("finite output absent")?;
@@ -259,12 +255,10 @@ async fn later_error_releases_output() -> TestResult {
         let _active = &active;
         batch
     });
-    let mut previous = None;
     let error = output(&session, Arc::clone(&snapshot))?
         .complete(
             &session,
             Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream)),
-            Some(&mut previous),
         )
         .await
         .err()
@@ -276,7 +270,6 @@ async fn later_error_releases_output() -> TestResult {
         crate::Failure::from(&error),
         crate::Failure::EvaluationFailed
     );
-    assert_eq!(previous, None);
     assert_eq!(Arc::strong_count(&producer), 1);
     drop(session.engine().reserve_evaluation([1; 16])?);
     drop(
@@ -300,7 +293,6 @@ async fn later_error_releases_output() -> TestResult {
                 schema,
                 None,
             )?),
-            Some(&mut previous),
         )
         .await
         .err()
@@ -311,7 +303,6 @@ async fn later_error_releases_output() -> TestResult {
             source: DataFusionError::ResourcesExhausted(_)
         }
     ));
-    assert_eq!(previous, None);
     drop(session.engine().reserve_evaluation([1; 16])?);
     drop(
         session.engine().memory().reserve_output(
@@ -345,7 +336,6 @@ async fn borrowed_output_keeps_charge() -> TestResult {
                 schema,
                 None,
             )?),
-            Some(&mut None),
         )
         .await?;
     let array = Arc::clone(
@@ -412,17 +402,14 @@ async fn empty_prefix_yields_cancel() -> TestResult {
             Ok::<_, DataFusionError>(empty.clone())
         });
         let stream = Box::pin(RecordBatchStreamAdapter::new(schema, stream));
-        let mut previous = None;
         let error = {
-            let pending =
-                output(&session, snapshot)?.complete(&session, stream, Some(&mut previous));
+            let pending = output(&session, snapshot)?.complete(&session, stream);
             tokio::pin!(pending);
             assert!(futures_util::poll!(pending.as_mut()).is_pending());
             session.control().cancel()?;
             pending.await.err().ok_or("empty source must cancel")?
         };
         assert_eq!(crate::Failure::from(&error), crate::Failure::Cancelled);
-        assert_eq!(previous, None);
         assert_eq!(Arc::strong_count(&active), 1);
         drop(engine.reserve_evaluation([1; 16])?);
         drop(
@@ -452,7 +439,6 @@ async fn empty_backing_obeys_limit() -> TestResult {
         Arc::clone(&schema),
         vec![Arc::new(Int64Array::from(vec![1; 2048]))],
     )?;
-    let mut previous = None;
     let error = output(&session, snapshot)?
         .complete(
             &session,
@@ -461,7 +447,6 @@ async fn empty_backing_obeys_limit() -> TestResult {
                 schema,
                 None,
             )?),
-            Some(&mut previous),
         )
         .await
         .err()
@@ -472,7 +457,6 @@ async fn empty_backing_obeys_limit() -> TestResult {
             source: DataFusionError::ResourcesExhausted(_)
         }
     ));
-    assert_eq!(previous, None);
     drop(session.engine().reserve_evaluation([1; 16])?);
     drop(
         session.engine().memory().reserve_output(

@@ -169,7 +169,7 @@ async fn subscription_keeps_bindings() {
 }
 
 #[tokio::test]
-async fn unchanged_result_advances_cursor() {
+async fn committed_change_advances_cursor() {
     for sql in [
         "SELECT count(*) AS total FROM events WHERE source_cursor = 1",
         "SELECT SUM(CAST(source_cursor AS BIGINT)) AS total FROM events WHERE source_cursor = 1",
@@ -187,7 +187,7 @@ async fn unchanged_result_advances_cursor() {
         clock.now.store(3_000_000_000, Ordering::SeqCst);
         fixture.commit(&fixture.source, 2, 1, 2_500_000_000);
         let completed = next(&mut subscription).await;
-        assert!(completed.batches.is_none());
+        assert_eq!(values(&completed, 0), [ScalarValue::Int64(Some(1))]);
         assert!(!completed.clock_changed);
         assert_eq!(completed.evaluated_utc_ns, 3_000_000_000);
         assert!(completed.cursor.read_revision() > first.cursor.read_revision());

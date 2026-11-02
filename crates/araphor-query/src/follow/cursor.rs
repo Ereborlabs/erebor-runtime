@@ -1,15 +1,16 @@
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
+use std::io::{self, Write};
 
 use araphor_data::{
     AnalysisSelectionV1, AnalysisStoreMetaV1, AnalysisTableRequests, StorePositionV1,
 };
 use datafusion::logical_expr::LogicalPlan;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::{Operation, Window, WindowRange, WindowSource};
-use crate::stream::physical::Fingerprint;
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
 #[cfg(test)]
@@ -215,15 +216,15 @@ impl Cursor {
     }
 }
 
-impl Fingerprint {
+impl Cursor {
     pub(super) fn binding(
-        plan: &LogicalPlan,
+        plan: Option<&LogicalPlan>,
         sources: &AnalysisTableRequests,
         selection: &AnalysisSelectionV1,
         operation: Operation,
         caller: &[u8],
     ) -> Result<[u8; 32]> {
-        let mut hash = Self::new();
+        let mut hash = RequestBinding(Sha256::new());
         Hasher::write(&mut hash, b"araphor-query.follow.v1\0");
         plan.hash(&mut hash);
         sources.len().hash(&mut hash);
@@ -240,6 +241,32 @@ impl Fingerprint {
                 }
                 .build()
             })?;
-        Ok(hash.finish_digest())
+        Ok(hash.0.finalize().into())
+    }
+}
+
+struct RequestBinding(Sha256);
+
+impl Hasher for RequestBinding {
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    fn finish(&self) -> u64 {
+        let digest = self.0.clone().finalize();
+        let mut bytes = [0; 8];
+        bytes.copy_from_slice(&digest[..8]);
+        u64::from_le_bytes(bytes)
+    }
+}
+
+impl Write for RequestBinding {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }

@@ -809,14 +809,14 @@ pub(crate) struct PhysicalStream {
 }
 
 impl CapturedPhysical {
-    pub(crate) fn reserve_complete(&self, fingerprint: bool) -> Result<()> {
+    pub(crate) fn reserve_complete(&self) -> Result<()> {
         if self
             .physical
             .as_any()
             .is::<datafusion::datasource::sink::DataSinkExec>()
         {
             self.reservation
-                .try_grow(crate::stream::Output::count_bytes(fingerprint)?)
+                .try_grow(crate::stream::Output::count_bytes())
                 .map_err(|source| crate::Error::Capacity {
                     resource: "shared output",
                     source,

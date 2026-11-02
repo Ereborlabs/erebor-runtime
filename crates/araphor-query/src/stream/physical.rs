@@ -39,8 +39,6 @@ mod output;
 mod page;
 mod runtime;
 
-pub(crate) use output::Fingerprint;
-
 #[derive(Debug)]
 pub(crate) struct SubscribeExec {
     input: Arc<dyn ExecutionPlan>,

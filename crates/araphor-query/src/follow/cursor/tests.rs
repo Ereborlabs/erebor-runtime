@@ -163,7 +163,7 @@ fn native_scope_binding() {
                 scope: &AnalysisSelectionV1,
                 operation: Operation,
                 caller: &[u8]| {
-        Fingerprint::binding(plan, sources, scope, operation, caller).unwrap()
+        Cursor::binding(Some(plan), sources, scope, operation, caller).unwrap()
     };
     let binding = bind(&plan, &sources, &scope, Operation::Append, b"principal A");
     let cursor = Cursor::new(
@@ -258,13 +258,25 @@ fn source_keys_keep_binding() {
     let scope = AnalysisSelectionV1::new([1; 16], vec![]);
     let names = BTreeSet::from(["coverage".to_owned(), "events".to_owned()]);
     let mut requests: AnalysisTableRequests = names.into_iter().map(|name| (name, None)).collect();
-    let binding =
-        Fingerprint::binding(&plan, &requests, &scope, Operation::Append, b"principal").unwrap();
+    let binding = Cursor::binding(
+        Some(&plan),
+        &requests,
+        &scope,
+        Operation::Append,
+        b"principal",
+    )
+    .unwrap();
     for columns in [None, Some(BTreeSet::new()), Some(BTreeSet::from([1, 3]))] {
         requests.insert("events".to_owned(), columns);
         assert_eq!(
-            Fingerprint::binding(&plan, &requests, &scope, Operation::Append, b"principal")
-                .unwrap(),
+            Cursor::binding(
+                Some(&plan),
+                &requests,
+                &scope,
+                Operation::Append,
+                b"principal"
+            )
+            .unwrap(),
             binding
         );
     }

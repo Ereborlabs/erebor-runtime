@@ -436,10 +436,12 @@ impl Instance {
                 witness_expiry,
             },
         });
-        let binding = spec
-            .definition
-            .digest()
-            .map_err(araphor_data::Error::from)?;
+        let binding = format!(
+            "{}:{}:{}",
+            uuid::Uuid::from_bytes(spec.tenant),
+            self.admitted.generation,
+            spec.id,
+        );
         let session = self.session.operation(control, time)?;
         if let Err(error) = session
             .run_managed(self.prepared.clone(), target, binding.as_bytes())

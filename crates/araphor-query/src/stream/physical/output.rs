@@ -1,16 +1,11 @@
-use std::hash::{Hash, Hasher};
-use std::io::{self, Write};
 use std::mem::size_of;
-use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt64Array};
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, ScalarValue};
+use datafusion::arrow::array::{ArrayRef, RecordBatch};
+use datafusion::common::DataFusionError;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::physical_plan::coop::make_cooperative;
 use datafusion::physical_plan::SendableRecordBatchStream;
 use futures_util::TryStreamExt as _;
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use crate::execution::Session;
@@ -22,10 +17,8 @@ impl Output {
         mut self,
         session: &Session,
         stream: SendableRecordBatchStream,
-        previous: Option<&mut Option<[u8; 32]>>,
     ) -> Result<Self> {
         self._control.check()?;
-        let schema = stream.schema();
         let stream = make_cooperative(stream);
         let permit = self._permit.take().ok_or_else(|| crate::Error::Sql {
             source: DataFusionError::Internal("completed output permit is absent".into()),
@@ -64,42 +57,19 @@ impl Output {
             .capacity()
             .saturating_mul(size_of::<RecordBatch>())
             .saturating_add(arrays);
-        let digest = previous
-            .as_ref()
-            .map(|_| self.fingerprint(&schema, &batches, &memory, headers))
-            .transpose()?;
-        let unchanged = previous
-            .as_ref()
-            .is_some_and(|previous| **previous == digest);
         memory
-            .try_resize(if unchanged { 0 } else { headers })
+            .try_resize(headers)
             .map_err(|source| crate::Error::Capacity {
                 resource: "shared output",
                 source,
             })?;
-        if let Some(previous) = previous {
-            *previous = digest;
-        }
-        self.batches = (!unchanged).then_some(batches);
+        self.batches = Some(batches);
         self._memory = memory;
         Ok(self)
     }
 
-    pub(crate) fn count_bytes(fingerprint: bool) -> Result<usize> {
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![(
-            "count",
-            Arc::new(UInt64Array::from(vec![0])) as ArrayRef,
-            false,
-        )])
-        .map_err(DataFusionError::from)
-        .context(SqlSnafu)?;
-        let headers = size_of::<RecordBatch>() + size_of::<ArrayRef>();
-        Ok(headers
-            + if fingerprint {
-                Self::row_bytes(&batch, 0)? + size_of::<ScalarValue>()
-            } else {
-                0
-            })
+    pub(crate) fn count_bytes() -> usize {
+        size_of::<RecordBatch>() + size_of::<ArrayRef>()
     }
 
     fn charge(memory: &MemoryReservation, bytes: usize) -> Result<()> {
@@ -109,75 +79,6 @@ impl Output {
                 resource: "shared output",
                 source,
             })
-    }
-
-    fn fingerprint(
-        &self,
-        schema: &SchemaRef,
-        batches: &[RecordBatch],
-        memory: &MemoryReservation,
-        headers: usize,
-    ) -> Result<[u8; 32]> {
-        let mut hash = Fingerprint::new();
-        schema.hash(&mut hash);
-        batches
-            .iter()
-            .map(RecordBatch::num_rows)
-            .sum::<usize>()
-            .hash(&mut hash);
-        for batch in batches {
-            for row in 0..batch.num_rows() {
-                self._control.check()?;
-                Self::charge(
-                    memory,
-                    headers
-                        .saturating_add(Self::row_bytes(batch, row)?)
-                        .saturating_add(size_of::<ScalarValue>()),
-                )?;
-                for column in batch.columns() {
-                    ScalarValue::try_from_array(column, row)
-                        .context(SqlSnafu)?
-                        .hash(&mut hash);
-                }
-            }
-        }
-        Ok(hash.finish_digest())
-    }
-}
-
-pub(crate) struct Fingerprint(Sha256);
-
-impl Fingerprint {
-    pub(crate) fn new() -> Self {
-        Self(Sha256::new())
-    }
-
-    pub(crate) fn finish_digest(self) -> [u8; 32] {
-        self.0.finalize().into()
-    }
-}
-
-impl Hasher for Fingerprint {
-    fn write(&mut self, bytes: &[u8]) {
-        self.0.update(bytes);
-    }
-
-    fn finish(&self) -> u64 {
-        let digest = self.0.clone().finalize();
-        let mut bytes = [0; 8];
-        bytes.copy_from_slice(&digest[..8]);
-        u64::from_le_bytes(bytes)
-    }
-}
-
-impl Write for Fingerprint {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.update(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
     }
 }
 

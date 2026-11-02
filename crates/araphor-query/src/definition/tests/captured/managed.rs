@@ -326,7 +326,7 @@ async fn admission_cancel_joins_worker() -> TestResult {
 
 #[tokio::test]
 async fn count_delivery_is_prepaid() -> TestResult {
-    let required = 8 + crate::stream::Output::count_bytes(true)?;
+    let required = std::mem::size_of::<u64>() + crate::stream::Output::count_bytes();
     for capacity in [required - 1, required] {
         let fixture = Fixture::limits(Limits {
             output_capacity: Some(capacity),

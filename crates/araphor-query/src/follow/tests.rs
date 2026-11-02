@@ -22,7 +22,7 @@ use futures_util::StreamExt as _;
 use prost::Message as _;
 use tokio::sync::watch;
 
-use super::{Clock, Cursor, Fingerprint, Operation, Subscription, Update, Window};
+use super::{Clock, Cursor, Operation, Subscription, Update, Window};
 use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
 use crate::sources::SourceSnapshot;
@@ -405,8 +405,8 @@ fn native_graph_admission() {
         ));
     }
     let (plan, sources) = fixture.plan(sql, vec![]);
-    let binding = Fingerprint::binding(
-        &plan,
+    let binding = Cursor::binding(
+        Some(&plan),
         &sources,
         &selection,
         Operation::Replace,
@@ -2305,7 +2305,7 @@ fn cursor_admission_bindings() {
     );
     let scope = fixture.selection();
     let operation = Operation::Append;
-    let binding = Fingerprint::binding(&plan, &sources, &scope, operation, b"authority").unwrap();
+    let binding = Cursor::binding(Some(&plan), &sources, &scope, operation, b"authority").unwrap();
     let cursor = Cursor::new(
         &fixture.store.meta().unwrap(),
         operation,
@@ -2355,7 +2355,7 @@ fn cursor_admission_bindings() {
         source_sha256: [5; 32],
     }]);
     let binding =
-        Fingerprint::binding(&plan, &sources, &first, operation, b"same principal").unwrap();
+        Cursor::binding(Some(&plan), &sources, &first, operation, b"same principal").unwrap();
     let cursor = Cursor::new(
         &fixture.store.meta().unwrap(),
         operation,
