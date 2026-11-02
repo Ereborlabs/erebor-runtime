@@ -46,18 +46,14 @@ impl RelationshipRows {
         if edges.is_empty() {
             return Ok(Vec::new());
         }
-        writer.execute_batch("CREATE TEMP TABLE graph_value_edges AS SELECT e.edge_id,e.value_hash,e.from_ref,e.to_ref,p.edge_type,p.edge_rank,p.package_id,p.cause,p.cause_rank,e.evidence_refs,p.proof_quality,p.required_coverage_interval_ids,e.first_boottime_ns,e.last_boottime_ns,p.property_hash FROM graph_edge_values e JOIN graph_edge_properties p USING(property_ref) WHERE false").context(DatabaseSnafu {operation:"create Graph edge candidates"})?;
+        writer.execute_batch("CREATE TEMP TABLE graph_value_edges AS SELECT e.edge_id,e.value_hash,e.from_ref,e.to_ref,p.edge_type,p.edge_rank,p.package_id,p.cause,p.cause_rank,e.evidence_refs,p.proof_quality,p.required_coverage_interval_ids,e.first_boottime_ns,e.last_boottime_ns,p.property_key FROM graph_edge_values e JOIN graph_edge_properties p USING(property_ref) WHERE false").context(DatabaseSnafu {operation:"create Graph edge candidates"})?;
         Self::append(writer, "graph_value_edges", subjects, records, edges)?;
-        let property="p.property_hash=c.property_hash AND p.edge_type=c.edge_type AND p.edge_rank=c.edge_rank AND p.package_id=c.package_id AND p.cause=c.cause AND p.cause_rank=c.cause_rank AND p.proof_quality=c.proof_quality AND p.required_coverage_interval_ids=c.required_coverage_interval_ids";
-        let invalid:bool=writer.query_row(&format!("SELECT EXISTS(SELECT 1 FROM graph_value_edges c JOIN graph_edge_properties p ON p.property_hash=c.property_hash WHERE NOT ({property}))"),[],|row|row.get(0)).context(DatabaseSnafu {operation:"check Graph edge properties"})?;
-        if invalid {
-            return Err(NativeRows::invalid("graph edge property value"));
-        }
-        writer.execute_batch(&format!("INSERT INTO graph_edge_properties SELECT nextval('graph_edge_properties_seq'),c.property_hash,c.edge_type,c.edge_rank,c.package_id,c.cause,c.cause_rank,c.proof_quality,c.required_coverage_interval_ids FROM (SELECT DISTINCT property_hash,edge_type,edge_rank,package_id,cause,cause_rank,proof_quality,required_coverage_interval_ids FROM graph_value_edges) c WHERE NOT EXISTS(SELECT 1 FROM graph_edge_properties p WHERE {property})")).context(DatabaseSnafu {operation:"intern Graph edge properties"})?;
-        let expanded="SELECT e.edge_id,e.value_hash,e.from_ref,e.to_ref,p.edge_type,p.edge_rank,p.package_id,p.cause,p.cause_rank,e.evidence_refs,p.proof_quality,p.required_coverage_interval_ids,e.first_boottime_ns,e.last_boottime_ns,p.property_hash FROM graph_edge_values e LEFT JOIN graph_edge_properties p USING(property_ref)";
-        let equal="v.property_hash=c.property_hash AND v.value_hash=c.value_hash AND v.from_ref=c.from_ref AND v.to_ref=c.to_ref AND v.edge_type=c.edge_type AND v.edge_rank=c.edge_rank AND v.package_id=c.package_id AND v.cause=c.cause AND v.cause_rank=c.cause_rank AND v.evidence_refs=c.evidence_refs AND v.proof_quality=c.proof_quality AND v.required_coverage_interval_ids=c.required_coverage_interval_ids AND v.first_boottime_ns=c.first_boottime_ns AND v.last_boottime_ns=c.last_boottime_ns";
+        let property="p.property_key=c.property_key AND p.edge_type=c.edge_type AND p.edge_rank=c.edge_rank AND p.package_id=c.package_id AND p.cause=c.cause AND p.cause_rank=c.cause_rank AND p.proof_quality=c.proof_quality AND p.required_coverage_interval_ids=c.required_coverage_interval_ids";
+        Self::intern_properties(writer)?;
+        let expanded="SELECT e.edge_id,e.value_hash,e.from_ref,e.to_ref,p.edge_type,p.edge_rank,p.package_id,p.cause,p.cause_rank,e.evidence_refs,p.proof_quality,p.required_coverage_interval_ids,e.first_boottime_ns,e.last_boottime_ns,p.property_key FROM graph_edge_values e LEFT JOIN graph_edge_properties p USING(property_ref)";
+        let equal="v.property_key=c.property_key AND v.value_hash=c.value_hash AND v.from_ref=c.from_ref AND v.to_ref=c.to_ref AND v.edge_type=c.edge_type AND v.edge_rank=c.edge_rank AND v.package_id=c.package_id AND v.cause=c.cause AND v.cause_rank=c.cause_rank AND v.evidence_refs=c.evidence_refs AND v.proof_quality=c.proof_quality AND v.required_coverage_interval_ids=c.required_coverage_interval_ids AND v.first_boottime_ns=c.first_boottime_ns AND v.last_boottime_ns=c.last_boottime_ns";
         let identity="v.from_ref=c.from_ref AND v.to_ref=c.to_ref AND v.edge_type=c.edge_type AND v.package_id=c.package_id AND v.cause=c.cause AND v.evidence_refs=c.evidence_refs";
-        let corrupt:bool=writer.query_row(&format!("SELECT EXISTS(SELECT 1 FROM graph_value_edges c JOIN ({expanded}) v ON v.value_hash=c.value_hash WHERE v.property_hash IS NULL OR ({identity} AND NOT ({equal})))"),[],|row|row.get(0)).context(DatabaseSnafu {operation:"check Graph edge candidates"})?;
+        let corrupt:bool=writer.query_row(&format!("SELECT EXISTS(SELECT 1 FROM graph_value_edges c JOIN ({expanded}) v ON v.value_hash=c.value_hash WHERE v.property_key IS NULL OR ({identity} AND NOT ({equal})))"),[],|row|row.get(0)).context(DatabaseSnafu {operation:"check Graph edge candidates"})?;
         if corrupt {
             return Err(NativeRows::invalid("duplicate graph edge value"));
         }
@@ -88,6 +84,59 @@ impl RelationshipRows {
         Ok(values)
     }
 
+    fn intern_properties(writer: &Connection) -> Result<()> {
+        let mut statement = writer
+            .prepare("SELECT DISTINCT property_key FROM graph_value_edges")
+            .context(DatabaseSnafu {
+                operation: "prepare Graph changed property keys",
+            })?;
+        let mut rows = statement.query([]).context(DatabaseSnafu {
+            operation: "read Graph changed property keys",
+        })?;
+        let mut keys = Vec::new();
+        while let Some(row) = rows.next().context(DatabaseSnafu {
+            operation: "advance Graph changed property keys",
+        })? {
+            keys.push(NativeRows::column::<Vec<u8>>(row, 0)?);
+        }
+        drop(rows);
+        drop(statement);
+        let mut statement = writer.prepare("WITH candidates AS MATERIALIZED (SELECT * FROM graph_edge_properties WHERE property_key=?) SELECT property_ref,property_key,edge_type,edge_rank,package_id,cause,cause_rank,proof_quality,required_coverage_interval_ids FROM candidates").context(DatabaseSnafu {operation:"prepare Graph property candidate"})?;
+        for key in keys {
+            let mut rows = statement
+                .query(duckdb::params![&key])
+                .context(DatabaseSnafu {
+                    operation: "read Graph property candidate",
+                })?;
+            let found = match rows.next().context(DatabaseSnafu {
+                operation: "advance Graph property candidate",
+            })? {
+                Some(row) => {
+                    Self::check_property(row)?;
+                    true
+                }
+                None => false,
+            };
+            if rows
+                .next()
+                .context(DatabaseSnafu {
+                    operation: "advance Graph property candidate",
+                })?
+                .is_some()
+            {
+                return Err(NativeRows::invalid("graph duplicate property value"));
+            }
+            drop(rows);
+            if !found {
+                let inserted = writer.execute("INSERT INTO graph_edge_properties SELECT nextval('graph_edge_properties_seq'),property_key,edge_type,edge_rank,package_id,cause,cause_rank,proof_quality,required_coverage_interval_ids FROM (SELECT DISTINCT property_key,edge_type,edge_rank,package_id,cause,cause_rank,proof_quality,required_coverage_interval_ids FROM graph_value_edges WHERE property_key=?)", duckdb::params![&key]).context(DatabaseSnafu {operation:"intern Graph edge property"})?;
+                if inserted != 1 {
+                    return Err(NativeRows::invalid("graph property candidate count"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn append(
         writer: &Connection,
         table: &str,
@@ -106,7 +155,7 @@ impl RelationshipRows {
         let mut evidence = LargeListBuilder::new(UInt64Builder::new());
         let mut coverage = LargeListBuilder::new(LargeBinaryBuilder::new());
         let mut hashes = Vec::with_capacity(edges.len());
-        let mut property_hashes = Vec::with_capacity(edges.len());
+        let mut property_keys = Vec::with_capacity(edges.len());
         let mut from = Vec::with_capacity(edges.len());
         let mut to = Vec::with_capacity(edges.len());
         let mut types = Vec::with_capacity(edges.len());
@@ -141,7 +190,7 @@ impl RelationshipRows {
                 edge.first_boottime_ns,
                 edge.last_boottime_ns,
             ))?));
-            property_hashes.push(Self::property_hash(
+            property_keys.push(Self::property_key(
                 edge.key.edge_type,
                 &edge.key.package_id,
                 edge.key.cause,
@@ -177,7 +226,7 @@ impl RelationshipRows {
             Arc::new(UInt64Array::from_iter_values(
                 edges.iter().map(|edge| edge.last_boottime_ns),
             )),
-            Arc::new(LargeBinaryArray::from_iter_values(&property_hashes)),
+            Arc::new(LargeBinaryArray::from_iter_values(&property_keys)),
         ];
         let names = [
             "edge_id",
@@ -194,7 +243,7 @@ impl RelationshipRows {
             "required_coverage_interval_ids",
             "first_boottime_ns",
             "last_boottime_ns",
-            "property_hash",
+            "property_key",
         ];
         let fields = names
             .into_iter()
@@ -324,23 +373,37 @@ impl RelationshipRows {
         }
         Ok(())
     }
-    fn property_hash(
+    fn property_key(
         edge_type: GraphEdgeTypeV1,
         package: &str,
         cause: GraphCauseV1,
         proof: ProofQualityV1,
         coverage: &[[u8; 16]],
     ) -> Result<Vec<u8>> {
-        Ok(NativeRows::hash(&NativeRows::encode(&(
-            edge_type, package, cause, proof, coverage,
-        ))?))
+        NativeRows::encode(&(edge_type, package, cause, proof, coverage))
     }
+    fn check_property(row: &Row<'_>) -> Result<Vec<u8>> {
+        let edge: GraphEdgeTypeV1 = NativeRows::label_column(row, 2)?;
+        let package: String = NativeRows::column(row, 4)?;
+        let cause: GraphCauseV1 = NativeRows::label_column(row, 5)?;
+        let proof = NativeRows::proof(row, 7)?;
+        let coverage = NativeRows::coverage(row, 8)?;
+        let body = Self::property_key(edge, &package, cause, proof, &coverage)?;
+        if edge as u8 != NativeRows::column::<u8>(row, 3)?
+            || cause as u8 != NativeRows::column::<u8>(row, 6)?
+            || body != NativeRows::column::<Vec<u8>>(row, 1)?
+        {
+            return Err(NativeRows::invalid("graph edge property value"));
+        }
+        Ok(body)
+    }
+
     fn validate_properties(reader: &Connection) -> Result<()> {
         let missing:bool=reader.query_row("SELECT EXISTS(SELECT 1 FROM graph_edge_values e LEFT JOIN graph_edge_properties p USING(property_ref) WHERE p.property_ref IS NULL)",[],|row|row.get(0)).context(DatabaseSnafu {operation:"validate Graph property references"})?;
         if missing {
             return Err(NativeRows::invalid("graph edge property reference"));
         }
-        let mut statement=reader.prepare("SELECT property_ref,property_hash,edge_type,edge_rank,package_id,cause,cause_rank,proof_quality,required_coverage_interval_ids FROM graph_edge_properties").context(DatabaseSnafu {operation:"prepare Graph property registry"})?;
+        let mut statement=reader.prepare("SELECT property_ref,property_key,edge_type,edge_rank,package_id,cause,cause_rank,proof_quality,required_coverage_interval_ids FROM graph_edge_properties").context(DatabaseSnafu {operation:"prepare Graph property registry"})?;
         let mut rows = statement.query([]).context(DatabaseSnafu {
             operation: "read Graph property registry",
         })?;
@@ -348,18 +411,8 @@ impl RelationshipRows {
         while let Some(row) = rows.next().context(DatabaseSnafu {
             operation: "advance Graph property registry",
         })? {
-            let edge: GraphEdgeTypeV1 = NativeRows::label_column(row, 2)?;
-            let package: String = NativeRows::column(row, 4)?;
-            let cause: GraphCauseV1 = NativeRows::label_column(row, 5)?;
-            let proof = NativeRows::proof(row, 7)?;
-            let coverage = NativeRows::coverage(row, 8)?;
-            let body = NativeRows::encode(&(edge, &package, cause, proof, &coverage))?;
-            if edge as u8 != NativeRows::column::<u8>(row, 3)?
-                || cause as u8 != NativeRows::column::<u8>(row, 6)?
-                || NativeRows::hash(&body) != NativeRows::column::<Vec<u8>>(row, 1)?
-                || !values.insert(body)
-            {
-                return Err(NativeRows::invalid("graph edge property value"));
+            if !values.insert(Self::check_property(row)?) {
+                return Err(NativeRows::invalid("graph duplicate property value"));
             }
         }
         Ok(())

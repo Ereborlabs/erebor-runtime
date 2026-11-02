@@ -1,16 +1,16 @@
 CREATE SEQUENCE graph_edge_values_seq;
 CREATE SEQUENCE graph_edge_properties_seq;
 CREATE TABLE graph_edge_properties (
-    property_ref UBIGINT PRIMARY KEY, property_hash BLOB NOT NULL,
+    property_ref UBIGINT PRIMARY KEY, property_key BLOB NOT NULL,
     edge_type VARCHAR NOT NULL, edge_rank UTINYINT NOT NULL,
     package_id VARCHAR NOT NULL, cause VARCHAR NOT NULL, cause_rank UTINYINT NOT NULL,
     proof_quality STRUCT(source_authority UTINYINT, local_subject_binding UTINYINT,
         remote_subject_binding UTINYINT, operation_result_authority UTINYINT,
         temporal_coverage UTINYINT, integrity UTINYINT) NOT NULL,
     required_coverage_interval_ids BLOB[] NOT NULL,
-    CHECK (octet_length(property_hash) = 32)
+    CHECK (octet_length(property_key) > 0)
 );
-CREATE INDEX graph_property_hash ON graph_edge_properties (property_hash);
+CREATE INDEX graph_property_key ON graph_edge_properties (property_key);
 CREATE TABLE graph_edge_values (
     edge_id UBIGINT PRIMARY KEY, value_hash BLOB NOT NULL,
     from_ref UBIGINT NOT NULL, to_ref UBIGINT NOT NULL,

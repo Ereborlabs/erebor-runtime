@@ -147,7 +147,7 @@ fn shared_corruption_rejects_reopen() -> TestResult {
         "UPDATE graph_subject_values SET authority_rank=3 WHERE authority_rank=0",
         "UPDATE graph_edge_values SET from_ref=from_ref+999999",
         "UPDATE graph_edge_values SET property_ref=property_ref+999999",
-        "UPDATE graph_edge_properties SET property_hash=from_hex(repeat('00',32))",
+        "UPDATE graph_edge_properties SET property_key=X'00'",
         "UPDATE graph_edge_properties SET edge_rank=255",
         "UPDATE graph_edge_values SET value_hash=from_hex(repeat('00',32))",
         "UPDATE graph_evidence SET source_ref=source_ref+1",

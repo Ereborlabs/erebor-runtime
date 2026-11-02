@@ -149,6 +149,25 @@ fn native_values_keep_identity_properties_and_history() -> TestResult {
     let keys = RelationshipRows::registry(&writer, &registry, &ValueFixture::evidence(&records))?;
     assert_eq!(keys[&ids[1]], second.key);
     assert_eq!(keys[&ids[2]], changed.key);
+    assert!(!fixture.edges[0].required_coverage_interval_ids.is_empty());
+    let mut interval = fixture.edges[0].clone();
+    interval.required_coverage_interval_ids.clear();
+    let mut quality = fixture.edges[0].clone();
+    quality.proof_quality.temporal_coverage = TemporalCoverageV1::Unknown;
+    let variants = RelationshipRows::intern(&writer, &subjects, &records, &[interval, quality])?;
+    assert_ne!(variants[0], ids[0]);
+    assert_ne!(variants[1], ids[0]);
+    assert_ne!(variants[0], variants[1]);
+    assert_eq!(
+        RelationshipRows::intern(&writer, &subjects, &records, &fixture.edges[..1])?,
+        vec![ids[0]]
+    );
+    let counts: (u64, u64) = writer.query_row(
+        "SELECT (SELECT count(*) FROM graph_edge_properties),(SELECT count(*) FROM graph_edge_values)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(counts, (3, 5));
     let mut statement = writer.prepare(&format!(
         "SELECT {} FROM graph_subjects WHERE result_id='old' ORDER BY ordinal",
         SubjectRows::COLUMNS
@@ -225,7 +244,7 @@ fn native_relationships_reject_corruption() -> TestResult {
         "UPDATE graph_edge_values SET evidence_refs=[NULL]::UBIGINT[]",
         "UPDATE graph_edge_values SET value_hash=from_hex(repeat('00',32))",
         "UPDATE graph_edge_values SET last_boottime_ns=last_boottime_ns+1",
-        "UPDATE graph_edge_properties SET property_hash=from_hex(repeat('00',32))",
+        "UPDATE graph_edge_properties SET property_key=X'00'",
         "UPDATE graph_edge_properties SET edge_type='INVALID'",
         "UPDATE graph_edge_properties SET edge_rank=255",
         "UPDATE graph_edge_properties SET cause_rank=255",
@@ -250,6 +269,10 @@ fn native_relationships_check_full_equality() -> TestResult {
     let records = fixture.records(&writer)?;
     let subjects = SubjectRows::intern(&writer, &fixture.subjects)?;
     let values = RelationshipRows::intern(&writer, &subjects, &records, &fixture.edges)?;
+    writer.execute_batch("BEGIN TRANSACTION")?;
+    assert_eq!(writer.execute("INSERT INTO graph_edge_properties SELECT nextval('graph_edge_properties_seq'),property_key,edge_type,edge_rank,package_id,cause,cause_rank,proof_quality,required_coverage_interval_ids FROM graph_edge_properties WHERE property_ref=(SELECT property_ref FROM graph_edge_values WHERE edge_id=?)", params![values[0]])?,1);
+    assert!(RelationshipRows::intern(&writer, &subjects, &records, &fixture.edges).is_err());
+    writer.execute_batch("ROLLBACK")?;
     writer.execute_batch("BEGIN TRANSACTION")?;
     writer.execute_batch("UPDATE graph_edge_properties SET package_id=package_id || '-tamper'")?;
     assert!(RelationshipRows::intern(&writer, &subjects, &records, &fixture.edges).is_err());

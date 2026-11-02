@@ -1,7 +1,9 @@
 # Araphor Graph Commit Review
 
-The [shared Graph section](#shared-graph-values-and-storage-controls) gives
-the current source reading route. The compact Graph and incremental builtin
+The [native edge property section](#native-edge-property-keys) gives the
+current property-key reading route. The
+[shared Graph section](#shared-graph-values-and-storage-controls) records
+its earlier source reading route. The compact Graph and incremental builtin
 sections retain their earlier source states and verification records.
 
 This guide covers the approved typed graph handoff and buffered row appends.
@@ -1151,3 +1153,36 @@ cursors; five notices existed at timeout. The final panic-free lease layout
 has not been measured with that workload.
 The measured command peak included compilation. It is not a runtime memory
 comparison. Backlog qualification and the 100-fold target remain **Not done**.
+
+## Native edge property keys
+
+This section covers the removal of the edge-property hash. Edge-value,
+finding-identity, and package-state hash removal remains separate work.
+
+[RelationshipRows::intern](../../crates/araphor-graph/src/relationships.rs) Graph receives the changed relationship values
+  -> [RelationshipRows::append](../../crates/araphor-graph/src/relationships.rs) Graph encodes each touched property tuple with the existing MessagePack codec
+  -> [RelationshipRows::intern_properties](../../crates/araphor-graph/src/relationships.rs) the native property-key index selects the exact candidate
+  -> [RelationshipRows::check_property](../../crates/araphor-graph/src/relationships.rs) Graph checks the stored tuple, enum ranks, proof, coverage IDs, and key
+  -> [RelationshipRows::intern_properties](../../crates/araphor-graph/src/relationships.rs) Graph allocates a native property reference only for an absent value
+
+The lookup accepts zero or one row. It rejects duplicate candidates. The
+key contains the existing edge type, package, cause, proof quality, and
+coverage IDs. It does not contain source payloads. Equal properties share
+one native reference. Changed proof or coverage uses a separate value.
+Returning to an earlier property reuses its original reference.
+
+Data retains the transaction. A failure rolls back the publication. The
+property registry uses the same tuple decoder during recovery. This change
+adds no registry, result cache, polling task, or change detector.
+
+The focused build on 2026-11-02 passes without warnings. Four Graph tests
+pass: native value identity and history, relationship corruption, exact
+relationship equality, and transaction rollback with reopen. The existing
+Data shared-corruption test also passes. That test checks 20 corrupt stores
+and takes 61.24 seconds. Its first run reaches a 60-second diagnostic timeout.
+
+A separate native prepared-query probe uses 16,384 unrelated property rows.
+The exact key reads one indexed row. An absent key reads zero rows. A
+duplicate key returns both rows for the Rust rejection check. The probe
+checks query shape. It does not prove complete Graph latency or source work
+bounds. No new end-to-end speed improvement is qualified by this change.
