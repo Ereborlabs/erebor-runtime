@@ -160,7 +160,7 @@ impl AnalysisStore {
             };
             if let Some((saved, commit_revision)) = &stored {
                 if saved == input {
-                    self.check_cached_provenance(writer, saved)?;
+                    Self::validate_stored_context_packages(writer, saved)?;
                     references.push(AnalysisContextRefV1 {
                         key: key.clone(),
                         commit_revision: *commit_revision,
@@ -175,7 +175,7 @@ impl AnalysisStore {
                     continue;
                 }
             } else if let Some((saved, _)) = stored {
-                self.check_cached_provenance(writer, &saved)?;
+                Self::validate_stored_context_packages(writer, &saved)?;
                 return AnalysisConflictSnafu.fail();
             }
             self.storage.check_context(input.body.len() as u64)?;
@@ -278,7 +278,7 @@ impl AnalysisStore {
         }
         if let Some((stored, revision)) = Self::read_context_row_from(reader, &self.root, key)? {
             if &stored != input {
-                self.check_cached_provenance(reader, &stored)?;
+                Self::validate_stored_context_packages(reader, &stored)?;
                 return AnalysisConflictSnafu.fail();
             }
             return Ok(Some(AnalysisContextRefV1 {
@@ -358,8 +358,7 @@ impl AnalysisStore {
                     owner_revision,
                     ..key.clone()
                 };
-                let (stored, _) = self
-                    .read_context_cached_from(reader, &self.root, &previous)?
+                let (stored, _) = Self::read_context_from(reader, &self.root, &previous)?
                     .ok_or_else(|| self.state_error("the prior discovery document is absent"))?;
                 crate::DiscoveryContextRevisionV1::try_from(&stored)
             })

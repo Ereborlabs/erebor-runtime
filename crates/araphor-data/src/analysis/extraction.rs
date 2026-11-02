@@ -2069,7 +2069,7 @@ impl AnalysisStore {
             }
             for key in selection.contexts.as_slice() {
                 control.check()?;
-                match self.read_context_cached_from(snapshot, &self.root, key)? {
+                match Self::read_context_from(snapshot, &self.root, key)? {
                     Some((context, revision)) => {
                         if revision > output.meta.commit_revision {
                             return self.reject("the context is newer than the referenced source cut");
@@ -2120,7 +2120,7 @@ impl AnalysisStore {
             let mut graphs = Vec::<(String, u64, super::graph_rows::GraphHeader)>::new();
             for key in selection.obligations.as_slice() {
                 control.check()?;
-                let (context, revision) = self.read_context_cached_from(snapshot, &self.root, key)?
+                let (context, revision) = Self::read_context_from(snapshot, &self.root, key)?
                     .ok_or_else(|| self.state_error("the selected notification state is absent"))?;
                 output.scan(context.body.len())?;
                 output.charge(context.body.capacity().saturating_mul(2))?;
@@ -2247,7 +2247,7 @@ impl AnalysisStore {
                             lifetime_key: b"route".to_vec(),
                             owner_revision: reference.revision,
                         };
-                        let route = self.read_context_cached_from(snapshot, &self.root, &key)?
+                        let route = Self::read_context_from(snapshot, &self.root, &key)?
                             .map(|(context, revision)| {
                                 output.scan(context.body.len())?;
                                 output.charge(context.body.capacity().saturating_mul(2))?;

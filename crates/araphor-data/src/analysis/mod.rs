@@ -113,7 +113,6 @@ pub struct AnalysisStore {
     raw_pending: AtomicBool,
     read_slots: Option<Arc<tokio::sync::Semaphore>>,
     pub(crate) package_lifecycle: Arc<Mutex<()>>,
-    package_validation: Mutex<context::ValidationCache>,
     pub(crate) discovery_owners: AtomicUsize,
     pub(crate) notification_owner: AtomicBool,
     pub(crate) graph_owner: Mutex<Option<Vec<AnalysisSelectionV1>>>,
@@ -556,7 +555,6 @@ impl AnalysisStore {
                 .reader_admissions
                 .map(|limit| Arc::new(tokio::sync::Semaphore::new(limit))),
             package_lifecycle: Arc::new(Mutex::new(())),
-            package_validation: Mutex::new(context::ValidationCache::default()),
             discovery_owners: AtomicUsize::new(0),
             maintenance: RwLock::new(()),
             revision,

@@ -102,8 +102,7 @@ impl AnalysisStore {
                 lifetime_key: b"obligation".to_vec(),
                 owner_revision,
             };
-            let (context, stored_revision) = self
-                .read_context_cached_from(reader, &self.root, &key)?
+            let (context, stored_revision) = Self::read_context_from(reader, &self.root, &key)?
                 .ok_or_else(|| self.state_error("the notification head has no context version"))?;
             if stored_revision != commit_revision
                 || NotificationKeys::from_context(&context)?.state != state_key

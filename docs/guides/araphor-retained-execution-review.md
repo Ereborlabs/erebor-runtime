@@ -136,6 +136,34 @@ value. The builtin `WAITING` state has tag `WAITING` and no declared value.
 A custom state named `WAITING` has tag `DECLARED` and value `WAITING`.
 Both compact and named MessagePack preserve that difference.
 
+## Package provenance validation
+
+[AnalysisStore::verify_package_revision](../../crates/araphor-data/src/analysis/context/provenance.rs)
+reads the selected installed package and checks its descriptor, declared
+dependency keys, and Wasm export selection. `VerifiedPackages` records successful checks
+within the current read operation. The set does not survive that operation.
+
+[AnalysisStore::verify_context_packages](../../crates/araphor-data/src/analysis/context/provenance.rs)
+checks the current package closure with
+[NativePackageContext::validate](../../crates/araphor-data/src/package/provenance.rs).
+The check retains the OCI image digest, selected export, output, tenant, and
+exact context identity. A missing dependency or corrupt package is an error.
+An exact context retry still checks its retained package.
+
+The store no longer retains a provenance validation cache. It does not hash
+stored descriptors, executable bytes, or dependencies to detect a cache
+change. The unused package inspection callback and private proof objects
+are removed. OCI integrity checks remain in the existing package validator.
+
+The focused build on 2026-11-02 passes after this deletion. Six existing
+Data tests pass: current package bytes and export identity, mixed native and
+Wasm exports with reopen, context corruption, missing dependencies, exact
+retry, and dependency artifact pins. The first test now also corrupts an
+installed package with two executable implementations for one export. This
+check replaces the removed private proof-object test. The build reports one
+unrelated unused Query import. These results do not qualify the complete
+incremental Graph path.
+
 ## Declared change inputs
 
 [ChangeInputs](../../crates/araphor-analysis-sdk/src/model/changes.rs) names

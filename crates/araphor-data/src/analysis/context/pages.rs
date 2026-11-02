@@ -61,7 +61,7 @@ impl AnalysisStore {
                     operation: "decode context head page",
                 })?;
                 let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
-                self.check_cached_provenance(reader, &version)?;
+                Self::validate_stored_context_packages(reader, &version)?;
                 versions.push(version);
             }
             Ok(versions)
@@ -142,7 +142,7 @@ impl AnalysisStore {
                     );
                 }
                 let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
-                self.check_cached_provenance(reader, &version)?;
+                Self::validate_stored_context_packages(reader, &version)?;
                 versions.push(version);
             }
             Ok(versions)

@@ -859,8 +859,7 @@ impl AnalysisStore {
                 current = false;
             }
             for reference in &contexts {
-                if self
-                    .read_context_cached_from(reader, &self.root, &reference.key)?
+                if Self::read_context_from(reader, &self.root, &reference.key)?
                     .is_none_or(|(_, current)| current != reference.commit_revision)
                 {
                     return Ok(false);
