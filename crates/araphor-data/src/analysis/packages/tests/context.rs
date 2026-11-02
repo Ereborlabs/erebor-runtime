@@ -386,7 +386,7 @@ fn package_context_checks_artifact() -> TestResult {
             _ => candidate.sensitivity = crate::ContextSensitivityV1::Public,
         }
         candidate.body = body.encode()?;
-        candidate.key.entity_key = crate::Qualification::digest(&candidate.body).into_bytes();
+        candidate.key.entity_key = rmp_serde::to_vec(&(&body.package, &body.export, &body.output))?;
         candidate.key.lifetime_key = body.digest.as_bytes().to_vec();
         assert!(store.intern_context(&candidate).is_err(), "change {change}");
         assert_eq!(store.meta()?, initial);
@@ -421,7 +421,6 @@ fn package_context_binary_rejects_trailing_and_malformed() -> TestResult {
     assert!(context.package_provenance()?.is_some());
     let mut trailing = context.clone();
     trailing.body.push(0);
-    trailing.key.entity_key = crate::Qualification::digest(&trailing.body).into_bytes();
     assert!(matches!(
         trailing.package_provenance(),
         Err(crate::Error::Package {
@@ -506,7 +505,7 @@ fn package_context_pins_dependency_artifact() -> TestResult {
     let mut body = body;
     body.package.revision = "missing".into();
     forged.body = body.encode()?;
-    forged.key.entity_key = crate::Qualification::digest(&forged.body).into_bytes();
+    forged.key.entity_key = rmp_serde::to_vec(&(&body.package, &body.export, &body.output))?;
     assert!(store.intern_context(&forged).is_err());
     assert_eq!(store.meta()?, before);
     drop(store);

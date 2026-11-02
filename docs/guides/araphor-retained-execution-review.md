@@ -150,6 +150,18 @@ The check retains the OCI image digest, selected export, output, tenant, and
 exact context identity. A missing dependency or corrupt package is an error.
 An exact context retry still checks its retained package.
 
+[NativePackageContext::entity_key](../../crates/araphor-data/src/package/provenance.rs)
+uses the existing typed package reference, export, and output as its entity
+key. The key uses MessagePack. It does not hash the context body. The tenant,
+owner, revision, OCI image lifetime, sensitivity, and temporal checks remain.
+The decoder checks the same tuple against the stored key.
+
+The later focused build includes this key change and passes without warnings.
+Eight related Data tests pass. These tests check missing packages, malformed
+and trailing bytes, changed package content, corrupt context metadata,
+missing dependencies, exact retries, artifact pins, and reopen. The complete
+incremental Graph path remains unqualified.
+
 The store no longer retains a provenance validation cache. It does not hash
 stored descriptors, executable bytes, or dependencies to detect a cache
 change. The unused package inspection callback and private proof objects

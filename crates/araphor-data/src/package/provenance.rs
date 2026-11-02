@@ -20,6 +20,11 @@ pub(crate) struct NativePackageContext {
 }
 
 impl NativePackageContext {
+    fn entity_key(&self) -> Result<Vec<u8>> {
+        rmp_serde::to_vec(&(&self.package, &self.export, &self.output))
+            .context(PackageContextEncodeSnafu)
+    }
+
     pub(crate) fn validate(self, artifacts: Vec<PackageArtifactV1>) -> Result<()> {
         let bundle = PackageBundleV1 {
             schema_version: 1,
@@ -65,19 +70,19 @@ impl AnalysisContextVersionV1 {
             return Err(Code::Invalid.error("native package context tenant"));
         }
         NativePackageContext::check_output(value.bundle(), package, export, output)?;
-        let body = rmp_serde::to_vec_named(&NativePackageContext {
+        let reference = NativePackageContext {
             root: value.bundle().root.clone(),
             digest: value.digest().into(),
             package: package.clone(),
             export: export.into(),
             output: output.into(),
-        })
-        .context(PackageContextEncodeSnafu)?;
+        };
+        let body = rmp_serde::to_vec_named(&reference).context(PackageContextEncodeSnafu)?;
         Ok(Self {
             key: AnalysisContextKeyV1 {
                 tenant_id: tenant,
                 owner_id: "native-package-v1".into(),
-                entity_key: super::native::Qualification::digest(&body).into_bytes(),
+                entity_key: reference.entity_key()?,
                 lifetime_key: value.digest().as_bytes().to_vec(),
                 owner_revision: 1,
             },
@@ -102,7 +107,7 @@ impl AnalysisContextVersionV1 {
             || self.valid_from_utc_ns.is_some()
             || self.valid_until_utc_ns.is_some()
             || self.key.owner_revision != 1
-            || self.key.entity_key != super::native::Qualification::digest(&self.body).as_bytes()
+            || self.key.entity_key != reference.entity_key()?
             || self.key.lifetime_key != reference.digest.as_bytes()
         {
             return Err(Code::Invalid.error("native package context identity"));

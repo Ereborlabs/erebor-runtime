@@ -447,6 +447,7 @@ fn context_batch_packages() -> TestResult {
         package_id: "absent".into(),
         revision: "1".into(),
     };
+    invalid.key.entity_key = rmp_serde::to_vec(&(&absent, "run", "rows"))?;
     invalid.body = rmp_serde::to_vec_named(&MissingPackage {
         root: absent.clone(),
         digest: &digest,
@@ -454,7 +455,6 @@ fn context_batch_packages() -> TestResult {
         export: "run",
         output: "rows",
     })?;
-    invalid.key.entity_key = crate::Qualification::digest(&invalid.body).into_bytes();
     invalid.key.lifetime_key = digest.into_bytes();
     let changes = store.subscribe_revision();
     let failure = store
