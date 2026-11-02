@@ -4,7 +4,6 @@ use std::io::Cursor;
 use araphor_analysis_builtins::{discovery::DiscoveryRecordIdV1, graph::*};
 use duckdb::{params, types::Value, Connection, Row};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use crate::{
@@ -38,7 +37,6 @@ impl FindingRows {
             return Ok(BTreeMap::new());
         }
         let mut names = BTreeSet::new();
-        let mut hashes = Vec::with_capacity(references.len());
         for reference in references {
             if !names.insert(reference.finding.finding_id.as_str()) {
                 return InvalidSnafu {
@@ -46,30 +44,6 @@ impl FindingRows {
                 }
                 .fail();
             }
-            hashes.push(Self::value_hash(reference)?);
-        }
-        writer
-            .execute_batch("CREATE TEMP TABLE graph_finding_candidates (request_ordinal UBIGINT, value_hash BLOB)")
-            .context(DatabaseSnafu {
-                operation: "create finding candidates",
-            })?;
-        {
-            let mut appender =
-                writer
-                    .appender("graph_finding_candidates")
-                    .context(DatabaseSnafu {
-                        operation: "open finding candidates",
-                    })?;
-            for (ordinal, hash) in hashes.iter().enumerate() {
-                appender
-                    .append_row(params![ordinal as u64, hash.as_slice()])
-                    .context(DatabaseSnafu {
-                        operation: "append finding candidate",
-                    })?;
-            }
-            appender.flush().context(DatabaseSnafu {
-                operation: "flush finding candidates",
-            })?;
         }
         let mut selected = vec![None; references.len()];
         let columns = Self::COLUMNS
@@ -83,59 +57,46 @@ impl FindingRows {
             })?;
         let mut statement = writer
             .prepare(&format!(
-                "SELECT f.value_id AS ordinal,{},c.request_ordinal \
-                 FROM graph_finding_candidates c \
-                 JOIN graph_finding_values f ON f.value_hash=c.value_hash",
+                "WITH candidates AS MATERIALIZED (
+                    SELECT * FROM graph_finding_values WHERE finding_id=?
+                 ) SELECT f.value_id AS ordinal,{} FROM candidates f WHERE tenant_id=?",
                 columns
             ))
             .context(DatabaseSnafu {
                 operation: "prepare finding candidates",
             })?;
-        let mut rows = statement.query([]).context(DatabaseSnafu {
-            operation: "read finding candidates",
-        })?;
-        while let Some(row) = rows.next().context(DatabaseSnafu {
-            operation: "advance finding candidates",
-        })? {
-            let ordinal: u64 = NativeRows::column(row, 18)?;
-            let reference = references
-                .get(usize::try_from(ordinal).map_err(|_| {
-                    InvalidSnafu {
-                        field: "finding candidate ordinal",
-                    }
-                    .build()
-                })?)
-                .ok_or_else(|| {
-                    InvalidSnafu {
-                        field: "finding candidate ordinal",
-                    }
-                    .build()
+        for (ordinal, reference) in references.iter().enumerate() {
+            let mut rows = statement
+                .query(params![
+                    reference.finding.finding_id,
+                    reference.finding.tenant_id.as_slice(),
+                ])
+                .context(DatabaseSnafu {
+                    operation: "read finding candidates",
                 })?;
-            let native = Self::references(row)?;
-            if native.0 == reference.subject
-                && native.1 == reference.evidence
-                && Self::decode(
-                    row,
-                    reference.finding.subject_id.clone(),
-                    reference.finding.evidence.clone(),
-                )? == *reference.finding
-            {
-                let slot = &mut selected[ordinal as usize];
-                if slot.replace(NativeRows::column(row, 0)?).is_some() {
-                    return InvalidSnafu {
-                        field: "duplicate finding value",
+            while let Some(row) = rows.next().context(DatabaseSnafu {
+                operation: "advance finding candidates",
+            })? {
+                let native = Self::references(row)?;
+                if native.0 == reference.subject
+                    && native.1 == reference.evidence
+                    && Self::decode(
+                        row,
+                        reference.finding.subject_id.clone(),
+                        reference.finding.evidence.clone(),
+                    )? == *reference.finding
+                {
+                    let slot = &mut selected[ordinal];
+                    if slot.replace(NativeRows::column(row, 0)?).is_some() {
+                        return InvalidSnafu {
+                            field: "duplicate finding value",
+                        }
+                        .fail();
                     }
-                    .fail();
                 }
             }
         }
-        drop(rows);
         drop(statement);
-        writer
-            .execute_batch("DROP TABLE graph_finding_candidates")
-            .context(DatabaseSnafu {
-                operation: "release finding candidates",
-            })?;
 
         let missing = selected.iter().filter(|id| id.is_none()).count();
         let mut allocated = Vec::with_capacity(missing);
@@ -169,7 +130,7 @@ impl FindingRows {
         let mut ids = BTreeMap::new();
         let mut inserts = Vec::with_capacity(missing);
         let mut allocated = allocated.into_iter();
-        for ((reference, hash), selected) in references.iter().zip(hashes).zip(selected) {
+        for (reference, selected) in references.iter().zip(selected) {
             let id = if let Some(id) = selected {
                 id
             } else {
@@ -179,7 +140,7 @@ impl FindingRows {
                     }
                     .build()
                 })?;
-                inserts.push((id, reference, hash));
+                inserts.push((id, reference));
                 id
             };
             ids.insert(reference.finding.finding_id.clone(), id);
@@ -188,44 +149,6 @@ impl FindingRows {
             Self::append(writer, &inserts)?;
         }
         Ok(ids)
-    }
-
-    fn value_hash(reference: &FindingRefs<'_>) -> Result<[u8; 32]> {
-        let finding = reference.finding;
-        let reason = match &finding.reason {
-            FindingReasonV1::Declared(reason) => StoredReason::Declared(reason),
-            reason => StoredReason::Builtin(Self::reason_label(reason)?),
-        };
-        let canonical = serde_value::to_value((
-            (
-                finding.tenant_id,
-                &finding.finding_id,
-                &finding.package_id,
-                finding.package_version,
-                reference.subject,
-                &finding.state,
-                finding.window_start_utc_ns,
-                finding.window_end_utc_ns,
-            ),
-            (
-                &reference.evidence,
-                &finding.required_coverage_interval_ids,
-                &finding.policy_provenance,
-                &finding.effects,
-                reason,
-                &finding.severity,
-                &finding.sensitivity,
-                &finding.required_action,
-                &finding.limits,
-            ),
-        ))
-        .map_err(|_| {
-            InvalidSnafu {
-                field: "finding canonical value",
-            }
-            .build()
-        })?;
-        Ok(Sha256::digest(NativeRows::encode(&canonical)?).into())
     }
 
     pub fn references(row: &Row<'_>) -> Result<(u64, Vec<u64>)> {
@@ -312,14 +235,14 @@ impl FindingRows {
     }
 
     pub fn validate(writer: &Connection) -> Result<()> {
-        let duplicate:bool=writer.query_row("SELECT EXISTS(SELECT tenant_id,finding_id,package_id,package_version,subject_ref,state,window_start_utc_ns,window_end_utc_ns,evidence_refs,required_coverage_interval_ids,policy_provenance,effects,reason,severity,sensitivity,required_action,limits,value_hash FROM graph_finding_values GROUP BY ALL HAVING count(*)>1)",[],|row|row.get(0)).context(DatabaseSnafu {operation:"check duplicate finding values"})?;
+        let duplicate:bool=writer.query_row("SELECT EXISTS(SELECT tenant_id,finding_id,package_id,package_version,subject_ref,state,window_start_utc_ns,window_end_utc_ns,evidence_refs,required_coverage_interval_ids,policy_provenance,effects,reason,severity,sensitivity,required_action,limits FROM graph_finding_values GROUP BY ALL HAVING count(*)>1)",[],|row|row.get(0)).context(DatabaseSnafu {operation:"check duplicate finding values"})?;
         if duplicate {
             return InvalidSnafu {
                 field: "duplicate finding value",
             }
             .fail();
         }
-        let mut statement=writer.prepare("SELECT value_id,tenant_id,finding_id,package_id,package_version,subject_ref,state,window_start_utc_ns,window_end_utc_ns,evidence_refs,required_coverage_interval_ids,policy_provenance,effects,reason,severity,sensitivity,required_action,limits,value_hash FROM graph_finding_values").context(DatabaseSnafu {operation:"prepare finding validation"})?;
+        let mut statement=writer.prepare("SELECT value_id,tenant_id,finding_id,package_id,package_version,subject_ref,state,window_start_utc_ns,window_end_utc_ns,evidence_refs,required_coverage_interval_ids,policy_provenance,effects,reason,severity,sensitivity,required_action,limits FROM graph_finding_values").context(DatabaseSnafu {operation:"prepare finding validation"})?;
         let mut rows = statement.query([]).context(DatabaseSnafu {
             operation: "read finding validation",
         })?;
@@ -342,8 +265,8 @@ impl FindingRows {
             Self::restore_reason(Self::decode_bytes(&NativeRows::column::<Vec<u8>>(
                 row, 13,
             )?)?)?;
-            let refs = Self::references(row)?;
-            let finding = Self::decode(
+            Self::references(row)?;
+            Self::decode(
                 row,
                 GraphSubjectKeyV1 {
                     tenant_id: tenant.try_into().map_err(|_| {
@@ -360,19 +283,6 @@ impl FindingRows {
                 },
                 Vec::new(),
             )?;
-            let hash: Vec<u8> = NativeRows::column(row, 18)?;
-            if hash
-                != Self::value_hash(&FindingRefs {
-                    finding: &finding,
-                    subject: refs.0,
-                    evidence: refs.1,
-                })?
-            {
-                return InvalidSnafu {
-                    field: "finding value hash",
-                }
-                .fail();
-            }
         }
         Ok(())
     }
@@ -431,7 +341,7 @@ impl FindingRows {
         Ok(value)
     }
 
-    fn append(writer: &Connection, values: &[(u64, &FindingRefs<'_>, [u8; 32])]) -> Result<()> {
+    fn append(writer: &Connection, values: &[(u64, &FindingRefs<'_>)]) -> Result<()> {
         use araphor_analysis_sdk::{
             arrow_array::{
                 builder::{
@@ -461,8 +371,7 @@ impl FindingRows {
         let mut sensitivities = LargeStringBuilder::new();
         let mut actions = LargeStringBuilder::new();
         let mut limits = LargeListBuilder::new(LargeStringBuilder::new());
-        let mut hashes = LargeBinaryBuilder::new();
-        for (id, reference, hash) in values {
+        for (id, reference) in values {
             let finding = reference.finding;
             ids.append_value(*id);
             tenants.append_value(finding.tenant_id);
@@ -493,7 +402,6 @@ impl FindingRows {
                 limits.values().append_value(limit);
             }
             limits.append(true);
-            hashes.append_value(hash);
         }
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(ids.finish()),
@@ -514,11 +422,8 @@ impl FindingRows {
             Arc::new(sensitivities.finish()),
             Arc::new(actions.finish()),
             Arc::new(limits.finish()),
-            Arc::new(hashes.finish()),
         ];
-        let names = std::iter::once("value_id")
-            .chain(Self::COLUMNS.split(',').skip(1))
-            .chain(std::iter::once("value_hash"));
+        let names = std::iter::once("value_id").chain(Self::COLUMNS.split(',').skip(1));
         let fields = names
             .zip(&arrays)
             .enumerate()

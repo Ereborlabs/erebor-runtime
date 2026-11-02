@@ -1214,3 +1214,23 @@ an exact key, zero for an absent key, and both duplicate rows.
 These checks qualify edge-value interning. They do not qualify complete
 Graph execution, source work bounds, or an end-to-end speed improvement.
 Finding identity and package-state hash removal remain separate work.
+
+## Native finding value lookup
+
+[FindingRows::intern](../../crates/araphor-graph/src/findings.rs) receives
+the changed findings. The native finding-ID index selects that identity's
+candidate history. The writer applies the tenant check and compares native
+references and complete typed values before reuse. An absent value receives
+a new native value ID. A later return to an old value reuses its old ID.
+
+The finding-value hash, hash column, hash index, temporary hash-candidate
+table, and hash serializer are removed. The existing typed decoder,
+duplicate-value check, reason validation, and transaction remain.
+The query selects candidates with the requested finding ID, then applies
+the tenant check. Candidate history can grow.
+
+The focused build on 2026-11-02 passes without warnings. All six finding
+owner tests pass. The tests cover exact identity and native references,
+value history, return to an old value, duplicate rejection, rollback,
+strict binary decoding, lists, and labels. Public finding identity still
+uses its prior contract; its hash removal remains separate work.

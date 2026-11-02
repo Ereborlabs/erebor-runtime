@@ -85,7 +85,7 @@ fn finding_values_follow_versions() -> TestResult {
     version("earlier", 1, 4, &[earlier.clone(), changed.clone()])?;
     version("removed-earlier", 1, 5, std::slice::from_ref(&changed))?;
     version("empty", 1, 6, &[])?;
-    version("reentered", 1, 7, std::slice::from_ref(&changed))?;
+    version("reentered", 1, 7, std::slice::from_ref(&finding))?;
     version("independent", 8, 8, std::slice::from_ref(&changed))?;
     FindingRows::validate(&writer)?;
     let totals: (u64, u64) = writer.query_row(
@@ -102,7 +102,7 @@ fn finding_values_follow_versions() -> TestResult {
         ("earlier", vec![earlier, changed.clone()]),
         ("removed-earlier", vec![changed.clone()]),
         ("empty", vec![]),
-        ("reentered", vec![changed.clone()]),
+        ("reentered", vec![finding.clone()]),
         ("independent", vec![changed]),
     ] {
         let mut statement = writer.prepare(&format!(
@@ -161,7 +161,7 @@ fn finding_values_follow_versions() -> TestResult {
         .split_once(',')
         .ok_or("finding columns")?
         .1;
-    writer.execute(&format!("INSERT INTO graph_finding_values SELECT value_id+99999,{columns},value_hash FROM graph_finding_values WHERE value_id=?"),params![original_id])?;
+    writer.execute(&format!("INSERT INTO graph_finding_values SELECT value_id+99999,{columns} FROM graph_finding_values WHERE value_id=?"),params![original_id])?;
     assert!(FindingRows::validate(&writer).is_err());
     assert!(FindingRows::intern(
         &writer,
@@ -218,26 +218,6 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
         subject: 17,
         evidence: evidence.clone(),
     };
-    assert_eq!(
-        FindingRows::value_hash(&refs)?,
-        FindingRows::value_hash(&reordered_refs)?
-    );
-    assert_ne!(
-        FindingRows::value_hash(&refs)?,
-        FindingRows::value_hash(&FindingRefs {
-            finding: &finding,
-            subject: 18,
-            evidence: evidence.clone()
-        })?
-    );
-    assert_ne!(
-        FindingRows::value_hash(&refs)?,
-        FindingRows::value_hash(&FindingRefs {
-            finding: &finding,
-            subject: 17,
-            evidence: vec![8; finding.evidence.len()]
-        })?
-    );
 
     let root = tempfile::tempdir()?;
     let path = root.path().join("findings.duckdb");
@@ -262,10 +242,6 @@ fn indexed_finding_values_keep_exact_identity() -> TestResult {
         subject: 17,
         evidence,
     };
-    writer.execute(
-        "UPDATE graph_finding_values SET value_hash = ?",
-        params![FindingRows::value_hash(&changed_refs)?.as_slice()],
-    )?;
     FindingFixture::apply(&writer, tenant, 1, 3, &[changed_refs], 1)?;
     let count: u64 = writer.query_row(
         "SELECT count(*)::UBIGINT FROM graph_finding_values",

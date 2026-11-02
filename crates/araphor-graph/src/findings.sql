@@ -6,9 +6,9 @@ CREATE TABLE graph_finding_values (
     evidence_refs UBIGINT[] NOT NULL, required_coverage_interval_ids BLOB[] NOT NULL,
     policy_provenance BLOB NOT NULL, effects BLOB NOT NULL, reason BLOB NOT NULL,
     severity VARCHAR NOT NULL, sensitivity VARCHAR NOT NULL, required_action VARCHAR,
-    limits VARCHAR[] NOT NULL, value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32)
+    limits VARCHAR[] NOT NULL
 );
-CREATE INDEX graph_finding_hash ON graph_finding_values (value_hash);
+CREATE INDEX graph_finding_identity ON graph_finding_values (finding_id);
 CREATE VIEW graph_findings AS
     SELECT m.result_id,
         (row_number() OVER (PARTITION BY m.result_id ORDER BY f.finding_id) - 1)::UINTEGER AS ordinal,
