@@ -19,7 +19,6 @@ use serde_json::json;
 
 use super::Result;
 
-mod backlog;
 mod identity;
 mod input;
 mod lightweight;
@@ -98,35 +97,6 @@ impl Incident {
 
     pub(super) async fn wait(self, client: &AraphorClient) -> Result<Observed> {
         self.wait_until(client, |_| true).await
-    }
-
-    pub(super) fn background_ready(&self, source: &EvidenceIntakeIdentityV1, cursor: u64) -> bool {
-        self.complete[1]
-            && self.graphs.get(source).is_some_and(|(_, _, graph)| {
-                graph.last_cursor == cursor
-                    && graph.missing_ranges.is_empty()
-                    && graph
-                        .findings
-                        .iter()
-                        .filter(|finding| finding.package_id == "HF-PROC-001")
-                        .count()
-                        == 138
-                    && graph.input_manifest.evidence.iter().any(|record| {
-                        &record.stream == source
-                            && record.cpu_id == 0
-                            && record.durable_cursor == cursor
-                    })
-                    && graph.input_manifest.coverage.iter().any(|coverage| {
-                        &coverage.source == source
-                            && coverage.cpu_id == 0
-                            && matches!(
-                                coverage.state,
-                                DiscoveryCoverageStateV1::Healthy
-                                    | DiscoveryCoverageStateV1::Closed
-                            )
-                            && coverage.gap_reasons.is_empty()
-                    })
-            })
     }
 
     pub(super) async fn wait_until(
