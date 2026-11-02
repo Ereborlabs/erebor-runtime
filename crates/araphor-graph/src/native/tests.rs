@@ -132,6 +132,19 @@ fn native_values_keep_identity_properties_and_history() -> TestResult {
     );
     assert_ne!(ids[0], ids[1]);
     assert_ne!(ids[1], ids[2]);
+    assert_eq!(
+        RelationshipRows::intern(
+            &writer,
+            &subjects,
+            &records,
+            &[
+                fixture.edges[0].clone(),
+                changed.clone(),
+                fixture.edges[0].clone()
+            ]
+        )?,
+        vec![ids[0], ids[2], ids[0]],
+    );
     ValueFixture::publish(&writer, "old", &subjects, &records, &ids[..2])?;
     ValueFixture::publish(&writer, "new", &subjects, &records, &[ids[0], ids[2]])?;
     let old = ValueFixture::selected(&writer, "old")?;
@@ -242,7 +255,7 @@ fn native_relationships_reject_corruption() -> TestResult {
         "UPDATE graph_edge_values SET property_ref=4294967295",
         "UPDATE graph_edge_values SET evidence_refs=[4294967295]::UBIGINT[]",
         "UPDATE graph_edge_values SET evidence_refs=[NULL]::UBIGINT[]",
-        "UPDATE graph_edge_values SET value_hash=from_hex(repeat('00',32))",
+        "UPDATE graph_edge_values SET value_key=X'00'",
         "UPDATE graph_edge_values SET last_boottime_ns=last_boottime_ns+1",
         "UPDATE graph_edge_properties SET property_key=X'00'",
         "UPDATE graph_edge_properties SET edge_type='INVALID'",
@@ -279,16 +292,28 @@ fn native_relationships_check_full_equality() -> TestResult {
     writer.execute_batch("ROLLBACK")?;
     let mut changed = fixture.edges[0].clone();
     changed.last_boottime_ns += 1;
-    let collision = NativeRows::hash(&NativeRows::encode(&(
-        &changed.key,
-        changed.proof_quality,
-        &changed.required_coverage_interval_ids,
+    let property: u64 = writer.query_row(
+        "SELECT property_ref FROM graph_edge_values WHERE edge_id=?",
+        params![values[0]],
+        |row| row.get(0),
+    )?;
+    let evidence = changed
+        .key
+        .evidence
+        .iter()
+        .map(|record| records[record])
+        .collect::<Vec<_>>();
+    let collision = NativeRows::encode(&(
+        subjects[&changed.key.from],
+        subjects[&changed.key.to],
+        property,
+        evidence,
         changed.first_boottime_ns,
         changed.last_boottime_ns,
-    ))?);
+    ))?;
     writer.execute_batch("BEGIN TRANSACTION")?;
     writer.execute(
-        "UPDATE graph_edge_values SET value_hash=? WHERE edge_id=?",
+        "UPDATE graph_edge_values SET value_key=? WHERE edge_id=?",
         params![collision, values[0]],
     )?;
     assert!(RelationshipRows::intern(&writer, &subjects, &records, &[changed]).is_err());

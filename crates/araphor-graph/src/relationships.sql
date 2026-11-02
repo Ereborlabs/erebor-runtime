@@ -12,13 +12,13 @@ CREATE TABLE graph_edge_properties (
 );
 CREATE INDEX graph_property_key ON graph_edge_properties (property_key);
 CREATE TABLE graph_edge_values (
-    edge_id UBIGINT PRIMARY KEY, value_hash BLOB NOT NULL,
+    edge_id UBIGINT PRIMARY KEY, value_key BLOB NOT NULL,
     from_ref UBIGINT NOT NULL, to_ref UBIGINT NOT NULL,
     property_ref UBIGINT NOT NULL, evidence_refs UBIGINT[] NOT NULL,
     first_boottime_ns UBIGINT NOT NULL, last_boottime_ns UBIGINT NOT NULL,
-    CHECK (first_boottime_ns <= last_boottime_ns), CHECK (octet_length(value_hash) = 32)
+    CHECK (first_boottime_ns <= last_boottime_ns), CHECK (octet_length(value_key) > 0)
 );
-CREATE INDEX graph_edge_hash ON graph_edge_values (value_hash);
+CREATE INDEX graph_edge_key ON graph_edge_values (value_key);
 CREATE VIEW graph_relationships AS
     WITH evidence AS (
         SELECT m.result_id, e.evidence_id,
@@ -26,7 +26,7 @@ CREATE VIEW graph_relationships AS
         FROM graph_selected_members m JOIN graph_evidence e ON m.value_ref = e.evidence_id
         WHERE m.member_kind = 0
     ), selected AS (
-        SELECT DISTINCT m.result_id, e.edge_id,e.value_hash,e.from_ref,e.to_ref,
+        SELECT DISTINCT m.result_id, e.edge_id,e.from_ref,e.to_ref,
             p.edge_type,p.edge_rank,p.package_id,p.cause,p.cause_rank,e.evidence_refs,
             p.proof_quality,p.required_coverage_interval_ids,e.first_boottime_ns,e.last_boottime_ns
         FROM graph_selected_members m JOIN graph_edge_values e ON e.edge_id=m.value_ref

@@ -149,7 +149,7 @@ fn shared_corruption_rejects_reopen() -> TestResult {
         "UPDATE graph_edge_values SET property_ref=property_ref+999999",
         "UPDATE graph_edge_properties SET property_key=X'00'",
         "UPDATE graph_edge_properties SET edge_rank=255",
-        "UPDATE graph_edge_values SET value_hash=from_hex(repeat('00',32))",
+        "UPDATE graph_edge_values SET value_key=X'00'",
         "UPDATE graph_evidence SET source_ref=source_ref+1",
         "UPDATE graph_producer_members SET anchor_fact=X'00' WHERE member_kind=2",
         "UPDATE graph_producer_members SET anchor_record_id=(SELECT min(evidence_id) FROM graph_evidence) WHERE member_kind=2",

@@ -5,7 +5,6 @@ use araphor_analysis_sdk::{
 };
 use duckdb::{types::Value, Row};
 use serde::{de::DeserializeOwned, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use std::sync::Arc;
 
@@ -42,10 +41,6 @@ impl NativeRows {
             .serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
             .context(EncodingSnafu)?;
         Ok(bytes)
-    }
-
-    pub(super) fn hash(bytes: &[u8]) -> Vec<u8> {
-        Sha256::digest(bytes).to_vec()
     }
 
     pub(super) fn label(value: &impl Serialize) -> Result<String> {

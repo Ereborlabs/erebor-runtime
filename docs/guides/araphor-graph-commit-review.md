@@ -1186,3 +1186,31 @@ The exact key reads one indexed row. An absent key reads zero rows. A
 duplicate key returns both rows for the Rust rejection check. The probe
 checks query shape. It does not prove complete Graph latency or source work
 bounds. No new end-to-end speed improvement is qualified by this change.
+
+## Native edge value keys
+
+[RelationshipRows::intern](../../crates/araphor-graph/src/relationships.rs) Graph receives changed edges and their checked native subject and evidence maps
+  -> [RelationshipRows::intern_properties](../../crates/araphor-graph/src/relationships.rs) Graph obtains each exact native property reference
+  -> [RelationshipRows::intern](../../crates/araphor-graph/src/relationships.rs) the native value-key index selects the requested edge value
+  -> [RelationshipRows::check_value](../../crates/araphor-graph/src/relationships.rs) Graph checks the key against every stored native field
+  -> [RelationshipRows::append_edges](../../crates/araphor-graph/src/relationships.rs) Graph appends only absent values and returns IDs in input order
+
+The MessagePack key contains native from, to, property, and evidence
+references, plus the first and last event times. The key does not copy
+subject bodies. Lookup rejects duplicate candidates. A repeated value
+reuses its existing ID, including an input sequence of A, B, A.
+
+This change removes the edge hash, the temporary edge candidate table,
+and the complete edge-pool joins. The existing member,
+source, tenant, and reference checks remain. Data retains the transaction.
+The generic native hash helper has no remaining caller and is removed.
+
+The focused build on 2026-11-02 passes without warnings. Four native Graph
+identity, ordering, corruption, rollback, and reopen cases pass. Data's
+20-store shared-corruption case passes in 67.42 seconds. A native prepared
+query probe with 16,384 unrelated values reads one indexed candidate for
+an exact key, zero for an absent key, and both duplicate rows.
+
+These checks qualify edge-value interning. They do not qualify complete
+Graph execution, source work bounds, or an end-to-end speed improvement.
+Finding identity and package-state hash removal remain separate work.
