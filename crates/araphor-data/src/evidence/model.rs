@@ -1,7 +1,6 @@
 use erebor_interceptor_abi::{
     EffectObservationReasonV1, KernelEffectFamilyV1, KernelEffectOperationV1,
 };
-use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
@@ -11,8 +10,6 @@ use crate::{
     EvidenceDecisionContext, EvidenceExactFileObject, EvidenceRecord, EvidenceTemporalCoverage,
     TemporalCoverageV1,
 };
-
-const OBSERVATION_ID_DOMAIN: &[u8] = b"MITHRIL-KERNEL-OBSERVATION-V2\0";
 
 pub type EvidenceDigestV1 = [u8; 32];
 pub type EvidenceIdV1 = erebor_interceptor_abi::Id128V1;
@@ -533,31 +530,6 @@ impl ObservationEnvelopeV1 {
         };
         let catalog = observation.validate_catalog()?;
         Ok((observation, catalog))
-    }
-
-    pub fn canonical_bytes(&self) -> EvidenceModelResult<Vec<u8>> {
-        let record = self.to_wire_record()?;
-        let mut bytes = Vec::with_capacity(80 + record.encoded_len());
-        bytes.extend_from_slice(OBSERVATION_ID_DOMAIN);
-        bytes.extend_from_slice(&self.tenant_id.to_be_bytes());
-        bytes.extend_from_slice(&self.node_boot_id.to_be_bytes());
-        bytes.extend_from_slice(&self.source_id.to_be_bytes());
-        bytes.extend_from_slice(&self.source_epoch.to_be_bytes());
-        bytes.extend_from_slice(&self.source_sequence.to_be_bytes());
-        bytes.extend_from_slice(&self.cpu_id.to_be_bytes());
-        record.encode(&mut bytes).map_err(|error| {
-            InvalidSnafu {
-                reason: format!("kernel observation encoding failed: {error}"),
-            }
-            .build()
-        })?;
-        Ok(bytes)
-    }
-
-    pub fn observation_id(&self) -> EvidenceModelResult<EvidenceDigestV1> {
-        let mut identity = self.clone();
-        identity.ingested_utc_ns = 0;
-        Ok(Sha256::digest(identity.canonical_bytes()?).into())
     }
 
     #[must_use]

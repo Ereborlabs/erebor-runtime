@@ -164,3 +164,19 @@ Remaining work in this phase: none within the qualified tier. Claim expansion
   requires a new qualification result.
 Next phase not authorized: yes.
 ```
+
+## Current window owner on 2026-11-02
+
+The earlier D6.6 result is historical. The Node fixed-sequence window API
+and its content-derived observation and revision IDs are retired. No
+production caller used that owner. Query owns running SQL windows through
+native DataFusion subscriptions. This does not reproduce the removed
+fixed-sequence API or its contradiction state.
+
+Node preserves kernel CPU and sequence coordinates. `EvidenceWal` allocates
+its own durable cursor. These are different positions. Coverage, WAL
+framing, restart, gap, and acknowledgement checks remain. Focused Linux
+qualification of this deletion: **Done**. All 53 Node observation tests
+and the native Query `fixed_window_keeps_cut` test pass on the current
+source. See the [dated review update](phase-6-implementation-review.md#journal-position-update-on-2026-11-02)
+for the checks and proof limits.

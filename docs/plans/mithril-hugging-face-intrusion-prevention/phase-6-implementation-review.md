@@ -406,3 +406,27 @@ not weaken the source tests. The phase result must record the exact boundary.
 - Restart with a live task, socket, response floor, mount view, and policy
   generation; confirm exact state and post-restart behavior.
 - Confirm all physical result files remain outside the repository.
+
+## Journal-position update on 2026-11-02
+
+The Node fixed-sequence window API and its content-derived observation and
+revision IDs are retired. No production caller used that owner. Query owns
+running SQL windows through native DataFusion subscriptions. This does not
+reproduce the removed fixed-sequence API or its contradiction state.
+
+[ObservationCanonicalizer](../../../crates/mithril-node/src/observation/model.rs) preserves kernel CPU and sequence coordinates
+  -> [EvidenceWal::append](../../../crates/mithril-node/src/observation/wal.rs) allocates a separate durable WAL cursor
+  -> [CoverageHealthOwner](../../../crates/mithril-node/src/observation/coverage.rs) preserves coverage, gap, and recovery checks
+
+Kernel coordinates and the durable WAL cursor are different positions. WAL
+framing, restart, and acknowledgement checks remain. The earlier results in
+this document describe their recorded source state. They do not qualify the
+retired API as a current implementation.
+
+Focused Linux qualification of this deletion: **Done**. The current build
+passes without warnings. All 53 Node observation tests pass. They cover
+normalization, coverage gaps, WAL corruption, acknowledgement, and restart.
+The native Query `fixed_window_keeps_cut` check also passes. These are
+functional results. They do not measure event-to-finding latency.
+Logs are `/tmp/araphor-cdc-node-tests-20261102.log` and
+`/tmp/araphor-cdc-node-query-window-20261102.log`.

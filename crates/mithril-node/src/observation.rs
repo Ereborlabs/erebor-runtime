@@ -17,7 +17,6 @@ mod coverage;
 mod model;
 mod persistence;
 mod wal;
-mod window;
 
 pub use coverage::{
     CoverageCountersV1, CoverageHealthOwner, CoverageIntervalV1, CoverageSnapshotV1,
@@ -33,10 +32,6 @@ use wal::EvidenceWalOwner;
 pub use wal::{
     EvidenceAckV1, EvidenceBatchV1, EvidenceFloorV1, EvidenceRecordV1, EvidenceWal,
     EvidenceWalCapacityPolicyV1, EvidenceWalLimits,
-};
-pub use window::{
-    DeterministicLocalWindowOwner, LocalFindingWindowSpecV1, LocalFindingWindowStateV1,
-    LocalFindingWindowV1,
 };
 
 const DEFAULT_RECENT_EFFECT_CAPACITY: usize = 1_024;

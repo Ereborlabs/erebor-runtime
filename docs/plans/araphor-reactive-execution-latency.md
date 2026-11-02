@@ -18,6 +18,196 @@ The parent designs are [component ownership](araphor-component-redesign.md),
 storage record already proves its logical payload reduction. This plan
 addresses execution and delivery latency.
 
+## Multi-source incremental qualification
+
+**User request: Approved. Implementation and qualification: Not done.**
+
+The user removes the old 1,592-event backlog test. Its Rust file and its
+private backlog helpers are removed. The recorded results below remain
+historical evidence. They do not qualify the replacement test.
+
+The replacement is a normal Rust test in
+`crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs`.
+It uses four sources with 4,096 initial events per source. Each source first
+receives one denied event. Its work is observed before the source grows.
+Two later rounds append one denied file-read event to each source.
+Most initial events have different process and task identities. A new event must not require the
+complete source history as causal support.
+
+Node appends an event to its WAL
+  -> authenticated Control intake commits the event to the central journal
+  -> Query notifies the subscriptions that depend on the changed data
+  -> the subscription creates its task context for the committed source cut
+  -> DataFusion executes the prepared native plan with that context
+  -> native affected-key and support queries select the required rows
+  -> the package computes the affected Graph contributions
+  -> Data commits changed contributions, references, and progress together
+  -> the Follow streams expose the Graph, finding, and notification
+
+The test sends events through the real Node WAL and authenticated intake.
+It receives event rows, small Graph header rows, finding rows, and notification
+rows through public Follow subscriptions. It does not call a journal point
+reader, a Graph getter, managed history, or the notification Router. Journal
+reads belong to the running native subscription plan. The test compares the
+ordered event stream with the exact uploaded bytes and journal positions.
+It checks stable native finding value IDs and source isolation. It does not
+subscribe to a complete serialized Graph payload.
+
+A stored notification reference can remain at its original publication when
+the finding value does not change. Each new finding must arrive through the
+notification subscription with its actual publication reference.
+
+The test checks the actual source and Graph input work. A small guest input
+does not prove that Query avoided a complete source scan. Continuing calls
+must use their exact prior result as the change base. An unrelated source
+must keep its committed Graph head. Stored contributions for untouched units
+must keep their existing membership intervals.
+
+Use native DataFusion metrics and normal structured debug events for work
+counts. Preserve the current trace dispatcher across existing task and
+blocking boundaries. The test uses a local telemetry subscriber. Do not add
+a host getter, a durable input or output copy, a second Graph state owner,
+or timer polling. No new elapsed-time pass/fail limit is part of this
+functional test.
+
+The working replacement uses native logical children for affected records,
+facts, and scalar window state. The old six-query capture and complete Graph
+reconstruction are removed from that path. The obsolete whole-input
+`GraphFacts::facts` callback is removed. The domain fact resolver remains.
+
+The replacement is **Not done**. The frozen coverage merge must preserve
+each required report and its qualification. Finding and notification reads
+still expand complete provenance. The replacement must select the actual
+finding's owning units. Native source read counts must be bounded. A small
+returned batch does not prove bounded work.
+
+The test waits for the exact Graph publication, its captured revision, the
+completed source reads, and the completed subscription execution. It checks
+changed package units and native membership writes. It also checks the
+complete journal frame's record count and body bytes against the actual
+single-event upload. The test does not accept an arbitrary multiple of the
+cold work count.
+
+Source checkpoint on 2026-11-01:
+
+- `cargo check -p mithril-control --tests --message-format=short`: passed
+  without warnings. This check covers Query, Data, Analysis, Control, and
+  Control tests at that checkpoint. It does not cover the later source fixes
+  or the Mithril end-to-end test.
+- Data `historical_call_members_require_unit_anchors`: passed.
+- Data `graph_reopen_`: both selected-call recovery and corruption rejection
+  passed. The corruption case rejects incorrect native captured revisions.
+- Control `managed_captures_control_proofs`: failed before execution because
+  the coverage adapter tried to replace the protected `events` source. The
+  working correction uses a private view and a native SQL CTE. Qualification
+  of that correction is **Not done**.
+- The four-source end-to-end test has not passed. No new latency or speed
+  improvement is proven.
+
+Source checkpoint on 2026-11-02:
+
+- `cargo check -p araphor-analysis -p mithril-e2e --tests --message-format=short`
+  passed without warnings before the later test and diagnostic edits. This
+  result does not qualify the current four-source test.
+- The focused Analysis run passed `native_projection_keeps_policy_values`.
+  `keeps_frozen_coverage` failed during native SQL planning. The fixture now
+  uses equivalent explicit join conditions. The retry passes that point, but
+  fails at the source-port key schema check.
+- The same retry built the Control test executable. Its direct
+  `managed_captures_control_proofs` run also failed at the source-port key
+  schema check. No Graph execution or coverage result is proven by these
+  failed runs.
+- The four-source subscription test remains **Not done**. Native coverage
+  invalidation, frozen report reads, and the work bounds remain **Not done**.
+  No new end-to-end latency, speed factor, or millisecond result is proven.
+
+The next connected run built the selected Analysis, Control, and Mithril
+end-to-end test executables in 3 minutes 3 seconds. The projection case passed.
+Initial Graph preparation then used one CPU core for more than 12 minutes.
+The run was stopped for diagnosis. The other selected cases did not run.
+
+Two debugger samples of the same focused case identify repeated native-plan
+work before package execution. One sample traverses native physical-plan
+invariant checks. The other hashes nested `SourcePort` children while
+`prepare_on` prepares `graph-settings`. The DuckDB worker is idle in the
+physical-plan sample. The samples are in
+`/tmp/araphor-frozen-child-stack-20261102.log` and
+`/tmp/araphor-frozen-caller-20261102.log`. A working correction carries
+resolved rows through coverage qualification and removes the second resolver
+subtree and its identity join. Runtime qualification is **Not done**.
+
+The native prepared-query probe now executes all five corrected point
+queries. The finding queries required an equivalent derived join because
+DuckDB rejected a correlated subquery in their outer join. Indexed member
+candidates read the requested identity's history. Evidence, source-version,
+and context-reference joins still read unrelated rows. This probe uses
+synthetic native rows. It does not qualify Rust authority checks or complete
+incremental execution. The exact SQL, plans, failures, and correction are
+recorded in `/tmp/araphor-five-point-query-review.md`.
+
+## Journal positions for change detection
+
+**User request: Approved. Implementation and qualification: Not done.**
+
+Change detection must use committed journal positions and explicit change
+records. Do not hash input rows, output rows, or state to find changes. Do
+not create object IDs from content hashes. Hashing is prohibited unless a
+specific operation requires it.
+
+Data appends records and commits the journal position
+  -> Query receives the commit notification
+  -> Query reads changes after the subscription's last committed position
+  -> the saved native DataFusion plan consumes those changes
+  -> the package returns changed contributions
+  -> Data commits those contributions and the new progress position together
+
+Execution or commit fails
+  -> the subscription keeps its previous committed progress position
+  -> retry reads the same journal range
+  -> Data preserves the existing transaction and duplicate-call checks
+
+Working changes remove Query result fingerprints, managed result hash IDs,
+Graph member hash keys, and Graph input content revisions. The end-to-end
+test compares exact bytes received through subscriptions. Source-key
+lookups, generic input receipts, and native value interning still require
+completion and focused qualification. No complete hash audit or new speed
+improvement is proven at this checkpoint.
+
+
+### Current change audit on 2026-11-02
+
+Native Query output delivery no longer hashes result rows. Managed result
+IDs use the committed publication and call positions. Discovery instance
+identity uses its existing source key. Native Graph property and edge
+values use exact native keys. Finding values use indexed candidates and
+full typed equality. Package context keys use native package metadata.
+The retained package-validation cache and its content fingerprints are
+removed. These changes have focused owner checks. They do not qualify
+complete incremental Graph execution.
+
+The unused Node fixed-sequence window owner and its content-derived
+observation and revision IDs are removed from the working source. Node
+keeps kernel CPU and sequence coordinates. `EvidenceWal` allocates a
+separate durable cursor. The historical ownership and current deletion
+checks are in the
+[dated evidence review update](mithril-hugging-face-intrusion-prevention/phase-6-implementation-review.md#journal-position-update-on-2026-11-02).
+
+Remaining hash removals include Graph package state, public finding IDs,
+Discovery definition revisions, and derived workload and source IDs. OCI
+blob validation, signed policy and catalog integrity, and WAL corruption
+checks have separate integrity requirements. An integrity check must not
+be used as a change detector. The complete hash audit is **Not done**.
+
+A 90-second diagnostic run of `keeps_frozen_coverage` records 135 native
+Control-source compilations and 55 Status-source compilations during
+initial preparation. The run ends at its diagnostic cutoff. Control header logical optimization takes 7.549 seconds
+in total. Status header logical optimization takes 14.726 seconds. These
+are observations from one partial run, not a work bound or event latency.
+Nested physical-planning scopes overlap and must not be added together.
+The trace is `/tmp/araphor-cdc-source-plan-profile-20261102.log`.
+Complete Graph preparation and the four-source subscription test remain
+**Not done**. No new end-to-end speed factor is proven.
+
 ## Intended end state
 
 ### Central journal references

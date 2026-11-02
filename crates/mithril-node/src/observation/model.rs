@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn kernel_observation_has_stable_complete_identity() -> Result<(), Box<dyn std::error::Error>> {
+    fn kernel_observation_preserves_position() -> Result<(), Box<dyn std::error::Error>> {
         let first = canonicalizer()?.normalize_kernel(
             event(2),
             EvidenceIdV1::new(30, 31),
@@ -292,8 +292,25 @@ mod tests {
             TemporalCoverageV1::Complete,
             200,
         )?;
-        assert_eq!(first.observation_id()?, second.observation_id()?);
-        assert_ne!(first.canonical_bytes()?, second.canonical_bytes()?);
+        assert_eq!(
+            (
+                first.tenant_id,
+                first.node_boot_id,
+                first.source_id,
+                first.source_epoch,
+                first.cpu_id,
+                first.source_sequence
+            ),
+            (
+                second.tenant_id,
+                second.node_boot_id,
+                second.source_id,
+                second.source_epoch,
+                second.cpu_id,
+                second.source_sequence
+            )
+        );
+        assert_ne!(first.to_wire_record()?, second.to_wire_record()?);
         assert!(first.supports_negative_claim());
         assert_eq!(first.effect.operation, 2);
         assert_eq!(first.effect.kernel_result, -13);
@@ -330,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_and_kernel_result_change_observation_identity() -> crate::Result<()> {
+    fn operation_fields_survive_normalization() -> crate::Result<()> {
         let original = canonicalizer()?.normalize_kernel(
             event(2),
             EvidenceIdV1::new(30, 31),
@@ -353,11 +370,27 @@ mod tests {
             TemporalCoverageV1::Complete,
             100,
         )?;
-        assert_ne!(
-            original.observation_id()?,
-            changed_operation.observation_id()?
-        );
-        assert_ne!(original.observation_id()?, changed_result.observation_id()?);
+        for changed in [&changed_operation, &changed_result] {
+            assert_eq!(
+                (
+                    original.tenant_id,
+                    original.node_boot_id,
+                    original.source_id,
+                    original.source_epoch,
+                    original.cpu_id,
+                    original.source_sequence
+                ),
+                (
+                    changed.tenant_id,
+                    changed.node_boot_id,
+                    changed.source_id,
+                    changed.source_epoch,
+                    changed.cpu_id,
+                    changed.source_sequence
+                )
+            );
+            assert_ne!(original.to_wire_record()?, changed.to_wire_record()?);
+        }
         Ok(())
     }
 
@@ -376,7 +409,6 @@ mod tests {
             100,
         )?;
         assert_ne!(first.source_id, second.source_id);
-        assert_ne!(first.observation_id()?, second.observation_id()?);
         Ok(())
     }
 
