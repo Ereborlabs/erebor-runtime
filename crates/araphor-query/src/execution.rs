@@ -33,6 +33,7 @@ use datafusion::physical_plan::{
 use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::planner::object_name_to_table_reference;
 use datafusion::sql::sqlparser::ast::Statement as SqlStatement;
+use erebor_telemetry::tracing::{instrument::WithSubscriber as _, Instrument as _};
 use futures_util::{StreamExt as _, TryStreamExt};
 use snafu::ResultExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -434,9 +435,15 @@ impl Engine {
             active: true,
         };
         let (send, receive) = tokio::sync::oneshot::channel();
+        let dispatch = erebor_telemetry::tracing::dispatcher::get_default(Clone::clone);
+        let span = erebor_telemetry::tracing::Span::current();
         let worker = tokio::task::spawn_blocking(move || {
-            let _lease = lease;
-            drop(send.send(operation()));
+            erebor_telemetry::tracing::dispatcher::with_default(&dispatch, || {
+                span.in_scope(|| {
+                    let _lease = lease;
+                    drop(send.send(operation()));
+                })
+            })
         });
         Self::join_worker(control, pending, worker, receive).await
     }
@@ -465,20 +472,24 @@ impl Engine {
         let (send, receive) = tokio::sync::oneshot::channel();
         let engine = Arc::clone(self);
         let stage = Arc::clone(&control);
-        let worker = handle.spawn(async move {
-            let _engine = engine;
-            let _lease = lease;
-            let result = stage
-                .query_async(async move {
-                    state
-                        .query_planner()
-                        .create_physical_plan(&plan, &state)
-                        .await
-                        .context(SqlSnafu)
-                })
-                .await;
-            drop(send.send(result));
-        });
+        let worker = handle.spawn(
+            async move {
+                let _engine = engine;
+                let _lease = lease;
+                let result = stage
+                    .query_async(async move {
+                        state
+                            .query_planner()
+                            .create_physical_plan(&plan, &state)
+                            .await
+                            .context(SqlSnafu)
+                    })
+                    .await;
+                drop(send.send(result));
+            }
+            .in_current_span()
+            .with_current_subscriber(),
+        );
         Self::join_worker(control, pending, worker, receive).await
     }
 
@@ -723,9 +734,13 @@ impl Engine {
             .fail();
         }
         let (send, receive) = std::sync::mpsc::sync_channel(1);
-        handle.spawn(async move {
-            let _sent = send.send(future.await);
-        });
+        handle.spawn(
+            async move {
+                let _sent = send.send(future.await);
+            }
+            .in_current_span()
+            .with_current_subscriber(),
+        );
         receive.recv().map_err(|_| {
             BusySnafu {
                 resource: "execution runtime",

@@ -443,6 +443,7 @@ dependencies = [
  "crc32c",
  "datafusion",
  "erebor-runtime-error",
+ "erebor-telemetry",
  "futures-core",
  "futures-util",
  "prost",

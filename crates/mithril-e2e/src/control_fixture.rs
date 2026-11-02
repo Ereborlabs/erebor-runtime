@@ -1,3 +1,4 @@
+use erebor_telemetry::tracing::{instrument::WithSubscriber as _, Instrument as _};
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fs;
@@ -507,9 +508,14 @@ impl ControlServerFixture {
         address: SocketAddr,
     ) -> Result<Self, Box<dyn StdError>> {
         let (shutdown, receiver) = oneshot::channel();
-        let server = tokio::spawn(listener.serve(async move {
-            let _result = receiver.await;
-        }));
+        let server = tokio::spawn(
+            listener
+                .serve(async move {
+                    let _result = receiver.await;
+                })
+                .in_current_span()
+                .with_current_subscriber(),
+        );
         Self::from_running(address, shutdown, server).await
     }
 
@@ -575,18 +581,24 @@ impl ControlServerFixture {
     ) -> Result<Self, Box<dyn StdError>> {
         let address = free_address()?;
         let (shutdown, receiver) = oneshot::channel();
+        let dispatch = erebor_telemetry::tracing::dispatcher::get_default(Clone::clone);
+        let span = erebor_telemetry::tracing::Span::current();
         let server = tokio::task::spawn_blocking(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|source| mithril_control::Error::Io {
-                    path: PathBuf::from("Control test runtime"),
-                    source,
-                    location: snafu::Location::default(),
-                })?;
-            runtime.block_on(serve(address, &tls, control, async move {
-                let _result = receiver.await;
-            }))
+            erebor_telemetry::tracing::dispatcher::with_default(&dispatch, || {
+                span.in_scope(|| {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|source| mithril_control::Error::Io {
+                            path: PathBuf::from("Control test runtime"),
+                            source,
+                            location: snafu::Location::default(),
+                        })?;
+                    runtime.block_on(serve(address, &tls, control, async move {
+                        let _result = receiver.await;
+                    }))
+                })
+            })
         });
         if let Err(error) = tokio::time::timeout(Duration::from_secs(5), async {
             while tokio::net::TcpStream::connect(address).await.is_err() {

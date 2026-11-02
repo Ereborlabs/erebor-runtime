@@ -1,3 +1,4 @@
+use erebor_telemetry::tracing::{instrument::WithSubscriber as _, Instrument as _};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
@@ -418,35 +419,39 @@ impl InstanceHost {
         let shutdown = Shutdown(Arc::clone(&operation));
         let caller = Arc::new(control.within(None)?);
         let host = Arc::clone(self);
-        let task = tokio::spawn(async move {
-            let mut changes = host.authority.changes_for(&grant);
-            grant.remaining()?;
-            let work = work(Arc::clone(&host), Arc::clone(&operation));
-            tokio::pin!(work);
-            let result = tokio::select! {
-                result = &mut work => result,
-                _ = changes.changed() => {
-                    let _cancelled = operation.cancel();
-                    match work.await {
-                        Ok(value) => Ok(value),
-                        Err(_) => Err(Code::Denied.error("managed authority change").into()),
+        let task = tokio::spawn(
+            async move {
+                let mut changes = host.authority.changes_for(&grant);
+                grant.remaining()?;
+                let work = work(Arc::clone(&host), Arc::clone(&operation));
+                tokio::pin!(work);
+                let result = tokio::select! {
+                    result = &mut work => result,
+                    _ = changes.changed() => {
+                        let _cancelled = operation.cancel();
+                        match work.await {
+                            Ok(value) => Ok(value),
+                            Err(_) => Err(Code::Denied.error("managed authority change").into()),
+                        }
                     }
-                }
-                stopped = caller.query_async(std::future::pending::<Result<T>>()) => {
-                    let _cancelled = operation.cancel();
-                    match work.await {
-                        Ok(value) => Ok(value),
-                        Err(_) => stopped,
+                    stopped = caller.query_async(std::future::pending::<Result<T>>()) => {
+                        let _cancelled = operation.cancel();
+                        match work.await {
+                            Ok(value) => Ok(value),
+                            Err(_) => stopped,
+                        }
                     }
+                };
+                if result.is_err() && grant.remaining().is_err() {
+                    return Err(Code::Denied.error("managed grant expiry").into());
                 }
-            };
-            if result.is_err() && grant.remaining().is_err() {
-                return Err(Code::Denied.error("managed grant expiry").into());
+                let value = result?;
+                caller.check()?;
+                Ok(value)
             }
-            let value = result?;
-            caller.check()?;
-            Ok(value)
-        });
+            .in_current_span()
+            .with_current_subscriber(),
+        );
         let result = task.await.context(crate::error::TaskSnafu)?;
         drop(shutdown);
         result

@@ -54,6 +54,40 @@ the earlier sections. Those sections do not qualify the new Replay path.
   -> [AnalysisStore::capture_managed](../../crates/araphor-data/src/analysis/managed/capture.rs) the first invocation restores saved state from Data
   -> [ManagedExecution::promote](../../crates/araphor-data/src/analysis/managed/execution.rs) the first successful commit retains state for later invocations
 
+## Execution diagnostics
+
+[Engine](../../crates/araphor-query/src/execution.rs) keeps the current trace
+subscriber and span across its worker boundaries.
+[CallContext::call](../../crates/araphor-query/src/definition/physical.rs)
+keeps that context while it shares a package evaluation.
+[InstanceHost](../../crates/araphor-analysis/src/instance/host.rs) keeps the
+same context in its existing host and lifecycle tasks. No new task or store
+owns the diagnostics.
+
+[PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs)
+emits a `package` debug event after SQL or guest execution, output validation,
+and buffer admission succeed. The event contains the instance, source cut,
+call, package, and actual input and output row counts. The declared change
+ports supply the affected, before, and after row counts. The event contains
+no evidence or package payload. A retained call that does not execute emits
+no execution event.
+
+`elapsed_us` measures the wall time from the SQL or guest branch through
+output admission. This value includes validation. It does not measure pure
+guest CPU time or result commit time. This event does not prove a durable
+commit or an end-to-end latency improvement.
+
+The local test subscriber receives these events through the same trace
+context. The replacement Follow test remains **Not done** until the complete
+source, Graph, and notification path passes its checks.
+
+Source: the diagnostics change after `4266d0abd`. `cargo check -p
+araphor-query --tests` passes. Four exact Query checks also pass:
+`physical_sql_return_retains_contract`, `physical_calls_keep_capture_and_clock`,
+`physical_call_cancellation_joins`, and `native_planning_joins_worker`.
+These checks cover the diagnostics change. They do not qualify the new
+incremental Graph path.
+
 ## State and lifetime
 
 Analysis creates one opaque `ManagedExecution` in each subscription's `Step`.

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use araphor_analysis_sdk as sdk;
 use araphor_data::AnalysisReadControl;
@@ -25,6 +26,7 @@ use datafusion::physical_plan::{
     execute_stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use erebor_telemetry::tracing::{instrument::WithSubscriber as _, Instrument as _};
 use futures_util::future::{BoxFuture, FutureExt, Shared, WeakShared};
 use futures_util::{stream, StreamExt, TryStreamExt};
 
@@ -663,6 +665,8 @@ impl CallContext {
             }
             result
         }
+        .in_current_span()
+        .with_current_subscriber()
         .boxed()
         .shared();
         calls.insert(
@@ -962,6 +966,7 @@ impl PackageExec {
                     .map_or(0, araphor_data::ManagedChanges::metadata_bytes),
             ),
         )?;
+        let started = Instant::now();
         let (_admission, output, output_memory) = if self.call.sql.is_some() {
             let output_memory = Arc::new(owner.memory.reserve_output(0)?);
             let checked = self
@@ -986,6 +991,39 @@ impl PackageExec {
             owner.memory.retain_output(batch, &output_memory)?;
         }
         output_memory.try_resize(output.metadata_bytes())?;
+        let rows = |name: &str| {
+            evaluation
+                .inputs
+                .iter()
+                .find(|input| input.data.name == name)
+                .map_or(0, |input| input.data.rows())
+        };
+        let changed = model
+            .change_inputs
+            .as_ref()
+            .into_iter()
+            .flat_map(|contract| &contract.ports)
+            .fold((0u64, 0u64, 0u64), |counts, port| {
+                (
+                    counts.0.saturating_add(rows(&port.affected)),
+                    counts.1.saturating_add(rows(&port.before)),
+                    counts.2.saturating_add(rows(&port.after)),
+                )
+            });
+        erebor_telemetry::debug!(
+            stage = "package",
+            instance_id = %snapshot.managed().map_or("", |managed| managed.instance().spec.id.as_str()),
+            cut_revision = snapshot.page.extraction.meta.commit_revision,
+            call_id = self.call.id,
+            package_id = %self.call.package.package_id,
+            affected_rows = changed.0,
+            before_rows = changed.1,
+            after_rows = changed.2,
+            rows = evaluation.inputs.iter().fold(0u64, |rows, input| rows.saturating_add(input.data.rows())),
+            output_rows = output.datasets.iter().fold(0u64, |rows, data| rows.saturating_add(data.rows())),
+            elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+            "Package execution completed"
+        );
         Ok(CallResult {
             evaluation,
             output,

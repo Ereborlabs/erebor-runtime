@@ -11,6 +11,7 @@ use araphor_query::execution::Engine;
 use araphor_query::memory::Memory;
 use datafusion::execution::memory_pool::MemoryReservation;
 use erebor_runtime_error::{ErrorExt as _, StatusCode};
+use erebor_telemetry::tracing::{instrument::WithSubscriber as _, Instrument as _};
 use futures_util::{future::BoxFuture, stream::FuturesUnordered, FutureExt as _, StreamExt as _};
 use snafu::ResultExt as _;
 use tokio::sync::{mpsc, watch};
@@ -72,26 +73,30 @@ impl Shutdown {
         work: impl Future<Output = Result<()>> + Send + 'static,
     ) -> Result<()> {
         let shutdown = Self(Arc::clone(&control));
-        let task = tokio::spawn(async move {
-            let result = {
-                tokio::pin!(work);
-                loop {
-                    tokio::select! {
-                        result = &mut work => break result,
-                        changed = stop.changed() => {
-                            if changed.is_err() || *stop.borrow_and_update() {
-                                let cancelled = control.cancel();
-                                let joined = work.await;
-                                cancelled?;
-                                break joined;
+        let task = tokio::spawn(
+            async move {
+                let result = {
+                    tokio::pin!(work);
+                    loop {
+                        tokio::select! {
+                            result = &mut work => break result,
+                            changed = stop.changed() => {
+                                if changed.is_err() || *stop.borrow_and_update() {
+                                    let cancelled = control.cancel();
+                                    let joined = work.await;
+                                    cancelled?;
+                                    break joined;
+                                }
                             }
                         }
                     }
-                }
-            };
-            drop(stop);
-            result
-        });
+                };
+                drop(stop);
+                result
+            }
+            .in_current_span()
+            .with_current_subscriber(),
+        );
         let result = task.await.context(crate::error::TaskSnafu)?;
         drop(shutdown);
         result
@@ -385,14 +390,18 @@ impl InstanceHost {
             let Some((control, shutdown, reader, registration, requests)) = prepared? else {
                 return Ok(());
             };
-            let task = tokio::spawn(self.drive(
-                control,
-                reader,
-                stop,
-                witness_expiry,
-                registration,
-                requests,
-            ));
+            let task = tokio::spawn(
+                self.drive(
+                    control,
+                    reader,
+                    stop,
+                    witness_expiry,
+                    registration,
+                    requests,
+                )
+                .in_current_span()
+                .with_current_subscriber(),
+            );
             let result = task.await.context(crate::error::TaskSnafu)?;
             drop(shutdown);
             result
