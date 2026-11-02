@@ -7,7 +7,6 @@ use araphor_data::{
     AnalysisReadControl, EvidenceIntakeIdentityV1, ManagedDestination, PackageErrorCodeV1 as Code,
     ProcessorScopeV1, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
 };
-use araphor_package::Qualification;
 use araphor_query::follow::Update;
 use erebor_runtime_error::{ErrorExt as _, StatusCode};
 use futures_util::stream::SelectAll;
@@ -282,7 +281,12 @@ impl DiscoveryOwner {
     }
 
     pub(super) fn instance_id(source: &EvidenceIntakeIdentityV1) -> String {
-        format!("discovery:{}", Qualification::digest(&source.key()))
+        let key = source
+            .key()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        format!("discovery:{key}")
     }
 
     pub(super) async fn sources(&self, control: &Arc<AnalysisReadControl>) -> Result<Updates> {

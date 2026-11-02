@@ -176,6 +176,18 @@ check replaces the removed private proof-object test. The build reports one
 unrelated unused Query import. These results do not qualify the complete
 incremental Graph path.
 
+## Discovery instance identity
+
+[DiscoveryOwner::instance_id](../../crates/araphor-analysis/src/discovery/feed.rs)
+uses the exact native source key as hexadecimal text. It does not hash the
+source key. The key includes the tenant, node, boot, label epoch, source,
+and source epoch. The existing Graph instance owner uses the same encoding.
+
+The existing restore and destination checks still compare the complete
+source. Focused start, stop, restart-intent, and foreign-source rejection
+cases pass. These checks qualify identity and lifecycle behavior. They do
+not qualify event latency.
+
 ## Declared change inputs
 
 [ChangeInputs](../../crates/araphor-analysis-sdk/src/model/changes.rs) names
