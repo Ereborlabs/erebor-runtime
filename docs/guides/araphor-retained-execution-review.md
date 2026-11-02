@@ -188,6 +188,15 @@ source. Focused start, stop, restart-intent, and foreign-source rejection
 cases pass. These checks qualify identity and lifecycle behavior. They do
 not qualify event latency.
 
+## Coverage input revision
+
+[The builtin package input](../../crates/araphor-analysis/src/package/builtin.rs)
+includes the existing nullable `interval_revision` column. The shared
+coverage SQL reads this column. Omitting the column caused native planning
+to fail before Discovery execution. The Data table provider already supplies
+the interval's own revision. The existing coverage and Discovery lifecycle
+cases pass with the corrected declaration.
+
 ## Declared change inputs
 
 [ChangeInputs](../../crates/araphor-analysis-sdk/src/model/changes.rs) names

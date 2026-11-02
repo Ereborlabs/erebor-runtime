@@ -158,6 +158,7 @@ const INPUTS: &[(&str, &[&str])] = &[
             "coverage_revision",
             "interval_id",
             "interval_source_epoch",
+            "interval_revision",
             "state",
             "gap_reasons",
             "first_sequence",

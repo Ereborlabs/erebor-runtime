@@ -20,7 +20,7 @@ const EVENT_FIELDS: [&str; 11] = [
     "kernel_sequence",
 ];
 
-const REPORT_FIELDS: [&str; 31] = [
+const REPORT_FIELDS: [&str; 32] = [
     "tenant_id",
     "node_id",
     "node_boot_id",
@@ -33,6 +33,7 @@ const REPORT_FIELDS: [&str; 31] = [
     "state",
     "interval_id",
     "interval_source_epoch",
+    "interval_revision",
     "first_sequence",
     "last_sequence",
     "gap_reasons",
@@ -160,6 +161,7 @@ impl Report {
             "interval_source_epoch" => {
                 ScalarValue::UInt64(interval.map(|value| value.source_epoch))
             }
+            "interval_revision" => ScalarValue::UInt64(interval.map(|value| value.revision)),
             "first_sequence" => ScalarValue::UInt64(interval.map(|value| value.first_sequence)),
             "last_sequence" => ScalarValue::UInt64(interval.and_then(|value| value.last_sequence)),
             "gap_reasons" => ScalarValue::Utf8(interval.map(|value| value.gap_reasons.join(","))),
