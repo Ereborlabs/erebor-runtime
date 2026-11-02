@@ -100,53 +100,39 @@ fn accumulate_receives_previous_versioned_state() -> Result<(), Box<dyn std::err
 }
 
 #[test]
-fn echo_keeps_context_rows_revision_and_coverage() -> Result<(), Box<dyn std::error::Error>> {
-    let port = builtin::Discovery::port::<builtin::ContextSelection>("context");
+fn echo_keeps_rows_revision_and_coverage() -> Result<(), Box<dyn std::error::Error>> {
+    let port = RuntimeFixture::package().exports[1].inputs[0].port.clone();
     let package = sdk::Package::new(
         "context-fixture",
         "1",
         vec![sdk::Model::new(
             "echo-inputs",
             vec![port.clone()],
-            vec![port.clone(), RuntimeFixture::metadata_port()],
+            vec![port, RuntimeFixture::metadata_port()],
         )],
     );
-    let row = builtin::ContextSelection {
-        selector_version: 1,
-        from_utc_ns: 1000,
-        cutoff_utc_ns: 1999,
-        host_packet: "{\"omissions\":{\"EVIDENCE_OUTSIDE_WINDOW_OR_UNDATED\":1}}".into(),
+    let mut evaluation = evaluation(&package.exports[0], vec![vec![3, 7]])?;
+    evaluation.inputs[0].revision = sdk::Revision {
+        owner: "discovery-context-v1".into(),
+        id: "cutoff-1999".into(),
+        window: Some(sdk::SourceWindow {
+            source: b"qualified-subject".to_vec(),
+            start_utc_ns: 1000,
+            end_utc_ns: 1999,
+        }),
     };
-    let evaluation = sdk::Evaluation {
-        previous_outputs: Vec::new(),
-        export: "echo-inputs".into(),
-        inputs: vec![sdk::Input {
-            data: Rows::encode(&port, std::slice::from_ref(&row))?,
-            revision: sdk::Revision {
-                owner: "discovery-context-v1".into(),
-                id: "cutoff-1999".into(),
-                window: Some(sdk::SourceWindow {
-                    source: b"qualified-subject".to_vec(),
-                    start_utc_ns: 1000,
-                    end_utc_ns: 1999,
-                }),
-            },
-            coverage: sdk::Coverage {
-                state: sdk::CoverageState::Gapped,
-                limits: vec!["EVIDENCE_OUTSIDE_WINDOW_OR_UNDATED".into()],
-            },
-        }],
-        parameters: None,
-        context: sdk::EvaluationContext {
-            id: "context-echo".into(),
-            time_utc_ns: 3000,
-            seed: None,
-        },
-        checkpoint: None,
+    evaluation.inputs[0].coverage = sdk::Coverage {
+        state: sdk::CoverageState::Gapped,
+        limits: vec!["EVIDENCE_OUTSIDE_WINDOW_OR_UNDATED".into()],
     };
+    evaluation.context.id = "context-echo".into();
+    evaluation.context.time_utc_ns = 3000;
     let output = run(&package, &evaluation)?;
-    let rows: Vec<builtin::ContextSelection> = Rows::decode(&port, &output.datasets[0])?;
-    assert_eq!(serde_json::to_value(&rows[0])?, serde_json::to_value(row)?);
+    assert_eq!(output.datasets[0].name, evaluation.inputs[0].data.name);
+    assert_eq!(
+        output.datasets[0].batches,
+        evaluation.inputs[0].data.batches
+    );
     let metadata = &output.datasets[1].batches[0];
     let revision: sdk::Revision =
         serde_json::from_str(metadata.column(1).as_string::<i32>().value(0))?;

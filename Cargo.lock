@@ -249,7 +249,6 @@ dependencies = [
 name = "araphor-component-fixture"
 version = "0.1.0"
 dependencies = [
- "araphor-analysis-builtins",
  "araphor-analysis-sdk",
  "serde_json",
 ]

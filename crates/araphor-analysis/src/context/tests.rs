@@ -1,5 +1,4 @@
 mod baseline;
-mod sdk;
 
 use std::sync::Arc;
 
@@ -493,8 +492,7 @@ async fn discovery_context_native_capture() -> TestResult<()> {
     assert_eq!(initial.omissions.get("DOCUMENT_AFTER_CUTOFF"), Some(&1));
     assert_eq!(initial.available_documents, 1);
     request.cutoff_utc_ns = 4000;
-    let packet = owner.context_input(&request, &control).await?;
-    let later = Context::decode_context(&packet)?;
+    let later = owner.select_context(&request, &control).await?;
     assert_eq!(later.documents.len(), 1);
     assert_eq!(later.documents[0].document_revision, 2);
     assert_eq!(later.documents[0].trust, DiscoveryContextTrustV1::Reviewed);
@@ -602,11 +600,4 @@ async fn select_packet(
     Ok(context
         .select_captured(request, revisions, &AnalysisReadControl::default())
         .await?)
-}
-
-async fn context_input(
-    request: &DiscoveryContextRequestV1,
-    revisions: &[DiscoveryContextRevisionV1],
-) -> TestResult<araphor_analysis_sdk::Input> {
-    Ok(Context::input(&select(request, revisions).await?)?)
 }

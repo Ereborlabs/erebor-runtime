@@ -836,3 +836,26 @@ the 90-second diagnostic cutoff. They remain **Not done**. This output
 qualification does not prove complete incremental execution, a complete
 hash audit, or a latency improvement. Generic input receipts and native
 source-key replacement remain separate work.
+
+## Native context selection without a packet bridge
+
+[Context::select_context](../../crates/araphor-analysis/src/context/selection.rs) selects the admitted context versions
+  -> [Context::select_captured](../../crates/araphor-analysis/src/context/selection.rs) checks the captured context and returns the typed view
+  -> [Native capture test](../../crates/araphor-analysis/src/context/tests.rs) checks cutoff, revision, trust, and selection results
+
+The unused SDK context-packet bridge, `ContextSelection`, JSON `host_packet`,
+and packet content digest are removed. The native selector keeps its
+cutoff, trust, tenant, source, quota, and cancellation checks. Existing
+context field encoding and optional byte accounting remain. The component
+echo test checks exact Arrow batches, revision, window, and gapped coverage
+through its existing input contract. The removed roundtrip codec modules
+had no declared parent module.
+
+Focused Linux qualification at the connected build-14 source checkpoint:
+**Done**. All 14 Context cases complete across the grouped run and its
+final-case retry. The group reaches its 60-second diagnostic cutoff after
+13 passes. The final case passes separately in 6.85 seconds. The component
+echo case also passes. Logs are `/tmp/araphor-cdc-context-native-20261102.log`,
+`/tmp/araphor-cdc-context-subject-20261102.log`, and
+`/tmp/araphor-cdc-context-echo-20261102.log`. These checks do not qualify full
+JSON or hash removal, event latency, or the complete subscription path.

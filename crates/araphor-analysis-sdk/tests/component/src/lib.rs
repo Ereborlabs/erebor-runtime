@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::sync::Arc;
 
-use araphor_analysis_builtins::{discovery as builtin, Rows};
 use araphor_analysis_sdk as sdk;
 use sdk::arrow_array::{cast::AsArray as _, types::UInt64Type, StringArray, UInt64Array};
 use sdk::guest::bindings::{araphor::analysis::types, exports::araphor::analysis::analysis::Guest};
@@ -219,16 +218,8 @@ impl RuntimeFixture {
     fn echo_inputs(input: sdk::wire::Evaluation) -> sdk::Result<sdk::wire::Output> {
         let mut ports = Vec::new();
         for source in &input.inputs {
-            let typed = (source.data.name == "context")
-                .then(|| builtin::Discovery::port::<builtin::ContextSelection>("context"));
-            let data = sdk::wire::Dataset::decode_ipc(
-                &source.data.name,
-                &source.data.arrow_ipc,
-                typed.as_ref().map(|port| &port.schema),
-            )?;
-            if let Some(port) = typed {
-                let _: Vec<builtin::ContextSelection> = Rows::decode(&port, &data)?;
-            }
+            let data =
+                sdk::wire::Dataset::decode_ipc(&source.data.name, &source.data.arrow_ipc, None)?;
             let schema = data
                 .batches
                 .first()

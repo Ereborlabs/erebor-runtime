@@ -9,7 +9,6 @@ use snafu::ResultExt as _;
 
 use crate::Result;
 
-mod codec;
 mod selection;
 #[cfg(test)]
 mod tests;

@@ -360,15 +360,6 @@ pub struct MatchState {
     pub lifecycle: Vec<DiscoveryLifecycleEntryV1>,
 }
 
-#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContextSelection {
-    pub selector_version: u32,
-    pub from_utc_ns: u64,
-    pub cutoff_utc_ns: u64,
-    pub host_packet: String,
-}
-
 impl BehaviorDisplayKeyV1 {
     pub(super) fn outcome(&self) -> impl Ord + '_ {
         (
