@@ -6,8 +6,7 @@ WITH indexed AS (
         key['entity_key'], key['lifetime_key'], key['owner_revision']) AS keys
     FROM graph_facts GROUP BY record
 ), qualified AS (
-    SELECT indexed.*, COALESCE(fact_keys.keys, []) AS facts
-    FROM indexed LEFT JOIN fact_keys ON fact_keys.record = indexed.record_row
+    SELECT * FROM indexed
 ), causal_ids AS (
     {support}
 ), base_support AS (
@@ -24,9 +23,10 @@ WITH indexed AS (
 ), support AS (
     SELECT members.root_row,
         array_agg(named_struct('record', selected.id, 'proof', selected.proof_quality,
-            'facts', selected.facts) ORDER BY selected.id) AS support
+            'facts', COALESCE(fact_keys.keys, [])) ORDER BY selected.id) AS support
     FROM support_ids members
     JOIN qualified selected ON selected.record_row = members.support_row
+    LEFT JOIN fact_keys ON fact_keys.record = selected.record_row
     GROUP BY members.root_row
 )
 SELECT root.id AS record, config.window_ns,

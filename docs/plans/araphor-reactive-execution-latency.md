@@ -4,6 +4,85 @@ Replace repeated source capture, saved-state reconstruction, and per-row
 transactions with one retained DataFusion subscription and atomic writes of
 changes. This plan records the measured costs and proposes the replacement.
 
+## Current approval on 2026-11-03
+
+All six proposals and further component rewrites are approved when they
+improve the existing live subscription test by 100 times. This approval
+supersedes the earlier approval limits in this file. Preserve those older
+records as history. The target is **Not done** until comparable completion
+of the same workload proves the improvement.
+
+The qualification owner is
+`discovery::packages::required::incident::incremental::follows_incremental_sources`.
+The workload has four sources, 4,096 initial events per source, and eight
+later arrivals: 16,392 events in total. Run only this live test during the
+performance work. Preserve its inputs, assertions, progress gates, native
+finding identities, notification references, and source isolation.
+
+Use the native DataFusion SQL parser, logical planner, optimizer, physical
+planner, and execution. Keep subscriptions reactive. Use committed journal
+positions for change detection. Compute and store changes incrementally.
+Preserve authorization, attribution, atomic commits, and recovery. Remove
+unnecessary hashes, serialization, repeated planning, and data copies from
+this path. A crate replacement is permitted when this path requires it.
+
+Record actual elapsed seconds for each measured section after each run.
+State the source change and compare the same before and after boundaries.
+Identify nested or concurrent intervals and any unmeasured time. Counts,
+partial runs, and build times do not prove the 100-times target.
+
+### Live physical planning measurement
+
+**SQL dependency reduction: Done. First finding and 100-times target:
+Not done.**
+
+Both runs use the same live test and debug filters. The second run changes
+only the Graph unit selection SQL. It joins grouped fact keys at the final
+support aggregate. Credential support does not use those keys. The earlier
+join caused native planning to repeat the unused fact subtree in each
+credential support branch. The final join preserves the native record key,
+left-join behavior, empty fact list, support values, and final ordering.
+
+| Boundary | Before | After | Reduction |
+| --- | ---: | ---: | ---: |
+| External test process | 700.392 s | 568.844 s | 18.8% |
+| Configuration | 276.179 s | 224.314 s | 18.8% |
+| First large physical plan | 264.533 s | 213.609 s | 19.3% |
+| First-event observation (failed) | 422.111 s | 342.397 s | 18.9% |
+| Second large physical plan | 412.305 s | 333.745 s | 19.1% |
+| Pipeline shutdown | 1.506 s | 1.525 s | 1.3% increase |
+
+The internal total changes from 700.340 s to 568.792 s. Inclusive startup
+changes from 276.721 s to 224.869 s. Listening changes from 0.240439 s to
+0.240901 s; subscription setup, 0.067043 s to 0.067145 s; policy setup,
+0.220392 s to 0.230873 s; and OIDC shutdown, 0.000213 s to 0.000218 s.
+Startup includes configuration, listening, subscription setup, and policy
+setup. The internal total includes all test sections.
+
+The first physical plan is inside configuration. The second physical plan
+is inside first-event observation. Do not add these nested values to the
+process time. The two large physical plans do not overlap. Both runs fail
+before the first Graph publication, finding, and notification. The bulk
+events and eight later arrivals do not run. These results do not establish
+completed-workload throughput or event latency.
+
+The measured source includes the connected native record-identity changes.
+The separate SQL commit applies the same join movement to its parent
+record-row keys. It does not commit those unrelated identity changes.
+
+The logs are `/tmp/araphor-live-baseline-20261103.log` and
+`/tmp/araphor-live-fact-keys-20261103.log`. Their paired `-timing.txt` files
+record external process time. The builds take 198.762 s and 242.366 s.
+Build time is outside both test measurements.
+
+A separate debugger run of the exact same test samples native physical
+planning. The active Query thread computes join statistics inside native
+`EnforceDistribution`. The stack contains 829 frames. DuckDB is idle in
+that sample. This sample identifies active work; it does not measure the
+whole duration of that work. The source and summary are in
+`/tmp/araphor-live-fact-keys-gdb-exact-20261103.log` and
+`/tmp/araphor-live-fact-keys-stack-summary-20261103.txt`.
+
 **Measurement record: Done. Proposals 1 and 5: Approved; implementation in
 progress. Proposals 2, 3, 4, and 6: Not approved; implementation Not done.**
 The user approves retained execution state, change inputs, contribution

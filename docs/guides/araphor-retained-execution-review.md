@@ -1,5 +1,24 @@
 # Araphor retained execution state review
 
+## Graph support fact join on 2026-11-03
+
+[Unit selection SQL](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql)
+selects the changed Graph units
+  -> [credential support SQL](../../crates/araphor-analysis-builtins/src/graph/units/credential.sql) selects causal support without a fact-key join on each record relation
+  -> [the support aggregate](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql) joins the grouped fact keys once at their actual use
+  -> [the native planner](../../crates/araphor-query/src/planner/subscription.rs) plans the resulting SQL with DataFusion
+
+`fact_keys` groups by the same record key used by the final left join.
+The grouped relation supplies at most one row per selected record. The
+empty fact list, proof quality, support order, and output schema remain.
+No Rust planner, aggregate, or execution operator is added.
+
+The two connected live runs take 700.392 s and 568.844 s. Both fail before
+the first finding. The result proves a reduction at the same measured
+planning boundaries. It does not prove completed-workload performance.
+The [measurement record](../plans/araphor-reactive-execution-latency.md#live-physical-planning-measurement)
+states each duration and the connected-source qualification limit.
+
 The [journal-reference review](#checked-journal-references) describes the
 current change after `3f9bbd3a4`. The bounded storage change is qualified.
 The earlier sections retain the source review record for retained state and
