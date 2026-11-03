@@ -1021,3 +1021,17 @@ stops at 213.426846 s after separate bulk read-control failures. The
 completed workload and performance target remain **Not done**. This
 measurement includes other working-tree changes. There is no isolated
 HEAD-only build or timing result.
+
+## Source callback database controls
+
+[SourceSnapshot::blocking](../../crates/araphor-query/src/sources/rows.rs)
+creates a separate interrupt control for each database operation. The
+blocking join and its worker use the same child. Parent cancellation,
+deadlines, permits, and operation lifetimes remain in effect. Concurrent
+source callbacks no longer share a database interrupt slot.
+
+The connected working tree passes the focused build in 193.326576 s. All
+four initial source checks pass in the unchanged live case. Bulk work
+advances but exposes false call resets and separate replay-control
+collisions. The run stops at 277.443348 s. Complete-workload performance
+remains **Not done**. There is no isolated HEAD-only build or timing.

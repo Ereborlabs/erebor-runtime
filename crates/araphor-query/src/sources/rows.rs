@@ -339,6 +339,7 @@ impl SourceSnapshot {
             .get_extension::<crate::execution::Permit>()
             .ok_or_else(|| DataFusionError::Execution("evaluation permit is absent".into()))?;
         control.check().map_err(Self::data_error)?;
+        let control = Arc::new(control.operation().map_err(Self::data_error)?);
         let worker = calls.token()?;
         let stage = Arc::clone(&control);
         crate::execution::Engine::blocking(control, (permit, lease, worker), move || {
