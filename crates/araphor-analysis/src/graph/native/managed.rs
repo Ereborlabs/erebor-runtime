@@ -157,7 +157,6 @@ impl GraphPublication {
                 },
             })
             .await?;
-        let feedback = selected.sources().contains_key("graph_manifest");
         let mut nested = false;
         PackageCall::any(&selected.plan, &mut |_| {
             nested = true;
@@ -195,7 +194,6 @@ impl GraphPublication {
             authority,
             grant.clone(),
             selected.plan,
-            feedback,
             DefinitionRef::Retained(&definition),
             facts,
         )

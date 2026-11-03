@@ -226,7 +226,7 @@ impl GraphPublication {
                 advance: advanced,
                 expire: false,
             },
-            completed: !self.feedback && last >= captured.accepted,
+            completed: last >= captured.accepted,
             deadline,
             _memory: graph._memory.take(),
         })

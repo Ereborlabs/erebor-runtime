@@ -984,3 +984,26 @@ The earlier connected authority case passes in 3.72 seconds after a
 2.89-second failure. Those runs do not measure a speed improvement: the
 failed run ends before the full contract executes. The live Graph pipeline
 and the 100-times target remain **Not done**.
+
+## Graph completion follows the source frontier
+
+Graph publication is complete when its last cursor reaches the checked
+captured contiguous cursor. Reading Graph metadata in SQL does not by
+itself make that commit incomplete. The static feedback field and its
+preparation-time detection are removed. Partial and older windows below
+the captured frontier remain incomplete.
+
+Native dependency checks still compare changes with captured revision C.
+Published revision P remains separate, so relevant own and external
+changes still wake the subscription. Receipt and acknowledgement checks
+remain. This change adds no query, decode, polling loop, or test condition.
+
+The connected live run uses the current working tree. Its separate focused
+build passes in 191.812096 s. No isolated HEAD-only before/after timing is
+available. All four initial sources pass their execution, Graph, finding,
+notification, and completion checks. The separate append-to-notice section
+durations, in source order, are 17.122480 s, 18.044350 s, 19.221436 s, and
+20.423512 s. Startup takes 55.042500 s. Bulk execution then fails because concurrent
+callbacks share an interrupt slot. The diagnostic run stops after that
+known failure at 213.426846 s. This is no complete-workload speed result.
+The log is `/tmp/araphor-live-native-task-tracing-20261103.log`.
