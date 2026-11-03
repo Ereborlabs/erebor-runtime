@@ -859,3 +859,37 @@ echo case also passes. Logs are `/tmp/araphor-cdc-context-native-20261102.log`,
 `/tmp/araphor-cdc-context-subject-20261102.log`, and
 `/tmp/araphor-cdc-context-echo-20261102.log`. These checks do not qualify full
 JSON or hash removal, event latency, or the complete subscription path.
+
+
+## Native executable cache keys on 2026-11-03
+
+[Runtime::prepare](../../crates/araphor-package-runtime/src/lib.rs) receives an immutable admitted package image and model
+  -> [WasmExecution::prepare_model](../../crates/araphor-package-runtime/src/wasm/cache.rs) selects code from that same image
+  -> [CodeCache](../../crates/araphor-package-runtime/src/wasm/cache.rs) looks up its checked OCI image identity and exact package/export
+  -> [Prepared](../../crates/araphor-package-runtime/src/lib.rs) retains the compiled component and its existing lease
+
+The unprepared worker path uses the same image/model lookup. It does not
+compute another content digest. The public raw Wasm path uses exact
+executable bytes. A raw lookup borrows those bytes; a cache miss retains
+them after reservation. These cache keys select immutable executable code.
+Journal positions still select subscription work.
+
+Cache charges include source bytes, native image bytes, the actual entry
+type, and retained image/model strings. Compiler serialization, cancellation,
+interface checks, resource checks, eviction, and pinned leases remain at
+their existing owners. Cache inspection helpers are test-only. Their Query
+and Control callers use the actual admitted image pins and export.
+
+Focused Linux qualification: **Done** for 30 Wasm owner cases across the
+initial run and the corrected fixture rerun. The fixture now uses current
+disabled-by-default quotas. Configured byte, entry, eviction, and pinned
+lease cases remain unchanged and pass. The actual prepared-owner case
+checks shared compiled code across independently admitted copies of one
+OCI image. A different image with the same package/export fails its actual
+interface check. Foreign handles remain rejected.
+
+Logs are `/tmp/araphor-cdc-code-cache-wasm-20261103.log` and
+`/tmp/araphor-cdc-code-cache-default-fixture-20261103.log`. The first run
+passes 29 cases and fails the obsolete fixed-cap fixture. The corrected
+fixture passes separately. These checks do not qualify full Graph
+execution, complete hash removal, or a latency improvement.

@@ -215,9 +215,14 @@ impl Engine {
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub fn guest_cached(&self, bytes: &[u8]) -> Result<bool> {
+    pub fn guest_cached(
+        &self,
+        image: &str,
+        package: &araphor_package::PackageRefV1,
+        export: &str,
+    ) -> Result<bool> {
         self.package_runtime
-            .guest_cached(bytes)
+            .guest_cached(image, package, export)
             .map_err(|source| crate::Error::Sql {
                 source: DataFusionError::External(Box::new(source)),
             })

@@ -173,13 +173,18 @@ async fn graph_sources_use_host() -> TestResult {
     let graph = parts.graph.clone().ok_or("configured Graph feed")?;
     let host = parts.instances.clone().ok_or("shared Instance Host")?;
     let query = Arc::clone(&parts.control.analysis_packages(None)?.query);
-    let components = [
-        araphor_analysis_builtins::components::PROCESS,
-        araphor_analysis_builtins::components::CREDENTIALS,
-        araphor_analysis_builtins::components::KUBERNETES,
-    ];
-    for component in components {
-        assert!(!query.guest_cached(component)?);
+    let images = data
+        .definition(
+            source.tenant_id,
+            "mithril-control-graph",
+            None,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("configured Graph definition")?
+        .images;
+    assert_eq!(images.len(), 3);
+    for image in &images {
+        assert!(!query.guest_cached(&image.digest, &image.image, "detect")?);
     }
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let serving = tokio::spawn(Arc::clone(&host).serve(stopped.clone(), u64::MAX));
@@ -218,8 +223,8 @@ async fn graph_sources_use_host() -> TestResult {
                     source.source_id
                 )
             })??;
-            for component in components {
-                assert!(query.guest_cached(component)?);
+            for image in &images {
+                assert!(query.guest_cached(&image.digest, &image.image, "detect")?);
             }
             let graph = data
                 .graph_snapshot(&source)?

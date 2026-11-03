@@ -18,7 +18,6 @@ libloading = "=0.9.0"
 object = { version = "=0.40.0", default-features = false, features = ["read", "std"] }
 rustix = { version = "1.1.4", features = ["fs"] }
 serde.workspace = true
-sha2.workspace = true
 snafu.workspace = true
 tempfile = "3.23.0"
 tokio.workspace = true

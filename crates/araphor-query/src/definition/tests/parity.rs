@@ -162,8 +162,12 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
         ))
         .await?;
     let retained = fixture.engine.memory().input_reserved();
-    let bytes = araphor_analysis_builtins::components::RUNTIME;
-    assert!(!fixture.engine.guest_cached(bytes)?);
+    let image = definition.images().next().ok_or("admitted image")?;
+    let image_digest = image.digest().to_owned();
+    let package = image.bundle().root.clone();
+    assert!(!fixture
+        .engine
+        .guest_cached(&image_digest, &package, "evaluate")?);
     for id in ["cold", "cached"] {
         let error = session
             .execute_definition(
@@ -182,7 +186,9 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
             crate::Failure::DeadlineExceeded,
             "{error:?}"
         );
-        assert!(fixture.engine.guest_cached(bytes)?);
+        assert!(fixture
+            .engine
+            .guest_cached(&image_digest, &package, "evaluate")?);
         control.check()?;
         drop(fixture.engine.reserve_evaluation([1; 16])?);
         assert_eq!(fixture.engine.memory().input_reserved(), retained);
@@ -253,6 +259,9 @@ async fn views_prepare_hidden_guests() -> TestResult {
             r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'echo', amount => 42)"#,
         ))
         .await?;
+    let image = definition.images().next().ok_or("admitted image")?;
+    let image_digest = image.digest().to_owned();
+    let package = image.bundle().root.clone();
     let mut plan = definition.plan;
     for name in ["inner_guest", "outer_guest"] {
         plan = LogicalPlan::TableScan(TableScan::try_new(
@@ -265,14 +274,17 @@ async fn views_prepare_hidden_guests() -> TestResult {
     }
     assert!(Fixture::calls(&plan)?.is_empty());
     assert!(PackageCall::contains(&plan)?);
-    let bytes = araphor_analysis_builtins::components::RUNTIME;
-    assert!(!fixture.engine.guest_cached(bytes)?);
+    assert!(!fixture
+        .engine
+        .guest_cached(&image_digest, &package, "evaluate")?);
     let mut state = session.state()?;
     state
         .config_mut()
         .set_extension(Arc::new(fixture.engine.reserve_evaluation([1; 16])?));
     let physical = session.physical(&plan, &state).await?;
-    assert!(fixture.engine.guest_cached(bytes)?);
+    assert!(fixture
+        .engine
+        .guest_cached(&image_digest, &package, "evaluate")?);
     drop(physical);
     drop(state);
     control.check()?;

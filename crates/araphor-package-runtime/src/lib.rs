@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use araphor_analysis_sdk as sdk;
-use araphor_package::{PackageBundle, PackageImplementationV1, PackageRefV1};
+use araphor_package::{ModelRef, PackageBundle, PackageImplementationV1, PackageRefV1};
 use snafu::ResultExt as _;
 
 pub use araphor_data::{AnalysisReadControl, PackageErrorCodeV1};
@@ -87,12 +87,16 @@ impl Runtime {
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub fn guest_cached(&self, bytes: &[u8]) -> Result<bool> {
-        use sha2::Digest as _;
-
+    pub fn guest_cached(&self, image: &str, package: &PackageRefV1, export: &str) -> Result<bool> {
         Ok(self
             .wasm()?
-            .cached(&sha2::Sha256::digest(bytes).into())?
+            .cached_model(
+                image,
+                &ModelRef {
+                    package: package.clone(),
+                    export: export.into(),
+                },
+            )?
             .is_some())
     }
 
@@ -120,9 +124,7 @@ impl Runtime {
         control.check()?;
         let artifact = bundle.bundle().artifact(&package)?;
         match artifact.implementation(&export)? {
-            PackageImplementationV1::Wasm {
-                artifact: bytes, ..
-            } => {
+            PackageImplementationV1::Wasm { .. } => {
                 #[cfg(any(test, feature = "test-fixtures"))]
                 {
                     let preparing = self
@@ -145,7 +147,14 @@ impl Runtime {
                         }
                     }
                 }
-                let component = self.wasm()?.prepare(bytes, control)?;
+                let component = self.wasm()?.prepare_model(
+                    &bundle,
+                    &ModelRef {
+                        package: package.clone(),
+                        export: export.clone(),
+                    },
+                    control,
+                )?;
                 Ok(Some(Prepared {
                     runtime: Arc::downgrade(self),
                     bundle,
@@ -265,15 +274,19 @@ impl Runtime {
                 let artifact = bundle.bundle().artifact(&package)?;
                 let implementation = artifact.implementation(&evaluation.export)?;
                 if let Some(runtime) = wasm {
-                    let PackageImplementationV1::Wasm {
-                        artifact: bytes, ..
-                    } = implementation
-                    else {
+                    let PackageImplementationV1::Wasm { .. } = implementation else {
                         return Err(PackageErrorCodeV1::Invalid.error("runtime target").into());
                     };
                     let prepared = match prepared {
                         Some(prepared) => prepared.component,
-                        None => runtime.prepare(bytes, &stage)?,
+                        None => runtime.prepare_model(
+                            &bundle,
+                            &ModelRef {
+                                package: package.clone(),
+                                export: evaluation.export.clone(),
+                            },
+                            &stage,
+                        )?,
                     };
                     let output = runtime.evaluate_prepared(
                         &artifact.descriptor,

@@ -2,8 +2,6 @@ use super::*;
 
 #[tokio::test]
 async fn preparation_precedes_guest_timeout() -> TestResult {
-    use sha2::Digest as _;
-
     let runtime = crate::Runtime::new(crate::Limits {
         wasm: WasmLimits {
             timeout: Some(Duration::from_nanos(1)),
@@ -13,10 +11,9 @@ async fn preparation_precedes_guest_timeout() -> TestResult {
         ..Default::default()
     })?;
     let wasm = runtime.wasm()?;
-    let digest = sha2::Sha256::digest(COMPONENT).into();
-    assert!(wasm.cached(&digest)?.is_none());
     let package = package();
     let image = bundle(&package)?;
+    assert!(!runtime.guest_cached(image.digest(), &image.bundle().root, "evaluate")?);
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let workers = crate::TaskTracker::new();
     let result = runtime
@@ -37,7 +34,7 @@ async fn preparation_precedes_guest_timeout() -> TestResult {
         ),
         "{result:?}"
     );
-    assert!(wasm.cached(&digest)?.is_some());
+    assert!(runtime.guest_cached(image.digest(), &image.bundle().root, "evaluate")?);
     assert_eq!(
         wasm.evaluations
             .as_ref()
@@ -195,6 +192,38 @@ async fn prepared_owner_keeps_identity() -> TestResult {
             &control,
         )?
         .ok_or("prepared component")?;
+    let reused = first
+        .prepare(
+            Arc::clone(&other),
+            other.bundle().root.clone(),
+            "evaluate".into(),
+            &control,
+        )?
+        .ok_or("reused component")?;
+    assert!(Arc::ptr_eq(
+        &prepared.component.entry,
+        &reused.component.entry
+    ));
+    let mut replacement = image.bundle().clone();
+    replacement.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
+        exports: vec!["evaluate".into()],
+        artifact: wat::parse_str("(component)")?,
+    }];
+    let replacement = Arc::new(PackageBundle::try_from(replacement)?);
+    assert_ne!(replacement.digest(), image.digest());
+    assert!(matches!(
+        first.prepare(
+            Arc::clone(&replacement),
+            replacement.bundle().root.clone(),
+            "evaluate".into(),
+            &control,
+        ),
+        Err(Error::PackageWasm {
+            code: Code::Unsupported,
+            operation: "analysis component exports",
+            ..
+        })
+    ));
     let workers = crate::TaskTracker::new();
     for (runtime, content) in [(&first, &other), (&second, &image)] {
         let error = runtime

@@ -1,7 +1,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use tokio::sync::Semaphore;
 
@@ -65,11 +64,11 @@ impl WasmExecution {
                     .cache
                     .lock()
                     .map_err(|_| Code::Incomplete.error("component fixture cache lock"))?
-                    .charge(&Sha256::digest(source).into())
+                    .charge(source)
                     .ok_or_else(|| Code::Incomplete.error("component fixture cache entry"))?;
             }
             for (_, source) in sources {
-                if prepared.cached(&Sha256::digest(source).into())?.is_none() {
+                if prepared.cached(source)?.is_none() {
                     return Err(wasmtime::Error::new(FixtureBudgetError { charges })).context(
                         crate::PackageWasmSnafu {
                             code: Code::Limit,

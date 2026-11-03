@@ -421,7 +421,8 @@ async fn package_checkpoint_releases_capacity(
     state.config_mut().set_extension(Arc::clone(&permit));
     drop(session.physical(&prepared.plan, &state).await?);
     drop((state, permit));
-    assert!(engine.guest_cached(araphor_analysis_builtins::components::RUNTIME)?);
+    let image = prepared.images().next().ok_or("admitted image")?;
+    assert!(engine.guest_cached(image.digest(), &image.bundle().root, "evaluate")?);
     drop(engine.reserve_evaluation([1; 16])?);
     drop(engine.memory().reserve_output(capacity)?);
     let clock = Arc::new(TestClock {

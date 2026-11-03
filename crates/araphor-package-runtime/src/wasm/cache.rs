@@ -4,7 +4,7 @@ use std::sync::{
     Arc, TryLockError,
 };
 
-use sha2::{Digest as _, Sha256};
+use araphor_package::{ModelRef, PackageBundle, PackageImplementationV1};
 use snafu::ResultExt as _;
 use tokio::sync::watch;
 
@@ -31,9 +31,37 @@ struct CacheBudget {
 }
 
 pub(super) struct CacheEntry {
-    digest: [u8; 32],
+    key: CodeKey,
     pub(super) prepared: AnalysisPackagePre<GuestState>,
     _reservation: CacheCharge,
+}
+
+enum CodeKey {
+    Image { digest: String, model: ModelRef },
+    Raw(Box<[u8]>),
+}
+
+impl CodeKey {
+    fn matches(&self, bytes: &[u8], image: Option<(&str, &ModelRef)>) -> bool {
+        match (self, image) {
+            (Self::Image { digest, model }, Some((expected, reference))) => {
+                digest == expected && model == reference
+            }
+            (Self::Raw(saved), None) => saved.as_ref() == bytes,
+            _ => false,
+        }
+    }
+
+    fn extra_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Image { digest, model } => digest
+                .capacity()
+                .checked_add(model.package.package_id.capacity())?
+                .checked_add(model.package.revision.capacity())?
+                .checked_add(model.export.capacity()),
+            Self::Raw(_) => Some(0),
+        }
+    }
 }
 
 struct CacheCharge {
@@ -123,10 +151,10 @@ impl CodeCache {
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub(super) fn charge(&self, digest: &[u8; 32]) -> Option<usize> {
+    pub(super) fn charge(&self, bytes: &[u8]) -> Option<usize> {
         self.entries
             .iter()
-            .find(|entry| entry.digest == *digest)
+            .find(|entry| entry.key.matches(bytes, None))
             .map(|entry| entry._reservation.bytes)
     }
 
@@ -135,10 +163,10 @@ impl CodeCache {
         self.entries.clear();
     }
 
-    fn get(&self, digest: &[u8; 32]) -> Option<PreparedComponent> {
+    fn get(&self, bytes: &[u8], image: Option<(&str, &ModelRef)>) -> Option<PreparedComponent> {
         self.entries
             .iter()
-            .find(|entry| entry.digest == *digest)
+            .find(|entry| entry.key.matches(bytes, image))
             .map(|entry| PreparedComponent {
                 entry: Arc::clone(entry),
                 _release: CapacityRelease(self.budget.capacity.clone()),
@@ -173,12 +201,12 @@ impl CodeCache {
 
     fn insert(
         &mut self,
-        digest: [u8; 32],
+        key: CodeKey,
         prepared: AnalysisPackagePre<GuestState>,
         reservation: CacheCharge,
     ) -> PreparedComponent {
         let entry = Arc::new(CacheEntry {
-            digest,
+            key,
             prepared,
             _reservation: reservation,
         });
@@ -191,11 +219,29 @@ impl CodeCache {
 }
 
 impl super::WasmExecution {
-    pub fn cached(&self, digest: &[u8; 32]) -> Result<Option<PreparedComponent>> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn cached(&self, bytes: &[u8]) -> Result<Option<PreparedComponent>> {
+        self.cached_code(bytes, None)
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub(crate) fn cached_model(
+        &self,
+        image: &str,
+        model: &ModelRef,
+    ) -> Result<Option<PreparedComponent>> {
+        self.cached_code(&[], Some((image, model)))
+    }
+
+    fn cached_code(
+        &self,
+        bytes: &[u8],
+        image: Option<(&str, &ModelRef)>,
+    ) -> Result<Option<PreparedComponent>> {
         let prepared = self
             .cache
             .lock()
-            .map(|cache| cache.get(digest))
+            .map(|cache| cache.get(bytes, image))
             .map_err(|_| Code::Incomplete.error("component cache lock"))?;
         if let Some(prepared) = &prepared {
             CompileBudget::resources(prepared.instance_pre().component(), &self.limits)?;
@@ -203,15 +249,39 @@ impl super::WasmExecution {
         Ok(prepared)
     }
 
+    pub(crate) fn prepare_model(
+        &self,
+        bundle: &PackageBundle,
+        model: &ModelRef,
+        control: &AnalysisReadControl,
+    ) -> Result<PreparedComponent> {
+        let artifact = bundle.bundle().artifact(&model.package)?;
+        let PackageImplementationV1::Wasm {
+            artifact: bytes, ..
+        } = artifact.implementation(&model.export)?
+        else {
+            return Err(Code::Invalid.error("component implementation").into());
+        };
+        self.compile(bytes, Some((bundle.digest(), model)), control)
+    }
+
     pub(super) fn compiled(
         &self,
         bytes: &[u8],
         control: &AnalysisReadControl,
     ) -> Result<PreparedComponent> {
+        self.compile(bytes, None, control)
+    }
+
+    fn compile(
+        &self,
+        bytes: &[u8],
+        image: Option<(&str, &ModelRef)>,
+        control: &AnalysisReadControl,
+    ) -> Result<PreparedComponent> {
         control.check()?;
         CompileBudget::check_size(bytes, &self.limits)?;
-        let digest = Sha256::digest(bytes).into();
-        if let Some(prepared) = self.cached(&digest)? {
+        if let Some(prepared) = self.cached_code(bytes, image)? {
             return Ok(prepared);
         }
         let compiler = self.compiler.try_lock().map_err(|error| match error {
@@ -223,7 +293,7 @@ impl super::WasmExecution {
             TryLockError::Poisoned(_) => Code::Incomplete.error("component compiler lock").into(),
         })?;
         let _compiler = (compiler, CapacityRelease(self.capacity.clone()));
-        if let Some(prepared) = self.cached(&digest)? {
+        if let Some(prepared) = self.cached_code(bytes, image)? {
             return Ok(prepared);
         }
         CompileBudget::check(bytes, control, &self.limits)?;
@@ -235,8 +305,8 @@ impl super::WasmExecution {
             },
         )?;
         control.check()?;
-        let image = component.image_range();
-        let image_bytes = (image.end as usize).saturating_sub(image.start as usize);
+        let range = component.image_range();
+        let image_bytes = (range.end as usize).saturating_sub(range.start as usize);
         if self
             .limits
             .image_bytes
@@ -244,14 +314,23 @@ impl super::WasmExecution {
         {
             return Err(Code::Limit.error("component compiled image").into());
         }
+        let key = image.map(|(digest, model)| CodeKey::Image {
+            digest: digest.to_owned(),
+            model: model.clone(),
+        });
         let charge = image_bytes
             .checked_add(bytes.len())
+            .and_then(|charge| charge.checked_add(std::mem::size_of::<CacheEntry>()))
+            .and_then(|charge| {
+                charge.checked_add(key.as_ref().map_or(Some(0), CodeKey::extra_bytes)?)
+            })
             .ok_or_else(|| Code::Limit.error("component cache bytes"))?;
         reservation = self
             .cache
             .lock()
             .map_err(|_| Code::Incomplete.error("component cache lock"))?
             .reserve(charge)?;
+        let key = key.unwrap_or_else(|| CodeKey::Raw(bytes.into()));
         CompileBudget::interface(&self.engine, &component, &self.limits)?;
         let instance =
             self.linker
@@ -269,13 +348,17 @@ impl super::WasmExecution {
             .cache
             .lock()
             .map_err(|_| Code::Incomplete.error("component cache lock"))?
-            .insert(digest, prepared, reservation))
+            .insert(key, prepared, reservation))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn raw(index: usize) -> CodeKey {
+        CodeKey::Raw(index.to_le_bytes().into())
+    }
 
     const CACHE_BYTES: usize = 80 * 1024 * 1024;
     const CACHE_ENTRIES: usize = 16;
@@ -303,7 +386,7 @@ mod tests {
         let mut pins = Vec::new();
         for index in 0..=CACHE_ENTRIES {
             let charge = unbounded.reserve(CACHE_BYTES + 1)?;
-            pins.push(unbounded.insert([index as u8; 32], prepared.component().clone(), charge));
+            pins.push(unbounded.insert(raw(index), prepared.component().clone(), charge));
         }
         assert_eq!(unbounded.entries.len(), CACHE_ENTRIES + 1);
         assert!(unbounded.available(CACHE_BYTES));
@@ -315,32 +398,30 @@ mod tests {
         let mut cache = limited_cache();
         for index in 0..=CACHE_ENTRIES {
             let charge = cache.reserve(1)?;
-            cache.insert([index as u8; 32], prepared.component().clone(), charge);
+            cache.insert(raw(index), prepared.component().clone(), charge);
         }
         assert_eq!(cache.entries.len(), CACHE_ENTRIES);
         assert_eq!(cache.budget.bytes.load(Ordering::Acquire), CACHE_ENTRIES);
-        assert!(cache.get(&[0; 32]).is_none());
-        assert!(cache.get(&[CACHE_ENTRIES as u8; 32]).is_some());
+        assert!(cache.get(&0usize.to_le_bytes(), None).is_none());
+        assert!(cache.get(&CACHE_ENTRIES.to_le_bytes(), None).is_some());
 
         let charge = 40 * 1024 * 1024;
         let capacity = (CACHE_BYTES / charge).min(CACHE_ENTRIES);
         let mut cache = limited_cache();
         for index in 0..capacity + 2 {
             let reservation = cache.reserve(charge)?;
-            cache.insert(
-                [(32 + index) as u8; 32],
-                prepared.component().clone(),
-                reservation,
-            );
+            cache.insert(raw(32 + index), prepared.component().clone(), reservation);
             let retained = (index + 1).min(capacity);
             assert_eq!(cache.entries.len(), retained);
             assert_eq!(
                 cache.budget.bytes.load(Ordering::Acquire),
                 retained * charge
             );
-            assert!(cache.get(&[(32 + index) as u8; 32]).is_some());
+            assert!(cache.get(&(32 + index).to_le_bytes(), None).is_some());
             if index >= capacity {
-                assert!(cache.get(&[(32 + index - capacity) as u8; 32]).is_none());
+                assert!(cache
+                    .get(&(32 + index - capacity).to_le_bytes(), None)
+                    .is_none());
             }
         }
         Ok(())
@@ -357,7 +438,7 @@ mod tests {
         let mut eviction = limited_cache();
         let mut changes = eviction.budget.capacity.subscribe();
         let charge = eviction.reserve(CACHE_BYTES)?;
-        let pin = eviction.insert([0; 32], prepared.component().clone(), charge);
+        let pin = eviction.insert(raw(0), prepared.component().clone(), charge);
         assert!(matches!(
             eviction.reserve(1),
             Err(crate::Error::AnalysisBusy { .. })
@@ -390,7 +471,7 @@ mod tests {
 
         let mut exact = limited_cache();
         let charge = exact.reserve(CACHE_BYTES - 8)?;
-        let pin = exact.insert([1; 32], prepared.component().clone(), charge);
+        let pin = exact.insert(raw(1), prepared.component().clone(), charge);
         assert!(exact.available(8));
         assert!(!exact.available(9));
         assert!(matches!(
@@ -409,13 +490,15 @@ mod tests {
             let mut handles = Vec::new();
             for index in 0..count {
                 let charge = cache.reserve(bytes)?;
-                handles.push(cache.insert([index as u8; 32], prepared.component().clone(), charge));
+                handles.push(cache.insert(raw(index), prepared.component().clone(), charge));
             }
-            let second = cache.get(&[0; 32]).ok_or("pinned component")?;
+            let second = cache
+                .get(&0usize.to_le_bytes(), None)
+                .ok_or("pinned component")?;
             let mut mirror = cache.clone();
             cache.clear();
             mirror.clear();
-            assert!(cache.get(&[0; 32]).is_none());
+            assert!(cache.get(&0usize.to_le_bytes(), None).is_none());
             assert_eq!(cache.budget.bytes.load(Ordering::Acquire), count * bytes);
             assert_eq!(cache.budget.entries.load(Ordering::Acquire), count);
             assert!(matches!(
