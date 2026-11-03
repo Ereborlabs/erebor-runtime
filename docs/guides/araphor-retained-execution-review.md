@@ -1007,3 +1007,17 @@ durations, in source order, are 17.122480 s, 18.044350 s, 19.221436 s, and
 callbacks share an interrupt slot. The diagnostic run stops after that
 known failure at 213.426846 s. This is no complete-workload speed result.
 The log is `/tmp/araphor-live-native-task-tracing-20261103.log`.
+
+## Native partition task tracing
+
+[Engine::new](../../crates/araphor-query/src/execution.rs) installs the
+native DataFusion task tracing hook. Async and blocking partition work
+retain the invoking dispatcher and span. An existing embedding hook stays
+in place. There is no new dependency or per-call state.
+
+The connected working tree passes the focused build in 191.812096 s. All
+four initial source checks then pass in the unchanged live test. The run
+stops at 213.426846 s after separate bulk read-control failures. The
+completed workload and performance target remain **Not done**. This
+measurement includes other working-tree changes. There is no isolated
+HEAD-only build or timing result.

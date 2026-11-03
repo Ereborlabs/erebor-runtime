@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -14,6 +15,7 @@ use datafusion::catalog::memory::{
     MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
 };
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
+use datafusion::common::runtime::{set_join_set_tracer, JoinSetTracer, JoinSetTracerError};
 use datafusion::common::tree_node::TreeNode;
 use datafusion::common::DataFusionError;
 use datafusion::datasource::MemTable;
@@ -34,6 +36,7 @@ use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::planner::object_name_to_table_reference;
 use datafusion::sql::sqlparser::ast::Statement as SqlStatement;
 use erebor_telemetry::tracing::{instrument::WithSubscriber as _, Instrument as _};
+use futures_util::future::{BoxFuture, FutureExt as _};
 use futures_util::{StreamExt as _, TryStreamExt};
 use snafu::ResultExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -167,6 +170,30 @@ impl Drop for PendingRead {
     }
 }
 
+struct TaskTracer;
+
+impl JoinSetTracer for TaskTracer {
+    fn trace_future(
+        &self,
+        future: BoxFuture<'static, Box<dyn Any + Send>>,
+    ) -> BoxFuture<'static, Box<dyn Any + Send>> {
+        future.in_current_span().with_current_subscriber().boxed()
+    }
+
+    fn trace_block(
+        &self,
+        operation: Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>,
+    ) -> Box<dyn FnOnce() -> Box<dyn Any + Send> + Send> {
+        let dispatch = erebor_telemetry::tracing::dispatcher::get_default(Clone::clone);
+        let span = erebor_telemetry::tracing::Span::current();
+        Box::new(move || {
+            erebor_telemetry::tracing::dispatcher::with_default(&dispatch, || {
+                span.in_scope(operation)
+            })
+        })
+    }
+}
+
 pub struct Engine {
     store: Arc<AnalysisStore>,
     state: SessionState,
@@ -252,6 +279,9 @@ impl Engine {
 
     pub fn new(store: Arc<AnalysisStore>, limits: Limits) -> Result<Arc<Self>> {
         limits.validate()?;
+        match set_join_set_tracer(&TaskTracer) {
+            Ok(()) | Err(JoinSetTracerError::AlreadySet) => {}
+        }
         let package_runtime =
             araphor_package_runtime::Runtime::new(limits.package).map_err(|error| {
                 crate::Error::Sql {
