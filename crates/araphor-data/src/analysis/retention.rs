@@ -314,7 +314,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                         params![key.as_slice(), identity.tenant().as_slice(), now]).context(AnalysisDatabaseSnafu { operation: "remove expired witness references" })?;
                     if floor > before {
                         if let Some(source) = identity.evidence() {
-                            let mut receipt = AnalysisStore::read_receipt_from(
+                            let (mut receipt, _) = AnalysisStore::read_receipt_from(
                                 &transaction,
                                 &self.store.root,
                                 source,

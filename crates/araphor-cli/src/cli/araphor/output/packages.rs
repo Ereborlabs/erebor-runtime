@@ -9,11 +9,21 @@ use crate::cli::araphor::error::PackageSnafu;
 impl Output {
     pub(in crate::cli::araphor) fn package(&self, response: PackageResponseV1) -> Result<Vec<u8>> {
         match &response {
-            PackageResponseV1::Definition(definition) => {
-                let revision = definition
-                    .digest()
+            PackageResponseV1::Definition {
+                snapshot: definition,
+                commit_revision,
+            } => {
+                definition
+                    .validate()
                     .map_err(araphor_data::Error::from)
                     .context(PackageSnafu)?;
+                if *commit_revision == 0 {
+                    return Err(
+                        araphor_data::PackageErrorCodeV1::Invalid.error("definition revision")
+                    )
+                    .context(PackageSnafu);
+                }
+                let revision = commit_revision.to_string();
                 let document = serde_json::json!({"revision": revision, "snapshot": definition});
                 if matches!(self.mode, OutputMode::Jsonl) {
                     return Self::json("definition", &document);
@@ -176,12 +186,15 @@ mod tests {
             "program":{"kind":"sql", "source":{"inline":"SELECT 1"}}
         }))?;
         let definition = ResolvedDefinition::new(definition, "SELECT 1".into(), Vec::new())?;
-        let response = PackageResponseV1::Definition(definition.clone());
+        let response = PackageResponseV1::Definition {
+            snapshot: definition.clone(),
+            commit_revision: 7,
+        };
         for mode in [OutputMode::Jsonl, OutputMode::Table] {
             let bytes = Output::new(Some(mode), false).package(response.clone())?;
             let document: serde_json::Value = serde_json::from_slice(&bytes)?;
             let frame = document.get("frame").unwrap_or(&document);
-            assert_eq!(frame["revision"], definition.digest()?);
+            assert_eq!(frame["revision"], "7");
             assert_eq!(frame["snapshot"], serde_json::to_value(&definition)?);
         }
         Ok(())
@@ -209,7 +222,7 @@ mod tests {
     fn instance_output_keeps_fields() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let status = araphor_data::InstanceStatusV1 {
             id: "counts".into(),
-            definition_revision: "sha256:exact".into(),
+            definition_revision: "7".into(),
             generation: 10,
             lifecycle: 14,
             running: false,
@@ -285,7 +298,7 @@ mod tests {
         let result = araphor_data::InstanceResultV1 {
             instance_id: "counts".into(),
             result: reference.clone(),
-            definition_revision: format!("sha256:{}", "1".repeat(64)),
+            definition_revision: "7".into(),
             generation: 2,
             source: araphor_data::AnalysisStoreMetaV1 {
                 store_uuid: uuid::Uuid::from_bytes([7; 16]),

@@ -1,6 +1,7 @@
 use super::*;
 
 impl Graph<'_> {
+    #[cfg(test)]
     pub(super) fn projection(&self) -> Result<&[sdk::Dataset; 3]> {
         if self.projection.get().is_none() {
             let facts = self
@@ -31,7 +32,8 @@ impl Graph<'_> {
             let values = [
                 algorithm::Observation::encode(&self.observations)
                     .context(AnalysisContractSnafu)?,
-                algorithm::Fact::encode(&facts).context(AnalysisContractSnafu)?,
+                algorithm::Fact::encode_source(&facts, &self.observations)
+                    .context(AnalysisContractSnafu)?,
                 algorithm::Manifest::encode(&[algorithm::Manifest {
                     window_ns: GRAPH_WINDOW_NS,
                 }])
@@ -76,18 +78,13 @@ impl Graph<'_> {
                 .data,
         )
         .context(AnalysisContractSnafu)?;
-        let restricted = self
-            .input
-            .facts
-            .iter()
-            .any(|fact| fact.sensitivity == ContextSensitivityV1::HostRestricted);
         let mut selected = BTreeMap::new();
         let mut roots = BTreeSet::new();
         for unit in &units {
             Self::require(
                 roots.insert(&unit.record)
                     && unit.window_ns == GRAPH_WINDOW_NS
-                    && unit.restricted == restricted
+                    && unit.restricted == self.restricted
                     && unit
                         .support
                         .windows(2)
@@ -261,8 +258,31 @@ impl Graph<'_> {
         )
     }
 
-    pub(super) fn qualify_record(
-        &self,
+    pub(super) fn qualify_records(
+        input: &GraphReplayInputV1,
+    ) -> Result<Vec<algorithm::Observation>> {
+        let positions = input
+            .input_positions
+            .iter()
+            .map(|(id, position)| (id, position))
+            .collect::<BTreeMap<_, _>>();
+        input
+            .records
+            .iter()
+            .map(|record| {
+                let position = positions.get(&record.id).ok_or_else(|| {
+                    GraphInvalidSnafu {
+                        field: "graph input position",
+                    }
+                    .build()
+                })?;
+                Self::qualify_record(input, record, **position)
+            })
+            .collect()
+    }
+
+    fn qualify_record(
+        input: &GraphReplayInputV1,
         record: &DiscoveryRecordV1,
         position: araphor_data::StorePositionV1,
     ) -> Result<algorithm::Observation> {
@@ -294,13 +314,12 @@ impl Graph<'_> {
             entry_rule_id: context
                 .map(|value| value.entry_rule_id)
                 .filter(|id| *id > 0),
-            proof_quality: self.proof(record),
+            proof_quality: Self::proof(input, record),
         })
     }
 
-    pub(super) fn proof(&self, record: &DiscoveryRecordV1) -> ProofQualityV1 {
-        let ranges = self
-            .input
+    fn proof(input: &GraphReplayInputV1, record: &DiscoveryRecordV1) -> ProofQualityV1 {
+        let ranges = input
             .coverage
             .iter()
             .filter(|range| {
@@ -309,7 +328,7 @@ impl Graph<'_> {
                     && (range.first_cursor..=range.last_cursor).contains(&record.id.durable_cursor)
             })
             .collect::<Vec<_>>();
-        let temporal = if !self.input.missing_ranges.is_empty()
+        let temporal = if !input.missing_ranges.is_empty()
             || ranges
                 .iter()
                 .any(|range| range.state == DiscoveryCoverageStateV1::Gapped)

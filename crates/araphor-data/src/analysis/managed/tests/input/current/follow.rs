@@ -32,6 +32,7 @@ fn fixture_with_calls(
         },
         operation: ManagedGraphOperation::Evaluate,
         events_sql: "SELECT * FROM events".into(),
+        control_sql: "SELECT * FROM graph_state".into(),
     };
     let descriptor = araphor_analysis_builtins::graph::Detector::Process.descriptor();
     let export = descriptor.exports[0].name.clone();
@@ -76,10 +77,10 @@ fn fixture_with_calls(
         spec.definition.sql.clone(),
         images,
     )?;
-    spec.manifest.definition = spec.definition.digest()?;
-    graph
-        .store
-        .admit_definition(spec.tenant, &spec.definition, || Ok(()))?;
+    spec.manifest.definition =
+        graph
+            .store
+            .admit_definition(spec.tenant, &spec.definition, || Ok(()))?;
     fixture.instance = graph
         .store
         .admit_managed(&spec, &fixture.instance.grant, || Ok(()))?;
@@ -127,59 +128,84 @@ fn graph_reopen_uses_selected_call_subset() -> TestResult {
 }
 
 #[test]
-fn graph_reopen_rejects_package_state_mismatch() -> TestResult {
-    let (graph, fixture) = fixture()?;
-    let captured = read(&graph, &mode(&fixture, true))?;
-    let attempt = graph
-        .store
-        .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
-    let receipt = publish(&graph, &fixture, &captured, &attempt, None)?;
-    let result = receipt.graph.as_ref().ok_or("Graph result absent")?;
-    {
-        let mut writer = graph.store.writer()?;
-        let writer = writer.get_mut()?;
-        let header =
-            GraphRows::read_header(writer, fixture.instance.spec.tenant, &result.result_id)?
+fn graph_reopen_rejects_corruption() -> TestResult {
+    for fault in 0..3 {
+        let (graph, fixture) = fixture()?;
+        let captured = read(&graph, &mode(&fixture, true))?;
+        let attempt = graph
+            .store
+            .register_managed_attempt(&captured, &input(&graph), || Ok(()))?;
+        let receipt = publish(&graph, &fixture, &captured, &attempt, None)?;
+        let result = receipt.graph.as_ref().ok_or("Graph result absent")?;
+        graph.store.verify_state()?;
+        {
+            let mut writer = graph.store.writer()?;
+            let writer = writer.get_mut()?;
+            if fault == 0 {
+                let header = GraphRows::read_header(
+                    writer,
+                    fixture.instance.spec.tenant,
+                    &result.result_id,
+                )?
                 .ok_or("Graph header absent")?;
-        let mut snapshot = GraphRows::read(writer, &result.result_id, &header)?;
-        let package = snapshot
-            .packages
-            .iter_mut()
-            .find(|package| {
-                package.package_id == araphor_analysis_builtins::graph::Detector::Process.id()
-            })
-            .ok_or("Graph package absent")?;
-        package.state =
-            if package.state == araphor_analysis_builtins::graph::GraphPackageStateV1::Waiting {
-                araphor_analysis_builtins::graph::GraphPackageStateV1::NativeEffect
+                let mut snapshot = GraphRows::read(writer, &result.result_id, &header)?;
+                let package = snapshot
+                    .packages
+                    .iter_mut()
+                    .find(|package| {
+                        package.package_id
+                            == araphor_analysis_builtins::graph::Detector::Process.id()
+                    })
+                    .ok_or("Graph package absent")?;
+                package.state = if package.state
+                    == araphor_analysis_builtins::graph::GraphPackageStateV1::Waiting
+                {
+                    araphor_analysis_builtins::graph::GraphPackageStateV1::NativeEffect
+                } else {
+                    araphor_analysis_builtins::graph::GraphPackageStateV1::Waiting
+                };
+                let body = GraphRows::encode(&snapshot)?;
+                assert_eq!(
+                    writer.execute(
+                        "UPDATE analysis_results SET body=? WHERE result_id=?",
+                        params![body, result.result_id],
+                    )?,
+                    1
+                );
             } else {
-                araphor_analysis_builtins::graph::GraphPackageStateV1::Waiting
-            };
-        let body = GraphRows::encode(&snapshot)?;
-        writer.execute(
-            "UPDATE analysis_results SET body=? WHERE result_id=?",
-            params![body, result.result_id],
-        )?;
+                assert_eq!(writer.execute("UPDATE graph_producer_versions SET captured_revision=captured_revision-1
+                WHERE result_id=(SELECT metadata_result_id FROM graph_versions WHERE result_id=?) AND captured_revision>1",
+                params![result.result_id])?,1);
+                if fault == 2 {
+                    assert_eq!(writer.execute("UPDATE graph_producer_versions SET captured_revision=captured_revision-1
+                    WHERE result_id=? AND captured_revision>1",params![receipt.results[&13].result_id])?,1);
+                }
+            }
+        }
+        let error = graph
+            .store
+            .verify_state()
+            .err()
+            .ok_or("corrupt Graph state accepted")?;
+        assert!(
+            format!("{error:?}").contains(match fault {
+                0 => "published Graph package state differs",
+                1 => "graph metadata summary",
+                _ => "captured",
+            }),
+            "fault {fault}: {error:?}"
+        );
+        let root = graph._directory.path().join("analysis");
+        let CommitFixture {
+            store,
+            _graph,
+            _directory,
+            ..
+        } = graph;
+        drop(_graph);
+        drop(store);
+        assert!(AnalysisStore::open(&root).is_err());
     }
-    let error = graph
-        .store
-        .verify_state()
-        .err()
-        .ok_or("mismatched Graph package state accepted")?;
-    assert!(
-        format!("{error:?}").contains("published Graph package state differs"),
-        "{error:?}"
-    );
-    let root = graph._directory.path().join("analysis");
-    let CommitFixture {
-        store,
-        _graph,
-        _directory,
-        ..
-    } = graph;
-    drop(_graph);
-    drop(store);
-    assert!(AnalysisStore::open(&root).is_err());
     Ok(())
 }
 
@@ -389,6 +415,24 @@ fn publish(
     }
     let mut request = graph.request.clone();
     request.body.clear();
+    let mut metadata = crate::analysis::graph::GraphManifest::from_snapshot(&graph.snapshot);
+    metadata.input_positions = metadata
+        .input_manifest
+        .evidence
+        .iter()
+        .map(|record| -> TestResult<_> {
+            let page = graph
+                .store
+                .read_page(&record.stream, record.durable_cursor)?;
+            let observed = page
+                .records
+                .into_iter()
+                .find(|observed| observed.cursor == record.durable_cursor)
+                .ok_or("Graph fixture journal record absent")?;
+            assert!(observed.position.commit_revision <= attempt.captured_revision());
+            Ok((record.clone(), observed.position))
+        })
+        .collect::<TestResult<_>>()?;
     let (receipt, result) = graph.store.commit_managed_graph(
         &ManagedCommit {
             completed: true,
@@ -400,10 +444,12 @@ fn publish(
         },
         Some(crate::analysis::graph::GraphCommit {
             request,
-            metadata: crate::analysis::graph::GraphManifest::from_snapshot(&graph.snapshot),
+            metadata,
             contexts: Vec::new(),
             proofs: Vec::new(),
+            record_proofs: Vec::new(),
             sources,
+            removed: Vec::new(),
             advance: true,
             expire: false,
         }),

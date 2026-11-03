@@ -15,33 +15,15 @@ WITH current_findings AS (
         CASE sensitivity WHEN 'public' THEN 0 WHEN 'tenant' THEN 1
             WHEN 'host_restricted' THEN 2 END AS sensitivity_rank
     FROM notifications
-), revision_pairs AS (
-    SELECT DISTINCT finding.tenant_id,
-        finding.graph_result_id AS current_result_id, state.finding_result_id AS prior_result_id
-    FROM current_findings finding JOIN current_states state
-        ON state.tenant_id = finding.tenant_id AND state.finding_id = finding.finding_id
-    WHERE state.finding_available
-), same_revisions AS (
-    SELECT pair.*
-    FROM revision_pairs pair JOIN graph_manifest current_manifest
-        ON current_manifest.tenant_id = pair.tenant_id
-            AND current_manifest.graph_result_id = pair.current_result_id
-    JOIN graph_manifest prior_manifest
-        ON prior_manifest.tenant_id = pair.tenant_id
-            AND prior_manifest.graph_result_id = pair.prior_result_id
-    WHERE current_manifest.graph_revision = prior_manifest.graph_revision
 ), matching_states AS (
     SELECT state.*, finding.graph_result_id AS current_result_id
     FROM current_states state JOIN current_findings finding
         ON finding.tenant_id = state.tenant_id
             AND finding.finding_id = state.finding_id
-    LEFT JOIN same_revisions revision
-        ON revision.tenant_id = state.tenant_id
-            AND revision.prior_result_id = state.finding_result_id
-            AND revision.current_result_id = finding.graph_result_id
     WHERE state.finding_available AND (
         finding.finding_value_id = state.finding_value_id
-        OR revision.current_result_id IS NOT NULL
+        OR (state.same_graph_revision
+            AND state.current_finding_result_id = finding.graph_result_id)
     )
 ), current_routes AS (
     SELECT * FROM notification_routes

@@ -125,7 +125,7 @@ impl Dataset {
             array.validate_full()?;
             // Zero capacity avoids excess allocation for empty list children.
             let mut owned = MutableArrayData::new(vec![array], false, 0);
-            owned.extend(0, 0, array.len());
+            owned.try_extend(0, 0, array.len())?;
             columns.push(make_array(owned.freeze()));
         }
         Ok(RecordBatch::try_new_with_options(

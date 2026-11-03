@@ -539,10 +539,11 @@ async fn native_faults_reopen() -> TestResult {
         )
         .await?;
     let target = prepared.resolved().clone();
-    fixture
+    let revision = fixture
         .query
         .store()
         .admit_definition([1; 16], &target, || Ok(()))?;
+    let prepared = prepared.bind_revision(&fixture.query, revision, &control)?;
     let target_spec = ManagedSpec {
         tenant: [1; 16],
         id: "checkpoint".into(),

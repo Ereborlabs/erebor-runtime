@@ -268,7 +268,10 @@ async fn nested_local_metadata() -> TestResult {
         )?;
         session.register("local_rows", rows.schema(), &[rows])?;
         let prepared = session
-            .prepare_definition(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+            .prepare_definition(
+                &Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#),
+                None,
+            )
             .await?;
         assert!(prepared.sources().is_empty());
         let meta = fixture.engine.store().meta()?;
@@ -362,9 +365,9 @@ async fn retained_origins(elided: bool) -> TestResult {
         .find(|call| call.export() == "count")
         .ok_or("outer plan")?;
     assert_ne!(inner.id(), outer.id());
-    assert!(PackageCall::any(outer.inputs()[0], &mut |call| Ok(call
-        .id()
-        == inner.id()))?);
+    assert!(PackageCall::any(outer.inputs()[0], &mut |_, call| Ok(
+        call.id() == inner.id()
+    ))?);
     let inner_id = inner.id();
     let outer_id = outer.id();
     drop(calls);

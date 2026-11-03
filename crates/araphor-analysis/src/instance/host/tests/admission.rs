@@ -755,7 +755,7 @@ async fn admitted_busy_retries_capacity() -> TestResult {
             "SELECT joined_input.value FROM joined_input CROSS JOIN range(4096) WHERE (SELECT MAX(owner_revision) FROM context_versions) = 1"
         };
         let prepared = session
-            .prepare_definition(&Fixture::definition(sql))
+            .prepare_definition(&Fixture::definition(sql), None)
             .await?;
         fixture
             .query

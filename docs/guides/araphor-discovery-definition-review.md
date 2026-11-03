@@ -4418,10 +4418,16 @@ The complete matrix and current physical incident remain Not done.
 
 ## Current paired incident reading route
 
+The user removed the 1,592-event backlog case. The linked source below is
+historical. Its private input helpers are also removed. The replacement
+[multi-source test](../../crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs)
+is in development. Its incremental computation and storage result is
+**Not done**. The separate CPU-stream and physical cases remain in use.
+
 The intended result is one complete decision from the shared lightweight
 consumer and the physical read case. Current physical proof remains Not done.
 
-[follows_wal_backlog](../../crates/mithril-e2e/src/discovery/packages/required/incident/backlog.rs) uses [WAL input helpers](../../crates/mithril-e2e/src/discovery/packages/required/incident/input.rs) for contiguous CPU 1 input and exact selected frames.
+[The retired backlog test](https://github.com/Ereborlabs/erebor-runtime/blob/fe83a48f52208b894a6faf6b6367199a973f943c/crates/mithril-e2e/src/discovery/packages/required/incident/backlog.rs) used [WAL input helpers](../../crates/mithril-e2e/src/discovery/packages/required/incident/input.rs) for contiguous CPU 1 input and exact selected frames.
   -> [Incident::subscribe and Incident::wait](../../crates/mithril-e2e/src/discovery/packages/required/incident.rs) observe events, Graphs, and notifications through complete Query checkpoints.
   -> [protected_read_package](../../crates/mithril-e2e/src/discovery/packages/required/incident/physical.rs) reuses that consumer through [Platform::client_operation](../../crates/mithril-e2e/src/platform.rs).
   -> [Kubernetes::run_client](../../crates/mithril-e2e/src/platform/kubernetes/client.rs) obtains the query profile and emits actual Node/Control Pod UIDs and resolved image identities.

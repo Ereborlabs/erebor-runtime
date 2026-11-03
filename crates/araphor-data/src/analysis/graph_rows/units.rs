@@ -5,6 +5,8 @@ use crate::{AnalysisContractSnafu, GraphValidate as _};
 pub(super) struct UnitEffects {
     pub touched: BTreeSet<(u8, Vec<u8>)>,
     pub state: GraphPackageStateV1,
+    pub work: (u64, u64, u64),
+    pub root_cursors: (u64, u64),
 }
 
 struct UnitBatch {
@@ -29,6 +31,7 @@ impl UnitBatch {
         returned: &crate::ManagedReturn<'_>,
         pin: &crate::ManagedCall,
         reset: bool,
+        restricted: bool,
     ) -> Result<Self> {
         let evaluation = returned.evaluation;
         let output = returned.output;
@@ -119,9 +122,19 @@ impl UnitBatch {
             }
         }
         if records.len() != expected.len()
-            || records
-                .iter()
-                .any(|record| expected.get(&record.id) != Some(&record.proof_quality))
+            || records.iter().any(|record| {
+                expected.get(&record.id) != Some(&record.proof_quality)
+                    || metadata
+                        .input_positions
+                        .binary_search_by(|(id, _)| id.cmp(&record.id))
+                        .ok()
+                        .is_none_or(|index| {
+                            metadata.input_positions[index].1.commit_revision
+                                != record.position.commit_revision
+                                || metadata.input_positions[index].1.ordinal
+                                    != record.position.ordinal
+                        })
+            })
             || facts.len() != expected_facts.len()
             || facts.iter().any(|fact| {
                 records
@@ -131,7 +144,7 @@ impl UnitBatch {
         {
             return Err(GraphRows::invalid("graph unit lookup union"));
         }
-        let (restricted, contexts) = Self::contexts(writer, root, metadata, &facts, &records)?;
+        let contexts = Self::contexts(writer, root, metadata, &facts, &records)?;
         if units.values().any(|unit| unit.restricted != restricted) {
             return Err(GraphRows::invalid("graph unit sensitivity"));
         }
@@ -286,12 +299,12 @@ impl UnitBatch {
         metadata: &GraphManifest,
         facts: &[Fact],
         records: &[Observation],
-    ) -> Result<(bool, BTreeMap<crate::AnalysisContextKeyV1, u64>)> {
+    ) -> Result<BTreeMap<crate::AnalysisContextKeyV1, u64>> {
         if metadata.input_manifest.context.is_empty() {
             if !facts.is_empty() {
                 return Err(GraphRows::invalid("graph unit context keys"));
             }
-            return Ok((false, BTreeMap::new()));
+            return Ok(BTreeMap::new());
         }
         writer.execute_batch("CREATE TEMP TABLE graph_unit_contexts(tenant_id BLOB,owner_id VARCHAR,entity_key BLOB,lifetime_key BLOB,owner_revision UBIGINT,wanted BOOLEAN)")
             .context(AnalysisDatabaseSnafu {operation:"stage graph unit contexts"})?;
@@ -332,7 +345,7 @@ impl UnitBatch {
                     operation: "flush graph unit contexts",
                 })?;
             }
-            let (restricted, missing):(bool,bool)=writer.query_row("SELECT coalesce(bool_or(context.sensitivity='host_restricted'),false),coalesce(bool_or(context.commit_revision IS NULL),false) FROM graph_unit_contexts wanted LEFT JOIN context_versions context USING(tenant_id,owner_id,entity_key,lifetime_key,owner_revision)",[],|row|Ok((row.get(0)?,row.get(1)?))).context(AnalysisDatabaseSnafu {operation:"check graph unit sensitivity"})?;
+            let missing:bool=writer.query_row("SELECT EXISTS(SELECT 1 FROM graph_unit_contexts wanted LEFT JOIN context_versions context USING(tenant_id,owner_id,entity_key,lifetime_key,owner_revision) WHERE context.commit_revision IS NULL)",[],|row|row.get(0)).context(AnalysisDatabaseSnafu {operation:"check graph unit context references"})?;
             if missing {
                 return Err(GraphRows::invalid("graph unit context reference"));
             }
@@ -384,7 +397,7 @@ impl UnitBatch {
             if seen.len() != wanted.len() {
                 return Err(GraphRows::invalid("graph unit context count"));
             }
-            Ok((restricted, seen))
+            Ok(seen)
         })();
         let cleanup = writer
             .execute_batch("DROP TABLE graph_unit_contexts")
@@ -398,6 +411,10 @@ impl UnitBatch {
 }
 
 impl GraphRows {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The unit write keeps its producer cut and checked metadata sensitivity."
+    )]
     pub(super) fn apply_units(
         writer: &Connection,
         root: &std::path::Path,
@@ -406,6 +423,7 @@ impl GraphRows {
         metadata: &GraphManifest,
         returned: &crate::ManagedReturn<'_>,
         pin: &crate::ManagedCall,
+        restricted: bool,
     ) -> Result<UnitEffects> {
         let reset = sdk::ChangeInputs {
             reset: "reset".into(),
@@ -413,7 +431,7 @@ impl GraphRows {
         }
         .is_reset(returned.evaluation)
         .context(AnalysisContractSnafu)?;
-        let batch = UnitBatch::new(writer, root, metadata, returned, pin, reset)?;
+        let batch = UnitBatch::new(writer, root, metadata, returned, pin, reset, restricted)?;
         let mut reasons = BTreeMap::new();
         for reason in &returned.output.reasons {
             if reason.output.dataset != "findings"
@@ -776,9 +794,33 @@ impl GraphRows {
                 return Err(Self::invalid("graph member identity collision"));
             }
         }
-        araphor_graph::Contributions::apply(writer, scope, revision, &replacements, reset)?;
+        let mut work =
+            araphor_graph::Contributions::apply(writer, scope, revision, &replacements, reset)?;
+        work.0 = work.0.saturating_add(
+            (record_keys.len()
+                + batch.records.len()
+                + metadata.input_manifest.context.len()
+                + replacements.len()
+                + subjects.len()) as u64,
+        );
         let state = araphor_graph::StateRows::finish(writer, scope, revision, &batch.default)?;
-        Ok(UnitEffects { touched, state })
+        let root_cursors = batch
+            .units
+            .keys()
+            .chain(batch.before.iter())
+            .map(|record| record.durable_cursor)
+            .fold(None, |bounds: Option<(u64, u64)>, cursor| {
+                Some(bounds.map_or((cursor, cursor), |(first, last)| {
+                    (first.min(cursor), last.max(cursor))
+                }))
+            })
+            .unwrap_or_default();
+        Ok(UnitEffects {
+            touched,
+            state,
+            work,
+            root_cursors,
+        })
     }
 }
 

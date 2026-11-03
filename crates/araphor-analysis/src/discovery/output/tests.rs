@@ -244,9 +244,9 @@ impl Fixture {
                 },
             },
         };
-        let prepared = session.prepare_definition(&definition).await?;
+        let prepared = session.prepare_definition(&definition, None).await?;
         let mut calls = Vec::new();
-        prepared.plan.apply_with_subqueries(|plan| {
+        prepared.plan().apply_with_subqueries(|plan| {
             if let LogicalPlan::Extension(extension) = plan {
                 if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
                     calls.push(call.clone());

@@ -92,6 +92,14 @@ pub(super) fn fixture(
                 .map(|record| record.id.clone())
                 .collect::<Vec<_>>(),
         )?,
+        Detector::window_data(
+            &records
+                .first()
+                .map_or_else(|| identity(0).stream, |record| record.id.stream.clone())
+                .key(),
+            records.first().map_or(1, |record| record.id.durable_cursor),
+            u64::MAX,
+        )?,
     ];
     Ok(sdk::Fixture {
         implementation: "shared-rust".into(),

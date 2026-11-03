@@ -2,10 +2,12 @@ use super::*;
 
 pub struct Graph<'a> {
     pub(super) input: Cow<'a, GraphReplayInputV1>,
+    #[cfg(test)]
     pub(super) projection: std::cell::OnceCell<[sdk::Dataset; 3]>,
     pub(super) observations: Vec<algorithm::Observation>,
     pub(super) revision: GraphRevisionV1,
     pub(super) facts: Vec<GraphFactV1>,
+    pub(super) restricted: bool,
     pub(super) packages: Vec<GraphPackageCheckpointV1>,
     pub(super) subjects: BTreeMap<GraphSubjectKeyV1, u32>,
     pub(super) edges: BTreeMap<GraphEdgeKeyV1, GraphEdgeV1>,
@@ -14,12 +16,118 @@ pub struct Graph<'a> {
 }
 
 impl<'a> Graph<'a> {
+    pub(super) fn preparation_bytes(&self) -> Option<usize> {
+        use std::mem::size_of;
+        let mut bytes = self
+            .revision
+            .evidence
+            .capacity()
+            .checked_mul(size_of::<DiscoveryRecordIdV1>())?;
+        bytes = self
+            .revision
+            .evidence
+            .iter()
+            .try_fold(bytes, |bytes, id| bytes.checked_add(id.allocated_bytes()))?;
+        bytes = self.revision.context.iter().try_fold(
+            bytes.checked_add(
+                self.revision
+                    .context
+                    .capacity()
+                    .checked_mul(size_of::<araphor_data::AnalysisContextKeyV1>())?,
+            )?,
+            |bytes, key| bytes.checked_add(key.allocated_bytes()),
+        )?;
+        bytes = self.revision.coverage.iter().try_fold(
+            bytes.checked_add(
+                self.revision
+                    .coverage
+                    .capacity()
+                    .checked_mul(size_of::<araphor_data::GraphCoverageKeyV1>())?,
+            )?,
+            |bytes, key| {
+                key.gap_reasons.iter().try_fold(
+                    bytes
+                        .checked_add(key.source.node_id.capacity())?
+                        .checked_add(
+                            key.gap_reasons
+                                .capacity()
+                                .checked_mul(size_of::<String>())?,
+                        )?,
+                    |bytes, reason| bytes.checked_add(reason.capacity()),
+                )
+            },
+        )?;
+        bytes = bytes.checked_add(
+            self.revision
+                .missing_ranges
+                .capacity()
+                .checked_mul(size_of::<(u64, u64)>())?,
+        )?;
+        bytes = self.facts.iter().try_fold(
+            bytes.checked_add(
+                self.facts
+                    .capacity()
+                    .checked_mul(size_of::<GraphFactV1>())?,
+            )?,
+            |bytes, fact| bytes.checked_add(fact.allocated_bytes()),
+        )?;
+        bytes = self.observations.iter().try_fold(
+            bytes.checked_add(
+                self.observations
+                    .capacity()
+                    .checked_mul(size_of::<algorithm::Observation>())?,
+            )?,
+            |bytes, record| bytes.checked_add(record.allocated_bytes()),
+        )?;
+        self.packages.iter().try_fold(
+            bytes.checked_add(
+                self.packages
+                    .capacity()
+                    .checked_mul(size_of::<GraphPackageCheckpointV1>())?,
+            )?,
+            |bytes, package| bytes.checked_add(package.allocated_bytes()),
+        )
+    }
+
     pub fn new(input: &'a GraphReplayInputV1) -> Result<Self> {
         Self::from_input(Cow::Borrowed(input))
     }
 
-    fn from_input(mut input: Cow<'a, GraphReplayInputV1>) -> Result<Self> {
+    fn from_input(input: Cow<'a, GraphReplayInputV1>) -> Result<Self> {
         input.validate()?;
+        let restricted = input
+            .facts
+            .iter()
+            .any(|fact| fact.sensitivity == ContextSensitivityV1::HostRestricted);
+        Self::prepare(input, restricted)
+    }
+
+    pub(super) fn from_parts(
+        input: GraphReplayInputV1,
+        restricted: bool,
+    ) -> Result<Graph<'static>> {
+        Self::validate_local(&input)?;
+        Graph::prepare(Cow::Owned(input), restricted)
+    }
+
+    pub(super) fn validate_local(input: &GraphReplayInputV1) -> Result<()> {
+        if input.records.is_empty() {
+            use araphor_data::DiscoveryValidate as _;
+            Self::require(
+                input.source.valid() && input.input_positions.is_empty() && input.facts.is_empty(),
+                "empty Graph local basis",
+            )?;
+            for range in &input.coverage {
+                range.validate()?;
+                Self::require(range.stream == input.source, "Graph local coverage source")?;
+            }
+            Ok(())
+        } else {
+            input.validate()
+        }
+    }
+
+    fn prepare(mut input: Cow<'a, GraphReplayInputV1>, restricted: bool) -> Result<Self> {
         if input
             .records
             .windows(2)
@@ -38,39 +146,21 @@ impl<'a> Graph<'a> {
             .iter()
             .map(GraphFactV1::try_from)
             .collect::<Result<_>>()?;
-        let mut graph = Self {
+        let observations = Self::qualify_records(&input)?;
+        Ok(Self {
             input,
+            #[cfg(test)]
             projection: std::cell::OnceCell::new(),
-            observations: Vec::new(),
+            observations,
             revision,
             facts,
+            restricted,
             packages: Vec::new(),
             subjects: BTreeMap::new(),
             edges: BTreeMap::new(),
             findings: BTreeMap::new(),
             _memory: None,
-        };
-        let positions = graph
-            .input
-            .input_positions
-            .iter()
-            .map(|(id, position)| (id, position))
-            .collect::<BTreeMap<_, _>>();
-        graph.observations = graph
-            .input
-            .records
-            .iter()
-            .map(|record| {
-                let position = positions.get(&record.id).ok_or_else(|| {
-                    GraphInvalidSnafu {
-                        field: "graph input position",
-                    }
-                    .build()
-                })?;
-                graph.qualify_record(record, **position)
-            })
-            .collect::<Result<_>>()?;
-        Ok(graph)
+        })
     }
 
     pub fn supports(model: &sdk::Model) -> bool {

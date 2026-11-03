@@ -82,10 +82,9 @@ async fn immutable_facts_precede_guests() -> TestResult {
         let owner = fixture
             .managed_graph(&grant, &definition, &instance_id, "SELECT * FROM events")
             .await?;
-        let graph = owner
+        owner
             .graph_owner()
             .ok_or("admitted immutable Graph owner")?;
-        let projection = &graph.projection;
         let before_instance = owner.admitted().clone();
         assert!(!before_instance.running);
         assert_eq!(before_instance.progress, 0);
@@ -112,7 +111,6 @@ async fn immutable_facts_precede_guests() -> TestResult {
             format!("{error:?}").contains("conflicting context version"),
             "{field}: {error:?}"
         );
-        assert_eq!(projection.projections.load(Ordering::SeqCst), 0);
         assert_eq!(
             entered.try_recv(),
             Err(std::sync::mpsc::TryRecvError::Empty)
@@ -300,8 +298,6 @@ async fn immutable_facts_precede_guests() -> TestResult {
         )
         .await?;
     let graph = owner.graph_owner().ok_or("recovered Graph owner")?;
-    let projection = &graph.projection;
-    let observed = projection.observe_capture();
     let before_instance = fixture
         .query
         .store()
@@ -322,24 +318,37 @@ async fn immutable_facts_precede_guests() -> TestResult {
     let repeated = owner
         .run(managed::request("restored")?, &fixture.control)
         .await?;
-    let captured = observed.try_recv()?;
-    assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
-    assert_eq!(captured.inputs.len(), 3);
-    assert_eq!(projection.ports.len(), captured.inputs.len());
-    for (port, input) in projection.ports.iter().zip(&captured.inputs) {
-        assert_eq!(input.data.name, port.name);
+    let reference = repeated
+        .results
+        .values()
+        .next()
+        .ok_or("restored Graph call")?;
+    let replayed = fixture
+        .replay_result(owner.admitted(), &reference.result_id, &fixture.control)
+        .await?;
+    let (&call_id, call) = replayed
+        .calls
+        .iter()
+        .next()
+        .ok_or("replayed restored call")?;
+    let declared = graph.calls.get(&call_id).ok_or("restored declaration")?;
+    let model = declared
+        .descriptor()
+        .exports
+        .iter()
+        .find(|model| model.name == declared.export())
+        .ok_or("restored model")?;
+    assert_eq!(call.evaluation().inputs.len(), model.inputs.len());
+    for (port, input) in model.inputs.iter().zip(&call.evaluation().inputs) {
+        assert_eq!(input.data.name, port.port.name);
         assert!(!input.data.batches.is_empty());
         assert!(input
             .data
             .batches
             .iter()
-            .all(|batch| batch.schema().as_ref() == &port.schema));
+            .all(|batch| batch.schema().as_ref() == &port.port.schema));
     }
-    assert!(captured
-        .graph
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .is_none());
+    drop(replayed);
     let expected = araphor_data::FindingV1::PACKAGES
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
@@ -774,10 +783,6 @@ async fn source_preserves_dense_findings() -> TestResult {
     let owner = fixture.running_graph(owner).await?;
     assert!(owner.admitted().running);
     let prepared = started.elapsed();
-    let projection = &owner
-        .graph_owner()
-        .ok_or("dense running Graph owner")?
-        .projection;
     let mut stream = owner.subscribe(
         Arc::new(AnalysisReadControl::default()),
         u64::MAX,
@@ -787,12 +792,11 @@ async fn source_preserves_dense_findings() -> TestResult {
         .await
         .map_err(|error| {
             format!(
-                "Dense Graph first receipt: {error}; elapsed={:?}; prepared={prepared:?}; first_capture={:?}; facts={}; projections={}",
+                "Dense Graph first receipt: {error}; elapsed={:?}; prepared={prepared:?}; first_facts={:?}; facts={}",
                 started.elapsed(),
                 fixture.facts.first.lock().unwrap_or_else(|error| error.into_inner())
                     .map(|first| first.saturating_duration_since(started)),
                 fixture.facts.calls.load(Ordering::SeqCst),
-                projection.projections.load(Ordering::SeqCst),
             )
         });
     let joined = stream.cancel_and_join(&fixture.control).await;

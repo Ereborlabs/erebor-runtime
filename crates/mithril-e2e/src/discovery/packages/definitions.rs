@@ -144,34 +144,39 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
                 selection: None,
             })
             .await?;
-        let PackageResponseV1::Definition(admitted) = PackageResponseV1::from_bytes(&reply.result)?
+        let PackageResponseV1::Definition {
+            snapshot: admitted,
+            commit_revision: revision,
+        } = PackageResponseV1::from_bytes(&reply.result)?
         else {
             return Err("admitted definition variant".into());
         };
         assert_eq!(
             serde_json::to_value(PackageResponseV1::from_bytes(&reply.result)?)?,
-            serde_json::json!({"definition": admitted}),
+            serde_json::json!({"definition": {"snapshot": admitted, "commit_revision": revision}}),
         );
         assert_eq!(admitted.definition, expected);
         assert_eq!(admitted.sql, expected.program.sql()?);
         assert_eq!(admitted.images, images);
-        let revision = admitted.digest()?;
+        assert!(revision > 0);
         let reply = client
             .package_operation(PackageOperationRequest {
                 definition: PackageRequestV1::InspectDefinition {
                     name: expected.name,
-                    revision: Some(revision.clone()),
+                    revision: Some(revision.to_string()),
                 }
                 .encode()?,
                 selection: None,
             })
             .await?;
-        let PackageResponseV1::Definition(inspected) =
-            PackageResponseV1::from_bytes(&reply.result)?
+        let PackageResponseV1::Definition {
+            snapshot: inspected,
+            commit_revision: inspected_revision,
+        } = PackageResponseV1::from_bytes(&reply.result)?
         else {
             return Err("inspected definition variant".into());
         };
-        assert_eq!(inspected.digest()?, revision);
+        assert_eq!(inspected_revision, revision);
         assert_eq!(inspected, admitted);
         assert_eq!(data.active_managed(&Default::default())?.1, members);
         assert!(!lifecycle.has_changed()?);

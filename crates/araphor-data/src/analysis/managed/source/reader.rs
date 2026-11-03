@@ -201,10 +201,18 @@ impl SourceScope {
 
 impl ManagedSourceFrame {
     pub fn check_before(&self, reference: &super::super::model::ManagedAttempt) -> Result<()> {
-        let capture = &reference.0.capture;
         let ManagedSourceRead::Changes(parent) = self.read() else {
             return Err(Code::Conflict.error("managed before parent"));
         };
+        self.check_point(reference, parent)
+    }
+
+    pub fn check_point(
+        &self,
+        reference: &super::super::model::ManagedAttempt,
+        parent: &ManagedSourceRef,
+    ) -> Result<()> {
+        let capture = &reference.0.capture;
         if reference
             .receipt()
             .is_none_or(|receipt| receipt.selected != parent.result)

@@ -1140,3 +1140,17 @@ for native eligibility, retained finite delivery, optional count limits, and
 qualified retirement evidence. Automatic Control subscription ownership,
 failed-offer retry and shutdown, complete migration, and the final shared Rust
 procedure remain **Not done**.
+
+
+### Package quota correction
+
+On 2026-10-23, the user removes package row, batch, byte, and checkpoint quotas.
+This instruction replaces the earlier instruction to retain explicit image,
+model, and caller quotas. Only the time window can be set outside SQL. Native
+SQL selects rows. Shared engine configuration remains separate. Current source
+removes the SDK quota fields, enforcement, and retained metadata. All 143
+focused checks, strict Clippy, formatting, and library test compilation pass.
+Version identifiers stay unchanged during development. The
+[qualification record](../../recovery/araphor-package-quota-removal-20261023.json)
+contains the exact results. No preparation timeout change is approved by this
+correction. The full test suite is not run under the user's focused-test rule.

@@ -12,18 +12,19 @@ test-fixtures = ["araphor-data/test-fixtures", "araphor-query/test-fixtures", "a
 [dependencies]
 araphor-discovery-definition = { path = "../araphor-discovery-definition" }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
+araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 araphor-data = { path = "../araphor-data" }
 araphor-query = { path = "../araphor-query" }
 araphor-analysis = { path = "../araphor-analysis" }
 araphor-observability = { path = "../araphor-observability" }
-arrow-array = "=58.4.0"
-arrow-schema = "=58.4.0"
+arrow-array = "=59.2.0"
+arrow-schema = "=59.2.0"
 axum.workspace = true
 axum-server.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 crc32c.workspace = true
-datafusion-common = { version = "=53.1.0", default-features = false }
+datafusion-common = { version = "=55.0.0", default-features = false }
 ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
@@ -61,7 +62,7 @@ zerocopy.workspace = true
 tonic-build.workspace = true
 
 [dev-dependencies]
-serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-58"] }
+serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-59"] }
 araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
 araphor-query = { path = "../araphor-query", features = ["test-fixtures"] }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }

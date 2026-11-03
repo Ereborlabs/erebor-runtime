@@ -4,11 +4,13 @@ use std::future::{poll_fn, Future as _};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, DFSchemaRef, DataFusionError, Result};
 use datafusion::datasource::source_as_provider;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::SessionState;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{
     Expr, Extension, LogicalPlan, Projection, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
     Volatility,
@@ -63,7 +65,6 @@ impl Subscribe {
                     return Ok(scan.fetch.is_none()
                         && source_as_provider(&scan.source).is_ok_and(|provider| {
                             provider
-                                .as_any()
                                 .downcast_ref::<SourceProvider>()
                                 .is_some_and(|source| {
                                     matches!(
@@ -126,7 +127,6 @@ impl Subscribe {
                 LogicalPlan::TableScan(scan) => {
                     let provider = source_as_provider(&scan.source)?;
                     if !provider
-                        .as_any()
                         .downcast_ref::<SourceProvider>()
                         .is_some_and(|source| source.origin.durable() == Some("events"))
                         || provider.schema() != SourceSnapshot::schemas()["events"]
@@ -219,11 +219,27 @@ impl QueryPlanner for SubscriptionPlanner {
     async fn create_physical_plan(
         &self,
         plan: &LogicalPlan,
-        state: &SessionState,
+        session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let state = session
+            .as_any()
+            .downcast_ref::<SessionState>()
+            .ok_or_else(|| DataFusionError::Plan("source planning session differs".into()))?;
+        let clock = state
+            .execution_props()
+            .query_execution_start_time
+            .and_then(|time| time.timestamp_nanos_opt());
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(Self)]);
+        erebor_telemetry::debug!(stage="source_plan",role="native_pipeline",clock=?clock,child="pipeline",action="physical_start","Native physical planning started");
+        let started = std::time::Instant::now();
         let mut planning = std::pin::pin!(planner.create_physical_plan(plan, state));
-        poll_fn(|context| crate::parser::Parser::stack(|| planning.as_mut().poll(context))).await
+        let physical =
+            poll_fn(|context| crate::parser::Parser::stack(|| planning.as_mut().poll(context)))
+                .await;
+        let elapsed = started.elapsed();
+        erebor_telemetry::debug!(stage="source_plan",role="native_pipeline",clock=?clock,child="pipeline",action="physical_done",elapsed_us=elapsed.as_micros(),elapsed_s=elapsed.as_secs_f64(),success=physical.is_ok(),"Native physical planning completed");
+        let physical = physical?;
+        Ok(physical)
     }
 }
 
@@ -235,8 +251,13 @@ impl ExtensionPlanner for SubscriptionPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let state = session
+            .as_any()
+            .downcast_ref::<SessionState>()
+            .ok_or_else(|| DataFusionError::Plan("source planning session differs".into()))?;
         if let Some(call) = node
             .as_any()
             .downcast_ref::<crate::definition::PackageCall>()

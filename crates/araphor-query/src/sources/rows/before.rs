@@ -7,6 +7,7 @@ impl SourceSnapshot {
         current: &Self,
         requests: &AnalysisTableRequests,
         bounds: ScanBounds,
+        call: u64,
     ) -> Result<Arc<ArrowSnapshot>> {
         let control = self
             .control
@@ -21,7 +22,15 @@ impl SourceSnapshot {
         let view = current.source_view()?.ok_or_else(|| {
             DataFusionError::Execution("the current source view is absent".into())
         })?;
-        view.check_before(reference)?;
+        let view = if reference
+            .receipt()
+            .is_some_and(|receipt| receipt.commit_revision == view.version())
+        {
+            view.check_before(reference)?;
+            view
+        } else {
+            view.call_before(call, reference)?
+        };
         let requests = requests
             .iter()
             .filter(|(_, columns)| columns.is_some())

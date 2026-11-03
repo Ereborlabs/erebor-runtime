@@ -738,8 +738,8 @@ impl TryFrom<ObservationRow> for Observation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct FactRow {
-    pub record: u32,
+pub(super) struct FactRow<R = u32> {
+    pub record: R,
     pub key: ContextKeyRow,
     pub sensitivity: ContextSensitivityV1,
     pub value: FactValueRow,

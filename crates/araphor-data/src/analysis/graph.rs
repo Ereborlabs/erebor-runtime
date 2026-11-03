@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::*;
-use crate::{GraphSnapshotV1, GraphValidate as _, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION};
+use crate::{
+    GraphSnapshotV1, GraphValidate as _, PackageErrorCodeV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
+};
 
 mod findings;
 mod interest;
@@ -32,8 +34,13 @@ pub struct GraphCommit {
     pub request: AnalysisResultCommitV1,
     pub metadata: GraphManifest,
     pub contexts: Vec<AnalysisContextVersionV1>,
+    /// Global proof refs. Exclude fact refs and record proof refs.
     pub proofs: Vec<AnalysisContextRefV1>,
+    /// Upstream proof refs for each changed source record.
+    pub record_proofs: Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
     pub sources: Vec<(String, u64)>,
+    /// Source records absent from the after set.
+    pub removed: Vec<crate::DiscoveryRecordIdV1>,
     pub advance: bool,
     pub expire: bool,
 }
@@ -224,6 +231,114 @@ impl AnalysisStore {
             Ok(
                 super::graph_rows::GraphRows::read_header(reader, tenant, result_id)?
                     .map(|header| header.snapshot.scope.identity),
+            )
+        })
+    }
+
+    pub fn graph_frozen_facts(
+        &self,
+        capture: &ManagedCapture,
+        reference: Option<&ManagedAttempt>,
+        result: &PackageResultRefV1,
+        records: &std::collections::BTreeSet<crate::DiscoveryRecordIdV1>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<(
+        (GraphManifest, Option<u64>),
+        Vec<(AnalysisContextVersionV1, AnalysisContextRefV1)>,
+        Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+    )> {
+        let ManagedDestination::Graph { source, .. } = &capture.instance().spec.destination else {
+            return Err(PackageErrorCodeV1::Invalid.error("frozen Graph destination"));
+        };
+        if result.result_id.is_empty()
+            || result.commit_revision == 0
+            || (result.commit_revision > capture.revision()
+                && reference
+                    .and_then(|reference| reference.receipt())
+                    .and_then(|receipt| receipt.graph.as_ref())
+                    != Some(result))
+            || !capture.instance().grant.selection.includes_source(source)
+            || records
+                .iter()
+                .any(|record| &record.stream != source || record.durable_cursor == 0)
+        {
+            return Err(PackageErrorCodeV1::Denied.error("frozen Graph source"));
+        }
+        if let Some(reference) = reference {
+            capture.check_reference(reference)?;
+        }
+        if limits.keys.is_some_and(|keys| records.len() > keys) {
+            return crate::AnalysisInputTooLargeSnafu {
+                resource: "frozen Graph keys",
+            }
+            .fail();
+        }
+        let mut reader = self.reader_until(control)?;
+        control.run(&mut reader, |reader| {
+            let actual = Self::read_meta_from(reader, &self.root)?;
+            let captured = capture.source_meta();
+            if actual.store_uuid != captured.store_uuid
+                || actual.schema_version != captured.schema_version
+                || captured.recovery_epoch == 0
+                || captured.recovery_epoch > actual.recovery_epoch
+                || captured.commit_revision > actual.commit_revision
+            {
+                return Err(PackageErrorCodeV1::Conflict.error("frozen Graph store"));
+            }
+            if let Some(reference) =
+                reference.filter(|_| result.commit_revision > capture.revision())
+            {
+                if Self::graph_capture_cut(
+                    reader,
+                    capture.instance().spec.tenant,
+                    result,
+                    Some(reference),
+                    None,
+                )? != capture.revision()
+                {
+                    return Err(
+                        PackageErrorCodeV1::Conflict.error("frozen Graph publication source")
+                    );
+                }
+            }
+            let mut input = 0usize;
+            let mut scanned = 0usize;
+            let mut charge = |scan: usize, bytes: usize| {
+                scanned = scanned
+                    .checked_add(scan)
+                    .filter(|total| *total <= limits.scan_bytes)
+                    .ok_or_else(|| {
+                        crate::AnalysisInputTooLargeSnafu {
+                            resource: "scanned Graph bytes",
+                        }
+                        .build()
+                    })?;
+                input = input
+                    .checked_add(bytes)
+                    .filter(|total| *total <= limits.input_bytes)
+                    .ok_or_else(|| {
+                        crate::AnalysisInputTooLargeSnafu {
+                            resource: "frozen Graph bytes",
+                        }
+                        .build()
+                    })?;
+                Ok(())
+            };
+            for record in records {
+                charge(
+                    0,
+                    std::mem::size_of_val(record) + record.stream.node_id.len(),
+                )?;
+            }
+            super::graph_rows::GraphRows::frozen_facts(
+                reader,
+                &self.root,
+                capture,
+                result,
+                records,
+                control,
+                &mut charge,
             )
         })
     }

@@ -78,7 +78,7 @@ impl AnalysisStore {
                 operation: "begin source recovery",
             })?;
         let stored = Self::read_receipt_from(&transaction, &self.root, identity, &key)?
-            .map_or(0, |receipt| receipt.contiguous_cursor);
+            .map_or(0, |(receipt, _)| receipt.contiguous_cursor);
         if node_retained_floor <= stored {
             return Ok(AnalysisRecoveryStatusV1::Complete);
         }

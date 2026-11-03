@@ -8,8 +8,7 @@ pub(super) fn target(
 ) -> TestResult<ManagedSpec> {
     let mut spec = current.spec.clone();
     spec.definition.definition.description = description.into();
-    spec.manifest.definition = spec.definition.digest()?;
-    store.admit_definition(spec.tenant, &spec.definition, || Ok(()))?;
+    spec.manifest.definition = store.admit_definition(spec.tenant, &spec.definition, || Ok(()))?;
     Ok(spec)
 }
 
@@ -293,8 +292,8 @@ fn versions_keep_call_identity() -> TestResult {
             spec.definition.definition.program = Program::Sql {
                 source: Source::Inline { inline: sql },
             };
-            spec.manifest.definition = spec.definition.digest()?;
-            store.admit_definition(spec.tenant, &spec.definition, || Ok(()))?;
+            spec.manifest.definition =
+                store.admit_definition(spec.tenant, &spec.definition, || Ok(()))?;
         } else {
             spec.manifest.planner.push_str("/changed");
         }

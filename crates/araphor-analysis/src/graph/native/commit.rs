@@ -4,7 +4,7 @@ use std::sync::{Arc, Weak};
 use araphor_data::{
     analysis::{GraphCommit, GraphManifest},
     AnalysisReadControl, AnalysisResultCommitV1, AnalysisWitnessV1, PackageErrorCodeV1 as Code,
-    ProcessorScopeV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, GRAPH_WITNESS_TTL_NS,
+    GRAPH_SCHEMA_VERSION,
 };
 use araphor_query::definition::ExecutionReceipt;
 use datafusion::arrow::array::{BinaryArray, StringArray, UInt64Array};
@@ -18,7 +18,7 @@ pub(crate) struct GraphConversion {
     pub(crate) packet: GraphCommit,
     pub(crate) completed: bool,
     pub(crate) deadline: u64,
-    _memory: Option<MemoryReservation>,
+    _memory: Vec<MemoryReservation>,
 }
 
 impl GraphPublication {
@@ -29,17 +29,16 @@ impl GraphPublication {
         result_id: String,
         control: &AnalysisReadControl,
     ) -> araphor_query::Result<GraphConversion> {
+        let started = std::time::Instant::now();
         control.check()?;
         let run = GraphRun::from_context(context, &self.projection)
             .map_err(|source| araphor_query::Error::Sql { source })?;
-        let captured = run
+        let mut captured = run
             .captured
-            .get()
-            .ok_or_else(|| Code::Incomplete.error("graph input capture"))?
-            .clone()
-            .map_err(|source| araphor_query::Error::Sql {
-                source: datafusion::common::DataFusionError::Shared(source),
-            })?;
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .ok_or_else(|| Code::Incomplete.error("graph input capture"))?;
         let source = context
             .session_config()
             .get_extension::<araphor_query::sources::SourceSnapshot>()
@@ -47,6 +46,12 @@ impl GraphPublication {
         if !Weak::ptr_eq(&captured.source, &Arc::downgrade(&source)) {
             return Err(Code::Invalid.error("graph returned source capture").into());
         }
+        let (consumed, _, accepted, coverage_revision) = captured
+            .progress
+            .ok_or_else(|| Code::Invalid.error("graph publication progress"))?;
+        let restricted = captured
+            .restricted
+            .ok_or_else(|| Code::Invalid.error("graph publication restriction"))?;
         for (id, returned) in receipt.calls() {
             if self
                 .calls
@@ -56,12 +61,12 @@ impl GraphPublication {
                 return Err(Code::Invalid.error("graph returned call identity").into());
             }
         }
-        let mut graph = captured
-            .graph
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .ok_or_else(|| Code::Invalid.error("graph publication was consumed"))?;
+        let memory = source
+            .memory()
+            .prepare_input(source.extraction_limits().input_bytes)
+            .map_err(|source| araphor_query::Error::Sql { source })?;
+        let (input, references) = captured.take_input();
+        let mut graph = Graph::from_parts(input, restricted != 0)?;
         let mut actual = receipt
             .calls()
             .iter()
@@ -107,25 +112,16 @@ impl GraphPublication {
                 graph.validate_output(call.descriptor(), result.evaluation(), result.output())?;
             graph.packages.push(checkpoint);
         }
-        let mut contexts = captured.contexts.clone();
-        contexts.sort_by(|left, right| left.key.cmp(&right.key));
-        if contexts
-            .windows(2)
-            .any(|pair| pair[0].key == pair[1].key && pair[0] != pair[1])
-        {
-            return Err(Code::Conflict.error("graph context identity").into());
-        }
-        contexts.dedup();
-        let mut proofs = captured.proofs.clone();
-        proofs.extend_from_slice(&captured.fact_refs);
-        for id in receipt.calls().keys() {
-            proofs.push(
+        let mut proofs = receipt
+            .calls()
+            .keys()
+            .map(|id| {
                 self.packages
                     .get(id)
                     .cloned()
-                    .ok_or_else(|| Code::Denied.error("graph package attribution"))?,
-            );
-        }
+                    .ok_or_else(|| Code::Denied.error("graph package attribution"))
+            })
+            .collect::<araphor_data::Result<Vec<_>>>()?;
         proofs.sort_by(|left, right| left.key.cmp(&right.key));
         if proofs
             .windows(2)
@@ -134,56 +130,41 @@ impl GraphPublication {
             return Err(Code::Conflict.error("graph proof identity").into());
         }
         proofs.dedup();
-        if graph.input.input_positions != captured.positions {
-            return Err(Code::Invalid.error("graph captured positions").into());
-        }
-        let first = graph
-            .input
-            .records
-            .iter()
-            .map(|record| record.id.durable_cursor)
-            .min()
-            .ok_or_else(|| Code::Invalid.error("graph first record"))?;
-        let last = graph
-            .input
-            .records
-            .iter()
-            .map(|record| record.id.durable_cursor)
-            .max()
-            .ok_or_else(|| Code::Invalid.error("graph last record"))?;
-        let deadline = captured
-            .heads
-            .iter()
-            .map(|head| head.deadline)
-            .min()
-            .or_else(|| captured.now.checked_add(GRAPH_WITNESS_TTL_NS))
-            .ok_or_else(|| Code::Invalid.error("graph witness deadline"))?;
-        let scope = ProcessorScopeV1 {
-            processor_id: GRAPH_PROCESSOR.into(),
-            method_version: u64::from(GRAPH_SCHEMA_VERSION),
-            identity: graph.input.source.clone(),
-        };
+        let deadline = captured.metadata.witness_deadline_utc_ns;
+        let first = captured.metadata.first_cursor;
+        let last = captured.metadata.last_cursor;
+        Projection::check_deadline(deadline)?;
+        let mut coverage = captured
+            .metadata
+            .input_manifest
+            .coverage
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        coverage.extend(std::mem::take(&mut graph.revision.coverage));
+        graph.revision.coverage = coverage.into_iter().collect();
+        let bytes = graph
+            .preparation_bytes()
+            .ok_or_else(|| Code::Limit.error("Graph preparation memory"))?;
+        let mut input = graph.input.into_owned();
+        let contexts = std::mem::take(&mut input.facts)
+            .into_iter()
+            .filter(|value| !references.contains_key(&value.key))
+            .collect();
+        let mut context_refs = references.into_values().collect::<Vec<_>>();
+        context_refs.sort_by(|left, right| left.key.cmp(&right.key));
+
         let metadata = GraphManifest {
             schema_version: GRAPH_SCHEMA_VERSION,
-            scope: scope.clone(),
+            scope: captured.metadata.scope,
             first_cursor: first,
             last_cursor: last,
             input_manifest: graph.revision,
             facts: graph.facts,
             packages: graph.packages,
-            missing_ranges: graph.input.missing_ranges.clone(),
-            input_positions: graph.input.input_positions.clone(),
-            previous_result_id: captured
-                .heads
-                .iter()
-                .find(|head| head.first == first)
-                .map(|head| head.id.clone()),
-            context_notice_revision: captured
-                .proofs
-                .iter()
-                .map(|proof| proof.commit_revision)
-                .max()
-                .unwrap_or(0),
+            missing_ranges: input.missing_ranges,
+            input_positions: input.input_positions,
+            previous_result_id: captured.metadata.previous_result_id,
+            context_notice_revision: receipt.snapshot().page.extraction.meta.commit_revision,
             witness_deadline_utc_ns: deadline,
         };
         let witnesses = metadata
@@ -191,44 +172,134 @@ impl GraphPublication {
             .evidence
             .iter()
             .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
             .map(|id| AnalysisWitnessV1 {
                 identity: id.stream.into(),
                 cursor: id.durable_cursor,
                 expires_utc_ns: deadline,
             })
             .collect();
-        let advanced = last > captured.consumed;
         let request = AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: captured.consumed,
-            consumed_cursor: last.max(captured.consumed),
-            coverage_revision: captured.coverage_revision,
-            context_revision: 0,
+            scope: metadata.scope.clone(),
+            expected_cursor: consumed,
+            consumed_cursor: last.max(consumed),
+            coverage_revision,
+            context_revision: context_refs
+                .iter()
+                .map(|reference| reference.commit_revision)
+                .max()
+                .unwrap_or(0),
             result_id,
             body: Vec::new(),
-            created_utc_ns: captured.now,
+            created_utc_ns: source.time_utc_ns(),
             witnesses,
-            context_refs: Vec::new(),
+            context_refs,
         };
         let sources = receipt
             .snapshot()
             .selection
             .source_revisions(receipt.snapshot().page.extraction.meta.commit_revision);
+        let record_proofs = captured
+            .proofs
+            .into_iter()
+            .map(|((record, _), proof)| (record, proof))
+            .collect();
+        let removed = captured.removed.into_iter().collect();
+        let packet = GraphCommit {
+            request,
+            metadata,
+            contexts,
+            proofs,
+            record_proofs,
+            removed,
+            sources,
+            advance: last > consumed,
+            expire: false,
+        };
+        let before = captured._memory.capacity();
+        captured
+            ._memory
+            .try_reserve(1)
+            .map_err(|source| araphor_query::Error::Sql {
+                source: Projection::external(source),
+            })?;
+        let bytes =
+            (|| -> Option<usize> {
+                let bytes = bytes.checked_add(
+                    captured
+                        ._memory
+                        .capacity()
+                        .checked_sub(before)?
+                        .checked_mul(std::mem::size_of::<MemoryReservation>())?,
+                )?;
+                packet
+                    .proofs
+                    .iter()
+                    .try_fold(
+                        bytes.checked_add(packet.proofs.capacity().checked_mul(
+                            std::mem::size_of::<araphor_data::AnalysisContextRefV1>(),
+                        )?)?,
+                        |bytes, proof| bytes.checked_add(proof.key.allocated_bytes()),
+                    )
+                    .and_then(|bytes| {
+                        packet.sources.iter().try_fold(
+                            bytes.checked_add(
+                                packet.sources.capacity().checked_mul(std::mem::size_of::<(
+                                    String,
+                                    u64,
+                                )>(
+                                ))?,
+                            )?,
+                            |bytes, (name, _)| bytes.checked_add(name.capacity()),
+                        )
+                    })
+                    .and_then(|bytes| {
+                        packet.request.witnesses.iter().try_fold(
+                            bytes.checked_add(
+                                packet
+                                    .request
+                                    .witnesses
+                                    .capacity()
+                                    .checked_mul(std::mem::size_of::<AnalysisWitnessV1>())?,
+                            )?,
+                            |bytes, witness| {
+                                bytes.checked_add(match &witness.identity {
+                                    araphor_data::AnalysisStreamIdentityV1::Evidence(identity) => {
+                                        identity.node_id.capacity()
+                                    }
+                                    araphor_data::AnalysisStreamIdentityV1::Diagnostic(_) => 0,
+                                })
+                            },
+                        )
+                    })
+                    .and_then(|bytes| {
+                        bytes
+                            .checked_add(packet.request.scope.processor_id.capacity())?
+                            .checked_add(packet.request.scope.identity.node_id.capacity())?
+                            .checked_add(packet.request.result_id.capacity())?
+                            .checked_add(packet.request.body.capacity())
+                    })
+            })()
+            .ok_or_else(|| Code::Limit.error("Graph publication memory"))?;
+        if bytes > source.extraction_limits().input_bytes {
+            return Err(Code::Limit.error("Graph publication memory").into());
+        }
+        drop(input.source);
+        drop(captured.metadata.missing_ranges);
+        memory
+            .try_resize(bytes)
+            .map_err(|source| araphor_query::Error::Sql { source })?;
+        captured._memory.push(memory);
+        erebor_telemetry::debug!(
+            stage = "graph_conversion", result_id = %packet.request.result_id,
+            cut_revision = receipt.snapshot().page.extraction.meta.commit_revision,
+            calls = receipt.calls().len(), elapsed_s = started.elapsed().as_secs_f64(),
+            "Graph conversion completed"
+        );
         Ok(GraphConversion {
-            packet: GraphCommit {
-                request,
-                metadata,
-                contexts,
-                proofs,
-                sources,
-                advance: advanced,
-                expire: false,
-            },
-            completed: last >= captured.accepted,
+            packet,
+            completed: last >= accepted,
             deadline,
-            _memory: graph._memory.take(),
+            _memory: captured._memory,
         })
     }
 }
@@ -335,13 +406,15 @@ impl GraphConversion {
                     metadata,
                     contexts: Vec::new(),
                     proofs,
+                    record_proofs: Vec::new(),
+                    removed: Vec::new(),
                     sources,
                     advance: false,
                     expire: true,
                 },
                 completed,
                 deadline,
-                _memory: None,
+                _memory: Vec::new(),
             }))
         };
         convert().map_err(|source| araphor_query::Error::Sql { source })

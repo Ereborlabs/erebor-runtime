@@ -24,7 +24,7 @@ pub(super) struct SegmentRange {
 }
 
 impl SegmentRange {
-    pub(super) fn read(&self, root: &Path) -> Result<Vec<AnalysisRecordV1>> {
+    pub(super) fn read(&self, root: &Path) -> Result<(Vec<AnalysisRecordV1>, usize, usize)> {
         if self
             .byte_end
             .checked_sub(self.byte_start)

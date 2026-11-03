@@ -45,7 +45,7 @@ async fn public_control_keeps_identity() -> TestResult {
     );
     assert_eq!(fixture.query.store().meta()?, before);
     let definition = fixture.query.admit_definition([1; 16], Fixture::definition(r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(4 AS BIGINT UNSIGNED) AS value))"#), Arc::new(control.operation()?)).await?;
-    fixture
+    let revision = fixture
         .query
         .store()
         .admit_definition([1; 16], &definition, || Ok(()))?;
@@ -56,7 +56,7 @@ async fn public_control_keeps_identity() -> TestResult {
                 instance_id: "shared-control".into(),
                 expected_lifecycle: instance.admitted().lifecycle,
                 definition_name: definition.definition.name.clone(),
-                definition_revision: definition.digest()?,
+                definition_revision: revision.to_string(),
                 rebuild: true,
             },
             &control,

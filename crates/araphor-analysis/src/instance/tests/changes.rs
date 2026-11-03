@@ -183,7 +183,17 @@ async fn source_lookup_keeps_evidence() -> TestResult {
     let fixture = Fixture::new(Default::default())?;
     let mut image = lookup_image()?;
     image.artifacts[0].descriptor.exports[0].inputs[4].source = sdk::InputSource::Lookup(
-        "SELECT c.owner_revision AS value FROM input i JOIN context_versions c ON c.owner_revision = i.value - 1".into(),
+        "WITH selected AS (
+            SELECT owner_revision AS value FROM context_versions WHERE owner_revision % 2 = 0
+            UNION ALL
+            SELECT owner_revision AS value FROM context_versions WHERE owner_revision % 2 = 1
+        ), expanded AS (
+            SELECT value, UNNEST(make_array(value, value)) AS item FROM selected
+        ), grouped AS (
+            SELECT value FROM expanded GROUP BY value HAVING COUNT(item) = 2
+        )
+        SELECT support.value FROM input i JOIN grouped support ON support.value = i.value - 1"
+            .into(),
     );
     fixture.install(&image)?;
     fixture.context(1)?;
@@ -358,7 +368,7 @@ async fn named_inputs_keep_phase() -> TestResult {
             session.register_table(name, Arc::clone(&table))?;
             session.register_table("input", table)?;
             let prepared = session
-                .prepare_definition(&Fixture::definition(&format!("SELECT value FROM {name}")))
+                .prepare_definition(&Fixture::definition(&format!("SELECT value FROM {name}")), None)
                 .await?;
             let output = session
                 .execute_definition(&prepared, araphor_query::definition::Invocation::default())
@@ -368,7 +378,7 @@ async fn named_inputs_keep_phase() -> TestResult {
             let error = session
                 .prepare_definition(&Fixture::definition(
                     r#"SELECT * FROM "runtime-fixture"."1".changes()"#,
-                ))
+                ), None)
                 .await
                 .err()
                 .ok_or("Named input crossed the change phase")?;

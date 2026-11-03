@@ -11,20 +11,27 @@ const CAPACITY: usize = 256 * 1024;
 impl Fixture {
     pub(super) fn managed(
         &self,
-        definition: &PreparedDefinition,
+        definition: &mut PreparedDefinition,
         selection: AnalysisSelectionV1,
     ) -> TestResult<ManagedInstance> {
-        self.engine
-            .store()
-            .admit_definition([1; 16], definition.resolved(), || Ok(()))?;
+        definition.check_store(&self.engine)?;
+        let revision =
+            self.engine
+                .store()
+                .admit_definition([1; 16], definition.resolved(), || Ok(()))?;
+        *definition = definition.clone().bind_revision(
+            &self.engine,
+            revision,
+            &AnalysisReadControl::default(),
+        )?;
         let mut calls = BTreeMap::new();
-        PackageCall::any(&definition.plan, &mut |call| {
+        PackageCall::any(&definition.plan, &mut |_, call| {
             let implementation = call.bundle.bundle().artifacts[call.artifact]
                 .implementation(call.export())
                 .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
             let mut dependencies = std::collections::BTreeSet::new();
             for input in call.inputs() {
-                PackageCall::any(input, &mut |dependency| {
+                PackageCall::any(input, &mut |_, dependency| {
                     if dependency.id() != call.id() {
                         dependencies.insert(dependency.id());
                     }
@@ -56,7 +63,7 @@ impl Fixture {
                 manifest: ManagedManifest {
                     format: 1,
                     planner: "datafusion-53/sql-call-1".into(),
-                    definition: definition.resolved().digest()?,
+                    definition: revision,
                     calls,
                     selected_schema: definition.plan.schema().as_arrow().clone(),
                 },
@@ -85,14 +92,17 @@ async fn constant_capture_keeps_state() -> TestResult {
         fixture
             .engine
             .session(selection.clone(), &AnalysisReadControl::default(), NOW)?;
-    let definition = session
-        .prepare_definition(&Fixture::sql("SELECT CAST(7 AS BIGINT UNSIGNED) AS value"))
+    let mut definition = session
+        .prepare_definition(
+            &Fixture::sql("SELECT CAST(7 AS BIGINT UNSIGNED) AS value"),
+            None,
+        )
         .await?;
     let retained = session.memory().input_reserved();
     assert!(retained > 0);
     let available = CAPACITY.checked_sub(retained).ok_or("admitted metadata")?;
     assert!(definition.sources().is_empty());
-    let instance = fixture.managed(&definition, selection)?;
+    let instance = fixture.managed(&mut definition, selection)?;
     let captured = session
         .capture_managed(
             &definition,
@@ -179,10 +189,10 @@ async fn managed_capture_rejects_state() -> TestResult {
         fixture
             .engine
             .session(selection.clone(), &AnalysisReadControl::default(), NOW)?;
-    let definition = session
-        .prepare_definition(&Fixture::sql("SELECT 1 AS value"))
+    let mut definition = session
+        .prepare_definition(&Fixture::sql("SELECT 1 AS value"), None)
         .await?;
-    let instance = fixture.managed(&definition, selection)?;
+    let instance = fixture.managed(&mut definition, selection)?;
     for state in ["inputs", "checkpoint", "previous"] {
         let mut invocation = Invocation::default();
         if state == "checkpoint" {
@@ -232,10 +242,10 @@ async fn managed_capture_keeps_binding() -> TestResult {
         fixture
             .engine
             .session(selection.clone(), &AnalysisReadControl::default(), NOW)?;
-    let definition = session
-        .prepare_definition(&Fixture::sql("SELECT 1 AS value"))
+    let mut definition = session
+        .prepare_definition(&Fixture::sql("SELECT 1 AS value"), None)
         .await?;
-    let instance = fixture.managed(&definition, selection)?;
+    let instance = fixture.managed(&mut definition, selection)?;
     for changed_scope in [false, true] {
         let mut changed = instance.clone();
         if changed_scope {

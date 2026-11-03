@@ -1,5 +1,10 @@
 pub const OBSERVED_EFFECTS_SQL: &str = include_str!("sql/observed_effects.sql");
-pub const COVERAGE_RANGES_SQL: &str = include_str!("sql/coverage_ranges.sql");
+pub const COVERAGE_ROWS_SQL: &str = include_str!("sql/coverage_rows.sql");
+pub const COVERAGE_RANGES_SQL: &str = concat!(
+    include_str!("sql/coverage_ranges.sql"),
+    include_str!("sql/coverage_rows.sql"),
+    include_str!("sql/coverage_ranges_tail.sql"),
+);
 pub const CONTEXT_BINDINGS_SQL: &str = include_str!("sql/context_bindings.sql");
 pub const RECORDED_SNAPSHOT_SQL: &str = include_str!("sql/recorded_snapshot.sql");
 pub const MERGE_SQL: &str = include_str!("sql/merge_snapshot.sql");
@@ -8,6 +13,8 @@ pub const VIEWS_SQL: &str = concat!(
     include_str!("sql/observed_effects.sql"),
     "\n",
     include_str!("sql/coverage_ranges.sql"),
+    include_str!("sql/coverage_rows.sql"),
+    include_str!("sql/coverage_ranges_tail.sql"),
     "\n",
     include_str!("sql/context_bindings.sql"),
 );

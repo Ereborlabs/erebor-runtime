@@ -25,7 +25,7 @@ fn standalone_graph_rejects_managed_producer_binding() -> TestResult {
     )?;
     writer.execute("INSERT INTO analysis_results VALUES('call',?,'managed-package-v1',?,1),('standalone',?,'graph-findings',?,2)",params![source.tenant_id.as_slice(),source.key(),source.tenant_id.as_slice(),source.key()])?;
     writer.execute("INSERT INTO graph_producer_scopes VALUES(1,?,1,0,'instance',1,'package','revision','image',1,1),(2,?,1,2,NULL,NULL,NULL,NULL,NULL,1,2),(3,?,1,1,NULL,NULL,NULL,NULL,NULL,1,2)",params![source.tenant_id.as_slice(),source.tenant_id.as_slice(),source.tenant_id.as_slice()])?;
-    writer.execute("INSERT INTO graph_producer_versions VALUES('call',1,1,NULL,0,0,0,0,NULL),('standalone:metadata',2,2,NULL,0,0,0,0,NULL),('standalone:publication',3,2,NULL,0,0,0,0,NULL)",[])?;
+    writer.execute("INSERT INTO graph_producer_versions(result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,finding_count,state_count,selected_state_ref) VALUES('call',1,1,NULL,0,0,0,0,NULL),('standalone:metadata',2,2,NULL,0,0,0,0,NULL),('standalone:publication',3,2,NULL,0,0,0,0,NULL)",[])?;
     araphor_graph::StateRows::finish(&writer, 1, 1, &GraphPackageStateV1::Waiting)?;
     writer.execute(
         "INSERT INTO graph_versions VALUES('standalone',2,'standalone:metadata',false,false)",

@@ -98,7 +98,10 @@ async fn body_port_metadata() -> TestResult {
     )?;
     session.register("local_rows", schema, &[rows])?;
     let prepared = session
-        .prepare_definition(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+        .prepare_definition(
+            &Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#),
+            None,
+        )
         .await?;
     let calls = Fixture::calls(&prepared.plan)?;
     assert_eq!(calls.len(), 2);
@@ -112,9 +115,9 @@ async fn body_port_metadata() -> TestResult {
         .ok_or("outer body")?;
     let (inner_id, outer_id) = (inner.id(), outer.id());
     assert_ne!(inner_id, outer_id);
-    assert!(PackageCall::any(&outer.children[1], &mut |call| Ok(call
-        .id()
-        == inner_id))?);
+    assert!(PackageCall::any(&outer.children[1], &mut |_, call| Ok(
+        call.id() == inner_id
+    ))?);
     drop(calls);
     let meta = fixture.engine.store().meta()?;
     let initial = session
@@ -192,9 +195,9 @@ async fn body_elided_metadata() -> TestResult {
             .find(|call| call.export() == "count")
             .ok_or("outer body")?;
         let (inner_id, outer_id) = (inner.id(), outer.id());
-        assert!(PackageCall::any(&outer.children[1], &mut |call| Ok(call
-            .id()
-            == inner_id))?);
+        assert!(PackageCall::any(&outer.children[1], &mut |_, call| Ok(
+            call.id() == inner_id
+        ))?);
         drop(calls);
         let mut previous = None;
         for cursor in [2, 3] {

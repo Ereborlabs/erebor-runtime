@@ -347,6 +347,11 @@ fn native_header_explicit_findings() -> TestResult {
             finding_count,
             snapshot.graph.branches.len(),
         ),
+        (
+            snapshot.input_manifest.evidence.len(),
+            snapshot.input_positions.len(),
+            snapshot.graph.facts.len(),
+        ),
     )?;
     let header = GraphHeader::decode(&encoded)?;
     assert_eq!(header.finding_count, finding_count);
@@ -364,6 +369,11 @@ fn native_header_explicit_findings() -> TestResult {
                 snapshot.graph.edges.len(),
                 count,
                 snapshot.graph.branches.len(),
+            ),
+            (
+                snapshot.input_manifest.evidence.len(),
+                snapshot.input_positions.len(),
+                snapshot.graph.facts.len(),
             ),
         )?;
         assert_eq!(GraphHeader::decode(&encoded)?.finding_count, count);

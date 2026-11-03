@@ -108,7 +108,10 @@ async fn reused_session_deadline() -> TestResult {
             .engine
             .session(AnalysisSelectionV1::tenant([1; 16]), &control, NOW)?;
     let prepared = session
-        .prepare_definition(&Fixture::sql("SELECT CAST(7 AS BIGINT UNSIGNED) AS value"))
+        .prepare_definition(
+            &Fixture::sql("SELECT CAST(7 AS BIGINT UNSIGNED) AS value"),
+            None,
+        )
         .await?;
     let output = session
         .execute_definition(&prepared, invocation("before-deadline"))

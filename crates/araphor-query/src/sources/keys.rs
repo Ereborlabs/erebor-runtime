@@ -1,27 +1,27 @@
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use datafusion::arrow::array::{RecordBatch, UInt64Array};
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::row::{RowConverter, Rows};
+use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, PlanProperties, RecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    InputDistributionRequirements, PlanProperties, RecordBatchStream, ReplaceChildrenOptions,
     SendableRecordBatchStream,
 };
 use futures_util::{Stream, StreamExt};
 use tokio::sync::Notify;
 
-use super::{SourceData, SourceImage, SourceKey, SourceSnapshot};
+use super::{PortExec, SourceData, SourceImage, SourceKey, SourceSnapshot};
 
 mod planner;
 pub(crate) use planner::{SourceJoin, SourceLookup};
@@ -40,7 +40,7 @@ pub(super) struct KeySlot {
 
 #[derive(Debug)]
 struct KeyState {
-    hashes: Arc<BTreeSet<u64>>,
+    keys: Arc<BTreeSet<Vec<u8>>>,
     finished: bool,
     failed: bool,
     memory: MemoryReservation,
@@ -50,13 +50,17 @@ struct KeyState {
 pub(crate) struct KeyBuildExec {
     input: Arc<dyn ExecutionPlan>,
     slot: usize,
-    hash: Arc<HashExpr>,
+    expressions: Arc<[Arc<dyn PhysicalExpr>]>,
+    converter: Arc<RowConverter>,
+    data_types: Arc<[DataType]>,
 }
 
 struct KeyStream {
     input: SendableRecordBatchStream,
     slot: Arc<KeySlot>,
-    hash: Arc<HashExpr>,
+    expressions: Arc<[Arc<dyn PhysicalExpr>]>,
+    converter: Arc<RowConverter>,
+    data_types: Arc<[DataType]>,
     ended: bool,
     control: araphor_data::AnalysisReadControl,
     scratch: MemoryReservation,
@@ -72,20 +76,26 @@ impl SourceSnapshot {
             .source_view()?
             .ok_or_else(|| DataFusionError::Execution("the before source view is absent".into()))?;
         let cached = |node: &Arc<dyn ExecutionPlan>| match (
-            node.as_any()
-                .downcast_ref::<crate::definition::physical::PackageExec>(),
+            node.downcast_ref::<crate::definition::physical::PackageExec>(),
             calls,
         ) {
             (Some(package), Some(calls)) => calls.cached(package.logical_call()),
             _ => Ok(false),
         };
         SourceLookup::keys(&plan, calls)?;
-        let mut seeds = BTreeMap::new();
-        plan.apply(|node| {
+        let mut converters = BTreeMap::new();
+        PortExec::apply(&plan, &mut |node| {
             if cached(node)? {
                 return Ok(TreeNodeRecursion::Jump);
             }
             if let Some(source) = SourceData::from_plan(node.as_ref()) {
+                if source
+                    .origin
+                    .durable()
+                    .is_some_and(araphor_data::AnalysisTableRead::source_header)
+                {
+                    return Ok(TreeNodeRecursion::Continue);
+                }
                 if source.origin.durable().is_some() && source.image != Some(SourceImage::Before) {
                     return Err(DataFusionError::Execution(
                         "the before source image differs".into(),
@@ -93,10 +103,18 @@ impl SourceSnapshot {
                 }
                 if let Some(read) = &source.key {
                     if let Some(admitted) = view.before_key(&read.key) {
-                        let hash = admitted.hash.seeds();
-                        if seeds
-                            .insert(read.slot, hash)
-                            .is_some_and(|saved| saved != hash)
+                        if converters
+                            .insert(
+                                read.slot,
+                                (
+                                    Arc::clone(&admitted.converter),
+                                    Arc::clone(&admitted.data_types),
+                                ),
+                            )
+                            .is_some_and(|(converter, data_types)| {
+                                !Arc::ptr_eq(&converter, &admitted.converter)
+                                    || !Arc::ptr_eq(&data_types, &admitted.data_types)
+                            })
                         {
                             return Err(DataFusionError::Execution(
                                 "the before source key bindings differ".into(),
@@ -107,42 +125,45 @@ impl SourceSnapshot {
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
-        let plan = plan
-            .transform_down(|node| {
-                if cached(&node)? {
-                    return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+        let plan = PortExec::transform_down(plan, &mut |node| {
+            if cached(&node)? {
+                return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+            }
+            if let Some(source) = SourceData::from_plan(node.as_ref()) {
+                if source
+                    .origin
+                    .durable()
+                    .is_some_and(araphor_data::AnalysisTableRead::source_header)
+                {
+                    return Ok(Transformed::no(node));
                 }
-                if let Some(source) = SourceData::from_plan(node.as_ref()) {
-                    if source.origin.durable().is_some() {
-                        let mut source = source.clone();
-                        source.image = Some(SourceImage::Before);
-                        source.key = source.key.as_ref().and_then(|read| {
-                            view.before_key(&read.key).map(|admitted| KeyRead {
-                                slot: read.slot,
-                                key: admitted.clone(),
-                            })
-                        });
-                        return Ok(Transformed::yes(DataSourceExec::from_data_source(source)));
-                    }
+                if source.origin.durable().is_some() {
+                    let mut source = source.clone();
+                    source.image = Some(SourceImage::Before);
+                    source.key = source.key.as_ref().and_then(|read| {
+                        view.before_key(&read.key).map(|admitted| KeyRead {
+                            slot: read.slot,
+                            key: admitted.clone(),
+                        })
+                    });
+                    return Ok(Transformed::yes(DataSourceExec::from_data_source(source)));
                 }
-                if let Some(build) = node.as_any().downcast_ref::<KeyBuildExec>() {
-                    let Some(&(a, b, c, d)) = seeds.get(&build.slot) else {
-                        return Ok(Transformed::yes(Arc::clone(&build.input)));
-                    };
-                    let hash = Arc::new(HashExpr::new(
-                        build.hash.on_columns().to_vec(),
-                        SeededRandomState::with_seeds(a, b, c, d),
-                        build.hash.description().to_owned(),
-                    ));
-                    return Ok(Transformed::yes(Arc::new(KeyBuildExec::new(
-                        Arc::clone(&build.input),
-                        build.slot,
-                        hash,
-                    )?)));
-                }
-                Ok(Transformed::no(node))
-            })?
-            .data;
+            }
+            if let Some(build) = node.downcast_ref::<KeyBuildExec>() {
+                let Some((converter, data_types)) = converters.get(&build.slot) else {
+                    return Ok(Transformed::yes(Arc::clone(&build.input)));
+                };
+                return Ok(Transformed::yes(Arc::new(KeyBuildExec::new(
+                    Arc::clone(&build.input),
+                    build.slot,
+                    Arc::clone(&build.expressions),
+                    Arc::clone(converter),
+                    Arc::clone(data_types),
+                )?)));
+            }
+            Ok(Transformed::no(node))
+        })?
+        .data;
         SourceLookup::keys(&plan, calls)?;
         Ok(plan)
     }
@@ -157,7 +178,7 @@ impl SourceSnapshot {
         }
         let slot = Arc::new(KeySlot {
             state: Mutex::new(KeyState {
-                hashes: Arc::default(),
+                keys: Arc::default(),
                 finished: false,
                 failed: false,
                 memory: self.memory.reserve_input(0)?,
@@ -170,7 +191,7 @@ impl SourceSnapshot {
 }
 
 impl KeySlot {
-    fn add(&self, values: &UInt64Array) -> Result<()> {
+    fn add(&self, values: &Rows) -> Result<()> {
         let mut state = self
             .state
             .lock()
@@ -180,10 +201,18 @@ impl KeySlot {
                 "the native key build has ended".into(),
             ));
         }
-        for value in values.values() {
-            if !state.hashes.contains(value) {
-                state.memory.try_grow(size_of::<u64>())?;
-                Arc::make_mut(&mut state.hashes).insert(*value);
+        for value in values {
+            if !state.keys.contains(value.data()) {
+                state.memory.try_grow(
+                    size_of::<Vec<u8>>()
+                        .checked_add(value.data().len())
+                        .ok_or_else(|| {
+                            DataFusionError::ResourcesExhausted(
+                                "the native key allocation overflowed".into(),
+                            )
+                        })?,
+                )?;
+                Arc::make_mut(&mut state.keys).insert(value.data().to_vec());
             }
         }
         Ok(())
@@ -197,7 +226,7 @@ impl KeySlot {
         self.ready.notify_waiters();
     }
 
-    pub(super) async fn hashes(&self) -> araphor_data::Result<Arc<BTreeSet<u64>>> {
+    pub(super) async fn values(&self) -> araphor_data::Result<Arc<BTreeSet<Vec<u8>>>> {
         loop {
             let ready = self.ready.notified();
             tokio::pin!(ready);
@@ -211,7 +240,7 @@ impl KeySlot {
                         .error("native source key build"));
                 }
                 if state.finished {
-                    return Ok(Arc::clone(&state.hashes));
+                    return Ok(Arc::clone(&state.keys));
                 }
             }
             ready.await;
@@ -223,14 +252,22 @@ impl KeyBuildExec {
     pub(crate) fn new(
         input: Arc<dyn ExecutionPlan>,
         slot: usize,
-        hash: Arc<HashExpr>,
+        expressions: Arc<[Arc<dyn PhysicalExpr>]>,
+        converter: Arc<RowConverter>,
+        data_types: Arc<[DataType]>,
     ) -> Result<Self> {
         if input.properties().output_partitioning().partition_count() != 1 {
             return Err(DataFusionError::Plan(
                 "a native source key build requires one partition".into(),
             ));
         }
-        Ok(Self { input, slot, hash })
+        Ok(Self {
+            input,
+            slot,
+            expressions,
+            converter,
+            data_types,
+        })
     }
 }
 
@@ -238,8 +275,8 @@ impl DisplayAs for KeyBuildExec {
     fn fmt_as(&self, _format: DisplayFormatType, formatter: &mut fmt::Formatter) -> fmt::Result {
         write!(
             formatter,
-            "SourceKeys: slot={}, hash={}",
-            self.slot, self.hash
+            "SourceKeys: slot={}, columns={:?}",
+            self.slot, self.expressions
         )
     }
 }
@@ -248,18 +285,31 @@ impl ExecutionPlan for KeyBuildExec {
     fn name(&self) -> &'static str {
         "SourceKeys"
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn properties(&self) -> &Arc<PlanProperties> {
         self.input.properties()
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion::physical_plan::apply_expression_roots(self.expressions.iter(), f)
+    }
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let [input] = children.as_slice() else {
             return Err(DataFusionError::Internal(
@@ -269,11 +319,13 @@ impl ExecutionPlan for KeyBuildExec {
         Ok(Arc::new(Self::new(
             Arc::clone(input),
             self.slot,
-            Arc::clone(&self.hash),
+            Arc::clone(&self.expressions),
+            Arc::clone(&self.converter),
+            Arc::clone(&self.data_types),
         )?))
     }
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        InputDistributionRequirements::new(vec![Distribution::SinglePartition])
     }
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
@@ -297,7 +349,9 @@ impl ExecutionPlan for KeyBuildExec {
         Ok(Box::pin(KeyStream {
             input: self.input.execute(partition, context)?,
             slot: snapshot.key_slot(self.slot)?,
-            hash: Arc::clone(&self.hash),
+            expressions: Arc::clone(&self.expressions),
+            converter: Arc::clone(&self.converter),
+            data_types: Arc::clone(&self.data_types),
             ended: false,
             control: snapshot
                 .control
@@ -319,23 +373,16 @@ impl Stream for KeyStream {
         }
         match state.input.poll_next_unpin(context) {
             Poll::Ready(Some(Ok(batch))) => {
-                let result = state
-                    .scratch
-                    .try_resize(batch.num_rows().saturating_mul(size_of::<u64>()))
-                    .and_then(|()| state.hash.evaluate(&batch))
-                    .and_then(|value| value.into_array(batch.num_rows()))
-                    .and_then(|values| {
-                        let hashes =
-                            values
-                                .as_any()
-                                .downcast_ref::<UInt64Array>()
-                                .ok_or_else(|| {
-                                    DataFusionError::Internal(
-                                        "the native build hash type differs".into(),
-                                    )
-                                })?;
-                        state.slot.add(hashes)
-                    });
+                let result = SourceKey::encode(
+                    &state.expressions,
+                    &state.converter,
+                    &state.data_types,
+                    &batch,
+                )
+                .and_then(|values| {
+                    state.scratch.try_resize(values.size())?;
+                    state.slot.add(&values)
+                });
                 state.scratch.shrink(state.scratch.size());
                 match result {
                     Ok(()) => Poll::Ready(Some(Ok(batch))),

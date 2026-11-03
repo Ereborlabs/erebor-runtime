@@ -228,6 +228,15 @@ impl Coverage {
 }
 
 impl Input {
+    pub fn allocated_bytes(&self) -> usize {
+        self.data
+            .allocated_bytes()
+            .saturating_add(crate::memory::Memory::input_metadata(
+                &self.revision,
+                &self.coverage,
+            ))
+    }
+
     pub fn metadata_bytes(&self) -> usize {
         self.data
             .metadata_bytes()

@@ -144,7 +144,7 @@ impl AnalysisStore {
             return Err(Code::Invalid.error("managed profile capture"));
         }
         let mut profile_receipt = None;
-        let receipt = self.commit_managed_projection(
+        let (receipt, _) = self.commit_managed_projection(
             managed,
             |transaction, revision, publication, _, _| {
                 let declaration = &managed.attempt.instance().spec.manifest.calls[call];
@@ -168,7 +168,7 @@ impl AnalysisStore {
                     return Err(Code::Invalid.error("managed profile schema"));
                 }
                 let Some(packet) = packet else {
-                    return Ok((Vec::new(), None));
+                    return Ok((Vec::new(), None, Default::default()));
                 };
                 let id = packet.request.result_id.clone();
                 let result = publication
@@ -186,6 +186,7 @@ impl AnalysisStore {
                                     Vec::new()
                                 },
                                 None,
+                                Default::default(),
                             ))
                         }
                     };
@@ -196,7 +197,7 @@ impl AnalysisStore {
                     std::slice::from_ref(origin.as_ref().unwrap_or(result)),
                 )?;
                 profile_receipt = Some(write.receipt);
-                Ok((write.relations, None))
+                Ok((write.relations, None, Default::default()))
             },
             check,
         )?;

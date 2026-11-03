@@ -4,7 +4,7 @@ use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisTableReques
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::LogicalPlan;
 
-use super::Engine;
+use super::{Engine, LocalTables};
 use crate::definition::PreparedDefinition;
 use crate::follow::{Clock, Cursor, ManagedPublication, Subscription};
 use crate::sources::SourceSnapshot;
@@ -16,7 +16,17 @@ impl Engine {
         sql: &str,
         parameters: Vec<ScalarValue>,
     ) -> Result<(LogicalPlan, AnalysisTableRequests)> {
-        let state = self.catalog(SourceSnapshot::providers())?;
+        self.prepare_tables(sql, parameters, Arc::default()).await
+    }
+
+    async fn prepare_tables(
+        &self,
+        sql: &str,
+        parameters: Vec<ScalarValue>,
+        tables: Arc<LocalTables>,
+    ) -> Result<(LogicalPlan, AnalysisTableRequests)> {
+        let mut state = self.catalog(SourceSnapshot::bind_tables(&tables)?)?;
+        state.config_mut().set_extension(tables);
         let statement = self.limits.parser.parse(sql)?;
         let planner = Planner::new(&state);
         let (plan, origins) = planner.build_with_sources(statement, parameters).await?;
@@ -54,6 +64,20 @@ impl Engine {
 }
 
 impl super::Session {
+    pub async fn prepare(
+        &self,
+        sql: &str,
+        parameters: Vec<ScalarValue>,
+    ) -> Result<(LogicalPlan, AnalysisTableRequests)> {
+        self.control().check()?;
+        let prepared = self
+            .engine()
+            .prepare_tables(sql, parameters, Arc::clone(&self.tables))
+            .await?;
+        self.control().check()?;
+        Ok(prepared)
+    }
+
     pub async fn run_managed(
         mut self,
         definition: PreparedDefinition,

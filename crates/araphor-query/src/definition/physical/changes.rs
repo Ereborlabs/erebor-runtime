@@ -58,24 +58,28 @@ impl PackageExec {
             bind(slot, &input)?;
             inputs[slot] = Some(input);
         }
-        let compatible = prior.is_some_and(|prior| {
-            view.as_ref()
-                .is_some_and(|view| view.version() == prior.revision)
-                && prior
+        let retained = match (prior, view.as_ref()) {
+            (Some(prior), Some(view)) => view.has_call(self.call.id, prior)?,
+            _ => false,
+        };
+        let compatible = retained
+            && prior.is_some_and(|prior| {
+                prior
                     .parameters
                     .as_ref()
                     .map(|data| data.batches.as_slice())
                     == evaluation.parameters.as_ref().map(std::slice::from_ref)
-                && inputs.iter().enumerate().all(|(slot, input)| {
-                    input.as_ref().is_none_or(|input| {
-                        prior.context.inputs.get(slot) == Some(&input.revision)
-                            && prior.context.input_coverage.get(slot) == Some(&input.coverage)
+                    && inputs.iter().enumerate().all(|(slot, input)| {
+                        input.as_ref().is_none_or(|input| {
+                            prior.context.inputs.get(slot) == Some(&input.revision)
+                                && prior.context.input_coverage.get(slot) == Some(&input.coverage)
+                        })
                     })
-                })
-        }) && source
-            .snapshot()?
-            .managed()
-            .is_none_or(|managed| !managed.rebuild())
+            })
+            && source
+                .snapshot()?
+                .managed()
+                .is_none_or(|managed| !managed.rebuild())
             && (model.checkpoint.is_none() || evaluation.checkpoint.is_some());
         let reset = !compatible;
         if reset {

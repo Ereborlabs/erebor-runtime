@@ -133,7 +133,10 @@ impl Fixture {
             )
             .optional()?;
         writer.execute(
-            "INSERT INTO graph_producer_versions VALUES (?,1,?,?,0,0,0,0,NULL)",
+            "INSERT INTO graph_producer_versions
+                (result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,
+                    finding_count,state_count,selected_state_ref)
+             VALUES (?,1,?,?,0,0,0,0,NULL)",
             params![format!("version-{revision}"), revision, base],
         )?;
         Ok(())
@@ -451,13 +454,18 @@ fn publication_members_require_empty_unit() -> TestResult {
         INSERT INTO graph_producer_scopes VALUES
             (2,'tenant'::BLOB,10,1,NULL,NULL,NULL,NULL,NULL,1,1),
             (3,'tenant'::BLOB,10,2,NULL,NULL,NULL,NULL,NULL,1,1);
-        INSERT INTO graph_producer_versions VALUES
+        INSERT INTO graph_producer_versions
+            (result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,
+                finding_count,state_count,selected_state_ref) VALUES
             ('publication',2,1,NULL,0,0,0,0,NULL), ('metadata',3,1,NULL,0,0,0,0,NULL)",
     )?;
     for (scope, kinds) in [(2, vec![2, 3, 4, 6]), (3, vec![0, 1, 7])] {
-        assert!(
-            Contributions::apply(&writer, scope, 1, &[Fixture::unit(101, vec![])], false).is_err()
-        );
+        if scope == 2 {
+            assert!(
+                Contributions::apply(&writer, scope, 1, &[Fixture::unit(101, vec![])], false)
+                    .is_err()
+            );
+        }
         let members = kinds
             .into_iter()
             .map(|kind| Member {
@@ -475,7 +483,7 @@ fn publication_members_require_empty_unit() -> TestResult {
             scope,
             1,
             &[Replacement {
-                unit: None,
+                unit: (scope == 3).then_some(101),
                 members,
             }],
             true,
@@ -483,7 +491,7 @@ fn publication_members_require_empty_unit() -> TestResult {
     }
     writer.execute_batch("COMMIT")?;
     let invalid: bool = writer.query_row(
-        "SELECT EXISTS(SELECT 1 FROM graph_producer_members WHERE unit_ref <> 0)",
+        "SELECT EXISTS(SELECT 1 FROM graph_producer_members WHERE scope_id=2 AND unit_ref <> 0)",
         [],
         |row| row.get(0),
     )?;
@@ -495,6 +503,107 @@ fn publication_members_require_empty_unit() -> TestResult {
         |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?]),
     )?;
     assert_eq!(counts, [1, 1, 1, 0]);
+    let counts: [u64; 3] = writer.query_row(
+        "SELECT evidence_count,position_count,fact_count
+            FROM graph_producer_versions WHERE scope_id = 3",
+        [],
+        |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?]),
+    )?;
+    assert_eq!(counts, [1, 1, 1]);
+    let global = |key, value| Replacement {
+        unit: None,
+        members: vec![Member {
+            kind: 10,
+            key: vec![key],
+            value,
+            record: None,
+            fact: None,
+            reason: None,
+            ordinal: 0,
+        }],
+    };
+    for (revision, base) in [(2, "metadata"), (3, "metadata-2")] {
+        writer.execute_batch("BEGIN TRANSACTION")?;
+        writer.execute(
+            "INSERT INTO graph_producer_versions
+             (result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,
+                finding_count,state_count,selected_state_ref) VALUES (?,3,?,?,0,0,0,0,NULL)",
+            params![format!("metadata-{revision}"), revision, base],
+        )?;
+        assert_eq!(
+            Contributions::apply(
+                &writer,
+                3,
+                revision,
+                &[global(revision as u8, revision)],
+                false
+            )?,
+            (1, 1, 0)
+        );
+        writer.execute_batch("COMMIT")?;
+    }
+    let intervals: Vec<(u64, Option<u64>)> = writer
+        .prepare("SELECT valid_from,valid_to FROM graph_producer_members WHERE scope_id=3 ORDER BY member_kind,member_key")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<duckdb::Result<_>>()?;
+    assert_eq!(
+        intervals,
+        vec![(1, None), (1, None), (1, None), (2, None), (3, None)]
+    );
+    writer.execute_batch(
+        "BEGIN TRANSACTION;
+         INSERT INTO graph_producer_versions
+            (result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,
+                finding_count,state_count,selected_state_ref)
+         VALUES ('metadata-4',3,4,'metadata-3',0,0,0,0,NULL)",
+    )?;
+    assert!(Contributions::apply(&writer, 3, 4, &[global(2, 99)], false).is_err());
+    writer.execute_batch("ROLLBACK")?;
+    let active: u64 = writer.query_row(
+        "SELECT count(*) FROM graph_producer_members WHERE scope_id=3 AND valid_to IS NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(active, 5);
+    writer.execute_batch(
+        "BEGIN TRANSACTION;
+         INSERT INTO graph_producer_versions
+            (result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,
+                finding_count,state_count,selected_state_ref)
+         VALUES ('metadata-4',3,4,'metadata-3',0,0,0,0,NULL)",
+    )?;
+    assert_eq!(
+        Contributions::apply(&writer, 3, 4, &[global(4, 4)], true)?,
+        (1, 1, 5)
+    );
+    writer.execute_batch(
+        "COMMIT;
+         BEGIN TRANSACTION;
+         INSERT INTO graph_producer_versions
+            (result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,
+                finding_count,state_count,selected_state_ref)
+         VALUES ('metadata-5',3,5,'metadata-4',0,0,0,0,NULL)",
+    )?;
+    assert_eq!(
+        Contributions::apply(
+            &writer,
+            3,
+            5,
+            &[Replacement {
+                unit: None,
+                members: Vec::new()
+            }],
+            false
+        )?,
+        (1, 0, 1)
+    );
+    writer.execute_batch("COMMIT")?;
+    let closed: u64 = writer.query_row(
+        "SELECT count(*) FROM graph_producer_members WHERE scope_id=3 AND valid_to IS NOT NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(closed, 6);
     Ok(())
 }
 

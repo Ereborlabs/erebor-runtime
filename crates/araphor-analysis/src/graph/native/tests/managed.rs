@@ -87,7 +87,8 @@ async fn graph_conversion_failure_finishes() -> TestResult {
         "conversion".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -213,7 +214,8 @@ async fn graph_conversion_failure_finishes() -> TestResult {
         "independent".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -338,19 +340,23 @@ impl Fixture {
         &self,
         grant: &PackageGrantV1,
         definition: &araphor_discovery_definition::ResolvedDefinition,
-    ) -> araphor_data::Result<()> {
+    ) -> araphor_data::Result<u64> {
+        let mut revision = None;
         self.authority
             .commit_many(&[(grant, PackageActionV1::Install, None)], &mut || {
-                self.query.store().admit_definition(
+                revision = Some(self.query.store().admit_definition(
                     grant.selection.tenant_id,
                     definition,
                     || {
                         grant.remaining()?;
                         self.control.check()
                     },
-                )?;
+                )?);
                 Ok(())
-            })
+            })?;
+        revision.ok_or_else(|| {
+            araphor_data::PackageErrorCodeV1::Incomplete.error("admitted definition revision")
+        })
     }
 }
 
@@ -381,7 +387,8 @@ async fn managed_restores_native_inputs() -> TestResult {
         "native-graph-job".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -707,7 +714,7 @@ async fn managed_expiry_without_head() -> TestResult {
             Arc::new(fixture.control.within(None)?),
         )
         .await?;
-    fixture.admit_definition(&grant, &definition)?;
+    let revision = fixture.admit_definition(&grant, &definition)?;
     let scope = araphor_data::ProcessorScopeV1 {
         processor_id: araphor_data::GRAPH_PROCESSOR.into(),
         method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
@@ -721,6 +728,7 @@ async fn managed_expiry_without_head() -> TestResult {
         grant,
         "native-graph-expiry".into(),
         fixture.source.clone(),
+        revision,
         &fixture.control,
     )
     .await?;
@@ -895,7 +903,7 @@ async fn managed_expiry_without_head() -> TestResult {
 async fn managed_gate_is_native() -> TestResult {
     let fixture = Fixture::target(Target::Sql)?;
     let publication = fixture.prepare("WHERE source_cursor > 3").await?;
-    let schema = Arc::clone(publication.prepared.plan.schema());
+    let schema = Arc::clone(publication.prepared.plan().schema());
     let grant = publication.grant.clone();
     let definition = publication.prepared.resolved().clone();
     fixture.admit_definition(&grant, &definition)?;
@@ -936,7 +944,8 @@ async fn managed_gate_skips_calls() -> TestResult {
             "empty-graph-gate".into(),
             fixture.source.clone(),
             format!("SELECT * FROM events {predicate}"),
-            definition,
+            Fixture::control_sql(&format!("SELECT * FROM events {predicate}")),
+            (definition, None),
             &fixture.control,
         )
         .await?;
@@ -1096,13 +1105,14 @@ async fn managed_expiry_reads_history() -> TestResult {
             Arc::clone(&fixture.control),
         )
         .await?;
-    fixture.admit_definition(&grant, &definition)?;
+    let revision = fixture.admit_definition(&grant, &definition)?;
     let instance = GraphPublication::admit_expiry(
         Arc::clone(&fixture.query),
         fixture.authority.clone(),
         grant,
         "graph-history-expiry".into(),
         fixture.source.clone(),
+        revision,
         &fixture.control,
     )
     .await?;

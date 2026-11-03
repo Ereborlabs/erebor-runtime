@@ -353,6 +353,14 @@ impl SourceSnapshot {
         self.now
     }
 
+    pub fn memory(&self) -> &Arc<crate::memory::Memory> {
+        &self.memory
+    }
+
+    pub fn extraction_limits(&self) -> araphor_data::AnalysisExtractLimits {
+        self.limits
+    }
+
     pub fn with_table<T>(
         &self,
         name: &str,
@@ -414,6 +422,21 @@ impl SourceSnapshot {
             .as_ref()
             .map(|captured| Arc::clone(&captured.receipt))
             .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))
+    }
+
+    pub fn with_capture<T>(
+        &self,
+        read: impl FnOnce(
+            &araphor_data::AnalysisStore,
+            &araphor_data::ManagedCapture,
+            Option<&araphor_data::ManagedAttempt>,
+        ) -> araphor_data::Result<T>,
+    ) -> Result<T> {
+        let snapshot = self.snapshot()?;
+        let capture = snapshot.managed().ok_or_else(|| {
+            DataFusionError::Execution("the managed source capture is absent".into())
+        })?;
+        read(&self.store, capture, self.reference.get()).map_err(Self::data_error)
     }
 
     pub fn bind_port(

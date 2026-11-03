@@ -3,11 +3,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use araphor_analysis_sdk::arrow_array::{Array as _, BooleanArray};
 use araphor_data::{
     AnalysisReadControl, EvidenceIntakeIdentityV1, ManagedDestination, PackageErrorCodeV1 as Code,
     ProcessorScopeV1, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
 };
-use araphor_query::follow::Update;
+use araphor_query::follow::{Operation, Update};
 use erebor_runtime_error::{ErrorExt as _, StatusCode};
 use futures_util::stream::SelectAll;
 use futures_util::{Stream, StreamExt as _};
@@ -31,12 +32,6 @@ impl Stream for SourceStream {
             .poll_next(context)
             .map(|item| item.map(|update| (self.tenant, update)))
     }
-}
-
-#[derive(serde::Deserialize)]
-struct SourceState {
-    source: EvidenceIntakeIdentityV1,
-    active: bool,
 }
 
 pub(super) type Updates = SelectAll<SourceStream>;
@@ -110,32 +105,40 @@ impl DiscoveryOwner {
         update: &Update,
         control: &AnalysisReadControl,
     ) -> Result<()> {
-        if update.limited || !update.exhausted {
+        if update.operation != Operation::Replace || update.limited || !update.exhausted {
             return Err(Code::Incomplete
                 .error("source subscription replacement")
                 .into());
         }
-        let states = Self::source_states(update)?;
-        let sources = states
-            .iter()
-            .filter(|state| state.active)
-            .map(|state| state.source.clone())
-            .collect::<BTreeSet<_>>();
         let package = self.package(tenant)?;
-        for state in &states {
-            package.selection(Some(&state.source))?;
+        let mut seen = BTreeSet::new();
+        let mut removed = BTreeSet::new();
+        for batch in update.batches.iter().flatten() {
+            let active = Self::active(batch)?;
+            for (row, source) in EvidenceIntakeIdentityV1::from_batch(batch)
+                .context(araphor_data::AnalysisContractSnafu)?
+                .enumerate()
+            {
+                let source = source.context(araphor_data::AnalysisContractSnafu)?;
+                if !package.grant.selection.includes_source(&source) {
+                    return Err(Code::Denied.error("package source selection").into());
+                }
+                if active.value(row) {
+                    if let Some(member) = members.get(&source) {
+                        seen.insert(member);
+                    }
+                } else {
+                    removed.insert(source);
+                }
+            }
         }
-        let removed = members
-            .iter()
-            .filter(|source| source.tenant_id == tenant && !sources.contains(*source))
-            .cloned()
-            .chain(
-                states
-                    .iter()
-                    .filter(|state| !state.active)
-                    .map(|state| state.source.clone()),
-            )
-            .collect::<BTreeSet<_>>();
+        removed.extend(
+            members
+                .iter()
+                .filter(|source| source.tenant_id == tenant && !seen.contains(source))
+                .cloned(),
+        );
+        drop(seen);
         for source in removed {
             match self
                 .host
@@ -157,10 +160,20 @@ impl DiscoveryOwner {
             }
             members.remove(&source);
         }
-        for source in sources {
-            if members.contains(&source) {
-                continue;
+        let mut sources = BTreeSet::new();
+        for batch in update.batches.iter().flatten() {
+            let active = Self::active(batch)?;
+            for (row, source) in EvidenceIntakeIdentityV1::from_batch(batch)
+                .context(araphor_data::AnalysisContractSnafu)?
+                .enumerate()
+            {
+                let source = source.context(araphor_data::AnalysisContractSnafu)?;
+                if active.value(row) && !members.contains(&source) {
+                    sources.insert(source);
+                }
             }
+        }
+        for source in sources {
             let instance = match self
                 .host
                 .restore(tenant, &Self::instance_id(&source), control)
@@ -261,23 +274,30 @@ impl DiscoveryOwner {
         Ok(())
     }
 
-    fn source_states(update: &Update) -> Result<Vec<SourceState>> {
-        update
-            .batches
-            .iter()
-            .flatten()
-            .map(|batch| serde_arrow::from_record_batch(batch).context(crate::error::ArrowSnafu))
-            .collect::<Result<Vec<Vec<_>>>>()
-            .map(|rows| rows.into_iter().flatten().collect())
+    fn active(batch: &araphor_analysis_sdk::RecordBatch) -> Result<&BooleanArray> {
+        batch
+            .column_by_name("active")
+            .and_then(|column| column.as_any().downcast_ref::<BooleanArray>())
+            .filter(|column| column.null_count() == 0)
+            .ok_or_else(|| Code::Invalid.error("source subscription active").into())
     }
 
     #[cfg(test)]
     pub(super) fn identities(update: &Update) -> Result<Vec<EvidenceIntakeIdentityV1>> {
-        Ok(Self::source_states(update)?
-            .into_iter()
-            .filter(|state| state.active)
-            .map(|state| state.source)
-            .collect())
+        let mut values = Vec::new();
+        for batch in update.batches.iter().flatten() {
+            let active = Self::active(batch)?;
+            for (row, source) in EvidenceIntakeIdentityV1::from_batch(batch)
+                .context(araphor_data::AnalysisContractSnafu)?
+                .enumerate()
+            {
+                let source = source.context(araphor_data::AnalysisContractSnafu)?;
+                if active.value(row) {
+                    values.push(source);
+                }
+            }
+        }
+        Ok(values)
     }
 
     pub(super) fn instance_id(source: &EvidenceIntakeIdentityV1) -> String {
@@ -297,10 +317,9 @@ impl DiscoveryOwner {
             let (plan, sources) = package
                 .query
                 .prepare(
-                    "SELECT DISTINCT named_struct('tenant_id',tenant_id,'node_id',node_id,
-                    'node_boot_id',node_boot_id,'label_epoch',label_epoch,
-                    'source_id',source_id,'source_epoch',source_epoch) AS source,
-                    NOT coalesce(retired,false) AS active FROM discovery_state",
+                    "SELECT DISTINCT tenant_id, node_id, node_boot_id, label_epoch,
+                    source_id, source_epoch, NOT coalesce(retired,false) AS active
+                    FROM discovery_state",
                     Vec::new(),
                 )
                 .await?;

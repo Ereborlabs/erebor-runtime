@@ -391,7 +391,7 @@ impl AnalysisStore {
             return Ok(meta.commit_revision);
         }
         let receipt = Self::read_receipt_from(&transaction, &self.root, &scope.identity, &key)?;
-        if receipt.as_ref().is_some_and(|receipt| {
+        if receipt.as_ref().is_some_and(|(receipt, _)| {
             (start_cursor <= receipt.retained_floor
                 && !(class == ProcessorClassV1::Optional && start_cursor == 1))
                 || start_cursor > receipt.contiguous_cursor.saturating_add(1)
@@ -500,8 +500,9 @@ impl AnalysisStore {
             check()?;
             return Ok(None);
         };
-        let receipt = Self::read_receipt_from(&transaction, &self.root, &scope.identity, &key)?
-            .ok_or_else(|| self.state_error("the optional processor source is absent"))?;
+        let (receipt, _) =
+            Self::read_receipt_from(&transaction, &self.root, &scope.identity, &key)?
+                .ok_or_else(|| self.state_error("the optional processor source is absent"))?;
         if last_cursor > receipt.contiguous_cursor {
             return self.reject("the expired optional gap exceeds accepted evidence");
         }
@@ -889,7 +890,7 @@ impl AnalysisStore {
         {
             return AnalysisConflictSnafu.fail();
         }
-        let receipt =
+        let (receipt, _) =
             Self::read_receipt_from(transaction, &self.root, &input.scope.identity, &key)?
                 .ok_or_else(|| self.state_error("the processor source is absent"))?;
         if input.consumed_cursor > receipt.contiguous_cursor

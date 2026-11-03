@@ -1,8 +1,42 @@
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use super::{credential::CredentialIndex, *};
 
 impl Detector {
+    pub fn window_port() -> sdk::Port {
+        sdk::Port::new(
+            "window",
+            sdk::Schema::new(vec![
+                sdk::Field::new("source_key", sdk::DataType::Binary, false),
+                sdk::Field::new("first_cursor", sdk::DataType::UInt64, false),
+                sdk::Field::new("witness_deadline_utc_ns", sdk::DataType::UInt64, false),
+                sdk::Field::new("window_ns", sdk::DataType::UInt64, false),
+            ]),
+        )
+    }
+
+    pub fn window_data(source: &[u8], first: u64, deadline: u64) -> sdk::Result<sdk::Dataset> {
+        if source.is_empty() || first == 0 || deadline == 0 {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Invalid,
+                "graph window configuration",
+            ));
+        }
+        let port = Self::window_port();
+        Ok(sdk::Dataset {
+            name: port.name,
+            batches: vec![sdk::RecordBatch::try_new(
+                Arc::new(port.schema),
+                vec![
+                    Arc::new(sdk::arrow_array::BinaryArray::from_vec(vec![source])),
+                    Arc::new(sdk::arrow_array::UInt64Array::from(vec![first])),
+                    Arc::new(sdk::arrow_array::UInt64Array::from(vec![deadline])),
+                    Arc::new(sdk::arrow_array::UInt64Array::from(vec![GRAPH_WINDOW_NS])),
+                ],
+            )?],
+        })
+    }
+
     pub fn descriptor(self) -> sdk::Package {
         self.declaration().clone()
     }
@@ -58,6 +92,7 @@ impl Detector {
                 Observation::port(),
                 Fact::port(),
                 Unit::affected_port(),
+                Self::window_port(),
             ],
             vec![
                 subjects,
@@ -69,7 +104,7 @@ impl Detector {
         );
         let support = match self {
             Self::Credentials => include_str!("units/credential.sql"),
-            _ => "SELECT record_row AS root_row, record_row AS support_row FROM qualified",
+            _ => "SELECT id AS root_id, id AS support_id FROM qualified",
         };
         model.inputs[0].source = sdk::InputSource::Query(format!(
             include_str!("units/selection.sql"),
@@ -82,9 +117,9 @@ impl Detector {
         );
         model.inputs[3].source = sdk::InputSource::Lookup(include_str!("units/records.sql").into());
         model.inputs[4].source = sdk::InputSource::Lookup(include_str!("units/facts.sql").into());
-        model.inputs[5].source = sdk::InputSource::Query(
-            "SELECT record FROM inserted.units UNION SELECT record FROM removed.units".into(),
-        );
+        model.inputs[5].source = sdk::InputSource::Query("SELECT record FROM graph_dirty".into());
+        model.inputs[6].source =
+            sdk::InputSource::Table(sdk::TableRef::Named("graph_window".into()));
         model.input_mode = sdk::InputMode::Resolved;
         model.change_inputs = Some(sdk::ChangeInputs {
             reset: "reset".into(),

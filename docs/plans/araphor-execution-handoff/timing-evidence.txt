@@ -1,0 +1,157 @@
+
+/tmp/araphor-live-call-points-native-boundaries-20261103
+elapsed_s=284.597287
+exit=101
+2026-11-03T13:22:40.635722Z DEBUG araphor_query::planner::subscription: Native physical planning completed stage="source_plan" role="native_pipeline" clock=Some(0) child="pipeline" action="physical_done" elapsed_us=44984632 elapsed_s=44.984632684 success=true
+2026-11-03T13:22:40.969180Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="configuration" elapsed_s=55.198427188 inclusive=false
+2026-11-03T13:22:41.053797Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="listening" elapsed_s=0.084568317 inclusive=false
+2026-11-03T13:22:41.115617Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="subscriptions" elapsed_s=0.061747808 inclusive=false
+2026-11-03T13:22:41.357626Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="policy" elapsed_s=0.241958267 inclusive=false
+2026-11-03T13:22:41.368983Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="startup" elapsed_s=55.60166219 inclusive=true
+2026-11-03T13:22:58.652683Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="initial_notice" source=33 cursor=1 elapsed_s=17.283643268 inclusive=true success=true
+2026-11-03T13:23:17.173052Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="initial_notice" source=34 cursor=1 elapsed_s=18.495475794 inclusive=true success=true
+2026-11-03T13:23:36.847994Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="initial_notice" source=35 cursor=1 elapsed_s=19.62279491 inclusive=true success=true
+2026-11-03T13:23:57.913662Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="initial_notice" source=36 cursor=1 elapsed_s=20.996587513 inclusive=true success=true
+2026-11-03T13:26:29.931183Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="teardown" component="pipeline" elapsed_s=6.915047671 inclusive=true
+2026-11-03T13:26:29.931462Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="teardown" component="oidc" elapsed_s=0.000210085 inclusive=false success=true
+2026-11-03T13:26:29.931488Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="total" elapsed_s=284.164725671 inclusive=true success=false
+failure count 6
+2026-11-03T13:26:23.290520Z DEBUG araphor_analysis::instance::subscription: Managed subscription execution failed instance_id=araphor-graph:00000000000000000100000000000000020707070707070707070707070707070764df6c85af4147f185abace3c30aeabe0000000000000001000000000000000100066e6f64652d61:evaluate error=Query { source: Data { source: AnalysisReadCancelled { location: Location { file: "crates/araphor-data/src/analysis/read.rs", line: 321, column: 14 } } } }
+2026-11-03T13:26:23.675316Z DEBUG araphor_analysis::instance::subscription: Managed subscription execution failed instance_id=araphor-graph:00000000000000000100000000000000020707070707070707070707070707070764df6c85af4147f185abace3c30aeabe0000000000000001000000000000000100066e6f64652d61:expire error=Query { source: Sql { source: External(Data { source: AnalysisReadCancelled { location: Location { file: "crates/araphor-data/src/analysis/read.rs", line: 321, column: 14 } } }) } }
+2026-11-03T13:26:23.980638Z DEBUG araphor_analysis::instance::subscription: Managed subscription execution failed instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707075f43f46cf98342c1b620e238d3ce2b330000000000000001000000000000000100066e6f64652d61:evaluate error=Query { source: Data { source: AnalysisReadCancelled { location: Location { file: "crates/araphor-data/src/analysis/read.rs", line: 321, column: 14 } } } }
+2026-11-03T13:26:23.983780Z DEBUG araphor_analysis::instance::subscription: Managed subscription execution failed instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707071e930dfac5184e5ca372626f8630a36e0000000000000001000000000000000100066e6f64652d61:expire error=Query { source: Data { source: AnalysisReadCancelled { location: Location { file: "crates/araphor-data/src/analysis/read.rs", line: 321, column: 14 } } } }
+2026-11-03T13:26:23.986650Z DEBUG araphor_analysis::instance::subscription: Managed subscription execution failed instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707075f43f46cf98342c1b620e238d3ce2b330000000000000001000000000000000100066e6f64652d61:expire error=Query { source: Data { source: AnalysisReadCancelled { location: Location { file: "crates/araphor-data/src/analysis/read.rs", line: 321, column: 14 } } } }
+2026-11-03T13:26:24.840379Z DEBUG araphor_analysis::instance::subscription: Managed subscription execution failed instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707071e930dfac5184e5ca372626f8630a36e0000000000000001000000000000000100066e6f64652d61:evaluate error=Query { source: Sql { source: External(Data { source: AnalysisReadCancelled { location: Location { file: "crates/araphor-data/src/analysis/read.rs", line: 321, column: 14 } } }) } }
+commit count 43
+2026-11-03T13:25:57.835040Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:000000000000000001000000000000000207070707070707070707070707070707a3d509120e2e400fadf69c46ac8213550000000000000001000000000000000100066e6f64652d61:expire cut_revision=179 publication_revision=186 coverage_revision=0 graph_revision=0 prior_graph_result_id="" graph_result_id="" staged_support_rows=0 inserted_rows=0 closed_rows=0 pin_rows=8 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0
+2026-11-03T13:26:06.388619Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707075f43f46cf98342c1b620e238d3ce2b330000000000000001000000000000000100066e6f64652d61:expire cut_revision=187 publication_revision=191 coverage_revision=0 graph_revision=0 prior_graph_result_id="" graph_result_id="" staged_support_rows=0 inserted_rows=0 closed_rows=0 pin_rows=8 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0
+2026-11-03T13:26:08.453216Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707071e930dfac5184e5ca372626f8630a36e0000000000000001000000000000000100066e6f64652d61:expire cut_revision=187 publication_revision=193 coverage_revision=0 graph_revision=0 prior_graph_result_id="" graph_result_id="" staged_support_rows=0 inserted_rows=0 closed_rows=0 pin_rows=8 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0
+2026-11-03T13:26:12.481317Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707075f43f46cf98342c1b620e238d3ce2b330000000000000001000000000000000100066e6f64652d61:evaluate cut_revision=150 publication_revision=194 coverage_revision=774 graph_revision=194 prior_graph_result_id=graph:90ff2bf5-01f3-4db8-8c0d-702623f9aecb graph_result_id=graph:7665aa7f-6498-4d3a-a0da-8491af5d2d97 staged_support_rows=24 inserted_rows=0 closed_rows=0 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0 pin_rows=4117
+2026-11-03T13:26:18.062203Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:000000000000000001000000000000000207070707070707070707070707070707a3d509120e2e400fadf69c46ac8213550000000000000001000000000000000100066e6f64652d61:evaluate cut_revision=150 publication_revision=197 coverage_revision=1031 graph_revision=197 prior_graph_result_id=graph:2c138636-c436-4ff0-bc3b-9e4ccf5406d0 graph_result_id=graph:54142ced-b916-4d5c-a174-af442ed37626 staged_support_rows=24 inserted_rows=0 closed_rows=0 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0 pin_rows=4117
+2026-11-03T13:26:21.732522Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:00000000000000000100000000000000020707070707070707070707070707070764df6c85af4147f185abace3c30aeabe0000000000000001000000000000000100066e6f64652d61:evaluate cut_revision=150 publication_revision=198 coverage_revision=1031 graph_revision=198 prior_graph_result_id=graph:a6aadf7f-3cee-4d60-aa7b-af7bac35f6fb graph_result_id=graph:32fa7691-386e-4497-91f7-ee513a77bcb5 staged_support_rows=24 inserted_rows=0 closed_rows=0 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0 pin_rows=4117
+work count 37
+2026-11-03T13:25:59.850170Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:00000000000000000100000000000000020707070707070707070707070707070764df6c85af4147f185abace3c30aeabe0000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=99 rows=0 read_count=1
+2026-11-03T13:26:02.237135Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:00000000000000000100000000000000020707070707070707070707070707070764df6c85af4147f185abace3c30aeabe0000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=99 rows=0 read_count=1
+2026-11-03T13:26:14.037560Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:0000000000000000010000000000000002070707070707070707070707070707075f43f46cf98342c1b620e238d3ce2b330000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=150 rows=136688 read_count=8091
+2026-11-03T13:26:19.311149Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:000000000000000001000000000000000207070707070707070707070707070707a3d509120e2e400fadf69c46ac8213550000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=150 rows=137104 read_count=8474
+2026-11-03T13:26:22.702126Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:00000000000000000100000000000000020707070707070707070707070707070764df6c85af4147f185abace3c30aeabe0000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=150 rows=130240 read_count=7812
+2026-11-03T13:26:24.766254Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:0000000000000000010000000000000002070707070707070707070707070707071e930dfac5184e5ca372626f8630a36e0000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=163 rows=175177 read_count=10543
+package HF-XNODE-001 calls 11 total_ms 13124.868 min_ms 41.088 max_ms 2583.174
+package HF-PROC-001 calls 11 total_ms 5920.658 min_ms 35.943 max_ms 2160.782
+package HF-DW-001 calls 11 total_ms 12375.655 min_ms 31.368 max_ms 2435.197
+managed_commit_timing count 43
+2026-11-03T13:22:45.653632Z cut_revision=22 publication_revision=24 freeze_s=2.305e-6 writer_wait_s=0.001663989 transaction_work_s=0.052589755 commit_s=0.004878755 postcommit_s=1.2851e-5 elapsed_s=0.059147655
+2026-11-03T13:22:54.225745Z cut_revision=21 publication_revision=26 freeze_s=8.381e-6 writer_wait_s=8.1925e-5 transaction_work_s=2.925956279 commit_s=0.045938407 postcommit_s=6.1531e-5 elapsed_s=2.972046523
+2026-11-03T13:22:58.268974Z cut_revision=26 publication_revision=30 freeze_s=7.194e-6 writer_wait_s=0.091885195 transaction_work_s=1.445046708 commit_s=0.008441335 postcommit_s=5.6711e-5 elapsed_s=1.545437143
+2026-11-03T13:25:02.814022Z cut_revision=138 publication_revision=146 freeze_s=1.4317e-5 writer_wait_s=12.360090065 transaction_work_s=1.636473887 commit_s=0.01011755 postcommit_s=7.3893e-5 elapsed_s=14.006769712
+2026-11-03T13:25:01.166779Z cut_revision=107 publication_revision=145 freeze_s=7.8153e-5 writer_wait_s=8.52708873 transaction_work_s=4.083674315 commit_s=0.017354598 postcommit_s=0.000127671 elapsed_s=12.628323467
+2026-11-03T13:26:21.732057Z cut_revision=150 publication_revision=198 freeze_s=0.000673418 writer_wait_s=7.807384251 transaction_work_s=3.5952863859999997 commit_s=0.074365605 postcommit_s=0.000144085 elapsed_s=11.477853745
+2026-11-03T13:24:57.065045Z cut_revision=104 publication_revision=144 freeze_s=6.5862e-5 writer_wait_s=5.147162249 transaction_work_s=3.929144444 commit_s=0.023023689 postcommit_s=0.000109582 elapsed_s=9.099505826
+2026-11-03T13:26:18.061772Z cut_revision=150 publication_revision=197 freeze_s=0.000753668 writer_wait_s=4.935181555 transaction_work_s=3.749899398 commit_s=0.056338214 postcommit_s=0.000137869 elapsed_s=8.742310704
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+graph_conversion count 11
+2026-11-03T13:22:51.253480Z cut_revision=21 calls=3 elapsed_s=0.013355988
+2026-11-03T13:23:09.071384Z cut_revision=40 calls=3 elapsed_s=0.013216514
+2026-11-03T13:23:28.365091Z cut_revision=60 calls=3 elapsed_s=0.0133247
+2026-11-03T13:26:06.773734Z cut_revision=150 calls=3 elapsed_s=0.027488774
+2026-11-03T13:26:09.319217Z cut_revision=150 calls=3 elapsed_s=0.019920114
+2026-11-03T13:26:10.253971Z cut_revision=150 calls=3 elapsed_s=0.015342027
+2026-11-03T13:24:47.965322Z cut_revision=104 calls=3 elapsed_s=0.014673705
+2026-11-03T13:25:10.631407Z cut_revision=114 calls=3 elapsed_s=0.013943296
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+port_timing count 0
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+Notification batch ends count 16
+2026-11-03T13:22:43.027262Z rows=0 routed_items=0 handled_states=0 decode_s=9.569e-6 heads_s=5.308e-6 processing_s=0.000100084 elapsed_s=0.000114961
+2026-11-03T13:22:58.870739Z rows=1 routed_items=1 handled_states=1 decode_s=1.6902e-5 heads_s=0.044305079 processing_s=2.6743555629999998 elapsed_s=2.718677544
+2026-11-03T13:23:01.179435Z rows=0 routed_items=0 handled_states=0 decode_s=1.1454e-5 heads_s=5.657e-6 processing_s=9.2541e-5 elapsed_s=0.000109652
+2026-11-03T13:23:17.414311Z rows=1 routed_items=1 handled_states=1 decode_s=1.5855e-5 heads_s=0.032532554 processing_s=2.5170425720000003 elapsed_s=2.549590981
+2026-11-03T13:23:36.842315Z rows=1 routed_items=1 handled_states=1 decode_s=1.5785e-5 heads_s=0.034867938 processing_s=1.740303138 elapsed_s=1.775186861
+2026-11-03T13:23:57.480011Z rows=1 routed_items=1 handled_states=1 decode_s=1.9975e-5 heads_s=0.059295243 processing_s=1.147547268 elapsed_s=1.206862486
+2026-11-03T13:25:48.544590Z rows=0 routed_items=0 handled_states=0 decode_s=9.219e-6 heads_s=8.032e-6 processing_s=0.00014597 elapsed_s=0.000163221
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+
+/tmp/araphor-live-native-control-linear-20261103
+elapsed_s=3.980711
+exit=101
+2026-11-03T14:03:00.627768Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="teardown" component="oidc" elapsed_s=0.000600158 inclusive=false success=true
+2026-11-03T14:03:00.627849Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="total" elapsed_s=3.9464271650000002 inclusive=true success=false
+failure count 0
+commit count 0
+work count 0
+managed_commit_timing count 0
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+graph_conversion count 0
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+port_timing count 0
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+Notification batch ends count 0
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+
+/tmp/araphor-live-native-control-aggregate-20261103
+elapsed_s=347.853963
+exit=101
+2026-11-03T14:19:34.198673Z DEBUG araphor_query::planner::subscription: Native physical planning completed stage="source_plan" role="native_pipeline" clock=Some(0) child="pipeline" action="physical_done" elapsed_us=37528233 elapsed_s=37.528233184 success=true
+2026-11-03T14:19:34.471090Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="configuration" elapsed_s=47.286763188 inclusive=false
+2026-11-03T14:19:34.557169Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="listening" elapsed_s=0.08602771 inclusive=false
+2026-11-03T14:19:34.619171Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="subscriptions" elapsed_s=0.061942142 inclusive=false
+2026-11-03T14:19:34.848902Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="policy" elapsed_s=0.229682198 inclusive=false
+2026-11-03T14:19:34.862176Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="startup" elapsed_s=47.681282992999996 inclusive=true
+2026-11-03T14:19:50.630409Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="initial_notice" source=33 cursor=1 elapsed_s=15.768149272 inclusive=true success=true
+2026-11-03T14:20:07.427365Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="initial_notice" source=34 cursor=1 elapsed_s=16.780978212 inclusive=true success=true
+2026-11-03T14:20:25.321935Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="initial_notice" source=35 cursor=1 elapsed_s=17.868428373 inclusive=true success=true
+2026-11-03T14:20:45.088210Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="initial_notice" source=36 cursor=1 elapsed_s=19.717617078 inclusive=true success=true
+2026-11-03T14:24:34.858319Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="teardown" component="oidc" elapsed_s=0.000227263 inclusive=false success=true
+2026-11-03T14:24:34.858385Z DEBUG mithril_e2e::discovery::packages::required::incident::incremental: Live subscription test section completed stage="live_test" section="total" elapsed_s=347.67802923 inclusive=true success=false
+failure count 0
+commit count 17
+2026-11-03T14:20:24.448430Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707074b7058dae1b94445a1fb7986f4a25ecc0000000000000001000000000000000100066e6f64652d61:evaluate cut_revision=66 publication_revision=70 coverage_revision=0 graph_revision=0 prior_graph_result_id="" graph_result_id="" staged_support_rows=0 inserted_rows=0 closed_rows=0 pin_rows=2 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0
+2026-11-03T14:20:29.795892Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707077468e619fdd14f5482ede36a37601ef10000000000000001000000000000000100066e6f64652d61:expire cut_revision=82 publication_revision=84 coverage_revision=0 graph_revision=0 prior_graph_result_id="" graph_result_id="" staged_support_rows=0 inserted_rows=0 closed_rows=0 pin_rows=0 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0
+2026-11-03T14:20:38.896350Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707077468e619fdd14f5482ede36a37601ef10000000000000001000000000000000100066e6f64652d61:evaluate cut_revision=80 publication_revision=86 coverage_revision=3 graph_revision=86 prior_graph_result_id= graph_result_id=graph:2a7c5957-ba19-4886-8c5a-e73bd429a1bb staged_support_rows=66 inserted_rows=31 closed_rows=0 metadata_inserted_rows=10 metadata_closed_rows=0 detector_inserted_rows=21 detector_closed_rows=0 pin_rows=21
+2026-11-03T14:20:42.927369Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707077468e619fdd14f5482ede36a37601ef10000000000000001000000000000000100066e6f64652d61:expire cut_revision=86 publication_revision=89 coverage_revision=0 graph_revision=0 prior_graph_result_id="" graph_result_id="" staged_support_rows=0 inserted_rows=0 closed_rows=0 pin_rows=8 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0
+2026-11-03T14:20:43.014634Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:0000000000000000010000000000000002070707070707070707070707070707077468e619fdd14f5482ede36a37601ef10000000000000001000000000000000100066e6f64652d61:evaluate cut_revision=86 publication_revision=90 coverage_revision=0 graph_revision=0 prior_graph_result_id="" graph_result_id="" staged_support_rows=0 inserted_rows=0 closed_rows=0 pin_rows=2 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0
+2026-11-03T14:20:50.476647Z DEBUG araphor_data::analysis::progress::graph: Graph commit completed stage="graph_commit" instance_id=araphor-graph:000000000000000001000000000000000207070707070707070707070707070707819ad7c1da634467b1d154d04eaaf3960000000000000001000000000000000100066e6f64652d61:expire cut_revision=98 publication_revision=101 coverage_revision=0 graph_revision=0 prior_graph_result_id="" graph_result_id="" staged_support_rows=0 inserted_rows=0 closed_rows=0 pin_rows=8 metadata_inserted_rows=0 metadata_closed_rows=0 detector_inserted_rows=0 detector_closed_rows=0
+work count 8
+2026-11-03T14:20:03.122270Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:0000000000000000010000000000000002070707070707070707070707070707077f616ae792194837812320e57e04cbf10000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=41 rows=4908 read_count=5045
+2026-11-03T14:20:06.846231Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:0000000000000000010000000000000002070707070707070707070707070707077f616ae792194837812320e57e04cbf10000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=46 rows=12 read_count=13
+2026-11-03T14:20:20.511689Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:0000000000000000010000000000000002070707070707070707070707070707074b7058dae1b94445a1fb7986f4a25ecc0000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=61 rows=4908 read_count=5045
+2026-11-03T14:20:24.452081Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:0000000000000000010000000000000002070707070707070707070707070707074b7058dae1b94445a1fb7986f4a25ecc0000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=66 rows=12 read_count=13
+2026-11-03T14:20:39.069933Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:0000000000000000010000000000000002070707070707070707070707070707077468e619fdd14f5482ede36a37601ef10000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=80 rows=4908 read_count=5045
+2026-11-03T14:20:43.018627Z DEBUG araphor_query::sources::work: Native source execution completed stage="source_done" instance_id="araphor-graph:0000000000000000010000000000000002070707070707070707070707070707077468e619fdd14f5482ede36a37601ef10000000000000001000000000000000100066e6f64652d61:evaluate" cut_revision=86 rows=12 read_count=13
+package HF-PROC-001 calls 4 total_ms 286.734 min_ms 54.101 max_ms 117.735
+package HF-XNODE-001 calls 4 total_ms 169.508 min_ms 36.457 max_ms 48.706
+package HF-DW-001 calls 4 total_ms 128.359 min_ms 31.238 max_ms 34.413
+managed_commit_timing count 17
+2026-11-03T14:19:38.469799Z cut_revision=22 publication_revision=24 freeze_s=1.885e-6 writer_acquire_s=0.000175934 transaction_work_s=0.050603126 commit_s=0.004175121 postcommit_s=1.32e-5 elapsed_s=0.054969266
+2026-11-03T14:19:46.617767Z cut_revision=21 publication_revision=26 freeze_s=8.032e-6 writer_acquire_s=8.87e-5 transaction_work_s=2.928035403 commit_s=0.038325846 postcommit_s=5.8318e-5 elapsed_s=2.9665162990000002
+2026-11-03T14:19:50.263649Z cut_revision=26 publication_revision=30 freeze_s=1.2851e-5 writer_acquire_s=0.090975639 transaction_work_s=1.435208643 commit_s=0.007866511 postcommit_s=6.2998e-5 elapsed_s=1.534126642
+2026-11-03T14:20:02.974717Z cut_revision=41 publication_revision=46 freeze_s=8.52e-6 writer_acquire_s=9.2961e-5 transaction_work_s=3.041253807 commit_s=0.050476991 postcommit_s=6.3906e-5 elapsed_s=3.091896185
+2026-11-03T14:20:38.896118Z cut_revision=80 publication_revision=86 freeze_s=9.15e-6 writer_acquire_s=8.9608e-5 transaction_work_s=3.055370379 commit_s=0.02455079 postcommit_s=8.5766e-5 elapsed_s=3.080105693
+2026-11-03T14:20:20.341587Z cut_revision=61 publication_revision=66 freeze_s=1.1035e-5 writer_acquire_s=8.7792e-5 transaction_work_s=2.959740856 commit_s=0.02471953 postcommit_s=6.1741e-5 elapsed_s=2.984620954
+2026-11-03T14:20:24.340864Z cut_revision=66 publication_revision=69 freeze_s=1.0407e-5 writer_acquire_s=0.058862851 transaction_work_s=1.521703174 commit_s=0.009076464 postcommit_s=7.7665e-5 elapsed_s=1.589730561
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+graph_conversion count 4
+2026-11-03T14:19:43.651057Z cut_revision=21 calls=3 elapsed_s=0.013063848
+2026-11-03T14:19:59.882609Z cut_revision=41 calls=3 elapsed_s=0.012945115
+2026-11-03T14:20:17.356712Z cut_revision=61 calls=3 elapsed_s=0.013538638
+2026-11-03T14:20:35.815783Z cut_revision=80 calls=3 elapsed_s=0.025814941
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+port_timing count 2669
+2026-11-03T14:19:38.766166Z cut_revision=21 role=graph_capture read_id=27197 image=None driver_s=4.7074e-5 header_s=8.661e-6 callback_s=0.000215115 binding_s=1.9626e-5 elapsed_s=0.000290476
+2026-11-03T14:19:38.772034Z cut_revision=21 role=graph_control read_id=27199 image=None driver_s=4.2535e-5 header_s=0.009711124 callback_s=0.000632424 binding_s=4.4281e-5 elapsed_s=0.010430364
+2026-11-03T14:19:38.790776Z cut_revision=21 role=graph_capture read_id=24696 image=None driver_s=0.000115799 header_s=2.3956e-5 callback_s=0.013043454 binding_s=2.1302e-5 elapsed_s=0.013204511
+2026-11-03T14:20:32.915409Z cut_revision=80 role=facts read_id=7857 image=Some(After) driver_s=0.209831673 header_s=0.462152928 callback_s=0.711963549 binding_s=0.00023984 elapsed_s=1.38418799
+2026-11-03T14:20:14.726821Z cut_revision=61 role=records read_id=24450 image=Some(After) driver_s=0.62329663 header_s=0.071299792 callback_s=0.601321076 binding_s=8.2414e-5 elapsed_s=1.295999912
+2026-11-03T14:20:32.711447Z cut_revision=80 role=facts read_id=13009 image=Some(After) driver_s=0.216016863 header_s=0.346179856 callback_s=0.68594383 binding_s=0.000287961 elapsed_s=1.24842851
+2026-11-03T14:20:33.834701Z cut_revision=80 role=records read_id=10745 image=Some(After) driver_s=0.03514668 header_s=0.814463077 callback_s=0.391638446 binding_s=8.0528e-5 elapsed_s=1.241328731
+2026-11-03T14:19:40.990418Z cut_revision=21 role=records read_id=1049 image=Some(After) driver_s=0.212302356 header_s=0.565195205 callback_s=0.39364335 binding_s=8.2484e-5 elapsed_s=1.171223395
+Aggregate work only; concurrent entries do not sum to elapsed wall time.
+Notification batch ends count 9
+2026-11-03T14:19:36.753904Z rows=0 routed_items=0 handled_states=0 decode_s=8.94e-6 heads_s=6.146e-6 processing_s=0.000102948 elapsed_s=0.000118034
+2026-11-03T14:19:50.879008Z rows=1 routed_items=1 handled_states=1 decode_s=1.8997e-5 heads_s=0.044551335 processing_s=2.420714706 elapsed_s=2.465285038
+2026-11-03T14:19:53.177382Z rows=0 routed_items=0 handled_states=0 decode_s=1.2432e-5 heads_s=5.657e-6 processing_s=9.9526e-5 elapsed_s=0.000117615
+2026-11-03T14:20:07.635071Z rows=1 routed_items=1 handled_states=1 decode_s=1.4737e-5 heads_s=0.031944467 processing_s=2.022690824 elapsed_s=2.054650028
+2026-11-03T14:20:25.231057Z rows=1 routed_items=1 handled_states=1 decode_s=1.6622e-5 heads_s=0.058815638 processing_s=1.524774292 elapsed_s=1.583606552
+2026-11-03T14:20:44.429913Z rows=1 routed_items=1 handled_states=1 decode_s=2.8636e-5 heads_s=0.05961757 processing_s=1.097545523 elapsed_s=1.157191729
+2026-11-03T14:20:49.534849Z rows=0 routed_items=0 handled_states=0 decode_s=1.4527e-5 heads_s=6.635e-6 processing_s=0.000154562 elapsed_s=0.000175724
+Aggregate work only; concurrent entries do not sum to elapsed wall time.

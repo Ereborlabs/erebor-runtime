@@ -103,7 +103,7 @@ impl AnalysisStore {
             return Ok(());
         }
         let floor = Self::read_receipt_from(writer.get()?, &self.root, source, &source.key())?
-            .map_or(0, |receipt| receipt.retained_floor);
+            .map_or(0, |(receipt, _)| receipt.retained_floor);
         self.register_graph_locked(writer.get_mut()?, source, floor, || Ok(()))
     }
 
@@ -124,7 +124,7 @@ impl AnalysisStore {
             return Ok(!retired);
         }
         let floor = Self::read_receipt_from(writer.get()?, &self.root, source, &source.key())?
-            .map_or(0, |receipt| receipt.retained_floor);
+            .map_or(0, |(receipt, _)| receipt.retained_floor);
         self.register_graph_locked(writer.get_mut()?, source, floor, check)?;
         Ok(true)
     }

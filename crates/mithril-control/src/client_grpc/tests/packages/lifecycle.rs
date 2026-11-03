@@ -9,7 +9,7 @@ async fn instance_admission_is_inert() -> TestResult {
     let request = PackageRequestV1::AdmitInstance {
         instance_id: "public-counts".into(),
         definition_name: "public-count".into(),
-        definition_revision: format!("sha256:{}", "1".repeat(64)),
+        definition_revision: u64::MAX.to_string(),
     };
     let store = &fixture.service.data()?.store;
     let before = store.meta()?;
@@ -29,7 +29,10 @@ async fn instance_admission_is_inert() -> TestResult {
             subject: "alice".into(),
             tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
         }])?;
-    let PackageResponseV1::Definition(definition) = fixture
+    let PackageResponseV1::Definition {
+        snapshot: definition,
+        commit_revision: revision,
+    } = fixture
         .package(
             PackageRequestV1::AdmitDefinition {
                 definition: Definition {
@@ -62,7 +65,7 @@ async fn instance_admission_is_inert() -> TestResult {
     let request = PackageRequestV1::AdmitInstance {
         instance_id: "public-counts".into(),
         definition_name: definition.definition.name.clone(),
-        definition_revision: definition.digest()?,
+        definition_revision: revision.to_string(),
     };
     assert_eq!(
         fixture
@@ -78,7 +81,7 @@ async fn instance_admission_is_inert() -> TestResult {
         return Err("admitted instance variant".into());
     };
     assert_eq!(admitted.id, "public-counts");
-    assert_eq!(admitted.definition_revision, definition.digest()?);
+    assert_eq!(admitted.definition_revision, revision.to_string());
     assert!(admitted.generation > 0);
     assert_eq!(admitted.generation, admitted.lifecycle);
     assert!(!admitted.running);
@@ -203,7 +206,10 @@ async fn instance_rpc_controls_lifecycle() -> TestResult {
             .sum::<usize>(),
         1
     );
-    let PackageResponseV1::Definition(definition) = fixture
+    let PackageResponseV1::Definition {
+        snapshot: definition,
+        commit_revision: revision,
+    } = fixture
         .package(
             PackageRequestV1::AdmitDefinition {
                 definition: Definition {
@@ -229,7 +235,7 @@ async fn instance_rpc_controls_lifecycle() -> TestResult {
                 instance_id: saved.spec.id.clone(),
                 expected_lifecycle: saved.lifecycle,
                 definition_name: definition.definition.name.clone(),
-                definition_revision: definition.digest()?,
+                definition_revision: revision.to_string(),
                 rebuild: true,
             },
             true,

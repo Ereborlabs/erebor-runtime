@@ -272,37 +272,31 @@ impl InstanceHost {
         let control = Arc::clone(&read);
         let store = Arc::clone(self.query.store());
         let check = Arc::clone(&self.authority);
-        let retained = prepared.clone();
         let authorized = grant.clone();
-        Engine::blocking(read, (), move || {
-            let definition = retained.resolved();
-            let digest = definition.digest().map_err(araphor_data::Error::from)?;
-            let saved = store.definition(
-                authorized.selection.tenant_id,
-                &definition.definition.name,
-                Some(&digest),
-                &control,
-            )?;
-            if let Some(saved) = saved {
-                if saved != *definition {
-                    return Err(Code::Conflict.error("managed definition pin").into());
-                }
-                return Ok(());
-            }
-            Instance::authorize_actions(
-                check.as_ref(),
-                &authorized,
-                &retained,
-                &[araphor_data::PackageActionV1::Install],
-                || {
-                    store
-                        .admit_definition(authorized.selection.tenant_id, definition, || {
+        let query = Arc::clone(&self.query);
+        let prepared = Engine::blocking(read, (), move || {
+            prepared.check_store(&query)?;
+            let definition = prepared.resolved();
+            let revision = if let Some(revision) = prepared.revision() {
+                revision
+            } else if let Some(revision) =
+                store.definition_revision(authorized.selection.tenant_id, definition, &control)?
+            {
+                revision
+            } else {
+                Instance::authorize_actions(
+                    check.as_ref(),
+                    &authorized,
+                    &prepared,
+                    &[araphor_data::PackageActionV1::Install],
+                    || {
+                        store.admit_definition(authorized.selection.tenant_id, definition, || {
                             control.check()
                         })
-                        .map(|_| ())
-                },
-            )
-            .map_err(Into::into)
+                    },
+                )?
+            };
+            prepared.bind_revision(&query, revision, &control)
         })
         .await?;
         Instance::admit_prepared(
@@ -318,29 +312,23 @@ impl InstanceHost {
 
     pub(crate) async fn admit_graph(
         &self,
-        grant: araphor_data::PackageGrantV1,
         id: String,
         source: araphor_data::EvidenceIntakeIdentityV1,
-        events_sql: String,
-        definition: araphor_discovery_definition::ResolvedDefinition,
+        program: &crate::GraphProgram,
+        revision: u64,
         control: &AnalysisReadControl,
     ) -> Result<Arc<Instance>> {
         let facts = self
             .graph_facts
             .as_ref()
             .ok_or_else(|| Code::Incomplete.error("managed graph facts"))?;
-        crate::GraphPublication::admit(
-            Arc::clone(&self.query),
-            Arc::clone(&self.authority),
-            Arc::clone(facts),
-            grant,
-            id,
-            source,
-            events_sql,
-            definition,
-            control,
-        )
-        .await
+        self.check_query(program.publication().session().engine())?;
+        if !program.publication().uses_facts(facts) {
+            return Err(Code::Conflict.error("managed graph facts owner").into());
+        }
+        program
+            .admit(Arc::clone(&self.authority), id, source, revision, control)
+            .await
     }
 
     pub(crate) async fn admit_graph_expiry(
@@ -348,6 +336,7 @@ impl InstanceHost {
         grant: araphor_data::PackageGrantV1,
         id: String,
         source: araphor_data::EvidenceIntakeIdentityV1,
+        revision: u64,
         control: &AnalysisReadControl,
     ) -> Result<Arc<Instance>> {
         crate::GraphPublication::admit_expiry(
@@ -356,6 +345,7 @@ impl InstanceHost {
             grant,
             id,
             source,
+            revision,
             control,
         )
         .await

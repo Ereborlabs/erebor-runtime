@@ -30,7 +30,10 @@ impl Fixture {
         let grant =
             access.package_grant(AnalysisSelectionV1::tenant([1; 16]), PackageActionV1::Run)?;
         let query = Arc::clone(&self.service.data()?.query);
-        let PackageResponseV1::Definition(definition) = self
+        let PackageResponseV1::Definition {
+            snapshot: definition,
+            ..
+        } = self
             .package(
                 PackageRequestV1::AdmitDefinition {
                     definition: Definition {

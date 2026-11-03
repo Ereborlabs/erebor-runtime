@@ -33,7 +33,7 @@ pub use clock::{Clock, SystemClock};
 pub use cursor::Cursor;
 pub use delivery::{Action, Consumer, Delivery};
 pub use managed::ManagedPublication;
-pub(crate) use window::Window;
+pub(crate) use window::{Window, Windows};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub enum Operation {

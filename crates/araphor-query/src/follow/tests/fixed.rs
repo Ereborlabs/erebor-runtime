@@ -26,6 +26,31 @@ fn native_fixed_bounds() {
         );
         assert_eq!(window.expiry(Some(2_600_000_000)), None);
     }
+    for same in [true, false] {
+        let other = if same {
+            BIN.to_owned()
+        } else {
+            "date_bin(INTERVAL '2 seconds', CURRENT_TIMESTAMP, TIMESTAMP '1970-01-01 00:00:00.500')"
+                .into()
+        };
+        let sql = format!("WITH repeated AS (SELECT source_cursor, received_at FROM events) SELECT source_cursor FROM repeated WHERE received_at >= {BIN} AND received_at < {BIN} + INTERVAL '2 seconds' UNION ALL SELECT source_cursor FROM repeated WHERE received_at >= {other} AND received_at < {other} + INTERVAL '2 seconds'");
+        let (plan, _) = fixture.plan(&sql, Vec::new());
+        let window = Window::from_plan(&plan);
+        if same {
+            assert_eq!(
+                window.unwrap().unwrap().fixed_range(2_750_000_000).unwrap(),
+                Some((2_000_000_000, 4_000_000_000))
+            );
+        } else {
+            assert!(matches!(
+                window,
+                Err(crate::Error::Invalid {
+                    field: "follow clock filter",
+                    ..
+                })
+            ));
+        }
+    }
     for predicate in [
         format!("received_at >= {BIN}"),
         format!("received_at > {BIN} AND received_at < {BIN} + INTERVAL '2 seconds'"),
@@ -390,7 +415,7 @@ async fn fixed_ports_close_independently() -> Result<(), Box<dyn std::error::Err
             )
             .await?;
         let mut id = None;
-        PackageCall::any(&prepared.plan, &mut |call| {
+        PackageCall::any(&prepared.plan, &mut |_, call| {
             if call.export() == "combine" {
                 id = Some(call.id());
             }

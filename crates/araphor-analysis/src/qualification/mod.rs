@@ -155,7 +155,7 @@ impl Qualification {
             }
             let mut calls = BTreeSet::new();
             prepared
-                .plan
+                .plan()
                 .apply_with_subqueries(|plan| {
                     if let LogicalPlan::Extension(extension) = plan {
                         if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {

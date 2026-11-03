@@ -43,6 +43,7 @@ pub(super) struct Capture<'a> {
     received_min: Option<u64>,
     next_change: Option<u64>,
     graph_manifests: std::collections::BTreeSet<String>,
+    graph_findings: BTreeMap<String, std::collections::BTreeSet<String>>,
     pub(super) graph_coverage: std::collections::BTreeSet<(crate::EvidenceIntakeIdentityV1, u64)>,
 }
 
@@ -61,6 +62,7 @@ impl<'a> Capture<'a> {
             received_min: None,
             next_change: None,
             graph_manifests: Default::default(),
+            graph_findings: Default::default(),
             graph_coverage: Default::default(),
         }
     }

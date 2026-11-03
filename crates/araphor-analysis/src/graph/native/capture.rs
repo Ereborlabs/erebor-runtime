@@ -2,486 +2,879 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 use std::sync::{Arc, Weak};
 
+use araphor_analysis_builtins::graph::{Fact, Observation, Unit};
 use araphor_analysis_sdk as sdk;
 use araphor_data::{
-    AnalysisContextKeyV1, AnalysisContextVersionV1, DiscoveryRecordIdV1, DiscoveryRecordV1,
+    analysis::{GraphManifest, PackageResultRefV1},
+    AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1, ContextSensitivityV1,
+    DiscoveryCoverageStateV1, DiscoveryCoverageV1, DiscoveryRecordIdV1, DiscoveryRecordV1,
     EvidenceIntakeIdentityV1, GraphCoverageKeyV1, GraphReplayInputV1, GraphRevisionV1,
-    StorePositionV1,
+    ProcessorScopeV1, StorePositionV1,
 };
-use araphor_query::sources::SourceSnapshot;
+use araphor_query::sources::{SourceImage, SourceSnapshot};
 use datafusion::arrow::array::{
-    Array, BinaryArray, BooleanArray, StringArray, UInt32Array, UInt64Array,
+    Array, BinaryArray, BooleanArray, StringArray, StructArray, UInt64Array,
 };
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::Result;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
-use datafusion::physical_plan::execution_plan::reset_plan_states;
-use datafusion::physical_plan::{execute_stream, ExecutionPlan};
-use futures_util::TryStreamExt as _;
+use futures_util::future::BoxFuture;
+use futures_util::FutureExt as _;
 
-use super::{Capture, GraphRun, Head, Projection};
+use super::{Capture, GraphPublication, GraphRun, Projection};
 use crate::Graph;
 
-type CapturedRecords = (
-    Vec<DiscoveryRecordV1>,
-    Vec<(DiscoveryRecordIdV1, StorePositionV1)>,
-);
-
 impl Projection {
-    pub(super) async fn capture(
-        self: &Arc<Self>,
-        plans: &[Arc<dyn ExecutionPlan>],
-        context: &Arc<TaskContext>,
-    ) -> Result<Arc<Capture>> {
-        let source = context
-            .session_config()
-            .get_extension::<SourceSnapshot>()
-            .ok_or_else(|| Self::invalid("graph captured source"))?;
-        source.check_point(plans, context)?;
-        let run = GraphRun::from_context(context, self)?;
-        let captured = run
-            .captured
-            .get_or_init(|| async {
-                let captured = self
-                    .read(plans, context, Arc::clone(&source))
-                    .await
-                    .map(Arc::new)
-                    .map_err(Arc::new);
-                #[cfg(test)]
-                if let (Ok(value), Some(observer)) = (
-                    &captured,
-                    self.observed
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .as_ref(),
-                ) {
-                    let _sent = observer.send(Arc::clone(value));
-                }
-                captured
-            })
-            .await
-            .clone()
-            .map_err(DataFusionError::Shared)?;
-        if !Weak::ptr_eq(&captured.source, &Arc::downgrade(&source)) {
-            return Err(Self::invalid("graph input belongs to another capture"));
-        }
-        Ok(captured)
-    }
-
-    async fn read(
-        self: &Arc<Self>,
-        plans: &[Arc<dyn ExecutionPlan>],
-        context: &Arc<TaskContext>,
-        source: Arc<SourceSnapshot>,
-    ) -> Result<Capture> {
-        let reset = plans
-            .iter()
-            .map(|plan| reset_plan_states(Arc::clone(plan)))
-            .collect::<Result<Vec<_>>>()?;
-        let plans = reset.as_slice();
-        if plans.len() != 6 {
-            return Err(Self::invalid("graph source plans"));
-        }
-        let control = context
-            .session_config()
-            .get_extension::<araphor_data::AnalysisReadControl>()
-            .ok_or_else(|| Self::invalid("graph execution control"))?;
-        let staging = self.memory.reserve_input(0)?;
-        let memory = self.memory.reserve_input(0)?;
-        let frames = self.memory.reserve_input(0)?;
-        let mut inputs = Vec::with_capacity(6);
-        for plan in plans {
-            let mut stream = execute_stream(Arc::clone(plan), Arc::clone(context))?;
-            let mut batches = Vec::new();
-            while let Some(batch) = stream.try_next().await? {
-                control.check().map_err(Self::external)?;
-                self.memory.retain_input(&batch, &staging)?;
-                staging.try_grow(size_of::<sdk::RecordBatch>())?;
-                batches.push(batch);
-            }
-            inputs.push(batches);
-        }
-        let owner = Arc::clone(self);
-        source
-            .blocking(context, staging, move |source, control| {
-                owner
-                    .project(inputs, source, control, memory, frames)
-                    .map_err(|source| araphor_query::Error::Sql { source })
-            })
-            .await
-    }
-
-    fn project(
-        &self,
-        inputs: Vec<Vec<sdk::RecordBatch>>,
+    pub(super) fn begin(
         source: &Arc<SourceSnapshot>,
-        control: &araphor_data::AnalysisReadControl,
-        memory: MemoryReservation,
-        frames: MemoryReservation,
-    ) -> Result<Capture> {
-        let (records, positions) = source.with_table("events", |_, canonical| {
-            Self::records(&inputs[0], canonical, &frames)
-        })?;
-        let identity = records
-            .first()
-            .ok_or_else(|| Self::invalid("empty graph window"))?
-            .id
-            .stream
-            .clone();
-        if identity.tenant_id != self.tenant || records.iter().any(|row| row.id.stream != identity)
-        {
-            return Err(Self::invalid("one exact graph source"));
+        context: &TaskContext,
+        identity: &EvidenceIntakeIdentityV1,
+        first: u64,
+        last: u64,
+        deadline: u64,
+        base: Option<&PackageResultRefV1>,
+        summary: Option<&(GraphManifest, Option<u64>)>,
+        progress: Option<(u64, u64, u64, u64)>,
+        memory: &MemoryReservation,
+    ) -> Result<()> {
+        let run = context
+            .session_config()
+            .get_extension::<GraphRun>()
+            .ok_or_else(|| Self::invalid("graph execution context"))?;
+        let owner = run
+            .projection
+            .upgrade()
+            .ok_or_else(|| Self::invalid("graph execution projection"))?;
+        if owner.tenant != identity.tenant_id {
+            return Err(Self::invalid("graph capture tenant"));
         }
-        let (consumed, floor, accepted) = Self::progress(&inputs[3], &identity)?;
-        let latest = Self::coverage_revision(&inputs[3], &identity)?;
-        let mut heads = Vec::new();
-        let mut manifests = Vec::new();
-        for batch in &inputs[4] {
-            for row in 0..batch.num_rows() {
-                if Self::column::<BinaryArray>(batch, "source_key")?.value(row) != identity.key() {
-                    continue;
-                }
-                let revision: GraphRevisionV1 = Self::value(batch, "graph_revision", row)?;
-                if !revision
-                    .evidence
-                    .iter()
-                    .any(|id| records.binary_search_by(|record| record.id.cmp(id)).is_ok())
-                {
-                    continue;
-                }
-                heads.push(Head {
-                    id: Self::column::<StringArray>(batch, "graph_result_id")?
-                        .value(row)
-                        .into(),
-                    first: Self::column::<UInt64Array>(batch, "first_cursor")?.value(row),
-                    deadline: Self::column::<UInt64Array>(batch, "witness_deadline_utc_ns")?
-                        .value(row),
-                });
-                manifests.push(revision);
+        let mut capture = run
+            .captured
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(current) = capture.as_ref() {
+            if !Weak::ptr_eq(&current.source, &Arc::downgrade(source))
+                || current.metadata.scope.identity != *identity
+                || current.metadata.first_cursor != first
+                || current.metadata.last_cursor != last
+                || current.metadata.witness_deadline_utc_ns != deadline
+                || current.base.as_ref() != base
+                || current.base_count != summary.and_then(|(_, count)| *count)
+                || current.progress != progress
+                || summary.is_some_and(|(summary, _)| {
+                    current.metadata.schema_version != summary.schema_version
+                        || current.metadata.scope != summary.scope
+                        || current.metadata.input_manifest.coverage
+                            != summary.input_manifest.coverage
+                        || current.metadata.missing_ranges != summary.missing_ranges
+                        || current.metadata.context_notice_revision
+                            != summary.context_notice_revision
+                })
+            {
+                return Err(Self::invalid("conflicting Graph capture header"));
             }
+            return Ok(());
         }
-        let deadline = heads
-            .iter()
-            .map(|head| head.deadline)
-            .min()
-            .or_else(|| {
-                source
-                    .time_utc_ns()
-                    .checked_add(araphor_data::GRAPH_WITNESS_TTL_NS)
-            })
-            .ok_or_else(|| Self::invalid("graph witness deadline"))?;
-        Self::check_deadline(deadline).map_err(Self::external)?;
-        let keys = manifests
-            .iter()
-            .flat_map(|manifest| &manifest.context)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let mut facts = Self::frozen_facts(&inputs[1], &keys, &records)?;
-        let (incoming, proofs) = self
-            .facts
-            .facts(&inputs[1], &records)
+        let mut metadata = summary
+            .map(|(metadata, _)| metadata.clone())
+            .unwrap_or_else(|| GraphManifest {
+                schema_version: araphor_data::GRAPH_SCHEMA_VERSION,
+                scope: ProcessorScopeV1 {
+                    processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+                    method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+                    identity: identity.clone(),
+                },
+                first_cursor: first,
+                last_cursor: last,
+                input_manifest: GraphRevisionV1 {
+                    evidence: Vec::new(),
+                    coverage: Vec::new(),
+                    context: Vec::new(),
+                    missing_ranges: Vec::new(),
+                },
+                facts: Vec::new(),
+                packages: Vec::new(),
+                missing_ranges: Vec::new(),
+                input_positions: Vec::new(),
+                previous_result_id: None,
+                context_notice_revision: 0,
+                witness_deadline_utc_ns: deadline,
+            });
+        if metadata.scope.identity != *identity
+            || metadata.first_cursor != first
+            || metadata.last_cursor > last
+            || first == 0
+            || last < first
+        {
+            return Err(Self::invalid("Graph native base window"));
+        }
+        metadata.last_cursor = last;
+        metadata.previous_result_id = base.map(|base| base.result_id.clone());
+        metadata.witness_deadline_utc_ns = deadline;
+        metadata.packages = Vec::new();
+        if !metadata.input_manifest.evidence.is_empty()
+            || !metadata.input_manifest.context.is_empty()
+            || !metadata.facts.is_empty()
+            || !metadata.input_positions.is_empty()
+        {
+            return Err(Self::invalid("Graph header contains unloaded rows"));
+        }
+        if progress.is_some_and(|(_, floor, _, _)| floor > 0) && base.is_none() {
+            metadata
+                .missing_ranges
+                .push((1, progress.map_or(0, |value| value.1)));
+            metadata.missing_ranges.sort();
+            metadata.missing_ranges.dedup();
+        }
+        let mut value = Capture {
+            source: Arc::downgrade(source),
+            metadata,
+            base: base.cloned(),
+            base_count: summary.and_then(|(_, count)| *count),
+            restricted: None,
+            progress,
+            records: BTreeMap::new(),
+            facts: BTreeMap::new(),
+            proofs: BTreeMap::new(),
+            coverage: BTreeMap::new(),
+            coverage_keys: BTreeSet::new(),
+            removed: BTreeSet::new(),
+            _memory: Vec::new(),
+        };
+        value.retain(memory)?;
+        *capture = Some(value);
+        Ok(())
+    }
+
+    pub(super) fn read_bound<'a>(
+        self: &'a Arc<Self>,
+        index: usize,
+        image: Option<SourceImage>,
+        driver: Vec<sdk::RecordBatch>,
+        header: Vec<sdk::RecordBatch>,
+        source: Arc<SourceSnapshot>,
+        context: Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<(sdk::Input, MemoryReservation)>> {
+        async move {
+            if matches!(image, Some(SourceImage::Inserted | SourceImage::Removed)) {
+                return datafusion::common::not_impl_err!("composite Graph delta image");
+            }
+            let memory = source
+                .memory()
+                .prepare_input(source.extraction_limits().input_bytes)?;
+            let owner = Arc::clone(self);
+            let callback = Arc::clone(&context);
+            source
+                .blocking(&context, (), move |source, control| {
+                    (|| -> Result<_> {
+                        let run = GraphRun::from_context(&callback, &owner)?;
+                        let (identity, base, missing) = {
+                            let capture = run
+                                .captured
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            let capture = capture
+                                .as_ref()
+                                .ok_or_else(|| Self::invalid("Graph input header"))?;
+                            if !Weak::ptr_eq(&capture.source, &Arc::downgrade(source)) {
+                                return Err(Self::invalid(
+                                    "Graph input belongs to another capture",
+                                ));
+                            }
+                            (
+                                capture.metadata.scope.identity.clone(),
+                                capture.base.clone(),
+                                capture.metadata.missing_ranges.clone(),
+                            )
+                        };
+                        let (mut input, incoming, mut proofs, removed) =
+                            Self::decode_rows(&driver, &identity)?;
+                        input.missing_ranges = missing;
+                        let keys = input
+                            .records
+                            .iter()
+                            .map(|record| record.id.clone())
+                            .chain(removed.iter().cloned())
+                            .collect::<BTreeSet<_>>();
+                        let mut limits = source.extraction_limits();
+                        Self::read_limit(source, &memory, &mut limits);
+                        let frozen = base
+                            .as_ref()
+                            .map(|base| {
+                                source.with_capture(|store, capture, reference| {
+                                    store.graph_frozen_facts(
+                                        capture, reference, base, &keys, limits, control,
+                                    )
+                                })
+                            })
+                            .transpose()?;
+                        let mut references = BTreeMap::new();
+                        let mut facts = BTreeMap::new();
+                        if let Some((_, frozen, frozen_proofs)) = frozen {
+                            for (value, reference) in frozen {
+                                let fact = araphor_data::GraphFactV1::try_from(&value)
+                                    .map_err(Self::external)?;
+                                if input
+                                    .records
+                                    .binary_search_by(|record| record.id.cmp(&fact.record_id))
+                                    .is_ok()
+                                {
+                                    references.insert(value.key.clone(), reference);
+                                    facts.insert(value.key.clone(), value);
+                                }
+                            }
+                            proofs.extend(frozen_proofs.into_iter().filter(|(record, _)| {
+                                input
+                                    .records
+                                    .binary_search_by(|row| row.id.cmp(record))
+                                    .is_ok()
+                            }));
+                        }
+                        for value in incoming {
+                            if facts.get(&value.key).is_some_and(|old| old != &value) {
+                                return Err(Self::invalid("conflicting Graph fact value"));
+                            }
+                            facts.insert(value.key.clone(), value);
+                        }
+                        proofs.sort_by(|left, right| {
+                            (&left.0, &left.1.key, left.1.commit_revision).cmp(&(
+                                &right.0,
+                                &right.1.key,
+                                right.1.commit_revision,
+                            ))
+                        });
+                        if proofs.windows(2).any(|pair| {
+                            pair[0].0 == pair[1].0
+                                && pair[0].1.key == pair[1].1.key
+                                && pair[0].1 != pair[1].1
+                        }) {
+                            return Err(Self::invalid("conflicting Graph input proof"));
+                        }
+                        proofs.dedup();
+                        input.facts = facts.into_values().collect();
+                        Graph::validate_local(&input).map_err(Self::external)?;
+                        input
+                            .manifest()
+                            .validate(input.source.tenant_id)
+                            .map_err(Self::external)?;
+                        let observations =
+                            Graph::qualify_records(&input).map_err(Self::external)?;
+                        let revision = sdk::Revision {
+                            owner: araphor_data::GRAPH_PROCESSOR.into(),
+                            id: source.with_capture(|_, capture, _| {
+                                Ok(format!(
+                                    "{}:{}:{}:{}:{index}",
+                                    capture.instance().generation,
+                                    capture.revision(),
+                                    capture.time_utc_ns(),
+                                    base.as_ref().map_or(0, |base| base.commit_revision),
+                                ))
+                            })?,
+                            window: observations
+                                .iter()
+                                .map(|row| row.ingested_utc_ns)
+                                .min()
+                                .zip(observations.iter().map(|row| row.ingested_utc_ns).max())
+                                .map(|(start_utc_ns, end_utc_ns)| sdk::SourceWindow {
+                                    source: identity.exact_key(),
+                                    start_utc_ns,
+                                    end_utc_ns,
+                                }),
+                        };
+                        let coverage = Self::input_coverage(&input, &observations);
+                        let data = match index {
+                            0 => Observation::encode(&observations).map_err(Self::external)?,
+                            1 => {
+                                let facts = input
+                                    .facts
+                                    .iter()
+                                    .map(|context| {
+                                        let fact = araphor_data::GraphFactV1::try_from(context)
+                                            .map_err(Self::external)?;
+                                        let record = input
+                                            .records
+                                            .binary_search_by(|row| row.id.cmp(&fact.record_id))
+                                            .ok()
+                                            .and_then(|row| u32::try_from(row).ok())
+                                            .ok_or_else(|| {
+                                                Self::invalid("Graph fact source row")
+                                            })?;
+                                        Ok(Fact {
+                                            record,
+                                            key: context.key.clone(),
+                                            sensitivity: context.sensitivity,
+                                            value: fact.value,
+                                        })
+                                    })
+                                    .collect::<Result<Vec<_>>>()?;
+                                Fact::encode_source(&facts, &observations)
+                                    .map_err(Self::external)?
+                            }
+                            2 => Unit::encode_affected(&keys.iter().cloned().collect::<Vec<_>>())
+                                .map_err(Self::external)?,
+                            _ => return Err(Self::invalid("Graph source port")),
+                        };
+                        let local = input;
+                        let input = sdk::Input {
+                            data,
+                            revision,
+                            coverage,
+                        };
+                        let rows = local.records.len();
+                        let contexts = local.facts.len();
+                        let first = local
+                            .records
+                            .iter()
+                            .map(|row| row.id.durable_cursor)
+                            .min()
+                            .unwrap_or(0);
+                        let last = local
+                            .records
+                            .iter()
+                            .map(|row| row.id.durable_cursor)
+                            .max()
+                            .unwrap_or(0);
+                        let affected = if index == 2 { keys.len() } else { 0 };
+                        drop(observations);
+                        run.retain_input(
+                            local,
+                            references,
+                            proofs,
+                            if index == 2 { Some(removed) } else { None },
+                            &memory,
+                        )?;
+                        drop(driver);
+                        drop(header);
+                        for batch in &input.data.batches {
+                            source.memory().retain_input(batch, &memory)?;
+                        }
+                        memory.try_resize(input.metadata_bytes())?;
+                        control.check().map_err(Self::external)?;
+                        Self::report_input(
+                            source,
+                            match index {
+                                0 => "records",
+                                1 => "facts",
+                                _ => "affected",
+                            },
+                            image,
+                            rows,
+                            contexts,
+                            affected,
+                            first,
+                            last,
+                        )?;
+                        Ok((input, memory))
+                    })()
+                    .map_err(|source| araphor_query::Error::Sql { source })
+                })
+                .await
+        }
+        .boxed()
+    }
+
+    pub(super) fn read_status<'a>(
+        image: Option<SourceImage>,
+        driver: Vec<sdk::RecordBatch>,
+        header: Vec<sdk::RecordBatch>,
+        source: Arc<SourceSnapshot>,
+        context: Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<(sdk::Input, MemoryReservation)>> {
+        async move {
+            let memory = source
+                .memory()
+                .prepare_input(source.extraction_limits().input_bytes)?;
+            let callback = Arc::clone(&context);
+            source
+                .blocking(&context, (), move |source, control| {
+                    (|| -> Result<_> {
+                        let run = callback
+                            .session_config()
+                            .get_extension::<GraphRun>()
+                            .ok_or_else(|| Self::invalid("Graph status context"))?;
+                        let owner = run
+                            .projection
+                            .upgrade()
+                            .ok_or_else(|| Self::invalid("Graph status projection"))?;
+                        GraphRun::from_context(&callback, &owner)?;
+                        let mut limits = source.extraction_limits();
+                        Self::read_limit(source, &memory, &mut limits);
+                        let before = image == Some(SourceImage::Before);
+                        if before {
+                            let (base, summary) =
+                                source.with_capture(|store, capture, reference| {
+                                    let base = reference
+                                        .and_then(|reference| reference.receipt())
+                                        .and_then(|receipt| receipt.graph.as_ref())
+                                        .ok_or_else(|| {
+                                            araphor_data::PackageErrorCodeV1::Incomplete
+                                                .error("Graph before owning result")
+                                        })?;
+                                    store
+                                        .graph_frozen_facts(
+                                            capture,
+                                            reference,
+                                            base,
+                                            &BTreeSet::new(),
+                                            limits,
+                                            control,
+                                        )
+                                        .map(|(summary, _, _)| (base.clone(), summary))
+                                })?;
+                            Self::begin(
+                                source,
+                                &callback,
+                                &summary.0.scope.identity,
+                                summary.0.first_cursor,
+                                summary.0.last_cursor,
+                                summary.0.witness_deadline_utc_ns,
+                                Some(&base),
+                                Some(&summary),
+                                None,
+                                &memory,
+                            )?;
+                        }
+                        let (identity, base, base_count, missing) = {
+                            let capture = run
+                                .captured
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            let capture = capture
+                                .as_ref()
+                                .ok_or_else(|| Self::invalid("Graph status header"))?;
+                            (
+                                capture.metadata.scope.identity.clone(),
+                                capture.base.clone(),
+                                capture.base_count,
+                                capture.metadata.missing_ranges.clone(),
+                            )
+                        };
+                        let (count, crossing, rows, contexts, first, last) = if before {
+                            (
+                                base_count
+                                    .ok_or_else(|| Self::invalid("Graph before native count"))?,
+                                false,
+                                0,
+                                0,
+                                0,
+                                0,
+                            )
+                        } else {
+                            let (mut input, incoming, mut proofs, removed) =
+                                Self::decode_rows(&header, &identity)?;
+                            input.missing_ranges = missing;
+                            let keys = input
+                                .records
+                                .iter()
+                                .map(|record| record.id.clone())
+                                .chain(removed.iter().cloned())
+                                .collect::<BTreeSet<_>>();
+                            let frozen = base
+                                .as_ref()
+                                .map(|base| {
+                                    source.with_capture(|store, capture, reference| {
+                                        store.graph_frozen_facts(
+                                            capture, reference, base, &keys, limits, control,
+                                        )
+                                    })
+                                })
+                                .transpose()?;
+                            let mut old = BTreeMap::new();
+                            let mut facts = BTreeMap::new();
+                            let mut references = BTreeMap::new();
+                            if let Some((_, frozen, frozen_proofs)) = frozen {
+                                for (value, reference) in frozen {
+                                    old.insert(value.key.clone(), value.sensitivity);
+                                    let fact = araphor_data::GraphFactV1::try_from(&value)
+                                        .map_err(Self::external)?;
+                                    if input
+                                        .records
+                                        .binary_search_by(|record| record.id.cmp(&fact.record_id))
+                                        .is_ok()
+                                    {
+                                        references.insert(value.key.clone(), reference);
+                                        facts.insert(value.key.clone(), value);
+                                    }
+                                }
+                                proofs.extend(
+                                    frozen_proofs
+                                        .into_iter()
+                                        .filter(|(record, _)| !removed.contains(record)),
+                                );
+                            }
+                            for value in incoming {
+                                if facts.get(&value.key).is_some_and(|old| old != &value) {
+                                    return Err(Self::invalid("conflicting Graph status fact"));
+                                }
+                                facts.insert(value.key.clone(), value);
+                            }
+                            let old_count = u64::try_from(
+                                old.values()
+                                    .filter(|value| **value == ContextSensitivityV1::HostRestricted)
+                                    .count(),
+                            )
+                            .map_err(Self::external)?;
+                            let new_count = u64::try_from(
+                                facts
+                                    .values()
+                                    .filter(|value| {
+                                        value.sensitivity == ContextSensitivityV1::HostRestricted
+                                    })
+                                    .count(),
+                            )
+                            .map_err(Self::external)?;
+                            let resume = header
+                                .iter()
+                                .find(|batch| batch.num_rows() != 0)
+                                .ok_or_else(|| Self::invalid("Graph status control row"))
+                                .and_then(|batch| {
+                                    Ok(Self::column::<BooleanArray>(batch, "resume_window")?
+                                        .value(0))
+                                })?;
+                            let count = match base_count.filter(|_| resume) {
+                                Some(base) => base
+                                    .checked_sub(old_count)
+                                    .and_then(|value| value.checked_add(new_count))
+                                    .ok_or_else(|| Self::invalid("Graph restricted count"))?,
+                                None => new_count,
+                            };
+                            input.facts = facts.into_values().collect();
+                            let input = Graph::from_parts(input, count != 0)
+                                .map_err(Self::external)?
+                                .input
+                                .into_owned();
+                            let rows = input.records.len();
+                            let contexts = input.facts.len();
+                            let first = input
+                                .records
+                                .iter()
+                                .map(|row| row.id.durable_cursor)
+                                .min()
+                                .unwrap_or(0);
+                            let last = input
+                                .records
+                                .iter()
+                                .map(|row| row.id.durable_cursor)
+                                .max()
+                                .unwrap_or(0);
+                            run.retain_input(input, references, proofs, None, &memory)?;
+                            (
+                                count,
+                                base_count.is_some_and(|old| (old == 0) != (count == 0)),
+                                rows,
+                                contexts,
+                                first,
+                                last,
+                            )
+                        };
+                        {
+                            let mut capture = run
+                                .captured
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            let capture = capture
+                                .as_mut()
+                                .ok_or_else(|| Self::invalid("Graph status capture"))?;
+                            if capture.restricted.is_some_and(|old| old != count) {
+                                return Err(Self::invalid("conflicting Graph status"));
+                            }
+                            capture.restricted = Some(count);
+                            capture.retain(&memory)?;
+                        }
+                        let input = sdk::Input {
+                            data: sdk::Dataset {
+                                name: "graph_status".into(),
+                                batches: vec![sdk::RecordBatch::try_new(
+                                    super::node::MetadataPort::Status.schema(),
+                                    vec![
+                                        Arc::new(BooleanArray::from(vec![count != 0])),
+                                        Arc::new(BooleanArray::from(vec![crossing])),
+                                    ],
+                                )
+                                .map_err(Self::external)?],
+                            },
+                            revision: sdk::Revision {
+                                owner: "araphor-analysis.GraphStatus".into(),
+                                id: source.with_capture(|_, capture, _| {
+                                    Ok(format!(
+                                        "{}:{}:{}:{}",
+                                        capture.instance().generation,
+                                        capture.revision(),
+                                        capture.time_utc_ns(),
+                                        base.as_ref().map_or(0, |base| base.commit_revision),
+                                    ))
+                                })?,
+                                window: None,
+                            },
+                            coverage: sdk::Coverage {
+                                state: sdk::CoverageState::Complete,
+                                limits: Vec::new(),
+                            },
+                        };
+                        drop(driver);
+                        drop(header);
+                        for batch in &input.data.batches {
+                            source.memory().retain_input(batch, &memory)?;
+                        }
+                        memory.try_resize(input.metadata_bytes())?;
+                        Self::report_input(
+                            source, "status", image, rows, contexts, 0, first, last,
+                        )?;
+                        Ok((input, memory))
+                    })()
+                    .map_err(|source| araphor_query::Error::Sql { source })
+                })
+                .await
+        }
+        .boxed()
+    }
+
+    fn report_input(
+        source: &SourceSnapshot,
+        role: &'static str,
+        image: Option<SourceImage>,
+        rows: usize,
+        contexts: usize,
+        affected: usize,
+        first: u64,
+        last: u64,
+    ) -> Result<()> {
+        let (instance, cut) = source.with_capture(|_, capture, _| {
+            Ok((capture.instance().spec.id.clone(), capture.revision()))
+        })?;
+        let image = match image {
+            Some(SourceImage::Before) => "before",
+            Some(SourceImage::Inserted) => "inserted",
+            Some(SourceImage::Removed) => "removed",
+            _ => "after",
+        };
+        erebor_telemetry::debug!(
+            stage = "graph_input", instance_id = %instance, cut_revision = cut,
+            role, image, rows = rows as u64, affected_roots = affected as u64,
+            support_rows = rows as u64, first_cursor = first, last_cursor = last,
+            "Native Graph input completed"
+        );
+        erebor_telemetry::debug!(
+            stage = "context", instance_id = %instance, cut_revision = cut,
+            role, image, rows = contexts as u64,
+            "Native Graph contexts qualified"
+        );
+        Ok(())
+    }
+
+    fn read_limit(
+        source: &SourceSnapshot,
+        memory: &MemoryReservation,
+        limits: &mut araphor_data::AnalysisExtractLimits,
+    ) {
+        if memory.size() != 0
+            || source.memory().input_capacity().is_some()
+            || limits.input_bytes != usize::MAX
+        {
+            limits.input_bytes = memory.size();
+        }
+    }
+
+    fn decode_rows(
+        batches: &[sdk::RecordBatch],
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<(
+        GraphReplayInputV1,
+        Vec<AnalysisContextVersionV1>,
+        Vec<(DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+        BTreeSet<DiscoveryRecordIdV1>,
+    )> {
+        let mut records = BTreeMap::new();
+        let mut positions = BTreeMap::new();
+        let mut contexts = BTreeMap::new();
+        let mut proofs = BTreeMap::new();
+        let mut coverage = BTreeMap::new();
+        let mut coverage_keys = BTreeSet::new();
+        let mut removed = BTreeSet::new();
+        let mut payloads =
+            BTreeMap::<DiscoveryRecordIdV1, (&StructArray, &StructArray, usize)>::new();
+        for batch in batches {
+            let record_values = datafusion::arrow::compute::cast(
+                Self::column::<StructArray>(batch, "record")?,
+                Unit::affected_port().schema.field(0).data_type(),
+            )
             .map_err(Self::external)?;
-        facts.extend(incoming);
-        let mut coverage = Vec::new();
-        for batch in &inputs[2] {
-            let values: Vec<araphor_data::DiscoveryCoverageV1> =
-                serde_arrow::from_record_batch(batch).map_err(Self::external)?;
-            coverage.extend(values.into_iter().filter(|range| range.stream == identity));
-        }
-        let intervals = records
-            .iter()
-            .filter_map(|record| {
-                record
-                    .decode()
-                    .ok()
-                    .and_then(|wire| <[u8; 16]>::try_from(wire.coverage_interval_id.as_ref()).ok())
-            })
-            .collect::<BTreeSet<_>>();
-        let requested = manifests
-            .iter()
-            .flat_map(|manifest| &manifest.coverage)
-            .filter(|key| key.source == identity && intervals.contains(&key.interval_id))
-            .map(|key| key.report_revision)
-            .chain([latest])
-            .collect::<BTreeSet<_>>();
-        let mut versions = BTreeMap::new();
-        let mut matching = BTreeSet::new();
-        for batch in &inputs[5] {
-            let ids = Self::column::<BinaryArray>(batch, "interval_id")?;
+            let ids = record_values
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| Self::invalid("Graph record key"))?;
+            let events = Self::column::<StructArray>(batch, "event")?;
+            let resolved = Self::column::<StructArray>(batch, "resolved")?;
             for row in 0..batch.num_rows() {
-                if ids.is_null(row) || Self::identity(batch, row)? != identity {
+                if ids.is_null(row) {
                     continue;
                 }
-                let id: [u8; 16] = ids
+                let key = sdk::RecordBatch::try_new(
+                    Arc::new(Unit::affected_port().schema),
+                    vec![Arc::new(ids.slice(row, 1))],
+                )
+                .map_err(Self::external)?;
+                let record = Unit::decode_affected(&sdk::Dataset {
+                    name: Unit::affected_port().name,
+                    batches: vec![key],
+                })
+                .map_err(Self::external)?
+                .pop()
+                .ok_or_else(|| Self::invalid("Graph record key"))?;
+                if record.stream != *identity {
+                    return Err(Self::invalid("Graph record source"));
+                }
+                if events.is_null(row) {
+                    if !resolved.is_null(row)
+                        || records.contains_key(&record)
+                        || !removed.insert(record)
+                    {
+                        return Err(Self::invalid("Graph removed record"));
+                    }
+                    continue;
+                }
+                if resolved.is_null(row) || removed.contains(&record) {
+                    return Err(Self::invalid("Graph resolved event"));
+                }
+                let event = sdk::RecordBatch::from(events);
+                let (value, position) = GraphPublication::decode_event(&record, &event, row)?;
+                if records.get(&record).is_some_and(|old| old != &value)
+                    || positions.get(&record).is_some_and(|old| old != &position)
+                    || payloads.get(&record).is_some_and(|(event, facts, index)| {
+                        StructArray::slice(event, *index, 1) != StructArray::slice(events, row, 1)
+                            || StructArray::slice(facts, *index, 1)
+                                != StructArray::slice(resolved, row, 1)
+                    })
+                {
+                    return Err(Self::invalid("conflicting Graph driver record"));
+                }
+                records.entry(record.clone()).or_insert(value);
+                positions.entry(record.clone()).or_insert(position);
+                payloads
+                    .entry(record.clone())
+                    .or_insert((events, resolved, row));
+                let values = sdk::RecordBatch::from(resolved).slice(row, 1);
+                let (decoded, incoming, references) = GraphPublication::decode_resolved(&values)?
+                    .pop()
+                    .ok_or_else(|| Self::invalid("Graph resolved row"))?;
+                if decoded != record {
+                    return Err(Self::invalid("Graph resolver record binding"));
+                }
+                for value in incoming {
+                    if contexts.get(&value.key).is_some_and(|old| old != &value) {
+                        return Err(Self::invalid("Graph resolved fact conflict"));
+                    }
+                    contexts.insert(value.key.clone(), value);
+                }
+                for reference in references {
+                    let key = (record.clone(), reference.key.clone());
+                    if proofs.get(&key).is_some_and(|old| old != &reference) {
+                        return Err(Self::invalid("Graph record proof conflict"));
+                    }
+                    proofs.insert(key, reference);
+                }
+                let name = if batch.column_by_name("record_coverage_revision").is_some() {
+                    "record_coverage_revision"
+                } else {
+                    "coverage_revision"
+                };
+                let revision = Self::column::<UInt64Array>(batch, name)?;
+                let interval = Self::column::<UInt64Array>(batch, "interval_revision")?;
+                let ids = Self::column::<BinaryArray>(batch, "coverage_interval_id")?;
+                let state = match Self::column::<StringArray>(batch, "coverage_state")?.value(row) {
+                    "HEALTHY" => DiscoveryCoverageStateV1::Healthy,
+                    "CLOSED" => DiscoveryCoverageStateV1::Closed,
+                    "GAPPED" => DiscoveryCoverageStateV1::Gapped,
+                    "UNKNOWN" => DiscoveryCoverageStateV1::Unknown,
+                    _ => return Err(Self::invalid("Graph coverage state")),
+                };
+                let reasons = Self::column::<StringArray>(batch, "coverage_reasons")?.value(row);
+                let mut reasons = reasons
+                    .split(',')
+                    .filter(|reason| !reason.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                reasons.sort();
+                reasons.dedup();
+                let interval_id = ids
                     .value(row)
                     .try_into()
-                    .map_err(|_| Self::invalid("captured coverage identity"))?;
-                let report = Self::column::<UInt64Array>(batch, "coverage_revision")?.value(row);
-                let cpu = Self::column::<UInt32Array>(batch, "cpu_id")?.value(row);
-                let version = Self::column::<UInt64Array>(batch, "interval_revision")?.value(row);
-                if versions
-                    .insert((report, id, cpu), version)
-                    .is_some_and(|old| old != version)
-                {
-                    return Err(Self::invalid("conflicting captured coverage interval"));
-                }
-                if requested.contains(&report) && intervals.contains(&id) {
-                    matching.insert(report);
-                }
-            }
-        }
-        let fallback = !coverage
-            .iter()
-            .any(|range| matching.contains(&range.coverage_revision));
-        coverage.retain(|range| {
-            if fallback {
-                range.coverage_revision == latest
-            } else {
-                matching.contains(&range.coverage_revision)
-            }
-        });
-        let coverage_keys = if fallback {
-            Vec::new()
-        } else {
-            coverage
-                .iter()
-                .map(|range| {
-                    let mut gaps = range.gap_reasons.clone();
-                    gaps.sort();
-                    gaps.dedup();
-                    GraphCoverageKeyV1 {
+                    .map_err(|_| Self::invalid("Graph coverage interval"))?;
+                let range = DiscoveryCoverageV1 {
+                    stream: identity.clone(),
+                    cpu_id: record.cpu_id,
+                    first_cursor: record.durable_cursor,
+                    last_cursor: record.durable_cursor,
+                    expected_records: 1,
+                    coverage_revision: revision.value(row),
+                    coverage_interval_id: interval_id,
+                    state,
+                    gap_reasons: reasons.clone(),
+                };
+                if !interval.is_null(row) {
+                    coverage_keys.insert(GraphCoverageKeyV1 {
                         source: identity.clone(),
-                        cpu_id: range.cpu_id,
-                        report_revision: range.coverage_revision,
-                        interval_id: range.coverage_interval_id,
-                        interval_revision: versions
-                            .get(&(
-                                range.coverage_revision,
-                                range.coverage_interval_id,
-                                range.cpu_id,
-                            ))
-                            .copied()
-                            .unwrap_or(0),
-                        state: range.state,
-                        gap_reasons: gaps,
-                    }
-                })
-                .collect()
-        };
-        let mut missing = manifests
-            .iter()
-            .flat_map(|manifest| manifest.missing_ranges.iter().copied())
-            .collect::<Vec<_>>();
-        if floor > 0 && heads.is_empty() {
-            missing.push((1, floor));
+                        cpu_id: record.cpu_id,
+                        report_revision: revision.value(row),
+                        interval_id,
+                        interval_revision: interval.value(row),
+                        state,
+                        gap_reasons: reasons,
+                    });
+                }
+                let key = (
+                    record,
+                    revision.value(row),
+                    (!interval.is_null(row)).then(|| interval.value(row)),
+                );
+                if coverage.insert(key, range).is_some() {
+                    return Err(Self::invalid("duplicate Graph coverage qualification"));
+                }
+            }
         }
-        let input = GraphReplayInputV1 {
-            source: identity,
-            records,
-            input_positions: positions.clone(),
-            coverage,
-            coverage_keys,
-            facts,
-            missing_ranges: missing,
-        }
-        .normalized()
-        .map_err(Self::external)?;
-        let mut graph = Graph::try_from(input).map_err(Self::external)?;
-        let (contexts, fact_refs) = Self::bind_facts(&graph.input.facts, &inputs[1])?;
-        memory.try_grow(
-            positions.len() * size_of::<(DiscoveryRecordIdV1, StorePositionV1)>()
-                + heads.len() * size_of::<Head>()
-                + proofs.len() * size_of::<araphor_data::AnalysisContextRefV1>(),
-        )?;
-        let times = graph
-            .observations
-            .iter()
-            .map(|row| row.ingested_utc_ns)
-            .collect::<Vec<_>>();
-        let revision = sdk::Revision {
-            owner: araphor_data::GRAPH_PROCESSOR.into(),
-            id: araphor_data::InputRevision::of_native(&(
-                &graph.input.source,
-                &graph.input.records,
-                &graph.input.input_positions,
-                &graph.input.coverage,
-                &graph.input.coverage_keys,
-                &graph.input.facts,
-                &graph.input.missing_ranges,
-            ))
-            .map_err(Self::external)?,
-            window: Some(sdk::SourceWindow {
-                source: graph.input.source.exact_key(),
-                start_utc_ns: times.iter().copied().min().unwrap_or(0),
-                end_utc_ns: times.iter().copied().max().unwrap_or(0),
-            }),
-        };
-        let state = if !graph.input.missing_ranges.is_empty()
-            || graph
-                .input
+        Ok((
+            GraphReplayInputV1 {
+                source: identity.clone(),
+                records: records.into_values().collect(),
+                input_positions: positions.into_iter().collect(),
+                coverage: coverage.into_values().collect(),
+                coverage_keys: coverage_keys.into_iter().collect(),
+                facts: Vec::new(),
+                missing_ranges: Vec::new(),
+            },
+            contexts.into_values().collect(),
+            proofs
+                .into_iter()
+                .map(|((record, _), proof)| (record, proof))
+                .collect(),
+            removed,
+        ))
+    }
+
+    fn input_coverage(input: &GraphReplayInputV1, observations: &[Observation]) -> sdk::Coverage {
+        let state = if !input.missing_ranges.is_empty()
+            || input
                 .coverage
                 .iter()
-                .any(|range| range.state == araphor_data::DiscoveryCoverageStateV1::Gapped)
+                .any(|range| range.state == DiscoveryCoverageStateV1::Gapped)
         {
             sdk::CoverageState::Gapped
-        } else if graph.observations.iter().any(|row| {
+        } else if observations.iter().any(|row| {
             row.proof_quality.temporal_coverage != araphor_data::TemporalCoverageV1::Complete
         }) {
             sdk::CoverageState::Unknown
         } else {
             sdk::CoverageState::Complete
         };
-        let coverage = sdk::Coverage {
+        sdk::Coverage {
             state,
             limits: if state == sdk::CoverageState::Complete {
                 Vec::new()
             } else {
                 vec!["SOURCE_COVERAGE_INSUFFICIENT".into()]
             },
-        };
-        control.check().map_err(Self::external)?;
-        let inputs = self.inputs(&graph, &revision, &coverage, &memory, &frames)?;
-        graph._memory = Some(frames);
-        #[cfg(test)]
-        self.projections
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(Capture {
-            source: Arc::downgrade(source),
-            graph: std::sync::Mutex::new(Some(graph)),
-            positions,
-            heads,
-            proofs,
-            fact_refs,
-            contexts,
-            consumed,
-            accepted,
-            coverage_revision: latest,
-            now: source.time_utc_ns(),
-            inputs,
-            _memory: memory,
-        })
-    }
-
-    pub(super) fn inputs(
-        &self,
-        graph: &Graph<'_>,
-        revision: &sdk::Revision,
-        coverage: &sdk::Coverage,
-        memory: &MemoryReservation,
-        frames: &MemoryReservation,
-    ) -> Result<Vec<sdk::Input>> {
-        let before = memory.size();
-        let values = graph.projection().map_err(Self::external)?;
-        let mut inputs = Vec::with_capacity(3);
-        let mut metadata = 0usize;
-        for data in values {
-            if data.allocated_bytes() > self.limits.input_bytes {
-                return Err(Self::external(
-                    araphor_data::PackageErrorCodeV1::Limit.error("graph input bytes"),
-                ));
-            }
-            frames.try_grow(data.metadata_bytes())?;
-            let input = sdk::Input {
-                data: data.clone(),
-                revision: revision.clone(),
-                coverage: coverage.clone(),
-            };
-            for batch in &input.data.batches {
-                self.memory.retain_input(batch, memory)?;
-            }
-            metadata = metadata
-                .checked_add(input.metadata_bytes())
-                .and_then(|bytes| bytes.checked_add(size_of::<sdk::Input>()))
-                .ok_or_else(|| Self::invalid("graph port metadata overflow"))?;
-            inputs.push(input);
         }
-        memory.try_resize(
-            before
-                .checked_add(metadata)
-                .ok_or_else(|| Self::invalid("graph input metadata overflow"))?,
-        )?;
-        Ok(inputs)
     }
-
-    pub(super) fn records(
-        selected: &[sdk::RecordBatch],
-        canonical: &[sdk::RecordBatch],
-        memory: &MemoryReservation,
-    ) -> Result<CapturedRecords> {
-        let mut retained = BTreeMap::new();
-        for batch in canonical {
-            for row in 0..batch.num_rows() {
-                retained.insert(
-                    (
-                        Self::column::<UInt64Array>(batch, "commit_revision")?.value(row),
-                        Self::column::<UInt32Array>(batch, "ordinal")?.value(row),
-                    ),
-                    (batch, row),
-                );
-            }
-        }
-        let mut records = BTreeMap::new();
-        let mut positions = BTreeMap::new();
-        for batch in selected {
-            for row in 0..batch.num_rows() {
-                let revision = Self::column::<UInt64Array>(batch, "commit_revision")?.value(row);
-                let ordinal = Self::column::<UInt32Array>(batch, "ordinal")?.value(row);
-                let (actual, index) = retained
-                    .get(&(revision, ordinal))
-                    .ok_or_else(|| Self::invalid("uncaptured graph event position"))?;
-                for name in [
-                    "tenant_id",
-                    "node_id",
-                    "node_boot_id",
-                    "label_epoch",
-                    "source_id",
-                    "source_epoch",
-                    "cpu_id",
-                    "source_cursor",
-                    "framed_record",
-                    "temporal_coverage",
-                    "kernel_sequence",
-                    "coverage_interval_id",
-                ] {
-                    let left = batch
-                        .column_by_name(name)
-                        .ok_or_else(|| Self::invalid("graph event field"))?
-                        .slice(row, 1);
-                    let right = actual
-                        .column_by_name(name)
-                        .ok_or_else(|| Self::invalid("graph event field"))?
-                        .slice(*index, 1);
-                    if left.as_ref() != right.as_ref() {
-                        return Err(Self::invalid("graph event differs from capture"));
-                    }
-                }
-                let id = DiscoveryRecordIdV1 {
-                    stream: Self::identity(batch, row)?,
-                    cpu_id: Self::column::<UInt32Array>(batch, "cpu_id")?.value(row),
-                    durable_cursor: Self::column::<UInt64Array>(batch, "source_cursor")?.value(row),
-                };
-                let bytes = Self::column::<BinaryArray>(batch, "framed_record")?.value(row);
-                memory.try_grow(bytes.len())?;
-                let record =
-                    DiscoveryRecordV1::try_from((id.clone(), bytes)).map_err(Self::external)?;
-                if records.insert(id.clone(), record).is_some() {
-                    return Err(Self::invalid("duplicate graph event"));
-                }
-                positions.insert(
-                    id,
-                    StorePositionV1 {
-                        commit_revision: revision,
-                        ordinal,
-                    },
-                );
-            }
-        }
-        Ok((
-            records.into_values().collect(),
-            positions.into_iter().collect(),
-        ))
-    }
-
     pub(super) fn progress(
         batches: &[sdk::RecordBatch],
         source: &EvidenceIntakeIdentityV1,
@@ -518,7 +911,7 @@ impl Projection {
         found.ok_or_else(|| Self::invalid("graph source registration"))
     }
 
-    fn coverage_revision(
+    pub(super) fn coverage_revision(
         batches: &[sdk::RecordBatch],
         source: &EvidenceIntakeIdentityV1,
     ) -> Result<u64> {
@@ -532,127 +925,10 @@ impl Projection {
         Err(Self::invalid("graph source receipt"))
     }
 
-    fn frozen_facts(
-        batches: &[sdk::RecordBatch],
-        keys: &BTreeSet<AnalysisContextKeyV1>,
-        records: &[DiscoveryRecordV1],
-    ) -> Result<Vec<AnalysisContextVersionV1>> {
-        let mut values = BTreeMap::new();
-        for batch in batches {
-            for row in 0..batch.num_rows() {
-                let key = Self::context_key(batch, row)?;
-                if !keys.contains(&key) {
-                    continue;
-                }
-                let from = Self::column::<UInt64Array>(batch, "valid_from_utc_ns")?;
-                let until = Self::column::<UInt64Array>(batch, "valid_until_utc_ns")?;
-                let value = AnalysisContextVersionV1 {
-                    key: key.clone(),
-                    valid_from_utc_ns: (!from.is_null(row)).then(|| from.value(row)),
-                    valid_until_utc_ns: (!until.is_null(row)).then(|| until.value(row)),
-                    sensitivity: Self::column::<StringArray>(batch, "sensitivity")?
-                        .value(row)
-                        .try_into()
-                        .map_err(|_| Self::invalid("graph context sensitivity"))?,
-                    body: Self::column::<BinaryArray>(batch, "body")?
-                        .value(row)
-                        .into(),
-                };
-                if values
-                    .insert(key, value.clone())
-                    .is_some_and(|old| old != value)
-                {
-                    return Err(Self::invalid("graph context identity"));
-                }
-            }
-        }
-        if values.len() != keys.len() {
-            return Err(Self::invalid("frozen graph fact is absent"));
-        }
-        values
-            .into_values()
-            .filter_map(|value| match araphor_data::GraphFactV1::try_from(&value) {
-                Ok(fact) => records
-                    .binary_search_by(|row| row.id.cmp(&fact.record_id))
-                    .is_ok()
-                    .then_some(Ok(value)),
-                Err(error) => Some(Err(Self::external(error))),
-            })
-            .collect()
-    }
-
-    fn bind_facts(
-        values: &[AnalysisContextVersionV1],
-        batches: &[sdk::RecordBatch],
-    ) -> Result<(
-        Vec<AnalysisContextVersionV1>,
-        Vec<araphor_data::AnalysisContextRefV1>,
-    )> {
-        let mut stored = BTreeMap::new();
-        for batch in batches {
-            for row in 0..batch.num_rows() {
-                if stored
-                    .insert(Self::context_key(batch, row)?, (batch, row))
-                    .is_some()
-                {
-                    return Err(Self::invalid("graph context identity"));
-                }
-            }
-        }
-        let mut contexts = Vec::new();
-        let mut references = Vec::new();
-        for value in values {
-            let Some(&(batch, row)) = stored.get(&value.key) else {
-                contexts.push(value.clone());
-                continue;
-            };
-            let from = Self::column::<UInt64Array>(batch, "valid_from_utc_ns")?;
-            let until = Self::column::<UInt64Array>(batch, "valid_until_utc_ns")?;
-            let sensitivity: araphor_data::ContextSensitivityV1 =
-                Self::column::<StringArray>(batch, "sensitivity")?
-                    .value(row)
-                    .try_into()
-                    .map_err(|_| Self::invalid("graph context sensitivity"))?;
-            if value.valid_from_utc_ns != (!from.is_null(row)).then(|| from.value(row))
-                || value.valid_until_utc_ns != (!until.is_null(row)).then(|| until.value(row))
-                || value.sensitivity != sensitivity
-                || value.body.as_slice() != Self::column::<BinaryArray>(batch, "body")?.value(row)
-            {
-                return Err(Self::external(
-                    araphor_data::PackageErrorCodeV1::Conflict.error("graph context identity"),
-                ));
-            }
-            references.push(araphor_data::AnalysisContextRefV1 {
-                key: value.key.clone(),
-                commit_revision: Self::column::<UInt64Array>(batch, "commit_revision")?.value(row),
-            });
-        }
-        Ok((contexts, references))
-    }
-
-    pub(super) fn context_key(
+    pub(super) fn identity(
         batch: &sdk::RecordBatch,
         row: usize,
-    ) -> Result<AnalysisContextKeyV1> {
-        Ok(AnalysisContextKeyV1 {
-            tenant_id: Self::column::<BinaryArray>(batch, "tenant_id")?
-                .value(row)
-                .try_into()
-                .map_err(|_| Self::invalid("context tenant"))?,
-            owner_id: Self::column::<StringArray>(batch, "owner_id")?
-                .value(row)
-                .into(),
-            entity_key: Self::column::<BinaryArray>(batch, "entity_key")?
-                .value(row)
-                .into(),
-            lifetime_key: Self::column::<BinaryArray>(batch, "lifetime_key")?
-                .value(row)
-                .into(),
-            owner_revision: Self::column::<UInt64Array>(batch, "owner_revision")?.value(row),
-        })
-    }
-
-    fn identity(batch: &sdk::RecordBatch, row: usize) -> Result<EvidenceIntakeIdentityV1> {
+    ) -> Result<EvidenceIntakeIdentityV1> {
         Ok(EvidenceIntakeIdentityV1 {
             tenant_id: Self::column::<BinaryArray>(batch, "tenant_id")?
                 .value(row)
@@ -709,5 +985,328 @@ impl Projection {
             .column_by_name(name)
             .and_then(|column| column.as_any().downcast_ref())
             .ok_or_else(|| Self::invalid("graph native column"))
+    }
+}
+
+impl GraphRun {
+    fn retain_input(
+        &self,
+        input: GraphReplayInputV1,
+        references: BTreeMap<AnalysisContextKeyV1, AnalysisContextRefV1>,
+        proofs: Vec<(DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+        removed: Option<BTreeSet<DiscoveryRecordIdV1>>,
+        memory: &MemoryReservation,
+    ) -> Result<()> {
+        let mut capture = self
+            .captured
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let result = capture
+            .as_mut()
+            .ok_or_else(|| Projection::invalid("Graph input capture"))
+            .and_then(|capture| {
+                capture.absorb(input, references, proofs, removed)?;
+                capture.retain(memory)
+            });
+        if result.is_err() {
+            capture.take();
+        }
+        result
+    }
+}
+
+impl Capture {
+    fn absorb(
+        &mut self,
+        input: GraphReplayInputV1,
+        references: BTreeMap<AnalysisContextKeyV1, AnalysisContextRefV1>,
+        proofs: Vec<(DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+        removed: Option<BTreeSet<DiscoveryRecordIdV1>>,
+    ) -> Result<()> {
+        if input.source != self.metadata.scope.identity {
+            return Err(Projection::invalid("Graph local basis source"));
+        }
+        let positions = input
+            .input_positions
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        for record in input.records {
+            if !(self.metadata.first_cursor..=self.metadata.last_cursor)
+                .contains(&record.id.durable_cursor)
+            {
+                return Err(Projection::invalid("Graph local basis window"));
+            }
+            let position = *positions
+                .get(&record.id)
+                .ok_or_else(|| Projection::invalid("Graph local basis position"))?;
+            if self
+                .records
+                .get(&record.id)
+                .is_some_and(|old| old.0 != record || old.1 != position)
+            {
+                return Err(Projection::invalid("conflicting Graph local record"));
+            }
+            if removed.is_some() && self.removed.contains(&record.id) {
+                return Err(Projection::invalid("conflicting Graph target presence"));
+            }
+            self.records
+                .entry(record.id.clone())
+                .or_insert((record, position));
+        }
+        for value in input.facts {
+            let reference = references.get(&value.key).cloned();
+            if let Some((old, bound)) = self.facts.get_mut(&value.key) {
+                if old != &value
+                    || bound
+                        .as_ref()
+                        .zip(reference.as_ref())
+                        .is_some_and(|(left, right)| left != right)
+                {
+                    return Err(Projection::invalid("conflicting Graph local fact"));
+                }
+                if bound.is_none() {
+                    *bound = reference;
+                }
+            } else {
+                self.facts.insert(value.key.clone(), (value, reference));
+            }
+        }
+        for (record, proof) in proofs {
+            let key = (record, proof.key.clone());
+            if self.proofs.get(&key).is_some_and(|old| old != &proof) {
+                return Err(Projection::invalid("conflicting Graph local proof"));
+            }
+            self.proofs.insert(key, proof);
+        }
+        let mut intervals = BTreeMap::new();
+        for key in self.coverage_keys.iter().chain(&input.coverage_keys) {
+            let identity = (key.cpu_id, key.report_revision, key.interval_id);
+            if intervals
+                .insert(identity, key.interval_revision)
+                .is_some_and(|old| old != key.interval_revision)
+            {
+                return Err(Projection::invalid("conflicting Graph interval proof"));
+            }
+        }
+        for range in input.coverage {
+            let id = DiscoveryRecordIdV1 {
+                stream: range.stream.clone(),
+                cpu_id: range.cpu_id,
+                durable_cursor: range.first_cursor,
+            };
+            let interval = intervals
+                .get(&(
+                    range.cpu_id,
+                    range.coverage_revision,
+                    range.coverage_interval_id,
+                ))
+                .copied();
+            let key = (id, range.coverage_revision, interval);
+            if self.coverage.get(&key).is_some_and(|old| old != &range) {
+                return Err(Projection::invalid("conflicting Graph local coverage"));
+            }
+            self.coverage.entry(key).or_insert(range);
+        }
+        self.coverage_keys.extend(input.coverage_keys);
+        if let Some(removed) = removed {
+            for id in removed {
+                if id.stream != self.metadata.scope.identity || self.records.contains_key(&id) {
+                    return Err(Projection::invalid("conflicting Graph removed target"));
+                }
+                self.removed.insert(id);
+            }
+        }
+        Ok(())
+    }
+
+    fn retain(&mut self, memory: &MemoryReservation) -> Result<()> {
+        let used = self
+            ._memory
+            .iter()
+            .try_fold(0usize, |bytes, memory| bytes.checked_add(memory.size()))
+            .ok_or_else(|| Projection::invalid("Graph capture memory"))?;
+        let bytes = self
+            .allocated_bytes()
+            .ok_or_else(|| Projection::invalid("Graph capture memory"))?;
+        if bytes <= used {
+            return Ok(());
+        }
+        self._memory.try_reserve(1).map_err(Projection::external)?;
+        let bytes = self
+            .allocated_bytes()
+            .ok_or_else(|| Projection::invalid("Graph capture memory"))?;
+        if let Some(added) = bytes.checked_sub(used).filter(|added| *added != 0) {
+            if memory.size() < added {
+                memory.try_grow(added - memory.size())?;
+            }
+            self._memory.push(memory.split(added));
+        }
+        Ok(())
+    }
+
+    fn key_bytes(key: &AnalysisContextKeyV1) -> Option<usize> {
+        key.owner_id
+            .capacity()
+            .checked_add(key.entity_key.capacity())?
+            .checked_add(key.lifetime_key.capacity())
+    }
+
+    fn allocated_bytes(&self) -> Option<usize> {
+        let strings = |values: &Vec<String>| {
+            values.iter().try_fold(
+                values.capacity().checked_mul(size_of::<String>())?,
+                |bytes, value| bytes.checked_add(value.capacity()),
+            )
+        };
+        let mut bytes = size_of::<Self>().checked_add(
+            self._memory
+                .capacity()
+                .checked_mul(size_of::<MemoryReservation>())?,
+        )?;
+        bytes = bytes.checked_add(
+            self.base
+                .as_ref()
+                .map_or(0, |base| base.result_id.capacity()),
+        )?;
+        bytes = bytes
+            .checked_add(self.metadata.scope.identity.node_id.capacity())?
+            .checked_add(self.metadata.scope.processor_id.capacity())?
+            .checked_add(
+                self.metadata
+                    .previous_result_id
+                    .as_ref()
+                    .map_or(0, String::capacity),
+            )?
+            .checked_add(
+                self.metadata
+                    .missing_ranges
+                    .capacity()
+                    .checked_mul(size_of::<(u64, u64)>())?,
+            )?;
+        bytes = self.metadata.input_manifest.coverage.iter().try_fold(
+            bytes.checked_add(
+                self.metadata
+                    .input_manifest
+                    .coverage
+                    .capacity()
+                    .checked_mul(size_of::<GraphCoverageKeyV1>())?,
+            )?,
+            |bytes, key| {
+                bytes
+                    .checked_add(key.source.node_id.capacity())?
+                    .checked_add(strings(&key.gap_reasons)?)
+            },
+        )?;
+        bytes = bytes.checked_add(
+            self.metadata
+                .input_manifest
+                .missing_ranges
+                .capacity()
+                .checked_mul(size_of::<(u64, u64)>())?,
+        )?;
+        bytes = self
+            .records
+            .iter()
+            .try_fold(bytes, |bytes, (id, (record, _))| {
+                bytes
+                    .checked_add(size_of::<(
+                        DiscoveryRecordIdV1,
+                        (DiscoveryRecordV1, StorePositionV1),
+                    )>())?
+                    .checked_add(id.allocated_bytes())?
+                    .checked_add(record.id.allocated_bytes())?
+                    .checked_add(record.wire_record.capacity())
+            })?;
+        bytes = self
+            .facts
+            .iter()
+            .try_fold(bytes, |bytes, (key, (value, reference))| {
+                bytes
+                    .checked_add(size_of::<(
+                        AnalysisContextKeyV1,
+                        (AnalysisContextVersionV1, Option<AnalysisContextRefV1>),
+                    )>())?
+                    .checked_add(Self::key_bytes(key)?)?
+                    .checked_add(Self::key_bytes(&value.key)?)?
+                    .checked_add(value.body.capacity())?
+                    .checked_add(
+                        reference
+                            .as_ref()
+                            .map_or(Some(0), |reference| Self::key_bytes(&reference.key))?,
+                    )
+            })?;
+        bytes = self
+            .proofs
+            .iter()
+            .try_fold(bytes, |bytes, ((id, key), reference)| {
+                bytes
+                    .checked_add(size_of::<(
+                        (DiscoveryRecordIdV1, AnalysisContextKeyV1),
+                        AnalysisContextRefV1,
+                    )>())?
+                    .checked_add(id.allocated_bytes())?
+                    .checked_add(Self::key_bytes(key)?)?
+                    .checked_add(Self::key_bytes(&reference.key)?)
+            })?;
+        bytes = self
+            .coverage
+            .iter()
+            .try_fold(bytes, |bytes, ((id, _, _), range)| {
+                bytes
+                    .checked_add(size_of::<(
+                        (DiscoveryRecordIdV1, u64, Option<u64>),
+                        DiscoveryCoverageV1,
+                    )>())?
+                    .checked_add(id.allocated_bytes())?
+                    .checked_add(range.stream.node_id.capacity())?
+                    .checked_add(strings(&range.gap_reasons)?)
+            })?;
+        bytes = self.coverage_keys.iter().try_fold(bytes, |bytes, key| {
+            bytes
+                .checked_add(size_of::<GraphCoverageKeyV1>())?
+                .checked_add(key.source.node_id.capacity())?
+                .checked_add(strings(&key.gap_reasons)?)
+        })?;
+        self.removed.iter().try_fold(bytes, |bytes, id| {
+            bytes
+                .checked_add(size_of::<DiscoveryRecordIdV1>())?
+                .checked_add(id.allocated_bytes())
+        })
+    }
+
+    pub(super) fn take_input(
+        &mut self,
+    ) -> (
+        GraphReplayInputV1,
+        BTreeMap<AnalysisContextKeyV1, AnalysisContextRefV1>,
+    ) {
+        let mut records = Vec::with_capacity(self.records.len());
+        let mut positions = Vec::with_capacity(self.records.len());
+        for (id, (record, position)) in std::mem::take(&mut self.records) {
+            records.push(record);
+            positions.push((id, position));
+        }
+        let mut facts = Vec::with_capacity(self.facts.len());
+        let mut references = BTreeMap::new();
+        for (key, (value, reference)) in std::mem::take(&mut self.facts) {
+            facts.push(value);
+            if let Some(reference) = reference {
+                references.insert(key, reference);
+            }
+        }
+        (
+            GraphReplayInputV1 {
+                source: self.metadata.scope.identity.clone(),
+                records,
+                input_positions: positions,
+                coverage: std::mem::take(&mut self.coverage).into_values().collect(),
+                coverage_keys: std::mem::take(&mut self.coverage_keys)
+                    .into_iter()
+                    .collect(),
+                facts,
+                missing_ranges: self.metadata.missing_ranges.clone(),
+            },
+            references,
+        )
     }
 }

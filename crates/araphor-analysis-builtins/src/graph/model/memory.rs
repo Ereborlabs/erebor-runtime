@@ -43,11 +43,43 @@ impl GraphSubjectKeyV1 {
 }
 
 impl AnalysisContextKeyV1 {
-    fn allocated_bytes(&self) -> usize {
+    pub fn allocated_bytes(&self) -> usize {
         self.owner_id
             .capacity()
             .saturating_add(self.entity_key.capacity())
             .saturating_add(self.lifetime_key.capacity())
+    }
+}
+
+impl Observation {
+    pub fn allocated_bytes(&self) -> usize {
+        self.id
+            .allocated_bytes()
+            .saturating_add(self.effect.process_lineage_id.capacity())
+            .saturating_add(self.effect.authority_domain_id.capacity())
+            .saturating_add(self.effect.execution_set_id.capacity())
+            .saturating_add(self.effect.exact_object_id.capacity())
+            .saturating_add(self.coverage_interval_id.capacity())
+    }
+}
+
+impl GraphPackageCheckpointV1 {
+    pub fn allocated_bytes(&self) -> usize {
+        self.package_id
+            .capacity()
+            .saturating_add(strings(&self.required_inputs))
+            .saturating_add(self.late_action.capacity())
+            .saturating_add(self.coverage_predicate.capacity())
+            .saturating_add(self.replay_contract_id.capacity())
+            .saturating_add(
+                self.result_states
+                    .capacity()
+                    .saturating_mul(size_of::<FindingStateV1>()),
+            )
+            .saturating_add(match &self.state {
+                GraphPackageStateV1::Declared(value) => value.capacity(),
+                _ => 0,
+            })
     }
 }
 
@@ -169,6 +201,14 @@ impl GraphFactValueV1 {
                 .saturating_add(optional(&value.full_container_id))
                 .saturating_add(optional(&value.remote_admission_id)),
         }
+    }
+}
+
+impl GraphFactV1 {
+    pub fn allocated_bytes(&self) -> usize {
+        self.record_id
+            .allocated_bytes()
+            .saturating_add(self.value.allocated_bytes())
     }
 }
 

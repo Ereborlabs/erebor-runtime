@@ -7,7 +7,7 @@ repository.workspace = true
 
 [dependencies]
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
-arrow-json = "=58.4.0"
+arrow-json = "=59.2.0"
 araphor-discovery-definition = { path = "../araphor-discovery-definition" }
 araphor-data = { path = "../araphor-data" }
 clap.workspace = true

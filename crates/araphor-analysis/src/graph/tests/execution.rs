@@ -1,6 +1,6 @@
 use super::super::*;
 use super::{fixture, TestResult};
-use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, InputRevision};
+use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore};
 use araphor_query::definition::{DefinitionOutput, Invocation};
 use araphor_query::execution::{Engine, Limits};
 use araphor_query::Failure;
@@ -296,16 +296,15 @@ fn evaluation(
         .iter()
         .map(|record| record.decode().map(|wire| wire.ingested_utc_ns))
         .collect::<araphor_data::Result<Vec<_>>>()?;
+    let position = input
+        .input_positions
+        .iter()
+        .map(|(_, position)| position)
+        .max()
+        .ok_or("fixture input position")?;
     let revision = sdk::Revision {
         owner: GRAPH_PROCESSOR.into(),
-        id: InputRevision::of_native(&(
-            &input.source,
-            &input.records,
-            &input.coverage,
-            &input.coverage_keys,
-            &input.facts,
-            &input.missing_ranges,
-        ))?,
+        id: format!("{}:{}", position.commit_revision, position.ordinal),
         window: Some(sdk::SourceWindow {
             source: input.source.exact_key(),
             start_utc_ns: times.iter().copied().min().unwrap_or(0),

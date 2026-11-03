@@ -399,34 +399,7 @@ impl AnalysisStore {
                     return Err(Code::Invalid.error("managed source witness expiry"));
                 }
             }
-            let native: Option<(u64, bool)> = reader.query_row(
-                "SELECT e.expires_utc_ns, s.segment_id IS NOT NULL FROM evidence_refs e
-                 LEFT JOIN segments s ON s.segment_id = e.segment_id AND s.state = 'Live'
-                    AND s.tenant_id = e.tenant_id AND s.stream_key = e.stream_key
-                    AND e.durable_cursor BETWEEN s.first_cursor AND s.last_cursor
-                 WHERE e.ref_id = ? AND e.tenant_id = ? AND e.stream_key = ? AND e.durable_cursor = ?",
-                params![selected.result_id, capture.tenant.as_slice(), witness.identity.key(), witness.cursor],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            ).optional().context(AnalysisDatabaseSnafu { operation: "read canonical source witness" })?;
-            match native {
-                Some((expiry, true)) if expiry == witness.expires_utc_ns => {}
-                Some(_) => return Err(Code::Invalid.error("managed source witness binding")),
-                None => {
-                    // Replay must read the old event from the journal.
-                    let expired: bool = reader
-                        .query_row(
-                            "SELECT ? <= epoch_ns(current_timestamp)::UBIGINT",
-                            params![witness.expires_utc_ns],
-                            |row| row.get(0),
-                        )
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "check expired source witness",
-                        })?;
-                    if !expired {
-                        return Err(Code::Missing.error("managed source witness binding"));
-                    }
-                }
-            }
+            AnalysisStore::check_witness_ref(reader,&selected.result_id,witness)?;
         }
         for context in &step.contexts {
             if !capture.contexts.contains(context)

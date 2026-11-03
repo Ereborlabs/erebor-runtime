@@ -5,14 +5,11 @@ use araphor_data::{
     AnalysisContextKeyV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
     AnalysisSourceSnapshotV1, CoverageInterval, CoverageReport,
 };
-use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::physical_plan::ExecutionPlan;
 use prost::Message as _;
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::Inputs;
-use crate::memory::Memory;
 use crate::sources::{ArrowSnapshot, SourceOrigin, SourceSnapshot};
 use crate::{InvalidSnafu, Result, SqlSnafu};
 
@@ -21,7 +18,9 @@ pub(super) struct PortScope<'a> {
     invocation: Option<(&'a str, u64)>,
     pub(super) selection: AnalysisSelectionV1,
     window: Option<(i64, i64)>,
-    reads: Option<Vec<araphor_data::ManagedSourceRows>>,
+    context_revision: Option<Option<u64>>,
+    time: i64,
+    seed: Option<u64>,
 }
 
 impl Inputs {
@@ -135,7 +134,7 @@ impl Inputs {
         &self,
         data: sdk::Dataset,
         source: &SourceSnapshot,
-        (call, slot, child, invocation): (u64, usize, usize, &str),
+        (call, slot, _child, invocation): (u64, usize, usize, &str),
         physical: &Arc<dyn ExecutionPlan>,
         inherited: &[&sdk::Input],
         owner: &crate::definition::CallContext,
@@ -146,9 +145,28 @@ impl Inputs {
             }
             .build()
         })?;
+        let bounds = source
+            .input_bounds(physical, Some(owner))
+            .context(SqlSnafu)?;
         if let Some(identity) = &port.identity {
+            let identity = match identity {
+                SourceOrigin::Port(family) => {
+                    let reads = bounds
+                        .qualified
+                        .get(family)
+                        .filter(|reads| reads.len() == 1)
+                        .ok_or_else(|| {
+                            araphor_data::PackageErrorCodeV1::Incomplete
+                                .error("bound source identity")
+                        })?;
+                    SourceOrigin::Port(*reads.first().ok_or_else(|| {
+                        araphor_data::PackageErrorCodeV1::Incomplete.error("bound source identity")
+                    })?)
+                }
+                other => other.clone(),
+            };
             let input = source
-                .captured_input(identity)
+                .captured_input(&identity)
                 .context(SqlSnafu)?
                 .ok_or_else(|| {
                     araphor_data::PackageErrorCodeV1::Incomplete.error("bound input metadata")
@@ -172,17 +190,24 @@ impl Inputs {
             });
         }
         let snapshot = source.snapshot().context(SqlSnafu)?;
-        let bounds = source
-            .input_bounds(physical, Some(owner))
-            .context(SqlSnafu)?;
         let mut bound = Vec::new();
         for origin in &port.origins {
-            if matches!(origin, SourceOrigin::Port(id) if child != slot && !bounds.ports.contains(id))
+            if matches!(origin, SourceOrigin::Port(id) if !bounds.ports.contains(id)
+                && !bounds.qualified.contains_key(id))
             {
                 continue;
             }
             if let SourceOrigin::Port(id) = origin {
-                if let Some(input) = source.captured_input(origin).context(SqlSnafu)? {
+                if let Some(reads) = bounds.qualified.get(id) {
+                    for read in reads {
+                        if let Some(input) = source
+                            .captured_input(&SourceOrigin::Port(*read))
+                            .context(SqlSnafu)?
+                        {
+                            bound.push((*read, input));
+                        }
+                    }
+                } else if let Some(input) = source.captured_input(origin).context(SqlSnafu)? {
                     bound.push((*id, input));
                 }
             }
@@ -210,9 +235,13 @@ impl Inputs {
                 slot,
                 invocation: Some((invocation, call)),
                 selection,
-                reads: source
-                    .input_reads(physical, bound.iter().map(|(id, _)| *id))
-                    .context(SqlSnafu)?,
+                context_revision: source.context_revision(&bounds).context(SqlSnafu)?,
+                time: owner
+                    .window_clock(crate::follow::WindowSource::Input { call, slot })
+                    .context(SqlSnafu)?
+                    .or(owner.invocation().time_utc_ns)
+                    .unwrap_or(snapshot.now as i64),
+                seed: owner.invocation().seed,
                 window: snapshot
                     .windows
                     .iter()
@@ -225,7 +254,6 @@ impl Inputs {
                 .iter()
                 .copied()
                 .chain(bound.iter().map(|(_, input)| input.as_ref())),
-            owner.memory(),
         )
     }
 
@@ -235,7 +263,6 @@ impl Inputs {
         snapshot: &ArrowSnapshot,
         scope: &PortScope<'_>,
         inherited: impl Iterator<Item = &'a sdk::Input>,
-        memory: &Memory,
     ) -> Result<sdk::Input> {
         let port = self
             .plans
@@ -286,16 +313,8 @@ impl Inputs {
                 AnalysisReferenceOriginV1::Notification => has("notifications"),
                 AnalysisReferenceOriginV1::ExplicitResult => true,
             };
-        let mut contexts = Vec::new();
-        let indexed_context = !port.changes
-            && scope.reads.is_some()
-            && has("context_versions")
-            && snapshot
-                .managed()
-                .and_then(|managed| managed.source())
-                .and_then(|frame| frame.projection().get("context_versions"))
-                .is_some_and(Option::is_some);
-        let mut results = Vec::new();
+        let mut context_revision = 0;
+        let mut result_revision = 0;
         let mut graph_count = 0;
         let mut graph_coverage = sdk::Coverage {
             state: sdk::CoverageState::Complete,
@@ -304,18 +323,16 @@ impl Inputs {
         for reference in &snapshot.page.extraction.references {
             match reference {
                 AnalysisReferenceV1::Context { reference, origins }
-                    if origins.iter().any(|origin| {
-                        includes(origin, Some(&reference.key))
-                            && !(indexed_context
-                                && matches!(origin, AnalysisReferenceOriginV1::Context))
-                    }) =>
+                    if origins
+                        .iter()
+                        .any(|origin| includes(origin, Some(&reference.key))) =>
                 {
-                    contexts.push(reference);
+                    context_revision = context_revision.max(reference.commit_revision);
                 }
                 AnalysisReferenceV1::Result { reference, origins }
                     if origins.iter().any(|origin| includes(origin, None)) =>
                 {
-                    results.push(reference);
+                    result_revision = result_revision.max(reference.commit_revision);
                     if has_graph && origins.contains(&AnalysisReferenceOriginV1::Graph) {
                         let saved = snapshot
                             .page
@@ -338,23 +355,6 @@ impl Inputs {
                 _ => {}
             }
         }
-        if indexed_context {
-            if let Some(reads) = &scope.reads {
-                contexts.extend(reads.iter().flat_map(|rows| rows.contexts()));
-            }
-        }
-        contexts.sort_by(|left, right| {
-            left.key
-                .cmp(&right.key)
-                .then(left.commit_revision.cmp(&right.commit_revision))
-        });
-        contexts.dedup();
-        results.sort_by(|left, right| {
-            left.result_id
-                .cmp(&right.result_id)
-                .then(left.commit_revision.cmp(&right.commit_revision))
-        });
-        results.dedup();
         let sources = snapshot
             .page
             .extraction
@@ -412,20 +412,7 @@ impl Inputs {
                 source
             }
         };
-        let mut inherited = inherited.collect::<Vec<_>>();
-        inherited.sort_by_key(|input| {
-            let input = *input;
-            (
-                &input.data.name,
-                &input.revision.owner,
-                &input.revision.id,
-                input
-                    .revision
-                    .window
-                    .as_ref()
-                    .map(|window| (&window.source, window.start_utc_ns, window.end_utc_ns)),
-            )
-        });
+        let inherited = inherited.collect::<Vec<_>>();
         if !inherited.is_empty() {
             let builtin = port.origins.iter().any(|origin| origin.durable().is_some());
             coverage = Self::coverage(
@@ -435,21 +422,7 @@ impl Inputs {
                     .chain(builtin.then_some(&coverage)),
             );
         }
-        let receipts = sources
-            .iter()
-            .map(|source| {
-                (
-                    &source.receipt.identity,
-                    source.receipt.cpu_id,
-                    source.receipt.contiguous_cursor,
-                    source.receipt.coverage_revision,
-                    source.receipt.retained_floor,
-                    &source.expired,
-                    &source.recovery,
-                    &source.pending,
-                )
-            })
-            .collect::<Vec<_>>();
+        let meta = &snapshot.page.extraction.meta;
         let window = match scope.window {
             Some(range) => Some(range),
             None => port
@@ -460,154 +433,71 @@ impl Inputs {
                 .context(SqlSnafu)?
                 .flatten(),
         };
-        let window = window
-            .map(|(start, end)| {
-                let sources = sources
-                    .iter()
-                    .map(|source| (&source.receipt.identity, source.receipt.cpu_id))
-                    .collect::<Vec<_>>();
-                let source = araphor_data::InputRevision::of_native(&(&data.name, sources))?;
-                Ok::<_, crate::Error>(sdk::SourceWindow {
-                    source: Sha256::digest(source.as_bytes()).to_vec(),
-                    start_utc_ns: start,
-                    end_utc_ns: end,
-                })
-            })
-            .transpose()?;
-        let mut hash = Sha256::new();
-        hash.update(b"ARAPHOR-SQL-INPUT-V1\0");
-        let provenance = araphor_data::InputRevision::of_native(&(
-            &scope.selection,
-            receipts,
-            contexts,
-            results,
-            &coverage,
-            &window,
-        ))?;
-        hash.update(provenance.as_bytes());
-        if let Some(reads) = &scope.reads {
-            let mut witnesses = reads
-                .iter()
-                .flat_map(|rows| rows.witnesses())
-                .collect::<Vec<_>>();
-            witnesses.sort_by(|left, right| {
-                (&left.identity, left.cursor, left.expires_utc_ns).cmp(&(
-                    &right.identity,
-                    right.cursor,
-                    right.expires_utc_ns,
-                ))
-            });
-            witnesses.dedup();
-            if port.changes {
-                let frame = snapshot
-                    .managed()
-                    .and_then(|managed| managed.source())
-                    .ok_or_else(|| {
-                        araphor_data::PackageErrorCodeV1::Incomplete.error("indexed input source")
-                    })?;
-                let mut contexts = reads
-                    .iter()
-                    .flat_map(|rows| rows.contexts())
-                    .collect::<Vec<_>>();
-                contexts.sort_by(|left, right| {
-                    left.key
-                        .cmp(&right.key)
-                        .then(left.commit_revision.cmp(&right.commit_revision))
-                });
-                contexts.dedup();
-                hash.update(
-                    araphor_data::InputRevision::of_native(&(
-                        frame.read(),
-                        frame.position(),
-                        witnesses,
-                        contexts,
-                    ))?
-                    .as_bytes(),
-                );
-            } else {
-                let meta = &snapshot.page.extraction.meta;
-                hash.update(
-                    araphor_data::InputRevision::of_native(&(
-                        meta.store_uuid,
-                        meta.schema_version,
-                        meta.recovery_epoch,
-                        scope.invocation.map(|(_, call)| (call, scope.slot)),
-                        &data.name,
-                        witnesses,
-                    ))?
-                    .as_bytes(),
-                );
+        let window = window.map(|(start, end)| sdk::SourceWindow {
+            source: meta.store_uuid.as_bytes().to_vec(),
+            start_utc_ns: start,
+            end_utc_ns: end,
+        });
+        if data.batches.is_empty() {
+            return InvalidSnafu {
+                field: "input batches",
             }
+            .fail();
         }
-        if !inherited.is_empty() {
-            let revisions = inherited
-                .iter()
-                .map(|input| &input.revision)
-                .collect::<Vec<_>>();
-            hash.update(araphor_data::InputRevision::of_native(&revisions)?.as_bytes());
+        let point = !inherited.is_empty()
+            || port.origins.iter().any(|origin| {
+                matches!(origin, SourceOrigin::Port(_))
+                    || origin.durable().is_some_and(|name| {
+                        !matches!(name, "events" | "coverage" | "context_versions" | "context")
+                    })
+            });
+        let local = port
+            .origins
+            .iter()
+            .any(|origin| matches!(origin, SourceOrigin::Local(_)));
+        let mut version = sources
+            .iter()
+            .map(|source| source.commit_revision)
+            .max()
+            .unwrap_or(0);
+        if has("context") || has("context_versions") {
+            version = version.max(match scope.context_revision {
+                Some(Some(revision)) => revision,
+                Some(None) => meta.commit_revision,
+                None => context_revision,
+            });
         }
-        let schema = data
-            .batches
-            .first()
-            .ok_or_else(|| {
-                InvalidSnafu {
-                    field: "input batches",
-                }
-                .build()
-            })?
-            .schema();
-        if port.changes && snapshot.managed().is_some() {
-            let (invocation, call) = scope.invocation.ok_or_else(|| {
-                InvalidSnafu {
-                    field: "change input invocation",
-                }
-                .build()
-            })?;
-            let meta = &snapshot.page.extraction.meta;
-            let position = araphor_data::InputRevision::of_native(&(
-                invocation,
-                call,
-                scope.slot,
+        version = version.max(result_revision);
+        if point || port.changes && snapshot.managed().is_some() {
+            version = meta.commit_revision;
+        }
+        let varying = port.varying || local;
+        if varying {
+            version = meta.commit_revision;
+        }
+        let time = if varying || point { scope.time } else { 0 };
+        let (invocation, call) = scope.invocation.unwrap_or(("", 0));
+        let invocation = if varying { invocation } else { "" };
+        let seed = varying.then_some(scope.seed).flatten();
+        let generation = snapshot
+            .managed()
+            .map_or(0, |capture| capture.instance().generation);
+        let revision = sdk::Revision {
+            owner: "araphor-query.Inputs".into(),
+            id: format!(
+                "{}:{}:{}:{generation}:{call}:{}:{version}:{time}:{}:{}:{invocation}",
                 meta.store_uuid,
                 meta.schema_version,
                 meta.recovery_epoch,
-                meta.commit_revision,
-            ))?;
-            hash.update(position.as_bytes());
-        } else {
-            let _scratch = if memory.input_capacity().is_some() {
-                let bytes = data.batches.iter().try_fold(0usize, |bytes, batch| {
-                    let scratch = sdk::wire::Dataset::encoding_scratch(batch)
-                        .context(araphor_data::AnalysisContractSnafu)?;
-                    bytes.checked_add(scratch).ok_or_else(|| {
-                        araphor_data::PackageErrorCodeV1::Limit.error("input encoding scratch")
-                    })
-                })?;
-                Some(memory.reserve_input(bytes).context(SqlSnafu)?)
-            } else {
-                None
-            };
-            let mut writer = StreamWriter::try_new(&mut hash, &schema)
-                .map_err(sdk::Error::from)
-                .context(araphor_data::AnalysisContractSnafu)?;
-            for batch in &data.batches {
-                writer
-                    .write(batch)
-                    .map_err(sdk::Error::from)
-                    .context(araphor_data::AnalysisContractSnafu)?;
-            }
-            writer
-                .finish()
-                .map_err(sdk::Error::from)
-                .context(araphor_data::AnalysisContractSnafu)?;
-        }
+                scope.slot,
+                u8::from(seed.is_some()),
+                seed.unwrap_or(0),
+            ),
+            window,
+        };
         Ok(sdk::Input {
             data,
-            revision: sdk::Revision {
-                owner: "araphor-query.Inputs".into(),
-                id: format!("{:x}", hash.finalize()),
-                window,
-            },
+            revision,
             coverage,
         })
     }
@@ -771,66 +661,6 @@ mod supplied {
                 .is_err());
         }
         scope.supplied_inputs(&mut [input(&[])?], &[input(&[])?])?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn encoding_scratch_respects_pressure() -> TestResult {
-        use crate::execution::{Engine, Read};
-        use araphor_data::{AnalysisReadControl, AnalysisStore};
-
-        let directory = tempfile::tempdir()?;
-        let engine = Engine::new(
-            Arc::new(AnalysisStore::open(directory.path().join("data"))?),
-            Default::default(),
-        )?;
-        let (plan, sources) = engine.prepare("SELECT 1 AS value", Vec::new()).await?;
-        let session = engine.session(
-            AnalysisSelectionV1::tenant([1; 16]),
-            &AnalysisReadControl::default(),
-            1,
-        )?;
-        let (snapshot, stream) = session.stream(&plan, &sources, Read::Snapshot).await?;
-        drop(stream);
-        let data = input(&vec![7; 1024])?.data;
-        let scratch = sdk::wire::Dataset::encoding_scratch(&data.batches[0])?;
-        assert!(scratch > 0);
-        let capacity = scratch * 2;
-        let memory = Memory::new(Some(capacity), None);
-        let held = memory.reserve_input(scratch + 1)?;
-        let scope = scope(&[SourceOrigin::Local("fixture".into())])?;
-        let selected = PortScope {
-            reads: None,
-            invocation: None,
-            slot: 0,
-            window: None,
-            selection: snapshot.selection.clone(),
-        };
-        let error = scope
-            .input(
-                data.clone(),
-                &snapshot,
-                &selected,
-                std::iter::empty(),
-                &memory,
-            )
-            .err()
-            .ok_or("input serializer exceeded available scratch")?;
-        assert!(format!("{error:?}").contains("araphor input"));
-        drop(memory.reserve_input(scratch - 1)?);
-        drop(held);
-        let first = scope.input(
-            data.clone(),
-            &snapshot,
-            &selected,
-            std::iter::empty(),
-            &memory,
-        )?;
-        drop(memory.reserve_input(capacity)?);
-        let disabled = Memory::new(None, None);
-        let second = scope.input(data, &snapshot, &selected, std::iter::empty(), &disabled)?;
-        assert_eq!(first.revision, second.revision);
-        assert_eq!(first.coverage, second.coverage);
         Ok(())
     }
 }

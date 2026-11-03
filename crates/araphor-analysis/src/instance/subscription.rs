@@ -102,7 +102,7 @@ impl Instance {
                 .map_err(|source| araphor_query::Error::Sql { source })?;
             let publication = Arc::new(sink::Publication {
                 owner: Arc::clone(self),
-                schema: Arc::clone(self.prepared.plan.schema().inner()),
+                schema: Arc::clone(self.prepared.plan().schema().inner()),
                 mode: sink::Mode::Managed {
                     operation: Box::new(sink::Operation::Follow {
                         lifecycle: expected_lifecycle,
@@ -395,6 +395,7 @@ impl Stream for Subscription {
                 }
             };
             if let Err(error) = &result {
+                erebor_telemetry::debug!(instance_id = %self.owner.admitted.spec.id, error = ?error, "Managed subscription execution failed");
                 self.failed(error);
                 let _cancelled = self.query.cancel();
             }

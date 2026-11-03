@@ -34,6 +34,8 @@ pub(in crate::analysis) enum GraphWrite<'a> {
     Managed {
         commit: &'a ManagedCommit<'a>,
         producers: &'a [(u64, PackageResultRefV1)],
+        removed: &'a [crate::DiscoveryRecordIdV1],
+        record_proofs: &'a [(crate::DiscoveryRecordIdV1, crate::AnalysisContextRefV1)],
     },
     Direct(&'a GraphSnapshotV1),
     Expiry(&'a PackageResultRefV1),
@@ -93,6 +95,9 @@ impl TryFrom<u8> for MemberKind {
 }
 
 impl GraphRows {
+    const CALL_PRODUCER: u8 = 0;
+    const METADATA_PRODUCER: u8 = 2;
+
     fn invalid(field: &'static str) -> crate::Error {
         GraphInvalidSnafu { field }.build()
     }
@@ -114,7 +119,7 @@ impl GraphRows {
         Ok(value)
     }
 
-    fn member_key(value: &impl Serialize) -> Result<Vec<u8>> {
+    pub(in crate::analysis) fn member_key(value: &impl Serialize) -> Result<Vec<u8>> {
         Self::encode_value(value)
     }
 

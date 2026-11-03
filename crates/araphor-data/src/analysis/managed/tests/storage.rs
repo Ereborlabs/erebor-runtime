@@ -4,7 +4,6 @@ fn large_spec(fixture: &Fixture) -> TestResult<ManagedSpec> {
     let mut spec = fixture.instance.spec.clone();
     spec.id = "large-contract".into();
     spec.definition.definition.description = "x".repeat(17 * 1024 * 1024);
-    spec.manifest.definition = spec.definition.digest()?;
     Ok(spec)
 }
 
@@ -158,14 +157,15 @@ fn large_contract_preserves_bytes() -> TestResult {
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
     let mut fixture = Fixture::admit(&store)?;
-    let spec = large_spec(&fixture)?;
-    store.admit_definition([1; 16], &spec.definition, || Ok(()))?;
+    let mut spec = large_spec(&fixture)?;
+    spec.manifest.definition = store.admit_definition([1; 16], &spec.definition, || Ok(()))?;
     let definition: Vec<u8> = store.read_snapshot(|reader| reader.query_row(
-        "SELECT definition FROM discovery_definitions WHERE tenant_id = ? AND name = ? AND revision = ?",
+        "SELECT definition FROM discovery_definitions WHERE tenant_id = ? AND name = ? AND commit_revision = ?",
         params![[1u8; 16].as_slice(), spec.definition.definition.name, spec.manifest.definition],
         |row| row.get(0),
     ).context(crate::AnalysisDatabaseSnafu { operation: "read admitted definition bytes" }))?;
-    assert_eq!(definition, serde_json::to_vec(&spec.definition)?);
+    assert_eq!(definition, spec.definition.encode()?);
+    assert!(serde_json::from_slice::<ResolvedDefinition>(&definition).is_err());
     let grant = fixture.instance.grant.clone();
     fixture.instance = store.admit_managed(&spec, &grant, || Ok(()))?;
     let (version, scope, authority): (Vec<u8>, Vec<u8>, Vec<u8>) = store.read_snapshot(|reader| reader.query_row(
@@ -265,12 +265,13 @@ fn large_contract_preserves_bytes() -> TestResult {
             .definition(
                 [1; 16],
                 &spec.definition.definition.name,
-                Some(&spec.manifest.definition),
+                Some(spec.manifest.definition),
                 &AnalysisReadControl::default(),
             )?
             .ok_or("definition absent")?;
-        assert_eq!(retained, spec.definition);
-        assert!(retained.definition.description.len() > 16 * 1024 * 1024);
+        assert_eq!(retained.1, spec.manifest.definition);
+        assert_eq!(retained.0, spec.definition);
+        assert!(retained.0.definition.description.len() > 16 * 1024 * 1024);
         let current = fixture.current(store)?;
         assert_eq!(current.spec, spec);
         for call in [10, 11] {

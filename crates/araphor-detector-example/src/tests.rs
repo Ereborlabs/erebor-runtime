@@ -121,6 +121,17 @@ fn threshold_retains_evidence_and_state() -> TestResult {
             .reset_input(true)?,
         Observation::encode(&records)?,
         Fact::encode(&facts)?,
+        Unit::encode_affected(
+            &units
+                .iter()
+                .map(|unit| unit.record.clone())
+                .collect::<Vec<_>>(),
+        )?,
+        araphor_analysis_builtins::graph::Detector::window_data(
+            &records[0].id.stream.key(),
+            records[0].id.durable_cursor,
+            u64::MAX,
+        )?,
     ];
     let mut evaluation = sdk::Evaluation {
         previous_outputs: Vec::new(),

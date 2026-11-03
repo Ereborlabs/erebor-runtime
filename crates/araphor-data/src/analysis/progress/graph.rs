@@ -24,6 +24,10 @@ struct GraphResultWrite {
     reference: PackageResultRefV1,
     relations: Vec<&'static str>,
     changed: bool,
+    work: (u64, u64, u64),
+    metadata_rows: (u64, u64),
+    pin_rows: u64,
+    root_cursors: BTreeMap<u64, (u64, u64)>,
 }
 
 impl AnalysisStore {
@@ -143,9 +147,20 @@ impl AnalysisStore {
             {
                 return Err(Code::Invalid.error("managed Graph empty result"));
             }
-            return self
-                .commit_managed_projection(managed, |_, _, _, _, _| Ok((Vec::new(), None)), check)
-                .map(|receipt| (receipt, None));
+            let (receipt, pins) = self.commit_managed_projection(
+                managed,
+                |_, _, _, _, _| Ok((Vec::new(), None, Default::default())),
+                check,
+            )?;
+            erebor_telemetry::debug!(stage="graph_commit",instance_id=%spec.id,
+                cut_revision=managed.attempt.captured_revision(),publication_revision=receipt.commit_revision,
+                coverage_revision=0u64,
+                graph_revision=0u64,prior_graph_result_id="",graph_result_id="",
+                staged_support_rows=0u64,inserted_rows=0u64,closed_rows=0u64,pin_rows=pins,
+                metadata_inserted_rows=0u64,metadata_closed_rows=0u64,
+                detector_inserted_rows=0u64,detector_closed_rows=0u64,
+                "Graph commit completed");
+            return Ok((receipt, None));
         };
         if packet.request.scope.identity != *source
             || packet.request.created_utc_ns != managed.attempt.request().time_utc_ns
@@ -162,7 +177,10 @@ impl AnalysisStore {
             return Err(Code::Invalid.error("managed Graph expiry"));
         }
         let mut graph_receipt = None;
-        let receipt = self.commit_managed_projection(
+        let mut graph_work = (0, 0, 0);
+        let mut graph_pins = 0;
+        let mut metadata_rows = (0, 0);
+        let (receipt,pins) = self.commit_managed_projection(
             managed,
             |transaction, revision, publication, witnesses, verified| {
                 let producers: Vec<_> = publication
@@ -200,6 +218,8 @@ impl AnalysisStore {
                     GraphWrite::Managed {
                         commit: managed,
                         producers: &producers,
+                        removed: &packet.removed,
+                        record_proofs: &packet.record_proofs,
                     }
                 };
                 let notice = if managed.attempt.follows_graph() {
@@ -223,11 +243,24 @@ impl AnalysisStore {
                     Some(managed.attempt.contexts()),
                     Some(verified),
                 )?;
+                graph_work=write.work;
+                graph_pins=write.pin_rows;
+                metadata_rows=write.metadata_rows;
                 graph_receipt = Some(write.receipt);
-                Ok((write.relations, Some(write.reference)))
+                Ok((write.relations, Some(write.reference), write.root_cursors))
             },
             check,
         )?;
+        erebor_telemetry::debug!(stage="graph_commit",instance_id=%spec.id,
+            cut_revision=managed.attempt.captured_revision(),publication_revision=receipt.commit_revision,
+            coverage_revision=packet.request.coverage_revision,
+            graph_revision=receipt.graph.as_ref().map_or(0,|graph|graph.commit_revision),
+            prior_graph_result_id=%packet.metadata.previous_result_id.as_deref().unwrap_or(""),
+            graph_result_id=%receipt.graph.as_ref().map_or("",|graph|graph.result_id.as_str()),
+            staged_support_rows=graph_work.0,inserted_rows=graph_work.1,closed_rows=graph_work.2,
+            metadata_inserted_rows=metadata_rows.0,metadata_closed_rows=metadata_rows.1,
+            detector_inserted_rows=graph_work.1-metadata_rows.0,detector_closed_rows=graph_work.2-metadata_rows.1,
+            pin_rows=pins.saturating_add(graph_pins),"Graph commit completed");
         Ok((receipt, graph_receipt))
     }
 
@@ -335,6 +368,50 @@ impl AnalysisStore {
             return self.reject("the Graph publication context is invalid");
         }
         let key = input.scope.identity.key();
+        let managed = matches!(graph_write, GraphWrite::Managed { .. });
+        let inherited = if managed {
+            let reset = match &graph_write {
+                GraphWrite::Managed { commit, .. } => {
+                    commit.attempt.request().rebuild || commit.attempt.switches_version()
+                }
+                _ => false,
+            };
+            GraphRows::reset_proofs(transaction, &self.root, metadata, reset)?
+        } else {
+            Vec::new()
+        };
+        let record_proofs = match &graph_write {
+            GraphWrite::Managed { record_proofs, .. } => *record_proofs,
+            _ => &[],
+        };
+        if managed
+            && proofs.iter().any(|proof| {
+                metadata
+                    .input_manifest
+                    .context
+                    .binary_search(&proof.key)
+                    .is_ok()
+                    || record_proofs
+                        .iter()
+                        .any(|(_, reference)| reference.key == proof.key)
+            })
+        {
+            return self.reject("the global Graph proofs contain record refs");
+        }
+        let mut global_proofs = proofs
+            .iter()
+            .filter(|reference| {
+                metadata
+                    .input_manifest
+                    .context
+                    .binary_search(&reference.key)
+                    .is_err()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        global_proofs.extend(inherited);
+        global_proofs.sort_by(|left, right| left.key.cmp(&right.key));
+        global_proofs.dedup();
         let mut expected_keys: BTreeSet<_> = metadata.input_manifest.context.iter().collect();
         for context in contexts {
             if context.package_provenance()?.is_some() {
@@ -347,6 +424,8 @@ impl AnalysisStore {
             }
         }
         expected_keys.extend(proofs.iter().map(|proof| &proof.key));
+        expected_keys.extend(global_proofs.iter().map(|proof| &proof.key));
+        expected_keys.extend(record_proofs.iter().map(|(_, proof)| &proof.key));
         let mut context_write = None;
         let inserted = self.context_rows(transaction, contexts, false, None, &mut context_write)?;
         let verified_contexts = inserted
@@ -356,6 +435,8 @@ impl AnalysisStore {
         let mut references = input.context_refs.clone();
         references.extend(inserted);
         references.extend_from_slice(proofs);
+        references.extend_from_slice(&global_proofs);
+        references.extend(record_proofs.iter().map(|(_, proof)| proof.clone()));
         references.sort_by(|left, right| left.key.cmp(&right.key));
         if references
             .windows(2)
@@ -384,9 +465,21 @@ impl AnalysisStore {
             captured_context_revision: input.context_revision,
             result_id: input.result_id.clone(),
             created_utc_ns: input.created_utc_ns,
-            witnesses: input.witnesses.clone(),
-            captured_context_refs: input.context_refs.clone(),
-            context_refs: references.clone(),
+            witnesses: if managed {
+                Vec::new()
+            } else {
+                input.witnesses.clone()
+            },
+            captured_context_refs: if managed {
+                Vec::new()
+            } else {
+                input.context_refs.clone()
+            },
+            context_refs: if managed {
+                Vec::new()
+            } else {
+                references.clone()
+            },
             sources: sources.to_vec(),
             advance,
             captured_prefix,
@@ -447,6 +540,10 @@ impl AnalysisStore {
                 },
                 relations: Vec::new(),
                 changed: false,
+                work: (0, 0, 0),
+                metadata_rows: (0, 0),
+                pin_rows: 0,
+                root_cursors: Default::default(),
             });
         }
         if input.context_revision
@@ -474,7 +571,7 @@ impl AnalysisStore {
         }) {
             return AnalysisConflictSnafu.fail();
         }
-        let receipt =
+        let (receipt, _) =
             Self::read_receipt_from(transaction, &self.root, &input.scope.identity, &key)?
                 .ok_or_else(|| self.state_error("the Graph source is absent"))?;
         if input.consumed_cursor > receipt.contiguous_cursor
@@ -596,17 +693,21 @@ impl AnalysisStore {
                         relations: changed
                             .map_or_else(Vec::new, |_| vec!["result_notices", "analysis_results"]),
                         changed: false,
+                        work: (0, 0, 0),
+                        metadata_rows: (0, 0),
+                        pin_rows: 0,
+                        root_cursors: Default::default(),
                     });
                 }
             }
         }
-        let staged = match &graph_write {
-            GraphWrite::Managed { commit, producers } => Some(GraphRows::stage_managed(
+        let mut staged = match &graph_write {
+            GraphWrite::Managed { .. } => Some(GraphRows::stage_managed(
                 self,
                 transaction,
                 metadata,
-                commit,
-                producers,
+                &graph_write,
+                &global_proofs,
                 verified,
             )?),
             GraphWrite::Direct(_) | GraphWrite::Expiry(_) => None,
@@ -621,7 +722,7 @@ impl AnalysisStore {
             .transpose()?;
         let metadata = resolved.as_ref().unwrap_or(metadata);
         if let (Some(changes), Some(prior_id)) =
-            (staged.as_ref(), metadata.previous_result_id.as_deref())
+            (staged.as_mut(), metadata.previous_result_id.as_deref())
         {
             if !advance && metadata.witness_deadline_utc_ns > input.created_utc_ns {
                 let prior_revision: u64 = transaction
@@ -637,7 +738,7 @@ impl AnalysisStore {
                     result_id: prior_id.to_owned(),
                     commit_revision: prior_revision,
                 };
-                if GraphRows::unchanged(transaction, &prior, metadata, &references, changes)? {
+                if GraphRows::unchanged(transaction, &prior, metadata, changes)? {
                     let changed = self.notice_rows(
                         transaction,
                         &input.scope,
@@ -663,6 +764,10 @@ impl AnalysisStore {
                         reference: prior,
                         relations,
                         changed: true,
+                        work: changes.work,
+                        metadata_rows: (0, 0),
+                        pin_rows: 0,
+                        root_cursors: std::mem::take(&mut changes.root_cursors),
                     });
                 }
             }
@@ -701,7 +806,11 @@ impl AnalysisStore {
             ),
             _ => None,
         };
-        let body = match staged {
+        let root_cursors = staged
+            .as_mut()
+            .map(|changes| std::mem::take(&mut changes.root_cursors))
+            .unwrap_or_default();
+        let (body, work, metadata_rows) = match staged {
             Some(changes) => GraphRows::publish(transaction, &reference, metadata, changes)?,
             None => GraphRows::commit(transaction, &reference, metadata, graph_write)?,
         };
@@ -716,7 +825,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "store Graph result header",
             })?;
-        Self::insert_references(
+        let pin_rows = Self::insert_references(
             transaction,
             &input.result_id,
             &input.witnesses,
@@ -782,6 +891,10 @@ impl AnalysisStore {
             reference,
             relations,
             changed: true,
+            work,
+            metadata_rows,
+            pin_rows,
+            root_cursors,
         })
     }
 }

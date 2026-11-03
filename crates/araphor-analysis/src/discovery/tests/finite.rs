@@ -154,9 +154,9 @@ impl Fixture {
                 },
             },
         };
-        let prepared = session.prepare_definition(&definition).await?;
+        let prepared = session.prepare_definition(&definition, None).await?;
         let mut selected = None;
-        PackageCall::any(&prepared.plan, &mut |call| {
+        PackageCall::any(prepared.plan(), &mut |_, call| {
             if call.package() == &image.bundle().root
                 && call.export() == "live"
                 && call.output() == "snapshot"

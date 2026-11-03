@@ -74,7 +74,6 @@ impl Runtime {
                 let journal = Changes::new(source, Arc::clone(&context))?;
                 let aggregate = compiled
                     .aggregate
-                    .as_any()
                     .downcast_ref::<AggregateExec>()
                     .ok_or_else(Self::state_error)?;
                 Some(Maintained {
@@ -260,6 +259,7 @@ impl Runtime {
         };
         session.source_index = self.source_index.clone();
         let calls = session.calls.clone().ok_or_else(Self::state_error)?;
+        let mut observed = None;
         let execution = async {
             let output = if self.run.operation == Operation::Append {
                 let PhysicalStream {
@@ -351,6 +351,10 @@ impl Runtime {
                         permit,
                     )
                     .await?;
+                observed = captured
+                    .context
+                    .session_config()
+                    .get_extension::<crate::sources::SourceSnapshot>();
                 if self.run.follow || self.run.managed.is_none() {
                     captured.reserve_complete()?;
                 }
@@ -485,6 +489,27 @@ impl Runtime {
             let _cancelled = session.control().cancel();
         }
         calls.finish().await;
+        if let Some(source) = observed {
+            source.report_work();
+        }
+        if let Ok(result) = &result {
+            if let Some(snapshot) = result
+                .as_ref()
+                .map(|output| &output.snapshot)
+                .or(self.snapshot.as_ref())
+            {
+                erebor_telemetry::debug!(
+                    stage = "subscription_done",
+                    instance_id = %snapshot.managed().map_or("", |capture| capture.instance().spec.id.as_str()),
+                    cut_revision = snapshot.page.extraction.meta.commit_revision,
+                    publication_revision = calls.published_revision(),
+                    rows = result.as_ref().and_then(|output| output.batches.as_ref()).map_or(0u64, |batches| {
+                        batches.iter().fold(0u64, |rows, batch| rows.saturating_add(batch.num_rows() as u64))
+                    }),
+                    "Native subscription execution completed"
+                );
+            }
+        }
         let Some(output) = result? else {
             return Ok(None);
         };

@@ -1280,6 +1280,7 @@ fn native_manifest_budget() -> TestResult {
             &[],
             (0, 0),
             false,
+            None,
             &mut output.sink(&control)
         )?);
         let batch = capture.tables["graph_manifest"]
@@ -1299,6 +1300,7 @@ fn native_manifest_budget() -> TestResult {
             &[],
             (0, 0),
             false,
+            None,
             &mut output.sink(&control)
         )?);
         assert_eq!(capture.tables["graph_manifest"].total_rows, rows);
@@ -1317,6 +1319,7 @@ fn native_manifest_budget() -> TestResult {
         &[],
         (0, 0),
         false,
+        None,
         &mut output.sink(&control),
     );
     assert!(
@@ -1359,6 +1362,7 @@ fn native_manifest_budget() -> TestResult {
         &[],
         (0, 0),
         false,
+        None,
         &mut output.sink(&control)
     )?);
     assert_eq!(capture.tables["graph_manifest"].total_rows, 1);

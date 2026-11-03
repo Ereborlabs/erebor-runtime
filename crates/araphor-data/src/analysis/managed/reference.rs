@@ -121,7 +121,7 @@ impl AnalysisStore {
         reader.execute_batch(&format!(
             "CREATE TEMP VIEW source_receipts AS
                 SELECT stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor,
-                    coverage_revision, retained_floor
+                    coverage_revision, retained_floor, commit_revision
                 FROM {base}.source_versions WHERE commit_revision <= {revision}
                 QUALIFY row_number() OVER (PARTITION BY stream_key ORDER BY commit_revision DESC) = 1;
              CREATE TEMP VIEW expired_ranges AS SELECT * FROM {base}.expired_ranges

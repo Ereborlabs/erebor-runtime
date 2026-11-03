@@ -51,12 +51,13 @@ impl ControlPackages {
                 self.authority.clone(),
                 grant.clone(),
                 include_str!("graph-events.sql").into(),
+                include_str!("graph-control.sql").into(),
                 definition,
                 Arc::clone(&facts),
             )
             .await?;
-            if program.definition.images.len() != images.len()
-                || program.definition.images.iter().any(|pin| {
+            if program.definition().images.len() != images.len()
+                || program.definition().images.iter().any(|pin| {
                     !images.iter().any(|bundle| {
                         bundle.bundle().root == pin.image && bundle.digest() == pin.digest
                     })
@@ -75,7 +76,7 @@ impl ControlPackages {
                     Arc::clone(&control),
                 )
                 .await?;
-            for definition in [&program.definition, &expiry] {
+            for definition in [program.definition(), &expiry] {
                 let mut grants = vec![(&grant, PackageActionV1::Install, None)];
                 grants.extend(
                     images

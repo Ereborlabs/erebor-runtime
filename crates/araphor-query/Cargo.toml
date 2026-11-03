@@ -15,9 +15,9 @@ araphor-package-runtime = { path = "../araphor-package-runtime" }
 araphor-data = { path = "../araphor-data" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 async-trait = "0.1"
-arrow-buffer = { version = "=58.4.0", features = ["pool"] }
+arrow-buffer = { version = "=59.2.0", features = ["pool"] }
 chrono = "0.4"
-datafusion = { version = "=53.1.0", default-features = false, features = ["sql", "nested_expressions", "unicode_expressions", "recursive_protection"] }
+datafusion = { version = "=55.0.0", default-features = false, features = ["sql", "nested_expressions", "unicode_expressions", "recursive_protection"] }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-telemetry = { path = "../erebor-telemetry" }
 futures-core = "0.3"

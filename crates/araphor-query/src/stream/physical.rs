@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -14,17 +13,19 @@ use datafusion::datasource::view::ViewTable;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::Count;
 use datafusion::functions_aggregate::sum::Sum;
-use datafusion::logical_expr::{Expr, LogicalPlan, Volatility};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::logical_expr::{dml::InsertOp, Expr, LogicalPlan, Volatility};
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion::physical_optimizer::sanity_checker::check_plan_sanity;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::execution_plan::{reset_plan_states, Boundedness, EmissionType};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    execute_stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    execute_stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 use futures_util::{stream, TryStreamExt as _};
 use snafu::ResultExt as _;
@@ -89,18 +90,9 @@ impl SubscribeExec {
             }
             if let LogicalPlan::TableScan(scan) = node {
                 if let Ok(provider) = source_as_provider(&scan.source) {
-                    if let Some(port) = provider.as_any().downcast_ref::<SourcePort>() {
-                        let identity = Arc::as_ptr(&provider) as *const () as usize;
-                        if views.insert(identity) {
-                            safe &= port.reusable();
-                            for input in port.inputs() {
-                                safe &= Self::reusable(input, views)?;
-                            }
-                            views.remove(&identity);
-                        } else {
-                            safe = false;
-                        }
-                    } else if let Some(view) = provider.as_any().downcast_ref::<ViewTable>() {
+                    if let Some(port) = provider.downcast_ref::<SourcePort>() {
+                        safe &= port.reusable();
+                    } else if let Some(view) = provider.downcast_ref::<ViewTable>() {
                         let identity = Arc::as_ptr(&provider) as *const () as usize;
                         if views.insert(identity) {
                             safe &= Self::reusable(view.logical_plan(), views)?;
@@ -109,8 +101,7 @@ impl SubscribeExec {
                             safe = false;
                         }
                     } else {
-                        safe &= provider.as_any().is::<SourceProvider>()
-                            || provider.as_any().is::<EmptyTable>();
+                        safe &= provider.is::<SourceProvider>() || provider.is::<EmptyTable>();
                     }
                 } else {
                     safe = false;
@@ -187,12 +178,10 @@ impl SubscribeExec {
     fn compile(input: &Arc<dyn ExecutionPlan>) -> NativeResult<Option<Compiled>> {
         let mut node = Arc::clone(input);
         let aggregate = loop {
-            if node.as_any().is::<AggregateExec>() {
+            if node.is::<AggregateExec>() {
                 break Arc::clone(&node);
             }
-            if !node.as_any().is::<ProjectionExec>()
-                && !node.as_any().is::<CoalescePartitionsExec>()
-            {
+            if !node.is::<ProjectionExec>() && !node.is::<CoalescePartitionsExec>() {
                 return Ok(None);
             }
             let children = node.children();
@@ -201,14 +190,14 @@ impl SubscribeExec {
             };
             node = Arc::clone(child);
         };
-        let Some(definition) = aggregate.as_any().downcast_ref::<AggregateExec>() else {
+        let Some(definition) = aggregate.downcast_ref::<AggregateExec>() else {
             return Ok(None);
         };
         if definition.mode() != &AggregateMode::Single
             || !definition.group_expr().is_true_no_grouping()
             || definition.aggr_expr().is_empty()
             || definition.aggr_expr().iter().any(|expression| {
-                let function = expression.fun().inner().as_any();
+                let function = expression.fun().inner();
                 expression.is_distinct()
                     || !(function.is::<Count>()
                         || (function.is::<Sum>()
@@ -228,9 +217,9 @@ impl SubscribeExec {
                 }
                 break;
             }
-            if !node.as_any().is::<ProjectionExec>()
-                && !node.as_any().is::<FilterExec>()
-                && !node.as_any().is::<CoalescePartitionsExec>()
+            if !node.is::<ProjectionExec>()
+                && !node.is::<FilterExec>()
+                && !node.is::<CoalescePartitionsExec>()
             {
                 return Ok(None);
             }
@@ -322,7 +311,7 @@ impl SubscribeExec {
             run.operation == crate::follow::Operation::Append,
         )
         .context(SqlSnafu)?;
-        state.config_mut().set_extension(run);
+        state.config_mut().set_extension(Arc::clone(&run));
         let mut planning = state.clone();
         planning.config_mut().set_extension(Arc::clone(&permit));
         if reusable {
@@ -332,9 +321,40 @@ impl SubscribeExec {
                 .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", false);
             *planning.config_mut() = config;
         }
-        let physical = session.physical(&logical, &planning).await?;
+        let prepared = if reusable {
+            run.managed.as_ref().and_then(|(definition, publication)| {
+                definition
+                    .executable(session.engine())
+                    .map(|physical| (physical, Arc::clone(publication)))
+            })
+        } else {
+            None
+        };
+        let physical = match prepared {
+            Some((physical, publication)) => {
+                let mut input = reset_plan_states(physical).context(SqlSnafu)?;
+                if input.output_partitioning().partition_count() > 1 {
+                    input = match input.output_ordering().cloned() {
+                        Some(order) => Arc::new(SortPreservingMergeExec::new(order, input)),
+                        None => Arc::new(CoalescePartitionsExec::new(input)),
+                    };
+                    check_plan_sanity(&input, &planning.config_options().optimizer)
+                        .context(SqlSnafu)?;
+                }
+                let sink = publication
+                    .insert_into(&planning, input, InsertOp::Append)
+                    .await
+                    .context(SqlSnafu)?;
+                check_plan_sanity(&sink, &planning.config_options().optimizer).context(SqlSnafu)?;
+                let subscription: Arc<dyn ExecutionPlan> =
+                    Arc::new(Self::new(sink, false).context(SqlSnafu)?);
+                check_plan_sanity(&subscription, &planning.config_options().optimizer)
+                    .context(SqlSnafu)?;
+                subscription
+            }
+            None => session.physical(&logical, &planning).await?,
+        };
         let subscription = physical
-            .as_any()
             .downcast_ref::<Self>()
             .ok_or_else(|| DataFusionError::Internal("subscription physical root changed".into()))
             .context(SqlSnafu)?;
@@ -435,10 +455,6 @@ impl ExecutionPlan for SubscribeExec {
         "SubscribeExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -456,6 +472,13 @@ impl ExecutionPlan for SubscribeExec {
             .iter()
             .map(|_| Distribution::SinglePartition)
             .collect()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> NativeResult<TreeNodeRecursion>,
+    ) -> NativeResult<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

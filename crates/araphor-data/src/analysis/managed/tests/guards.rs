@@ -35,6 +35,50 @@ fn managed_images_reject_forged_implementation_pin() -> TestResult {
             "{error:?}"
         );
     }
+    for field in ["body", "revision", "tenant"] {
+        let mut spec = fixture.instance.spec.clone();
+        match field {
+            "body" => spec.definition.definition.description.push_str(" changed"),
+            "revision" => spec.manifest.definition = store.meta()?.commit_revision + 1,
+            "tenant" => spec.tenant = [2; 16],
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                store.read_snapshot(|reader| AnalysisStore::check_managed_images(reader, &spec)),
+                Err(crate::Error::Package {
+                    code: crate::PackageErrorCodeV1::Missing,
+                    field: "managed definition pin",
+                    ..
+                })
+            ),
+            "{field}"
+        );
+    }
+    let mut changed = fixture.instance.spec.definition.clone();
+    changed.definition.description.push_str(" changed");
+    {
+        let mut writer = store.writer()?;
+        assert_eq!(
+            writer.get_mut()?.execute(
+                "UPDATE discovery_definitions SET definition = ? WHERE commit_revision = ?",
+                params![changed.encode()?, fixture.instance.spec.manifest.definition],
+            )?,
+            1
+        );
+    }
+    assert!(matches!(
+        store.read_snapshot(|reader| {
+            AnalysisStore::check_managed_images(reader, &fixture.instance.spec)
+        }),
+        Err(crate::Error::Package {
+            code: crate::PackageErrorCodeV1::Missing,
+            field: "managed definition pin",
+            ..
+        })
+    ));
+    drop(store);
+    assert!(AnalysisStore::open(directory.path().join("store")).is_err());
     Ok(())
 }
 

@@ -22,6 +22,7 @@ pub struct Package {
     bundle: Arc<PackageBundle>,
     export: String,
     output: String,
+    revision: u64,
     prepared: OnceCell<(PreparedDefinition, PackageCall)>,
 }
 
@@ -51,8 +52,7 @@ impl Package {
             );
             Ok(())
         })?;
-        let _context =
-            reference.ok_or_else(|| Code::Denied.error("package retention authority"))?;
+        let context = reference.ok_or_else(|| Code::Denied.error("package retention authority"))?;
         let package = Self {
             query,
             authority,
@@ -60,6 +60,7 @@ impl Package {
             bundle,
             export: export.into(),
             output: output.into(),
+            revision: context.commit_revision,
             prepared: OnceCell::new(),
         };
         package.check()?;
@@ -134,7 +135,7 @@ impl Package {
                     return Err(Code::Denied.error("package image pin").into());
                 }
                 let mut root = None;
-                PackageCall::any(&prepared.plan, &mut |call| {
+                PackageCall::any(prepared.plan(), &mut |_, call| {
                     let model = call
                         .descriptor()
                         .exports
@@ -179,15 +180,12 @@ impl Package {
         self.check()?;
         let selection = self.selection(source)?;
         let (prepared, _) = self.prepared().await?;
-        let binding = prepared
-            .resolved()
-            .digest()
-            .map_err(araphor_data::Error::from)?;
+        let binding = self.revision.to_be_bytes();
         let session = self.query.session(selection, &self.control()?, 0)?;
         let stream = session.subscribe(
-            prepared.plan.clone(),
+            prepared.plan().clone(),
             prepared.sources().clone(),
-            binding.as_bytes(),
+            &binding,
             follow,
         )?;
         self.check()?;

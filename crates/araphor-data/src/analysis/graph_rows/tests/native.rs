@@ -21,7 +21,7 @@ impl NativeRows {
             result_id: id.into(),
             commit_revision: revision,
         };
-        let body = GraphRows::commit(
+        let (body, _, _) = GraphRows::commit(
             writer,
             &reference,
             &GraphManifest::from_snapshot(graph),
@@ -151,6 +151,7 @@ impl NativeRows {
             records: &BTreeMap::new(),
         }
         .replace(members)
+        .map(|_| ())
     }
 
     pub fn branches(
@@ -182,6 +183,7 @@ impl NativeRows {
             records: &BTreeMap::new(),
         }
         .replace(members)
+        .map(|_| ())
     }
 
     pub fn read_branches(

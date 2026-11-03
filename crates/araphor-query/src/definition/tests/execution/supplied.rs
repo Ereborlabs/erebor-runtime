@@ -53,7 +53,7 @@ async fn supplied_sql_keeps_shapes() -> TestResult {
         session.register("supplied_rows", schema, &batches)?;
         let prepared = session.prepare_definition(&Fixture::sql(
             r#"SELECT * FROM "fixture"."r1".count(source => (SELECT value FROM supplied_rows))"#,
-        )).await?;
+        ), None).await?;
         let calls = Fixture::calls(&prepared.plan)?;
         assert_eq!(calls.len(), 1);
         let call = &calls[0];
@@ -118,10 +118,13 @@ async fn supplied_inputs_reject_shape() -> TestResult {
     )?;
     session.register("supplied_rows", schema, std::slice::from_ref(&batch))?;
     let prepared = session
-        .prepare_definition(&Fixture::sql(
-            r#"SELECT * FROM "runtime-fixture"."1"."count-input"(
+        .prepare_definition(
+            &Fixture::sql(
+                r#"SELECT * FROM "runtime-fixture"."1"."count-input"(
             input => (SELECT value FROM supplied_rows), mode => 'sum-input', amount => 0)"#,
-        ))
+            ),
+            None,
+        )
         .await?;
     let calls = Fixture::calls(&prepared.plan)?;
     assert_eq!(calls.len(), 1);

@@ -102,6 +102,7 @@ mod tests {
             assert_eq!(
                 AnalysisStore::read_receipt_from(writer, &root, &identity, &identity.key())?
                     .ok_or("receipt absent")?
+                    .0
                     .contiguous_cursor,
                 64
             );
@@ -457,6 +458,7 @@ impl RawJournal {
             self.freeze(entry, index, cursor, cursor)?
                 .read(&self.root)?;
         }
+        super::graph_rows::GraphRows::validate_positions(writer, self, revision)?;
         Ok(())
     }
 
@@ -752,6 +754,7 @@ impl RawJournal {
                 &receipt.identity,
                 &key,
             )?
+            .map(|(receipt, _)| receipt)
             .unwrap_or_else(|| AnalysisSourceReceiptV1 {
                 identity: receipt.identity.clone(),
                 cpu_id: receipt.cpu_id,

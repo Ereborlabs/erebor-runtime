@@ -257,6 +257,86 @@ impl AnalysisStore {
                 operation: "flush native package context roots",
             })?;
         }
+        let head: u64 = transaction
+            .query_row("SELECT commit_revision FROM store_meta", [], |row| {
+                row.get(0)
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read definition collection head",
+            })?;
+        let mut after = None;
+        loop {
+            let page = {
+                let mut statement = transaction.prepare(
+                    "SELECT tenant_id, name, definition, commit_revision FROM discovery_definitions
+                     WHERE (CAST(? AS BLOB) IS NULL OR tenant_id = ?) AND (? OR commit_revision > ?)
+                     ORDER BY commit_revision LIMIT ?",
+                ).context(AnalysisDatabaseSnafu { operation: "prepare definition collection page" })?;
+                statement
+                    .query_map(
+                        params![
+                            tenant.as_ref().map(|tenant| tenant.as_slice()),
+                            tenant.as_ref().map(|tenant| tenant.as_slice()),
+                            after.is_none(),
+                            after.unwrap_or_default(),
+                            super::super::MAX_ANALYSIS_PAGE_RECORDS as u32
+                        ],
+                        |row| {
+                            Ok((
+                                row.get::<_, Vec<u8>>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, Vec<u8>>(2)?,
+                                row.get::<_, u64>(3)?,
+                            ))
+                        },
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read definition collection page",
+                    })?
+                    .collect::<duckdb::Result<Vec<_>>>()
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "decode definition collection page",
+                    })?
+            };
+            if page.is_empty() {
+                break;
+            }
+            let mut roots = Vec::new();
+            for (tenant, name, bytes, revision) in page {
+                let tenant: [u8; 16] = tenant
+                    .try_into()
+                    .map_err(|_| self.state_error("the definition tenant is invalid"))?;
+                let definition =
+                    araphor_discovery_definition::ResolvedDefinition::from_bytes(&bytes)?;
+                if tenant == [0; 16]
+                    || revision == 0
+                    || after.is_some_and(|after| revision <= after)
+                    || revision > head
+                    || definition.definition.name != name
+                    || definition.encode()? != bytes
+                {
+                    return Err(self.state_error("the retained definition is invalid"));
+                }
+                Self::definition_images(transaction, tenant, &definition, false)?;
+                after = Some(revision);
+                roots.extend(definition.images.into_iter().map(|pin| (tenant, pin.image)));
+            }
+            let mut appender = transaction
+                .appender_to_catalog_and_db("package_context_gc_roots", "temp", "main")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare definition root staging",
+                })?;
+            for (tenant, image) in roots {
+                appender
+                    .append_row(params![tenant.as_slice(), image.package_id, image.revision])
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "stage definition image root",
+                    })?;
+            }
+            appender.flush().context(AnalysisDatabaseSnafu {
+                operation: "flush definition image roots",
+            })?;
+        }
         Ok(())
     }
 
@@ -276,11 +356,6 @@ impl AnalysisStore {
             "DELETE FROM package_revisions p WHERE (? OR (p.tenant_id = ? AND p.package_id = ? AND p.revision = ?))
             AND NOT EXISTS (SELECT 1 FROM package_images i WHERE i.tenant_id = p.tenant_id
                 AND i.package_id = p.package_id AND i.revision = p.revision AND i.installed)
-            AND NOT EXISTS (SELECT 1 FROM discovery_definitions d,
-                json_each(TRY_CAST(decode(d.definition) AS JSON), '$.images') j
-                WHERE d.tenant_id = p.tenant_id
-                    AND (j.value->'image'->>'package_id') = p.package_id
-                    AND (j.value->'image'->>'revision') = p.revision)
             AND NOT EXISTS (SELECT 1 FROM temp.main.package_context_gc_roots c
                 WHERE c.tenant_id = p.tenant_id AND c.package_id = p.package_id
                     AND c.revision = p.revision)

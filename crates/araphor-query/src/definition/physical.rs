@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,14 +16,15 @@ use datafusion::execution::{SessionState, TaskContext};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion::optimizer::OptimizerRule;
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    execute_stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    execute_stream, ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, InputDistributionRequirements, Partitioning, PlanProperties,
+    ReplaceChildrenOptions, SendableRecordBatchStream,
 };
 use erebor_telemetry::tracing::{instrument::WithSubscriber as _, Instrument as _};
 use futures_util::future::{BoxFuture, FutureExt, Shared, WeakShared};
@@ -117,7 +117,29 @@ impl ExecutionReceipt {
         &self.calls
     }
 
-    pub fn acknowledge(&self, context: &TaskContext, revision: u64, completed: bool) -> Result<()> {
+    pub fn prepare_ack(&self, context: &TaskContext) -> Result<()> {
+        let source = context
+            .session_config()
+            .get_extension::<SourceSnapshot>()
+            .ok_or_else(|| internal("the publication source is absent"))?;
+        if !Arc::ptr_eq(&self.snapshot, &source.snapshot()?) {
+            return Err(external(
+                araphor_data::PackageErrorCodeV1::Invalid.error("publication receipt"),
+            ));
+        }
+        if let Some(view) = source.source_view()? {
+            view.prepare_calls(self.calls.keys().copied())?;
+        }
+        Ok(())
+    }
+
+    pub fn acknowledge(
+        &self,
+        context: &TaskContext,
+        revision: u64,
+        completed: bool,
+        receipt: Option<&araphor_data::ManagedReceipt>,
+    ) -> Result<()> {
         let current = Self::from_context(context)?;
         if !Arc::ptr_eq(&self.snapshot, &current.snapshot) {
             return Err(external(
@@ -134,7 +156,14 @@ impl ExecutionReceipt {
                 .proof()
                 .filter(|proof| proof.commit_revision == revision)
                 .ok_or_else(|| internal("the source publication acknowledgement differs"))?;
-            view.commit(proof)?;
+            let receipt = receipt
+                .filter(|receipt| {
+                    receipt.commit_revision == revision
+                        && &receipt.selected == proof.as_ref()
+                        && receipt.results.keys().eq(self.calls.keys())
+                })
+                .ok_or_else(|| internal("the source call acknowledgement differs"))?;
+            view.commit(receipt)?;
         }
         if completed {
             context
@@ -400,10 +429,6 @@ impl CallContext {
         &self.invocation
     }
 
-    pub(crate) fn memory(&self) -> &Memory {
-        &self.memory
-    }
-
     pub fn new(
         runtime: Arc<Runtime>,
         invocation: Invocation,
@@ -501,6 +526,20 @@ impl CallContext {
                     .clone()
                     .transform_down_up_with_subqueries(
                         |plan| {
+                            if let LogicalPlan::TableScan(scan) = &plan {
+                                if let Ok(provider) =
+                                    datafusion::datasource::source_as_provider(&scan.source)
+                                {
+                                    if let Some(source) =
+                                        provider.downcast_ref::<crate::sources::SourcePort>()
+                                    {
+                                        return source
+                                            .clocked(&scoped)
+                                            .scan_plan(scan.clone())
+                                            .map(Transformed::yes);
+                                    }
+                                }
+                            }
                             let nested = matches!(&plan, LogicalPlan::Extension(extension)
                                 if extension.node.as_any().is::<PackageCall>());
                             Ok(Transformed::new(
@@ -728,7 +767,10 @@ impl PackageExec {
                         self.call
                             .input_scope
                             .window(slot)
-                            .map_or_else(|| crate::follow::Window::infer(plan), Ok)
+                            .map_or_else(
+                                || crate::follow::Window::infer(plan).map(|(window, _)| window),
+                                Ok,
+                            )
                             .map_err(external)?
                     } else {
                         None
@@ -875,18 +917,20 @@ impl PackageExec {
                     .prior(self.call.id)
                     .map(|prior| {
                         let reset = model.change_inputs.is_some()
-                            && view
-                                .as_ref()
-                                .is_none_or(|view| view.version() != prior.revision);
-                        prior.state(
-                            model,
-                            &inputs,
-                            parameters.as_ref(),
-                            managed.rebuild() || reset,
-                        )
+                            && match &view {
+                                Some(view) => !view.has_call(self.call.id, prior)?,
+                                None => true,
+                            };
+                        prior
+                            .state(
+                                model,
+                                &inputs,
+                                parameters.as_ref(),
+                                managed.rebuild() || reset,
+                            )
+                            .map_err(external)
                     })
-                    .transpose()
-                    .map_err(external)?
+                    .transpose()?
                     .unwrap_or_default()
             }
             None => (
@@ -1110,7 +1154,7 @@ impl PackageExec {
         Self::collect_plan(plan, schema, owner, context, memory, input).await
     }
 
-    pub(super) async fn collect_plan(
+    pub(crate) async fn collect_plan(
         plan: &Arc<dyn ExecutionPlan>,
         schema: &sdk::Schema,
         owner: &CallContext,
@@ -1209,21 +1253,34 @@ impl ExecutionPlan for PackageExec {
     fn name(&self) -> &str {
         "PackageExec"
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         self.children.iter().collect()
     }
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition; self.children.len()]
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        InputDistributionRequirements::new(vec![Distribution::SinglePartition; self.children.len()])
+    }
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != self.children.len() {
             return Err(internal("package physical child count changed"));

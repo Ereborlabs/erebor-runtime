@@ -89,8 +89,7 @@ fn metadata_counts_spare_capacity() -> TestResult {
         .ok_or("image pin absent")?;
     growth +=
         grow(&mut pin.image.package_id) + grow(&mut pin.image.revision) + grow(&mut pin.digest);
-    growth +=
-        grow(&mut instance.spec.manifest.planner) + grow(&mut instance.spec.manifest.definition);
+    growth += grow(&mut instance.spec.manifest.planner);
     let call = instance
         .spec
         .manifest

@@ -124,7 +124,10 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
         ),
     ] {
         let name = definition.name.clone();
-        let PackageResponseV1::Definition(admitted) = fixture
+        let PackageResponseV1::Definition {
+            snapshot: admitted,
+            commit_revision: revision,
+        } = fixture
             .package(
                 PackageRequestV1::AdmitDefinition {
                     definition: definition.clone(),
@@ -135,6 +138,7 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
         else {
             return Err("definition absent".into());
         };
+        assert!(revision > 0);
         assert_eq!(admitted.definition, definition);
         assert!(admitted.images.is_empty());
         let before = store.meta()?.commit_revision;
@@ -142,7 +146,7 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
             fixture
                 .package(PackageRequestV1::AdmitDefinition { definition }, true)
                 .await?,
-            PackageResponseV1::Definition(actual) if actual == admitted
+            PackageResponseV1::Definition { snapshot: actual, commit_revision: actual_revision } if actual == admitted && actual_revision == revision
         ));
         assert_eq!(store.meta()?.commit_revision, before);
         assert!(matches!(
@@ -150,12 +154,12 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
                 .package(
                     PackageRequestV1::InspectDefinition {
                         name,
-                        revision: Some(admitted.digest()?),
+                        revision: Some(revision.to_string()),
                     },
                     false
                 )
                 .await?,
-            PackageResponseV1::Definition(actual) if actual == admitted
+            PackageResponseV1::Definition { snapshot: actual, commit_revision: actual_revision } if actual == admitted && actual_revision == revision
         ));
     }
     let invalid = definition(
@@ -256,7 +260,10 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
             },
         },
     );
-    let PackageResponseV1::Definition(admitted) = fixture
+    let PackageResponseV1::Definition {
+        snapshot: admitted,
+        commit_revision: revision,
+    } = fixture
         .package(
             PackageRequestV1::AdmitDefinition {
                 definition: call.clone(),
@@ -349,7 +356,10 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
             },
         ),
     ] {
-        let PackageResponseV1::Definition(admitted) = fixture
+        let PackageResponseV1::Definition {
+            snapshot: admitted,
+            commit_revision: revision,
+        } = fixture
             .package(
                 PackageRequestV1::AdmitDefinition {
                     definition: definition.clone(),
@@ -360,13 +370,17 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
         else {
             return Err("multiple call definition absent".into());
         };
+        assert!(revision > 0);
         assert_eq!(admitted.definition, definition);
         assert_eq!(admitted.images, vec![first_pin.clone(), second_pin.clone()]);
     }
     let repeated = definition("repeated-image", Program::Sql { source: Source::Inline {
         inline: "SELECT a.count AS first_count, b.count AS second_count FROM \"api.fixture\".\"1\".count() a CROSS JOIN \"api.fixture\".\"1\".count() b".into(),
     } });
-    let PackageResponseV1::Definition(repeated) = fixture
+    let PackageResponseV1::Definition {
+        snapshot: repeated,
+        commit_revision: repeated_revision,
+    } = fixture
         .package(
             PackageRequestV1::AdmitDefinition {
                 definition: repeated,
@@ -377,6 +391,7 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
     else {
         return Err("repeated image definition absent".into());
     };
+    assert!(repeated_revision > 0);
     assert_eq!(repeated.images, vec![first_pin.clone()]);
     fixture
         .service
@@ -410,7 +425,7 @@ async fn definition_rpc_admission_is_not_execution() -> TestResult {
                 false
             )
             .await?,
-        PackageResponseV1::Definition(actual) if actual == admitted
+        PackageResponseV1::Definition { snapshot: actual, commit_revision: actual_revision } if actual == admitted && actual_revision == revision
     ));
     Ok(())
 }

@@ -4,7 +4,7 @@ use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 use std::collections::BTreeMap;
 
-use super::super::AnalysisStore;
+use super::super::{AnalysisStore, PackageResultRefV1};
 use super::model::*;
 use crate::{AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result};
 
@@ -245,9 +245,8 @@ impl AnalysisStore {
     }
 
     pub(super) fn check_managed_images(reader: &Connection, spec: &ManagedSpec) -> Result<()> {
-        let definition =
-            serde_json::to_vec(&spec.definition).context(crate::PackageEncodingSnafu)?;
-        let saved: Option<Vec<u8>> = reader.query_row("SELECT definition FROM discovery_definitions WHERE tenant_id = ? AND name = ? AND revision = ?",
+        let definition = spec.definition.encode()?;
+        let saved: Option<Vec<u8>> = reader.query_row("SELECT definition FROM discovery_definitions WHERE tenant_id = ? AND name = ? AND commit_revision = ?",
             params![spec.tenant.as_slice(), spec.definition.definition.name, spec.manifest.definition], |row| row.get(0))
             .optional().context(AnalysisDatabaseSnafu { operation: "read managed definition pin" })?;
         if saved.as_deref() != Some(definition.as_slice()) {
@@ -702,10 +701,14 @@ impl AnalysisStore {
                 crate::InstanceResultKindV1::Selected,
             ),
         };
+        reference.instance().spec.definition.validate()?;
+        if reference.instance().spec.manifest.definition == 0 {
+            return Err(Code::Invalid.error("definition revision"));
+        }
         Ok(crate::InstanceResultV1 {
             instance_id: instance.spec.id.clone(),
             result,
-            definition_revision: reference.instance().spec.definition.digest()?,
+            definition_revision: reference.instance().spec.manifest.definition.to_string(),
             generation: captured.generation,
             source: crate::AnalysisStoreMetaV1 {
                 store_uuid: captured.store,
@@ -921,6 +924,77 @@ impl AnalysisStore {
 }
 
 impl AnalysisStore {
+    pub(in crate::analysis) fn graph_capture_cut(
+        reader: &Connection,
+        tenant: [u8; 16],
+        result: &PackageResultRefV1,
+        reference: Option<&ManagedAttempt>,
+        expected_call: Option<&str>,
+    ) -> Result<u64> {
+        let (call, source, call_cut, metadata_cut): (String, Vec<u8>,Option<u64>,Option<u64>) = reader
+            .query_row(
+                "SELECT v.result_id,r.stream_key,v.captured_revision,metadata.captured_revision FROM graph_versions g
+             JOIN analysis_results r ON r.result_id=g.result_id
+             JOIN graph_producer_versions metadata ON metadata.result_id=g.metadata_result_id
+             JOIN graph_result_producers b ON b.result_id=g.result_id
+             JOIN graph_producer_versions v ON v.result_id=b.producer_result_id
+             JOIN graph_producer_scopes s ON s.scope_id=v.scope_id
+             WHERE g.result_id=? AND g.commit_revision=? AND r.tenant_id=?
+                AND r.commit_revision=g.commit_revision AND s.producer_kind=0
+                AND v.commit_revision=g.commit_revision AND (CAST(? AS VARCHAR) IS NULL OR v.result_id=?)
+                ORDER BY s.call_id LIMIT 1",
+                params![result.result_id, result.commit_revision, tenant.as_slice(),expected_call,expected_call],
+                |row| Ok((row.get(0)?, row.get(1)?,row.get(2)?,row.get(3)?)),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read Graph captured owner",
+            })?;
+        let (record, revision) = Self::managed_meta_from(reader, tenant, &call)?;
+        let (attempt, spec) = Self::managed_call_owner(reader, tenant, &call, revision, &record)?;
+        if call_cut != Some(attempt.capture.revision)
+            || metadata_cut != Some(attempt.capture.revision)
+        {
+            return Err(Code::Invalid.error("Graph captured native cut"));
+        }
+        if reference.is_some_and(|reference| {
+            reference.0.capture != attempt.capture
+                || reference.1.spec != spec
+                || reference.0.receipt != attempt.receipt
+                || reference.0.request.id != attempt.request.id
+        }) {
+            return Err(Code::Conflict.error("Graph captured reference"));
+        }
+        let ManagedDestination::Graph {
+            source: declared,
+            calls,
+            ..
+        } = &spec.destination
+        else {
+            return Err(Code::Invalid.error("Graph captured destination"));
+        };
+        if declared.key() != source
+            || !calls.contains(&record.call)
+            || attempt
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.graph.as_ref())
+                != Some(result)
+            || attempt.capture.revision >= result.commit_revision
+        {
+            return Err(Code::Invalid.error("Graph captured receipt"));
+        }
+        crate::analysis::graph_rows::GraphRows::call_scope(
+            reader,
+            &spec,
+            record.call,
+            &PackageResultRefV1 {
+                result_id: call,
+                commit_revision: revision,
+            },
+        )?;
+        Ok(attempt.capture.revision)
+    }
+
     pub(super) fn managed_call_owner(
         reader: &Connection,
         tenant: [u8; 16],

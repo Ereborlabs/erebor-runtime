@@ -12,9 +12,15 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Definition JSON failed: {source}"))]
-    Json {
-        source: serde_json::Error,
+    #[snafu(display("Definition encoding failed: {source}"))]
+    Encoding {
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Definition decoding failed: {source}"))]
+    Decoding {
+        source: rmp_serde::decode::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -59,7 +65,8 @@ impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Invalid { .. }
-            | Self::Json { .. }
+            | Self::Encoding { .. }
+            | Self::Decoding { .. }
             | Self::Yaml { .. }
             | Self::YamlScan { .. }
             | Self::Sql { .. }

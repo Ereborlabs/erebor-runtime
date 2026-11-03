@@ -9,7 +9,85 @@ use std::collections::{BTreeMap, BTreeSet};
 type GraphFindingBatch = BTreeMap<String, (GraphRevisionV1, BTreeMap<String, FindingV1>)>;
 
 impl AnalysisStore {
-    fn current_finding_keys(
+    pub fn notification_finding_value(
+        &self,
+        tenant: [u8; 16],
+        reference: &NotificationFindingRefV1,
+        prior: Option<&NotificationFindingRefV1>,
+    ) -> Result<(FindingV1, bool)> {
+        Notice::Invalid.require(
+            tenant != [0; 16]
+                && std::iter::once(reference).chain(prior).all(|reference| {
+                    NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
+                        && NotificationGrantV1::identifier(&reference.result_id, usize::MAX)
+                })
+                && prior.is_none_or(|prior| prior.finding_id == reference.finding_id),
+            "finding reference",
+        )?;
+        self.read_snapshot(|reader| {
+            let heads =
+                self.current_finding_keys(reader, tenant, None, Some(&reference.finding_id), 1)?;
+            let current = heads.first().ok_or_else(|| {
+                crate::NotificationSnafu {
+                    code: Notice::Denied,
+                    field: "current finding scope",
+                }
+                .build()
+            })?;
+            Notice::Conflict.require(
+                current.0 == reference.result_id,
+                "current finding reference",
+            )?;
+            let header = GraphRows::read_summary(reader, tenant, &reference.result_id, None)?
+                .ok_or_else(|| self.state_error("the Graph header is absent"))?;
+            let finding = GraphRows::read_finding(
+                reader,
+                &reference.result_id,
+                &reference.finding_id,
+                &header,
+                None,
+            )?
+            .ok_or_else(|| {
+                crate::NotificationSnafu {
+                    code: Notice::Denied,
+                    field: "current finding scope",
+                }
+                .build()
+            })?;
+            let changed = match prior {
+                None => true,
+                Some(prior) if prior.result_id == reference.result_id => false,
+                Some(prior) => {
+                    match GraphRows::read_summary(reader, tenant, &prior.result_id, None)? {
+                        None => true,
+                        Some(previous) => match GraphRows::read_finding(
+                            reader,
+                            &prior.result_id,
+                            &prior.finding_id,
+                            &previous,
+                            None,
+                        )? {
+                            None => true,
+                            Some(value) => {
+                                value != finding
+                                    && !GraphRows::same_revision(
+                                        reader,
+                                        &prior.result_id,
+                                        &previous,
+                                        &reference.result_id,
+                                        &header,
+                                        None,
+                                    )?
+                            }
+                        },
+                    }
+                }
+            };
+            Ok((finding, changed))
+        })
+    }
+
+    pub(in crate::analysis) fn current_finding_keys(
         &self,
         reader: &Connection,
         tenant: [u8; 16],
@@ -17,6 +95,42 @@ impl AnalysisStore {
         exact: Option<&str>,
         limit: usize,
     ) -> Result<Vec<(String, String)>> {
+        if let Some(id) = exact {
+            if after.is_some_and(|after| id <= after) || limit == 0 {
+                return Ok(Vec::new());
+            }
+            let mut statement=reader.prepare(
+                "WITH heads AS (
+                    SELECT result_id,commit_revision FROM analysis_results
+                    WHERE tenant_id=? AND processor_id=? AND method_version=? AND stream_key IS NOT NULL
+                    QUALIFY row_number() OVER(PARTITION BY stream_key,first_cursor ORDER BY commit_revision DESC,result_id DESC)=1
+                 ) SELECT h.result_id,f.finding_id FROM heads h
+                 JOIN graph_result_producers b ON b.result_id=h.result_id
+                 JOIN graph_producer_versions v ON v.result_id=b.producer_result_id
+                 JOIN graph_producer_members m ON m.scope_id=v.scope_id AND m.member_kind=4 AND m.member_key=?
+                    AND m.valid_from<=v.commit_revision AND (m.valid_to IS NULL OR m.valid_to>v.commit_revision)
+                 JOIN graph_finding_values f ON f.value_id=m.value_ref AND f.finding_id=?
+                 QUALIFY row_number() OVER(PARTITION BY f.finding_id ORDER BY h.commit_revision DESC,h.result_id DESC)=1"
+            ).context(AnalysisDatabaseSnafu {operation:"prepare exact current finding key"})?;
+            return statement
+                .query_map(
+                    params![
+                        tenant.as_slice(),
+                        GRAPH_PROCESSOR,
+                        GRAPH_SCHEMA_VERSION,
+                        GraphRows::member_key(&id)?,
+                        id
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read exact current finding key",
+                })?
+                .collect::<duckdb::Result<_>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode exact current finding key",
+                });
+        }
         let mut statement=reader.prepare("WITH heads AS (SELECT result_id,commit_revision FROM analysis_results WHERE tenant_id=? AND processor_id=? AND method_version=? AND stream_key IS NOT NULL QUALIFY row_number() OVER(PARTITION BY stream_key,first_cursor ORDER BY commit_revision DESC,result_id DESC)=1), current AS (SELECT f.result_id,f.finding_id,h.commit_revision FROM heads h JOIN graph_finding_keys f USING(result_id) QUALIFY row_number() OVER(PARTITION BY f.finding_id ORDER BY h.commit_revision DESC,f.result_id DESC)=1) SELECT result_id,finding_id FROM current WHERE (? IS NULL OR finding_id>?) AND (? IS NULL OR finding_id=?) ORDER BY finding_id LIMIT ?").context(AnalysisDatabaseSnafu {operation:"prepare current finding keys"})?;
         statement
             .query_map(

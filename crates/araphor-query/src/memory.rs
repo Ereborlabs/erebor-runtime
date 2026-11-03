@@ -37,7 +37,17 @@ struct Consumer {
     scoped: bool,
 }
 
+impl std::fmt::Display for Pool {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.native, formatter)
+    }
+}
+
 impl MemoryPool for Pool {
+    fn name(&self) -> &str {
+        self.resource
+    }
+
     fn unregister(&self, consumer: &MemoryConsumer) {
         self.capacity
             .released
@@ -359,7 +369,7 @@ impl Memory {
         Self::reserve(&self.output, bytes, self.output_capacity)
     }
 
-    pub(crate) fn input_capacity(&self) -> Option<usize> {
+    pub fn input_capacity(&self) -> Option<usize> {
         self.input_capacity
     }
 
@@ -379,7 +389,7 @@ impl Memory {
         self.reserve_output(bytes.min(available).max(usize::from(bytes != 0)))
     }
 
-    pub(crate) fn prepare_input(&self, bytes: usize) -> Result<MemoryReservation> {
+    pub fn prepare_input(&self, bytes: usize) -> Result<MemoryReservation> {
         let Some(capacity) = self.input_capacity else {
             return self.reserve_input(if bytes == usize::MAX { 0 } else { bytes });
         };

@@ -6,6 +6,7 @@ use araphor_data::{
 
 use super::*;
 
+mod native;
 mod retained;
 pub(super) use retained::GraphCandidate;
 use retained::GraphContext;
@@ -335,54 +336,26 @@ fn graph_fact(
 }
 
 impl araphor_analysis::GraphFacts for super::context::ControlContextOwner {
+    fn plans<'a>(
+        &'a self,
+        session: &'a araphor_query::execution::Session,
+        events: &'a araphor_query::datafusion::logical_expr::LogicalPlan,
+        contexts: &'a araphor_query::datafusion::logical_expr::LogicalPlan,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        araphor_query::Result<(
+            araphor_query::datafusion::logical_expr::LogicalPlan,
+            araphor_query::datafusion::logical_expr::LogicalPlan,
+        )>,
+    > {
+        Box::pin(GraphContext::plans(session, events, contexts))
+    }
+
     fn context_owners(&self) -> Option<&'static [&'static str]> {
         Some(&[
             "mithril-control/policy-candidate",
             "mithril-control/activation-ack",
-            "mithril-control/graph-policy",
-            "mithril-control/graph-baseline",
-            "mithril-control/graph-credential",
-            "mithril-control/policy-ack",
         ])
-    }
-
-    fn facts(
-        &self,
-        contexts: &[arrow_array::RecordBatch],
-        records: &[araphor_data::DiscoveryRecordV1],
-    ) -> araphor_data::Result<(
-        Vec<AnalysisContextVersionV1>,
-        Vec<araphor_data::AnalysisContextRefV1>,
-    )> {
-        let (context, mut proofs) = GraphContext::capture(contexts, records)?;
-        let mut facts = Vec::new();
-        for record in records {
-            facts.extend(context.facts(record).map_err(|source| {
-                araphor_data::Error::GraphContext {
-                    source: Box::new(source),
-                    location: snafu::location!(),
-                }
-            })?);
-        }
-        let consulted = facts
-            .iter()
-            .filter(|fact| fact.key.owner_id == "mithril-control/policy-ack")
-            .flat_map(|fact| {
-                let original = |owner: &str, revision| AnalysisContextKeyV1 {
-                    tenant_id: fact.key.tenant_id,
-                    owner_id: owner.into(),
-                    entity_key: fact.key.entity_key.clone(),
-                    lifetime_key: records[0].id.stream.node_id.as_bytes().to_vec(),
-                    owner_revision: revision,
-                };
-                [
-                    original("mithril-control/policy-candidate", 1),
-                    original("mithril-control/activation-ack", fact.key.owner_revision),
-                ]
-            })
-            .collect::<std::collections::BTreeSet<_>>();
-        proofs.retain(|proof| consulted.contains(&proof.key));
-        Ok((facts, proofs))
     }
 }
 

@@ -4,7 +4,6 @@ use araphor_data::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisReadModeV1, AnalysisSelectionV1,
     AnalysisStore, AnalysisTableRead, AnalysisTableRequests,
 };
-use arrow_array::{Array, BinaryArray, StringArray, UInt64Array};
 use std::sync::Arc;
 
 mod runtime;
@@ -33,43 +32,8 @@ fn capture(
     )?;
     let mut contexts = Vec::new();
     for batch in page.tables.get("context_versions").into_iter().flatten() {
-        let binary = |name: &str| -> TestValue<&BinaryArray> {
-            batch
-                .column_by_name(name)
-                .and_then(|column| column.as_any().downcast_ref())
-                .ok_or_else(|| format!("missing {name}").into())
-        };
-        let text = |name: &str| -> TestValue<&StringArray> {
-            batch
-                .column_by_name(name)
-                .and_then(|column| column.as_any().downcast_ref())
-                .ok_or_else(|| format!("missing {name}").into())
-        };
-        let number = |name: &str| -> TestValue<&UInt64Array> {
-            batch
-                .column_by_name(name)
-                .and_then(|column| column.as_any().downcast_ref())
-                .ok_or_else(|| format!("missing {name}").into())
-        };
         for row in 0..batch.num_rows() {
-            contexts.push(AnalysisContextVersionV1 {
-                key: AnalysisContextKeyV1 {
-                    tenant_id: binary("tenant_id")?.value(row).try_into()?,
-                    owner_id: text("owner_id")?.value(row).into(),
-                    entity_key: binary("entity_key")?.value(row).into(),
-                    lifetime_key: binary("lifetime_key")?.value(row).into(),
-                    owner_revision: number("owner_revision")?.value(row),
-                },
-                valid_from_utc_ns: (!number("valid_from_utc_ns")?.is_null(row))
-                    .then(|| number("valid_from_utc_ns").map(|values| values.value(row)))
-                    .transpose()?,
-                valid_until_utc_ns: (!number("valid_until_utc_ns")?.is_null(row))
-                    .then(|| number("valid_until_utc_ns").map(|values| values.value(row)))
-                    .transpose()?,
-                sensitivity: ContextSensitivityV1::try_from(text("sensitivity")?.value(row))
-                    .map_err(|_| "invalid sensitivity")?,
-                body: binary("body")?.value(row).into(),
-            });
+            contexts.push(GraphContext::context_row(batch, row)?.0);
         }
     }
     Ok((page.extraction.meta.commit_revision, contexts))
@@ -529,33 +493,71 @@ impl araphor_data::PackageAuthorization for GraphAuthority {
 struct CapturedFacts {
     owner: ControlContextOwner,
     authority: Arc<GraphAuthority>,
-    update: std::sync::Mutex<Option<ControlContextOwner>>,
+    update: Arc<std::sync::Mutex<Option<ControlContextOwner>>>,
 }
 
 impl araphor_analysis::GraphFacts for CapturedFacts {
-    fn facts(
-        &self,
-        contexts: &[arrow_array::RecordBatch],
-        records: &[araphor_data::DiscoveryRecordV1],
-    ) -> araphor_data::Result<(
-        Vec<AnalysisContextVersionV1>,
-        Vec<araphor_data::AnalysisContextRefV1>,
-    )> {
-        let facts = araphor_analysis::GraphFacts::facts(&self.owner, contexts, records)?;
-        let update = self
-            .update
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .ok_or_else(|| {
-                araphor_data::PackageErrorCodeV1::Invalid.error("graph update fixture")
-            })?;
-        *self
-            .authority
-            .1
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(update);
-        Ok(facts)
+    fn plans<'a>(
+        &'a self,
+        session: &'a araphor_query::execution::Session,
+        events: &'a araphor_query::datafusion::logical_expr::LogicalPlan,
+        contexts: &'a araphor_query::datafusion::logical_expr::LogicalPlan,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        araphor_query::Result<(
+            araphor_query::datafusion::logical_expr::LogicalPlan,
+            araphor_query::datafusion::logical_expr::LogicalPlan,
+        )>,
+    > {
+        use araphor_query::datafusion::logical_expr::{
+            col, create_udf, LogicalPlanBuilder, Volatility,
+        };
+        Box::pin(async move {
+            let (resolved, changed) =
+                araphor_analysis::GraphFacts::plans(&self.owner, session, events, contexts).await?;
+            let authority = Arc::clone(&self.authority);
+            let update = Arc::clone(&self.update);
+            let kind = resolved
+                .schema()
+                .field_with_unqualified_name("resolved")
+                .map_err(|source| araphor_query::Error::Sql { source })?
+                .data_type()
+                .clone();
+            let captured = create_udf(
+                "captured_control_facts",
+                vec![kind.clone()],
+                kind,
+                Volatility::Volatile,
+                Arc::new(move |args| {
+                    if !args[0].to_array(1)?.is_empty() {
+                        if let Some(update) = update
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .take()
+                        {
+                            *authority
+                                .1
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner()) = Some(update);
+                        }
+                    }
+                    Ok(args[0].clone())
+                }),
+            );
+            let resolved = LogicalPlanBuilder::from(resolved)
+                .project([
+                    col("record"),
+                    col("event"),
+                    captured.call(vec![col("resolved")]).alias("resolved"),
+                ])
+                .and_then(LogicalPlanBuilder::build)
+                .map_err(|source| araphor_query::Error::Sql { source })?;
+            Ok((resolved, changed))
+        })
+    }
+
+    fn context_owners(&self) -> Option<&'static [&'static str]> {
+        araphor_analysis::GraphFacts::context_owners(&self.owner)
     }
 }
 
@@ -654,12 +656,27 @@ async fn managed_captures_control_proofs() -> TestValue<()> {
         authority.clone(),
         grant.clone(),
         "SELECT * FROM events".into(),
+        "WITH ranges AS (
+            SELECT tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch,
+                MIN(source_cursor) AS first_cursor, MAX(source_cursor) AS last_cursor
+            FROM events GROUP BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch
+        ), heads AS (
+            SELECT tenant_id, source_key, first_cursor, graph_result_id, commit_revision
+            FROM graph_manifest QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY tenant_id, source_key, first_cursor ORDER BY commit_revision DESC
+            ) = 1
+        ) SELECT s.source_key, r.first_cursor, r.last_cursor,
+            h.graph_result_id AS base_result_id, h.commit_revision AS base_commit_revision
+        FROM ranges r JOIN graph_state s
+            USING (tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch)
+        LEFT JOIN heads h ON h.tenant_id = s.tenant_id AND h.source_key = s.source_key
+            AND h.first_cursor = r.first_cursor".into(),
         definition,
         facts.clone(),
     )
     .await?;
     authority.commit_many(&[(&grant, PackageActionV1::Install, None)], &mut || {
-        data.admit_definition(tenant, &program.definition, || read.check())?;
+        data.admit_definition(tenant, program.definition(), || read.check())?;
         Ok(())
     })?;
     let instance = GraphPublication::admit(
@@ -669,8 +686,9 @@ async fn managed_captures_control_proofs() -> TestValue<()> {
         grant.clone(),
         "control-proofs".into(),
         record.id.stream.clone(),
-        program.events_sql.clone(),
-        program.definition.clone(),
+        program.events_sql().to_owned(),
+        program.control_sql().to_owned(),
+        (program.definition().clone(), None),
         &read,
     )
     .await?;
@@ -718,6 +736,65 @@ async fn managed_captures_control_proofs() -> TestValue<()> {
     let original_head = data.processor_result(&scope)?.ok_or("native Graph head")?;
     let id = original_head.result_id.clone();
     let retained = data.graph_result(tenant, &id)?.ok_or("graph result")?;
+    let wire = record.decode()?;
+    let binding: [u8; 16] = wire
+        .decision_context
+        .as_ref()
+        .ok_or("record decision context")?
+        .binding_id
+        .as_slice()
+        .try_into()?;
+    assert_ne!(binding, [0; 16]);
+    let foreign = [99; 16];
+    assert_ne!(binding, foreign);
+    let expected = retained
+        .findings
+        .iter()
+        .map(|finding| finding.finding_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(!expected.is_empty());
+    let requests = AnalysisTableRequests::from([(
+        "findings".into(),
+        Some(std::collections::BTreeSet::from([
+            AnalysisStore::table_schemas()["findings"].index_of("finding_id")?,
+        ])),
+    )]);
+    for (binding, expected) in [(binding, expected), (foreign, Default::default())] {
+        let mut selected = selection.clone();
+        selected.sources = araphor_data::Selection::Exact(vec![record.id.stream.clone()]);
+        selected.select_graphs(araphor_data::Selection::Exact(vec![id.clone()]), None)?;
+        selected.binding_ids = vec![binding];
+        let page = data.read_tables(
+            &selected,
+            AnalysisTableRead {
+                requests: &requests,
+                event_ranges: None,
+                mode: AnalysisReadModeV1::Complete,
+                now,
+            },
+            AnalysisExtractLimits::default(),
+            &read,
+        )?;
+        let mut actual = std::collections::BTreeSet::new();
+        for batch in page.tables.get("findings").into_iter().flatten() {
+            assert_eq!(batch.num_columns(), 1);
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<araphor_analysis_sdk::arrow_array::StringArray>()
+                .ok_or("finding ID column")?;
+            actual.extend(ids.iter().flatten().map(str::to_owned));
+        }
+        assert_eq!(actual, expected);
+        if actual.is_empty() {
+            assert!(!page
+                .extraction
+                .references
+                .iter()
+                .filter_map(|entry| entry.result())
+                .any(|reference| reference.result_id == id));
+        }
+    }
     let first_cursor = retained.first_cursor;
     let policies = retained
         .graph
@@ -881,8 +958,9 @@ async fn managed_captures_control_proofs() -> TestValue<()> {
         },
         "control-restricted".into(),
         record.id.stream.clone(),
-        program.events_sql.clone(),
-        program.definition.clone(),
+        program.events_sql().to_owned(),
+        program.control_sql().to_owned(),
+        (program.definition().clone(), None),
         &read,
     )
     .await;
@@ -964,7 +1042,11 @@ async fn managed_captures_control_proofs() -> TestValue<()> {
     let publication_feed = CapturedFacts {
         owner: owner(&same_control, Arc::clone(&data), tenant)?,
         authority: Arc::clone(&authority),
-        update: std::sync::Mutex::new(Some(owner(&same_control, Arc::clone(&data), tenant)?)),
+        update: Arc::new(std::sync::Mutex::new(Some(owner(
+            &same_control,
+            Arc::clone(&data),
+            tenant,
+        )?))),
     };
     let publication = GraphPublication::admit(
         Arc::clone(&query),
@@ -973,8 +1055,9 @@ async fn managed_captures_control_proofs() -> TestValue<()> {
         grant.clone(),
         "control-race".into(),
         record.id.stream.clone(),
-        program.events_sql.clone(),
-        program.definition.clone(),
+        program.events_sql().to_owned(),
+        program.control_sql().to_owned(),
+        (program.definition().clone(), None),
         &read,
     )
     .await?;
@@ -1035,8 +1118,9 @@ async fn managed_captures_control_proofs() -> TestValue<()> {
         grant,
         "control-fresh".into(),
         record.id.stream.clone(),
-        program.events_sql,
-        program.definition,
+        program.events_sql().to_owned(),
+        program.control_sql().to_owned(),
+        (program.definition().clone(), None),
         &read,
     )
     .await?;

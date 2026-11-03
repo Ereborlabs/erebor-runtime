@@ -51,10 +51,8 @@ impl AnalysisStore {
                 {
                     return Err(Code::Unsupported.error("managed source projection"));
                 }
-                if matches!(read.mode, crate::AnalysisReadModeV1::Complete) {
-                    if let (Some(source), Some(receipt)) = (&captured.source, reference.receipt()) {
-                        source.commit_proof(std::sync::Arc::new(receipt.selected.clone()));
-                    }
+                if let (Some(source), Some(receipt)) = (&captured.source, reference.receipt()) {
+                    source.commit_proof(std::sync::Arc::new(receipt.selected.clone()));
                 }
             }
         }
@@ -249,7 +247,7 @@ impl AnalysisStore {
         if saved != revision {
             return Err(Code::Invalid.error("managed prior revision"));
         }
-        let (_, owner) = Self::managed_call_owner(reader, tenant, id, revision, &record)?;
+        let (attempt, owner) = Self::managed_call_owner(reader, tenant, id, revision, &record)?;
         let descriptor = Self::managed_contract(reader, tenant, declaration)?;
         output.charge(descriptor.allocated_bytes())?;
         let model = descriptor
@@ -297,9 +295,23 @@ impl AnalysisStore {
         model
             .validate_checkpoint(checkpoint.as_ref(), true)
             .context(crate::AnalysisContractSnafu)?;
+        let source = super::ManagedSourceRef {
+            result: attempt
+                .receipt
+                .as_ref()
+                .ok_or_else(|| Code::Invalid.error("managed prior receipt"))?
+                .selected
+                .clone(),
+            position: crate::StorePositionV1 {
+                commit_revision: attempt.capture.revision,
+                ordinal: u32::MAX,
+            },
+        };
+        output.charge(source.result.result_id.capacity())?;
         Ok(ManagedPrior {
             revision,
             result: id.into(),
+            source,
             context: record.context,
             parameters: None,
             checkpoint,

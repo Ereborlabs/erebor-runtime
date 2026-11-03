@@ -4,7 +4,7 @@ use std::sync::Arc;
 use araphor_analysis_sdk as sdk;
 use datafusion::catalog::TableProvider;
 use datafusion::common::TableReference;
-use datafusion::datasource::{provider_as_source, source_as_provider};
+use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use snafu::ResultExt as _;
 
@@ -24,6 +24,7 @@ pub struct Inputs {
 struct PortPlan {
     slot: usize,
     changes: bool,
+    varying: bool,
     window: Option<Window>,
     plan: Arc<LogicalPlan>,
     origins: BTreeSet<SourceOrigin>,
@@ -56,15 +57,17 @@ impl Inputs {
                                 sdk::InputSource::Table(sdk::TableRef::Named(_))
                             ))
                 });
+                let (window, varying) = Window::infer(plan)?;
                 Ok(PortPlan {
                     slot,
+                    varying,
                     changes: model.change_inputs.as_ref().is_some_and(|changes| {
                         changes
                             .ports
                             .iter()
                             .any(|pair| pair.after == model.inputs[slot].port.name)
                     }),
-                    window: Window::infer(plan)?,
+                    window,
                     plan: Arc::new(plan.clone()),
                     origins,
                     identity,
@@ -115,16 +118,17 @@ impl Inputs {
 
     fn identity(plan: &LogicalPlan) -> Option<SourceOrigin> {
         match plan {
-            LogicalPlan::TableScan(scan) => {
-                let provider = source_as_provider(&scan.source).ok()?;
-                let source = provider.as_any().downcast_ref::<crate::sources::SourcePort>()?;
-                (scan.filters.is_empty()
+            LogicalPlan::TableScan(scan)
+                if scan.filters.is_empty()
                     && scan.fetch.is_none()
-                    && scan.projected_schema.as_arrow() == source.schema().as_ref()
-                    && scan.projection.as_ref().is_none_or(|indices| {
-                        indices.iter().copied().eq(0..source.schema().fields().len())
-                    }))
-                .then_some(SourceOrigin::Port(source.slot))
+                    && scan.projection.as_ref().is_none_or(|columns| {
+                        columns.iter().copied().eq(0..scan.source.schema().fields().len())
+                    })
+                    && scan.projected_schema.as_arrow() == scan.source.schema().as_ref() =>
+            {
+                datafusion::datasource::source_as_provider(&scan.source).ok()
+                    .and_then(|provider| provider.downcast_ref::<crate::sources::SourcePort>()
+                        .map(|source| SourceOrigin::Port(source.slot)))
             }
             LogicalPlan::Projection(projection) if projection.schema.as_arrow() == projection.input.schema().as_arrow()
                 && projection.expr.iter().enumerate().all(|(index, expr)| {

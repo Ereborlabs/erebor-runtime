@@ -31,14 +31,14 @@ pub struct ManagedCall {
 pub struct ManagedManifest {
     pub format: u32,
     pub planner: String,
-    pub definition: String,
+    pub definition: u64,
     pub calls: BTreeMap<u64, ManagedCall>,
     pub selected_schema: sdk::Schema,
 }
 
 impl ManagedManifest {
     pub fn order(&self) -> Result<Vec<u64>> {
-        if self.format != 1 || self.planner.is_empty() || self.definition.is_empty() {
+        if self.format != 1 || self.planner.is_empty() || self.definition == 0 {
             return Err(Code::Invalid.error("managed manifest format"));
         }
         let mut done = BTreeSet::new();
@@ -102,6 +102,7 @@ pub enum ManagedDestination {
     Graph {
         source: crate::EvidenceIntakeIdentityV1,
         events_sql: String,
+        control_sql: String,
         calls: BTreeSet<u64>,
         operation: ManagedGraphOperation,
     },
@@ -145,7 +146,6 @@ impl ManagedSpec {
                     .checked_sub(std::mem::size_of::<ResolvedDefinition>())?,
             )?
             .checked_add(self.manifest.planner.capacity())?
-            .checked_add(self.manifest.definition.capacity())?
             .checked_add(self.manifest.selected_schema.fields().size())?
             .checked_add(
                 self.manifest
@@ -163,11 +163,13 @@ impl ManagedSpec {
                     source,
                     calls,
                     events_sql,
+                    control_sql,
                     ..
                 } => source
                     .node_id
                     .capacity()
                     .checked_add(events_sql.capacity())?
+                    .checked_add(control_sql.capacity())?
                     .checked_add(calls.len().checked_mul(std::mem::size_of::<u64>())?)?,
             })?;
         let bytes = self.manifest.selected_schema.metadata().iter().try_fold(
@@ -209,11 +211,7 @@ impl ManagedSpec {
     }
 
     pub(super) fn validate(&self) -> Result<()> {
-        if self.tenant == [0; 16]
-            || self.id.is_empty()
-            || self.id.chars().any(char::is_control)
-            || self.manifest.definition != self.definition.digest()?
-        {
+        if self.tenant == [0; 16] || self.id.is_empty() || self.id.chars().any(char::is_control) {
             return Err(Code::Invalid.error("managed instance"));
         }
         self.definition.validate()?;
@@ -248,6 +246,7 @@ impl ManagedSpec {
                 calls,
                 operation,
                 events_sql,
+                control_sql,
             } => {
                 if !source.valid()
                     || source.tenant_id != self.tenant
@@ -256,10 +255,12 @@ impl ManagedSpec {
                         .any(|call| !self.manifest.calls.contains_key(call))
                     || match operation {
                         ManagedGraphOperation::Evaluate => {
-                            calls.is_empty() || events_sql.is_empty()
+                            calls.is_empty() || events_sql.is_empty() || control_sql.is_empty()
                         }
                         ManagedGraphOperation::Expire => {
-                            !calls.is_empty() || !self.manifest.calls.is_empty()
+                            !calls.is_empty()
+                                || !self.manifest.calls.is_empty()
+                                || !control_sql.is_empty()
                         }
                     }
                 {
@@ -379,6 +380,7 @@ pub struct ManagedRequest {
 pub struct ManagedPrior {
     pub revision: u64,
     pub result: String,
+    pub source: super::ManagedSourceRef,
     pub context: ResultContext,
     pub parameters: Option<sdk::Dataset>,
     pub checkpoint: Option<sdk::Checkpoint>,
@@ -490,6 +492,15 @@ pub(super) struct Capture {
 }
 
 impl Capture {
+    fn source_meta(&self) -> crate::AnalysisStoreMetaV1 {
+        crate::AnalysisStoreMetaV1 {
+            store_uuid: self.store,
+            schema_version: self.schema,
+            recovery_epoch: self.recovery,
+            commit_revision: self.revision,
+        }
+    }
+
     pub(super) fn follows_graph(&self, spec: &ManagedSpec) -> bool {
         self.follow && matches!(&spec.destination, ManagedDestination::Graph { .. })
     }
@@ -515,6 +526,21 @@ pub struct ManagedCapture {
 }
 
 impl ManagedCapture {
+    pub(in crate::analysis) fn check_reference(&self, reference: &ManagedAttempt) -> Result<()> {
+        if self.contract != reference.0.capture
+            || self.instance.spec != reference.1.spec
+            || self.instance.grant != reference.1.grant
+            || self.instance.generation != reference.1.generation
+        {
+            return Err(Code::Conflict.error("frozen Graph capture reference"));
+        }
+        Ok(())
+    }
+
+    pub(in crate::analysis) fn source_meta(&self) -> crate::AnalysisStoreMetaV1 {
+        self.contract.source_meta()
+    }
+
     pub fn discard_prior(&mut self, call: u64) -> usize {
         let before = self.metadata_bytes();
         if let Some(prior) = self.prior.remove(&call) {
@@ -725,12 +751,7 @@ pub struct ManagedAttempt(
 
 impl ManagedAttempt {
     pub fn source_meta(&self) -> crate::AnalysisStoreMetaV1 {
-        crate::AnalysisStoreMetaV1 {
-            store_uuid: self.0.capture.store,
-            schema_version: self.0.capture.schema,
-            recovery_epoch: self.0.capture.recovery,
-            commit_revision: self.0.capture.revision,
-        }
+        self.0.capture.source_meta()
     }
     pub fn prior_result(&self, call: u64) -> Option<&PackageResultRefV1> {
         self.0.capture.prior.get(&call).and_then(Option::as_ref)

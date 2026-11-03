@@ -63,10 +63,10 @@ impl Instance {
             plan.fetch() == Some(1) || plan.children().iter().any(|child| limited(child))
         }
 
-        assert_eq!(self.prepared.plan.schema(), schema);
+        assert_eq!(self.prepared.plan().schema(), schema);
         let target = Arc::new(sink::Publication {
             owner: Arc::clone(self),
-            schema: Arc::clone(self.prepared.plan.schema().inner()),
+            schema: Arc::clone(self.prepared.plan().schema().inner()),
             mode: sink::Mode::Managed {
                 witness_expiry: request.witness_expiry,
                 operation: Box::new(sink::Operation::Once {
@@ -78,7 +78,7 @@ impl Instance {
             },
         });
         let plan = LogicalPlanBuilder::insert_into(
-            self.prepared.plan.clone(),
+            self.prepared.plan().clone(),
             "__araphor_managed_output",
             provider_as_source(target),
             InsertOp::Append,
@@ -1710,8 +1710,8 @@ async fn instance_shares_admitted_images() -> TestResult {
         &images[0].bundle().artifacts[0].descriptor
     ));
     assert!(PackageCall::any(
-        &instance.prepared.plan,
-        &mut |original| {
+        instance.prepared.plan(),
+        &mut |_, original| {
             if original.id() == call.id() {
                 assert!(std::ptr::eq(original, call));
                 return Ok(true);

@@ -13,6 +13,7 @@ pub(in crate::analysis) struct GraphHeader {
     pub evidence_count: usize,
     pub position_count: usize,
     pub fact_count: usize,
+    pub restricted_count: Option<u64>,
     pub notice: (u64, u64),
     pub expired: bool,
 }
@@ -31,6 +32,7 @@ impl GraphHeader {
     pub(super) fn encode(
         metadata: &GraphManifest,
         counts: (usize, usize, usize, usize),
+        inputs: (usize, usize, usize),
     ) -> Result<Vec<u8>> {
         let mut stripped = metadata.clone();
         stripped.input_manifest.evidence.clear();
@@ -38,10 +40,10 @@ impl GraphHeader {
         stripped.facts.clear();
         let payload = GraphRows::encode_value(&HeaderMetadata {
             metadata: stripped,
-            evidence_count: metadata.input_manifest.evidence.len(),
-            position_count: metadata.input_positions.len(),
+            evidence_count: inputs.0,
+            position_count: inputs.1,
             branch_count: counts.3,
-            fact_count: metadata.facts.len(),
+            fact_count: inputs.2,
         })?;
         let mut encoder = minicbor::Encoder::new(Vec::new());
         encoder
@@ -105,6 +107,7 @@ impl GraphHeader {
             evidence_count: payload.evidence_count,
             position_count: payload.position_count,
             fact_count: payload.fact_count,
+            restricted_count: None,
             notice,
             expired: false,
         })
@@ -153,6 +156,11 @@ impl GraphRows {
                 graph.graph.edges.len(),
                 graph.findings.len(),
                 graph.graph.branches.len(),
+            ),
+            (
+                graph.input_manifest.evidence.len(),
+                graph.input_positions.len(),
+                graph.graph.facts.len(),
             ),
         )
     }

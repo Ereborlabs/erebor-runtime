@@ -40,7 +40,7 @@ pub struct AnalysisContextVersionV1 {
 }
 
 impl AnalysisContextVersionV1 {
-    pub(in crate::analysis) fn valid(&self) -> bool {
+    pub fn valid(&self) -> bool {
         self.key.valid()
             && match (self.valid_from_utc_ns, self.valid_until_utc_ns) {
                 (None, None) => true,

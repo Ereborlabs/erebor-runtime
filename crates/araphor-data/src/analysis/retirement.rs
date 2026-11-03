@@ -73,7 +73,7 @@ impl AnalysisStore {
             return Ok(prior);
         }
         let accepted = Self::read_receipt_from(&transaction, &self.root, &scope.identity, &key)?
-            .map_or(0, |receipt| receipt.contiguous_cursor);
+            .map_or(0, |(receipt, _)| receipt.contiguous_cursor);
         if input.cutoff_cursor != accepted {
             return AnalysisConflictSnafu.fail();
         }

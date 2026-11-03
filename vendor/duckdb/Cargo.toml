@@ -168,7 +168,7 @@ path = "examples/vtab.rs"
 required-features = ["vtab"]
 
 [dependencies.arrow]
-version = "58"
+version = "59"
 features = [
     "prettyprint",
     "ffi",

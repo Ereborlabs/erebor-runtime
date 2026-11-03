@@ -13,7 +13,7 @@ impl AnalysisStore {
         reader: &Connection,
         tenant: [u8; 16],
         output: &mut AnalysisExtractionV1,
-        graph_witnesses: bool,
+        capture: &super::tables::Capture<'_>,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         let count = output
@@ -75,8 +75,48 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "read captured evidence manifest",
                 })?;
-            let (witnesses, contexts) = Self::decode_evidence(&processor, &manifest)?;
-            let inherit_raw = graph_witnesses
+            if !capture.graph_provenance()
+                && processor == crate::GRAPH_PROCESSOR
+                && origins.as_slice() == [AnalysisReferenceOriginV1::Graph]
+            {
+                continue;
+            }
+            let local = (processor == crate::GRAPH_PROCESSOR
+                && origins.iter().all(|origin| {
+                    matches!(
+                        origin,
+                        AnalysisReferenceOriginV1::Graph | AnalysisReferenceOriginV1::Notification
+                    )
+                }))
+            .then(|| capture.finding_basis(&reference.result_id))
+            .flatten();
+            let (witnesses, contexts) = if let Some(findings) = local {
+                super::super::graph_rows::GraphRows::finding_provenance(
+                    reader,
+                    &self.root,
+                    &reference,
+                    super::super::graph::GraphRequestMeta::decode(&manifest)?,
+                    findings,
+                    Some(control),
+                    &mut |scan, input| {
+                        output.scan(scan)?;
+                        output.charge(input)
+                    },
+                )?
+            } else {
+                Self::decode_evidence(
+                    reader,
+                    &reference,
+                    &processor,
+                    &manifest,
+                    Some(control),
+                    &mut |scan, input| {
+                        output.scan(scan)?;
+                        output.charge(input)
+                    },
+                )?
+            };
+            let inherit_raw = capture.graph_witnesses()
                 || processor != crate::GRAPH_PROCESSOR
                 || origins.as_slice() != [AnalysisReferenceOriginV1::Graph];
             for witness in witnesses {

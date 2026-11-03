@@ -17,7 +17,8 @@ async fn expiry_allows_new_input() -> TestResult {
         "expired-graph-input".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -172,13 +173,14 @@ async fn expiry_allows_new_input() -> TestResult {
             Arc::clone(&donor.control),
         )
         .await?;
-    donor.admit_definition(&grant, &definition)?;
+    let revision = donor.admit_definition(&grant, &definition)?;
     let expiry = GraphPublication::admit_expiry(
         Arc::clone(&donor.query),
         donor.authority.clone(),
         grant.clone(),
         "expired-graph-head".into(),
         donor.source.clone(),
+        revision,
         &donor.control,
     )
     .await?;
@@ -461,7 +463,8 @@ async fn managed_expiry_is_atomic() -> TestResult {
         "managed-retention-input".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -527,13 +530,14 @@ async fn managed_expiry_is_atomic() -> TestResult {
             Arc::clone(&fixture.control),
         )
         .await?;
-    fixture.admit_definition(&grant, &definition)?;
+    let revision = fixture.admit_definition(&grant, &definition)?;
     let instance = GraphPublication::admit_expiry(
         Arc::clone(&fixture.query),
         fixture.authority.clone(),
         grant,
         "managed-reclaimed-expiry".into(),
         fixture.source.clone(),
+        revision,
         &fixture.control,
     )
     .await?;
@@ -755,7 +759,8 @@ async fn expiry_query_clock() -> TestResult {
         "query-clock-expiry-input".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -786,7 +791,7 @@ async fn expiry_query_clock() -> TestResult {
         0,
     )?;
     let definition = session
-        .prepare_definition(&GraphPublication::expiry_program())
+        .prepare_definition(&GraphPublication::expiry_program(), None)
         .await?;
     assert_eq!(
         definition.resolved().definition,
@@ -796,7 +801,7 @@ async fn expiry_query_clock() -> TestResult {
     let sources = definition.sources().clone();
     let mut stream = araphor_query::follow::Subscription::new(
         session,
-        Arc::new(definition.plan),
+        Arc::new(definition.into_plan()),
         sources,
         b"native-expiry-clock",
         None,
@@ -947,7 +952,8 @@ async fn managed_expiry_subscription_recovers() -> TestResult {
         "subscription-expiry-input".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -1005,13 +1011,14 @@ async fn managed_expiry_subscription_recovers() -> TestResult {
             Arc::clone(&fixture.control),
         )
         .await?;
-    fixture.admit_definition(&grant, &definition)?;
+    let revision = fixture.admit_definition(&grant, &definition)?;
     let instance = GraphPublication::admit_expiry(
         Arc::clone(&fixture.query),
         fixture.authority.clone(),
         grant,
         "subscription-expiry".into(),
         fixture.source.clone(),
+        revision,
         &fixture.control,
     )
     .await?;

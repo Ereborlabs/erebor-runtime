@@ -21,10 +21,11 @@ impl AnalysisStore {
             PRIMARY KEY (tenant_id, package_id, revision)
         );
         CREATE TABLE IF NOT EXISTS discovery_definitions (
-            tenant_id BLOB NOT NULL, name VARCHAR NOT NULL, revision VARCHAR NOT NULL,
-            definition BLOB NOT NULL, commit_revision UBIGINT NOT NULL,
-            PRIMARY KEY (tenant_id, name, revision)
-        );";
+            tenant_id BLOB NOT NULL, name VARCHAR NOT NULL,
+            definition BLOB NOT NULL, commit_revision UBIGINT PRIMARY KEY,
+            UNIQUE (tenant_id, name, definition)
+        );
+        CREATE INDEX IF NOT EXISTS discovery_definition_body ON discovery_definitions(definition);";
 
     pub(in crate::analysis) fn validate_packages(writer: &Connection, root: &Path) -> Result<()> {
         let revision_query = "SELECT 1 FROM package_revisions WHERE octet_length(tenant_id) <> 16

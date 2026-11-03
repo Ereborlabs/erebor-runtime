@@ -579,7 +579,10 @@ async fn captured_trace_revocation() -> TestResult {
     let parent = AnalysisReadControl::default();
     let session = fixture.engine.session(selection, &parent, NOW)?;
     let prepared = session
-        .prepare_definition(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#))
+        .prepare_definition(
+            &Fixture::sql(r#"SELECT * FROM "fixture"."r1".count()"#),
+            None,
+        )
         .await?;
     let first = session
         .execute_definition(&prepared, invocation("trace-readable"))

@@ -64,7 +64,7 @@ impl Instance {
                         name: "selected".into(),
                         batches: output.batches,
                     },
-                    prepared.plan.schema().as_arrow(),
+                    prepared.plan().schema().as_arrow(),
                 )
                 .context(araphor_data::AnalysisContractSnafu)?,
             ),
@@ -254,7 +254,7 @@ impl Instance {
                                 Arc::clone(&authority),
                                 facts,
                                 grant,
-                                spec.definition.clone(),
+                                (spec.definition.clone(), Some(spec.manifest.definition)),
                                 spec.destination.clone(),
                                 &control,
                             )
@@ -271,7 +271,13 @@ impl Instance {
                             &control,
                             0,
                         )?;
-                        let prepared = session.prepare_resolved(&spec.definition).await?;
+                        let prepared = session
+                            .prepare_resolved(
+                                &spec.definition,
+                                Some(spec.manifest.definition),
+                                None,
+                            )
+                            .await?;
                         (session, prepared, None)
                     }
                 }

@@ -194,7 +194,10 @@ impl Incident {
 impl Observed {
     pub(super) async fn identity(&self, client: &AraphorClient) -> TestResult<Vec<Value>> {
         // The fixture uses one definition and does not update it.
-        let Response::Definition(definition) = Self::inspect(
+        let Response::Definition {
+            snapshot: definition,
+            commit_revision: definition_revision,
+        } = Self::inspect(
             client,
             "InspectDefinition",
             Request::InspectDefinition {
@@ -206,7 +209,7 @@ impl Observed {
         else {
             return Err("physical definition identity".into());
         };
-        let definition_revision = definition.digest()?;
+        let definition_revision = definition_revision.to_string();
         let mut identities = Vec::new();
         for (graph, revision, snapshot) in &self.graphs {
             let id = ManagedGraphOperation::Evaluate.instance_id(&snapshot.scope.identity);

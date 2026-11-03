@@ -239,13 +239,12 @@ async fn captures_inputs(target: &str) -> TestResult {
         prepared.resolved().images[0].digest,
         package.bundle.digest()
     );
-    let digest = prepared.resolved().digest()?;
+    assert_eq!(package.revision, retained.commit_revision);
     assert_eq!(
-        package.query.store().definition(
+        package.query.store().definition_revision(
             [1; 16],
-            &prepared.resolved().definition.name,
-            Some(&digest),
-            &AnalysisReadControl::default()
+            prepared.resolved(),
+            &AnalysisReadControl::default(),
         )?,
         None
     );

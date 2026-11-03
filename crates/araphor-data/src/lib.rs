@@ -13,7 +13,7 @@ mod trace;
 mod workload;
 
 pub use canonical::encode_value;
-pub use digest::{DiscoveryDigestV1, InputRevision};
+pub use digest::DiscoveryDigestV1;
 pub use discovery::*;
 pub(crate) use error::*;
 pub use error::{

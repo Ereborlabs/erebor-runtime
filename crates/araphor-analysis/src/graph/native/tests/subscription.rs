@@ -22,8 +22,6 @@ async fn drains_captured_backlog() -> TestResult {
         )
         .await?;
     let job = fixture.running_graph(job).await?;
-    let projection = &job.graph_owner().ok_or("Running Graph owner")?.projection;
-    let observed = projection.observe_capture();
     let mut stream = job.subscribe(
         Arc::new(AnalysisReadControl::default()),
         u64::MAX,
@@ -36,14 +34,23 @@ async fn drains_captured_backlog() -> TestResult {
             std::collections::BTreeSet<araphor_data::DiscoveryRecordIdV1>,
         >::new();
         for consumed in 1..=3 {
-            let receipt = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
-                .await?
-                .ok_or("Graph subscription ended")??;
             let scope = araphor_data::ProcessorScopeV1 {
                 processor_id: araphor_data::GRAPH_PROCESSOR.into(),
                 method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
                 identity: fixture.source.clone(),
             };
+            assert_eq!(
+                fixture
+                    .query
+                    .store()
+                    .processor_health(&scope)?
+                    .ok_or("prior Graph progress")?
+                    .consumed_cursor,
+                consumed - 1
+            );
+            let receipt = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())
+                .await?
+                .ok_or("Graph subscription ended")??;
             let head = fixture
                 .query
                 .store()
@@ -85,10 +92,6 @@ async fn drains_captured_backlog() -> TestResult {
             assert_eq!(result, &id);
             assert_eq!(*revision, receipt.commit_revision);
             assert!(receipt.commit_revision > 0);
-            let captured = observed.try_recv()?;
-            assert_eq!(captured.accepted, 3);
-            assert_eq!(captured.consumed, consumed - 1);
-            assert!(captured.source.upgrade().is_none());
             assert_eq!(receipt.results.len(), 3);
             for (&call, reference) in &receipt.results {
                 let package = job
@@ -168,12 +171,10 @@ async fn drains_captured_backlog() -> TestResult {
             }
             previous = Some(id);
         }
-        assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 12);
-        assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
+        let calls = fixture.facts.calls.load(Ordering::SeqCst);
         let mut next = Box::pin(stream.next());
         assert!(futures_util::poll!(next.as_mut()).is_pending());
-        assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 12);
-        assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
+        assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), calls);
         drop(next);
         Ok(())
     }

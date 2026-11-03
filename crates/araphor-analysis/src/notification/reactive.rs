@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use araphor_analysis_sdk::arrow_array::{Array as _, BinaryArray, StringArray};
 use araphor_query::follow::Update;
-use snafu::ResultExt as _;
 
 use super::*;
 
@@ -9,13 +9,6 @@ use super::*;
 pub struct NotificationUpdate {
     pub routed: Vec<(NotificationFindingRefV1, Result<usize>)>,
     pub delivered: Vec<(NotificationKeyV1, Result<usize>)>,
-}
-
-#[derive(serde::Deserialize)]
-struct Row {
-    finding_id: Option<String>,
-    result_id: Option<String>,
-    notification_id: Option<Vec<u8>>,
 }
 
 impl NotificationRouter {
@@ -47,18 +40,36 @@ impl NotificationRouter {
         check: &dyn Fn() -> Result<()>,
         effect: &mut Effect<'_>,
     ) -> Result<NotificationUpdate> {
+        let started = std::time::Instant::now();
         NotificationErrorCodeV1::Invalid.require(now > 0, "notification evaluation time")?;
         let mut work = Vec::new();
         for batch in batches {
-            let rows: Vec<Row> =
-                serde_arrow::from_record_batch(batch).context(crate::error::ArrowSnafu)?;
-            for row in rows {
-                let reference = match (row.finding_id, row.result_id) {
-                    (Some(finding_id), Some(result_id)) => Some(NotificationFindingRefV1 {
-                        finding_id,
-                        result_id,
+            let invalid = || {
+                NotificationSnafu {
+                    code: NotificationErrorCodeV1::Invalid,
+                    field: "notification subscription columns",
+                }
+                .build()
+            };
+            let findings = batch
+                .column_by_name("finding_id")
+                .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+                .ok_or_else(invalid)?;
+            let results = batch
+                .column_by_name("result_id")
+                .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+                .ok_or_else(invalid)?;
+            let notifications = batch
+                .column_by_name("notification_id")
+                .and_then(|column| column.as_any().downcast_ref::<BinaryArray>())
+                .ok_or_else(invalid)?;
+            for row in 0..batch.num_rows() {
+                let reference = match (findings.is_null(row), results.is_null(row)) {
+                    (false, false) => Some(NotificationFindingRefV1 {
+                        finding_id: findings.value(row).to_owned(),
+                        result_id: results.value(row).to_owned(),
                     }),
-                    (None, None) => None,
+                    (true, true) => None,
                     _ => {
                         return Err(NotificationSnafu {
                             code: NotificationErrorCodeV1::Invalid,
@@ -68,8 +79,8 @@ impl NotificationRouter {
                         .into())
                     }
                 };
-                let key = row
-                    .notification_id
+                let key = (!notifications.is_null(row))
+                    .then(|| notifications.value(row))
                     .map(|id| -> Result<NotificationKeyV1> {
                         Ok(NotificationKeyV1 {
                             tenant_id: tenant,
@@ -90,6 +101,7 @@ impl NotificationRouter {
                 work.push((reference, key));
             }
         }
+        let decoded = std::time::Instant::now();
         let ids = work
             .iter()
             .filter_map(|(reference, _)| reference.as_ref())
@@ -105,16 +117,7 @@ impl NotificationRouter {
             check()?;
             self.store.notification_finding_heads(tenant, &ids).ok()
         };
-        let references = work
-            .iter()
-            .filter_map(|(reference, _)| reference.clone())
-            .collect::<Vec<_>>();
-        let findings = if references.is_empty() {
-            None
-        } else {
-            check()?;
-            self.store.graph_finding_batch(tenant, &references).ok()
-        };
+        let resolved = std::time::Instant::now();
         erebor_telemetry::debug!(
             tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
             rows = work.len(), routed_items = 0usize, handled_states = 0usize,
@@ -171,7 +174,7 @@ impl NotificationRouter {
                         continue;
                     }
                 } else {
-                    let result = self.route_states(tenant, &reference, now, findings.as_ref());
+                    let result = self.route_states(tenant, &reference, now);
                     routed.insert(identity, result.is_ok());
                     match result {
                         Ok((count, values)) => {
@@ -204,17 +207,22 @@ impl NotificationRouter {
             }
             for state in states {
                 if handled.insert(state.key) {
-                    self.consume_state(state, now, check, effect, &mut update, findings.as_ref())?;
+                    self.consume_state(state, now, check, effect, &mut update)?;
                 }
             }
         }
         if skipped_stale {
             check()?;
         }
+        let completed = std::time::Instant::now();
         erebor_telemetry::debug!(
             tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
             rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
             routed_items = update.routed.len(), handled_states = handled.len(),
+            decode_s = decoded.duration_since(started).as_secs_f64(),
+            heads_s = resolved.duration_since(decoded).as_secs_f64(),
+            processing_s = completed.duration_since(resolved).as_secs_f64(),
+            elapsed_s = completed.duration_since(started).as_secs_f64(),
             graph_results_sample = ?update.routed.iter().map(|(reference, _)|
                 reference.result_id.as_str()).collect::<BTreeSet<_>>().into_iter().take(4)
                 .map(|id| id.chars().take(64).collect::<String>()).collect::<Vec<_>>(),
@@ -230,7 +238,6 @@ impl NotificationRouter {
         check: &dyn Fn() -> Result<()>,
         effect: &mut Effect<'_>,
         update: &mut NotificationUpdate,
-        findings: Option<&FindingBatch>,
     ) -> Result<()> {
         erebor_telemetry::trace!(
             tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = now,
@@ -250,7 +257,6 @@ impl NotificationRouter {
                 effect(delivery)
             },
             now,
-            findings,
         );
         erebor_telemetry::trace!(
             tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = now,

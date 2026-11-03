@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use araphor_data::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
-    AnalysisTableRequests, StorePositionV1,
+    AnalysisTableRequests, ManagedSourceRef, StorePositionV1,
 };
 use datafusion::arrow::array::{Array as _, RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
@@ -16,7 +16,6 @@ use datafusion::catalog::memory::{
 };
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use datafusion::common::runtime::{set_join_set_tracer, JoinSetTracer, JoinSetTracerError};
-use datafusion::common::tree_node::TreeNode;
 use datafusion::common::DataFusionError;
 use datafusion::datasource::MemTable;
 use datafusion::execution::config::SessionConfig;
@@ -308,7 +307,7 @@ impl Engine {
             .with_target_partitions(1)
             .with_batch_size(200);
         config.options_mut().execution.planning_concurrency = 1;
-        // shortcut: DataFusion 53.1 corrupts join schemas in leaf pushdown; enable after the native fix is available.
+        // shortcut: Keep leaf pushdown disabled until native join schema checks pass.
         config
             .options_mut()
             .optimizer
@@ -324,7 +323,7 @@ impl Engine {
         let mut rules = state.physical_optimizers().to_vec();
         let distribution = rules
             .iter()
-            .position(|rule| rule.name() == "EnforceDistribution")
+            .position(|rule| rule.name() == "EnsureRequirements")
             .ok_or_else(|| crate::Error::Sql {
                 source: DataFusionError::Internal("the native distribution rule is absent".into()),
             })?;
@@ -826,7 +825,7 @@ pub struct Session {
 
 pub(crate) struct CapturedPhysical {
     physical: Arc<dyn ExecutionPlan>,
-    context: TaskContext,
+    pub(crate) context: TaskContext,
     pub(crate) snapshot: Arc<ArrowSnapshot>,
     pub(crate) recovery: Option<crate::stream::recovery::SourceRecovery>,
     pub(crate) permit: Arc<Permit>,
@@ -847,7 +846,6 @@ impl CapturedPhysical {
     pub(crate) fn reserve_complete(&self) -> Result<()> {
         if self
             .physical
-            .as_any()
             .is::<datafusion::datasource::sink::DataSinkExec>()
         {
             self.reservation
@@ -877,6 +875,22 @@ impl CapturedPhysical {
 }
 
 impl Session {
+    pub fn operation_at(
+        &self,
+        selection: AnalysisSelectionV1,
+        control: &AnalysisReadControl,
+        now: u64,
+    ) -> Result<Self> {
+        let mut session =
+            self.engine
+                .session_on(selection, control, now, self.engine.memory().scope())?;
+        session.tables = Arc::clone(&self.tables);
+        session.context_init = self.context_init.clone();
+        session.output_rows = self.output_rows;
+        session.output_bytes = self.output_bytes;
+        Ok(session)
+    }
+
     pub(crate) fn evaluation_permit(&self) -> Result<Arc<Permit>> {
         if let Some(permit) = &self.nested_permit {
             let tenant = self.engine.tenant(self.selection.tenant_id)?;
@@ -1220,10 +1234,7 @@ impl Session {
     }
 
     fn output_reservation(&self, physical: &Arc<dyn ExecutionPlan>) -> Result<MemoryReservation> {
-        if physical
-            .as_any()
-            .is::<datafusion::datasource::sink::DataSinkExec>()
-        {
+        if physical.is::<datafusion::datasource::sink::DataSinkExec>() {
             // Native DML returns one UInt64 count after the sink commits.
             let count = UInt64Array::from(vec![0]);
             if self.output_rows < 1 || count.get_array_memory_size() > self.output_bytes {
@@ -1236,13 +1247,15 @@ impl Session {
                 .reserve_output(count.get_buffer_memory_size())
                 .context(SqlSnafu);
         }
-        let package = physical
-            .exists(|node| {
-                Ok(node
-                    .as_any()
-                    .is::<crate::definition::physical::PackageExec>())
-            })
-            .context(SqlSnafu)?;
+        let mut package = false;
+        crate::sources::PortExec::apply(physical, &mut |node| {
+            if node.is::<crate::definition::physical::PackageExec>() {
+                package = true;
+                return Ok(datafusion::common::tree_node::TreeNodeRecursion::Stop);
+            }
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        })
+        .context(SqlSnafu)?;
         self.memory
             .prepare_output(if package { 0 } else { self.output_bytes })
             .context(SqlSnafu)
@@ -1335,7 +1348,25 @@ impl Session {
         })
         .await?;
         self.engine
-            .plan_physical(state, plan, control, self.token()?)
+            .plan_physical(
+                {
+                    if let Some(clock) = self
+                        .calls
+                        .as_ref()
+                        .map(|calls| calls.window_clock(crate::follow::WindowSource::Query))
+                        .transpose()
+                        .context(SqlSnafu)?
+                        .flatten()
+                    {
+                        state.execution_props_mut().query_execution_start_time =
+                            Some(chrono::DateTime::from_timestamp_nanos(clock));
+                    }
+                    state
+                },
+                plan,
+                control,
+                self.token()?,
+            )
             .await
     }
 
@@ -1431,7 +1462,7 @@ impl Session {
             let parent = if let Some(reference) = &self.reference {
                 let store = Arc::clone(&self.engine.store);
                 let reference = reference.clone();
-                let control = Arc::clone(&self.control);
+                let control = Arc::new(self.control.operation()?);
                 Engine::blocking(Arc::clone(&control), self.token()?, move || {
                     store
                         .managed_parent(&reference, &control)
@@ -1445,7 +1476,7 @@ impl Session {
                 if head.is_none() && !managed.rebuild {
                     let store = Arc::clone(&self.engine.store);
                     let instance = managed.instance.clone();
-                    let control = Arc::clone(&self.control);
+                    let control = Arc::new(self.control.operation()?);
                     Engine::blocking(Arc::clone(&control), self.token()?, move || {
                         Ok(store
                             .managed_resume(instance.spec.tenant, &instance.spec.id, &control)?
@@ -1477,7 +1508,7 @@ impl Session {
                 let owners = bounds.context_owners.clone();
                 let index = Arc::clone(index);
                 let store = Arc::clone(&self.engine.store);
-                let control = Arc::clone(&self.control);
+                let control = Arc::new(self.control.operation()?);
                 let memory = Arc::clone(&self.memory);
                 let limits = AnalysisExtractLimits {
                     scan_bytes: self.engine.limits.scan_bytes,
@@ -1487,63 +1518,228 @@ impl Session {
                 };
                 Engine::blocking(Arc::clone(&control), self.token()?, move || {
                     let restored = (|| {
-                        let (reference, call, _) = store.managed_reference(
+                        let (head, call, _) = store.managed_reference(
                             &owner,
                             &parent.result.result_id,
                             0,
                             &control,
                         )?;
                         if call.is_some()
-                            || reference
+                            || head
                                 .receipt()
                                 .is_none_or(|receipt| receipt.selected != parent.result)
+                            || head.captured_revision() != parent.position.commit_revision
+                            || parent.position.ordinal != u32::MAX
                         {
                             return Err(araphor_data::PackageErrorCodeV1::Invalid
                                 .error("source parent reference")
                                 .into());
                         }
-                        let selection = reference
-                            .instance()
-                            .spec
-                            .destination
-                            .selection(&reference.instance().grant.selection)?;
-                        let selection = selection.project(&requests)?;
-                        let decode = memory.prepare_input(limits.input_bytes).context(SqlSnafu)?;
-                        let bound = if memory.input_capacity().is_some()
-                            || limits.input_bytes != usize::MAX
-                        {
-                            decode.size()
-                        } else {
-                            usize::MAX
-                        };
-                        let page = store.read_managed_reference(
-                            &selection,
-                            &reference,
-                            araphor_data::AnalysisTableRead {
-                                requests: &requests,
-                                event_ranges: ranges.as_deref(),
-                                mode: araphor_data::AnalysisReadModeV1::Complete,
-                                now: reference.request().time_utc_ns,
-                            },
-                            AnalysisExtractLimits {
-                                input_bytes: bound,
-                                ..limits
-                            },
-                            &control,
-                            owners.as_ref(),
-                        )?;
-                        let frame = page.state.source().cloned().ok_or_else(|| {
-                            araphor_data::PackageErrorCodeV1::Missing.error("source parent frame")
+                        let mut retained = BTreeMap::new();
+                        let metadata = memory.reserve_input(0).context(SqlSnafu)?;
+                        let receipt = head.receipt().ok_or_else(|| {
+                            araphor_data::PackageErrorCodeV1::Missing.error("source parent receipt")
                         })?;
-                        if frame.position() != parent.position {
-                            return Err(araphor_data::PackageErrorCodeV1::Conflict
-                                .error("source parent position")
-                                .into());
+                        for call in head.instance().spec.manifest.calls.keys() {
+                            control.check()?;
+                            let Some(expected) = receipt
+                                .results
+                                .get(call)
+                                .or_else(|| head.prior_result(*call))
+                            else {
+                                continue;
+                            };
+                            let (reference, actual, _) = store.managed_reference(
+                                &owner,
+                                &expected.result_id,
+                                0,
+                                &control,
+                            )?;
+                            let saved = reference.receipt().filter(|receipt| {
+                                receipt.commit_revision == expected.commit_revision
+                                    && receipt.results.get(call) == Some(expected)
+                            });
+                            let saved = saved.ok_or_else(|| {
+                                araphor_data::PackageErrorCodeV1::Conflict
+                                    .error("source retained call")
+                            })?;
+                            if actual != Some(*call)
+                                || saved.selected.commit_revision > parent.result.commit_revision
+                            {
+                                return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                    .error("source retained call")
+                                    .into());
+                            }
+                            let point = ManagedSourceRef {
+                                result: saved.selected.clone(),
+                                position: araphor_data::StorePositionV1 {
+                                    commit_revision: reference.captured_revision(),
+                                    ordinal: u32::MAX,
+                                },
+                            };
+                            if let Some(previous) = retained.get(&point.result.commit_revision) {
+                                if previous != &point {
+                                    return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                        .error("source retained point")
+                                        .into());
+                                }
+                            } else {
+                                metadata
+                                    .try_grow(
+                                        std::mem::size_of::<(u64, ManagedSourceRef)>()
+                                            .saturating_add(point.result.result_id.capacity()),
+                                    )
+                                    .context(SqlSnafu)?;
+                                retained.insert(point.result.commit_revision, point);
+                            }
                         }
-                        for batch in frame.datasets().iter().flat_map(|data| &data.batches) {
-                            memory.retain_input(batch, &decode).context(SqlSnafu)?;
+                        let mut chain = Vec::new();
+                        let mut point = parent.clone();
+                        let mut reference = head;
+                        let mut call = call;
+                        loop {
+                            control.check()?;
+                            if call.is_some()
+                                || reference
+                                    .receipt()
+                                    .is_none_or(|receipt| receipt.selected != point.result)
+                                || reference.captured_revision() != point.position.commit_revision
+                                || point.position.ordinal != u32::MAX
+                            {
+                                return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                    .error("source replay point")
+                                    .into());
+                            }
+                            if let Some(expected) = retained.remove(&point.result.commit_revision) {
+                                if expected != point {
+                                    return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                        .error("source replay point")
+                                        .into());
+                                }
+                            }
+                            if chain.len() == chain.capacity() {
+                                let capacity = chain.capacity();
+                                chain.try_reserve_exact(1).map_err(|_| {
+                                    araphor_data::PackageErrorCodeV1::Limit
+                                        .error("source replay references")
+                                })?;
+                                metadata
+                                    .try_grow(
+                                        chain
+                                            .capacity()
+                                            .saturating_sub(capacity)
+                                            .saturating_mul(std::mem::size_of_val(&point)),
+                                    )
+                                    .context(SqlSnafu)?;
+                            }
+                            metadata
+                                .try_grow(point.result.result_id.capacity())
+                                .context(SqlSnafu)?;
+                            chain.push(point.clone());
+                            if retained.is_empty() {
+                                break;
+                            }
+                            let previous =
+                                store.managed_parent(&reference, &control)?.ok_or_else(|| {
+                                    araphor_data::PackageErrorCodeV1::Missing
+                                        .error("source retained history")
+                                })?;
+                            if previous.result.commit_revision >= point.result.commit_revision {
+                                return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                    .error("source replay order")
+                                    .into());
+                            }
+                            point = previous;
+                            let (next, actual, _) = store.managed_reference(
+                                &owner,
+                                &point.result.result_id,
+                                0,
+                                &control,
+                            )?;
+                            reference = next;
+                            call = actual;
                         }
-                        index.restore(frame, &control).context(SqlSnafu)
+                        for point in chain.into_iter().rev() {
+                            control.check()?;
+                            let (reference, call, _) = store.managed_reference(
+                                &owner,
+                                &point.result.result_id,
+                                0,
+                                &control,
+                            )?;
+                            let receipt = reference
+                                .receipt()
+                                .filter(|receipt| receipt.selected == point.result)
+                                .ok_or_else(|| {
+                                    araphor_data::PackageErrorCodeV1::Conflict
+                                        .error("source replay receipt")
+                                })?;
+                            if call.is_some()
+                                || reference.captured_revision() != point.position.commit_revision
+                            {
+                                return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                    .error("source replay point")
+                                    .into());
+                            }
+                            let restored = index.reference().context(SqlSnafu)?;
+                            let mode = if let Some(restored) = restored {
+                                if store.managed_parent(&reference, &control)?.as_ref()
+                                    != Some(&restored)
+                                {
+                                    return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                        .error("source replay parent")
+                                        .into());
+                                }
+                                araphor_data::AnalysisReadModeV1::Changes(restored.position)
+                            } else {
+                                araphor_data::AnalysisReadModeV1::Complete
+                            };
+                            let selection = reference
+                                .instance()
+                                .spec
+                                .destination
+                                .selection(&reference.instance().grant.selection)?;
+                            let selection = selection.project(&requests)?;
+                            let decode =
+                                memory.prepare_input(limits.input_bytes).context(SqlSnafu)?;
+                            let bound = if memory.input_capacity().is_some()
+                                || limits.input_bytes != usize::MAX
+                            {
+                                decode.size()
+                            } else {
+                                usize::MAX
+                            };
+                            let page = store.read_managed_reference(
+                                &selection,
+                                &reference,
+                                araphor_data::AnalysisTableRead {
+                                    requests: &requests,
+                                    event_ranges: ranges.as_deref(),
+                                    mode,
+                                    now: reference.request().time_utc_ns,
+                                },
+                                AnalysisExtractLimits {
+                                    input_bytes: bound,
+                                    ..limits
+                                },
+                                &control,
+                                owners.as_ref(),
+                            )?;
+                            let frame = page.state.source().cloned().ok_or_else(|| {
+                                araphor_data::PackageErrorCodeV1::Missing
+                                    .error("source parent frame")
+                            })?;
+                            if frame.position() != point.position {
+                                return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                    .error("source parent position")
+                                    .into());
+                            }
+                            for batch in frame.datasets().iter().flat_map(|data| &data.batches) {
+                                memory.retain_input(batch, &decode).context(SqlSnafu)?;
+                            }
+                            index.restore(frame, receipt, &control).context(SqlSnafu)?;
+                        }
+                        Ok(())
                     })();
                     if restored.is_err() {
                         index.discard_restore().context(SqlSnafu)?;
@@ -1602,6 +1798,7 @@ impl Session {
             context.session_id(),
             config,
             context.scalar_functions().clone(),
+            context.higher_order_functions().clone(),
             context.aggregate_functions().clone(),
             context.window_functions().clone(),
             context.runtime_env(),

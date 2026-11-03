@@ -10,10 +10,15 @@ async fn retained_images_use_plans() -> TestResult {
     );
     let original = fixture.prepare(&definition).await?;
     let resolved = original.resolved().clone();
-    fixture
+    let revision = fixture
         .engine
         .store()
         .admit_definition([1; 16], &resolved, || Ok(()))?;
+    assert_eq!(original.revision(), None);
+    assert!(original
+        .clone()
+        .bind_revision(&fixture.engine, revision, &AnalysisReadControl::default())
+        .is_ok());
     let pin = resolved.images[0].clone();
     fixture
         .engine
@@ -27,8 +32,20 @@ async fn retained_images_use_plans() -> TestResult {
         &control,
         1,
     )?;
-    let retained = session.prepare_resolved(&resolved).await?;
+    let retained = session
+        .prepare_resolved(&resolved, Some(revision), None)
+        .await?;
     assert_eq!(retained.resolved(), &resolved);
+    assert_eq!(retained.revision(), Some(revision));
+    assert!(session
+        .prepare_resolved(&resolved, Some(before.commit_revision + 1), None)
+        .await
+        .is_err());
+    let other = Fixture::installed(&package)?;
+    assert!(original
+        .clone()
+        .bind_revision(&other.engine, revision, &control)
+        .is_err());
     assert_eq!(
         retained.plan.display_indent_schema().to_string(),
         original.plan.display_indent_schema().to_string()
@@ -86,13 +103,19 @@ async fn retained_images_use_plans() -> TestResult {
         .definition
         .labels
         .insert("new".into(), "definition".into());
-    assert!(session.prepare_resolved(&forged).await.is_err());
+    assert!(session
+        .prepare_resolved(&forged, Some(revision), None)
+        .await
+        .is_err());
     let foreign = fixture.engine.session(
         araphor_data::AnalysisSelectionV1::tenant([2; 16]),
         &control,
         1,
     )?;
-    assert!(foreign.prepare_resolved(&resolved).await.is_err());
+    assert!(foreign
+        .prepare_resolved(&resolved, Some(revision), None)
+        .await
+        .is_err());
     assert_eq!(fixture.engine.store().meta()?, before);
     drop((
         output,

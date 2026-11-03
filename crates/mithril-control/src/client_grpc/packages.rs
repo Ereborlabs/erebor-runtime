@@ -105,7 +105,7 @@ impl ClientGrpcOwner {
             .check(&grant, action)
             .map_err(Self::image_failure)?;
         control.check().map_err(Self::failure)?;
-        let definition = match request {
+        let (definition, revision) = match request {
             PackageRequestV1::AdmitDefinition { definition } => {
                 definition
                     .validate_captured()
@@ -120,13 +120,13 @@ impl ClientGrpcOwner {
                 let grant = grant.clone();
                 let authority = authority.clone();
                 tokio::task::spawn_blocking(move || -> araphor_data::Result<_> {
-                    authority.commit_definition(&grant, &admitted, || {
+                    let revision = authority.commit_definition(&grant, &admitted, || {
                         store.admit_definition(grant.selection.tenant_id, &admitted, || {
                             grant.remaining()?;
                             check.check()
                         })
                     })?;
-                    Ok(admitted)
+                    Ok((admitted, revision))
                 })
                 .await
                 .map_err(|_| Status::internal("The definition admission failed."))?
@@ -135,9 +135,19 @@ impl ClientGrpcOwner {
             PackageRequestV1::InspectDefinition { name, revision } => {
                 let check = control.clone();
                 let tenant = grant.selection.tenant_id;
+                let revision = revision
+                    .map(|value| {
+                        value
+                            .parse::<u64>()
+                            .ok()
+                            .filter(|revision| *revision > 0 && revision.to_string() == value)
+                            .ok_or_else(|| PackageErrorCodeV1::Invalid.error("definition revision"))
+                    })
+                    .transpose()
+                    .map_err(Self::image_failure)?;
                 tokio::task::spawn_blocking(move || {
                     store
-                        .definition(tenant, &name, revision.as_deref(), &check)?
+                        .definition(tenant, &name, revision, &check)?
                         .ok_or_else(|| PackageErrorCodeV1::Missing.error("discovery definition"))
                 })
                 .await
@@ -155,7 +165,10 @@ impl ClientGrpcOwner {
             .check(&grant, action)
             .map_err(Self::image_failure)?;
         control.check().map_err(Self::failure)?;
-        Ok(PackageResponseV1::Definition(definition))
+        Ok(PackageResponseV1::Definition {
+            snapshot: definition,
+            commit_revision: revision,
+        })
     }
 
     async fn image_request(

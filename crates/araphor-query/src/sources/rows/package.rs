@@ -63,16 +63,13 @@ impl SourceSnapshot {
             .captured
             .lock()
             .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
-        let input = &captured
+        let input = captured
             .as_ref()
             .ok_or_else(|| DataFusionError::Execution("the source snapshot is absent".into()))?
             .tables
             .get(origin)
-            .ok_or_else(|| {
-                DataFusionError::Execution(format!("the materialized input is absent: {origin:?}"))
-            })?
-            .3;
-        Ok(input.as_ref().map(Arc::clone))
+            .and_then(|table| table.3.as_ref());
+        Ok(input.map(Arc::clone))
     }
 }
 
@@ -214,8 +211,16 @@ mod tests {
             if matches!(source.downcast_ref::<crate::Error>(), Some(crate::Error::Capacity { resource: "shared input", .. })))
         );
         assert!(source
-            .captured_input(&super::SourceOrigin::Port(0))
-            .is_err());
+            .captured_input(&super::SourceOrigin::Port(0))?
+            .is_none());
+        assert!(!source
+            .captured
+            .lock()
+            .map_err(|_| "source lock")?
+            .as_ref()
+            .ok_or("source capture")?
+            .tables
+            .contains_key(&super::SourceOrigin::Port(0)));
         drop(memory.reserve_input(1024)?);
         drop(held);
         source.bind_port(
@@ -258,8 +263,16 @@ mod tests {
             .bind_port(1, schema, input.data.batches.clone(), Some(&input))
             .is_err());
         assert!(source
-            .captured_input(&super::SourceOrigin::Port(1))
-            .is_err());
+            .captured_input(&super::SourceOrigin::Port(1))?
+            .is_none());
+        assert!(!source
+            .captured
+            .lock()
+            .map_err(|_| "source lock")?
+            .as_ref()
+            .ok_or("source capture")?
+            .tables
+            .contains_key(&super::SourceOrigin::Port(1)));
         drop(stored);
         drop(source);
         drop(memory.reserve_input(capacity)?);

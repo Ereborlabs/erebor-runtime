@@ -380,7 +380,7 @@ mod tests {
             "inspect",
             "counts",
             "--revision",
-            "exact",
+            "7",
         ])?;
         let Command::Investigate(command) = cli.command else {
             return Err("definition command absent".into());
@@ -392,7 +392,7 @@ mod tests {
         assert!(request.selection.is_none());
         assert!(matches!(PackageRequestV1::from_bytes(&request.definition)?,
             PackageRequestV1::InspectDefinition { name, revision }
-                if name == "counts" && revision.as_deref() == Some("exact")));
+                if name == "counts" && revision.as_deref() == Some("7")));
         Ok(())
     }
 
@@ -761,10 +761,10 @@ mod tests {
                     "--definition",
                     "count-events",
                     "--revision",
-                    "exact",
+                    "7",
                     "--rebuild",
                 ],
-                serde_json::json!({"operation":"update_instance","instance_id":"counts","expected_lifecycle":17,"definition_name":"count-events","definition_revision":"exact","rebuild":true}),
+                serde_json::json!({"operation":"update_instance","instance_id":"counts","expected_lifecycle":17,"definition_name":"count-events","definition_revision":"7","rebuild":true}),
             ),
             (
                 "rollback",

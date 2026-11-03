@@ -9,7 +9,7 @@ pub(super) struct GraphStage<'a> {
 }
 
 impl GraphStage<'_> {
-    pub fn replace(&self, additions: Vec<Member>) -> Result<()> {
+    pub fn replace(&self, additions: Vec<Member>) -> Result<(u64, u64, u64)> {
         let mut selected = BTreeMap::new();
         for member in additions {
             if selected
@@ -66,6 +66,7 @@ impl GraphStage<'_> {
                 return Err(GraphRows::invalid("graph member identity collision"));
             }
         }
+        let staged = (previous.len() + selected.len()) as u64;
         let mut members = Vec::with_capacity(selected.len());
         for (key, member) in selected {
             if let Some(old) = previous.get(&key).filter(|_| (2..=4).contains(&key.0)) {
@@ -99,7 +100,7 @@ impl GraphStage<'_> {
                 ordinal: member.ordinal,
             });
         }
-        araphor_graph::Contributions::apply(
+        let mut work = araphor_graph::Contributions::apply(
             self.writer,
             self.scope,
             self.revision,
@@ -109,7 +110,8 @@ impl GraphStage<'_> {
             }],
             false,
         )?;
-        Ok(())
+        work.0 = work.0.saturating_add(staged);
+        Ok(work)
     }
 
     pub(super) fn identities(

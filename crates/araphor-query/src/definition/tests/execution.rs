@@ -33,10 +33,13 @@ async fn registered_arrow_package_inputs() -> TestResult {
         .collect::<std::result::Result<Vec<_>, _>>()?;
     session.register("fixture_input", schema, &batches)?;
     let prepared = session
-        .prepare_definition(&Fixture::sql(
-            r#"SELECT * FROM "fixture"."r1".count(
+        .prepare_definition(
+            &Fixture::sql(
+                r#"SELECT * FROM "fixture"."r1".count(
                 source => (SELECT * FROM fixture_input), increment => 2)"#,
-        ))
+            ),
+            None,
+        )
         .await?;
     assert!(prepared.sources().is_empty());
     let result = session
@@ -81,11 +84,14 @@ async fn registered_scalar_parameter_admission() -> TestResult {
         session.register(table, schema, &[batch])?;
     }
     let prepared = session
-        .prepare_definition(&Fixture::sql(
-            r#"SELECT * FROM "fixture"."r1".count(
+        .prepare_definition(
+            &Fixture::sql(
+                r#"SELECT * FROM "fixture"."r1".count(
                 source => (SELECT value FROM fixture_input),
                 increment => (SELECT increment FROM __fixture_parameters))"#,
-        ))
+            ),
+            None,
+        )
         .await?;
     let output = session
         .execute_definition(&prepared, invocation("fixture-parameter"))
@@ -121,7 +127,7 @@ async fn registered_sources_cannot_shadow() -> TestResult {
     session.register("events", Arc::new(Fixture::schema("value")), &[])?;
     assert!(matches!(
         session
-            .prepare_definition(&Fixture::sql("SELECT * FROM events"))
+            .prepare_definition(&Fixture::sql("SELECT * FROM events"), None)
             .await,
         Err(crate::Error::Invalid {
             field: "definition source binding",
@@ -1353,7 +1359,7 @@ async fn sql_body_scope() -> TestResult {
             )?;
             session.register("caller_rows", schema, &[batch])?;
             let error = session
-                .prepare_definition(&Fixture::definition())
+                .prepare_definition(&Fixture::definition(), None)
                 .await
                 .err()
                 .ok_or("SQL body read an undeclared table")?;
@@ -1427,7 +1433,7 @@ impl Fixture {
         session.register("total_input", batch.schema(), std::slice::from_ref(batch))?;
         let prepared = session.prepare_definition(&Fixture::sql(
             r#"SELECT * FROM "fixture"."r1".count(source => (SELECT value FROM total_input), increment => 2)"#,
-        )).await?;
+        ), None).await?;
         let calls =
             Fixture::calls(&prepared.plan).map_err(|source| crate::Error::Sql { source })?;
         let mut request = invocation("total-input");

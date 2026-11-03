@@ -31,12 +31,40 @@ impl Running {
 }
 
 async fn program(fixture: &Fixture) -> TestResult<GraphProgram> {
-    let publication = fixture.prepare("").await?;
-    let program = GraphProgram {
-        grant: publication.grant.clone(),
-        definition: publication.prepared.resolved().clone(),
-        events_sql: "SELECT * FROM events".into(),
-    };
+    let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
+    let selection = AnalysisSelectionV1::tenant(fixture.source.tenant_id);
+    let session = fixture
+        .query
+        .session(selection.clone(), &fixture.control, now)?;
+    let program = GraphProgram::prepare(
+        session,
+        fixture.authority.clone(),
+        PackageGrantV1 {
+            principal: "graph-native-fixture".into(),
+            revision: 1,
+            selection,
+            expires_utc_ns: None,
+            authorization_id: None,
+        },
+        "SELECT * FROM events".into(),
+        Fixture::control_sql("SELECT * FROM events"),
+        Definition {
+            name: "graph-native-fixture".into(),
+            description: String::new(),
+            labels: BTreeMap::new(),
+            program: Program::Sql {
+                source: Source::Inline {
+                    inline: araphor_data::FindingV1::PACKAGES
+                        .iter()
+                        .map(|id| format!("SELECT * FROM \"{id}\".\"1\".detect('subjects')"))
+                        .collect::<Vec<_>>()
+                        .join(" UNION ALL "),
+                },
+            },
+        },
+        fixture.facts.clone(),
+    )
+    .await?;
     let expiry = fixture
         .query
         .admit_definition(
@@ -596,18 +624,33 @@ async fn feed_rejects_stale_grants() -> TestResult {
                     id.clone(),
                     fixture.source.clone(),
                     configured.events_sql.clone(),
-                    configured.definition.clone(),
+                    configured.control_sql.clone(),
+                    (configured.definition.clone(), None),
                     &fixture.control,
                 )
                 .await?
             }
             ManagedGraphOperation::Expire => {
+                let definition = fixture
+                    .query
+                    .admit_definition(
+                        fixture.source.tenant_id,
+                        GraphPublication::expiry_program(),
+                        Arc::clone(&fixture.control),
+                    )
+                    .await?;
+                let revision = fixture
+                    .query
+                    .store()
+                    .definition_revision(fixture.source.tenant_id, &definition, &fixture.control)?
+                    .ok_or("admitted expiry definition")?;
                 GraphPublication::admit_expiry(
                     Arc::clone(&fixture.query),
                     fixture.authority.clone(),
                     retained.clone(),
                     id.clone(),
                     fixture.source.clone(),
+                    revision,
                     &fixture.control,
                 )
                 .await?

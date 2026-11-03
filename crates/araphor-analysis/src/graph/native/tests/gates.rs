@@ -3,13 +3,12 @@ mod source;
 use super::*;
 use araphor_data::{
     CoverageCounters, CoverageInterval, CoverageReport, DiscoveryCoverageStateV1,
-    DiscoveryCoverageV1, GraphCoverageKeyV1, GraphReplayInputV1, InputRevision,
-    ValidatedCoverageV1,
+    DiscoveryCoverageV1, GraphCoverageKeyV1, GraphReplayInputV1, ValidatedCoverageV1,
 };
 use prost::Message as _;
 
 #[test]
-fn native_projection_requires_admission() -> TestResult {
+fn native_projection_keeps_policy_values() -> TestResult {
     let mut input = crate::graph::tests::fixture::credential_input_from(1)?;
     let ids = input
         .records
@@ -25,94 +24,55 @@ fn native_projection_requires_admission() -> TestResult {
         }
     }
     let input = input.normalized()?;
-    for mode in 0..3 {
-        let graph = Graph::new(&input)?;
-        assert!(graph.projection.get().is_none());
-        let limits = araphor_query::execution::Limits {
-            input_bytes: if mode == 0 { 1 } else { usize::MAX },
-            input_capacity: match mode {
-                0 => None,
-                1 => Some(1),
-                _ => Some(usize::MAX),
-            },
-            ..Default::default()
-        };
-        let memory = araphor_query::memory::Memory::new(limits.input_capacity, None);
-        let frames = memory.reserve_input(0)?;
-        let retained = memory.reserve_input(0)?;
-        let projection = super::super::Projection {
-            tenant: input.source.tenant_id,
-            facts: Arc::new(Facts::default()),
-            ports: araphor_analysis_builtins::graph::Detector::Process
-                .descriptor()
-                .exports[0]
-                .inputs
-                .iter()
-                .map(|input| input.port.clone())
-                .collect(),
-            memory: Arc::clone(&memory),
-            limits,
-            projections: Default::default(),
-            observed: Default::default(),
-        };
-        let result = projection.inputs(
-            &graph,
-            &sdk::Revision {
-                owner: "captured".into(),
-                id: "native-admission".into(),
-                window: None,
-            },
-            &sdk::Coverage {
-                state: sdk::CoverageState::Complete,
-                limits: Vec::new(),
-            },
-            &retained,
-            &frames,
-        );
-        if mode < 2 {
-            if mode == 0 {
-                assert!(
-                    matches!(&result, Err(DataFusionError::External(source))
-                    if matches!(source.downcast_ref::<araphor_data::Error>(),
-                        Some(araphor_data::Error::Package {
-                            code: araphor_data::PackageErrorCodeV1::Limit,
-                            field: "graph input bytes", ..
-                        }))),
-                    "{result:?}"
-                );
-            } else {
-                assert!(
-                    matches!(&result, Err(DataFusionError::ResourcesExhausted(_))),
-                    "{result:?}"
-                );
+    use sdk::arrow_array::{Array as _, ListArray, StringArray, StructArray};
+    let graph = Graph::new(&input)?;
+    assert!(graph.projection.get().is_none());
+    let expected = graph.observations.clone();
+    let inputs = graph.projection()?;
+    assert!(graph.projection.get().is_some());
+    assert_eq!(
+        expected
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    let record_ids = inputs[0].batches[0]
+        .column_by_name("id")
+        .ok_or("native record IDs")?;
+    let mut nested = false;
+    for batch in &inputs[1].batches {
+        let values = Projection::column::<StructArray>(batch, "value")?;
+        let policy = values
+            .column_by_name("policy")
+            .and_then(|array| array.as_any().downcast_ref::<StructArray>())
+            .ok_or("native policy facts")?;
+        let observations = policy
+            .column_by_name("observations")
+            .and_then(|array| array.as_any().downcast_ref::<ListArray>())
+            .ok_or("native policy observations")?;
+        let limits = policy
+            .column_by_name("limits")
+            .and_then(|array| array.as_any().downcast_ref::<ListArray>())
+            .ok_or("native policy limits")?;
+        for row in 0..batch.num_rows() {
+            if policy.is_null(row) {
+                continue;
             }
-            assert!(graph.projection.get().is_some());
-            drop(result);
-            drop(retained);
-            drop(frames);
-            drop(graph);
-            assert_eq!(memory.input_reserved(), 0);
-        } else {
-            let inputs = result?;
-            let expected = graph.observations.clone();
-            assert!(graph.projection.get().is_some());
-            let facts = araphor_analysis_builtins::graph::Fact::decode(&inputs[1].data)?;
-            assert!(facts.iter().any(|fact| matches!(&fact.value,
-                araphor_data::GraphFactValueV1::Policy(policy)
-                    if policy.observations == ids && policy.limits.iter()
-                        .any(|value| value.len() > 4096))));
-            drop(retained);
-            drop(frames);
-            drop(graph);
-            assert!(memory.input_reserved() > 0);
-            assert_eq!(
-                araphor_analysis_builtins::graph::Observation::decode(&inputs[0].data)?,
-                expected
-            );
-            drop(inputs);
-            assert_eq!(memory.input_reserved(), 0);
+            let limit = limits.value(row);
+            let limit = limit
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or("native policy limit strings")?;
+            nested |= observations.value(row).as_ref() == record_ids.as_ref()
+                && limit.iter().flatten().any(|value| value.len() > 4096);
         }
     }
+    assert!(nested);
+    assert_eq!(
+        araphor_analysis_builtins::graph::Observation::decode(&inputs[0])?,
+        expected
+    );
     Ok(())
 }
 
@@ -252,46 +212,63 @@ async fn payload(
         .managed_graph(&grant, &definition, instance_id, &events)
         .await?;
     let held = fixture.query.memory().input_reserved();
-    let projection = &owner
-        .graph_owner()
-        .ok_or("admitted Graph owner")?
-        .projection;
-    let observed = projection.observe_capture();
     let before_instance = owner.admitted().clone();
     let before = fixture.query.store().meta()?;
     let receipt = owner
         .run(managed::request("payload")?, &fixture.control)
         .await?;
-    let captured = observed.try_recv()?;
+    let reference = receipt
+        .results
+        .values()
+        .next()
+        .ok_or("payload Graph call")?;
+    let replayed = fixture
+        .replay_result(owner.admitted(), &reference.result_id, &fixture.control)
+        .await?;
+    let evaluation = replayed
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed Graph payload")?
+        .evaluation();
+    let observations =
+        araphor_analysis_builtins::graph::Observation::decode(&evaluation.input("records")?.data)?;
     let mut expected = expected;
-    expected.input_positions = captured.positions.clone();
+    expected.input_positions = observations
+        .iter()
+        .map(|record| {
+            (
+                record.id.clone(),
+                araphor_data::StorePositionV1 {
+                    commit_revision: record.position.commit_revision,
+                    ordinal: record.position.ordinal,
+                },
+            )
+        })
+        .collect();
     let expected = expected.normalized()?;
-    let revision = InputRevision::of_native(&(
-        &expected.source,
-        &expected.records,
-        &expected.input_positions,
-        &expected.coverage,
-        &expected.coverage_keys,
-        &expected.facts,
-        &expected.missing_ranges,
-    ))?;
     let expected_graph = Graph::new(&expected)?;
-    assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
-    assert_eq!(captured.inputs.len(), 3);
+    let metadata = fixture.query.store().managed_result(
+        owner.admitted(),
+        &reference.result_id,
+        u64::try_from(evaluation.context.time_utc_ns)?,
+        &fixture.control,
+    )?;
+    let araphor_data::InstanceResultKindV1::Call { context, .. } = metadata.kind else {
+        return Err("payload call metadata".into());
+    };
+    assert!(context.matches(&evaluation.inputs));
     let canonical = [
         araphor_analysis_builtins::graph::Observation::port(),
         araphor_analysis_builtins::graph::Fact::port(),
-        araphor_analysis_builtins::graph::Manifest::port(),
     ];
-    assert_eq!(captured.inputs.len(), canonical.len());
-    for (index, input) in captured.inputs.iter().enumerate() {
+    for port in &canonical {
+        let input = evaluation.input(&port.name)?;
         assert!(input
             .data
             .batches
             .iter()
-            .all(|batch| batch.schema().as_ref() == &canonical[index].schema));
-        assert_eq!(input.revision.owner, araphor_data::GRAPH_PROCESSOR);
-        assert_eq!(input.revision.id, revision);
+            .all(|batch| batch.schema().as_ref() == &port.schema));
         assert_eq!(
             input.revision.window,
             Some(sdk::SourceWindow {
@@ -301,36 +278,38 @@ async fn payload(
             })
         );
         assert_eq!(input.coverage.state, state);
-        assert_eq!(
-            input.coverage.limits,
-            if state == sdk::CoverageState::Complete {
-                Vec::new()
-            } else {
-                vec!["SOURCE_COVERAGE_INSUFFICIENT".to_owned()]
-            }
-        );
-        match input.data.name.as_str() {
-            "records" => assert_eq!(
-                araphor_analysis_builtins::graph::Observation::decode(&input.data)?,
-                araphor_analysis_builtins::graph::Observation::decode(
-                    &expected_graph.projection()?[index]
-                )?
-            ),
-            "facts" => assert_eq!(
-                araphor_analysis_builtins::graph::Fact::decode(&input.data)?,
-                araphor_analysis_builtins::graph::Fact::decode(
-                    &expected_graph.projection()?[index]
-                )?
-            ),
-            "manifest" => assert_eq!(
-                araphor_analysis_builtins::graph::Manifest::decode(&input.data)?,
-                araphor_analysis_builtins::graph::Manifest::decode(
-                    &expected_graph.projection()?[index]
-                )?
-            ),
-            _ => return Err("unexpected Graph input".into()),
+        if state == sdk::CoverageState::Complete {
+            assert!(input.coverage.limits.is_empty());
+        } else {
+            assert!(input
+                .coverage
+                .limits
+                .iter()
+                .any(|limit| limit == "SOURCE_COVERAGE_INSUFFICIENT"));
         }
     }
+    assert_eq!(observations, expected_graph.observations);
+    let expected_facts = expected
+        .facts
+        .iter()
+        .zip(&expected_graph.facts)
+        .map(|(context, fact)| {
+            let record = expected
+                .records
+                .binary_search_by(|record| record.id.cmp(&fact.record_id))
+                .map_err(|_| "expected Graph fact record")?;
+            Ok(araphor_analysis_builtins::graph::Fact {
+                record: u32::try_from(record)?,
+                key: context.key.clone(),
+                sensitivity: context.sensitivity,
+                value: fact.value.clone(),
+            })
+        })
+        .collect::<TestResult<Vec<_>>>()?;
+    assert_eq!(
+        araphor_analysis_builtins::graph::Fact::decode(&evaluation.input("facts")?.data)?,
+        expected_facts
+    );
     let first = expected
         .records
         .first()
@@ -426,7 +405,7 @@ async fn payload(
             .consumed_cursor,
         last
     );
-    drop(captured);
+    drop(replayed);
     assert_eq!(fixture.query.memory().input_reserved(), held);
     Ok(owner)
 }

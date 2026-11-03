@@ -191,8 +191,8 @@ async fn public_instance_reacts() -> Result<()> {
             assert_eq!(image, bundle.metadata()?);
             let path = tls.path().join("instance.yaml");
             fs::write(&path, "name: public-denials\ndescription: Count fixture denials.\nsql: 'SELECT * FROM \"denials.repeated\".\"public-1\".repeated()'\n")?;
-            let PackageResponseV1::Definition(definition) = request(&client, PackageRequestV1::AdmitDefinition { definition: Definition::read(&path)? }).await? else { return Err("admitted definition".into()); };
-            let admitted = instance(request(&client, PackageRequestV1::AdmitInstance { instance_id: "public-denials".into(), definition_name: definition.definition.name.clone(), definition_revision: definition.digest()? }).await?)?;
+            let PackageResponseV1::Definition { snapshot: definition, commit_revision: revision } = request(&client, PackageRequestV1::AdmitDefinition { definition: Definition::read(&path)? }).await? else { return Err("admitted definition".into()); };
+            let admitted = instance(request(&client, PackageRequestV1::AdmitInstance { instance_id: "public-denials".into(), definition_name: definition.definition.name.clone(), definition_revision: revision.to_string() }).await?)?;
             assert!(!admitted.running);
             assert_eq!(admitted.progress, 0);
             let data = fixture.control.analysis_store().ok_or("admitted store")?;
@@ -334,8 +334,8 @@ async fn public_receipt_reopens() -> Result<()> {
             request(&client, PackageRequestV1::InstallImage { bundle }).await?;
             let path = tls.path().join("receipt.yaml");
             fs::write(&path, "name: receipt-denials\nsql: 'SELECT * FROM \"denials.repeated\".\"public-1\".repeated()'\n")?;
-            let PackageResponseV1::Definition(definition) = request(&client, PackageRequestV1::AdmitDefinition { definition: Definition::read(&path)? }).await? else { return Err("receipt definition".into()); };
-            let admitted = instance(request(&client, PackageRequestV1::AdmitInstance { instance_id: "receipt-denials".into(), definition_name: definition.definition.name.clone(), definition_revision: definition.digest()? }).await?)?;
+            let PackageResponseV1::Definition { snapshot: definition, commit_revision: revision } = request(&client, PackageRequestV1::AdmitDefinition { definition: Definition::read(&path)? }).await? else { return Err("receipt definition".into()); };
+            let admitted = instance(request(&client, PackageRequestV1::AdmitInstance { instance_id: "receipt-denials".into(), definition_name: definition.definition.name.clone(), definition_revision: revision.to_string() }).await?)?;
             input(&fixture, 1, 2)?;
             let run = PackageRequestV1::RunInstance { instance_id: admitted.id, expected_lifecycle: admitted.lifecycle, evaluation_id: "public-retry".into(), rebuild: false };
             let PackageResponseV1::History(receipts) = request(&client, run.clone()).await? else { return Err("finite receipts".into()); };

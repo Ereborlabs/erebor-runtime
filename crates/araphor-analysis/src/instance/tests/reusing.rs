@@ -47,7 +47,7 @@ async fn retained_runs_check_authority() -> TestResult {
         10,
     )?;
     let error = session
-        .prepare_resolved(&definition)
+        .prepare_resolved(&definition, None, None)
         .await
         .err()
         .ok_or("cold corrupted image accepted")?;

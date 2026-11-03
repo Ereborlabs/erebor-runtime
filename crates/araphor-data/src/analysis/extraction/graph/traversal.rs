@@ -114,6 +114,7 @@ impl AnalysisStore {
                 &[],
                 header.notice,
                 header.expired,
+                header.restricted_count,
                 &mut output.sink(control),
             )?;
         }

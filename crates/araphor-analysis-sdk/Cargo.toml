@@ -6,12 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-arrow-array = "=58.4.0"
-arrow-buffer = "=58.4.0"
-arrow-cast = "=58.4.0"
-arrow-data = "=58.4.0"
-arrow-ipc = "=58.4.0"
-arrow-schema = { version = "=58.4.0", features = ["serde"] }
+arrow-array = "=59.2.0"
+arrow-buffer = "=59.2.0"
+arrow-cast = "=59.2.0"
+arrow-data = "=59.2.0"
+arrow-ipc = "=59.2.0"
+arrow-schema = { version = "=59.2.0", features = ["serde"] }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 serde.workspace = true
 serde_json.workspace = true

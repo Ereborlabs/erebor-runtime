@@ -117,6 +117,29 @@ impl Fact {
         static PORT: OnceLock<sdk::Port> = OnceLock::new();
         port::<views::FactRow>("facts", &PORT)
     }
+    pub fn source_port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        port::<views::FactRow<views::RecordIdRow>>("facts", &PORT)
+    }
+    pub fn encode_source(rows: &[Self], records: &[Observation]) -> sdk::Result<sdk::Dataset> {
+        row_count(rows.len())?;
+        let rows = rows
+            .iter()
+            .map(|fact| {
+                let record = records
+                    .get(fact.record as usize)
+                    .ok_or_else(|| invalid("graph native source record"))?;
+                let value = views::FactRow::from(fact);
+                Ok(views::FactRow {
+                    record: views::RecordIdRow::from(&record.id),
+                    key: value.key,
+                    sensitivity: value.sensitivity,
+                    value: value.value,
+                })
+            })
+            .collect::<sdk::Result<Vec<_>>>()?;
+        encode(Self::source_port(), &rows, |row| row)
+    }
     pub fn encode(rows: &[Self]) -> sdk::Result<sdk::Dataset> {
         encode(Self::port(), rows, views::FactRow::from)
     }

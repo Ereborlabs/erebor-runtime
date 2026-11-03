@@ -313,7 +313,10 @@ impl InstanceHost {
                     Arc::clone(&self.authority),
                     self.graph_facts.clone(),
                     &current.grant,
-                    definition,
+                    (
+                        definition,
+                        retained.as_ref().map(|spec| spec.manifest.definition),
+                    ),
                     destination,
                     control,
                 )
@@ -326,7 +329,12 @@ impl InstanceHost {
                     self.query
                         .session_on(selection, control, 0, self.query.memory().scope())?
                 };
-                let prepared = session.prepare_resolved(&definition).await?;
+                let prepared = session
+                    .prepare_resolved(
+                        &definition,
+                        retained.as_ref().map(|spec| spec.manifest.definition),
+                     None,)
+                    .await?;
                 if prepared.resolved() != &definition {
                     return Err(Code::Conflict.error("managed update definition pin").into());
                 }
@@ -334,7 +342,7 @@ impl InstanceHost {
             };
         let authority = Arc::clone(&self.authority);
         let stage = Arc::clone(control);
-        let store = Arc::clone(self.query.store());
+        let query = Arc::clone(&self.query);
         let current = current.clone();
         let memory = Arc::clone(session.memory());
         Engine::blocking(Arc::clone(control), (), move || {
@@ -342,19 +350,10 @@ impl InstanceHost {
             for bundle in prepared.images() {
                 authority.admit(&current.grant, bundle)?;
             }
-            let digest = prepared
-                .resolved()
-                .digest()
-                .map_err(araphor_data::Error::from)?;
-            if store.definition(
-                current.spec.tenant,
-                &prepared.resolved().definition.name,
-                Some(&digest),
-                &stage,
-            )? != Some(prepared.resolved().clone())
-            {
-                return Err(Code::Missing.error("managed definition pin").into());
-            }
+            let revision = prepared
+                .revision()
+                .ok_or_else(|| Code::Missing.error("managed definition revision"))?;
+            let prepared = prepared.bind_revision(&query, revision, &stage)?;
             let (manifest, calls) = Instance::manifest(&prepared)?;
             let spec = ManagedSpec {
                 tenant: current.spec.tenant,

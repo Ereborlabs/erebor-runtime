@@ -196,6 +196,7 @@ impl DataSink for Sink {
                 context,
                 revision.max(self.state.publication.load(Ordering::SeqCst)),
                 true,
+                None,
             )?;
         }
         Ok(rows)

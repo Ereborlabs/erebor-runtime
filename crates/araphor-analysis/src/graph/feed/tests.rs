@@ -1,34 +1,5 @@
 use super::*;
 use araphor_data::AnalysisSelectionV1;
-use araphor_discovery_definition::{Definition, Program, Source};
-
-fn program(selection: AnalysisSelectionV1) -> crate::Result<GraphProgram> {
-    let sql = "SELECT 1 AS value";
-    Ok(GraphProgram {
-        grant: PackageGrantV1 {
-            principal: "Graph scope fixture".into(),
-            revision: 1,
-            selection,
-            expires_utc_ns: None,
-            authorization_id: None,
-        },
-        definition: ResolvedDefinition::new(
-            Definition {
-                name: "graph-scope-fixture".into(),
-                description: String::new(),
-                labels: Default::default(),
-                program: Program::Sql {
-                    source: Source::Inline { inline: sql.into() },
-                },
-            },
-            sql.into(),
-            Vec::new(),
-        )
-        .map_err(araphor_data::Error::from)?,
-        events_sql: "SELECT * FROM events".into(),
-    })
-}
-
 #[test]
 fn scopes_have_one_program() -> crate::Result<()> {
     let source = EvidenceIntakeIdentityV1 {
@@ -70,10 +41,8 @@ fn scopes_have_one_program() -> crate::Result<()> {
     ] {
         assert!(left.valid());
         assert!(right.valid());
-        let left = program(left)?;
-        let right = program(right)?;
-        assert_eq!(left.overlaps(&right), expected);
-        assert_eq!(right.overlaps(&left), expected);
+        assert_eq!(GraphProgram::selections_overlap(&left, &right), expected);
+        assert_eq!(GraphProgram::selections_overlap(&right, &left), expected);
     }
     Ok(())
 }

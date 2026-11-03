@@ -127,11 +127,14 @@ impl SourceDemand {
             if let LogicalPlan::TableScan(scan) = plan {
                 let provider = source_as_provider(&scan.source).ok();
                 if let Some(provider) = &provider {
-                    if let Some(source) = provider.as_any().downcast_ref::<SourceProvider>() {
-                        origins.insert(source.origin.clone());
-                    }
-                    if let Some(source) = provider.as_any().downcast_ref::<SourcePort>() {
+                    if let Some(source) = provider.downcast_ref::<SourcePort>() {
                         origins.insert(SourceOrigin::Port(source.slot));
+                        if !scoped {
+                            origins.extend(source.origins().iter().cloned());
+                        }
+                    }
+                    if let Some(source) = provider.downcast_ref::<SourceProvider>() {
+                        origins.insert(source.origin.clone());
                     }
                 }
                 if !scoped {
@@ -139,14 +142,7 @@ impl SourceDemand {
                     if !views.insert(identity) {
                         return Err(DataFusionError::Plan("recursive source view".into()));
                     }
-                    if let Some(source) = provider
-                        .as_ref()
-                        .and_then(|provider| provider.as_any().downcast_ref::<SourcePort>())
-                    {
-                        for input in source.inputs() {
-                            origins.extend(Self::collect_with_views(input, false, views)?);
-                        }
-                    } else if let Some(view) = scan.source.get_logical_plan() {
+                    if let Some(view) = scan.source.get_logical_plan() {
                         origins.extend(Self::collect_with_views(&view, false, views)?);
                     }
                     views.remove(&identity);
@@ -284,29 +280,30 @@ impl<'a> Planner<'a> {
     }
 
     pub(crate) fn quotas(plan: &LogicalPlan, limits: &Limits) -> Result<()> {
-        Self::quotas_in_views(plan, limits, &mut BTreeSet::new()).context(crate::SqlSnafu)
+        Self::check_quotas(plan, limits).context(crate::SqlSnafu)
     }
 
-    fn quotas_in_views(
-        plan: &LogicalPlan,
-        limits: &Limits,
-        views: &mut BTreeSet<usize>,
-    ) -> NativeResult<()> {
+    fn check_quotas(plan: &LogicalPlan, limits: &Limits) -> NativeResult<()> {
         if limits.projection_columns.is_none() && limits.window_bound.is_none() {
             return Ok(());
         }
+        Self::quotas_in_sources(plan, limits, &mut BTreeSet::new())
+    }
+
+    fn quotas_in_sources(
+        plan: &LogicalPlan,
+        limits: &Limits,
+        sources: &mut BTreeSet<usize>,
+    ) -> NativeResult<()> {
         plan.apply_with_subqueries(|plan| {
             if let LogicalPlan::TableScan(scan) = plan {
                 if let Ok(provider) = source_as_provider(&scan.source) {
-                    if let Some(port) = provider.as_any().downcast_ref::<SourcePort>() {
-                        let identity = Arc::as_ptr(&scan.source) as *const () as usize;
-                        if !views.insert(identity) {
-                            return datafusion::common::plan_err!("recursive source view");
+                    if let Some(source) = provider.downcast_ref::<SourcePort>() {
+                        if sources.insert(std::ptr::from_ref(source) as usize) {
+                            for input in source.inputs() {
+                                Self::quotas_in_sources(input, limits, sources)?;
+                            }
                         }
-                        for input in port.inputs() {
-                            Self::quotas_in_views(input, limits, views)?;
-                        }
-                        views.remove(&identity);
                     }
                 }
             }
@@ -322,7 +319,7 @@ impl<'a> Planner<'a> {
                 if let Expr::WindowFunction(window) = expression {
                     if matches!(&window.fun,
                         datafusion::logical_expr::WindowFunctionDefinition::WindowUDF(function)
-                            if function.inner().as_any().is::<WindowShift>())
+                            if function.inner().is::<WindowShift>())
                     {
                         let bounded = match window.params.args.get(1) {
                             None => maximum >= 1,

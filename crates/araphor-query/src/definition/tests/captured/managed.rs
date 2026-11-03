@@ -115,7 +115,7 @@ async fn prepared(
         .project(vec![gate.call(vec![col("value")]).alias("value")])?
         .repartition(Partitioning::RoundRobinBatch(3))?
         .build()?;
-    let instance = fixture.managed(&definition, AnalysisSelectionV1::tenant([1; 16]))?;
+    let instance = fixture.managed(&mut definition, AnalysisSelectionV1::tenant([1; 16]))?;
     let target = Arc::new(Sink {
         schema: Arc::clone(definition.plan.schema().inner()),
         calls: Vec::new(),
@@ -385,11 +385,11 @@ async fn scope_check_precedes_capture() -> TestResult {
 #[tokio::test]
 async fn window_keeps_full_grant() -> TestResult {
     let fixture = fixture().await?;
-    let definition = fixture.prepare(&Fixture::sql(
+    let mut definition = fixture.prepare(&Fixture::sql(
         "SELECT source_cursor AS value FROM events WHERE received_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds'",
     )).await?;
     let full = AnalysisSelectionV1::tenant([1; 16]);
-    let instance = fixture.managed(&definition, full.clone())?;
+    let instance = fixture.managed(&mut definition, full.clone())?;
     let state = Arc::new(SinkState::default());
     let target = Arc::new(Sink {
         schema: Arc::clone(definition.plan.schema().inner()),

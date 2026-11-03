@@ -187,46 +187,22 @@ fn definition_values_are_checked() -> TestResult {
 }
 
 #[test]
-fn snapshot_digest_covers_content() -> TestResult {
-    let resolved = ResolvedDefinition::new(definition(), "SELECT 1".into(), Vec::new())?;
-    assert_eq!(
-        resolved.digest()?,
-        "sha256:4b191b5382565395b0a38e699e33dc36c28fbee79236c1adf39fb3152565b8cb"
-    );
-    let original = resolved.digest()?;
-    let mut changed = resolved.clone();
-    changed.definition.description = "new description".into();
-    assert_ne!(changed.digest()?, original);
-    changed = resolved.clone();
-    changed
-        .definition
-        .labels
-        .insert("team".into(), "security".into());
-    assert_ne!(changed.digest()?, original);
-    changed = resolved.clone();
-    changed.definition.program = Program::Sql {
-        source: Source::Inline {
-            inline: "SELECT 2".into(),
-        },
-    };
-    assert_ne!(changed.digest()?, original);
-    changed = resolved.clone();
-    changed.sql = "SELECT 2".into();
-    assert_ne!(changed.digest()?, original);
-    changed = resolved.clone();
-    changed.images.push(pin("example"));
-    assert_ne!(changed.digest()?, original);
+fn snapshot_keeps_native_content() -> TestResult {
     let ordered =
         ResolvedDefinition::new(definition(), "SELECT 1".into(), vec![pin("a"), pin("b")])?;
     let reversed =
         ResolvedDefinition::new(definition(), "SELECT 1".into(), vec![pin("b"), pin("a")])?;
-    assert_eq!(ordered.digest()?, reversed.digest()?);
-    let retained: ResolvedDefinition = serde_json::from_slice(&serde_json::to_vec(&ordered)?)?;
-    assert_eq!(retained.digest()?, ordered.digest()?);
-    let mut unordered = retained;
+    assert_eq!(ordered, reversed);
+    let bytes = ordered.encode()?;
+    assert_eq!(ResolvedDefinition::from_bytes(&bytes)?, ordered);
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(ResolvedDefinition::from_bytes(&trailing).is_err());
+    assert!(ResolvedDefinition::from_bytes(&serde_json::to_vec(&ordered)?).is_err());
+    let mut unordered = ordered;
     unordered.images.reverse();
     assert!(unordered.validate().is_err());
-    assert!(unordered.digest().is_err());
+    assert!(unordered.encode().is_err());
     Ok(())
 }
 
@@ -268,10 +244,6 @@ fn snapshot_requires_captured_sources() -> TestResult {
     }
     let resolved = ResolvedDefinition::new(definition(), "SELECT 1".into(), vec![pin("example")])?;
     resolved.validate()?;
-    let original = resolved.digest()?;
-    let mut changed = resolved.clone();
-    changed.images[0].digest = format!("sha256:{}", "b".repeat(64));
-    assert_ne!(changed.digest()?, original);
     let mut value = serde_json::to_value(&resolved)?;
     value["images"][0]["extra"] = json!(true);
     assert!(serde_json::from_value::<ResolvedDefinition>(value).is_err());

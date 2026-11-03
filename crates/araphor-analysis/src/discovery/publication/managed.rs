@@ -74,7 +74,7 @@ impl DiscoveryOwner {
         };
         control.check()?;
         let mut selected = None;
-        PackageCall::any(&prepared.plan, &mut |candidate| {
+        PackageCall::any(prepared.plan(), &mut |_, candidate| {
             if candidate.id() == *call && candidate.output() == output {
                 selected = Some(candidate.clone());
             }

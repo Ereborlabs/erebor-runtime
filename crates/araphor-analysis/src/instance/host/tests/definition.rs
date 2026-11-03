@@ -19,8 +19,8 @@ async fn prepared_definition_requires_install() -> TestResult {
             },
         },
     };
-    let prepared = session.prepare_definition(&definition).await?;
-    let digest = prepared.resolved().digest()?;
+    let prepared = session.prepare_definition(&definition, None).await?;
+    assert_eq!(prepared.revision(), None);
     let before = fixture.query.store().meta()?;
     authority.install_denied.store(true, Ordering::SeqCst);
     let error = host
@@ -51,7 +51,7 @@ async fn prepared_definition_requires_install() -> TestResult {
     assert!(fixture
         .query
         .store()
-        .definition([1; 16], &definition.name, Some(&digest), &control)?
+        .definition_revision([1; 16], prepared.resolved(), &control)?
         .is_none());
     assert!(fixture
         .query
@@ -72,12 +72,16 @@ async fn prepared_definition_requires_install() -> TestResult {
     assert!(!admitted.admitted().running);
     assert_eq!(admitted.admitted().progress, 0);
     assert_eq!(
-        fixture
-            .query
-            .store()
-            .definition([1; 16], &definition.name, Some(&digest), &control)?
-            .as_ref(),
-        Some(prepared.resolved())
+        fixture.query.store().definition(
+            [1; 16],
+            &definition.name,
+            Some(admitted.admitted().spec.manifest.definition),
+            &control,
+        )?,
+        Some((
+            prepared.resolved().clone(),
+            admitted.admitted().spec.manifest.definition
+        ))
     );
     let committed = fixture.query.store().meta()?;
     assert_eq!(committed.commit_revision, before.commit_revision + 2);

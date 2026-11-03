@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, ManagedDestination, PackageGrantV1};
-use araphor_discovery_definition::{Definition, Program, Source};
-use araphor_query::definition::PreparedDefinition;
+use araphor_discovery_definition::{Definition, Program, ResolvedDefinition, Source};
+use araphor_query::definition::PackageCall;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::{dml::InsertOp, LogicalPlanBuilder};
+use datafusion::logical_expr::{dml::InsertOp, LogicalPlan, LogicalPlanBuilder};
 
 use super::{Code, Instance, InstanceHost};
 use crate::instance::sink;
@@ -50,7 +50,7 @@ impl InstanceHost {
         }
         let session = self.query.session(grant.selection.clone(), control, 0)?;
         let prepared = session
-            .prepare_definition(&Notifications::definition())
+            .prepare_definition(&Notifications::definition(), None)
             .await?;
         self.admit_prepared(
             session,
@@ -65,11 +65,12 @@ impl InstanceHost {
 
 impl Instance {
     pub(in crate::instance) fn validate_notification(
-        prepared: &PreparedDefinition,
+        resolved: &ResolvedDefinition,
+        plan: &LogicalPlan,
         grant: &PackageGrantV1,
         id: &str,
     ) -> araphor_query::Result<()> {
-        let fields = prepared.plan.schema().fields();
+        let fields = plan.schema().fields();
         let columns = [
             ("finding_id", DataType::Utf8),
             ("result_id", DataType::Utf8),
@@ -77,13 +78,14 @@ impl Instance {
         ];
         if id != Notifications::ID
             || grant.selection != AnalysisSelectionV1::tenant(grant.selection.tenant_id)
-            || prepared.resolved().definition != Notifications::definition()
-            || !prepared.resolved().images.is_empty()
+            || resolved.definition != Notifications::definition()
+            || !resolved.images.is_empty()
             || fields.len() != columns.len()
             || fields.iter().zip(columns).any(|(field, (name, kind))| {
                 field.name() != name || field.data_type() != &kind || !field.is_nullable()
             })
-            || !Self::manifest(prepared)?.0.calls.is_empty()
+            || PackageCall::any(plan, &mut |_, _| Ok(true))
+                .map_err(|source| araphor_query::Error::Sql { source })?
         {
             return Err(Code::Invalid.error("notification native definition").into());
         }
@@ -109,11 +111,16 @@ impl Instance {
         control: Arc<AnalysisReadControl>,
         lifecycle: u64,
     ) -> Result<araphor_query::follow::Subscription> {
-        Self::validate_notification(&self.prepared, &self.admitted.grant, &self.admitted.spec.id)?;
+        Self::validate_notification(
+            self.prepared.resolved(),
+            self.prepared.plan(),
+            &self.admitted.grant,
+            &self.admitted.spec.id,
+        )?;
         self.check_notification(lifecycle, &control)?;
         let target = Arc::new(sink::Publication {
             owner: Arc::clone(self),
-            schema: Arc::clone(self.prepared.plan.schema().inner()),
+            schema: Arc::clone(self.prepared.plan().schema().inner()),
             mode: sink::Mode::Notification {
                 router: Arc::clone(&owner.router),
                 sink: Arc::clone(&owner.sink),
@@ -121,28 +128,18 @@ impl Instance {
             },
         });
         let plan = LogicalPlanBuilder::insert_into(
-            self.prepared.plan.clone(),
+            self.prepared.plan().clone(),
             "__araphor_notifications",
             provider_as_source(target),
             InsertOp::Append,
         )
         .and_then(LogicalPlanBuilder::build)
         .map_err(|source| araphor_query::Error::Sql { source })?;
-        let binding = self
-            .admitted
-            .spec
-            .definition
-            .digest()
-            .map_err(araphor_data::Error::from)?;
+        let binding = self.admitted.spec.manifest.definition.to_be_bytes();
         Ok(self
             .session
             .operation(&control, 0)?
-            .subscribe(
-                plan,
-                self.prepared.sources().clone(),
-                binding.as_bytes(),
-                true,
-            )?
+            .subscribe(plan, self.prepared.sources().clone(), &binding, true)?
             .until_change(self.authority.changes_for(&self.admitted.grant)))
     }
 }

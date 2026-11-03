@@ -17,7 +17,8 @@ async fn graph_restart_keeps_frontier() -> TestResult {
         "graph-restart".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -170,7 +171,8 @@ async fn graph_call_version_flush_failure_rolls_back() -> TestResult {
         "graph-progress-flush".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -205,6 +207,9 @@ async fn graph_call_version_flush_failure_rolls_back() -> TestResult {
         subject_count UBIGINT NOT NULL, edge_count UBIGINT NOT NULL,
         finding_count UBIGINT NOT NULL, state_count UBIGINT NOT NULL,
         selected_state_ref UBIGINT,
+        evidence_count UBIGINT NOT NULL DEFAULT 0, position_count UBIGINT NOT NULL DEFAULT 0,
+             fact_count UBIGINT NOT NULL DEFAULT 0, restricted_count UBIGINT, captured_revision UBIGINT,
+        CHECK (captured_revision IS NULL OR (captured_revision > 0 AND captured_revision < commit_revision)),
         CHECK (selected_state_ref IS NULL OR selected_state_ref > 0),
         UNIQUE (scope_id, commit_revision)";
     store.fault_write(
@@ -320,7 +325,8 @@ async fn unit_calls_keep_declared_state() -> TestResult {
         "retained-burst".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -437,7 +443,8 @@ async fn graph_call_reopen_rejects_corruption() -> TestResult {
         "graph-call-recovery".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;

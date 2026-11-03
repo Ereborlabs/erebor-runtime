@@ -16,7 +16,8 @@ async fn graph_replay_survives_removal() -> TestResult {
         "removed-graph-replay".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;

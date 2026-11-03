@@ -122,7 +122,7 @@ impl Packages {
         engine: &Engine,
         mut bundles: Vec<PackageBundle>,
         tenant: [u8; 16],
-        tables: BTreeMap<String, Arc<dyn TableProvider>>,
+        tables: Arc<crate::execution::LocalTables>,
         memory: Arc<crate::memory::Memory>,
     ) -> Result<Self> {
         bundles.sort_unstable_by(|left, right| left.bundle().root.cmp(&right.bundle().root));
@@ -150,19 +150,13 @@ impl Packages {
             let reservation = memory.reserve_input(bytes).context(SqlSnafu)?;
             images.push((Arc::new(bundle), Arc::new(reservation)));
         }
-        let mut sources = SourceSnapshot::providers();
-        for (name, table) in tables {
-            if sources.insert(name, table).is_some() {
-                return InvalidSnafu {
-                    field: "definition source binding",
-                }
-                .fail();
-            }
-        }
+        let sources = SourceSnapshot::bind_tables(&tables)?;
+        let mut state = engine.catalog(sources.clone())?;
+        state.config_mut().set_extension(tables);
         Ok(Self {
             demand: Arc::default(),
             tenant,
-            state: engine.catalog(sources.clone())?,
+            state,
             limits: engine.limits().clone(),
             bundles: images.into(),
             memory,
@@ -877,7 +871,7 @@ impl Packages {
             return None;
         };
         let provider = source_as_provider(&scan.source).ok()?;
-        match provider.as_any().downcast_ref::<SourceProvider>()?.origin {
+        match provider.downcast_ref::<SourceProvider>()?.origin {
             SourceOrigin::Port(slot) => Some(slot),
             _ => None,
         }

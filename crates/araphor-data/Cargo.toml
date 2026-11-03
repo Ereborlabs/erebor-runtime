@@ -9,13 +9,14 @@ repository.workspace = true
 test-fixtures = []
 
 [dependencies]
+erebor-telemetry = { path = "../erebor-telemetry" }
 araphor-discovery-definition = { path = "../araphor-discovery-definition" }
 araphor-package = { path = "../araphor-package" }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 araphor-graph = { path = "../araphor-graph" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
-arrow-ipc = "=58.4.0"
-arrow-json = "=58.4.0"
+arrow-ipc = "=59.2.0"
+arrow-json = "=59.2.0"
 crc32c.workspace = true
 duckdb = { workspace = true, features = ["json", "vtab", "appender-arrow"] }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
@@ -29,7 +30,7 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 schemars.workspace = true
 serde.workspace = true
 serde_bytes = "=0.11.19"
-serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-58"] }
+serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-59"] }
 serde_json.workspace = true
 serde_plain.workspace = true
 sha2.workspace = true

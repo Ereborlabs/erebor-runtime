@@ -114,7 +114,7 @@ impl TraversalFixture {
                             .into(),
                     },
                 },
-            })
+            }, None)
             .await?;
         let output = session
             .execute_definition(&prepared, Invocation::default())

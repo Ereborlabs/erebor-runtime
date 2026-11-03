@@ -123,7 +123,7 @@ async fn historical_inspect_keeps_result() -> TestResult {
         assert_eq!(saved.source.commit_revision, captured.captured_revision());
         assert_eq!(
             saved.definition_revision,
-            instance.admitted().spec.definition.digest()?
+            instance.admitted().spec.manifest.definition.to_string()
         );
         assert!(
             matches!(&saved.kind, araphor_data::InstanceResultKindV1::Call { call: id, .. } if id == call)

@@ -123,7 +123,7 @@ fn input_binding_preserves_links() -> TestResult {
         })
     ));
     let mut evaluation = graph.evaluation_for(model)?;
-    let mut facts = algorithm::Fact::decode(&graph.projection()?[1])?;
+    let mut facts = algorithm::Fact::decode(&evaluation.input("facts")?.data)?;
     let value = facts
         .iter_mut()
         .find_map(|fact| match &mut fact.value {
@@ -263,20 +263,33 @@ async fn result_requires_exact_image() -> TestResult {
             &input.data.batches,
         )?;
     }
+    let facts = algorithm::Fact::encode_source(
+        &algorithm::Fact::decode(&evaluation.input("facts")?.data)?,
+        &algorithm::Observation::decode(&evaluation.input("records")?.data)?,
+    )?;
     for (table, data) in [
         ("graph_records", &evaluation.input("records")?.data),
-        ("graph_facts", &evaluation.input("facts")?.data),
+        ("graph_facts", &facts),
+        ("graph_dirty", &evaluation.input("affected")?.data),
+        ("graph_window", &evaluation.input("window")?.data),
     ] {
         session.register(table, data.batches[0].schema(), &data.batches)?;
     }
     let settings = algorithm::Manifest::encode(&[algorithm::Manifest {
         window_ns: GRAPH_WINDOW_NS,
     }])?;
-    session.register(
-        "graph_settings",
-        settings.batches[0].schema(),
-        &settings.batches,
-    )?;
+    let mut fields = settings.batches[0].schema().fields().to_vec();
+    fields.push(Arc::new(sdk::Field::new(
+        "restricted",
+        sdk::DataType::Boolean,
+        false,
+    )));
+    let mut columns = settings.batches[0].columns().to_vec();
+    columns.push(Arc::new(sdk::arrow_array::BooleanArray::from(vec![
+        graph.restricted,
+    ])));
+    let settings = sdk::RecordBatch::try_new(Arc::new(sdk::Schema::new(fields)), columns)?;
+    session.register("graph_settings", settings.schema(), &[settings])?;
     let expected = algorithm::Detector::Process.evaluate(&evaluation)?;
     let mut returns = Vec::new();
     for revision in ["1", "2"] {
@@ -317,9 +330,9 @@ async fn result_requires_exact_image() -> TestResult {
                 },
             },
         };
-        let prepared = session.prepare_definition(&definition).await?;
+        let prepared = session.prepare_definition(&definition, None).await?;
         let mut call = None;
-        prepared.plan.apply_with_subqueries(|plan| {
+        prepared.plan().apply_with_subqueries(|plan| {
             if let LogicalPlan::Extension(extension) = plan {
                 if let Some(node) = extension.node.as_any().downcast_ref::<PackageCall>() {
                     call = Some(node.clone());

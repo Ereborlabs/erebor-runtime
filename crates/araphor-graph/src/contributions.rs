@@ -42,23 +42,24 @@ pub struct Contributions;
 struct Frontier {
     source: u64,
     kind: u8,
-    counts: [u64; 4],
+    counts: [u64; 7],
 }
 
 impl Contributions {
     /// Apply one contribution batch in the caller's transaction.
     /// Data must call this method once for each scope and version.
     /// The current version must exist and name the immediate previous version.
+    /// Return staged, inserted, and closed membership row counts.
     pub fn apply(
         writer: &Connection,
         scope: u64,
         revision: u64,
         replacements: &[Replacement],
         reset: bool,
-    ) -> Result<()> {
+    ) -> Result<(u64, u64, u64)> {
         Self::check_requests(replacements)?;
         let mut frontier = Self::frontier(writer, scope, revision)?;
-        if frontier.kind != 0 && replacements.iter().any(|item| item.unit.is_some()) {
+        if frontier.kind == 1 && replacements.iter().any(|item| item.unit.is_some()) {
             return InvalidSnafu {
                 field: "contribution publication unit",
             }
@@ -79,7 +80,14 @@ impl Contributions {
                             && member.ordinal == 0)
                 }
                 1 => matches!(member.kind, 2..=4 | 6),
-                2 => matches!(member.kind, 0..=1 | 7),
+                2 => {
+                    (matches!(member.kind, 0..=1 | 7) && member.record.is_none())
+                        || (member.kind == 10
+                            && member.record == replacement.unit
+                            && member.fact.is_none()
+                            && member.reason.is_none()
+                            && member.ordinal == 0)
+                }
                 _ => false,
             };
             if !allowed {
@@ -89,6 +97,14 @@ impl Contributions {
                 .fail();
             }
         }
+        // A metadata global-ref batch adds exact keys. It keeps unstaged global refs.
+        let additive = frontier.kind == 2
+            && !reset
+            && replacements.iter().any(|replacement| {
+                replacement.unit.is_none()
+                    && !replacement.members.is_empty()
+                    && replacement.members.iter().all(|member| member.kind == 10)
+            });
         writer
             .execute_batch(
                 "CREATE TEMP TABLE graph_contribution_stage (
@@ -100,7 +116,7 @@ impl Contributions {
                 operation: "create contribution stage",
             })?;
         let result = (|| {
-            Self::stage(writer, replacements)?;
+            let staged = Self::stage(writer, replacements)?;
             let (invalid_source, invalid_revision, duplicate_active) = writer
                 .query_row(
                     "SELECT EXISTS(
@@ -112,10 +128,14 @@ impl Contributions {
                                 AND (anchor.evidence_id IS NULL OR anchor.source_ref <> ?))),
                         EXISTS(SELECT 1 FROM graph_producer_members m WHERE m.scope_id = ?
                             AND (m.valid_from >= ? OR m.valid_to >= ?)
-                            AND (? OR m.unit_ref IN (SELECT unit_ref FROM graph_contribution_stage))),
+                            AND (? OR m.unit_ref IN (SELECT unit_ref FROM graph_contribution_stage))
+                            AND (NOT ? OR m.unit_ref<>0 OR EXISTS(SELECT 1 FROM graph_contribution_stage s
+                                WHERE s.unit_ref=0 AND s.member_kind=m.member_kind AND s.member_key=m.member_key))),
                         EXISTS(SELECT 1 FROM graph_producer_members m WHERE m.scope_id = ?
                             AND m.valid_to IS NULL
                             AND (? OR m.unit_ref IN (SELECT unit_ref FROM graph_contribution_stage))
+                            AND (NOT ? OR m.unit_ref<>0 OR EXISTS(SELECT 1 FROM graph_contribution_stage s
+                                WHERE s.unit_ref=0 AND s.member_kind=m.member_kind AND s.member_key=m.member_key))
                             GROUP BY m.unit_ref, m.member_kind, m.member_key HAVING count(*) > 1)",
                     params![
                         frontier.source,
@@ -124,8 +144,10 @@ impl Contributions {
                         revision,
                         revision,
                         reset,
+                        additive,
                         scope,
-                        reset
+                        reset,
+                        additive,
                     ],
                     |row| {
                         Ok((
@@ -156,6 +178,19 @@ impl Contributions {
                 }
                 .fail();
             }
+            let conflict:bool=writer.query_row(
+                "SELECT EXISTS(SELECT 1 FROM graph_contribution_stage input JOIN graph_producer_members old
+                    ON old.scope_id=? AND old.unit_ref=input.unit_ref AND old.member_kind=input.member_kind
+                        AND old.member_key=input.member_key AND old.valid_to IS NULL
+                    WHERE ? AND input.unit_ref=0 AND input.member_kind=10 AND old.value_ref<>input.value_ref)",
+                params![scope,additive],|row|row.get(0),
+            ).context(DatabaseSnafu { operation:"check immutable global contribution ref" })?;
+            if conflict {
+                return InvalidSnafu {
+                    field: "contribution global ref revision",
+                }
+                .fail();
+            }
             let prior_state = StateRows::prior(writer, scope, revision)?;
             let state_values = StateRows::staged(writer, scope, reset)?;
             writer
@@ -165,6 +200,8 @@ impl Contributions {
                         SELECT m.* FROM graph_producer_members m
                         WHERE m.scope_id = ? AND m.valid_to IS NULL
                             AND (? OR m.unit_ref IN (SELECT unit_ref FROM graph_contribution_stage))
+                            AND (NOT ? OR m.unit_ref<>0 OR EXISTS(SELECT 1 FROM graph_contribution_stage s
+                                WHERE s.unit_ref=0 AND s.member_kind=m.member_kind AND s.member_key=m.member_key))
                     ), replacement AS (
                         SELECT * FROM graph_contribution_stage WHERE member_kind IS NOT NULL
                     )
@@ -179,7 +216,7 @@ impl Contributions {
                         OR old.anchor_fact IS DISTINCT FROM new.anchor_fact
                         OR old.reason_code IS DISTINCT FROM new.reason_code
                         OR old.ordinal IS DISTINCT FROM new.ordinal",
-                    params![scope, reset],
+                    params![scope, reset, additive],
                 )
                 .context(DatabaseSnafu {
                     operation: "compare contribution members",
@@ -212,7 +249,10 @@ impl Contributions {
                         coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 2), 0)::BIGINT,
                         coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 3), 0)::BIGINT,
                         coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 4), 0)::BIGINT,
-                        coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 8), 0)::BIGINT
+                        coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 8), 0)::BIGINT,
+                        coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 0), 0)::BIGINT,
+                        coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 1), 0)::BIGINT,
+                        coalesce(sum(current::BIGINT - prior::BIGINT) FILTER(WHERE member_kind = 7), 0)::BIGINT
                     FROM presence",
                     params![scope],
                     |row| {
@@ -223,6 +263,9 @@ impl Contributions {
                                 row.get::<_, i64>(2)?,
                                 row.get::<_, i64>(3)?,
                                 row.get::<_, i64>(4)?,
+                                row.get::<_, i64>(5)?,
+                                row.get::<_, i64>(6)?,
+                                row.get::<_, i64>(7)?,
                             ],
                         ))
                     },
@@ -244,7 +287,7 @@ impl Contributions {
                     .build()
                 })?;
             }
-            writer
+            let closed=writer
                 .execute(
                     "UPDATE graph_producer_members old SET valid_to = ?
                     FROM graph_contribution_diff diff WHERE old.scope_id = ? AND old.valid_to IS NULL
@@ -255,7 +298,7 @@ impl Contributions {
                 .context(DatabaseSnafu {
                     operation: "close contribution members",
                 })?;
-            writer
+            let inserted = writer
                 .execute(
                     "INSERT INTO graph_producer_members
                         (scope_id, unit_ref, member_kind, member_key, value_ref, anchor_record_id,
@@ -271,12 +314,16 @@ impl Contributions {
             writer
                 .execute(
                     "UPDATE graph_producer_versions SET subject_count = ?, edge_count = ?,
-                        finding_count = ?, state_count = ? WHERE scope_id = ? AND commit_revision = ?",
+                        finding_count = ?, state_count = ?, evidence_count = ?, position_count = ?,
+                        fact_count = ? WHERE scope_id = ? AND commit_revision = ?",
                     params![
                         frontier.counts[0],
                         frontier.counts[1],
                         frontier.counts[2],
                         frontier.counts[3],
+                        frontier.counts[4],
+                        frontier.counts[5],
+                        frontier.counts[6],
                         scope,
                         revision
                     ],
@@ -285,7 +332,7 @@ impl Contributions {
                     operation: "update contribution counts",
                 })?;
             StateRows::advance(writer, scope, revision, prior_state, state_values, reset)?;
-            Ok(())
+            Ok((staged, inserted as u64, closed as u64))
         })();
         let cleanup = writer
             .execute_batch(
@@ -295,9 +342,9 @@ impl Contributions {
             .context(DatabaseSnafu {
                 operation: "release contribution stage",
             });
-        result?;
+        let work = result?;
         cleanup?;
-        Ok(())
+        Ok(work)
     }
 
     fn check_requests(replacements: &[Replacement]) -> Result<()> {
@@ -334,7 +381,9 @@ impl Contributions {
                 "SELECT s.source_ref, s.producer_kind, s.created_revision, current.commit_revision,
                     current.base_result_id, previous.result_id, previous.commit_revision,
                     coalesce(previous.subject_count, 0), coalesce(previous.edge_count, 0),
-                    coalesce(previous.finding_count, 0), coalesce(previous.state_count, 0)
+                    coalesce(previous.finding_count, 0), coalesce(previous.state_count, 0),
+                    coalesce(previous.evidence_count, 0), coalesce(previous.position_count, 0),
+                    coalesce(previous.fact_count, 0)
                 FROM graph_producer_scopes s
                 JOIN graph_producer_versions current ON current.scope_id = s.scope_id
                     AND current.commit_revision = (SELECT max(commit_revision)
@@ -354,7 +403,15 @@ impl Contributions {
                         row.get::<_, Option<String>>(4)?,
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, Option<u64>>(6)?,
-                        [row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?],
+                        [
+                            row.get(7)?,
+                            row.get(8)?,
+                            row.get(9)?,
+                            row.get(10)?,
+                            row.get(11)?,
+                            row.get(12)?,
+                            row.get(13)?,
+                        ],
                     ))
                 },
             )
@@ -388,7 +445,7 @@ impl Contributions {
         })
     }
 
-    fn stage(writer: &Connection, replacements: &[Replacement]) -> Result<()> {
+    fn stage(writer: &Connection, replacements: &[Replacement]) -> Result<u64> {
         let mut units = UInt64Builder::new();
         let mut kinds = UInt8Builder::new();
         let mut keys = LargeBinaryBuilder::new();
@@ -455,13 +512,14 @@ impl Contributions {
             .context(DatabaseSnafu {
                 operation: "open contribution appender",
             })?;
+        let rows = batch.num_rows() as u64;
         appender.append_record_batch(batch).context(DatabaseSnafu {
             operation: "append contribution members",
         })?;
         appender.flush().context(DatabaseSnafu {
             operation: "flush contribution members",
         })?;
-        Ok(())
+        Ok(rows)
     }
 }
 

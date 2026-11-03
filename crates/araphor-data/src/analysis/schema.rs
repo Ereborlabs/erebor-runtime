@@ -381,8 +381,8 @@ impl AnalysisStore {
                 if !identity.valid() || key != identity.key() {
                     return Self::reject_path(root, "the stored source identity or key is invalid");
                 }
-                let receipt =
-                    Self::read_receipt_from(writer, root, &identity, &key)?.ok_or_else(|| {
+                let (receipt, _) = Self::read_receipt_from(writer, root, &identity, &key)?
+                    .ok_or_else(|| {
                         crate::AnalysisStateSnafu {
                             path: root,
                             reason: "the stored receipt is absent",
@@ -598,7 +598,7 @@ impl AnalysisStore {
             "tenant_id, instance_id, attempt_id, generation, contract, completed FROM managed_attempts",
             "tenant_id, result_id, dependency_id, commit_revision FROM managed_edges",
             "relation_name, last_changed_revision FROM relation_revisions",
-            "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor FROM source_receipts",
+            "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor, commit_revision FROM source_receipts",
             "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor, commit_revision FROM source_versions",
             "stream_key, identity_json, tenant_id, last_sequence, output_bytes, terminal, retained_floor, commit_revision FROM trace_receipts",
             "stream_key, identity_json, tenant_id, last_sequence, output_bytes, terminal, retained_floor, commit_revision, version_revision FROM trace_versions",

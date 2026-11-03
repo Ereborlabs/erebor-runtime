@@ -308,12 +308,18 @@ impl InstanceHost {
     ) -> Result<ResolvedDefinition> {
         let store = Arc::clone(self.query.store());
         let tenant = grant.selection.tenant_id;
-        let (name, revision) = (name.to_owned(), revision.to_owned());
+        let parsed = revision
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0 && value.to_string() == revision)
+            .ok_or_else(|| Code::Invalid.error("definition revision"))?;
+        let (name, revision) = (name.to_owned(), parsed);
         let read = Arc::new(control.within(grant.remaining()?)?);
         let stage = Arc::clone(&read);
         Ok(Engine::blocking(read, (), move || {
             store
-                .definition(tenant, &name, Some(&revision), &stage)?
+                .definition(tenant, &name, Some(revision), &stage)?
+                .map(|(definition, _)| definition)
                 .ok_or_else(|| Code::Missing.error("discovery definition").into())
         })
         .await?)

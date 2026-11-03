@@ -2,21 +2,22 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use araphor_data::{
-    AnalysisStreamIdentityV1, AnalysisTableRead, ManagedSourceBlock, ManagedSourceFrame,
-    ManagedSourceRead, ManagedSourceRef, ManagedSourceRows, SourceScope,
+    AnalysisStreamIdentityV1, AnalysisTableRead, ManagedPrior, ManagedReceipt, ManagedSourceBlock,
+    ManagedSourceFrame, ManagedSourceRead, ManagedSourceRef, ManagedSourceRows, SourceScope,
+    StorePositionV1,
 };
-use datafusion::arrow::array::{Array, RecordBatch, UInt64Array};
-use datafusion::arrow::compute::take;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::{RecordBatch, UInt64Array};
+use datafusion::arrow::compute::{cast, max, take};
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatchOptions;
+use datafusion::arrow::row::{RowConverter, Rows};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::joins::HashExpr;
 
 use super::SourceSnapshot;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SourceImage {
     Before,
     After,
@@ -29,7 +30,9 @@ pub(crate) struct SourceKey {
     pub(crate) id: usize,
     pub(crate) table: String,
     pub(crate) columns: Vec<usize>,
-    pub(crate) hash: Arc<HashExpr>,
+    pub(crate) expressions: Arc<[Arc<dyn PhysicalExpr>]>,
+    pub(crate) converter: Arc<RowConverter>,
+    pub(crate) data_types: Arc<[DataType]>,
 }
 
 #[derive(Debug)]
@@ -48,7 +51,11 @@ struct IndexState {
     tables: BTreeMap<String, IndexedTable>,
     leases: BTreeMap<u64, usize>,
     retired: VecDeque<(u64, String, RowAddress)>,
+    context_revision: u64,
+    calls: Vec<CallPoint>,
 }
+
+type CallPoint = (u64, u64, StorePositionV1, u64);
 
 #[derive(Debug)]
 struct IndexedTable {
@@ -57,7 +64,7 @@ struct IndexedTable {
     blocks: BTreeMap<u64, Arc<SourceBlock>>,
     live: BTreeMap<u64, usize>,
     removed: BTreeMap<RowAddress, u64>,
-    buckets: BTreeMap<usize, BTreeMap<u64, BTreeSet<RowAddress>>>,
+    buckets: BTreeMap<usize, BTreeMap<Vec<u8>, BTreeSet<RowAddress>>>,
     cursors: BTreeMap<AnalysisStreamIdentityV1, BTreeMap<u64, BTreeSet<RowAddress>>>,
 }
 
@@ -72,7 +79,7 @@ struct SourceBlock {
     batch: RecordBatch,
     handles: ManagedSourceBlock,
     born: u64,
-    hashes: Arc<BTreeMap<usize, Arc<UInt64Array>>>,
+    keys: Arc<BTreeMap<usize, Arc<Rows>>>,
     _memory: Arc<MemoryReservation>,
     _scope: Arc<MemoryReservation>,
 }
@@ -84,6 +91,9 @@ pub(crate) struct SourceView {
     tables: BTreeMap<String, IndexedTable>,
     removed: BTreeMap<String, BTreeSet<RowAddress>>,
     next: u64,
+    context_before: u64,
+    context_after: u64,
+    historical: bool,
     control: araphor_data::AnalysisReadControl,
     _staging: MemoryReservation,
     _scope: Arc<MemoryReservation>,
@@ -92,6 +102,31 @@ pub(crate) struct SourceView {
 pub(crate) struct SourceRows {
     pub(crate) batches: Vec<RecordBatch>,
     pub(crate) origins: Vec<ManagedSourceRows>,
+}
+
+impl SourceKey {
+    pub(super) fn encode(
+        expressions: &[Arc<dyn PhysicalExpr>],
+        converter: &RowConverter,
+        data_types: &[DataType],
+        batch: &RecordBatch,
+    ) -> Result<Rows> {
+        let mut values = expressions
+            .iter()
+            .map(|expression| expression.evaluate(batch)?.into_array(batch.num_rows()))
+            .collect::<Result<Vec<_>>>()?;
+        if values.len() != data_types.len() {
+            return Err(DataFusionError::Internal(
+                "the source key types differ".into(),
+            ));
+        }
+        for (value, data_type) in values.iter_mut().zip(data_types) {
+            if value.data_type() != data_type && value.data_type().contains(data_type) {
+                *value = cast(value.as_ref(), data_type)?;
+            }
+        }
+        Ok(converter.convert_columns(&values)?)
+    }
 }
 
 impl SourceIndex {
@@ -107,14 +142,35 @@ impl SourceIndex {
                 "retained key for a non-row source".into(),
             ));
         }
+        let mut converters = BTreeSet::new();
         let bytes = size_of::<Self>()
             .saturating_add(keys.capacity().saturating_mul(size_of::<SourceKey>()))
             .saturating_add(
                 keys.iter()
                     .map(|key| {
-                        key.table.capacity().saturating_add(
-                            key.columns.capacity().saturating_mul(size_of::<usize>()),
-                        )
+                        key.table
+                            .capacity()
+                            .saturating_add(
+                                key.columns.capacity().saturating_mul(size_of::<usize>()),
+                            )
+                            .saturating_add(
+                                key.expressions
+                                    .len()
+                                    .saturating_mul(size_of::<Arc<dyn PhysicalExpr>>()),
+                            )
+                            .saturating_add(
+                                converters
+                                    .insert(Arc::as_ptr(&key.converter) as usize)
+                                    .then(|| {
+                                        key.converter.size().saturating_add(
+                                            key.data_types
+                                                .iter()
+                                                .map(DataType::size)
+                                                .sum::<usize>(),
+                                        )
+                                    })
+                                    .unwrap_or(0),
+                            )
                     })
                     .sum::<usize>(),
             );
@@ -150,10 +206,50 @@ impl SourceIndex {
 
     pub(crate) fn discard_restore(&self) -> Result<()> {
         let mut state = self.lock()?;
-        if !state.leases.is_empty() {
+        if state.leases.iter().any(|(version, count)| {
+            *count
+                != state
+                    .calls
+                    .iter()
+                    .filter(|point| point.1 == *version)
+                    .count()
+        }) {
             return Err(Self::conflict());
         }
         *state = IndexState::default();
+        Ok(())
+    }
+
+    fn prepare_calls(&self, ids: impl Iterator<Item = u64>) -> Result<()> {
+        let mut state = self.lock()?;
+        let needed = state
+            .calls
+            .len()
+            .checked_add(
+                ids.filter(|id| !state.calls.iter().any(|point| point.0 == *id))
+                    .count(),
+            )
+            .ok_or_else(Self::limit)?;
+        let capacity = state.calls.capacity();
+        if needed <= capacity {
+            return Ok(());
+        }
+        let per_call = size_of::<CallPoint>() + 2 * size_of::<(u64, usize)>();
+        let bytes = needed
+            .checked_sub(capacity)
+            .and_then(|count| count.checked_mul(per_call))
+            .ok_or_else(Self::limit)?;
+        self._metadata.try_grow(bytes)?;
+        let additional = needed - state.calls.len();
+        state.calls.reserve_exact(additional);
+        let actual = state.calls.capacity();
+        if actual > needed {
+            self._metadata.try_grow(
+                (actual - needed)
+                    .checked_mul(per_call)
+                    .ok_or_else(Self::limit)?,
+            )?;
+        }
         Ok(())
     }
 
@@ -210,6 +306,7 @@ impl SourceIndex {
                 .reserve_input(frame.scope().allocated_bytes().ok_or_else(Self::limit)?)?,
         );
         *state.leases.entry(version).or_default() += 1;
+        let context_revision = state.context_revision;
         drop(state);
         let mut view = SourceView {
             index: Arc::clone(self),
@@ -218,6 +315,9 @@ impl SourceIndex {
             tables: BTreeMap::new(),
             removed: BTreeMap::new(),
             next,
+            context_before: context_revision,
+            context_after: context_revision,
+            historical: false,
             control,
             _staging: staging,
             _scope: scope,
@@ -259,7 +359,7 @@ impl SourceIndex {
                     .filter(|key| key.table == data.name)
                     .count();
                 let entries = size_of::<RowAddress>()
-                    .saturating_add(size_of::<(u64, BTreeSet<RowAddress>)>())
+                    .saturating_add(size_of::<(Vec<u8>, BTreeSet<RowAddress>)>())
                     .saturating_mul(count)
                     .saturating_add(size_of::<(u64, BTreeSet<RowAddress>)>());
                 let bytes = size_of::<SourceBlock>()
@@ -274,10 +374,21 @@ impl SourceIndex {
                         .row_handles(&data.name, slot)
                         .map_err(SourceSnapshot::data_error)?,
                     born: 0,
-                    hashes: Arc::default(),
+                    keys: Arc::default(),
                     _memory: Arc::new(memory),
                     _scope: Arc::clone(&view._scope),
                 };
+                if data.name == "context_versions" {
+                    let revisions = batch
+                        .column_by_name("commit_revision")
+                        .and_then(|array| array.as_any().downcast_ref::<UInt64Array>())
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "the context journal position is absent".into(),
+                            )
+                        })?;
+                    view.context_after = view.context_after.max(max(revisions).unwrap_or(0));
+                }
                 for key in self.keys.iter().filter(|key| key.table == data.name) {
                     let projection = key
                         .columns
@@ -291,20 +402,22 @@ impl SourceIndex {
                         })
                         .collect::<Result<Vec<_>>>()?;
                     let batch = batch.project(&projection)?;
+                    let values = SourceKey::encode(
+                        &key.expressions,
+                        &key.converter,
+                        &key.data_types,
+                        &batch,
+                    )?;
+                    let bytes = values.iter().try_fold(0usize, |bytes, value| {
+                        bytes
+                            .checked_add(value.data().len())
+                            .ok_or_else(Self::limit)
+                    })?;
                     block
                         ._memory
-                        .try_grow(batch.num_rows().saturating_mul(size_of::<u64>()))?;
-                    let values = key.hash.evaluate(&batch)?.into_array(batch.num_rows())?;
-                    let hashes =
-                        values
-                            .as_any()
-                            .downcast_ref::<UInt64Array>()
-                            .ok_or_else(|| {
-                                DataFusionError::Internal(
-                                    "the native source hash type is invalid".into(),
-                                )
-                            })?;
-                    Arc::make_mut(&mut block.hashes).insert(key.id, Arc::new(hashes.clone()));
+                        .try_grow(values.size().checked_add(bytes).ok_or_else(Self::limit)?)?;
+                    view._staging.try_grow(bytes)?;
+                    Arc::make_mut(&mut block.keys).insert(key.id, Arc::new(values));
                 }
                 table.insert(next, Arc::new(block));
                 next = next.checked_add(1).ok_or_else(|| {
@@ -341,13 +454,12 @@ impl SourceIndex {
     pub(crate) fn restore(
         self: &Arc<Self>,
         frame: Arc<ManagedSourceFrame>,
+        receipt: &ManagedReceipt,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<()> {
-        let reference = frame.proof().cloned().ok_or_else(|| {
-            DataFusionError::Execution("the restored source proof is absent".into())
-        })?;
+        self.prepare_calls(receipt.results.keys().copied())?;
         let view = self.stage(frame, control)?;
-        view.commit(&reference)
+        view.commit(receipt)
     }
 
     fn conflict() -> DataFusionError {
@@ -373,13 +485,17 @@ impl IndexedTable {
     }
 
     fn insert(&mut self, id: u64, block: Arc<SourceBlock>) {
-        for (index, hashes) in block.hashes.iter() {
+        for (index, keys) in block.keys.iter() {
             let buckets = self.buckets.entry(*index).or_default();
-            for (row, hash) in hashes.values().iter().enumerate() {
-                buckets
-                    .entry(*hash)
-                    .or_default()
-                    .insert(RowAddress { block: id, row });
+            for (row, key) in keys.iter().enumerate() {
+                if let Some(bucket) = buckets.get_mut(key.data()) {
+                    bucket.insert(RowAddress { block: id, row });
+                } else {
+                    buckets.insert(
+                        key.data().to_vec(),
+                        BTreeSet::from([RowAddress { block: id, row }]),
+                    );
+                }
             }
         }
         for row in 0..block.batch.num_rows() {
@@ -409,27 +525,27 @@ impl IndexedTable {
     fn lookup<'a>(
         &'a self,
         index: usize,
-        hashes: &'a BTreeSet<u64>,
+        keys: &'a BTreeSet<Vec<u8>>,
     ) -> Result<impl Iterator<Item = RowAddress> + 'a> {
         let buckets = self.buckets.get(&index).ok_or_else(|| {
             DataFusionError::Internal("the retained source key index is absent".into())
         })?;
-        Ok(hashes
+        Ok(keys
             .iter()
-            .flat_map(move |hash| buckets.get(hash).into_iter().flatten().copied()))
+            .flat_map(move |key| buckets.get(key.as_slice()).into_iter().flatten().copied()))
     }
 
     fn reclaim(&mut self, address: RowAddress) {
         let Some(block) = self.blocks.get(&address.block) else {
             return;
         };
-        for (id, hashes) in block.hashes.iter() {
+        for (id, keys) in block.keys.iter() {
             if let Some(buckets) = self.buckets.get_mut(id) {
-                let hash = hashes.value(address.row);
-                if let Some(bucket) = buckets.get_mut(&hash) {
+                let key = keys.row(address.row);
+                if let Some(bucket) = buckets.get_mut(key.data()) {
                     bucket.remove(&address);
                     if bucket.is_empty() {
-                        buckets.remove(&hash);
+                        buckets.remove(key.data());
                     }
                 }
             }
@@ -469,6 +585,114 @@ impl SourceView {
         &self.frame
     }
 
+    pub(crate) fn prepare_calls(&self, ids: impl Iterator<Item = u64>) -> Result<()> {
+        self.index.prepare_calls(ids)
+    }
+
+    pub(crate) fn has_call(&self, call: u64, prior: &ManagedPrior) -> Result<bool> {
+        if !matches!(self.frame.read(), ManagedSourceRead::Changes(_)) {
+            return Ok(false);
+        }
+        let state = self.index.lock()?;
+        let point = state
+            .calls
+            .iter()
+            .find(|point| point.0 == call)
+            .ok_or_else(|| {
+                DataFusionError::Execution("the retained call source point is absent".into())
+            })?;
+        if point.1 != prior.revision
+            || point.1 != prior.source.result.commit_revision
+            || point.2 != prior.source.position
+            || !state.leases.contains_key(&point.1)
+        {
+            return Err(SourceIndex::conflict());
+        }
+        Ok(true)
+    }
+
+    pub(super) fn call_before(
+        &self,
+        call: u64,
+        reference: &araphor_data::ManagedAttempt,
+    ) -> Result<Arc<Self>> {
+        let mut state = self.index.lock()?;
+        let point = state
+            .calls
+            .iter()
+            .find(|point| point.0 == call)
+            .ok_or_else(|| {
+                DataFusionError::Execution("the retained call source point is absent".into())
+            })?;
+        let receipt = reference.receipt().ok_or_else(SourceIndex::conflict)?;
+        if receipt
+            .results
+            .get(&call)
+            .is_none_or(|result| result.commit_revision != point.1)
+            || receipt.selected.commit_revision != point.1
+            || reference.captured_revision() != point.2.commit_revision
+            || point.2.ordinal != u32::MAX
+            || !state.leases.contains_key(&point.1)
+        {
+            return Err(SourceIndex::conflict());
+        }
+        let control = self
+            .control
+            .within(None)
+            .map_err(SourceSnapshot::data_error)?;
+        let bytes = self.tables.iter().try_fold(
+            size_of::<Self>()
+                .checked_add(receipt.selected.result_id.capacity())
+                .ok_or_else(SourceIndex::limit)?,
+            |bytes, (name, table)| {
+                bytes
+                    .checked_add(size_of::<(String, IndexedTable)>())
+                    .and_then(|bytes| bytes.checked_add(name.len()))
+                    .and_then(|bytes| {
+                        bytes.checked_add(table.columns.len().checked_mul(size_of::<usize>())?)
+                    })
+                    .ok_or_else(SourceIndex::limit)
+            },
+        )?;
+        let staging = self.index.memory.reserve_input(bytes)?;
+        let parent = ManagedSourceRef {
+            result: receipt.selected.clone(),
+            position: point.2,
+        };
+        self.frame
+            .check_point(reference, &parent)
+            .map_err(SourceSnapshot::data_error)?;
+        let context_revision = point.3;
+        let tables = self
+            .tables
+            .iter()
+            .map(|(name, table)| {
+                (
+                    name.clone(),
+                    IndexedTable::new(table.columns.clone(), Arc::clone(&table.schema)),
+                )
+            })
+            .collect();
+        *state
+            .leases
+            .entry(parent.result.commit_revision)
+            .or_default() += 1;
+        Ok(Arc::new(Self {
+            index: Arc::clone(&self.index),
+            parent: Some(parent),
+            frame: Arc::clone(&self.frame),
+            tables,
+            removed: BTreeMap::new(),
+            next: self.next,
+            context_before: context_revision,
+            context_after: context_revision,
+            historical: true,
+            control,
+            _staging: staging,
+            _scope: Arc::clone(&self._scope),
+        }))
+    }
+
     pub(super) fn image_at(
         &self,
         revision: u64,
@@ -492,7 +716,8 @@ impl SourceView {
     }
 
     pub(super) fn check_before(&self, reference: &araphor_data::ManagedAttempt) -> Result<()> {
-        if !matches!(self.frame.read(), ManagedSourceRead::Changes(parent) if Some(parent) == self.parent.as_ref())
+        if self.historical
+            || !matches!(self.frame.read(), ManagedSourceRead::Changes(parent) if Some(parent) == self.parent.as_ref())
         {
             return Err(SourceIndex::conflict());
         }
@@ -505,20 +730,38 @@ impl SourceView {
         self.index.keys.iter().find(|admitted| {
             admitted.table == key.table
                 && admitted.columns == key.columns
-                && admitted.hash.on_columns() == key.hash.on_columns()
+                && admitted.expressions == key.expressions
         })
     }
 
-    pub(crate) fn commit(
-        &self,
-        reference: &araphor_data::analysis::PackageResultRefV1,
-    ) -> Result<()> {
+    pub(super) fn context_revision(&self, image: SourceImage) -> Option<u64> {
+        self.tables.get("context_versions")?;
+        match image {
+            SourceImage::Before => Some(self.context_before),
+            SourceImage::After => Some(self.context_after),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn commit(&self, receipt: &ManagedReceipt) -> Result<()> {
+        if self.historical {
+            return Err(SourceIndex::conflict());
+        }
+        let reference = &receipt.selected;
         self.frame
             .proof()
             .filter(|proof| proof.as_ref() == reference)
             .ok_or_else(|| {
                 DataFusionError::Execution("the source acknowledgement differs".into())
             })?;
+        if reference.commit_revision != receipt.commit_revision
+            || reference.result_id.is_empty()
+            || receipt.results.values().any(|result| {
+                result.commit_revision != receipt.commit_revision || result.result_id.is_empty()
+            })
+        {
+            return Err(SourceIndex::conflict());
+        }
         if self
             .parent
             .as_ref()
@@ -534,9 +777,41 @@ impl SourceView {
             position: self.frame.position(),
         };
         if state.head.as_ref() == Some(&next) {
-            return Ok(());
+            return if receipt.results.iter().all(|(call, result)| {
+                state.calls.iter().any(|point| {
+                    point.0 == *call
+                        && point.1 == result.commit_revision
+                        && point.2 == next.position
+                })
+            }) {
+                Ok(())
+            } else {
+                Err(SourceIndex::conflict())
+            };
         }
         if state.head != self.parent {
+            return Err(SourceIndex::conflict());
+        }
+        let additional = receipt
+            .results
+            .keys()
+            .filter(|call| !state.calls.iter().any(|point| point.0 == **call))
+            .count();
+        if state
+            .calls
+            .len()
+            .checked_add(additional)
+            .is_none_or(|needed| needed > state.calls.capacity())
+            || receipt.results.keys().any(|call| {
+                state
+                    .calls
+                    .iter()
+                    .find(|point| point.0 == *call)
+                    .is_some_and(|point| {
+                        point.1 >= reference.commit_revision || !state.leases.contains_key(&point.1)
+                    })
+            })
+        {
             return Err(SourceIndex::conflict());
         }
         for (name, addresses) in &self.removed {
@@ -565,7 +840,7 @@ impl SourceView {
                     batch: block.batch.clone(),
                     handles: block.handles.clone(),
                     born: reference.commit_revision,
-                    hashes: block.hashes.clone(),
+                    keys: block.keys.clone(),
                     _memory: Arc::clone(&block._memory),
                     _scope: Arc::clone(&block._scope),
                 });
@@ -573,6 +848,27 @@ impl SourceView {
             }
         }
         state.next = self.next;
+        state.context_revision = self.context_after;
+        for (call, result) in &receipt.results {
+            let point = (
+                *call,
+                result.commit_revision,
+                next.position,
+                self.context_after,
+            );
+            *state.leases.entry(reference.commit_revision).or_default() += 1;
+            if let Some(index) = state.calls.iter().position(|point| point.0 == *call) {
+                let old = std::mem::replace(&mut state.calls[index], point);
+                if let Some(count) = state.leases.get_mut(&old.1) {
+                    *count -= 1;
+                    if *count == 0 {
+                        state.leases.remove(&old.1);
+                    }
+                }
+            } else {
+                state.calls.push(point);
+            }
+        }
         state.head = Some(next);
         state.scope = Some((Arc::clone(self.frame.scope()), Arc::clone(&self._scope)));
         Ok(())
@@ -582,7 +878,7 @@ impl SourceView {
         &self,
         name: &str,
         image: SourceImage,
-        key: Option<(usize, &BTreeSet<u64>)>,
+        key: Option<(usize, &BTreeSet<Vec<u8>>)>,
         columns: &[usize],
         schema: &SchemaRef,
         metadata: &MemoryReservation,
@@ -647,9 +943,7 @@ impl SourceView {
                     Ok(())
                 };
                 match key {
-                    Some((index, hashes)) => {
-                        prior.lookup(index, hashes)?.try_for_each(&mut select)?
-                    }
+                    Some((index, keys)) => prior.lookup(index, keys)?.try_for_each(&mut select)?,
                     None if image == SourceImage::Removed => {
                         self.removed
                             .get(name)
@@ -676,8 +970,8 @@ impl SourceView {
                 add(address)
             };
             match key {
-                Some((index, hashes)) if !pending.blocks.is_empty() => {
-                    pending.lookup(index, hashes)?.try_for_each(&mut select)?;
+                Some((index, keys)) if !pending.blocks.is_empty() => {
+                    pending.lookup(index, keys)?.try_for_each(&mut select)?;
                 }
                 Some(_) => {}
                 None => pending

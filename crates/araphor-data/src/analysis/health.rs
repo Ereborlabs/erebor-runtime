@@ -286,7 +286,7 @@ impl AnalysisStore {
             let receipt = Self::read_receipt_from(snapshot, &self.root, &scope.identity, &key)?;
             let accepted_cursor = receipt
                 .as_ref()
-                .map_or(0, |receipt| receipt.contiguous_cursor);
+                .map_or(0, |(receipt, _)| receipt.contiguous_cursor);
             let effective = consumed_cursor.max(resume_floor);
             let cursor_lag = accepted_cursor
                 .checked_sub(effective)

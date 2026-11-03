@@ -69,6 +69,7 @@ impl ManagedPrior {
     pub(super) fn allocated_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             .saturating_add(self.result.capacity())
+            .saturating_add(self.source.result.result_id.capacity())
             .saturating_add(self.context.target.capacity())
             .saturating_add(self.context.context.id.capacity())
             .saturating_add(self.context.artifact.as_ref().map_or(
@@ -178,6 +179,13 @@ impl AnalysisStore {
                 Arc::new(ManagedPrior {
                     revision: reference.commit_revision,
                     result: reference.result_id.clone(),
+                    source: super::ManagedSourceRef {
+                        result: receipt.selected.clone(),
+                        position: crate::StorePositionV1 {
+                            commit_revision: input.attempt.captured_revision(),
+                            ordinal: u32::MAX,
+                        },
+                    },
                     context,
                     parameters,
                     checkpoint: returned.output.checkpoint.clone(),

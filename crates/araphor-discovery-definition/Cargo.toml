@@ -13,7 +13,7 @@ prqlc = { version = "=0.13.13", default-features = false }
 serde.workspace = true
 serde-saphyr.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
+rmp-serde.workspace = true
 snafu.workspace = true
 sqlparser = { version = "=0.61.0", default-features = false, features = ["std", "recursive-protection"] }
 

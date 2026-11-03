@@ -42,10 +42,11 @@ members = [
     "crates/mithril-e2e-macros",
     "crates/mithril-node",
 ]
-exclude = ["vendor/duckdb", "vendor/libduckdb-sys"]
+exclude = ["vendor/duckdb", "vendor/libduckdb-sys", "vendor/datafusion-physical-optimizer"]
 resolver = "2"
 
 [patch.crates-io]
+datafusion-physical-optimizer = { path = "vendor/datafusion-physical-optimizer" }
 duckdb = { path = "vendor/duckdb" }
 libduckdb-sys = { path = "vendor/libduckdb-sys" }
 

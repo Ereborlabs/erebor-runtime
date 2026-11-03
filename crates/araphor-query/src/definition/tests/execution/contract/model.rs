@@ -47,7 +47,7 @@ async fn model_state_provenance() -> TestResult {
             vec![Arc::new(UInt64Array::from(vec![1, 2, 3]))],
         )?;
         session.register("model_rows", rows.schema(), std::slice::from_ref(&rows))?;
-        let prepared = session.prepare_definition(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count('counts', events => (SELECT id FROM model_rows))"#)).await?;
+        let prepared = session.prepare_definition(&Fixture::sql(r#"SELECT * FROM "fixture"."r1".count('counts', events => (SELECT id FROM model_rows))"#), None).await?;
         let id = Fixture::calls(&prepared.plan)?[0].id();
         let mut request = invocation("model-state");
         request.checkpoints.insert(

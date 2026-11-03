@@ -370,6 +370,7 @@ fn units_keep_shared_state() -> TestResult {
             &fixture.metadata,
             &Fixture::returned(&evaluation, &output),
             &fixture.pin,
+            false,
         )?;
         assert_eq!(effects.state, expected);
         assert_eq!(writer.query_row("SELECT subject_count FROM graph_producer_versions WHERE scope_id=1 AND commit_revision=?",params![revision],|row|row.get::<_,u64>(0))?,count);
@@ -422,6 +423,10 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
     let scope = writer.query_row("SELECT scope_id FROM graph_producer_scopes", [], |row| {
         row.get::<_, u64>(0)
     })?;
+    writer.execute(
+        "UPDATE graph_producer_scopes SET created_revision=2 WHERE scope_id=?",
+        params![scope],
+    )?;
     let source = &fixture.metadata.scope.identity;
     let records = fixture
         .records
@@ -513,6 +518,7 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
         &Fixture::returned(&evaluation, &output),
         &fixture.pin,
         true,
+        false,
     )?;
     let mut dependencies = batch.dependencies(&writer, &record_ids)?;
     let graph: crate::GraphSnapshotV1 =
@@ -562,16 +568,20 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
     .collect::<Vec<_>>();
     members.extend(dependencies.remove(&records[0]).ok_or("unit support")?);
     for (revision, result, base, members) in [
-        (1, "opened", None, members),
-        (2, "untouched", Some("opened"), Vec::new()),
-        (3, "closed", Some("untouched"), Vec::new()),
+        (2, "opened", None, members),
+        (3, "untouched", Some("opened"), Vec::new()),
+        (4, "closed", Some("untouched"), Vec::new()),
     ] {
         GraphRows::version(&writer, result, scope, revision, base)?;
+        writer.execute(
+            "UPDATE graph_producer_versions SET captured_revision=1 WHERE result_id=?",
+            params![result],
+        )?;
         writer.execute(
             "INSERT INTO analysis_results VALUES(?,?,'managed-package-v1',?,?)",
             params![result, source.tenant_id.as_slice(), source.key(), revision],
         )?;
-        let replacements = if revision == 2 {
+        let replacements = if revision == 3 {
             Vec::new()
         } else {
             vec![araphor_graph::Replacement {
@@ -583,9 +593,9 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
         araphor_graph::StateRows::finish(&writer, scope, revision, &GraphPackageStateV1::Waiting)?;
     }
     GraphRows::validate_history(&writer, std::path::Path::new("units"))?;
-    GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 1, 1)?;
-    GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 3, 1)?;
-    assert_eq!(writer.query_row("SELECT count(*) FROM graph_producer_members WHERE scope_id=? AND member_kind IN (2,3,4) AND valid_from=1 AND valid_to=3",params![scope],|row|row.get::<_,u64>(0))?,3);
+    GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 2, 1)?;
+    GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 4, 1)?;
+    assert_eq!(writer.query_row("SELECT count(*) FROM graph_producer_members WHERE scope_id=? AND member_kind IN (2,3,4) AND valid_from=2 AND valid_to=4",params![scope],|row|row.get::<_,u64>(0))?,3);
     let mut trailing = bytes.clone();
     trailing.push(0);
     #[derive(serde::Serialize)]
@@ -638,13 +648,13 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
             ("outside support", GraphRows::encode_value(&outside)?),
         ] {
             let transaction = writer.transaction()?;
-            assert_eq!(transaction.execute("UPDATE graph_producer_members SET anchor_fact=? WHERE scope_id=? AND member_kind=? AND valid_from=1 AND valid_to=3",params![fault,scope,kind])?,1,"{name} kind {kind}");
+            assert_eq!(transaction.execute("UPDATE graph_producer_members SET anchor_fact=? WHERE scope_id=? AND member_kind=? AND valid_from=2 AND valid_to=4",params![fault,scope,kind])?,1,"{name} kind {kind}");
             assert!(
                 GraphRows::validate_call_members(
                     &transaction,
                     std::path::Path::new("units"),
                     scope,
-                    1,
+                    2,
                     1
                 )
                 .is_err(),
@@ -654,18 +664,18 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
                 &transaction,
                 std::path::Path::new("units"),
                 scope,
-                3,
+                4,
                 1,
             )?;
         }
         let transaction = writer.transaction()?;
-        assert_eq!(transaction.execute("UPDATE graph_producer_members SET anchor_record_id=? WHERE scope_id=? AND member_kind=? AND valid_from=1 AND valid_to=3",params![record_ids[&records[2]],scope,kind])?,1);
+        assert_eq!(transaction.execute("UPDATE graph_producer_members SET anchor_record_id=? WHERE scope_id=? AND member_kind=? AND valid_from=2 AND valid_to=4",params![record_ids[&records[2]],scope,kind])?,1);
         assert!(
             GraphRows::validate_call_members(
                 &transaction,
                 std::path::Path::new("units"),
                 scope,
-                1,
+                2,
                 1
             )
             .is_err(),
@@ -673,13 +683,13 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
         );
         drop(transaction);
         let transaction = writer.transaction()?;
-        assert_eq!(transaction.execute("UPDATE graph_producer_members SET unit_ref=? WHERE scope_id=? AND member_kind=? AND valid_from=1 AND valid_to=3",params![record_ids[&records[2]],scope,kind])?,1);
+        assert_eq!(transaction.execute("UPDATE graph_producer_members SET unit_ref=? WHERE scope_id=? AND member_kind=? AND valid_from=2 AND valid_to=4",params![record_ids[&records[2]],scope,kind])?,1);
         assert!(
             GraphRows::validate_call_members(
                 &transaction,
                 std::path::Path::new("units"),
                 scope,
-                1,
+                2,
                 1
             )
             .is_err(),
@@ -702,25 +712,25 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
     ] {
         let transaction = writer.transaction()?;
         assert_eq!(transaction.execute(fault, [])?,1,"{fault}");
-        assert!(GraphRows::validate_call_members(&transaction,std::path::Path::new("units"),scope,1,1).is_err(),"accepted {fault}");
-        GraphRows::validate_call_members(&transaction,std::path::Path::new("units"),scope,3,1)?;
+        assert!(GraphRows::validate_call_members(&transaction,std::path::Path::new("units"),scope,2,1).is_err(),"accepted {fault}");
+        GraphRows::validate_call_members(&transaction,std::path::Path::new("units"),scope,4,1)?;
     }
     for fault in [
-        "UPDATE graph_producer_members SET valid_to=2 WHERE member_kind=9 AND anchor_record_id=unit_ref",
-        "UPDATE graph_producer_members SET valid_to=2 WHERE member_kind=9 AND anchor_record_id<>unit_ref",
-        "UPDATE graph_producer_members SET valid_to=2 WHERE member_kind=10",
+        "UPDATE graph_producer_members SET valid_to=3 WHERE member_kind=9 AND anchor_record_id=unit_ref",
+        "UPDATE graph_producer_members SET valid_to=3 WHERE member_kind=9 AND anchor_record_id<>unit_ref",
+        "UPDATE graph_producer_members SET valid_to=3 WHERE member_kind=10",
     ] {
         let transaction = writer.transaction()?;
         assert_eq!(transaction.execute(fault,[])?,1,"{fault}");
-        assert!(GraphRows::validate_call_members(&transaction,std::path::Path::new("units"),scope,1,1).is_err(),"accepted {fault}");
-        GraphRows::validate_call_members(&transaction,std::path::Path::new("units"),scope,3,1)?;
+        assert!(GraphRows::validate_call_members(&transaction,std::path::Path::new("units"),scope,2,1).is_err(),"accepted {fault}");
+        GraphRows::validate_call_members(&transaction,std::path::Path::new("units"),scope,4,1)?;
     }
     assert!(
-        GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 1, 0)
+        GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 2, 0)
             .is_err()
     );
     assert!(
-        GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 1, 2)
+        GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 2, 2)
             .is_err()
     );
     for fault in [
@@ -734,14 +744,31 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
                 &transaction,
                 std::path::Path::new("units"),
                 scope,
-                1,
+                2,
                 1
             )
             .is_err(),
             "accepted {fault}"
         );
     }
-    GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 1, 1)?;
+    GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 2, 1)?;
+    let transaction = writer.transaction()?;
+    assert_eq!(
+        transaction.execute(
+            "UPDATE graph_producer_versions SET captured_revision=2 WHERE result_id='closed'",
+            []
+        )?,
+        1
+    );
+    assert!(GraphRows::validate_call_members(
+        &transaction,
+        std::path::Path::new("units"),
+        scope,
+        4,
+        1
+    )
+    .is_err());
+    drop(transaction);
     Ok(())
 }
 
@@ -800,7 +827,8 @@ fn units_reject_forged_outputs() -> TestResult {
                 &fixture.metadata,
                 &Fixture::returned(&evaluation, &output),
                 &fixture.pin,
-                true
+                true,
+                false,
             )
             .and_then(|batch| batch
                 .subjects
@@ -872,6 +900,7 @@ fn units_require_current_context() -> TestResult {
         &Fixture::returned(&evaluation, &output),
         &fixture.pin,
         true,
+        false,
     )?;
     let unit = GraphRows::intern_records(
         &writer,
@@ -903,6 +932,7 @@ fn units_require_current_context() -> TestResult {
             &fixture.metadata,
             &Fixture::returned(&current, &output),
             &fixture.pin,
+            false,
         )?;
         assert_eq!(effects.state, GraphPackageStateV1::NativeEffect);
         let selected:u64=writer.query_row("SELECT selected_state_ref FROM graph_producer_versions WHERE scope_id=1 AND commit_revision=?",params![revision],|row|row.get(0))?;
@@ -991,6 +1021,7 @@ fn units_require_current_context() -> TestResult {
                 &Fixture::returned(&evaluation, &output),
                 &fixture.pin,
                 true,
+                false,
             )
             .and_then(|batch| batch
                 .subjects
@@ -1011,6 +1042,7 @@ fn units_require_current_context() -> TestResult {
             &Fixture::returned(&evaluation, &output),
             &fixture.pin,
             true,
+            true,
         )
         .is_err());
         let mut unrelated = fixture.evaluation(&[1], &[], true)?;
@@ -1021,6 +1053,7 @@ fn units_require_current_context() -> TestResult {
             &fixture.metadata,
             &Fixture::returned(&unrelated, &unrelated_output),
             &fixture.pin,
+            true,
             true,
         )
         .is_err());
@@ -1033,6 +1066,7 @@ fn units_require_current_context() -> TestResult {
             &fixture.metadata,
             &Fixture::returned(&unrelated, &unrelated_output),
             &fixture.pin,
+            true,
             true,
         )?;
     }

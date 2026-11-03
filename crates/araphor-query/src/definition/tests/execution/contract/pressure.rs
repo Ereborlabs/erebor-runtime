@@ -115,7 +115,7 @@ async fn guest_nested_encoding_preflight() -> TestResult {
         session.register("nested_input", batch.schema(), std::slice::from_ref(&batch))?;
         let prepared = session.prepare_definition(&Fixture::sql(
             r#"SELECT * FROM "runtime-fixture"."1"."count-input"(input => (SELECT value FROM nested_input), mode => 'cancel', amount => 7)"#,
-        )).await?;
+        ), None).await?;
         let id = Fixture::calls(&prepared.plan)?[0].id();
         let available = fixture.engine.memory().prepare_input(capacity)?;
         let pressure_bytes = available
@@ -209,7 +209,7 @@ async fn guest_schema_and_wire_preflight() -> TestResult {
         session.register("schema_input", batch.schema(), std::slice::from_ref(&batch))?;
         let prepared = session.prepare_definition(&Fixture::sql(
             r#"SELECT * FROM "runtime-fixture"."1"."count-input"(input => (SELECT value FROM schema_input), mode => 'cancel', amount => 7)"#,
-        )).await?;
+        ), None).await?;
         let id = Fixture::calls(&prepared.plan)?[0].id();
         let available = fixture.engine.memory().prepare_input(capacity)?;
         let bytes = available

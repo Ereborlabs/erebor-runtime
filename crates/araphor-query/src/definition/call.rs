@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -132,7 +132,38 @@ impl PackageCall {
     }
 
     pub(super) fn seal(plan: LogicalPlan) -> Result<LogicalPlan> {
+        Self::seal_sources(plan, &mut BTreeMap::new())
+    }
+
+    pub(crate) fn seal_sources(
+        plan: LogicalPlan,
+        sources: &mut BTreeMap<
+            usize,
+            (
+                Arc<dyn datafusion::catalog::TableProvider>,
+                Arc<dyn datafusion::catalog::TableProvider>,
+            ),
+        >,
+    ) -> Result<LogicalPlan> {
         plan.transform_up_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = &plan {
+                if let Ok(provider) = datafusion::datasource::source_as_provider(&scan.source) {
+                    if let Some(source) = provider.downcast_ref::<crate::sources::SourcePort>() {
+                        let identity = std::ptr::from_ref(source) as usize;
+                        let sealed = if let Some((_, sealed)) = sources.get(&identity) {
+                            Arc::clone(sealed)
+                        } else {
+                            let sealed = Arc::new(source.sealed(sources)?)
+                                as Arc<dyn datafusion::catalog::TableProvider>;
+                            sources.insert(identity, (Arc::clone(&provider), Arc::clone(&sealed)));
+                            sealed
+                        };
+                        let mut scan = scan.clone();
+                        scan.source = datafusion::datasource::provider_as_source(sealed);
+                        return Ok(Transformed::yes(LogicalPlan::TableScan(scan)));
+                    }
+                }
+            }
             if let LogicalPlan::Extension(extension) = &plan {
                 if let Some(call) = extension.node.as_any().downcast_ref::<Self>() {
                     let mut call = call.clone();
@@ -148,11 +179,37 @@ impl PackageCall {
     }
 
     pub(crate) fn contains(plan: &LogicalPlan) -> Result<bool> {
-        Self::any(plan, &mut |_| Ok(true))
+        Self::contains_in_views(plan, &mut BTreeSet::new())
+    }
+
+    fn contains_in_views(plan: &LogicalPlan, views: &mut BTreeSet<usize>) -> Result<bool> {
+        let mut found = false;
+        plan.apply_with_subqueries(|plan| {
+            if matches!(plan, LogicalPlan::Extension(extension) if extension.node.as_any().is::<Self>()) {
+                found = true;
+            }
+            if let LogicalPlan::TableScan(scan) = plan {
+                if let Ok(provider) = datafusion::datasource::source_as_provider(&scan.source) {
+                    if let Some(source) = provider.downcast_ref::<crate::sources::SourcePort>() {
+                        found |= source.has_calls();
+                    }
+                }
+                if let Some(plan) = scan.source.get_logical_plan() {
+                    let identity = Arc::as_ptr(&scan.source) as *const () as usize;
+                    if !views.insert(identity) {
+                        return datafusion::common::plan_err!("recursive source view");
+                    }
+                    found |= Self::contains_in_views(plan.as_ref(), views)?;
+                    views.remove(&identity);
+                }
+            }
+            Ok(if found { TreeNodeRecursion::Stop } else { TreeNodeRecursion::Continue })
+        })?;
+        Ok(found)
     }
 
     pub(crate) fn check_admission(plan: &LogicalPlan) -> Result<()> {
-        Self::any(plan, &mut |call| {
+        Self::any(plan, &mut |_, call| {
             let mut valid = call.children.as_slice() == call.admitted.as_ref();
             if valid {
                 for (actual, admitted) in call.children.iter().zip(call.admitted.iter()) {
@@ -198,14 +255,18 @@ impl PackageCall {
         Ok(same && sources.next().is_none())
     }
 
-    pub fn any(plan: &LogicalPlan, test: &mut impl FnMut(&Self) -> Result<bool>) -> Result<bool> {
-        Self::any_in_views(plan, test, &mut BTreeSet::new())
+    pub fn any(
+        plan: &LogicalPlan,
+        test: &mut impl FnMut(&LogicalPlan, &Self) -> Result<bool>,
+    ) -> Result<bool> {
+        Self::any_in_views(plan, test, &mut BTreeSet::new(), &mut BTreeSet::new())
     }
 
     fn any_in_views(
         plan: &LogicalPlan,
-        test: &mut impl FnMut(&Self) -> Result<bool>,
+        test: &mut impl FnMut(&LogicalPlan, &Self) -> Result<bool>,
         views: &mut BTreeSet<usize>,
+        sources: &mut BTreeSet<usize>,
     ) -> Result<bool> {
         let mut found = false;
         plan.apply_with_subqueries(|plan| {
@@ -214,33 +275,38 @@ impl PackageCall {
                     .node
                     .as_any()
                     .downcast_ref::<Self>()
-                    .map(&mut *test)
+                    .map(|call| test(plan, call))
                     .transpose()?
                     .unwrap_or(false),
                 LogicalPlan::TableScan(scan) => {
                     let provider = datafusion::datasource::source_as_provider(&scan.source).ok();
-                    let port = provider.as_ref().and_then(|provider| {
-                        provider
-                            .as_any()
-                            .downcast_ref::<crate::sources::SourcePort>()
-                    });
-                    let plan = scan.source.get_logical_plan();
-                    if port.is_some() || plan.is_some() {
-                        let identity = Arc::as_ptr(&scan.source) as *const () as usize;
+                    if let Some(source) = provider
+                        .as_ref()
+                        .and_then(|provider| provider.downcast_ref::<crate::sources::SourcePort>())
+                    {
+                        let identity = std::ptr::from_ref(source) as usize;
+                        if sources.contains(&identity) {
+                            return Ok(TreeNodeRecursion::Jump);
+                        }
                         if !views.insert(identity) {
                             return datafusion::common::plan_err!("recursive source view");
                         }
                         let mut result = false;
-                        if let Some(port) = port {
-                            for input in port.inputs() {
-                                result = Self::any_in_views(input, test, views)?;
-                                if result {
-                                    break;
-                                }
+                        for input in source.inputs() {
+                            result |= Self::any_in_views(input, test, views, sources)?;
+                            if result {
+                                break;
                             }
-                        } else if let Some(plan) = plan {
-                            result = Self::any_in_views(plan.as_ref(), test, views)?;
                         }
+                        views.remove(&identity);
+                        sources.insert(identity);
+                        result
+                    } else if let Some(plan) = scan.source.get_logical_plan() {
+                        let identity = Arc::as_ptr(&scan.source) as *const () as usize;
+                        if !views.insert(identity) {
+                            return datafusion::common::plan_err!("recursive source view");
+                        }
+                        let result = Self::any_in_views(plan.as_ref(), test, views, sources)?;
                         views.remove(&identity);
                         result
                     } else {

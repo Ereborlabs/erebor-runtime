@@ -3,10 +3,9 @@ use std::path::{Path, PathBuf};
 
 use araphor_package::PackageRefV1;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use crate::error::{InvalidSnafu, JsonSnafu};
+use crate::error::{DecodingSnafu, EncodingSnafu, InvalidSnafu};
 use crate::Result;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -150,11 +149,21 @@ impl ResolvedDefinition {
         Ok(())
     }
 
-    pub fn digest(&self) -> Result<String> {
+    pub fn encode(&self) -> Result<Vec<u8>> {
         self.validate()?;
-        let mut json = serde_json::to_value(self).context(JsonSnafu)?;
-        json.sort_all_objects();
-        let bytes = serde_json::to_vec(&json).context(JsonSnafu)?;
-        Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+        rmp_serde::to_vec_named(self).context(EncodingSnafu)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
+        let value = Self::deserialize(&mut decoder).context(DecodingSnafu)?;
+        if decoder.position() != bytes.len() as u64 {
+            return InvalidSnafu {
+                field: "definition trailing bytes",
+            }
+            .fail();
+        }
+        value.validate()?;
+        Ok(value)
     }
 }

@@ -12,6 +12,7 @@ fn managed_destination_selection() -> TestResult {
         ManagedDestination::Graph {
             source: source.clone(),
             events_sql: "SELECT * FROM events".into(),
+            control_sql: "SELECT * FROM graph_state".into(),
             calls: BTreeSet::from([10]),
             operation: ManagedGraphOperation::Evaluate,
         },

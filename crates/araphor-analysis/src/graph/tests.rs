@@ -22,7 +22,30 @@ impl Graph<'_> {
     fn evaluation_for(&self, model: &sdk::Model) -> Result<sdk::Evaluation> {
         let source = self.projection()?;
         let records = algorithm::Observation::decode(&source[0]).context(AnalysisContractSnafu)?;
-        let facts = algorithm::Fact::decode(&source[1]).context(AnalysisContractSnafu)?;
+        let facts = self
+            .input
+            .facts
+            .iter()
+            .zip(&self.facts)
+            .map(|(context, fact)| {
+                let record = records
+                    .binary_search_by(|record| record.id.cmp(&fact.record_id))
+                    .ok()
+                    .and_then(|row| u32::try_from(row).ok())
+                    .ok_or_else(|| {
+                        GraphInvalidSnafu {
+                            field: "fixture fact record",
+                        }
+                        .build()
+                    })?;
+                Ok(algorithm::Fact {
+                    record,
+                    key: context.key.clone(),
+                    sensitivity: context.sensitivity,
+                    value: fact.value.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let restricted = self
             .input
             .facts
@@ -64,7 +87,23 @@ impl Graph<'_> {
                 .reset_input(true)
                 .context(AnalysisContractSnafu)?,
             source[0].clone(),
-            source[1].clone(),
+            algorithm::Fact::encode(&facts).context(AnalysisContractSnafu)?,
+            algorithm::Unit::encode_affected(
+                &units
+                    .iter()
+                    .map(|unit| unit.record.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .context(AnalysisContractSnafu)?,
+            algorithm::Detector::window_data(
+                &self.input.source.key(),
+                self.input
+                    .records
+                    .first()
+                    .map_or(1, |record| record.id.durable_cursor),
+                u64::MAX,
+            )
+            .context(AnalysisContractSnafu)?,
         ];
         let inputs = data
             .into_iter()

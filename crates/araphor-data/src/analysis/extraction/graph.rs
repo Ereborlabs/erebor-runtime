@@ -78,19 +78,32 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
     ) -> Result<Vec<crate::AnalysisContextRefV1>> {
         control.check()?;
-        let metadata: Vec<u8> = snapshot
+        let (metadata, revision): (Vec<u8>, u64) = snapshot
             .query_row(
-                "SELECT request_meta FROM analysis_results
+                "SELECT request_meta,commit_revision FROM analysis_results
              WHERE tenant_id = ? AND result_id = ? AND processor_id = ?",
                 params![tenant.as_slice(), result_id, crate::GRAPH_PROCESSOR],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "read captured graph attribution",
             })?;
         output.scan(metadata.len())?;
         output.charge(metadata.len())?;
-        let (_, contexts) = Self::decode_evidence(crate::GRAPH_PROCESSOR, &metadata)?;
+        let (_, contexts) = Self::decode_evidence(
+            snapshot,
+            &super::super::PackageResultRefV1 {
+                result_id: result_id.to_owned(),
+                commit_revision: revision,
+            },
+            crate::GRAPH_PROCESSOR,
+            &metadata,
+            Some(control),
+            &mut |scan, input| {
+                output.scan(scan)?;
+                output.charge(input)
+            },
+        )?;
         if contexts
             .iter()
             .any(|reference| reference.key.tenant_id != tenant)
@@ -241,21 +254,60 @@ impl AnalysisStore {
     pub(super) fn graph_input(
         &self,
         snapshot: &Connection,
-        tenant: [u8; 16],
+        selection: &AnalysisSelectionV1,
         result_id: &str,
         control: &AnalysisReadControl,
-        complete: bool,
+        read: &AnalysisTableRead<'_>,
         findings: bool,
         finding_value_ids: bool,
+        output: &mut AnalysisExtractionV1,
     ) -> Result<GraphHeader> {
         control.check()?;
-        let selected = if complete || findings {
+        let tenant = selection.tenant_id;
+        let length:u64=snapshot.query_row("SELECT octet_length(body) FROM analysis_results WHERE tenant_id=? AND result_id=? AND processor_id=?",
+            params![tenant.as_slice(),result_id,crate::GRAPH_PROCESSOR],|row|row.get(0))
+            .context(AnalysisDatabaseSnafu {operation:"bound captured Graph header"})?;
+        let length = usize::try_from(length).unwrap_or(usize::MAX);
+        output.scan(length)?;
+        output.charge(length.saturating_mul(2))?;
+        let complete = read.projects_field("graph_manifest", "snapshot");
+        let full = complete
+            || !selection.binding_ids.is_empty()
+            || ["graph_revision", "metadata", "context_refs"]
+                .iter()
+                .any(|field| read.projects_field("graph_manifest", field))
+            || ["graph_subjects", "relationships", "correlation_packages"]
+                .iter()
+                .any(|name| read.projected(name).is_some());
+        let selected = if complete {
             GraphRows::read_header_control(snapshot, tenant, result_id, Some(control))?
+        } else if !full {
+            let summary = GraphRows::read_summary(snapshot, tenant, result_id, Some(control))?;
+            if summary
+                .as_ref()
+                .is_some_and(|header| header.restricted_count.is_some())
+            {
+                summary
+            } else {
+                GraphRows::read_metadata_control(snapshot, tenant, result_id, Some(control))?
+            }
         } else {
             GraphRows::read_metadata_control(snapshot, tenant, result_id, Some(control))?
         };
         let mut header =
             selected.ok_or_else(|| self.state_error("the selected graph header is absent"))?;
+        if complete || findings {
+            GraphRows::bound_findings(
+                snapshot,
+                result_id,
+                None,
+                &header.snapshot.scope.identity,
+                &mut |scan, input| {
+                    output.scan(scan)?;
+                    output.charge(input)
+                },
+            )?;
+        }
         if complete {
             let (graph, ids) = GraphRows::read_control_with_ids(
                 snapshot,
@@ -283,7 +335,7 @@ impl AnalysisStore {
         if (complete || findings) && header.snapshot.findings.len() != header.finding_count {
             return self.reject("the selected graph finding count differs");
         }
-        if findings && !complete {
+        if findings && !complete && full {
             header.snapshot.validate()?;
         }
         Ok(header)
@@ -350,13 +402,15 @@ impl AnalysisStore {
             let edges = read.projected("relationships").is_some();
             let header = self.graph_input(
                 snapshot,
-                selection.tenant_id,
+                selection,
                 id,
                 control,
-                complete_graph,
+                read,
                 graph_findings,
                 read.projects_field("findings", "finding_value_id"),
+                output,
             )?;
+            let sensitivity = self.graph_sensitivity(snapshot, &header, control)?;
             let mut graph = header.snapshot;
             if graph.scope.identity != *source {
                 return self.reject("the graph source differs from its index");
@@ -364,7 +418,6 @@ impl AnalysisStore {
             if !selection.permits_graph(&graph) {
                 continue;
             }
-            let sensitivity = self.graph_sensitivity(snapshot, &graph.input_manifest, control)?;
             if (subjects || edges) && !complete_graph {
                 graph.graph.subjects =
                     GraphRows::read_subjects(snapshot, id, header.subject_count, Some(control))?;
@@ -402,6 +455,7 @@ impl AnalysisStore {
                 &contexts,
                 header.notice,
                 header.expired,
+                header.restricted_count,
                 &mut output.sink(control),
             )?;
         }

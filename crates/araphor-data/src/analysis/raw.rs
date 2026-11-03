@@ -401,7 +401,7 @@ impl AnalysisStore {
         let mut encoded_bytes = 0_usize;
         'pages: for range in frozen {
             control.check()?;
-            for record in range.read(&self.root)? {
+            for record in range.read(&self.root)?.0 {
                 let next_bytes = encoded_bytes
                     .checked_add(record.framed_record.len())
                     .ok_or_else(|| self.state_error("the evidence read page size overflowed"))?;
@@ -1087,7 +1087,7 @@ pub(super) struct RawRead {
 }
 
 impl RawRead {
-    pub(super) fn read(&self, root: &Path) -> Result<Vec<super::AnalysisRecordV1>> {
+    pub(super) fn read(&self, root: &Path) -> Result<(Vec<super::AnalysisRecordV1>, usize, usize)> {
         let commit = RawCommit::read(&self.file, self.frame_start, self.frame_bytes)?;
         let span = commit
             .spans
@@ -1107,6 +1107,8 @@ impl RawRead {
             }
             .build()
         })?;
+        let frame_rows = commit.spans.iter().map(|span| span.ends.len()).sum();
+        let body_bytes = commit.body.len();
         let bytes =
             &commit.body[span.start as usize..span.start as usize + self.span.bytes as usize];
         let mut records = Vec::new();
@@ -1127,7 +1129,7 @@ impl RawRead {
                 },
             });
         }
-        Ok(records)
+        Ok((records, frame_rows, body_bytes))
     }
 }
 

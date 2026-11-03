@@ -76,9 +76,11 @@ impl Instance {
         let memory = query.memory().scope();
         let session = query.session_on(grant.selection.clone(), &read, 0, memory)?;
         let prepared = if replacement.is_some() {
-            session.prepare_definition(&definition.definition).await?
+            session
+                .prepare_definition(&definition.definition, None)
+                .await?
         } else {
-            session.prepare_resolved(&definition).await?
+            session.prepare_resolved(&definition, None, None).await?
         };
         if *prepared.resolved() != definition {
             return Err(Code::Conflict.error("managed definition pin").into());
@@ -145,7 +147,7 @@ impl Instance {
         authority: Arc<dyn PackageAuthorization>,
         grant: PackageGrantV1,
         id: String,
-        prepared: PreparedDefinition,
+        mut prepared: PreparedDefinition,
         destination: araphor_data::ManagedDestination,
         graph: Option<Arc<crate::GraphPublication>>,
         replacement: Option<ManagedInstance>,
@@ -158,63 +160,82 @@ impl Instance {
         let read = Arc::new(session.control().within(grant.remaining()?)?);
         let store = Arc::clone(query.store());
         let check = Arc::clone(&authority);
+        let staged_query = Arc::clone(&query);
         let stage = Arc::clone(&read);
         let definition = prepared.resolved().clone();
         definition.validate().map_err(araphor_data::Error::from)?;
-        let (admitted, prepared, calls, metadata) =
-            Engine::blocking(read, (), move || {
-                for bundle in prepared.images() {
-                    check.admit(&grant, bundle)?;
-                }
-                let (manifest, calls) = Self::manifest(&prepared)?;
-                if destination == araphor_data::ManagedDestination::Notification {
-                    Self::validate_notification(&prepared, &grant, &id)?;
-                }
-                let spec = ManagedSpec {
-                    tenant: grant.selection.tenant_id,
-                    id,
-                    definition,
-                    manifest,
-                    destination,
-                };
-                let candidate = ManagedInstance {
-                    spec,
-                    grant,
-                    generation: 0,
-                    progress: 0,
-                    running: false,
-                    removed: false,
-                    lifecycle: 0,
-                };
-                let bytes = Self::metadata_bytes(&candidate, &calls)?;
-                let metadata = memory
-                    .reserve_input(bytes)
-                    .map_err(|source| araphor_query::Error::Sql { source })?;
-                let mut admitted =
-                    Self::authorize(check.as_ref(), &candidate.grant, &prepared, || {
-                        match replacement {
-                            Some(ref expected) if !expected.removed => {
-                                if expected.spec != candidate.spec {
-                                    return Err(Code::Conflict.error("managed renewal program pin"));
-                                }
-                                store.renew_managed(expected, &candidate.grant, || stage.check())
+        let checked = Arc::clone(&authority);
+        let checked_grant = grant.clone();
+        let checked_prepared = prepared.clone();
+        Engine::blocking(Arc::clone(&read), (), move || {
+            Self::check_prepared(checked.as_ref(), &checked_grant, &checked_prepared)?;
+            Ok(())
+        })
+        .await?;
+        session.prepare_execution(&mut prepared).await?;
+        let (admitted, prepared, calls, metadata) = Engine::blocking(read, (), move || {
+            for bundle in prepared.images() {
+                check.admit(&grant, bundle)?;
+            }
+            let revision = prepared.revision().map(Ok).unwrap_or_else(|| {
+                store
+                    .definition_revision(grant.selection.tenant_id, prepared.resolved(), &stage)?
+                    .ok_or_else(|| Code::Missing.error("managed definition revision"))
+            })?;
+            let prepared = prepared.bind_revision(&staged_query, revision, &stage)?;
+            let (manifest, calls) = Self::manifest(&prepared)?;
+            if destination == araphor_data::ManagedDestination::Notification {
+                Self::validate_notification(prepared.resolved(), prepared.plan(), &grant, &id)?;
+            }
+            let spec = ManagedSpec {
+                tenant: grant.selection.tenant_id,
+                id,
+                definition,
+                manifest,
+                destination,
+            };
+            let candidate = ManagedInstance {
+                spec,
+                grant,
+                generation: 0,
+                progress: 0,
+                running: false,
+                removed: false,
+                lifecycle: 0,
+            };
+            let bytes = Self::metadata_bytes(&candidate, &calls)?;
+            let metadata = memory
+                .reserve_input(bytes)
+                .map_err(|source| araphor_query::Error::Sql { source })?;
+            let mut admitted =
+                Self::authorize(
+                    check.as_ref(),
+                    &candidate.grant,
+                    &prepared,
+                    || match replacement {
+                        Some(ref expected) if !expected.removed => {
+                            if expected.spec != candidate.spec {
+                                return Err(Code::Conflict.error("managed renewal program pin"));
                             }
-                            Some(ref expected) => store.recreate_managed(
-                                expected,
-                                &candidate.spec,
-                                &candidate.grant,
-                                || stage.check(),
-                            ),
-                            None => store
-                                .admit_managed(&candidate.spec, &candidate.grant, || stage.check()),
+                            store.renew_managed(expected, &candidate.grant, || stage.check())
                         }
-                    })
-                    .map_err(araphor_query::Error::from)?;
-                admitted.spec = candidate.spec;
-                admitted.grant = candidate.grant;
-                Ok((admitted, prepared, calls, metadata))
-            })
-            .await?;
+                        Some(ref expected) => store.recreate_managed(
+                            expected,
+                            &candidate.spec,
+                            &candidate.grant,
+                            || stage.check(),
+                        ),
+                        None => {
+                            store.admit_managed(&candidate.spec, &candidate.grant, || stage.check())
+                        }
+                    },
+                )
+                .map_err(araphor_query::Error::from)?;
+            admitted.spec = candidate.spec;
+            admitted.grant = candidate.grant;
+            Ok((admitted, prepared, calls, metadata))
+        })
+        .await?;
         Ok(Arc::new(Self {
             query,
             authority,
@@ -426,7 +447,7 @@ impl Instance {
     ) -> Result<ManagedReceipt> {
         let spec = &self.admitted.spec;
         let state = Arc::new(Mutex::new(sink::Step::default()));
-        let schema = Arc::clone(self.prepared.plan.schema().inner());
+        let schema = Arc::clone(self.prepared.plan().schema().inner());
         let target = Arc::new(sink::Publication {
             owner: Arc::clone(self),
             schema,

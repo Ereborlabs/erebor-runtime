@@ -239,7 +239,7 @@ fn expiry_metadata_and_selected_values_keep_exact_state() -> TestResult {
         params![expired_ref.result_id],
         |row| row.get::<_, bool>(0)
     )?);
-    let body = GraphRows::commit(
+    let (body, _, _) = GraphRows::commit(
         &transaction,
         &expired_ref,
         &expired,

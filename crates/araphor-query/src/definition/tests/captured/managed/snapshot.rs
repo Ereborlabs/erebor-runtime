@@ -17,7 +17,7 @@ async fn publication_keeps_pending_input() -> TestResult {
             }),
             ..Default::default()
         });
-        let definition = fixture
+        let mut definition = fixture
             .prepare(&Fixture::sql(
                 r#"SELECT * FROM "runtime-fixture"."1"."count-input"(
                     input => (SELECT source_cursor AS value FROM events),
@@ -47,7 +47,7 @@ async fn publication_keeps_pending_input() -> TestResult {
             arguments: call.arguments().to_vec(),
             dependencies: Default::default(),
         };
-        let original = fixture.managed(&definition, AnalysisSelectionV1::tenant([1; 16]))?;
+        let original = fixture.managed(&mut definition, AnalysisSelectionV1::tenant([1; 16]))?;
         let mut spec = original.spec.clone();
         spec.id = "graph-cut".into();
         spec.manifest.calls = [(call_id, declaration)].into_iter().collect();
@@ -55,6 +55,7 @@ async fn publication_keeps_pending_input() -> TestResult {
             araphor_data::ManagedDestination::Graph {
                 source: fixture.engine.store().source_page([1; 16], None)?[0].clone(),
                 events_sql: "SELECT * FROM events".into(),
+                control_sql: "SELECT source_key FROM graph_state".into(),
                 calls: [call_id].into_iter().collect(),
                 operation: araphor_data::ManagedGraphOperation::Evaluate,
             }

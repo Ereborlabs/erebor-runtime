@@ -75,7 +75,7 @@ impl AnalysisStore {
             return crate::AnalysisReadDeniedSnafu.fail();
         }
         self.traversal_findings(snapshot, selection, id, header, control, finding_value_ids)?;
-        self.graph_sensitivity(snapshot, &header.snapshot.input_manifest, control)
+        self.graph_sensitivity(snapshot, header, control)
     }
 
     fn traversal_findings(

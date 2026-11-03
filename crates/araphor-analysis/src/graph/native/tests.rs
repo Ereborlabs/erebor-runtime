@@ -31,17 +31,6 @@ type GraphHistory = Vec<(
     ),
 )>;
 
-impl Projection {
-    fn observe_capture(&self) -> std::sync::mpsc::Receiver<Arc<Capture>> {
-        let (send, receive) = std::sync::mpsc::channel();
-        *self
-            .observed
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(send);
-        receive
-    }
-}
-
 struct Authority {
     changes: watch::Sender<u64>,
     allowed: AtomicBool,
@@ -121,18 +110,161 @@ impl PackageAuthorization for Authority {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Facts {
-    first: Mutex<Option<std::time::Instant>>,
-    supplied: Mutex<Vec<AnalysisContextVersionV1>>,
-    failed: Mutex<Option<EvidenceIntakeIdentityV1>>,
-    calls: AtomicUsize,
-    changed: Mutex<Option<AnalysisContextVersionV1>>,
-    records: Mutex<Option<std::sync::mpsc::Sender<Vec<araphor_data::DiscoveryRecordV1>>>>,
-    gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    first: Arc<Mutex<Option<std::time::Instant>>>,
+    supplied: Arc<Mutex<Vec<AnalysisContextVersionV1>>>,
+    failed: Arc<Mutex<Option<EvidenceIntakeIdentityV1>>>,
+    calls: Arc<AtomicUsize>,
+    changed: Arc<Mutex<Option<AnalysisContextVersionV1>>>,
+    records: Arc<Mutex<Option<std::sync::mpsc::Sender<Vec<araphor_data::DiscoveryRecordV1>>>>>,
+    gate: Arc<Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>>,
 }
 
 impl GraphFacts for Facts {
+    fn plans<'a>(
+        &'a self,
+        session: &'a Session,
+        events: &'a LogicalPlan,
+        contexts: &'a LogicalPlan,
+    ) -> futures_util::future::BoxFuture<'a, araphor_query::Result<(LogicalPlan, LogicalPlan)>>
+    {
+        Box::pin(async move {
+            use araphor_analysis_builtins::graph::Unit;
+            use datafusion::arrow::array::{Array as _, StructArray};
+            use datafusion::logical_expr::{
+                col, create_udf, ColumnarValue, LogicalPlanBuilder, Volatility,
+            };
+            let facts = self.clone();
+            let schema = Arc::new(contexts.schema().as_arrow().clone());
+            let function = create_udf(
+                "fixture_graph_facts",
+                vec![
+                    events.schema().field(0).data_type().clone(),
+                    events.schema().field(1).data_type().clone(),
+                ],
+                sdk::DataType::Struct(GraphPublication::resolved_schema().fields().clone()),
+                Volatility::Volatile,
+                Arc::new(move |args| {
+                    let arrays = ColumnarValue::values_to_arrays(args)?;
+                    let events = arrays[1]
+                        .as_any()
+                        .downcast_ref::<StructArray>()
+                        .ok_or_else(|| Projection::invalid("fixture Graph events"))?;
+                    let event = sdk::RecordBatch::from(events);
+                    let ids = sdk::RecordBatch::try_new(
+                        Arc::new(Unit::affected_port().schema),
+                        vec![Arc::clone(&arrays[0])],
+                    )
+                    .map_err(Projection::external)?;
+                    let ids = Unit::decode_affected(&sdk::Dataset {
+                        name: Unit::affected_port().name,
+                        batches: vec![ids],
+                    })
+                    .map_err(Projection::external)?;
+                    let records = ids
+                        .iter()
+                        .enumerate()
+                        .map(|(row, id)| {
+                            GraphPublication::decode_event(id, &event, row)
+                                .map(|(record, _)| record)
+                        })
+                        .collect::<datafusion::common::Result<Vec<_>>>()?;
+                    let (values, proofs) = facts
+                        .facts(
+                            &[sdk::RecordBatch::new_empty(Arc::clone(&schema))],
+                            &records,
+                        )
+                        .map_err(Projection::external)?;
+                    let mut selected = ids
+                        .into_iter()
+                        .map(|id| (id, (Vec::new(), proofs.clone())))
+                        .collect::<BTreeMap<_, _>>();
+                    for value in values {
+                        let fact = araphor_data::GraphFactV1::try_from(&value)
+                            .map_err(Projection::external)?;
+                        selected
+                            .get_mut(&fact.record_id)
+                            .ok_or_else(|| Projection::invalid("fixture Graph fact record"))?
+                            .0
+                            .push(value);
+                    }
+                    let rows = records
+                        .iter()
+                        .map(|record| {
+                            selected
+                                .remove_entry(&record.id)
+                                .map(|(record, (values, proofs))| (record, values, proofs))
+                                .ok_or_else(|| Projection::invalid("fixture Graph resolver order"))
+                        })
+                        .collect::<datafusion::common::Result<Vec<_>>>()?;
+                    let encoded = GraphPublication::encode_resolved(&rows)?;
+                    if encoded.num_rows() != records.len() {
+                        return Err(Projection::invalid("fixture Graph resolver rows"));
+                    }
+                    Ok(ColumnarValue::Array(Arc::new(StructArray::from(encoded))))
+                }),
+            );
+            let resolved = LogicalPlanBuilder::from(events.clone())
+                .project([
+                    col("record"),
+                    col("event"),
+                    function
+                        .call(vec![col("record"), col("event")])
+                        .alias("resolved"),
+                ])
+                .and_then(LogicalPlanBuilder::build)
+                .map_err(|source| araphor_query::Error::Sql { source })?;
+            let mut scope = session.clone();
+            for (name, image) in [
+                (
+                    "__fixture_inserted",
+                    araphor_query::sources::SourceImage::Inserted,
+                ),
+                (
+                    "__fixture_removed",
+                    araphor_query::sources::SourceImage::Removed,
+                ),
+            ] {
+                let plan = image
+                    .plan_rows(events)
+                    .map_err(|source| araphor_query::Error::Sql { source })?;
+                scope.register_table(
+                    name,
+                    Arc::new(datafusion::datasource::view::ViewTable::new(plan, None)),
+                )?;
+            }
+            scope.register_table(
+                "__fixture_events",
+                Arc::new(datafusion::datasource::view::ViewTable::new(
+                    events.clone(),
+                    None,
+                )),
+            )?;
+            scope.register_table(
+                "__fixture_contexts",
+                Arc::new(datafusion::datasource::view::ViewTable::new(
+                    contexts.clone(),
+                    None,
+                )),
+            )?;
+            let changed = GraphPublication::native_plan(&scope, "
+                SELECT record FROM __fixture_inserted UNION SELECT record FROM __fixture_removed
+                UNION SELECT events.record FROM __fixture_events events JOIN __fixture_contexts context
+                    ON events.record['stream']['tenant_id'] = context.tenant_id
+                CROSS JOIN graph_control control
+                WHERE context.commit_revision > control.notice_context_revision
+                    AND context.owner_id NOT IN ('graph-native-fixture', 'native-package-v1')").await
+                .map_err(|error| match error {
+                    crate::Error::Query { source, .. } => source,
+                    other => araphor_query::Error::Sql { source: Projection::external(other) },
+                })?;
+            Ok((resolved, changed))
+        })
+    }
+}
+
+impl Facts {
     fn facts(
         &self,
         contexts: &[sdk::RecordBatch],
@@ -694,6 +826,46 @@ impl Fixture {
         Ok(())
     }
 
+    pub(super) fn control_sql(sql: &str) -> String {
+        format!("WITH selected AS ({sql}), heads AS (
+            SELECT tenant_id, source_key, graph_result_id, commit_revision,
+                first_cursor, last_cursor, retained_input_expired, witness_deadline_utc_ns
+            FROM graph_manifest QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY tenant_id, source_key, first_cursor ORDER BY commit_revision DESC
+            ) = 1
+        ), expired AS (
+            SELECT DISTINCT s.tenant_id, s.node_id, s.node_boot_id, s.label_epoch,
+                s.source_id, s.source_epoch, s.consumed_cursor
+            FROM graph_state s JOIN heads h ON s.tenant_id = h.tenant_id AND s.source_key = h.source_key
+            JOIN selected e ON s.tenant_id = e.tenant_id AND s.node_id = e.node_id
+                AND s.node_boot_id = e.node_boot_id AND s.label_epoch = e.label_epoch
+                AND s.source_id = e.source_id AND s.source_epoch = e.source_epoch
+            WHERE e.source_cursor BETWEEN h.first_cursor AND h.last_cursor
+                AND (h.retained_input_expired OR h.first_cursor <= s.retained_floor
+                    OR h.witness_deadline_utc_ns <= s.capture_time_utc_ns)
+        ), current_events AS (
+            SELECT e.* FROM selected e LEFT JOIN expired s
+                ON e.tenant_id = s.tenant_id AND e.node_id = s.node_id
+                AND e.node_boot_id = s.node_boot_id AND e.label_epoch = s.label_epoch
+                AND e.source_id = s.source_id AND e.source_epoch = s.source_epoch
+            WHERE s.consumed_cursor IS NULL OR e.source_cursor > s.consumed_cursor
+        ), ranges AS (
+            SELECT tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch,
+                MIN(source_cursor) AS first_cursor, MAX(source_cursor) AS last_cursor
+            FROM current_events
+            GROUP BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch
+        ) SELECT s.source_key, r.first_cursor, r.last_cursor,
+            h.graph_result_id AS base_result_id, h.commit_revision AS base_commit_revision
+        FROM ranges r JOIN graph_state s
+            ON r.tenant_id = s.tenant_id AND r.node_id = s.node_id
+            AND r.node_boot_id = s.node_boot_id AND r.label_epoch = s.label_epoch
+            AND r.source_id = s.source_id AND r.source_epoch = s.source_epoch
+        LEFT JOIN heads h ON h.tenant_id = s.tenant_id AND h.source_key = s.source_key
+            AND h.first_cursor = r.first_cursor AND NOT h.retained_input_expired
+            AND h.first_cursor > s.retained_floor
+            AND h.witness_deadline_utc_ns > s.capture_time_utc_ns")
+    }
+
     async fn prepare(&self, filter: &str) -> TestResult<GraphPublication> {
         let sql = araphor_data::FindingV1::PACKAGES
             .iter()
@@ -711,7 +883,12 @@ impl Fixture {
     ) -> TestResult<GraphPublication> {
         let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
         let selection = AnalysisSelectionV1::tenant(self.source.tenant_id);
-        let session = self.query.session(selection.clone(), &self.control, now)?;
+        let mut session = self.query.session(selection.clone(), &self.control, now)?;
+        let control = GraphPublication::prepare_control(
+            &mut session,
+            &Self::control_sql(&format!("SELECT * FROM events {filter}")),
+        )
+        .await?;
         let sql = format!("SELECT {columns} FROM events {filter}");
         let events = self.query.prepare(&sql, Vec::new()).await?.0;
         let definition = Definition {
@@ -733,6 +910,7 @@ impl Fixture {
                 authorization_id: None,
             },
             events,
+            control,
             definition,
             self.facts.clone(),
         )
@@ -807,45 +985,14 @@ async fn captured_source(target: Target) -> TestResult {
         )
         .await?;
     let held = fixture.query.memory().input_reserved();
-    let projection = &instance
-        .graph_owner()
-        .ok_or("admitted Graph owner")?
-        .projection;
-    let observed = projection.observe_capture();
     let first = instance
         .run(managed::request("first")?, &fixture.control)
         .await?;
-    let captured = observed.try_recv()?;
-    assert!(captured
-        .graph
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .is_none());
-    assert!(captured.source.upgrade().is_none());
-    assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
-    let metadata = captured
-        .inputs
-        .iter()
-        .map(|input| {
-            (
-                input.data.name.clone(),
-                input.revision.clone(),
-                input.coverage.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(metadata.len(), 3);
-    assert!(metadata
-        .windows(2)
-        .all(|pair| pair[0].1 == pair[1].1 && pair[0].2 == pair[1].2));
-    let range = metadata[0]
-        .1
-        .window
-        .as_ref()
-        .ok_or("qualified Graph source range")?;
-    assert_eq!(range.source, fixture.source.exact_key());
-    assert_eq!((range.start_utc_ns, range.end_utc_ns), fixture.times);
-    drop(captured);
+    let range = sdk::SourceWindow {
+        source: fixture.source.exact_key(),
+        start_utc_ns: fixture.times.0,
+        end_utc_ns: fixture.times.1,
+    };
     assert_eq!(first.results.len(), 3);
     for reference in first.results.values() {
         let replayed = fixture
@@ -857,7 +1004,7 @@ async fn captured_source(target: Target) -> TestResult {
             .next()
             .ok_or("replayed Graph call")?
             .evaluation();
-        assert_eq!(evaluation.inputs.len(), 5);
+        assert_eq!(evaluation.inputs.len(), 7);
         let result = fixture.query.store().managed_result(
             instance.admitted(),
             &reference.result_id,
@@ -871,11 +1018,10 @@ async fn captured_source(target: Target) -> TestResult {
         for name in ["records", "facts"] {
             assert_eq!(
                 evaluation.input(name)?.revision.window.as_ref(),
-                Some(range)
+                Some(&range)
             );
         }
     }
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 4);
     let scope = araphor_data::ProcessorScopeV1 {
         processor_id: araphor_data::GRAPH_PROCESSOR.into(),
         method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
@@ -932,27 +1078,6 @@ async fn captured_source(target: Target) -> TestResult {
     let second = instance
         .run(managed::request("unchanged")?, &fixture.control)
         .await?;
-    let captured = observed.try_recv()?;
-    assert!(captured
-        .graph
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .is_none());
-    assert!(captured.source.upgrade().is_none());
-    assert_eq!(projection.projections.load(Ordering::SeqCst), 2);
-    let current = captured
-        .inputs
-        .iter()
-        .map(|input| {
-            (
-                input.data.name.clone(),
-                input.revision.clone(),
-                input.coverage.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(current, metadata);
-    drop(captured);
     assert_eq!(second.results.len(), 3);
     assert_eq!(
         second.commit_revision,
@@ -961,7 +1086,6 @@ async fn captured_source(target: Target) -> TestResult {
             .checked_add(2)
             .ok_or("native commit revision overflow")?
     );
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 5);
     assert_eq!(
         fixture.query.store().processor_result(&scope)?,
         Some(graph_result.clone())
@@ -1026,7 +1150,7 @@ async fn captured_source(target: Target) -> TestResult {
 #[tokio::test]
 async fn prepared_calls_capture_fresh() -> TestResult {
     let fixture = Fixture::target(Target::Wasm)?;
-    let publication = fixture.prepare("").await?;
+    let publication = fixture.prepare("WHERE CAST(now() AS BIGINT) > 0").await?;
     let grant = publication.grant.clone();
     let definition = publication.prepared.resolved().clone();
     fixture.admit_definition(&grant, &definition)?;
@@ -1036,26 +1160,14 @@ async fn prepared_calls_capture_fresh() -> TestResult {
             &grant,
             &definition,
             "prepared-capture",
-            "SELECT * FROM events",
+            "SELECT * FROM events WHERE CAST(now() AS BIGINT) > 0",
         )
         .await?;
     let held = fixture.query.memory().input_reserved();
-    let projection = &instance
-        .graph_owner()
-        .ok_or("admitted Graph owner")?
-        .projection;
-    let observed = projection.observe_capture();
     let first = instance
         .run(managed::request("first")?, &fixture.control)
         .await?;
-    let original = observed.try_recv()?;
     assert_eq!(first.results.len(), 3);
-    assert!(original.source.upgrade().is_none());
-    assert!(original
-        .graph
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .is_none());
     let before_domain = fixture.graph_history()?;
     assert_eq!(before_domain.len(), 1);
     let before_heads = fixture
@@ -1087,9 +1199,6 @@ async fn prepared_calls_capture_fresh() -> TestResult {
     let repeated = instance
         .run(managed::request("repeat")?, &fixture.control)
         .await?;
-    let next = observed.try_recv()?;
-    assert!(!Arc::ptr_eq(&original, &next));
-    assert!(next.source.upgrade().is_none());
     assert_eq!(fixture.graph_history()?, before_domain);
     assert_eq!(
         fixture
@@ -1134,24 +1243,32 @@ async fn prepared_calls_capture_fresh() -> TestResult {
         )?,
         [first.clone(), repeated.clone()]
     );
-    assert_eq!(projection.projections.load(Ordering::SeqCst), 2);
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(original.inputs.len(), next.inputs.len());
-    for (original, next) in original.inputs.iter().zip(&next.inputs) {
-        assert_eq!(original.revision, next.revision);
-        assert_eq!(original.coverage, next.coverage);
+    let reference = repeated
+        .results
+        .values()
+        .next()
+        .ok_or("repeated Graph call")?;
+    let replayed = fixture
+        .replay_result(instance.admitted(), &reference.result_id, &fixture.control)
+        .await?;
+    let call = replayed
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed repeated call")?;
+    for name in ["units", "unit_removals", "affected", "records", "facts"] {
+        assert_eq!(call.evaluation().input(name)?.data.rows(), 0);
     }
+    assert!(call
+        .changes()
+        .ok_or("continuing Graph change inputs")?
+        .base
+        .is_some());
+    drop(replayed);
     fixture.coverage(2, Some("HEALTHY"))?;
     let changed = instance
         .run(managed::request("changed")?, &fixture.control)
         .await?;
-    let updated = observed.try_recv()?;
-    assert!(!Arc::ptr_eq(&original, &updated));
-    assert!(!Arc::ptr_eq(&next, &updated));
-    assert_eq!(updated.coverage_revision, 2);
-    assert!(updated.source.upgrade().is_none());
-    assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);
     let heads = fixture
         .query
         .store()
@@ -1223,8 +1340,6 @@ async fn prepared_calls_capture_fresh() -> TestResult {
             .graph_window_headers(&fixture.source, None)?,
         heads
     );
-    assert_eq!(projection.projections.load(Ordering::SeqCst), 3);
-    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 3);
     assert!(fixture
         .query
         .store()
@@ -1235,8 +1350,6 @@ async fn prepared_calls_capture_fresh() -> TestResult {
             &fixture.control
         )?
         .is_none());
-    assert!(observed.try_recv().is_err());
-    drop((original, next, updated));
     assert_eq!(fixture.query.memory().input_reserved(), held);
     drop(fixture.query.reserve_evaluation(fixture.source.tenant_id)?);
     Ok(())
@@ -1254,7 +1367,7 @@ async fn graph_run_requires_projection() -> TestResult {
         .clone()
         .with_extension(Arc::new(GraphRun {
             projection: Arc::downgrade(&first.projection),
-            captured: OnceCell::new(),
+            captured: Mutex::new(None),
         }));
     let context = context.with_session_config(config);
     assert!(GraphRun::from_context(&context, &first.projection).is_ok());
@@ -1534,62 +1647,20 @@ async fn overlap_keeps_selected_facts() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn frame_copy_is_reserved() -> TestResult {
-    use araphor_data::{
-        AnalysisExtractLimits, AnalysisReadModeV1, AnalysisTableRead, AnalysisTableRequests,
-    };
-    let fixture = Fixture::target(Target::Sql)?;
-    let fields = AnalysisStore::table_schemas()["events"].fields().len();
-    let requests = AnalysisTableRequests::from([("events".into(), Some((0..fields).collect()))]);
-    let page = fixture.query.store().read_tables(
-        &AnalysisSelectionV1::tenant(fixture.source.tenant_id),
-        AnalysisTableRead {
-            requests: &requests,
-            event_ranges: None,
-            mode: AnalysisReadModeV1::Complete,
-            now: 1,
-        },
-        AnalysisExtractLimits::default(),
-        &AnalysisReadControl::default(),
-    )?;
-    let batches = page.tables.get("events").ok_or("captured events")?;
-    let limited = Memory::new(Some(1), None);
-    let reserved = limited.reserve_input(0)?;
-    assert!(matches!(
-        Projection::records(batches, batches, &reserved),
-        Err(DataFusionError::ResourcesExhausted(_))
-    ));
-    drop(reserved);
-    drop(limited.reserve_input(1)?);
-    let bytes = batches
-        .iter()
-        .map(|batch| {
-            Projection::column::<sdk::arrow_array::BinaryArray>(batch, "framed_record")
-                .map(|frames| frames.iter().flatten().map(<[u8]>::len).sum::<usize>())
-        })
-        .collect::<datafusion::common::Result<Vec<_>>>()?
-        .into_iter()
-        .sum::<usize>();
-    let memory = Memory::new(Some(bytes), None);
-    let reserved = memory.reserve_input(0)?;
-    let (records, positions) = Projection::records(batches, batches, &reserved)?;
-    assert_eq!(records.len(), 3);
-    assert_eq!(positions.len(), 3);
-    assert_eq!(reserved.size(), bytes);
-    assert!(memory.reserve_input(1).is_err());
-    drop((records, positions, reserved));
-    drop(memory.reserve_input(bytes)?);
-    Ok(())
-}
-
 #[tokio::test]
 async fn requires_all_detectors() -> TestResult {
     let fixture = Fixture::target(Target::Sql)?;
     let before = fixture.query.store().meta()?;
-    let single = r#"SELECT * FROM "HF-PROC-001"."1".detect('subjects', records => (SELECT * FROM records),
-        facts => (SELECT * FROM facts), manifest => (SELECT * FROM manifest))"#;
-    assert!(fixture.prepare_sql("*", "", single.into()).await.is_err());
+    let single = r#"SELECT * FROM "HF-PROC-001"."1".detect('subjects')"#;
+    let error = fixture
+        .prepare_sql("*", "", single.into())
+        .await
+        .err()
+        .ok_or("missing detector admitted")?;
+    assert!(
+        format!("{error:?}").contains("required graph detector call"),
+        "{error:?}"
+    );
     assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.query.store().meta()?, before);
     Ok(())
@@ -1772,6 +1843,7 @@ async fn projected_events_are_valid() -> TestResult {
 
 #[tokio::test]
 async fn keeps_frozen_coverage() -> TestResult {
+    erebor_telemetry::init_test_logging();
     let fixture = Fixture::target(Target::Sql)?;
     fixture.coverage(1, Some("GAPPED"))?;
     let publication = fixture.prepare("").await?;
@@ -1793,22 +1865,36 @@ async fn keeps_frozen_coverage() -> TestResult {
         identity: fixture.source.clone(),
     };
     let store = fixture.query.store();
-    let projection = Arc::clone(&owner.graph_owner().ok_or("native Graph owner")?.projection);
-    let observed = projection.observe_capture();
     let first_receipt = owner
         .run(managed::request("seed")?, &fixture.control)
         .await?;
     let head = store.processor_result(&scope)?.ok_or("native Graph head")?;
     assert_eq!(head.commit_revision, first_receipt.commit_revision);
     let first = head.result_id;
-    let capture = observed.try_recv()?;
-    assert!(capture
-        .inputs
-        .iter()
-        .all(|input| input.coverage.state == sdk::CoverageState::Gapped
-            && input.coverage.limits == ["SOURCE_COVERAGE_INSUFFICIENT"]));
-    drop(capture);
-    drop(projection);
+    let reference = first_receipt
+        .results
+        .values()
+        .next()
+        .ok_or("first Graph call")?;
+    let replayed = fixture
+        .replay_result(owner.admitted(), &reference.result_id, &fixture.control)
+        .await?;
+    let evaluation = replayed
+        .calls
+        .values()
+        .next()
+        .ok_or("replayed frozen coverage")?
+        .evaluation();
+    for name in ["records", "facts"] {
+        let input = evaluation.input(name)?;
+        assert_eq!(input.coverage.state, sdk::CoverageState::Gapped);
+        assert!(input
+            .coverage
+            .limits
+            .iter()
+            .any(|limit| limit == "SOURCE_COVERAGE_INSUFFICIENT"));
+    }
+    drop(replayed);
     let original = fixture
         .query
         .store()
@@ -2046,17 +2132,23 @@ async fn rejects_foreign_event_call() -> TestResult {
     )?;
     let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
     let selection = AnalysisSelectionV1::tenant(fixture.source.tenant_id);
-    let session = fixture
-        .query
-        .session(selection.clone(), &AnalysisReadControl::default(), now)?;
+    let mut session =
+        fixture
+            .query
+            .session(selection.clone(), &AnalysisReadControl::default(), now)?;
+    let control = GraphPublication::prepare_control(
+        &mut session,
+        &Fixture::control_sql("SELECT * FROM events"),
+    )
+    .await?;
     let foreign = session.prepare_definition(&Definition {
         name: "foreign-event-call".into(), description: String::new(), labels: Default::default(),
         program: Program::Sql { source: Source::Inline { inline:
             r#"SELECT events.* FROM events CROSS JOIN "runtime-fixture"."1".evaluate(mode => 'cancel', amount => 1) AS foreign_call"#.into(),
         }},
-    }).await?;
+    }, None).await?;
     let mut calls = 0;
-    PackageCall::any(&foreign.plan, &mut |_| {
+    PackageCall::any(foreign.plan(), &mut |_, _| {
         calls += 1;
         Ok(false)
     })?;
@@ -2079,7 +2171,8 @@ async fn rejects_foreign_event_call() -> TestResult {
             expires_utc_ns: None,
             authorization_id: None,
         },
-        foreign.plan.clone(),
+        foreign.plan().clone(),
+        control,
         Definition {
             name: "graph-foreign-call".into(),
             description: String::new(),

@@ -308,8 +308,12 @@ impl TryFrom<crate::ManagedStatus> for InstanceStatusV1 {
     type Error = crate::Error;
 
     fn try_from(status: crate::ManagedStatus) -> Result<Self> {
+        status.instance.spec.definition.validate()?;
+        if status.instance.spec.manifest.definition == 0 {
+            return Err(PackageErrorCodeV1::Invalid.error("definition revision"));
+        }
         Ok(Self {
-            definition_revision: status.instance.spec.definition.digest()?,
+            definition_revision: status.instance.spec.manifest.definition.to_string(),
             id: status.instance.spec.id,
             generation: status.instance.generation,
             lifecycle: status.instance.lifecycle,
@@ -364,7 +368,10 @@ pub struct FixtureResult {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackageResponseV1 {
-    Definition(araphor_discovery_definition::ResolvedDefinition),
+    Definition {
+        snapshot: araphor_discovery_definition::ResolvedDefinition,
+        commit_revision: u64,
+    },
     Image(araphor_package::PackageImageV1),
     Uninstalled(araphor_discovery_definition::ImagePin),
     Tests(Vec<FixtureResult>),
@@ -396,6 +403,16 @@ impl PackageResponseV1 {
             Self::deserialize(&mut decoder).context(crate::PackageResponseDecodeSnafu)?;
         if decoder.position() != bytes.len() as u64 {
             return Err(PackageErrorCodeV1::Invalid.error("package response trailing bytes"));
+        }
+        if let Self::Definition {
+            snapshot,
+            commit_revision,
+        } = &response
+        {
+            snapshot.validate()?;
+            if *commit_revision == 0 {
+                return Err(PackageErrorCodeV1::Invalid.error("definition response revision"));
+            }
         }
         Ok(response)
     }
@@ -547,7 +564,7 @@ mod inspection_tests {
             let result = InstanceResultV1 {
                 instance_id: "counts".into(),
                 result: reference,
-                definition_revision: format!("sha256:{}", "1".repeat(64)),
+                definition_revision: "7".into(),
                 generation: 2,
                 source: crate::AnalysisStoreMetaV1 {
                     store_uuid: uuid::Uuid::from_bytes([7; 16]),
@@ -596,7 +613,7 @@ mod inspection_tests {
             "SELECT 1".into(),
             Vec::new(),
         )?;
-        let revision = definition.digest()?;
+        let revision = 7u64;
         let status = crate::ManagedStatus {
             instance: crate::ManagedInstance {
                 spec: crate::ManagedSpec {
@@ -607,7 +624,7 @@ mod inspection_tests {
                     manifest: crate::ManagedManifest {
                         format: 1,
                         planner: "native".into(),
-                        definition: revision.clone(),
+                        definition: revision,
                         calls: Default::default(),
                         selected_schema: sdk::Schema::empty(),
                     },
@@ -635,7 +652,7 @@ mod inspection_tests {
         assert_eq!(
             serde_json::to_value(&status)?,
             serde_json::json!({
-                "id":"counts", "definition_revision":revision,
+                "id":"counts", "definition_revision":revision.to_string(),
                 "generation":10, "lifecycle":14, "running":false, "removed":false,
                 "progress":12, "status_progress":12,
                 "readiness":{"state":"failed", "code":"invalid", "field":"model evaluation"}

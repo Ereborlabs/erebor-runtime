@@ -159,7 +159,7 @@ async fn removal_rpc_keeps_history() -> TestResult {
         instance_id: "removed-counts".into(),
         expected_lifecycle: removed.lifecycle,
         definition_name: instance.admitted().spec.definition.definition.name.clone(),
-        definition_revision: instance.admitted().spec.definition.digest()?,
+        definition_revision: instance.admitted().spec.manifest.definition.to_string(),
     };
     assert!(fixture.package(recreate.clone(), true).await.is_err());
     assert_eq!(data.store.meta()?.commit_revision, removed_revision);

@@ -8,7 +8,6 @@ use araphor_data::{
 use araphor_discovery_definition::{Definition, Program, ResolvedDefinition, Source};
 use araphor_query::definition::{PackageCall, PreparedDefinition};
 use araphor_query::execution::{Engine, Session};
-use datafusion::logical_expr::{lit, Expr, LogicalPlan, LogicalPlanBuilder};
 
 use super::{DefinitionRef, GraphFacts, GraphPublication};
 use crate::{Instance, Result};
@@ -41,11 +40,13 @@ impl GraphPublication {
         grant: PackageGrantV1,
         id: String,
         source: EvidenceIntakeIdentityV1,
+        revision: u64,
         control: &AnalysisReadControl,
     ) -> Result<Arc<Instance>> {
         let destination = ManagedDestination::Graph {
             source,
             events_sql: String::new(),
+            control_sql: String::new(),
             calls: BTreeSet::new(),
             operation: ManagedGraphOperation::Expire,
         };
@@ -55,7 +56,16 @@ impl GraphPublication {
             0,
             query.memory().scope(),
         )?;
-        let prepared = session.prepare_definition(&Self::expiry_program()).await?;
+        let definition = Self::expiry_program();
+        let sql = definition
+            .program
+            .sql()
+            .map_err(araphor_data::Error::from)?;
+        let resolved = ResolvedDefinition::new(definition, sql, Vec::new())
+            .map_err(araphor_data::Error::from)?;
+        let prepared = session
+            .prepare_resolved(&resolved, Some(revision), None)
+            .await?;
         Instance::admit_prepared(session, authority, grant, id, prepared, destination).await
     }
 
@@ -71,12 +81,14 @@ impl GraphPublication {
         id: String,
         source: EvidenceIntakeIdentityV1,
         events_sql: String,
-        definition: ResolvedDefinition,
+        control_sql: String,
+        (definition, revision): (ResolvedDefinition, Option<u64>),
         control: &AnalysisReadControl,
     ) -> Result<Arc<Instance>> {
         let destination = ManagedDestination::Graph {
             source,
             events_sql,
+            control_sql,
             calls: BTreeSet::new(),
             operation: ManagedGraphOperation::Evaluate,
         };
@@ -85,7 +97,7 @@ impl GraphPublication {
             Arc::clone(&authority),
             Some(facts),
             &grant,
-            definition,
+            (definition, revision),
             destination,
             control,
         )
@@ -107,7 +119,7 @@ impl GraphPublication {
         authority: Arc<dyn PackageAuthorization>,
         facts: Option<Arc<dyn GraphFacts>>,
         grant: &PackageGrantV1,
-        definition: ResolvedDefinition,
+        (definition, revision): (ResolvedDefinition, Option<u64>),
         mut destination: ManagedDestination,
         control: &AnalysisReadControl,
     ) -> Result<(
@@ -118,6 +130,7 @@ impl GraphPublication {
     )> {
         let ManagedDestination::Graph {
             events_sql,
+            control_sql,
             operation,
             ..
         } = &destination
@@ -125,7 +138,7 @@ impl GraphPublication {
             return Err(Code::Invalid.error("Graph preparation destination").into());
         };
         definition.validate().map_err(araphor_data::Error::from)?;
-        let mut session = query.session_on(
+        let session = query.session_on(
             destination.selection(&grant.selection)?,
             control,
             0,
@@ -134,31 +147,72 @@ impl GraphPublication {
         if *operation == ManagedGraphOperation::Expire {
             if definition.definition != Self::expiry_program()
                 || !events_sql.is_empty()
+                || !control_sql.is_empty()
                 || !matches!(&destination, ManagedDestination::Graph { calls, .. } if calls.is_empty())
             {
                 return Err(Code::Invalid.error("graph expiry definition").into());
             }
-            let prepared = session.prepare_resolved(&definition).await?;
+            let prepared = session
+                .prepare_resolved(&definition, revision, None)
+                .await?;
             if prepared.resolved() != &definition {
                 return Err(Code::Conflict.error("graph expiry definition pin").into());
             }
             return Ok((session, prepared, destination, None));
         }
         let facts = facts.ok_or_else(|| Code::Incomplete.error("Graph facts owner"))?;
+        let owner = Self::prepare_program(
+            session,
+            authority,
+            grant.clone(),
+            events_sql,
+            control_sql,
+            DefinitionRef::Retained(&definition, revision),
+            facts,
+        )
+        .await?;
+        if owner.prepared.resolved() != &definition {
+            return Err(Code::Conflict.error("graph definition pin").into());
+        }
+        if let ManagedDestination::Graph { calls, .. } = &mut destination {
+            *calls = owner.calls.keys().copied().collect();
+        }
+        let owner = Arc::new(owner);
+        Ok((
+            owner.session.clone(),
+            owner.prepared.clone(),
+            destination,
+            Some(owner),
+        ))
+    }
+
+    pub(super) async fn prepare_program(
+        mut session: Session,
+        authority: Arc<dyn PackageAuthorization>,
+        grant: PackageGrantV1,
+        events_sql: &str,
+        control_sql: &str,
+        definition: DefinitionRef<'_>,
+        facts: Arc<dyn GraphFacts>,
+    ) -> Result<Self> {
+        let source_control = Self::prepare_control(&mut session, control_sql).await?;
         let selected = session
-            .prepare_definition(&Definition {
-                name: "graph-events".into(),
-                description: String::new(),
-                labels: Default::default(),
-                program: Program::Sql {
-                    source: Source::Inline {
-                        inline: events_sql.clone(),
+            .prepare_definition(
+                &Definition {
+                    name: "graph-events".into(),
+                    description: String::new(),
+                    labels: Default::default(),
+                    program: Program::Sql {
+                        source: Source::Inline {
+                            inline: events_sql.to_owned(),
+                        },
                     },
                 },
-            })
+                None,
+            )
             .await?;
         let mut nested = false;
-        PackageCall::any(&selected.plan, &mut |_| {
+        PackageCall::any(selected.plan(), &mut |_, _| {
             nested = true;
             Ok(false)
         })
@@ -169,7 +223,7 @@ impl GraphPublication {
         session.register_table(
             "__graph_current_events",
             Arc::new(datafusion::datasource::view::ViewTable::new(
-                selected.plan,
+                selected.into_plan(),
                 None,
             )),
         )?;
@@ -187,46 +241,18 @@ impl GraphPublication {
         ) SELECT e.* FROM __graph_current_events e LEFT JOIN expired s ON e.tenant_id = s.tenant_id
             AND e.node_id = s.node_id AND e.node_boot_id = s.node_boot_id AND e.label_epoch = s.label_epoch
             AND e.source_id = s.source_id AND e.source_epoch = s.source_epoch
-        WHERE s.consumed_cursor IS NULL OR e.source_cursor > s.consumed_cursor".into() } } }).await?;
-        let gate = selected.plan.clone();
-        let mut owner = Self::prepare_on(
+        WHERE s.consumed_cursor IS NULL OR e.source_cursor > s.consumed_cursor".into() } } }, None).await?;
+        let gate = source_control.clone();
+        Self::prepare_on(
             session,
             authority,
-            grant.clone(),
-            selected.plan,
-            DefinitionRef::Retained(&definition),
+            grant,
+            selected.into_plan(),
+            source_control,
+            definition,
             facts,
+            Some(gate),
         )
-        .await?;
-        if owner.prepared.resolved() != &definition {
-            return Err(Code::Conflict.error("graph definition pin").into());
-        }
-        owner.prepared.plan = Self::input_gate(gate, owner.prepared.plan)?;
-        if let ManagedDestination::Graph { calls, .. } = &mut destination {
-            *calls = owner.calls.keys().copied().collect();
-        }
-        let owner = Arc::new(owner);
-        Ok((
-            owner.session.clone(),
-            owner.prepared.clone(),
-            destination,
-            Some(owner),
-        ))
-    }
-
-    pub(super) fn input_gate(events: LogicalPlan, program: LogicalPlan) -> Result<LogicalPlan> {
-        let columns = program
-            .schema()
-            .columns()
-            .into_iter()
-            .map(Expr::Column)
-            .collect::<Vec<_>>();
-        LogicalPlanBuilder::from(events)
-            .project([lit(1i64).alias("__graph_has_input")])
-            .and_then(|gate| gate.limit(0, Some(1)))
-            .and_then(|gate| gate.cross_join(program))
-            .and_then(|joined| joined.project(columns))
-            .and_then(LogicalPlanBuilder::build)
-            .map_err(|source| araphor_query::Error::Sql { source }.into())
+        .await
     }
 }

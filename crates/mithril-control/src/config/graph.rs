@@ -115,13 +115,14 @@ fn graph_definitions_stay_inert() -> TestResult {
     let source = &records[0].id.stream;
     let data = parts.control.analysis_store().ok_or("Graph data")?;
     let control = AnalysisReadControl::default();
-    let definition = data
+    let (definition, _) = data
         .definition(source.tenant_id, "mithril-control-graph", None, &control)?
         .ok_or("configured Graph definition")?;
     assert_eq!(definition.images.len(), 3);
     assert!(data
         .definition(source.tenant_id, "graph-expiry", None, &control)?
         .ok_or("configured expiry definition")?
+        .0
         .images
         .is_empty());
     append(&data, source, &records)?;
@@ -181,6 +182,7 @@ async fn graph_sources_use_host() -> TestResult {
             &AnalysisReadControl::default(),
         )?
         .ok_or("configured Graph definition")?
+        .0
         .images;
     assert_eq!(images.len(), 3);
     for image in &images {

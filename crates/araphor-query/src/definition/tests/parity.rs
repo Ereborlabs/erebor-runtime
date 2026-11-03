@@ -34,11 +34,14 @@ async fn prepared(
         )?;
     }
     let prepared = session
-        .prepare_definition(&Fixture::sql(
-            r#"SELECT * FROM "discovery"."1".groups('groups',
+        .prepare_definition(
+            &Fixture::sql(
+                r#"SELECT * FROM "discovery"."1".groups('groups',
             atoms => (SELECT * FROM parity_atoms),
             coverage => (SELECT * FROM parity_coverage))"#,
-        ))
+            ),
+            None,
+        )
         .await?;
     Ok((session, prepared))
 }
@@ -157,9 +160,12 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
         .engine
         .session(AnalysisSelectionV1::tenant([1; 16]), &control, 123)?;
     let definition = session
-        .prepare_definition(&Fixture::sql(
-            r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'echo', amount => 42)"#,
-        ))
+        .prepare_definition(
+            &Fixture::sql(
+                r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'echo', amount => 42)"#,
+            ),
+            None,
+        )
         .await?;
     let retained = fixture.engine.memory().input_reserved();
     let image = definition.images().next().ok_or("admitted image")?;
@@ -255,9 +261,12 @@ async fn views_prepare_hidden_guests() -> TestResult {
         .engine
         .session(AnalysisSelectionV1::tenant([1; 16]), &control, 123)?;
     let definition = session
-        .prepare_definition(&Fixture::sql(
-            r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'echo', amount => 42)"#,
-        ))
+        .prepare_definition(
+            &Fixture::sql(
+                r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'echo', amount => 42)"#,
+            ),
+            None,
+        )
         .await?;
     let image = definition.images().next().ok_or("admitted image")?;
     let image_digest = image.digest().to_owned();
@@ -310,9 +319,12 @@ async fn preparation_cancellation_keeps_leases() -> TestResult {
                 .engine
                 .session(AnalysisSelectionV1::tenant([1; 16]), &control, 123)?;
         let definition = session
-            .prepare_definition(&Fixture::sql(
-                r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'echo', amount => 42)"#,
-            ))
+            .prepare_definition(
+                &Fixture::sql(
+                    r#"SELECT * FROM "runtime-fixture"."1".evaluate(mode => 'echo', amount => 42)"#,
+                ),
+                None,
+            )
             .await?;
         let (entry, observed) = mpsc::channel();
         let (release, waiting) = mpsc::channel();

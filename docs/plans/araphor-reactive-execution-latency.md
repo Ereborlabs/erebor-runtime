@@ -4,13 +4,25 @@ Replace repeated source capture, saved-state reconstruction, and per-row
 transactions with one retained DataFusion subscription and atomic writes of
 changes. This plan records the measured costs and proposes the replacement.
 
+## Handoff on 2026-11-03
+
+The user stopped implementation and requested a committed handoff. The
+latest focused build passes in 191.591930 s. The same live case fails in
+347.853963 s at an Arrow nullable-Struct conversion panic during bulk
+processing. Its four initial notifications take 15.768149 s, 16.780978 s,
+17.868428 s, and 19.717617 s. Startup takes 47.681283 s. The complete
+workload and 100-times target remain **Not done**. See the
+[handoff](araphor-execution-handoff.md) for the exact error, current source,
+commands, pending draft, measurements, and prohibited shortcuts.
+
 ## Current approval on 2026-11-03
 
 All six proposals and further component rewrites are approved when they
-improve the existing live subscription test by 100 times. This approval
-supersedes the earlier approval limits in this file. Preserve those older
-records as history. The target is **Not done** until comparable completion
-of the same workload proves the improvement.
+remove unnecessary work, use the native DataFusion architecture, and
+improve performance. This approval supersedes the earlier approval limits
+in this file. Preserve those older records as history. The overall
+100-times target remains **Not done** until comparable completion of the
+same workload proves the improvement.
 
 The qualification owner is
 `discovery::packages::required::incident::incremental::follows_incremental_sources`.
@@ -83,18 +95,127 @@ whole duration of that work. The source and summary are in
 `/tmp/araphor-live-fact-keys-gdb-exact-20261103.log` and
 `/tmp/araphor-live-fact-keys-stack-summary-20261103.txt`.
 
-### Retained join ordering measurement on 2026-11-03
+### Native optimizer checkpoint on 2026-11-03
 
-`SourceJoin` no longer adds native output requirements to every retained
-probe subtree. Real package arguments keep their `PackageExec` wrappers.
-The native optimizer still enforces SQL and package ordering requirements.
-The first join-orientation traversal remains.
+**Native interface migration: Builds. Live qualification and performance
+target: Not done.**
 
-The connected first-plan time falls from 253.668 s to 223.212 s. Setup takes
-235.576 s, including configuration at 235.006 s and the first physical
-plan. The attempt stops after 425.979 s during its second plan. No finding,
-bulk result, or warm-arrival result is produced. The build takes 189.707 s.
-The log is `/tmp/araphor-live-join-order-20261103.log`.
+The next connected source uses DataFusion 55.0 and Arrow 59.2. Source-header
+feeds read native Arrow columns. They no longer deserialize `SourceState`
+rows. Both feeds retain complete-frame validation before lifecycle effects.
+
+Native `named_struct` declares nullable children. DataFusion 55 rejects the
+old SQL cast that narrows those fields to the strict package identity.
+Remove that private SQL cast. Use checked native Arrow casts at the existing
+Control and Graph identity readers. The existing row encoder retains its
+selected key types with its converter. It checks compatible array metadata
+at encoding. Strict package schemas and actual null, journal, source,
+multiplicity, and position checks remain.
+
+The first live run stops at that SQL cast after 8.650 s. It does not prove a
+speed improvement. After the boundary correction, the same test completes
+the following sections:
+
+| Boundary | SQL change on DataFusion 53.1 | DataFusion 55.0 |
+| --- | ---: | ---: |
+| External process | 568.844 s | 727.010 s |
+| Internal total | 568.792 s | 726.963 s |
+| Configuration | 224.314 s | 292.889 s |
+| Listening | 0.240901 s | 0.254352 s |
+| Subscription setup | 0.067145 s | 0.070532 s |
+| Policy setup | 0.230873 s | 0.228978 s |
+| Inclusive startup | 224.869 s | 293.460 s |
+| First-event observation, failed | 342.397 s | 431.808 s |
+| Pipeline shutdown | 1.525 s | 1.694 s |
+| OIDC shutdown | 0.000218 s | 0.000215 s |
+| First large physical plan | 213.609 s | 281.581 s |
+| Second large physical plan | 333.745 s | 422.938 s |
+
+The connected change is a regression. Both tests fail before the first Graph
+publication, finding, and notification. Neither test reaches bulk events
+or the eight later arrivals. The large plans are inside configuration and
+first-event observation. Startup includes its setup sections. Internal
+total includes every section. Do not add these nested values together.
+
+Time outside the two large physical plans is 21.490 s before and 22.492 s
+after. This remainder includes other setup, smaller plans, and shutdown.
+Its remaining internal costs are not measured separately.
+
+The logs are `/tmp/araphor-live-native55-20261103.log` and
+`/tmp/araphor-live-native55-record-20261103.log`. Their paired timing files
+record external process time. The successful native-interface build takes
+192.679 s. The boundary-fix build takes 187.699 s. Both builds are outside
+the test durations. The earlier build stops after 640.530 s while it
+rebuilds unchanged C++ source. A cached-artifact build fails after 255.463 s,
+including an editor build-lock wait. Its API retry fails after 52.906 s.
+These build durations do not measure event latency.
+
+#### Native statistics pass result
+
+**Upstream distribution fix: Applied. Live qualification and 100-times
+target: Not done.**
+
+The published DataFusion 55.2 optimizer still creates a fresh statistics
+context for each child. The working source retains 55.0 and applies the
+two production-file changes from
+[upstream PR 25098](https://github.com/apache/datafusion/pull/25098), commit
+`dcd385e3e1770cf2ee0d0ffd7e70f0d2175dd247`. One statistics context serves
+the distribution pass. A plan change clears the cache before the old plan
+reference is dropped. Native sorting, statistics, and final checks remain.
+The native crate retains its license and notice. Araphor adds no optimizer
+or statistics cache. The public native function keeps its prior behavior.
+
+| Boundary | Before backport | After backport |
+| --- | ---: | ---: |
+| External process | 727.010 s | 653.602 s |
+| Internal total | 726.963 s | 653.550 s |
+| Configuration | 292.889 s | 264.418 s |
+| Listening | 0.254352 s | 0.248845 s |
+| Subscription setup | 0.070532 s | 0.069501 s |
+| Policy setup | 0.228978 s | 0.268686 s |
+| Inclusive startup | 293.460 s | 265.069 s |
+| First-event observation, failed | 431.808 s | 386.754 s |
+| Pipeline shutdown | 1.694 s | 1.726 s |
+| OIDC shutdown | 0.000215 s | 0.000227 s |
+| First large physical plan | 281.581 s | 252.890 s |
+| Second large physical plan | 422.938 s | 378.007 s |
+
+The same test, workload, filters, gates, and assertions apply. No compilation
+runs during either test. The build before this run takes 256.774 s.
+Both tests fail before the first finding. Bulk events and later arrivals
+do not run. The backport reduces this failed attempt by 10.1 percent.
+It does not prove completed-workload performance. The nested intervals have
+the same scope as the preceding table. Time outside the two large plans is
+22.705 s after the backport, including the external wrapper and other work.
+The log is `/tmp/araphor-live-native-statistics-20261103.log`.
+
+The next change calculates distribution-order satisfaction only when its
+result can affect a replacement. Native sorting and final sanity checks
+remain. The first large plan takes 253.668 s, against 252.890 s before.
+Configuration takes 265.085 s; listening, 0.254317 s; subscription setup,
+0.073497 s; policy setup, 0.238808 s; and inclusive startup, 265.666 s.
+The build takes 236.384 s outside the test. The operator stops this attempt
+after 556.405 s while the second large plan is unfinished. The first-event
+observation and shutdown do not complete. This partial run proves no speed
+improvement or completed workload. The log is
+`/tmp/araphor-live-lazy-ordering-20261103.log`.
+
+Source review then finds an extra Araphor pass that imposes ordering inside
+every retained join. The actual package argument already has native output
+requirements. The two supported source callbacks consume checked scalars
+or canonical keyed rows. They do not consume join row order. Remove this
+second join pass. Keep native package, query, window, and final ordering
+requirements. Completed-workload qualification remains **Not done**.
+
+#### Retained join ordering measurement on 2026-11-03
+
+The same live case runs for 425.979 s before an external interrupt during
+its second plan construction. The first physical plan falls from 253.668 s
+to 223.212 s. Configuration falls from 265.085 s to 235.006 s. Total setup
+takes 235.576 s. Configuration includes the first physical plan; setup
+includes configuration. These intervals must not be added together.
+The second plan has no completed timing. No finding is produced. No bulk
+or warm-arrival result is available.
 
 The paired completed setup stages are: configuration 265.085 s to
 235.006 s; listening 0.254317 s to 0.254086 s; subscriptions 0.073497 s to
@@ -103,11 +224,433 @@ from 265.666 s to 235.576 s. The externally interrupted totals are
 556.405 s and 425.979 s. These totals do not compare completed tests.
 The second-plan, event-observation, and shutdown durations are unknown.
 
-The measured source contains the recorded native optimizer and identity
-work. The isolated commit preserves its parent's first traversal and removes
-only the second traversal. This measurement does not qualify that isolated
-commit alone. Completed-workload qualification and the 100-times target
-remain **Not done**.
+The source change removes the second `SourceJoin` traversal and its blanket
+ordering requirements. `PackageExec` still adds native output requirements
+at each real package argument. Native SQL ordering requirements remain.
+The first traversal still selects the retained join side. The isolated
+commit preserves that traversal from its parent revision. The measured
+working tree also contains the recorded native optimizer and identity
+changes; this measurement does not qualify the isolated commit alone.
+
+The focused build takes 189.707 s. The external test log is
+`/tmp/araphor-live-join-order-20261103.log`. The stopped attempt is a partial
+measurement, not a test pass or a 100-times performance result.
+
+### Native table-provider boundary on 2026-11-03
+
+**Implementation: In progress. Live qualification and the 100-times target:
+Not done.**
+
+The last first-plan trace constructs 2,756 source operators for seven Graph
+input roles. The counts are: capture 1,591; control 895; status 51; facts 75;
+records 138; window 3; and affected records 3. These counts describe repeated
+plan construction. They do not count distinct events or prove execution
+counts.
+
+A native SQL plan scans a Graph input
+  -> the existing `SourcePort` table provider prepares its driver and header with DataFusion
+  -> the provider checks each native physical schema against its logical schema
+  -> the existing `PortExec` owns those prepared inputs and exposes its output reader
+  -> native filters, projections, and limits select the provider output
+
+A subscription executes or resets that plan
+  -> source inventory follows both provider-owned inputs and the output reader
+  -> key binding checks the outer join before it prepares inner lookups
+  -> replay and before-key binding use the same complete source inventory
+  -> native reset clears both owned plans and the visible reader
+
+This change removes `PortPlan`, source lowering, and their custom logical
+node equality, ordering, and hashing. It adds no operator or cache type.
+The provider retains source demand, image, clock, window, schema, and key
+checks. Real package arguments retain native output requirements. A scan
+can still occur once for each table reference. This change does not yet
+prove one construction or execution per Graph input.
+
+The source reviewer approves the exact eight-file change. The focused build
+passes in 193.004 s. The connected first physical plan takes 218.309 s,
+compared with 223.212 s before the boundary replacement. Configuration
+takes 229.559 s. Listening takes 0.252998 s, subscriptions take 0.071547 s,
+and policy takes 0.230702 s. Inclusive startup takes 230.130 s. The first
+plan is inside configuration; configuration is inside startup. The attempt
+stops after 298.721 s during the next source plan. No finding is produced. The log is
+`/tmp/araphor-live-port-provider-20261103.log`.
+
+This change removes a custom planner extension, but the measured first-plan
+reduction is about two percent. Repeated provider-input preparation remains.
+The second plan, bulk workload, and warm arrivals have no completed result.
+No completed-workload speed factor is claimed. No workload, assertion,
+acknowledgement gate, or progress gate is changed.
+
+### Retained native provider inputs on 2026-11-03
+
+**Implementation: In progress. Live qualification: Not done.**
+
+The provider retains its two native input plans when the existing reuse
+check succeeds, the input has no package calls, the clock count is zero,
+no runtime window exists, and no local table is used. The existing provider
+owns its constructor planning state and one native preparation cell. This
+change adds no registry, cache key, result comparison, or serialized data.
+
+A definition prepares a reusable provider
+  -> the provider prepares its driver and header once with DataFusion
+  -> canonical preparation disables native dynamic filters and defers source lookup
+  -> each scan resets ordinary native state and assigns fresh physical read identities
+  -> each nested provider receives independent input plans and an independent output binding
+  -> the outer source lookup binds that scan's keys after instantiation
+
+An input image or clock changes
+  -> the provider creates a separate preparation cell for that variant
+  -> package-free sealing retains the existing immutable provider
+  -> package-dependent, local, volatile, and runtime-window inputs keep incoming-state planning
+
+A warm subscription advances
+  -> the existing native reset keeps its read identities stable
+  -> the current source snapshot supplies new journal positions and rows
+
+Instantiation rejects a prepared key reader or key producer. The stored
+pair precedes key binding. Each output reader must retain the expected port
+origin before the new scan remaps that origin. Logical families, schemas,
+and native ordering remain. The source reviewer approves the exact change.
+The same live case fails after 161.072 s. The build passes in 189.140 s,
+after a 14.080 s compiler failure at the extracted reader call. That failure
+is build time, not execution time.
+
+| Completed interval | Seconds | Scope |
+| --- | ---: | --- |
+| First physical plan | 47.761607 | Inside configuration |
+| Configuration | 58.189235 | Inside startup |
+| Listening | 0.246326 | Inside startup |
+| Public subscriptions | 0.061579 | Inside startup |
+| Policy | 0.230003 | Inside startup |
+| Startup | 58.742683 | Includes the preceding setup stages |
+| First source admission physical plan | 69.238193 | Inside the first-notification wait |
+| First-notification wait | 90.146457 | Fails at the unchanged progress gate |
+| Pipeline teardown | 12.128534 | Includes cancellation and worker completion |
+| OIDC teardown | 0.000535 | Separate teardown stage |
+| Internal total | 161.019302 | Includes startup, observation, and teardown |
+| External total | 161.071990 | Includes the process wrapper |
+
+The log is `/tmp/araphor-live-port-retained-20261103.log`. No finding is
+produced. The source journal cursor reaches 1. The Graph result remains
+absent. The run reaches an empty expiry commit, but this commit is not a
+Graph detector result. No bulk or warm-arrival result is available.
+
+First-plan construction falls from 218.309 s to 47.762 s. Configuration
+falls from 229.559 s to 58.189 s. These are measured planning reductions,
+not completed-workload speed factors. The 100-times target is **Not done**.
+
+A separate parent-debugger run samples the remaining CPU work. Its active
+stack is `PortExec::instantiate` -> native child replacement ->
+`ProjectionExec::compute_properties` -> equivalence projection. The walk
+changes physical read identities but uses native property recomputation.
+Native DataFusion provides `ChildrenPropertiesMode::Keep` for unchanged
+properties. The proposed next change uses that native mode during
+instantiation. The debug run is stopped and is not timing evidence.
+
+The native `Keep` change is implemented in the existing instantiation
+method. It keeps schema, expressions, ordering, distribution, and statistics
+while it assigns new read identities. Native reset still clears execution
+state. The existing parser stack guard protects recursive visits.
+The focused build passes in 189.356 s. The same live case fails after
+130.920 s. The completed stages are:
+
+| Interval | Seconds | Scope |
+| --- | ---: | --- |
+| First physical plan | 28.064326 | Inside configuration |
+| Configuration | 38.428425 | Inside startup |
+| Listening | 0.249351 | Inside startup |
+| Public subscriptions | 0.062256 | Inside startup |
+| Policy | 0.227493 | Inside startup |
+| Startup | 38.982375 | Includes the preceding setup stages |
+| Source-admission physical plan | 40.385921 | Inside first-notification wait |
+| First-notification wait | 90.149156 | Fails at the unchanged gate |
+| Subscription physical plan | 39.016039 | Starts inside observation and completes during teardown |
+| Pipeline teardown | 1.725127 | Includes the end of subscription planning |
+| OIDC teardown | 0.000548 | Separate teardown stage |
+| Internal total | 130.858216 | Includes setup, observation, and teardown |
+| External total | 130.919515 | Includes process wrapper |
+
+The log is `/tmp/araphor-live-port-keep-20261103.log`. No finding is
+produced. A parent-debugger sample then identifies native projection
+property recomputation inside `SourceLookup::optimize`. The source
+reviewer approves use of native `Keep` at the four existing key-binding
+child replacements. The change preserves binding choices and key checks.
+The source-key change builds in 189.349 s. The same live case fails after
+128.445 s. The first plan takes 25.617536 s. Configuration takes 35.744582 s;
+listening takes 0.244901 s; subscriptions take 0.061240 s; policy takes
+0.225705 s. Inclusive startup takes 36.291744 s.
+
+Source-admission planning takes 37.646755 s. The later subscription plan
+takes 36.226225 s. Both occur inside the first-notification observation.
+That observation fails at 90.274181 s. Pipeline teardown takes 1.782505 s;
+OIDC teardown takes 0.000591 s. The internal total is 128.350022 s. The
+external total is 128.444935 s. The log is
+`/tmp/araphor-live-lookup-keep-20261103.log`.
+
+No finding is produced. The small reduction does not complete the target.
+The remaining event path still builds the same program at source admission
+and again at subscription execution. The next replacement must retain the
+complete prepared program before events arrive. Source lookup and native
+input preparation alone do not finish proposal 1.
+
+### Complete native program retention on 2026-11-03
+
+**Implementation: In progress. Live qualification: Not done.**
+
+The remaining measured duplication is source admission at 37.647 s and
+subscription planning at 36.226 s after the first event. The replacement
+retains the complete native program before events arrive.
+
+Graph program preparation
+  -> Analysis builds continuation and the control gate before Query seals the program
+  -> Query preserves resolution-time source access and adds the final plan dependencies
+  -> Analysis checks image authority and installs the context initializer
+  -> Query prepares native execution once and retains the executable with its real Engine owner
+
+A new source appears
+  -> Analysis validates the prepared Engine and facts owner
+  -> Analysis creates a fresh source session and binds the saved definition revision
+  -> the original instance admission checks remain
+  -> Query attaches a new native publication sink and subscription wrapper to the retained program
+  -> native local sanity checks validate new wrappers
+  -> execution uses fresh capture, source-index, call, and task state
+
+The logical plan has no public mutable field. A replay-selected logical
+output has no copied executable. Foreign Engine owners and ineligible
+clock, window, or local-table plans retain valid compilation paths. No
+hash key, opaque plan leaf, new execution owner, or polling loop is added.
+The [source review](../guides/araphor-retained-execution-review.md#complete-native-graph-program-on-2026-11-03)
+states each implemented owner and the remaining native-library readiness
+limit. The same live case must provide the timing and delivery result.
+
+#### Complete-program live measurement
+
+The source review passes for the combined Query and Analysis change. The
+focused build takes 195.684241 s. The same live case then fails in
+147.091725 s. Its internal total is 147.008740 s.
+
+| Measured section | Time | Scope |
+|---|---:|---|
+| Configuration | 55.628746 s | Includes the initial native plan |
+| Initial native physical plan | 45.127513 s | Inside configuration |
+| Listening | 0.086593 s | After configuration |
+| Notification subscriptions | 0.060285 s | After listening |
+| Policy setup | 0.281208 s | After subscriptions |
+| Complete startup | 56.127551 s | Includes the preceding setup sections |
+| First notification wait | 90.199012 s | Fails at the unchanged gate |
+| Pipeline stop | 0.680285 s | After the failed wait |
+| OIDC stop | 0.000666 s | After pipeline stop |
+
+The two large physical planning passes after event arrival are absent.
+This is a measured reduction in repeated planning. It is not a completed
+workload result. The evaluate invocation at cut 21 reports 8,404 source
+reads and 6,984 rows for one event. Its input log contains 31 record reads,
+14 status reads, and 11 fact reads. It publishes no Graph result or finding.
+The next work must explain that missing result and remove the repeated
+input computation. The log is
+`/tmp/araphor-live-complete-ready-20261103.log`.
+
+A later diagnostic run adds one DEBUG event at the existing Analysis
+subscription error boundary. The focused build takes 155.255537 s. The
+same case fails in 146.553355 s: startup 55.604068 s, including configuration
+55.125569 s and its native plan 44.852088 s; notification wait 90.195073 s;
+pipeline stop 0.669189 s; OIDC stop 0.000550 s. Listening takes 0.082868 s,
+subscription setup 0.060299 s, and policy setup 0.271537 s, all inside startup.
+The error is `the materialized input is absent: Port(26)`. Derived-input
+metadata uses a logical port identity that is absent from the actual
+physical input. Execution stores port data under physical read identities.
+The log is `/tmp/araphor-live-ready-failure-20261103.log`. This diagnostic
+run does not prove a performance change.
+
+The derived-input guard correction passes source review. Its focused
+build takes 191.000634 s. The unchanged case starts in 55.439231 s:
+configuration 54.946314 s, including native physical planning 44.487436 s;
+listening 0.085854 s; subscriptions 0.061374 s; policy 0.281124 s. The process
+package completes in 69.503 ms and the cross-node package in 46.557 ms.
+These package spans exclude input preparation. Credentials input preparation
+then fails because another physical port was not materialized. The failure
+occurs about 10.316 s after startup. The diagnostic run is interrupted after
+that known failure at 78.865103 s, with exit -2. No complete-workload timing
+or speed factor is claimed. The log is
+`/tmp/araphor-live-physical-input-metadata-20261103.log`.
+
+The optional executed-input metadata correction passes source review. Its
+focused build passes in 190.540733 s. The same case starts in 55.731831 s:
+configuration 55.237538 s, including native physical planning 44.737835 s;
+listening 0.088084 s; subscriptions 0.061592 s; policy 0.271398 s. All three
+package evaluators complete: process 61.043 ms, credentials 31.723 ms, and
+cross-node 48.820 ms. These spans exclude input preparation. Publication
+then rejects `graph canonical affected roots`, about 10.213 s after
+startup. The run stops after that known failure at 104.308969 s, exit -2.
+There is no complete-workload result. The log is
+`/tmp/araphor-live-executed-input-metadata-20261103.log`.
+
+The duplicate Graph target registry is removed. Source review passes; the
+focused build takes 153.080634 s. The same case starts in 54.607899 s:
+configuration 54.226778 s, including native physical planning 44.371843 s;
+listening 0.063004 s; subscriptions 0.063979 s; policy 0.238888 s. The first
+source completes the event, package, Graph, finding, and notification path
+in 17.320844 s. Graph publication 26 stages 66 support rows and inserts 31
+rows. Evaluator times are process 106.676 ms, credentials 31.025 ms, and
+cross-node 56.471 ms, excluding inputs.
+
+The full case fails in 163.056577 s. Internal total is 162.954116 s;
+pipeline stop takes 1.022289 s and OIDC stop 0.000595 s. The next completion
+check waits for 90 s because cut 21 commits Graph publication 26 but reports
+publication zero to the subscription. An extra empty execution at cut 26
+publishes 32. The static feedback flag forces the first publication to be
+incomplete merely because its SQL reads Graph metadata. This is the next
+concrete progress defect; no complete-workload speed factor is established.
+The log is `/tmp/araphor-live-native-input-ownership-20261103.log`.
+
+The source-frontier completion change removes the static feedback flag.
+Source review passes and the focused build takes 154.163885 s. The same
+case starts in 55.261421 s: configuration 54.849944 s, including native
+physical planning 44.633894 s; listening 0.089263 s; subscriptions 0.063313 s;
+policy 0.243617 s. The first finding and notification arrive in 17.396065 s.
+Subscription completion now correctly reports publication 26 at cut 21.
+
+The case fails in 73.719834 s at `unit committed without this execution`.
+All three package events and all three matching commit events are present
+in the global log. The native partition receiver starts tasks with a
+no-op tracing hook, so package events do not reach the scoped collector.
+The test and its assertion remain unchanged. A stateless implementation
+of DataFusion's native tracing hook passes source review. Its build and
+runtime proof are pending. This failed run is not a speed factor.
+The log is `/tmp/araphor-live-graph-frontier-completion-20261103.log`.
+
+#### Native task and source-control measurements
+
+The native DataFusion task hook now carries the invoking tracing dispatcher
+and span. The unchanged execution-to-commit assertion passes for all four
+initial sources. The focused build takes 191.812096 s. The run stops after
+confirmed bulk read-control failures at 213.426846 s. Startup takes
+55.042500 s: configuration 54.651384 s, including native physical planning
+44.629743 s; listening 0.082292 s; subscriptions 0.060604 s; and policy
+0.233551 s. Initial event-to-notification sections take 17.122480 s,
+18.044350 s, 19.221436 s, and 20.423512 s. The log is
+`/tmp/araphor-live-native-task-tracing-20261103.log`.
+
+Each source callback then receives an operation-local database control.
+It inherits cancellation and deadlines. The focused build takes
+193.326576 s. The run stops after confirmed false resets and a remaining
+replay-control failure at 277.443348 s. Startup takes 54.762609 s:
+configuration 54.358287 s, including native physical planning 44.165963 s;
+listening 0.086375 s; subscriptions 0.060715 s; and policy 0.239189 s.
+The four initial event-to-notification sections take 17.324471 s,
+18.303430 s, 19.612635 s, and 20.877165 s. All four initial source checks
+pass. Bulk processing starts and commits more results. It still fails.
+The log is `/tmp/araphor-live-source-operation-control-20261103.log`.
+
+These are interrupted runs of the same case. Startup includes its setup
+sections; configuration includes planning. Initial notification sections
+run in sequence. Package evaluator spans exclude input preparation and
+can overlap. Neither process duration proves completed-workload speed.
+The workload, assertions, and timeout gates are unchanged.
+
+#### Call-point live result
+
+**Focused build: Done. False-reset correction: Observed. Complete workload
+and performance target: Not done.**
+
+The connected build passes in 217.434504 s. The unchanged live case fails
+after 284.597287 s. Its actual error is `Control unary RPC timed out`
+during a bulk upload. The six Analysis cancellation messages occur during
+shutdown. No `read control` collision occurs before shutdown. All 21
+continuing call commits retain their actual prior results and report
+`reset=false`. The eight later arrivals do not run.
+
+| Boundary | Elapsed |
+| --- | ---: |
+| Configuration | 55.198427 s |
+| Native physical planning, inside configuration | 44.984633 s |
+| Listening | 0.084568 s |
+| Subscription setup | 0.061748 s |
+| Policy setup | 0.241958 s |
+| Inclusive startup | 55.601662 s |
+| Initial notification, source 33 | 17.283643 s |
+| Initial notification, source 34 | 18.495476 s |
+| Initial notification, source 35 | 19.622795 s |
+| Initial notification, source 36 | 20.996588 s |
+| Pipeline shutdown | 6.915048 s |
+| OIDC shutdown | 0.000210 s |
+| Internal total | 284.164726 s |
+| External process | 284.597287 s |
+
+The first Graph conversion takes 13.356 ms. Its managed commit takes
+2.972047 s: evidence preparation 0.008 ms, writer acquisition 0.082 ms,
+transaction work 2.925956 s, metadata commit 45.938 ms, and promotion and
+wake 0.062 ms. The first notification handler takes 2.718678 s: native
+column decoding 0.017 ms, head resolution 44.305 ms, and work processing
+2.674356 s. Notification processing includes its existing routing,
+storage, and delivery calls. These internal costs are not isolated yet.
+
+During bulk input, one managed write spends 12.360090 s acquiring its
+writer and 1.636474 s in transaction work. Other writes spend
+3.595286–4.226579 s in transaction work. Metadata commits for these
+samples take 17.355–84.455 ms. Writer acquisition includes the existing
+writer-owner preparation; this measurement does not isolate lock wait
+from catalog projection and capacity checks. The intervals are disjoint
+within one write. Concurrent writes and notification work can overlap.
+Do not add their durations to derive wall time.
+
+The first source execution records 9,275 native source reads for one
+event. Later cuts still record thousands of reads. Initial notification
+time does not materially improve in this correction. The next targets
+are repeated input execution and repeated work while the writer is held.
+Journal uploads use that same writer owner. Preserve the workload and
+RPC timeout when those owners change. The log is
+`/tmp/araphor-live-call-points-native-boundaries-20261103.log`.
+
+#### Native control query factoring
+
+The first factored control query passes its source review and focused build
+in 234.509284 s. The unchanged case fails during logical admission after
+3.980711 s. Native planning reports that lambda variable `h` is absent.
+The configured native generic SQL dialect does not parse that expression
+as a lambda. Startup, package execution, Graph publication, bulk input,
+and notification delivery do not complete. This short failure is not a
+performance result.
+
+The correction uses native conditional aggregates and `UNNEST`. It adds
+no dialect-specific parser path, custom planner, or input/output storage.
+Source review and the same live case must qualify the corrected query.
+The failed log is `/tmp/araphor-live-native-control-linear-20261103.log`.
+
+#### Retain the actual call source point
+
+**Design review and implementation: Done. Initial and continuing calls:
+Observed. Cold recovery and complete live qualification: Not done.**
+
+A progress-only publication advances the subscription's selected result.
+It does not replace a package call that did not run. The current code
+compares those different result revisions and resets the package. For
+example, a call result at publication 26 remains valid when a later empty
+publication advances the subscription to 32. The bulk trace incorrectly
+shows a new reset and a repeated root at cursor 1.
+
+Retain each actual call's source point in the existing source index.
+Use the checked native attempt and receipt to identify the point. Pin
+its existing indexed Arrow blocks before old versions can be removed.
+Only calls present in the committed receipt replace their prior points.
+An empty receipt advances subscription progress but retains call points.
+The existing Before view reads the exact retained point. It does not
+read the old journal prefix again. Reserve point metadata before Data
+commits. Use the actual receipt for the source-view acknowledgement.
+
+On recovery, validate the exact chain of selected results and call points.
+Read the central journal once at the earliest required point, then apply
+its committed changes to the current head. A missing chain, expired
+reference, or invalid source point is an explicit error. Do not silently
+rescan old input during a warm call or reset its state. Replay database
+operations also require separate operation controls with inherited
+cancellation and deadlines.
+
+The historical approval record below predates the current approval at the
+start of this file. All six proposals and necessary native DataFusion
+reworks are now approved. Completed event delivery and the 100-times
+performance target remain **Not done**.
+
 **Measurement record: Done. Proposals 1 and 5: Approved; implementation in
 progress. Proposals 2, 3, 4, and 6: Not approved; implementation Not done.**
 The user approves retained execution state, change inputs, contribution
@@ -313,6 +856,106 @@ Complete Graph preparation and the four-source subscription test remain
 **Not done**. No new end-to-end speed factor is proven.
 
 ## Intended end state
+
+### Native identity checkpoint on 2026-11-03
+
+**Native Graph state, Node source IDs, and executable cache keys: Done.
+Complete hash removal and incremental Graph qualification: Not done.**
+
+The Graph state pool uses native fact references and exact typed keys.
+Its independent qualification passes 31 Graph cases in 18.46 seconds
+and 65 Data Graph-row cases. The Data aggregate time was not measured. The grouped 8,193-witness case remains unqualified. That run uses
+a 180-second observation limit. Its exact elapsed time and internal stage
+times were not recorded. These results do not measure event latency.
+
+Node allocates CPU source and interval IDs at its existing durable coverage
+owner. Reopen checks those IDs against native WAL streams before it saves
+coverage state. Its existing snapshot path now contains strict MessagePack.
+All 52 Node observation cases pass in 4.21 seconds. The
+[native source review](mithril-hugging-face-intrusion-prevention/phase-6-implementation-review.md#native-source-identity-update-on-2026-11-03)
+records the exact owner and proof boundaries.
+
+Wasm compilation reuses the checked OCI image identity and exact model.
+The public raw-code cache uses exact executable bytes. It computes no new
+code digest. The initial Wasm run takes 76.02 seconds, with 29 passes and one obsolete
+fixture failure. The corrected default-quota fixture passes in 9.18 seconds.
+Together those runs cover all 30 owner cases. Ten focused Query cases pass, including
+clock isolation, input receipts, native view behavior, warm preparation,
+and checkpoint capacity. The
+[cache review](../guides/araphor-retained-execution-review.md#native-executable-cache-keys-on-2026-11-03)
+records the code and verification flow.
+
+Remaining application hashes include public finding IDs, definition
+revisions, workload and exact-file-object IDs, decision-catalog checksums,
+and Observability request, target, execution, and source hashes. Private
+cursor request binding requires a separate exact-request review. Required
+OCI and signature checks remain separate from change detection.
+
+The latest Graph diagnostic runs for 120.07 seconds. Its first large
+physical-planning pass completes in 62.85 seconds. Four smaller completed
+passes take 0.12 seconds together. The remaining 57.09 seconds include
+setup, work between passes, and a second unfinished large planning pass.
+Those parts were not measured separately. The five completed planning
+spans do not overlap. The displayed values are rounded. The source change removes the
+temporary Graph wrapper and Status dependencies from raw input readers.
+Earlier 120-second runs did not finish the first large planning pass.
+These partial runs do not establish a whole-path speed factor. The trace
+is `/tmp/araphor-cdc-local-reader-frozen-20261103.log`. The full Graph,
+Control, and four-source path remains **Not done**.
+
+Each new test report must state the actual elapsed time, measured section
+times, the source change, and a comparable prior result when one exists.
+State which sections overlap and which sections were not measured. A
+cutoff statement alone is not a timing report. Build time and functional
+verification time do not establish event-processing latency.
+
+### Prepared packages for running jobs
+
+**User requirement: Approved. Implementation and qualification: Not done.**
+
+A running job must retain its prepared package executables before it waits
+for subscription events. Event delivery must not load a native library or
+compile a Wasm component.
+
+The operator starts or recovers a job
+  -> Analysis checks the saved definition and current authority
+  -> Query prepares the native plan and its selected package calls
+  -> Package runtime loads and retains the selected executables
+  -> Query starts the subscription with those prepared executables
+  -> Analysis completes the existing start or recovery acknowledgment
+
+An event commits
+  -> Query wakes the existing subscription
+  -> the native plan calls the retained package executable
+  -> Data commits the returned changes and progress
+
+Preparation fails
+  -> Analysis does not report the job ready
+  -> the existing owner releases its preparation resources
+
+The operator stops the job
+  -> Query cancels and drains the existing subscription
+  -> Package runtime releases its executable references after calls finish
+
+Image installation and definition admission start no job.
+
+Current source has these gaps:
+
+| Owner | Current behavior |
+| --- | --- |
+| `Runtime::prepare` | Prepares Wasm code. The native branch validates limits and returns no prepared executable. |
+| `PackageExec::new` | Calls runtime preparation during physical planning. This does not prove readiness before the subscription waits. |
+| `Runtime::evaluate_reserved` | Loads the native shared library inside each invocation. |
+| `WasmExecution::invoke_reserved` | Creates a store, component instance, and interrupt worker for each invocation. Compiled code uses the existing cache. |
+
+Use the existing Query, Analysis, and package runtime owners. Native library
+reuse must preserve its file, dependency, ABI, and release-callback lifetime.
+The current native ABI has no reentrancy guarantee. Do not add unsafe shared
+access to make the library reusable. Review its existing worker ownership
+before implementation. Preserve Wasm invocation isolation and explicit SDK
+saved state. Retained code does not authorize shared guest globals. Use the
+existing job lifecycle and acknowledgment; add no Ready state or public API.
+Measure preparation and invocation costs separately.
 
 ### Central journal references
 

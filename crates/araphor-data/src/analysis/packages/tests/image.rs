@@ -526,7 +526,7 @@ fn definitions_retain_uninstalled_images() -> TestResult {
         sql,
         vec![pin.clone()],
     )?;
-    store.admit_definition([1; 16], &definition, || Ok(()))?;
+    let revision = store.admit_definition([1; 16], &definition, || Ok(()))?;
     assert!(store.uninstall_package_image([1; 16], &pin, || Ok(()))?);
     assert_eq!(inspect(&store, None)?.digest(), first.digest());
     assert!(store
@@ -549,10 +549,10 @@ fn definitions_retain_uninstalled_images() -> TestResult {
         store.definition(
             [1; 16],
             &definition.definition.name,
-            Some(&definition.digest()?),
+            Some(revision),
             &AnalysisReadControl::default()
         )?,
-        Some(definition.clone())
+        Some((definition.clone(), revision))
     );
     let mut fresh = definition.clone();
     fresh.definition.name = "fresh-image".into();

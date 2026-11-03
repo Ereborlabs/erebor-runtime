@@ -47,7 +47,7 @@ impl AnalysisStore {
             return self.reject("the discovery notice scope is invalid");
         }
         self.read_snapshot(|reader| {
-            let Some(receipt) = Self::read_receipt_from(
+            let Some((receipt, _)) = Self::read_receipt_from(
                 reader,
                 &self.root,
                 &scope.identity,

@@ -705,7 +705,8 @@ impl AnalysisStore {
     ) -> Result<Option<AnalysisSourceStatusV1>> {
         let key = identity.key();
         self.read_snapshot(|writer| {
-            let Some(receipt) = Self::read_receipt_from(writer, &self.root, identity, &key)? else {
+            let Some((receipt, _)) = Self::read_receipt_from(writer, &self.root, identity, &key)?
+            else {
                 return Ok(None);
             };
             let revision = Self::read_meta_from(writer, &self.root)?.commit_revision;
@@ -788,7 +789,8 @@ impl AnalysisStore {
             identity,
             self.storage.source_entries,
         )?;
-        let previous = Self::read_receipt_from(&transaction, &self.root, identity, &key)?;
+        let previous = Self::read_receipt_from(&transaction, &self.root, identity, &key)?
+            .map(|(receipt, _)| receipt);
         if previous
             .as_ref()
             .is_some_and(|receipt| receipt.cpu_id != input.cpu_id)
@@ -945,11 +947,11 @@ impl AnalysisStore {
         root: &Path,
         identity: &EvidenceIntakeIdentityV1,
         key: &[u8],
-    ) -> Result<Option<AnalysisSourceReceiptV1>> {
-        let stored: Option<(String, Vec<u8>, u32, u64, u64, u64)> = connection
+    ) -> Result<Option<(AnalysisSourceReceiptV1, u64)>> {
+        let stored: Option<(String, Vec<u8>, u32, u64, u64, u64, u64)> = connection
             .query_row(
                 "SELECT identity_json, tenant_id, cpu_id, contiguous_cursor,
-                        coverage_revision, retained_floor
+                        coverage_revision, retained_floor, commit_revision
                  FROM source_receipts WHERE stream_key = ?",
                 params![key],
                 |row| {
@@ -960,6 +962,7 @@ impl AnalysisStore {
                         row.get(3)?,
                         row.get(4)?,
                         row.get(5)?,
+                        row.get(6)?,
                     ))
                 },
             )
@@ -976,6 +979,7 @@ impl AnalysisStore {
                     contiguous_cursor,
                     coverage_revision,
                     retained_floor,
+                    commit_revision,
                 )| {
                     let saved: EvidenceIntakeIdentityV1 = serde_json::from_str(&identity_json)
                         .context(JsonSnafu {
@@ -988,13 +992,16 @@ impl AnalysisStore {
                         }
                         .fail();
                     }
-                    Ok(AnalysisSourceReceiptV1 {
-                        identity: saved,
-                        cpu_id,
-                        contiguous_cursor,
-                        coverage_revision,
-                        retained_floor,
-                    })
+                    Ok((
+                        AnalysisSourceReceiptV1 {
+                            identity: saved,
+                            cpu_id,
+                            contiguous_cursor,
+                            coverage_revision,
+                            retained_floor,
+                        },
+                        commit_revision,
+                    ))
                 },
             )
             .transpose()

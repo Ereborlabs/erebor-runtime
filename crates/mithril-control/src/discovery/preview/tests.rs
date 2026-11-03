@@ -184,9 +184,9 @@ impl Fixture {
                 },
             },
         };
-        let prepared = session.prepare_definition(&definition).await?;
+        let prepared = session.prepare_definition(&definition, None).await?;
         let mut call = None;
-        PackageCall::any(&prepared.plan, &mut |found| {
+        PackageCall::any(prepared.plan(), &mut |_, found| {
             assert!(call.replace(found.clone()).is_none());
             Ok(false)
         })?;

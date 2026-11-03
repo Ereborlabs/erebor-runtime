@@ -51,7 +51,7 @@ fn call_reference_keeps_pin() -> TestResult {
         assert_eq!(context.context.id, "first");
         assert_eq!(
             result.definition_revision,
-            current.spec.definition.digest()?
+            current.spec.manifest.definition.to_string()
         );
         assert_eq!(result.generation, current.generation);
         assert_eq!(result.source.store_uuid, before.store_uuid);
@@ -282,7 +282,10 @@ fn selected_uses_saved_schema() -> TestResult {
         )?;
         assert_eq!(&version.manifest.selected_schema, expected);
         assert_eq!(&result.result, reference);
-        assert_eq!(result.definition_revision, version.definition.digest()?);
+        assert_eq!(
+            result.definition_revision,
+            version.manifest.definition.to_string()
+        );
     }
     Ok(())
 }

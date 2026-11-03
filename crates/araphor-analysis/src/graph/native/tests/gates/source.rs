@@ -298,7 +298,10 @@ async fn frozen_keys_preserve_source() -> TestResult {
         "foreign-history".into(),
         other.clone(),
         "SELECT * FROM events WHERE source_id = decode(repeat('63', 16), 'hex')".into(),
-        foreign_definition,
+        Fixture::control_sql(
+            "SELECT * FROM events WHERE source_id = decode(repeat('63', 16), 'hex')",
+        ),
+        (foreign_definition, None),
         &fixture.control,
     )
     .await?;

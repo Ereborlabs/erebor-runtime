@@ -98,7 +98,7 @@ fn package_request_metadata_roundtrip() -> TestResult {
         },
         PackageRequestV1::InspectDefinition {
             name: "counts".into(),
-            revision: Some(format!("sha256:{}", "1".repeat(64))),
+            revision: Some("7".into()),
         },
         PackageRequestV1::InspectImage {
             package_id: "example".into(),
@@ -289,7 +289,7 @@ fn removal_requests_are_explicit() -> TestResult {
             PackageRequestV1::AdmitInstance {
                 instance_id: "counts".into(),
                 definition_name: "counts".into(),
-                definition_revision: format!("sha256:{}", "2".repeat(64)),
+                definition_revision: "7".into(),
             },
             crate::PackageActionV1::Run,
         ),
@@ -328,7 +328,7 @@ fn removal_requests_are_explicit() -> TestResult {
                 instance_id: "counts".into(),
                 expected_lifecycle: 17,
                 definition_name: "count-events".into(),
-                definition_revision: "exact".into(),
+                definition_revision: "7".into(),
                 rebuild: true,
             },
             crate::PackageActionV1::Update,
@@ -360,7 +360,7 @@ fn removal_requests_are_explicit() -> TestResult {
                 instance_id: "counts".into(),
                 expected_lifecycle: 19,
                 definition_name: "counts".into(),
-                definition_revision: format!("sha256:{}", "2".repeat(64)),
+                definition_revision: "7".into(),
             },
             crate::PackageActionV1::Run,
         ),

@@ -62,9 +62,11 @@ fn inspect(
     store: &AnalysisStore,
     tenant: [u8; 16],
     name: &str,
-    revision: Option<&str>,
+    revision: Option<u64>,
 ) -> crate::Result<Option<ResolvedDefinition>> {
-    store.definition(tenant, name, revision, &AnalysisReadControl::default())
+    Ok(store
+        .definition(tenant, name, revision, &AnalysisReadControl::default())?
+        .map(|(definition, _)| definition))
 }
 
 #[test]
@@ -99,7 +101,7 @@ fn definition_retains_captured_source() -> TestResult {
     let committed = store.admit_definition([1; 16], &captured, || Ok(()))?;
     assert_eq!(committed, store.meta()?.commit_revision);
     let saved = store.meta()?;
-    let revision = captured.digest()?;
+    let revision = committed;
     let retained = inspect(&store, [1; 16], "observed", None)?.ok_or("definition is absent")?;
     assert_eq!(retained, captured);
     assert_eq!(retained.sql, sql);
@@ -122,7 +124,7 @@ fn definition_retains_captured_source() -> TestResult {
     assert!(checked);
     assert_eq!(store.meta()?, saved);
     assert_eq!(
-        inspect(&store, [1; 16], "observed", Some(&revision))?,
+        inspect(&store, [1; 16], "observed", Some(revision))?,
         Some(captured.clone())
     );
     assert_no_execution(&store)?;
@@ -137,7 +139,7 @@ fn definition_retains_captured_source() -> TestResult {
     assert!(!notices.has_changed()?);
     assert_eq!(reopened.meta()?, saved);
     assert_eq!(
-        inspect(&reopened, [1; 16], "observed", Some(&revision))?,
+        inspect(&reopened, [1; 16], "observed", Some(revision))?,
         Some(captured)
     );
     assert_no_execution(&reopened)?;
@@ -156,9 +158,6 @@ fn definition_revisions_and_tenants() -> TestResult {
         .definition
         .labels
         .insert("revision".into(), "2".into());
-    let first_digest = first.digest()?;
-    let second_digest = second.digest()?;
-    assert_ne!(first_digest, second_digest);
     let first_commit = store.admit_definition([1; 16], &first, || Ok(()))?;
     let second_commit = store.admit_definition([1; 16], &second, || Ok(()))?;
     assert!(second_commit > first_commit);
@@ -167,7 +166,7 @@ fn definition_revisions_and_tenants() -> TestResult {
         Some(second.clone())
     );
     assert_eq!(
-        inspect(&store, [1; 16], "counts", Some(&first_digest))?,
+        inspect(&store, [1; 16], "counts", Some(first_commit))?,
         Some(first.clone())
     );
     let before = store.meta()?;
@@ -181,7 +180,13 @@ fn definition_revisions_and_tenants() -> TestResult {
         Some(second.clone())
     );
     assert!(inspect(&store, [2; 16], "counts", None)?.is_none());
-    assert!(inspect(&store, [1; 16], "counts", Some("absent"))?.is_none());
+    assert!(inspect(
+        &store,
+        [1; 16],
+        "counts",
+        Some(store.meta()?.commit_revision + 1)
+    )?
+    .is_none());
     store.admit_definition([2; 16], &first, || Ok(()))?;
     let saved = store.meta()?;
     let cancelled = AnalysisReadControl::default();
@@ -299,18 +304,18 @@ fn definition_requires_exact_image() -> TestResult {
 }
 
 #[test]
-fn definition_recovery_checks_digest() -> TestResult {
+fn definition_recovery_checks_identity() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("store");
     let store = AnalysisStore::open(&root)?;
     let mut definition = resolved("counts", "SELECT 1 AS count")?;
     store.admit_definition([1; 16], &definition, || Ok(()))?;
-    definition.definition.description = "Count modified records.".into();
+    definition.definition.name = "modified-counts".into();
     {
         let mut writer = store.writer()?;
         writer.get_mut()?.execute(
             "UPDATE discovery_definitions SET definition = ?",
-            params![serde_json::to_vec(&definition)?],
+            params![definition.encode()?],
         )?;
     }
     assert!(matches!(

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::sync::Arc;
 
@@ -6,9 +6,12 @@ use araphor_data::AnalysisSelectionV1;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{ExprSchema, ScalarValue};
+use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::source_as_provider;
 use datafusion::functions::datetime::{date_bin::DateBinFunc, now::NowFunc};
-use datafusion::logical_expr::{BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator};
+use datafusion::logical_expr::{
+    BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, Volatility,
+};
 use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use snafu::ResultExt as _;
 
@@ -30,24 +33,196 @@ pub(crate) enum Window {
 }
 
 #[derive(Default)]
-struct Windows {
+pub(crate) struct Windows {
+    visited: BTreeMap<usize, Vec<Option<Window>>>,
     error: Option<crate::Error>,
     clocks: usize,
     stack: Vec<Option<Window>>,
     scans: Vec<Option<Window>>,
     filters: usize,
     invalid: bool,
-    views: BTreeSet<usize>,
+    invalid_nested: bool,
+    varying: bool,
+    runtime: bool,
+}
+
+impl Windows {
+    fn read(plan: &LogicalPlan) -> Result<Self> {
+        let mut windows = Self::default();
+        plan.visit_with_subqueries(&mut windows).context(SqlSnafu)?;
+        if let Some(error) = windows.error.take() {
+            match error {
+                crate::Error::Invalid {
+                    field: "follow clock filter",
+                    ..
+                } => {
+                    windows.invalid_nested = true;
+                    windows.varying = true;
+                    windows.runtime = true;
+                }
+                error => return Err(error),
+            }
+        }
+        windows.visited.clear();
+        windows.stack.clear();
+        Ok(windows)
+    }
+
+    pub(crate) fn programs(inputs: &[LogicalPlan]) -> Result<Self> {
+        let mut windows = Self::default();
+        for input in inputs {
+            windows.absorb(&Self::read(input)?);
+        }
+        Ok(windows)
+    }
+
+    pub(crate) fn runtime(&self) -> bool {
+        self.runtime
+    }
+
+    pub(crate) fn same_scope(&self, other: &Self) -> bool {
+        self.clocks == other.clocks
+            && self.scans == other.scans
+            && self.filters == other.filters
+            && self.invalid == other.invalid
+            && self.invalid_nested == other.invalid_nested
+            && self.varying == other.varying
+            && self.runtime == other.runtime
+    }
+
+    fn scan(&mut self, window: Option<Window>) {
+        if let Some(first) = self.scans.first() {
+            self.invalid |= first != &window;
+        } else {
+            self.scans.push(window);
+        }
+    }
+
+    fn absorb(&mut self, other: &Self) {
+        self.clocks += other.clocks;
+        self.filters += other.filters;
+        self.invalid |= other.invalid;
+        self.invalid_nested |= other.invalid_nested;
+        self.varying |= other.varying;
+        self.runtime |= other.runtime;
+        if let Some(window) = other.scans.first() {
+            self.scan(window.clone());
+        }
+    }
+
+    fn finish(mut self) -> Result<Option<Window>> {
+        if let Some(error) = self.error.take() {
+            return Err(error);
+        }
+        if self.invalid_nested {
+            return InvalidSnafu {
+                field: "follow clock filter",
+            }
+            .fail();
+        }
+        if self.clocks == 0 {
+            return Ok(None);
+        }
+        let window = self.scans.first().cloned().flatten();
+        if self.invalid
+            || window.as_ref().is_none_or(|window| !window.complete())
+            || self.filters != self.clocks
+            || self.scans.iter().any(|scan| scan != &window)
+        {
+            return InvalidSnafu {
+                field: "follow clock filter",
+            }
+            .fail();
+        }
+        Ok(window)
+    }
 }
 
 impl<'n> TreeNodeVisitor<'n> for Windows {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, plan: &'n LogicalPlan) -> datafusion::common::Result<TreeNodeRecursion> {
+        let inherited = self.stack.last().cloned().flatten();
+        let visits = self
+            .visited
+            .entry(std::ptr::from_ref(plan) as usize)
+            .or_default();
+        if visits.contains(&inherited) {
+            self.stack.push(inherited);
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        visits.push(inherited.clone());
+        if let LogicalPlan::TableScan(scan) = plan {
+            self.varying |= !source_as_provider(&scan.source).is_ok_and(|provider| {
+                provider.is::<SourceProvider>()
+                    || provider.is::<SourcePort>()
+                    || provider.is::<EmptyTable>()
+            });
+        }
+        if matches!(
+            plan,
+            LogicalPlan::RecursiveQuery(_) | LogicalPlan::Extension(_)
+        ) {
+            self.runtime = true;
+        }
+        if let LogicalPlan::TableScan(scan) = plan {
+            self.runtime |= !source_as_provider(&scan.source).is_ok_and(|provider| {
+                if let Some(source) = provider.downcast_ref::<SourceProvider>() {
+                    !matches!(source.origin, crate::sources::SourceOrigin::Local(_))
+                } else {
+                    provider.is::<SourcePort>() || provider.is::<EmptyTable>()
+                }
+            });
+        }
+        plan.apply_expressions(|expression| {
+            expression.apply(|expression| {
+                self.runtime |= match expression {
+                    Expr::ScalarFunction(function) => {
+                        function.func.signature().volatility == Volatility::Stable
+                    }
+                    Expr::AggregateFunction(function) => {
+                        function.func.signature().volatility == Volatility::Stable
+                    }
+                    Expr::WindowFunction(function) => {
+                        function.fun.signature().volatility == Volatility::Stable
+                    }
+                    Expr::ScalarVariable(..) | Expr::Placeholder(..) => true,
+                    _ => false,
+                };
+                self.varying |= match expression {
+                    Expr::ScalarFunction(function) => {
+                        function.func.signature().volatility != Volatility::Immutable
+                    }
+                    Expr::AggregateFunction(function) => {
+                        function.func.signature().volatility != Volatility::Immutable
+                    }
+                    Expr::WindowFunction(function) => {
+                        function.fun.signature().volatility != Volatility::Immutable
+                    }
+                    Expr::ScalarVariable(..) | Expr::Placeholder(..) => true,
+                    _ => false,
+                };
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })?;
+        if let LogicalPlan::TableScan(scan) = plan {
+            if let Ok(provider) = source_as_provider(&scan.source) {
+                if let Some(source) = provider.downcast_ref::<SourcePort>() {
+                    self.absorb(source.windows());
+                    self.stack.push(None);
+                    return Ok(TreeNodeRecursion::Jump);
+                }
+            }
+        }
         if let LogicalPlan::Extension(extension) = plan {
             if let Some(call) = extension.node.as_any().downcast_ref::<PackageCall>() {
                 for child in &call.children {
-                    if let Err(error) = Window::from_plan_in(child, &self.views) {
+                    let result = Windows::read(child).and_then(|windows| {
+                        self.varying |= windows.varying;
+                        self.runtime |= windows.runtime;
+                        windows.finish()
+                    });
+                    if let Err(error) = result {
                         self.error = Some(error);
                         return Ok(TreeNodeRecursion::Stop);
                     }
@@ -61,7 +236,7 @@ impl<'n> TreeNodeVisitor<'n> for Windows {
                 self.clocks += Window::event_clocks(predicate, plan.schema())?;
             }
         }
-        let mut window = self.stack.last().cloned().flatten();
+        let mut window = inherited;
         if !Window::preserves(plan) && !Window::events(plan) {
             window = None;
         }
@@ -98,25 +273,9 @@ impl<'n> TreeNodeVisitor<'n> for Windows {
             }
         }
         if Window::events(plan) {
-            self.scans.push(window.clone());
+            self.scan(window.clone());
         }
         self.stack.push(window);
-        if let LogicalPlan::TableScan(scan) = plan {
-            if let Ok(provider) = source_as_provider(&scan.source) {
-                if let Some(port) = provider.as_any().downcast_ref::<SourcePort>() {
-                    let identity = Arc::as_ptr(&scan.source) as *const () as usize;
-                    if !self.views.insert(identity) {
-                        return datafusion::common::plan_err!("recursive source view");
-                    }
-                    for input in port.inputs() {
-                        if input.visit_with_subqueries(self)? == TreeNodeRecursion::Stop {
-                            return Ok(TreeNodeRecursion::Stop);
-                        }
-                    }
-                    self.views.remove(&identity);
-                }
-            }
-        }
         Ok(TreeNodeRecursion::Continue)
     }
 
@@ -148,15 +307,15 @@ impl Window {
     }
 
     pub(crate) fn clocks(plan: &LogicalPlan) -> Result<usize> {
-        Self::clocks_in(plan, &mut BTreeSet::new()).context(SqlSnafu)
-    }
-
-    fn clocks_in(
-        plan: &LogicalPlan,
-        views: &mut BTreeSet<usize>,
-    ) -> datafusion::common::Result<usize> {
         let mut count = 0;
         plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan {
+                if let Ok(provider) = source_as_provider(&scan.source) {
+                    if let Some(source) = provider.downcast_ref::<SourcePort>() {
+                        count += source.clocks();
+                    }
+                }
+            }
             plan.apply_expressions(|expression| {
                 expression.apply(|expression| {
                     if Self::clock(expression) {
@@ -165,63 +324,26 @@ impl Window {
                     Ok(TreeNodeRecursion::Continue)
                 })
             })?;
-            if let LogicalPlan::TableScan(scan) = plan {
-                if let Ok(provider) = source_as_provider(&scan.source) {
-                    if let Some(port) = provider.as_any().downcast_ref::<SourcePort>() {
-                        let identity = Arc::as_ptr(&scan.source) as *const () as usize;
-                        if !views.insert(identity) {
-                            return datafusion::common::plan_err!("recursive source view");
-                        }
-                        for input in port.inputs() {
-                            count += Self::clocks_in(input, views)?;
-                        }
-                        views.remove(&identity);
-                    }
-                }
-            }
             Ok(TreeNodeRecursion::Continue)
-        })?;
+        })
+        .context(SqlSnafu)?;
         Ok(count)
     }
 
-    pub(crate) fn infer(plan: &LogicalPlan) -> Result<Option<Self>> {
-        match Self::from_plan(plan) {
+    pub(crate) fn infer(plan: &LogicalPlan) -> Result<(Option<Self>, bool)> {
+        let windows = Windows::read(plan)?;
+        let varying = windows.varying;
+        match windows.finish() {
             Err(crate::Error::Invalid {
                 field: "follow clock filter",
                 ..
-            }) => Ok(None),
-            result => result,
+            }) => Ok((None, varying)),
+            result => result.map(|window| (window, varying)),
         }
     }
 
     pub(crate) fn from_plan(plan: &LogicalPlan) -> Result<Option<Self>> {
-        Self::from_plan_in(plan, &BTreeSet::new())
-    }
-
-    fn from_plan_in(plan: &LogicalPlan, views: &BTreeSet<usize>) -> Result<Option<Self>> {
-        let mut windows = Windows {
-            views: views.clone(),
-            ..Default::default()
-        };
-        plan.visit_with_subqueries(&mut windows).context(SqlSnafu)?;
-        if let Some(error) = windows.error.take() {
-            return Err(error);
-        }
-        if windows.clocks == 0 {
-            return Ok(None);
-        }
-        let window = windows.scans.first().cloned().flatten();
-        if windows.invalid
-            || window.as_ref().is_none_or(|window| !window.complete())
-            || windows.filters != windows.clocks
-            || windows.scans.iter().any(|scan| scan != &window)
-        {
-            return InvalidSnafu {
-                field: "follow clock filter",
-            }
-            .fail();
-        }
-        Ok(window)
+        Windows::read(plan)?.finish()
     }
 
     fn complete(&self) -> bool {
@@ -271,8 +393,9 @@ impl Window {
         let now = i64::try_from(now).map_err(|_| {
             datafusion::common::DataFusionError::Execution("window statement time".into())
         })?;
-        let context = SimplifyContext::default()
-            .with_query_execution_start_time(Some(chrono::DateTime::from_timestamp_nanos(now)));
+        let context = SimplifyContext::builder()
+            .with_query_execution_start_time(Some(chrono::DateTime::from_timestamp_nanos(now)))
+            .build();
         let simplifier = ExprSimplifier::new(context);
         let scalar = |expression| {
             let Expr::Literal(value, _) = simplifier.simplify(expression)? else {
@@ -305,7 +428,7 @@ impl Window {
     fn events(plan: &LogicalPlan) -> bool {
         matches!(plan, LogicalPlan::TableScan(scan)
         if source_as_provider(&scan.source).is_ok_and(|provider| {
-                provider.as_any().downcast_ref::<SourceProvider>()
+                provider.downcast_ref::<SourceProvider>()
                     .is_some_and(|source| source.origin.durable() == Some("events"))
             }))
     }
@@ -361,7 +484,7 @@ impl Window {
         }
         let bound = match bound {
             Expr::Cast(cast)
-                if cast.data_type == *field.data_type()
+                if cast.field.data_type() == field.data_type()
                     && cast.expr.get_type(schema).ok()?
                         == DataType::Timestamp(TimeUnit::Nanosecond, None) =>
             {
@@ -385,7 +508,7 @@ impl Window {
             None
         };
         if let Some(Expr::ScalarFunction(function)) = bin {
-            if function.func.inner().as_any().is::<DateBinFunc>()
+            if function.func.inner().is::<DateBinFunc>()
                 && (2..=3).contains(&function.args.len())
                 && matches!(function.args[0], Expr::Literal(_, _))
                 && Self::clock(&function.args[1])
@@ -432,7 +555,7 @@ impl Window {
 
     fn clock(expression: &Expr) -> bool {
         matches!(expression, Expr::ScalarFunction(function)
-            if function.func.inner().as_any().is::<NowFunc>())
+            if function.func.inner().is::<NowFunc>())
     }
 
     pub(crate) fn selection(

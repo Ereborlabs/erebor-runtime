@@ -48,7 +48,8 @@ impl Fixture {
             id.into(),
             self.source.clone(),
             sql.into(),
-            definition.clone(),
+            Fixture::control_sql(sql),
+            (definition.clone(), None),
             &self.control,
         )
         .await?)
@@ -913,7 +914,8 @@ async fn manifest_tracks_exact_source() -> TestResult {
         "other-source-manifest".into(),
         other,
         "SELECT * FROM events".into(),
-        definition,
+        Fixture::control_sql("SELECT * FROM events"),
+        (definition, None),
         &fixture.control,
     )
     .await?;
@@ -1000,13 +1002,14 @@ async fn managed_expiry_drains_heads() -> TestResult {
             Arc::clone(&fixture.control),
         )
         .await?;
-    fixture.admit_definition(&grant, &definition)?;
+    let revision = fixture.admit_definition(&grant, &definition)?;
     let job = GraphPublication::admit_expiry(
         Arc::clone(&fixture.query),
         fixture.authority.clone(),
         grant,
         "multi-head-expiry".into(),
         fixture.source.clone(),
+        revision,
         &fixture.control,
     )
     .await?;
@@ -1413,8 +1416,6 @@ async fn benign_stream_keeps_capture() -> TestResult {
         .managed_graph(&grant, &definition, "benign-stream", "SELECT * FROM events")
         .await?;
     let job = fixture.running_graph(job).await?;
-    let projection = &job.graph_owner().ok_or("Running Graph owner")?.projection;
-    let observed = projection.observe_capture();
     let memory = Arc::clone(fixture.query.memory());
     let held = memory.input_reserved();
     let (entry, release) = fixture.hold_facts();
@@ -1454,17 +1455,7 @@ async fn benign_stream_keeps_capture() -> TestResult {
         tokio::time::timeout(std::time::Duration::from_secs(30), worker).await??;
     let receipt = result.ok_or("Managed benign stream ended")??;
     fixture.assert_graph_receipt(&job, &receipt)?;
-    let captured = match observed.try_recv() {
-        Ok(captured) => captured,
-        Err(error) => {
-            let _terminal = stream.cancel_and_join(&fixture.control).await;
-            return Err(error.into());
-        }
-    };
-    assert!(captured.source.upgrade().is_none());
-    drop(captured);
-    assert!(observed.try_recv().is_err());
-    assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
+    let calls = fixture.facts.calls.load(Ordering::SeqCst);
     let before = fixture.query.store().meta()?;
     fixture.authority.set(false);
     assert!(
@@ -1475,7 +1466,7 @@ async fn benign_stream_keeps_capture() -> TestResult {
     );
     assert!(stream.cancel_and_join(&fixture.control).await?.is_none());
     assert_eq!(fixture.query.store().meta()?, before);
-    assert_eq!(projection.projections.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.facts.calls.load(Ordering::SeqCst), calls);
     fixture.assert_graph_receipt(&job, &receipt)?;
     assert_eq!(memory.input_reserved(), held);
     drop(

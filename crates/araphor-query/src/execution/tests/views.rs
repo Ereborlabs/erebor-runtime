@@ -121,7 +121,7 @@ async fn native_views_capture_sources() -> TestResult {
                 },
             },
         };
-        let prepared = session.prepare_definition(&definition).await?;
+        let prepared = session.prepare_definition(&definition, None).await?;
         let input = session
             .execute_definition(&prepared, crate::definition::Invocation::default())
             .await?;

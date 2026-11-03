@@ -476,7 +476,6 @@ mod tests {
         let mut source = SourceData {
             image: None,
             read: 0,
-            owners: Vec::new(),
             key: None,
             origin: SourceOrigin::Durable("events".into()),
             schema: Arc::clone(canonical),

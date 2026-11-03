@@ -463,7 +463,7 @@ async fn replay_fences_trace_revocation() -> TestResult {
     let healthy = session
         .prepare_definition(&Fixture::definition(
             "SELECT CAST(1 AS BIGINT UNSIGNED) AS value",
-        ))
+        ), None)
         .await?;
     assert_eq!(
         values(

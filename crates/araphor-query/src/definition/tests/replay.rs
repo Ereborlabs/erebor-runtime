@@ -13,10 +13,10 @@ async fn replay_uses_journal_cut() -> TestResult {
     fixture.install(&Fixture::bundle())?;
     fixture.event(1)?;
     fixture.event(2)?;
-    let prepared = fixture.prepare(&Fixture::definition()).await?;
+    let mut prepared = fixture.prepare(&Fixture::definition()).await?;
     let control = AnalysisReadControl::default();
     let selection = araphor_data::AnalysisSelectionV1::tenant([1; 16]);
-    let instance = fixture.managed(&prepared, selection.clone())?;
+    let instance = fixture.managed(&mut prepared, selection.clone())?;
     let session = fixture.engine.session(selection, &control, 1)?;
     let captured = session
         .capture_managed(

@@ -7,12 +7,11 @@ impl NotificationRouter {
         effect: &mut Effect<'_>,
         kind: NotificationDeliveryKindV1,
         now: u64,
-        batch: Option<&FindingBatch>,
     ) -> Result<bool> {
         let Some(number) = self.prepare_attempt(state, kind, now)? else {
             return Ok(false);
         };
-        let result = self.attempt_result(state, effect, kind, number, now, batch)?;
+        let result = self.attempt_result(state, effect, kind, number, now)?;
         self.complete_attempt(state, kind, number, result, now)?;
         Ok(true)
     }
@@ -115,7 +114,6 @@ impl NotificationRouter {
         kind: NotificationDeliveryKindV1,
         number: u64,
         now: u64,
-        batch: Option<&FindingBatch>,
     ) -> Result<NotificationSinkResultV1> {
         let pending = state
             .attempts
@@ -134,7 +132,7 @@ impl NotificationRouter {
         if let Some(reason) = self.delivery_failure(state, &route, now) {
             return Ok(NotificationSinkResultV1::Failed { reason });
         }
-        let delivery = self.captured_delivery(state, pending, kind, subject, &route, batch)?;
+        let delivery = self.captured_delivery(state, pending, kind, subject, &route)?;
         if delivery.finding.is_none() && delivery.unconfirmed_concern.is_none() {
             return Ok(NotificationSinkResultV1::Failed {
                 reason: NotificationFailureV1::FindingUnavailable,

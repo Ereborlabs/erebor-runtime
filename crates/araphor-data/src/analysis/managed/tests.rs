@@ -196,7 +196,7 @@ impl Fixture {
             sql,
             vec![pin.clone()],
         )?;
-        store.admit_definition([1; 16], &definition, || Ok(()))?;
+        let revision = store.admit_definition([1; 16], &definition, || Ok(()))?;
         let grant = PackageGrantV1 {
             principal: "fixture".into(),
             revision: 1,
@@ -210,7 +210,7 @@ impl Fixture {
             ""
         };
         let spec = ManagedSpec { destination: crate::ManagedDestination::Selected, tenant: [1; 16], id: "counter".into(), manifest: ManagedManifest {
-            format: 1, planner: "datafusion-53/sql-call-1".into(), definition: definition.digest()?, selected_schema: model.outputs[0].schema.clone(), calls: [(10, 2), (11, 3)].into_iter().map(|(id, increment)| (id, ManagedCall {
+            format: 1, planner: "datafusion-53/sql-call-1".into(), definition: revision, selected_schema: model.outputs[0].schema.clone(), calls: [(10, 2), (11, 3)].into_iter().map(|(id, increment)| (id, ManagedCall {
                 image: pin.clone(), package: image.bundle().root.clone(), export: "count".into(), target: "sql".into(), artifact: None, arguments: vec![format!("source => (SELECT 1::BIGINT UNSIGNED AS value){auxiliary}, increment => {increment}")], dependencies: BTreeSet::new(),
             })).collect(),
         }, definition };
@@ -1072,7 +1072,7 @@ fn managed_sql_checks_authority() -> TestResult {
         sql.into(),
         Vec::new(),
     )?;
-    store.admit_definition([1; 16], &definition, || Ok(()))?;
+    let revision = store.admit_definition([1; 16], &definition, || Ok(()))?;
     let grant = PackageGrantV1 {
         principal: "fixture".into(),
         revision: 1,
@@ -1087,7 +1087,7 @@ fn managed_sql_checks_authority() -> TestResult {
         manifest: ManagedManifest {
             format: 1,
             planner: "datafusion-53/sql-call-1".into(),
-            definition: definition.digest()?,
+            definition: revision,
             calls: BTreeMap::new(),
             selected_schema: sdk::Schema::new(vec![sdk::Field::new(
                 "value",
@@ -1619,7 +1619,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
         sql.into(),
         Vec::new(),
     )?;
-    store.admit_definition([1; 16], &definition, || Ok(()))?;
+    let revision = store.admit_definition([1; 16], &definition, || Ok(()))?;
     let grant = PackageGrantV1 {
         principal: "fixture".into(),
         revision: 1,
@@ -1660,7 +1660,7 @@ fn managed_native_selected_roundtrip() -> TestResult {
             manifest: ManagedManifest {
                 format: 1,
                 planner: "datafusion-53/sql-call-1".into(),
-                definition: definition.digest()?,
+                definition: revision,
                 calls: BTreeMap::new(),
                 selected_schema: batch.schema_ref().as_ref().clone(),
             },

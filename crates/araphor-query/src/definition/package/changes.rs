@@ -217,7 +217,7 @@ impl Packages {
         })?;
         let mut tables = self.sources.clone();
         for table in tables.values_mut() {
-            if let Some(source) = table.as_any().downcast_ref::<SourceProvider>() {
+            if let Some(source) = table.downcast_ref::<SourceProvider>() {
                 if matches!(&source.origin, SourceOrigin::Durable(_)) {
                     *table = source.image(SourceImage::After).context(SqlSnafu)?;
                 }

@@ -1128,7 +1128,7 @@ async fn versions_capture_joined_state() -> TestResult {
         )?),
     )?;
     let prepared = session
-        .prepare_definition(&Fixture::definition(sql))
+        .prepare_definition(&Fixture::definition(sql), None)
         .await?;
     fixture
         .query
@@ -1147,7 +1147,7 @@ async fn versions_capture_joined_state() -> TestResult {
     definition.description = "Retain the same program and state.".into();
     let definition = instance
         .session
-        .prepare_definition(&definition)
+        .prepare_definition(&definition, None)
         .await?
         .resolved()
         .clone();

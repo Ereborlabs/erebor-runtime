@@ -1042,6 +1042,7 @@ mod tests {
             commit_revision: u64::MAX,
         };
         let mut coverage = AnalysisSourceSnapshotV1 {
+            commit_revision: gap.commit_revision,
             receipt: AnalysisSourceReceiptV1 {
                 identity: EvidenceIntakeIdentityV1 {
                     tenant_id: [1; 16],

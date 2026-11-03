@@ -37,13 +37,13 @@ impl Fixture {
                 sql.into(),
                 Vec::new(),
             )?;
-            spec.manifest.definition = spec.definition.digest()?;
             spec.manifest.calls.clear();
         }
         spec.destination = destination;
         let mut grant = self.instance.grant.clone();
         grant.selection = AnalysisSelectionV1::tenant(spec.tenant);
-        store.admit_definition(spec.tenant, &spec.definition, || Ok(()))?;
+        spec.manifest.definition =
+            store.admit_definition(spec.tenant, &spec.definition, || Ok(()))?;
         Ok(store.admit_managed(&spec, &grant, || Ok(()))?)
     }
 }
@@ -56,6 +56,11 @@ fn graph(
         source: source.clone(),
         events_sql: if operation == ManagedGraphOperation::Evaluate {
             "SELECT * FROM events".into()
+        } else {
+            String::new()
+        },
+        control_sql: if operation == ManagedGraphOperation::Evaluate {
+            "SELECT * FROM graph_state".into()
         } else {
             String::new()
         },

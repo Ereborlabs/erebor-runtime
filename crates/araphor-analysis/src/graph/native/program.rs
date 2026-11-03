@@ -1,6 +1,46 @@
 use super::*;
 
 impl crate::GraphProgram {
+    pub(crate) async fn admit(
+        &self,
+        authority: Arc<dyn PackageAuthorization>,
+        id: String,
+        source: araphor_data::EvidenceIntakeIdentityV1,
+        revision: u64,
+        control: &araphor_data::AnalysisReadControl,
+    ) -> Result<Arc<crate::Instance>> {
+        let destination = araphor_data::ManagedDestination::Graph {
+            source,
+            events_sql: self.events_sql.clone(),
+            control_sql: self.control_sql.clone(),
+            calls: self.publication.calls.keys().copied().collect(),
+            operation: araphor_data::ManagedGraphOperation::Evaluate,
+        };
+        let session = self.publication.session.operation_at(
+            destination.selection(&self.grant.selection)?,
+            control,
+            0,
+        )?;
+        let prepared = self.publication.prepared.clone();
+        let query = Arc::clone(session.engine());
+        let read = Arc::new(control.within(self.grant.remaining()?)?);
+        let stage = Arc::clone(&read);
+        let prepared = araphor_query::execution::Engine::blocking(read, (), move || {
+            prepared.bind_revision(&query, revision, &stage)
+        })
+        .await?;
+        crate::Instance::admit_graph(
+            session,
+            authority,
+            self.grant.clone(),
+            id,
+            prepared,
+            destination,
+            Arc::clone(&self.publication),
+        )
+        .await
+    }
+
     pub fn images() -> Vec<araphor_data::PackageBundleV1> {
         [
             (
@@ -45,25 +85,28 @@ impl crate::GraphProgram {
         authority: Arc<dyn PackageAuthorization>,
         grant: PackageGrantV1,
         events_sql: String,
+        control_sql: String,
         definition: Definition,
         facts: Arc<dyn GraphFacts>,
     ) -> Result<Self> {
-        let events = session.engine().prepare(&events_sql, Vec::new()).await?.0;
-        let feedback = araphor_query::planner::Planner::reads_table(&events, "graph_manifest")?;
-        let publication = GraphPublication::prepare_on(
-            session,
-            authority,
-            grant.clone(),
-            events,
-            feedback,
-            DefinitionRef::Fresh(&definition),
-            facts,
-        )
-        .await?;
+        let publication = Arc::new(
+            GraphPublication::prepare_program(
+                session,
+                authority,
+                grant.clone(),
+                &events_sql,
+                &control_sql,
+                DefinitionRef::Fresh(&definition),
+                facts,
+            )
+            .await?,
+        );
         Ok(Self {
             grant,
             definition: publication.prepared.resolved().clone(),
             events_sql,
+            control_sql,
+            publication,
         })
     }
 }

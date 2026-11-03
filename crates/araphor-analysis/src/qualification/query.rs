@@ -48,6 +48,7 @@ impl Qualification {
                 Ident::with_quote('"', &fixture.export),
             ]),
             args,
+            with_ordinality: false,
             alias: None,
         };
         Ok(Definition {

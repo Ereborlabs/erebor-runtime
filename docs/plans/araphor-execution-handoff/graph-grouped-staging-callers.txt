@@ -1,0 +1,4 @@
+Overlay audit: 1611 Rust files.
+{'Contributions::apply(': 23, 'Self::metadata_members(': 2, 'UnitBatch::new(': 8, 'Self::apply_units(': 1, 'GraphRows::apply_units(': 2, 'GraphRows::metadata_members(': 2}
+All signatures match; all 10 primary before copies match; dry apply passes.
+No Cargo, test, or elapsed run was performed.

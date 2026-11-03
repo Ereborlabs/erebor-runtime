@@ -157,7 +157,12 @@ impl AnalysisStore {
         if input.attempt.1.spec.destination != ManagedDestination::Selected {
             return Err(Code::Invalid.error("managed selected destination"));
         }
-        self.commit_managed_projection(input, |_, _, _, _, _| Ok((Vec::new(), None)), check)
+        self.commit_managed_projection(
+            input,
+            |_, _, _, _, _| Ok((Vec::new(), None, Default::default())),
+            check,
+        )
+        .map(|(receipt, _)| receipt)
     }
 
     pub(in crate::analysis) fn commit_managed_projection(
@@ -169,9 +174,14 @@ impl AnalysisStore {
             &ManagedReceipt,
             (&[crate::AnalysisWitnessV1], &[u64]),
             &mut VerifiedPackages,
-        ) -> Result<(Vec<&'static str>, Option<PackageResultRefV1>)>,
+        ) -> Result<(
+            Vec<&'static str>,
+            Option<PackageResultRefV1>,
+            BTreeMap<u64, (u64, u64)>,
+        )>,
         check: impl FnOnce() -> Result<()>,
-    ) -> Result<ManagedReceipt> {
+    ) -> Result<(ManagedReceipt, u64)> {
+        let started = std::time::Instant::now();
         let evidence = match &input.attempt.5 {
             Some(source) => source.freeze_evidence(
                 &input.attempt.0.capture,
@@ -182,7 +192,9 @@ impl AnalysisStore {
                 contexts: input.attempt.0.capture.contexts.clone(),
             },
         };
+        let frozen = std::time::Instant::now();
         let mut writer = self.writer()?;
+        let acquired = std::time::Instant::now();
         let transaction = writer
             .get_mut()?
             .transaction()
@@ -190,7 +202,7 @@ impl AnalysisStore {
                 operation: "begin managed publication",
             })?;
         let revision = self.package_next(&transaction)?;
-        let (receipt, projected, _) =
+        let (receipt, projected, _, (pin_rows, call_pins, root_cursors)) =
             self.managed_commit_rows(&transaction, input, revision, &evidence, project)?;
         let retained = Self::retain_managed(input, &receipt);
         let source_proof = input.attempt.5.as_ref().map(|frame| {
@@ -215,7 +227,9 @@ impl AnalysisStore {
         check()?;
         #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("managed.before");
+        let prepared = std::time::Instant::now();
         self.commit_metadata(transaction, "commit complete managed step")?;
+        let committed = std::time::Instant::now();
         if let Some((frame, proof)) = source_proof {
             frame.commit_proof(proof);
         }
@@ -228,7 +242,41 @@ impl AnalysisStore {
         if input.attempt.switches_version() {
             self.activations.send_replace(revision);
         }
-        Ok(receipt)
+        let published = std::time::Instant::now();
+        erebor_telemetry::debug!(
+            stage = "managed_commit_timing", instance_id = %input.attempt.instance().spec.id,
+            cut_revision = input.attempt.captured_revision(), publication_revision = revision,
+            freeze_s = frozen.duration_since(started).as_secs_f64(),
+            writer_acquire_s = acquired.duration_since(frozen).as_secs_f64(),
+            transaction_work_s = prepared.duration_since(acquired).as_secs_f64(),
+            commit_s = committed.duration_since(prepared).as_secs_f64(),
+            postcommit_s = published.duration_since(committed).as_secs_f64(),
+            elapsed_s = published.duration_since(started).as_secs_f64(),
+            "Managed commit timing completed"
+        );
+        for returned in input.returns {
+            let roots = root_cursors.get(&returned.call).copied();
+            let rows = |name: &str| {
+                returned
+                    .evaluation
+                    .inputs
+                    .iter()
+                    .find(|input| input.data.name == name)
+                    .map_or(0, |input| input.data.rows() as u64)
+            };
+            erebor_telemetry::debug!(stage="call_commit",instance_id=%input.attempt.instance().spec.id,
+                call_id=returned.call,cut_revision=input.attempt.captured_revision(),publication_revision=revision,
+                result_id=%receipt.results.get(&returned.call).map_or("",|result|result.result_id.as_str()),
+                base_result_id=%returned.changes.and_then(|changes|changes.base.as_ref()).map_or("",|base|base.result_id.as_str()),
+                base_revision=returned.changes.and_then(|changes|changes.base.as_ref()).map_or(0,|base|base.commit_revision),
+                reset=returned.changes.is_some_and(|changes|changes.base.is_none()),
+                unit_rows=rows("units"),removal_rows=rows("unit_removals"),record_rows=rows("records"),fact_rows=rows("facts"),
+                output_rows=returned.output.datasets.iter().map(|data|data.rows() as u64).sum::<u64>(),
+                pin_rows=call_pins.get(&returned.call).copied().unwrap_or(0),
+                first_root_cursor=roots.map(|bounds|bounds.0),last_root_cursor=roots.map(|bounds|bounds.1),
+                "Package call commit completed");
+        }
+        Ok((receipt, pin_rows))
     }
 
     fn managed_commit_rows(
@@ -243,8 +291,17 @@ impl AnalysisStore {
             &ManagedReceipt,
             (&[crate::AnalysisWitnessV1], &[u64]),
             &mut VerifiedPackages,
-        ) -> Result<(Vec<&'static str>, Option<PackageResultRefV1>)>,
-    ) -> Result<(ManagedReceipt, Vec<&'static str>, VerifiedPackages)> {
+        ) -> Result<(
+            Vec<&'static str>,
+            Option<PackageResultRefV1>,
+            BTreeMap<u64, (u64, u64)>,
+        )>,
+    ) -> Result<(
+        ManagedReceipt,
+        Vec<&'static str>,
+        VerifiedPackages,
+        (u64, BTreeMap<u64, u64>, BTreeMap<u64, (u64, u64)>),
+    )> {
         if input.now_utc_ns < input.attempt.request().time_utc_ns {
             return Err(Code::Invalid.error("managed publication time"));
         }
@@ -304,10 +361,15 @@ impl AnalysisStore {
                     })?;
             }
         }
+        let mut pins = 0u64;
+        let mut call_pins = BTreeMap::new();
         for packet in packets {
-            self.insert_managed(transaction, spec, packet, revision, &segments)?;
+            let call = packet.call;
+            let rows = self.insert_managed(transaction, spec, packet, revision, &segments)?;
+            call_pins.insert(call, rows);
+            pins = pins.saturating_add(rows);
         }
-        let (projected, graph) = project(
+        let (projected, graph, root_cursors) = project(
             transaction,
             revision,
             &receipt,
@@ -332,13 +394,13 @@ impl AnalysisStore {
             step,
             revision,
         )?;
-        Self::insert_references(
+        pins = pins.saturating_add(Self::insert_references(
             transaction,
             &receipt.selected.result_id,
             &evidence.witnesses,
             &segments,
             &evidence.contexts,
-        )?;
+        )?);
         transaction
             .execute(
                 "UPDATE managed_instances SET progress = ?, generation = ?, lifecycle = CASE WHEN generation <> ? THEN ? ELSE lifecycle END, failure = NULL WHERE tenant_id = ? AND instance_id = ?",
@@ -351,7 +413,12 @@ impl AnalysisStore {
         transaction.execute("UPDATE managed_attempts SET contract = ?, completed = ? WHERE tenant_id = ? AND instance_id = ? AND attempt_id = ?",
             params![ManagedCodec::encode(&attempt).context(crate::ManagedEncodingSnafu)?, revision, spec.tenant.as_slice(), spec.id, attempt.request.id])
             .context(AnalysisDatabaseSnafu { operation: "complete managed attempt" })?;
-        Ok((receipt, projected, verified))
+        Ok((
+            receipt,
+            projected,
+            verified,
+            (pins, call_pins, root_cursors),
+        ))
     }
 
     pub(super) fn check_managed_claim(&self, attempt: &ManagedAttempt) -> Result<()> {
@@ -502,17 +569,10 @@ impl AnalysisStore {
             {
                 return Err(Code::Invalid.error("managed returned calls"));
             }
-            let id = crate::InputRevision::of(&(
-                spec.tenant,
-                &spec.id,
-                &attempt.request.id,
-                Some(returned.call),
-            ))
-            .context(crate::PackageEncodingSnafu)?;
             ids.insert(
                 returned.call,
                 PackageResultRefV1 {
-                    result_id: format!("managed-{id}"),
+                    result_id: format!("managed-{revision}-call-{}", returned.call),
                     commit_revision: revision,
                 },
             );
@@ -643,9 +703,6 @@ impl AnalysisStore {
             witnesses: evidence.witnesses.clone(),
             contexts: evidence.contexts.clone(),
         };
-        let id =
-            crate::InputRevision::of(&(spec.tenant, &spec.id, &attempt.request.id, None::<u64>))
-                .context(crate::PackageEncodingSnafu)?;
         let receipt = ManagedReceipt {
             frontier: attempt.request.frontier.as_ref().map(|frontier| {
                 let mut frontier = frontier.clone();
@@ -656,7 +713,7 @@ impl AnalysisStore {
             attempt: attempt.request.id.clone(),
             commit_revision: revision,
             selected: PackageResultRefV1 {
-                result_id: format!("managed-{id}"),
+                result_id: format!("managed-{revision}-selected"),
                 commit_revision: revision,
             },
             results: ids,
@@ -672,7 +729,7 @@ impl AnalysisStore {
         packet: Packet,
         revision: u64,
         segments: &[u64],
-    ) -> Result<()> {
+    ) -> Result<u64> {
         transaction.execute("INSERT INTO analysis_results (result_id, tenant_id, processor_id, body, request_meta, commit_revision) VALUES (?, ?, 'managed-package-v1', ?, ?, ?)",
             params![packet.id, spec.tenant.as_slice(), ManagedCodec::encode(&packet.checkpoint).context(crate::ManagedEncodingSnafu)?, ManagedCodec::encode(&packet.record).context(crate::ManagedEncodingSnafu)?, revision])
             .context(AnalysisDatabaseSnafu { operation: "insert complete managed result" })?;
@@ -682,7 +739,7 @@ impl AnalysisStore {
             &packet.id,
             &packet.record.dependencies,
         )?;
-        Self::insert_references(
+        let pins = Self::insert_references(
             transaction,
             &packet.id,
             &packet.record.witnesses,
@@ -692,7 +749,7 @@ impl AnalysisStore {
         transaction.execute("UPDATE managed_calls SET state_revision = ?, result_id = ? WHERE tenant_id = ? AND instance_id = ? AND call_id = ?",
             params![revision, packet.id, spec.tenant.as_slice(), spec.id, packet.call])
             .context(AnalysisDatabaseSnafu { operation: "advance independent managed call" })?;
-        Ok(())
+        Ok(pins)
     }
 
     fn insert_managed_step(

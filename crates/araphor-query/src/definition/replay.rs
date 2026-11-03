@@ -9,7 +9,7 @@ use futures_util::future::{BoxFuture, FutureExt};
 impl PreparedDefinition {
     fn replay_call(&self, id: u64) -> Result<PackageCall> {
         let mut selected = None;
-        PackageCall::any(&self.plan, &mut |call| {
+        PackageCall::any(&self.plan, &mut |_, call| {
             if call.id() == id {
                 selected = Some(call.clone());
                 Ok(true)
@@ -37,7 +37,7 @@ impl Session {
         let store = Arc::clone(self.engine().store());
         let instance = instance.clone();
         let expected = expected.clone();
-        let control = Arc::clone(self.control());
+        let control = Arc::new(self.control().operation()?);
         Engine::blocking(Arc::clone(&control), self.token()?, move || {
             let (reference, actual, _) =
                 store.managed_reference(&instance, &expected.result_id, now, &control)?;
@@ -60,6 +60,7 @@ impl Session {
         if let Some(prepared) = self.definition.as_ref().filter(|prepared| {
             prepared.admission.tenant == reference.instance().spec.tenant
                 && prepared.resolved() == &reference.instance().spec.definition
+                && prepared.revision() == Some(reference.instance().spec.manifest.definition)
         }) {
             for pin in &prepared.resolved().images {
                 if !prepared
@@ -74,8 +75,12 @@ impl Session {
             PackageCall::check_admission(&prepared.plan).context(SqlSnafu)?;
             return Ok(prepared.as_ref().clone());
         }
-        self.prepare_resolved(&reference.instance().spec.definition)
-            .await
+        self.prepare_resolved(
+            &reference.instance().spec.definition,
+            Some(reference.instance().spec.manifest.definition),
+            None,
+        )
+        .await
     }
 
     fn seed_before<'a>(
@@ -84,7 +89,6 @@ impl Session {
         before: u64,
     ) -> BoxFuture<'a, Result<()>> {
         async move {
-            use datafusion::common::tree_node::TreeNode;
             let reference = self
                 .reference
                 .as_ref()
@@ -97,31 +101,30 @@ impl Session {
                 .as_ref()
                 .ok_or_else(|| PackageErrorCodeV1::Invalid.error("replay call context"))?;
             let mut needed = BTreeMap::new();
-            physical
-                .apply(|plan| {
-                    if let Some(plan) = plan.as_any().downcast_ref::<physical::PackageExec>() {
-                        let call = plan.logical_call();
-                        if before == call.id() {
+            crate::sources::PortExec::apply(physical, &mut |plan| {
+                if let Some(plan) = plan.downcast_ref::<physical::PackageExec>() {
+                    let call = plan.logical_call();
+                    if before == call.id() {
+                        return Err(datafusion::common::DataFusionError::Execution(
+                            "the historical input contains its package call".into(),
+                        ));
+                    }
+                    if owner.cached(call)? {
+                        return Ok(TreeNodeRecursion::Jump);
+                    }
+                    if let Some(saved) = receipt.results.get(&call.id()) {
+                        if saved.commit_revision != receipt.commit_revision {
                             return Err(datafusion::common::DataFusionError::Execution(
-                                "the historical input contains its package call".into(),
+                                "the historical child publication differs".into(),
                             ));
                         }
-                        if owner.cached(call)? {
-                            return Ok(TreeNodeRecursion::Jump);
-                        }
-                        if let Some(saved) = receipt.results.get(&call.id()) {
-                            if saved.commit_revision != receipt.commit_revision {
-                                return Err(datafusion::common::DataFusionError::Execution(
-                                    "the historical child publication differs".into(),
-                                ));
-                            }
-                            needed.insert(call.id(), (call.clone(), saved.clone()));
-                            return Ok(TreeNodeRecursion::Jump);
-                        }
+                        needed.insert(call.id(), (call.clone(), saved.clone()));
+                        return Ok(TreeNodeRecursion::Jump);
                     }
-                    Ok(TreeNodeRecursion::Continue)
-                })
-                .context(SqlSnafu)?;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .context(SqlSnafu)?;
             for (id, (call, saved)) in needed {
                 self.control().check()?;
                 let historical = self
@@ -216,7 +219,7 @@ impl Session {
                     .selection(&reference.instance().grant.selection)?,
                 request.time_utc_ns,
             );
-            session.control = Arc::new(self.control().within(None)?);
+            session.control = Arc::new(self.control().operation()?);
             session.reference = Some(reference.clone());
             session.definition = Some(Arc::new(definition));
             session.calls = Some(session.call_context(Invocation {
@@ -226,6 +229,7 @@ impl Session {
                 ..Default::default()
             }));
             let calls = Arc::clone(session.calls.as_ref().ok_or_else(invalid)?);
+            let mut observed = None;
             let result = async {
                 let permit = session.evaluation_permit()?;
                 let mut state = session.state()?;
@@ -266,11 +270,12 @@ impl Session {
                     Arc::clone(session.memory()),
                     None,
                 );
+                observed = Some(Arc::clone(&historical));
                 let old = Arc::clone(&historical);
                 let current = Arc::clone(&source);
                 let saved = reference.clone();
                 Engine::blocking(Arc::clone(session.control()), session.token()?, move || {
-                    old.capture_before(&saved, &current, &requests, bounds)
+                    old.capture_before(&saved, &current, &requests, bounds, id)
                         .context(SqlSnafu)
                 })
                 .await?;
@@ -317,6 +322,9 @@ impl Session {
                 let _cancelled = session.control().cancel();
             }
             calls.finish().await;
+            if let Some(source) = observed {
+                source.report_work();
+            }
             self.control().check()?;
             result
         }
@@ -329,26 +337,24 @@ impl Session {
         physical: &'a Arc<dyn datafusion::physical_plan::ExecutionPlan>,
     ) -> BoxFuture<'a, Result<()>> {
         async move {
-            use datafusion::common::tree_node::TreeNode;
             let mut calls = BTreeMap::new();
-            physical
-                .apply(|plan| {
-                    if let Some(plan) = plan.as_any().downcast_ref::<physical::PackageExec>() {
-                        let call = plan.logical_call();
-                        if self
-                            .calls
-                            .as_ref()
-                            .map(|calls| calls.cached(call))
-                            .transpose()?
-                            .unwrap_or(false)
-                        {
-                            return Ok(TreeNodeRecursion::Jump);
-                        }
-                        calls.entry(call.id()).or_insert_with(|| call.clone());
+            crate::sources::PortExec::apply(physical, &mut |plan| {
+                if let Some(plan) = plan.downcast_ref::<physical::PackageExec>() {
+                    let call = plan.logical_call();
+                    if self
+                        .calls
+                        .as_ref()
+                        .map(|calls| calls.cached(call))
+                        .transpose()?
+                        .unwrap_or(false)
+                    {
+                        return Ok(TreeNodeRecursion::Jump);
                     }
-                    Ok(TreeNodeRecursion::Continue)
-                })
-                .context(SqlSnafu)?;
+                    calls.entry(call.id()).or_insert_with(|| call.clone());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .context(SqlSnafu)?;
             if let Some(reference) = &self.reference {
                 for (&id, call) in &calls {
                     let model = call
@@ -366,7 +372,7 @@ impl Session {
                     }
                     let store = Arc::clone(self.engine().store());
                     let reference = reference.clone();
-                    let control = Arc::clone(self.control());
+                    let control = Arc::new(self.control().operation()?);
                     let changes =
                         Engine::blocking(Arc::clone(&control), self.token()?, move || {
                             store
@@ -398,9 +404,10 @@ impl Session {
                     .model()
                     .ok_or_else(|| PackageErrorCodeV1::Missing.error("prior package model"))?;
                 if model.change_inputs.is_some()
-                    && view
-                        .as_ref()
-                        .is_none_or(|view| view.version() != prior.revision)
+                    && match &view {
+                        Some(view) => !view.has_call(id, prior).context(SqlSnafu)?,
+                        None => true,
+                    }
                 {
                     continue;
                 }
@@ -582,7 +589,7 @@ impl Session {
                         let base = if model.change_inputs.is_some() {
                             let store = Arc::clone(self.engine().store());
                             let owned = Arc::clone(&current);
-                            let control = Arc::clone(self.control());
+                            let control = Arc::new(self.control().operation()?);
                             Engine::blocking(Arc::clone(&control), self.token()?, move || {
                                 store
                                     .managed_changes(&owned, id, &control)
@@ -715,12 +722,14 @@ impl Session {
                 .selection(&reference.instance().grant.selection)?,
             reference.request().time_utc_ns,
         );
-        session.control = Arc::new(self.control().within(None)?);
+        session.control = Arc::new(self.control().operation()?);
         session.reference = Some(reference.clone());
         session.managed = None;
         session.source_index = None;
         let replay = PreparedDefinition {
             plan,
+            physical: None,
+            revision: definition.revision,
             admission: Arc::clone(&definition.admission),
         };
         let request = reference.request();

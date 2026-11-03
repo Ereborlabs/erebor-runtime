@@ -30,6 +30,11 @@ CREATE TABLE graph_producer_versions (
     base_result_id VARCHAR, subject_count UBIGINT NOT NULL, edge_count UBIGINT NOT NULL,
     finding_count UBIGINT NOT NULL, state_count UBIGINT NOT NULL,
     selected_state_ref UBIGINT,
+    evidence_count UBIGINT NOT NULL DEFAULT 0, position_count UBIGINT NOT NULL DEFAULT 0,
+    fact_count UBIGINT NOT NULL DEFAULT 0,
+    restricted_count UBIGINT,
+    captured_revision UBIGINT,
+    CHECK (captured_revision IS NULL OR (captured_revision > 0 AND captured_revision < commit_revision)),
     CHECK (selected_state_ref IS NULL OR selected_state_ref > 0),
     UNIQUE (scope_id, commit_revision)
 );
@@ -43,6 +48,10 @@ CREATE TABLE graph_producer_members (
     CHECK (member_kind IN (0,1,2,3,4,6,7,8,9,10)), CHECK (valid_to IS NULL OR valid_to > valid_from)
 );
 CREATE INDEX graph_producer_lookup ON graph_producer_members (scope_id, member_kind, member_key);
+CREATE INDEX graph_producer_units ON graph_producer_members (unit_ref);
+CREATE INDEX graph_producer_keys ON graph_producer_members (member_key);
+CREATE INDEX graph_producer_opened ON graph_producer_members (valid_from);
+CREATE INDEX graph_producer_closed ON graph_producer_members (valid_to);
 CREATE TABLE graph_versions (
     result_id VARCHAR PRIMARY KEY, commit_revision UBIGINT NOT NULL,
     metadata_result_id VARCHAR NOT NULL, derive_branches BOOLEAN NOT NULL,

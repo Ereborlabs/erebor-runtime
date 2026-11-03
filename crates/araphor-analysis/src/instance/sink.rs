@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -135,10 +134,6 @@ impl DisplayAs for Publication {
 
 #[async_trait]
 impl TableProvider for Publication {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> sdk::arrow_schema::SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -185,10 +180,6 @@ impl TableProvider for Publication {
 
 #[async_trait]
 impl DataSink for Publication {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &sdk::arrow_schema::SchemaRef {
         &self.schema
     }
@@ -313,6 +304,7 @@ impl DataSink for Publication {
             _ => &[PackageActionV1::Run],
         };
         let caller = mode.caller().map(|(grant, action)| (grant.clone(), action));
+        acknowledgement.prepare_ack(context)?;
         let published = receipt
             .blocking(context, reservation, move |control| {
                 let calls = captured.calls();
@@ -455,7 +447,6 @@ impl DataSink for Publication {
                                 }
                             }
                         };
-                        let revision = receipt.commit_revision;
                         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
                         if let Some(retained) = &state.retained {
                             if retained
@@ -472,14 +463,19 @@ impl DataSink for Publication {
                             admission.instance.progress = receipt.commit_revision;
                             admission.completed = receipt.commit_revision;
                         }
-                        state.receipt = Some(receipt);
-                        Ok((revision, completed))
+                        state.receipt = Some(receipt.clone());
+                        Ok((receipt, completed))
                     },
                 )
                 .map_err(araphor_query::Error::from)
             })
             .await?;
-        acknowledgement.acknowledge(context, published.0, published.1)?;
+        acknowledgement.acknowledge(
+            context,
+            published.0.commit_revision,
+            published.1,
+            Some(&published.0),
+        )?;
         Ok(rows as u64)
     }
 }

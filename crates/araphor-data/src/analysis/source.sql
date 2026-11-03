@@ -11,6 +11,6 @@ CREATE TABLE source_versions (
 );
 CREATE VIEW source_receipts AS
     SELECT stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor,
-        coverage_revision, retained_floor FROM source_versions
+        coverage_revision, retained_floor, commit_revision FROM source_versions
     QUALIFY ROW_NUMBER() OVER (
         PARTITION BY stream_key ORDER BY commit_revision DESC) = 1;

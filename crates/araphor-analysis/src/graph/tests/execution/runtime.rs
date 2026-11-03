@@ -147,18 +147,39 @@ impl Fixture {
                 &input.data.batches,
             )?;
         }
-        for (table, port) in [("graph_records", "records"), ("graph_facts", "facts")] {
-            let input = evaluation.input(port)?;
-            session.register(table, input.data.batches[0].schema(), &input.data.batches)?;
+        let records = &evaluation.input("records")?.data;
+        session.register(
+            "graph_records",
+            records.batches[0].schema(),
+            &records.batches,
+        )?;
+        let values = algorithm::Fact::decode(&evaluation.input("facts")?.data)?;
+        let facts =
+            algorithm::Fact::encode_source(&values, &algorithm::Observation::decode(records)?)?;
+        session.register("graph_facts", facts.batches[0].schema(), &facts.batches)?;
+        for (name, data) in [
+            ("graph_dirty", &evaluation.input("affected")?.data),
+            ("graph_window", &evaluation.input("window")?.data),
+        ] {
+            session.register(name, data.batches[0].schema(), &data.batches)?;
         }
         let settings = algorithm::Manifest::encode(&[algorithm::Manifest {
             window_ns: GRAPH_WINDOW_NS,
         }])?;
-        session.register(
-            "graph_settings",
-            settings.batches[0].schema(),
-            &settings.batches,
-        )?;
+        let mut fields = settings.batches[0].schema().fields().to_vec();
+        fields.push(Arc::new(sdk::Field::new(
+            "restricted",
+            sdk::DataType::Boolean,
+            false,
+        )));
+        let mut columns = settings.batches[0].columns().to_vec();
+        columns.push(Arc::new(sdk::arrow_array::BooleanArray::from(vec![values
+            .iter()
+            .any(|fact| {
+                fact.sensitivity == araphor_data::ContextSensitivityV1::HostRestricted
+            })])));
+        let settings = sdk::RecordBatch::try_new(Arc::new(sdk::Schema::new(fields)), columns)?;
+        session.register("graph_settings", settings.schema(), &[settings])?;
         let definition = Definition {
             name: "graph-adapter".into(),
             description: String::new(),
@@ -173,9 +194,9 @@ impl Fixture {
                 },
             },
         };
-        let prepared = session.prepare_definition(&definition).await?;
+        let prepared = session.prepare_definition(&definition, None).await?;
         let mut call = None;
-        PackageCall::any(&prepared.plan, &mut |node| {
+        PackageCall::any(prepared.plan(), &mut |_, node| {
             call = Some(node.clone());
             Ok(true)
         })?;

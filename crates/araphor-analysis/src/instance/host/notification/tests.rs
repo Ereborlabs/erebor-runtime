@@ -375,7 +375,7 @@ async fn notification_guard_keeps_pending() -> TestResult {
         let session = instance.session.operation(&control, now)?;
         let (snapshot, stream) = session
             .stream(
-                &instance.prepared.plan,
+                instance.prepared.plan(),
                 instance.prepared.sources(),
                 araphor_query::execution::Read::Snapshot,
             )
@@ -830,21 +830,34 @@ async fn notification_target_is_sealed() -> TestResult {
         .is_err());
     let mut narrowed = fixture.grant.clone();
     narrowed.selection.nodes.push("node".into());
-    assert!(
-        Instance::validate_notification(&instance.prepared, &narrowed, "notifications").is_err()
-    );
-    assert!(
-        Instance::validate_notification(&instance.prepared, &fixture.grant, "another-job").is_err()
-    );
-    let mut altered = instance.prepared.clone();
-    altered.plan = LogicalPlanBuilder::from(altered.plan)
+    assert!(Instance::validate_notification(
+        instance.prepared.resolved(),
+        instance.prepared.plan(),
+        &narrowed,
+        "notifications"
+    )
+    .is_err());
+    assert!(Instance::validate_notification(
+        instance.prepared.resolved(),
+        instance.prepared.plan(),
+        &fixture.grant,
+        "another-job"
+    )
+    .is_err());
+    let altered = LogicalPlanBuilder::from(instance.prepared.plan().clone())
         .project([datafusion::logical_expr::lit(1).alias("finding_id")])?
         .build()?;
-    assert!(Instance::validate_notification(&altered, &fixture.grant, "notifications").is_err());
+    assert!(Instance::validate_notification(
+        instance.prepared.resolved(),
+        &altered,
+        &fixture.grant,
+        "notifications"
+    )
+    .is_err());
     let notifications = host.notifications.as_ref().ok_or("notification owner")?;
     let target = sink::Publication {
         owner: Arc::clone(&instance),
-        schema: Arc::clone(instance.prepared.plan.schema().inner()),
+        schema: Arc::clone(instance.prepared.plan().schema().inner()),
         mode: sink::Mode::Notification {
             router: Arc::clone(&notifications.router),
             sink: Arc::clone(&notifications.sink),
@@ -902,8 +915,7 @@ async fn notification_target_is_sealed() -> TestResult {
     }
     fixture.install(&crate::instance::tests::bundle("sql")?)?;
     let caller = fixture.admit("foreign-call", r#"SELECT * FROM "runtime-fixture"."1".accumulate(input => (SELECT CAST(11 AS BIGINT UNSIGNED) AS value))"#).await?;
-    let mut forged = instance.prepared.clone();
-    forged.plan = LogicalPlanBuilder::from(caller.prepared.plan.clone())
+    let forged = LogicalPlanBuilder::from(caller.prepared.plan().clone())
         .project([
             datafusion::logical_expr::lit(datafusion::scalar::ScalarValue::Utf8(None))
                 .alias("finding_id"),
@@ -913,7 +925,13 @@ async fn notification_target_is_sealed() -> TestResult {
                 .alias("notification_id"),
         ])?
         .build()?;
-    assert!(Instance::validate_notification(&forged, &fixture.grant, "notifications").is_err());
+    assert!(Instance::validate_notification(
+        instance.prepared.resolved(),
+        &forged,
+        &fixture.grant,
+        "notifications"
+    )
+    .is_err());
     assert_eq!(
         fixture
             .query

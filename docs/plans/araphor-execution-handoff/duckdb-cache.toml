@@ -1,0 +1,6 @@
+[target.x86_64-unknown-linux-gnu.duckdb]
+rustc-link-lib = ["static=duckdb", "stdc++"]
+rustc-link-search = ["native=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/build/libduckdb-sys-87748e1592af7525/out"]
+rustc-env = { OUT_DIR = "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/build/libduckdb-sys-87748e1592af7525/out" }
+include = "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/build/libduckdb-sys-87748e1592af7525/out/duckdb/src/include"
+lib_dir = "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/build/libduckdb-sys-87748e1592af7525/out"

@@ -111,7 +111,7 @@ impl AnalysisStore {
         self.read_snapshot(|reader| {
             let mut statement = reader
                 .prepare(
-                    "SELECT x.processor_id, x.request_meta
+                    "SELECT x.processor_id, x.request_meta, x.result_id, x.commit_revision
                  FROM analysis_results x
                  WHERE x.tenant_id = ? AND x.result_id IN (SELECT unnest(CAST(? AS VARCHAR[])))",
                 )
@@ -120,7 +120,14 @@ impl AnalysisStore {
                 })?;
             let rows = statement
                 .query_map(params![tenant.as_slice(), encoded], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        PackageResultRefV1 {
+                            result_id: row.get(2)?,
+                            commit_revision: row.get(3)?,
+                        },
+                    ))
                 })
                 .context(AnalysisDatabaseSnafu {
                     operation: "read package evidence manifests",
@@ -128,11 +135,17 @@ impl AnalysisStore {
             let mut witnesses = std::collections::BTreeMap::new();
             let mut contexts = Vec::new();
             for row in rows {
-                let (processor, metadata) = row.context(AnalysisDatabaseSnafu {
+                let (processor, metadata, reference) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode package evidence manifest",
                 })?;
-                let (source_witnesses, source_contexts) =
-                    Self::decode_evidence(&processor, &metadata)?;
+                let (source_witnesses, source_contexts) = Self::decode_evidence(
+                    reader,
+                    &reference,
+                    &processor,
+                    &metadata,
+                    None,
+                    &mut |_, _| Ok(()),
+                )?;
                 for witness in source_witnesses {
                     let prior = witnesses
                         .entry((witness.identity.clone(), witness.cursor))
@@ -152,19 +165,76 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn decode_evidence(
+        reader: &Connection,
+        reference: &PackageResultRefV1,
         processor: &str,
         metadata: &[u8],
+        control: Option<&crate::AnalysisReadControl>,
+        charge: &mut impl FnMut(usize, usize) -> Result<()>,
     ) -> Result<PackageEvidence> {
         if matches!(processor, "managed-package-v1" | "managed-definition-v1") {
             Self::managed_evidence(processor, metadata)
         } else if processor == crate::GRAPH_PROCESSOR {
             let request = crate::analysis::graph::GraphRequestMeta::decode(metadata)?;
-            Ok((request.witnesses, request.context_refs))
+            crate::analysis::graph_rows::GraphRows::provenance(
+                reader, reference, request, control, charge,
+            )
         } else {
             crate::AnalysisResultCommitV1::request_refs(metadata).context(JsonSnafu {
                 path: "<native-evidence>",
             })
         }
+    }
+
+    pub(in crate::analysis) fn check_witness_ref(
+        reader: &Connection,
+        id: &str,
+        witness: &AnalysisWitnessV1,
+    ) -> Result<()> {
+        let native: Option<(u64, bool)> = reader
+            .query_row(
+                "SELECT e.expires_utc_ns, s.segment_id IS NOT NULL FROM evidence_refs e
+         LEFT JOIN segments s ON s.segment_id = e.segment_id AND s.state = 'Live'
+            AND s.tenant_id = e.tenant_id AND s.stream_key = e.stream_key
+            AND e.durable_cursor BETWEEN s.first_cursor AND s.last_cursor
+         WHERE e.ref_id = ? AND e.tenant_id = ? AND e.stream_key = ? AND e.durable_cursor = ?",
+                params![
+                    id,
+                    witness.identity.tenant().as_slice(),
+                    witness.identity.key(),
+                    witness.cursor
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read canonical source witness",
+            })?;
+        match native {
+            Some((expiry, true)) if expiry == witness.expires_utc_ns => {}
+            Some(_) => {
+                return Err(
+                    crate::PackageErrorCodeV1::Invalid.error("managed source witness binding")
+                )
+            }
+            None => {
+                let expired: bool = reader
+                    .query_row(
+                        "SELECT ? <= epoch_ns(current_timestamp)::UBIGINT",
+                        params![witness.expires_utc_ns],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "check expired source witness",
+                    })?;
+                if !expired {
+                    return Err(
+                        crate::PackageErrorCodeV1::Missing.error("managed source witness binding")
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(in crate::analysis) fn resolve_witnesses(
@@ -200,7 +270,7 @@ impl AnalysisStore {
                 if ranges.len() != 1 {
                     return self.reject("the result witness is not retained exactly once");
                 }
-                cached = ranges[0].read(&self.root)?;
+                cached = ranges[0].read(&self.root)?.0;
                 segment = ranges[0].segment_id;
                 source = Some(&witness.identity);
             }
@@ -218,7 +288,8 @@ impl AnalysisStore {
         witnesses: &[AnalysisWitnessV1],
         segments: &[u64],
         contexts: &[AnalysisContextRefV1],
-    ) -> Result<()> {
+    ) -> Result<u64> {
+        let mut rows = 0u64;
         if !witnesses.is_empty() && !segments.is_empty() {
             let mut appender =
                 transaction
@@ -239,6 +310,7 @@ impl AnalysisStore {
                     .context(AnalysisDatabaseSnafu {
                         operation: "insert exact witness",
                     })?;
+                rows += 1;
             }
             appender.flush().context(AnalysisDatabaseSnafu {
                 operation: "flush exact witnesses",
@@ -265,12 +337,13 @@ impl AnalysisStore {
                     .context(AnalysisDatabaseSnafu {
                         operation: "insert exact result context",
                     })?;
+                rows += 1;
             }
             appender.flush().context(AnalysisDatabaseSnafu {
                 operation: "flush exact result context",
             })?;
         }
-        Ok(())
+        Ok(rows)
     }
 }
 

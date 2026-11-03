@@ -10,7 +10,9 @@ use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::planner::{
     ContextProvider, ExprPlanner, RelationPlanner, TypePlanner,
 };
-use datafusion::logical_expr::{AggregateUDF, Expr, ScalarUDF, TableSource, WindowUDF};
+use datafusion::logical_expr::{
+    AggregateUDF, Expr, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
+};
 
 pub(super) struct Scope<'a> {
     pub provider: &'a dyn ContextProvider,
@@ -40,16 +42,13 @@ impl ContextProvider for Scope<'_> {
                     return Ok(provider_as_source(Arc::clone(table)));
                 }
                 if let Some(table) = self.tables.get(name.table()) {
-                    if let Some(source) = table
-                        .as_any()
-                        .downcast_ref::<crate::sources::SourceProvider>()
-                    {
+                    if let Some(source) = table.downcast_ref::<crate::sources::SourceProvider>() {
                         return Ok(provider_as_source(source.image(image)?));
                     }
-                    if let Some(source) =
-                        table.as_any().downcast_ref::<crate::sources::SourcePort>()
-                    {
-                        return Ok(provider_as_source(source.image(image)));
+                    if let Some(plan) = table.get_logical_plan() {
+                        return Ok(provider_as_source(Arc::new(
+                            datafusion::catalog::view::ViewTable::new(image.plan(&plan)?, None),
+                        )));
                     }
                 }
             }
@@ -92,6 +91,9 @@ impl ContextProvider for Scope<'_> {
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
         self.provider.get_function_meta(name)
     }
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<HigherOrderUDF>> {
+        self.provider.get_higher_order_meta(name)
+    }
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.provider.get_aggregate_meta(name)
     }
@@ -109,6 +111,9 @@ impl ContextProvider for Scope<'_> {
     }
     fn udf_names(&self) -> Vec<String> {
         self.provider.udf_names()
+    }
+    fn higher_order_function_names(&self) -> Vec<String> {
+        self.provider.higher_order_function_names()
     }
     fn udaf_names(&self) -> Vec<String> {
         self.provider.udaf_names()

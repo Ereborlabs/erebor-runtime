@@ -167,7 +167,7 @@ async fn prepared_view_program_order() -> TestResult {
             )),
         )?;
         let selected = session
-            .prepare_definition(&Fixture::sql("SELECT * FROM selected"))
+            .prepare_definition(&Fixture::sql("SELECT * FROM selected"), None)
             .await?;
         let output = session
             .execute_definition(&selected, Invocation::default())
@@ -192,7 +192,7 @@ async fn prepared_view_program_order() -> TestResult {
         .build()?;
     session.register_table("shared", Arc::new(ViewTable::new(shared, None)))?;
     let shared = session
-        .prepare_definition(&Fixture::sql("SELECT * FROM shared"))
+        .prepare_definition(&Fixture::sql("SELECT * FROM shared"), None)
         .await?;
     let output = session
         .execute_definition(&shared, Invocation::default())

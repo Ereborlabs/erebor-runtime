@@ -1,7 +1,6 @@
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -21,10 +20,13 @@ use datafusion::logical_expr::{
     utils::conjunction, Expr, Operator, TableProviderFilterPushDown, TableType,
 };
 use datafusion::physical_expr::projection::ProjectionExprs;
-use datafusion::physical_expr::{analyze, AnalysisContext, EquivalenceProperties, ExprBoundaries};
+use datafusion::physical_expr::{
+    analyze, AnalysisContext, EquivalenceProperties, ExprBoundaries, PhysicalExpr,
+};
 use datafusion::physical_plan::coop::cooperative;
 use datafusion::physical_plan::execution_plan::SchedulingType;
 use datafusion::physical_plan::memory::MemoryStream;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
@@ -43,10 +45,12 @@ pub use index::SourceImage;
 pub(crate) use index::{SourceIndex, SourceKey, SourceView};
 mod port;
 mod rows;
+pub(crate) use port::PortExec;
 pub use port::{PortSource, SourcePort};
 mod schema;
 #[cfg(test)]
 mod tests;
+mod work;
 
 pub(crate) use journal::Changes;
 pub use rows::ArrowSnapshot;
@@ -60,6 +64,13 @@ pub(crate) enum SourceOrigin {
 }
 
 impl SourceOrigin {
+    fn name(&self) -> &str {
+        match self {
+            Self::Durable(name) | Self::Local(name) => name,
+            Self::Port(_) => "port",
+        }
+    }
+
     pub(crate) fn durable(&self) -> Option<&str> {
         match self {
             Self::Durable(name) => Some(name),
@@ -89,7 +100,9 @@ pub(crate) struct ScanBounds {
     pub(crate) events: Option<Vec<(u64, u64)>>,
     pub(crate) windows: Vec<WindowBound>,
     pub(crate) ports: BTreeSet<usize>,
+    pub(crate) qualified: BTreeMap<usize, BTreeSet<usize>>,
     pub(crate) context_owners: Option<BTreeSet<String>>,
+    pub(crate) context_images: BTreeSet<Option<SourceImage>>,
 }
 
 #[derive(Default)]
@@ -149,9 +162,7 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
                 .is_empty()
                 .then_some(crate::follow::WindowSource::Query),
         ));
-        let package = node
-            .as_any()
-            .downcast_ref::<crate::definition::physical::PackageExec>();
+        let package = node.downcast_ref::<crate::definition::physical::PackageExec>();
         if package
             .map(|package| {
                 self.calls
@@ -166,6 +177,13 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
                 ..Default::default()
             });
             return Ok(TreeNodeRecursion::Jump);
+        }
+        if let Some(port) = node.downcast_ref::<PortExec>() {
+            self.bounds
+                .qualified
+                .entry(port.family)
+                .or_default()
+                .insert(port.read);
         }
         let inputs = package
             .map(|package| package.event_inputs(self.moving))
@@ -185,6 +203,9 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
                 self.bounds.ports.insert(slot);
             }
             if let Some(name) = source.origin.durable() {
+                if name == "context_versions" {
+                    self.bounds.context_images.insert(source.image);
+                }
                 self.requests
                     .get_mut(name)
                     .ok_or_else(|| {
@@ -233,6 +254,13 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
             }
         }
         self.frames.push(frame);
+        if let Some(port) = node.downcast_ref::<PortExec>() {
+            for input in port.inputs() {
+                if input.visit(self)? == TreeNodeRecursion::Stop {
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+            }
+        }
         Ok(TreeNodeRecursion::Continue)
     }
 
@@ -281,8 +309,10 @@ pub struct SourceSnapshot {
     captured: Mutex<Option<rows::Captured>>,
     index: Mutex<Option<Arc<SourceIndex>>>,
     view: Mutex<Option<Arc<SourceView>>>,
-    reads: Mutex<BTreeMap<usize, (SourceImage, Vec<araphor_data::ManagedSourceRows>)>>,
+    reads: Mutex<BTreeMap<usize, SourceImage>>,
     keys: Mutex<BTreeMap<usize, Arc<keys::KeySlot>>>,
+    work: ExecutionPlanMetricsSet,
+    reported: AtomicBool,
 }
 
 impl std::fmt::Debug for SourceSnapshot {
@@ -428,7 +458,30 @@ impl SourceSnapshot {
             view: Mutex::new(None),
             reads: Mutex::new(BTreeMap::new()),
             keys: Mutex::new(BTreeMap::new()),
+            work: ExecutionPlanMetricsSet::new(),
+            reported: AtomicBool::new(false),
         })
+    }
+
+    pub(crate) fn bind_tables(
+        tables: &crate::execution::LocalTables,
+    ) -> crate::Result<BTreeMap<String, Arc<dyn TableProvider>>> {
+        let mut sources = Self::providers();
+        for (name, table) in tables {
+            let provider = match table {
+                crate::execution::TableBinding::Rows { table, .. } => {
+                    SourceProvider::local(name, table.schema())
+                }
+                crate::execution::TableBinding::Provider(provider) => Arc::clone(provider),
+            };
+            if sources.insert(name.clone(), provider).is_some() {
+                return crate::InvalidSnafu {
+                    field: "definition source binding",
+                }
+                .fail();
+            }
+        }
+        Ok(sources)
     }
 
     pub(crate) fn providers() -> BTreeMap<String, Arc<dyn TableProvider>> {
@@ -624,10 +677,9 @@ impl SourceSnapshot {
             .session_config()
             .get_extension::<crate::definition::CallContext>();
         for plan in plans {
-            plan.apply(|node| {
+            PortExec::apply(plan, &mut |node| {
                 if let (Some(package), Some(calls)) = (
-                    node.as_any()
-                        .downcast_ref::<crate::definition::physical::PackageExec>(),
+                    node.downcast_ref::<crate::definition::physical::PackageExec>(),
                     calls.as_ref(),
                 ) {
                     if calls.cached(package.logical_call())? {
@@ -668,43 +720,28 @@ impl SourceSnapshot {
             .reads
             .lock()
             .map_err(|_| DataFusionError::Internal("source read lock is poisoned".into()))?;
-        let read = reads.entry(id).or_insert_with(|| (image, Vec::new()));
-        if read.0 != image {
+        if *reads.entry(id).or_insert(image) != image {
             return Err(DataFusionError::Internal(
                 "the source read image differs".into(),
             ));
         }
-        read.1.extend(rows);
         Ok(())
     }
 
-    pub(crate) fn input_reads(
-        &self,
-        plan: &Arc<dyn ExecutionPlan>,
-        covered: impl Iterator<Item = usize> + Clone,
-    ) -> Result<Option<Vec<araphor_data::ManagedSourceRows>>> {
-        if self.source_view()?.is_none() {
+    pub(crate) fn context_revision(&self, bounds: &ScanBounds) -> Result<Option<Option<u64>>> {
+        let Some(view) = self.source_view()? else {
             return Ok(None);
+        };
+        let point = self.point_image(&view)?;
+        if bounds
+            .context_images
+            .iter()
+            .flatten()
+            .any(|image| *image != point)
+        {
+            return Ok(Some(None));
         }
-        let mut ids = BTreeSet::new();
-        plan.apply(|node| {
-            if let Some(source) = SourceData::from_plan(node.as_ref()) {
-                if !covered.clone().any(|owner| source.owners.contains(&owner)) {
-                    ids.insert(source.read);
-                }
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-        let reads = self
-            .reads
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source read lock is poisoned".into()))?;
-        Ok(Some(
-            ids.into_iter()
-                .filter_map(|id| reads.get(&id))
-                .flat_map(|(_, rows)| rows.iter().cloned())
-                .collect(),
-        ))
+        Ok(Some(view.context_revision(point)))
     }
 
     pub(crate) fn prune_selection(
@@ -891,9 +928,6 @@ impl SourceProvider {
 
 #[async_trait]
 impl TableProvider for SourceProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -967,7 +1001,6 @@ impl TableProvider for SourceProvider {
             fetch: limit,
             image: self.image,
             read: Self::identity().map_err(|error| DataFusionError::External(Box::new(error)))?,
-            owners: Vec::new(),
             key: None,
         }))
     }
@@ -983,16 +1016,13 @@ pub(crate) struct SourceData {
     fetch: Option<usize>,
     image: Option<SourceImage>,
     read: usize,
-    owners: Vec<usize>,
     key: Option<KeyRead>,
 }
 
 impl SourceData {
     pub(crate) fn from_plan(plan: &dyn ExecutionPlan) -> Option<&Self> {
-        plan.as_any()
-            .downcast_ref::<DataSourceExec>()?
+        plan.downcast_ref::<DataSourceExec>()?
             .data_source()
-            .as_any()
             .downcast_ref::<Self>()
     }
 
@@ -1059,12 +1089,12 @@ impl DataSource for SourceData {
                 let read = self.read;
                 let fetch = self.fetch;
                 let stream = futures_util::stream::once(async move {
-                    let hashes = if let Some(key) = &key {
+                    let values = if let Some(key) = &key {
                         let slot = snapshot.key_slot(key.slot)?;
                         Some(
                             snapshot
                                 .control
-                                .query_async(slot.hashes())
+                                .query_async(slot.values())
                                 .await
                                 .map_err(SourceSnapshot::data_error)?,
                         )
@@ -1077,11 +1107,18 @@ impl DataSource for SourceData {
                         .map_err(SourceSnapshot::data_error)?;
                     let keys = key
                         .as_ref()
-                        .zip(hashes.as_deref())
-                        .map(|(key, hashes)| (key.key.id, hashes));
+                        .zip(values.as_deref())
+                        .map(|(key, values)| (key.key.id, values));
                     let receipt = snapshot.snapshot()?;
                     let rows =
                         view.read(&name, image, keys, &columns, &schema, receipt.metadata())?;
+                    snapshot.record_work(
+                        read,
+                        &name,
+                        Some(image),
+                        rows.batches.iter().map(|batch| batch.num_rows()).sum(),
+                        rows.origins.iter().flat_map(|origin| origin.witnesses()),
+                    );
                     snapshot.record_read(read, image, rows.origins)?;
                     Ok::<_, DataFusionError>(
                         MemoryStream::try_new(rows.batches, schema, None)?.with_fetch(fetch),
@@ -1097,6 +1134,13 @@ impl DataSource for SourceData {
         if matches!(self.image, Some(SourceImage::Before | SourceImage::Removed))
             && snapshot.source_view()?.is_none()
         {
+            snapshot.record_work(
+                self.read,
+                self.origin.name(),
+                self.image,
+                0,
+                std::iter::empty(),
+            );
             return Ok(Box::pin(MemoryStream::try_new(
                 Vec::new(),
                 Arc::clone(&self.schema),
@@ -1107,14 +1151,19 @@ impl DataSource for SourceData {
             .captured
             .lock()
             .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
-        let batches = captured
-            .as_ref()
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "the source snapshot was not captured before execution".into(),
-                )
-            })?
-            .project(&self.origin, &self.indices, &self.schema)?;
+        let current = captured.as_ref().ok_or_else(|| {
+            DataFusionError::Execution(
+                "the source snapshot was not captured before execution".into(),
+            )
+        })?;
+        let batches = current.project(&self.origin, &self.indices, &self.schema)?;
+        snapshot.record_work(
+            self.read,
+            self.origin.name(),
+            self.image,
+            batches.iter().map(|batch| batch.num_rows()).sum(),
+            std::iter::empty(),
+        );
         drop(captured);
         let stream = cooperative(
             MemoryStream::try_new(batches, Arc::clone(&self.schema), None)?.with_fetch(self.fetch),
@@ -1127,10 +1176,6 @@ impl DataSource for SourceData {
             Arc::clone(&self.schema),
             stream,
         )))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn fmt_as(
@@ -1157,8 +1202,18 @@ impl DataSource for SourceData {
         SchedulingType::Cooperative
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema))
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics::new_unknown(&self.schema)))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion::physical_plan::apply_expression_roots(
+            self.key.iter().flat_map(|read| read.key.expressions.iter()),
+            f,
+        )
     }
 
     fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn DataSource>> {

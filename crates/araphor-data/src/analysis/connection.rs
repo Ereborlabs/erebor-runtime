@@ -1148,7 +1148,7 @@ mod tests {
                 1
             );
             let ranges = store.raw_ranges(&snapshot, &identity(), 1, 1, 1)?;
-            assert_eq!(ranges[0].read(&store.root)?.len(), 1);
+            assert_eq!(ranges[0].read(&store.root)?.0.len(), 1);
             drop(snapshot);
             drop(reader);
             assert_eq!(

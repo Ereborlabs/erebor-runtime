@@ -311,7 +311,7 @@ async fn sql_preserves_portable_precision() -> TestResult {
         let prepared = session
             .prepare_definition(&Fixture::sql(
                 r#"SELECT * FROM "fixture"."r1".count(source => (SELECT * FROM precise_input))"#,
-            ))
+            ), None)
             .await?;
         let result = session
             .execute_definition(&prepared, invocation("portable"))

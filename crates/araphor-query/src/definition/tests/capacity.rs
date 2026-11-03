@@ -387,7 +387,7 @@ async fn admission_keeps_memory_scope() -> TestResult {
         Arc::clone(&memory),
     )?;
     let definition = Fixture::definition();
-    let prepared = session.prepare_definition(&definition).await?;
+    let prepared = session.prepare_definition(&definition, None).await?;
     let retained = fixture.engine.memory().input_reserved();
     assert!(retained > 1);
     drop(prepared);
@@ -399,7 +399,7 @@ async fn admission_keeps_memory_scope() -> TestResult {
     let epoch = memory.capacity_epoch();
     let observed = observer.capacity_epoch();
     let error = session
-        .prepare_definition(&definition)
+        .prepare_definition(&definition, None)
         .await
         .err()
         .ok_or("scoped admission ignored pressure")?;
@@ -412,7 +412,7 @@ async fn admission_keeps_memory_scope() -> TestResult {
     assert!(futures_util::poll!(waiting.as_mut()).is_pending());
     drop(pressure);
     tokio::time::timeout(std::time::Duration::from_secs(30), waiting).await??;
-    let prepared = session.prepare_definition(&definition).await?;
+    let prepared = session.prepare_definition(&definition, None).await?;
     assert_eq!(fixture.engine.memory().input_reserved(), retained);
     drop(prepared);
     assert_eq!(fixture.engine.memory().input_reserved(), 0);

@@ -163,7 +163,7 @@ impl Cursor {
                     .flatten(),
                 WindowSource::Input { call, slot } => {
                     let mut expected = None;
-                    crate::definition::PackageCall::any(plan, &mut |candidate| {
+                    crate::definition::PackageCall::any(plan, &mut |_, candidate| {
                         if candidate.id == call {
                             expected = candidate
                                 .input_scope

@@ -36,6 +36,7 @@ async fn managed_versions_rebuild_graph() -> TestResult {
     let destination = araphor_data::ManagedDestination::Graph {
         source: fixture.source.clone(),
         events_sql: "SELECT * FROM events".into(),
+        control_sql: Fixture::control_sql("SELECT * FROM events"),
         calls: Default::default(),
         operation: araphor_data::ManagedGraphOperation::Evaluate,
     };
@@ -45,7 +46,7 @@ async fn managed_versions_rebuild_graph() -> TestResult {
         fixture.authority.clone(),
         Some(fixture.facts.clone()),
         &grant,
-        first.clone(),
+        (first.clone(), None),
         destination,
         &fixture.control,
     )
@@ -60,7 +61,7 @@ async fn managed_versions_rebuild_graph() -> TestResult {
         fixture.authority.clone(),
         Some(fixture.facts.clone()),
         &grant,
-        next.clone(),
+        (next.clone(), None),
         target,
         &fixture.control,
     )
@@ -91,7 +92,7 @@ async fn managed_versions_rebuild_graph() -> TestResult {
         fixture.authority.clone(),
         Some(fixture.facts.clone()),
         &grant,
-        first.clone(),
+        (first.clone(), None),
         first_destination.clone(),
         &fixture.control,
     )
@@ -120,7 +121,8 @@ async fn managed_versions_rebuild_graph() -> TestResult {
         "running-graph-version".into(),
         fixture.source.clone(),
         "SELECT * FROM events".into(),
-        first.clone(),
+        Fixture::control_sql("SELECT * FROM events"),
+        (first.clone(), None),
         &fixture.control,
     )
     .await?;
@@ -384,6 +386,7 @@ async fn expiry_needs_no_facts() -> TestResult {
     let destination = araphor_data::ManagedDestination::Graph {
         source: fixture.source.clone(),
         events_sql: String::new(),
+        control_sql: String::new(),
         calls: Default::default(),
         operation: araphor_data::ManagedGraphOperation::Expire,
     };
@@ -393,7 +396,7 @@ async fn expiry_needs_no_facts() -> TestResult {
         fixture.authority.clone(),
         None,
         &grant,
-        definition.clone(),
+        (definition.clone(), None),
         destination.clone(),
         &fixture.control,
     )
@@ -410,7 +413,7 @@ async fn expiry_needs_no_facts() -> TestResult {
         fixture.authority.clone(),
         None,
         &grant,
-        definition.clone(),
+        (definition.clone(), None),
         forged,
         &fixture.control,
     )
@@ -425,7 +428,7 @@ async fn expiry_needs_no_facts() -> TestResult {
         fixture.authority.clone(),
         None,
         &grant,
-        definition,
+        (definition, None),
         forged,
         &fixture.control,
     )

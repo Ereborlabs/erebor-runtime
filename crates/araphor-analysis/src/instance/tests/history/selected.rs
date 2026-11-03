@@ -93,7 +93,7 @@ async fn selected_sql_prql_references() -> TestResult {
         assert_eq!(result.time_utc_ns, request("first").time_utc_ns);
         assert_eq!(
             result.definition_revision,
-            instance.admitted().spec.definition.digest()?
+            instance.admitted().spec.manifest.definition.to_string()
         );
         assert!(!result.current);
         assert!(serde_json::to_value(&result)?.get("output").is_none());

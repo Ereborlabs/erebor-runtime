@@ -16,6 +16,7 @@ struct ManifestRow<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     graph_revision: Option<&'a crate::GraphRevisionV1>,
     graph_sensitivity: &'a str,
+    restricted_count: Option<u64>,
     first_cursor: u64,
     last_cursor: u64,
     previous_result_id: Option<&'a str>,
@@ -132,6 +133,60 @@ macro_rules! graph_row {
 }
 
 impl Capture<'_> {
+    pub(in crate::analysis::extraction) fn finding_basis(
+        &self,
+        result: &str,
+    ) -> Option<&std::collections::BTreeSet<String>> {
+        if !self.scope.binding_ids.is_empty()
+            || ["metadata", "snapshot", "graph_revision", "context_refs"]
+                .iter()
+                .any(|field| self.read.projects_field("graph_manifest", field))
+            || [
+                "relationships",
+                "graph_subjects",
+                "correlation_packages",
+                "graph_branches",
+            ]
+            .iter()
+            .any(|table| self.read.projected(table).is_some())
+        {
+            return None;
+        }
+        self.graph_findings
+            .get(result)
+            .filter(|ids| !ids.is_empty())
+    }
+
+    pub(in crate::analysis::extraction) fn record_finding(
+        &mut self,
+        result: &str,
+        finding: &str,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<()> {
+        if !self.graph_findings.contains_key(result) {
+            budget
+                .charge(size_of::<(String, std::collections::BTreeSet<String>)>() + result.len())?;
+            self.graph_findings
+                .insert(result.to_owned(), Default::default());
+        }
+        let ids = self
+            .graph_findings
+            .get_mut(result)
+            .ok_or_else(|| invalid("the Graph finding capture is absent"))?;
+        if !ids.contains(finding) {
+            budget.charge(size_of::<String>() + finding.len())?;
+            ids.insert(finding.to_owned());
+        }
+        Ok(())
+    }
+
+    pub(in crate::analysis::extraction) fn graph_provenance(&self) -> bool {
+        self.graph_witnesses()
+            || ["graph_revision", "context_refs"]
+                .iter()
+                .any(|field| self.read.projects_field("graph_manifest", field))
+    }
+
     pub(in crate::analysis::extraction) fn graph_witnesses(&self) -> bool {
         !self.graph_expiry
             && (self.read.projects_field("graph_manifest", "metadata")
@@ -163,6 +218,7 @@ impl Capture<'_> {
         contexts: &[crate::AnalysisContextRefV1],
         notice: (u64, u64),
         expired: bool,
+        restricted_count: Option<u64>,
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
         if !self.scope.permits_graph(graph) {
@@ -221,6 +277,7 @@ impl Capture<'_> {
                 return Ok(false);
             }
             if self.read.projected("findings").is_some() {
+                self.record_finding(result_id, &finding.finding_id, budget)?;
                 let key = (finding.tenant_id, finding.finding_id.clone());
                 if !self.latest.contains_key(&key) {
                     budget.charge(size_of::<([u8; 16], String)>() + key.1.capacity())?;
@@ -245,6 +302,9 @@ impl Capture<'_> {
                     budget,
                 )? {
                     return Ok(false);
+                }
+                if self.read.projected("policy_observations").is_some() {
+                    self.record_finding(result_id, &finding.finding_id, budget)?;
                 }
             }
         }
@@ -335,6 +395,7 @@ impl Capture<'_> {
             contexts,
             notice,
             expired,
+            restricted_count,
             budget,
         )
     }
@@ -635,6 +696,7 @@ impl Capture<'_> {
         contexts: &[crate::AnalysisContextRefV1],
         notice: (u64, u64),
         expired: bool,
+        restricted_count: Option<u64>,
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
         budget.check()?;
@@ -648,6 +710,7 @@ impl Capture<'_> {
             "commit_revision",
             "graph_revision",
             "graph_sensitivity",
+            "restricted_count",
             "first_cursor",
             "last_cursor",
             "previous_result_id",
@@ -702,6 +765,7 @@ impl Capture<'_> {
             commit_revision,
             graph_revision: revision,
             graph_sensitivity: <&str>::from(sensitivity),
+            restricted_count,
             first_cursor: graph.first_cursor,
             last_cursor: graph.last_cursor,
             previous_result_id: graph.previous_result_id.as_deref(),
@@ -755,6 +819,7 @@ impl Capture<'_> {
                 false,
             ),
             sdk::Field::new("graph_sensitivity", Utf8, false),
+            sdk::Field::new("restricted_count", UInt64, true),
             sdk::Field::new("first_cursor", UInt64, false),
             sdk::Field::new("last_cursor", UInt64, false),
             sdk::Field::new("previous_result_id", Utf8, true),

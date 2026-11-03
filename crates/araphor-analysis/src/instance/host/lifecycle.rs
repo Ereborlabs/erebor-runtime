@@ -239,7 +239,10 @@ impl InstanceHost {
                 Arc::clone(&self.authority),
                 self.graph_facts.clone(),
                 &grant,
-                current.spec.definition.clone(),
+                (
+                    current.spec.definition.clone(),
+                    Some(current.spec.manifest.definition),
+                ),
                 current.spec.destination.clone(),
                 control,
             )
@@ -258,7 +261,12 @@ impl InstanceHost {
                 0,
                 memory,
             )?;
-            let prepared = session.prepare_resolved(&current.spec.definition).await?;
+            let prepared = session
+                .prepare_resolved(
+                    &current.spec.definition,
+                    Some(current.spec.manifest.definition),
+                 None,)
+                .await?;
             if prepared.resolved() != &current.spec.definition {
                 return Err(Code::Conflict
                     .error("managed restored definition pin")
