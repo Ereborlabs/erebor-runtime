@@ -12,7 +12,7 @@ fn graph_appender_constraint_rollback() -> TestResult {
         .split_once("CREATE TABLE graph_finding_values ")
         .ok_or("finding value table")?;
     let (table, _) = table
-        .split_once("CREATE INDEX graph_finding_hash")
+        .split_once("CREATE INDEX graph_finding_identity")
         .ok_or("finding value schema")?;
     let table = format!("CREATE TABLE graph_finding_values {table}");
     let (_, view) = original
@@ -20,8 +20,8 @@ fn graph_appender_constraint_rollback() -> TestResult {
         .ok_or("finding view schema")?;
     let view = format!("CREATE VIEW graph_findings{view}");
     let rejecting = table.replace(
-        "value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32)\n);",
-        "value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32), CHECK (false)\n);",
+        "limits VARCHAR[] NOT NULL\n);",
+        "limits VARCHAR[] NOT NULL, CHECK (false)\n);",
     );
     assert_ne!(rejecting, table);
     fixture.store.fault_write(
@@ -94,8 +94,8 @@ fn graph_appender_constraint_rollback() -> TestResult {
     fixture.store.fault_write(
         &format!(
             "DROP VIEW graph_finding_keys; DROP VIEW graph_findings; DROP TABLE graph_finding_values;
-                 {table} CREATE INDEX graph_finding_hash
-                 ON graph_finding_values (value_hash); {view}"
+                 {table} CREATE INDEX graph_finding_identity
+                 ON graph_finding_values (finding_id); {view}"
         ),
         &[],
     )?;
@@ -119,7 +119,7 @@ fn graph_branch_value_failure_rolls_back_public_commit() -> TestResult {
         .split_once("CREATE TABLE graph_branch_values ")
         .ok_or("branch value schema")?;
     let (table, _) = remainder.split_once(';').ok_or("branch table end")?;
-    let rejecting = table.replace("CHECK (octet_length(value_hash) = 32)", "CHECK (false)");
+    let rejecting = table.replace("body BLOB NOT NULL", "body BLOB NOT NULL, CHECK (false)");
     assert_ne!(rejecting, table);
     fixture.store.fault_write(
         &format!(
@@ -203,7 +203,7 @@ fn graph_branch_value_failure_rolls_back_public_commit() -> TestResult {
         &format!(
             "DROP TABLE graph_branch_values;
              CREATE TABLE graph_branch_values {table};
-             CREATE INDEX graph_branch_hash ON graph_branch_values (value_hash);"
+             CREATE INDEX graph_branch_body ON graph_branch_values (body);"
         ),
         &[],
     )?;

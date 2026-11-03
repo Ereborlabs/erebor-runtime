@@ -157,7 +157,7 @@ fn shared_corruption_rejects_reopen() -> TestResult {
         "UPDATE graph_sources SET tenant_id='wrong'::BLOB",
         "UPDATE graph_branch_values SET tenant_id='wrong'::BLOB",
         "UPDATE graph_branch_values SET body=body || from_hex('00')",
-        "INSERT INTO graph_branch_values SELECT branch_id+999999,tenant_id,value_hash,from_hex('c1') FROM graph_branch_values LIMIT 1",
+        "INSERT INTO graph_branch_values SELECT branch_id+999999,tenant_id,from_hex('c1') FROM graph_branch_values LIMIT 1",
         "INSERT INTO graph_producer_members SELECT 999999,0,0,member_key,value_ref,anchor_record_id,anchor_fact,reason_code,ordinal,valid_from,valid_to FROM graph_producer_members LIMIT 1",
         "INSERT INTO graph_producer_members SELECT 999999,0,1,member_key,value_ref,anchor_record_id,anchor_fact,reason_code,ordinal,valid_from,valid_to FROM graph_producer_members LIMIT 1",
         "INSERT INTO graph_producer_members SELECT 999999,0,2,member_key,value_ref,anchor_record_id,anchor_fact,reason_code,ordinal,valid_from,valid_to FROM graph_producer_members LIMIT 1",

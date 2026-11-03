@@ -5,7 +5,6 @@ use araphor_analysis_builtins::graph::*;
 use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, OptionalExt as _, Row};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::{AnalysisReadControl, GraphManifest, ManagedCommit, PackageResultRefV1};
@@ -115,12 +114,8 @@ impl GraphRows {
         Ok(value)
     }
 
-    fn hash(bytes: &[u8]) -> Vec<u8> {
-        Sha256::digest(bytes).to_vec()
-    }
-
     fn member_key(value: &impl Serialize) -> Result<Vec<u8>> {
-        Ok(Self::hash(&Self::encode_value(value)?))
+        Self::encode_value(value)
     }
 
     fn column<T: duckdb::types::FromSql>(row: &Row<'_>, index: usize) -> Result<T> {

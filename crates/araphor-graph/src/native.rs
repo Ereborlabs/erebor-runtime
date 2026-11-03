@@ -3,7 +3,7 @@ use araphor_analysis_sdk::{
     arrow_array::{ArrayRef, StructArray, UInt8Array},
     arrow_schema::{DataType, Field},
 };
-use duckdb::{types::Value, Row};
+use duckdb::{params, types::Value, Connection, Row};
 use serde::{de::DeserializeOwned, Serialize};
 use snafu::ResultExt as _;
 use std::sync::Arc;
@@ -41,6 +41,36 @@ impl NativeRows {
             .serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
             .context(EncodingSnafu)?;
         Ok(bytes)
+    }
+
+    pub(super) fn allocate(
+        writer: &Connection,
+        sequence: &'static str,
+        count: usize,
+    ) -> Result<Vec<u64>> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let count =
+            i64::try_from(count).map_err(|_| NativeRows::invalid("graph value identity count"))?;
+        let mut statement = writer
+            .prepare(&format!("SELECT nextval('{sequence}') FROM range(?)"))
+            .context(DatabaseSnafu {
+                operation: "prepare Graph value identities",
+            })?;
+        let values = statement
+            .query_map(params![count], |row| row.get::<_, u64>(0))
+            .context(DatabaseSnafu {
+                operation: "allocate Graph value identities",
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()
+            .context(DatabaseSnafu {
+                operation: "decode Graph value identities",
+            })?;
+        if values.len() != count as usize || values.contains(&0) {
+            return Err(NativeRows::invalid("graph value identity count"));
+        }
+        Ok(values)
     }
 
     pub(super) fn label(value: &impl Serialize) -> Result<String> {

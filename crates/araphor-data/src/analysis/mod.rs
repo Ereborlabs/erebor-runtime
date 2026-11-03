@@ -208,6 +208,23 @@ pub enum EvidenceStoreOutcomeV1 {
 impl AnalysisStore {
     const SOURCE_SCHEMA: &str = include_str!("source.sql");
 
+    const CONTEXT_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS context_versions (
+                    tenant_id BLOB NOT NULL,
+                    owner_id VARCHAR NOT NULL,
+                    entity_key BLOB NOT NULL,
+                    lifetime_key BLOB NOT NULL,
+                    owner_revision UBIGINT NOT NULL,
+                    valid_from_utc_ns UBIGINT,
+                    valid_until_utc_ns UBIGINT,
+                    sensitivity VARCHAR NOT NULL,
+                    body BLOB NOT NULL,
+                    commit_revision UBIGINT NOT NULL,
+                    version_key BLOB NOT NULL,
+                    PRIMARY KEY (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS context_version_key_idx
+                    ON context_versions(version_key);";
+
     pub fn register_discovery_owner(&self) {
         self.discovery_owners.fetch_add(1, Ordering::AcqRel);
     }
@@ -332,8 +349,8 @@ impl AnalysisStore {
                 operation: "begin schema",
             })?;
             transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS store_meta (
+                .execute_batch(
+                    "CREATE TABLE IF NOT EXISTS store_meta (
                     singleton BOOLEAN PRIMARY KEY CHECK (singleton),
                     store_uuid VARCHAR NOT NULL,
                     schema_version INTEGER NOT NULL,
@@ -375,22 +392,18 @@ impl AnalysisStore {
                     ordinal UINTEGER NOT NULL,
                     PRIMARY KEY (stream_key, revision)
                 );
-                CREATE TABLE IF NOT EXISTS context_versions (
-                    tenant_id BLOB NOT NULL,
-                    owner_id VARCHAR NOT NULL,
-                    entity_key BLOB NOT NULL,
-                    lifetime_key BLOB NOT NULL,
-                    owner_revision UBIGINT NOT NULL,
-                    valid_from_utc_ns UBIGINT,
-                    valid_until_utc_ns UBIGINT,
-                    sensitivity VARCHAR NOT NULL,
-                    body BLOB NOT NULL,
-                    commit_revision UBIGINT NOT NULL,
-                    version_key BLOB NOT NULL,
-                    PRIMARY KEY (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS context_version_key_idx
-                    ON context_versions(version_key);
+                ",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create schema",
+                })?;
+            transaction
+                .execute_batch(Self::CONTEXT_SCHEMA)
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create schema",
+                })?;
+            transaction.execute_batch(
+"
                 CREATE TABLE IF NOT EXISTS notification_heads (
                     state_key BLOB PRIMARY KEY,
                     tenant_id BLOB NOT NULL,

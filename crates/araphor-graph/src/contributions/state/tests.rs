@@ -62,6 +62,13 @@ impl Fixture {
                 reviewed_policy_revision: "policy".into(),
             },
         });
+        let fact_ref=anchor.as_ref().map(|anchor| -> TestResultValue<u64> {
+            let fact=GraphFactV1 {record_id:anchor.record.clone(),value:anchor.value.clone()};
+            let body=StateRows::encode(&fact)?;
+            writer.execute("INSERT INTO graph_fact_values SELECT nextval('graph_fact_values_seq'),?,? WHERE NOT EXISTS(SELECT 1 FROM graph_fact_values WHERE tenant_id=? AND body=?)",
+                params![record.stream.tenant_id.as_slice(),&body,record.stream.tenant_id.as_slice(),&body])?;
+            Ok(writer.query_row("SELECT fact_id FROM graph_fact_values WHERE tenant_id=? AND body=?",params![record.stream.tenant_id.as_slice(),&body],|row|row.get(0))?)
+        }).transpose()?;
         let value = StateValue {
             unit,
             state: UnitState {
@@ -72,17 +79,17 @@ impl Fixture {
                 },
                 fact: key,
             },
-            anchor,
+            anchor: anchor.as_ref().zip(fact_ref),
         };
         let id = StateRows::intern(writer, std::slice::from_ref(&value))?[0];
         Ok(Replacement {
             unit: Some(unit),
             members: vec![Member {
                 kind: 8,
-                key: StateRows::hash(&StateRows::encode(&record)?),
+                key: StateRows::encode(&record)?,
                 value: id,
                 record: Some(unit),
-                fact: value.anchor.as_ref().map(StateRows::encode).transpose()?,
+                fact: anchor.as_ref().map(StateRows::encode).transpose()?,
                 reason: None,
                 ordinal: 0,
             }],
@@ -108,7 +115,10 @@ impl Fixture {
         writer.execute_batch("BEGIN TRANSACTION")?;
         let result: TestResult = (|| {
             writer.execute(
-                "INSERT INTO graph_producer_versions VALUES(?,1,?,?,0,0,0,0,NULL)",
+                "INSERT INTO graph_producer_versions
+                    (result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,
+                        finding_count,state_count,selected_state_ref)
+                 VALUES(?,1,?,?,0,0,0,0,NULL)",
                 params![
                     format!("version-{revision}"),
                     revision,
@@ -233,6 +243,10 @@ fn context_state_orders_keys() -> TestResult {
         1,
         Some("z"),
     )?;
+    let original = first.members[0].value;
+    let original_fact = first.members[0].fact.clone().ok_or("first fact anchor")?;
+    let second_key = second.members[0].key.clone();
+    let second_id = second.members[0].value;
     Fixture::publish(&writer, 1, &[first, second], false)?;
     assert_eq!(
         Fixture::current(&writer, 1)?,
@@ -244,9 +258,113 @@ fn context_state_orders_keys() -> TestResult {
         GraphPackageStateV1::KubernetesAudit
     );
     StateRows::validate(&writer)?;
-    for fault in ["UPDATE graph_producer_members SET anchor_fact=anchor_fact || from_hex('00') WHERE member_kind=8","UPDATE graph_unit_state_values SET fact_owner='other'","UPDATE graph_unit_state_values SET fact_hash=from_hex(repeat('00',32))"] {
+    for fault in ["UPDATE graph_producer_members SET anchor_fact=anchor_fact || from_hex('00') WHERE member_kind=8","UPDATE graph_unit_state_values SET fact_owner='other'","DELETE FROM graph_fact_values"] {
         let transaction=writer.transaction()?;transaction.execute_batch(fault)?;assert!(StateRows::validate(&transaction).is_err(),"accepted {fault}");
     }
+    let reentered = Fixture::state(
+        &writer,
+        101,
+        GraphPackageStateV1::KubernetesAudit,
+        100,
+        Some("aa"),
+    )?;
+    assert_eq!(reentered.members[0].value, original);
+    let anchor: FactAnchor = StateRows::decode_body(&original_fact)?;
+    let fact_ref: u64 = writer.query_row(
+        "SELECT fact_ref FROM graph_unit_state_values WHERE value_ref=?",
+        params![original],
+        |row| row.get(0),
+    )?;
+    let second_ref: u64 = writer.query_row(
+        "SELECT fact_ref FROM graph_unit_state_values WHERE value_ref=?",
+        params![second_id],
+        |row| row.get(0),
+    )?;
+    let state = UnitState {
+        state: GraphPackageStateV1::KubernetesAudit,
+        position: Position {
+            commit_revision: 100,
+            ordinal: 0,
+        },
+        fact: Some(anchor.key.clone()),
+    };
+    {
+        let transaction = writer.transaction()?;
+        assert_eq!(transaction.execute("INSERT INTO graph_unit_state_values SELECT nextval('graph_unit_state_values_seq'),* EXCLUDE(value_ref) FROM graph_unit_state_values WHERE value_ref=?",params![original])?,1);
+        let value = StateValue {
+            unit: 101,
+            state: state.clone(),
+            anchor: Some((&anchor, fact_ref)),
+        };
+        assert!(StateRows::intern(&transaction, std::slice::from_ref(&value)).is_err());
+        assert!(StateRows::validate(&transaction).is_err());
+    }
+    for (sensitivity, reference) in [
+        (ContextSensitivityV1::HostRestricted, fact_ref),
+        (ContextSensitivityV1::Tenant, second_ref),
+    ] {
+        let transaction = writer.transaction()?;
+        let mut changed = anchor.clone();
+        changed.sensitivity = sensitivity;
+        let value = StateValue {
+            unit: 101,
+            state: state.clone(),
+            anchor: Some((&changed, reference)),
+        };
+        let replacement = StateRows::intern(&transaction, std::slice::from_ref(&value))?[0];
+        assert_ne!(replacement, original);
+        assert_eq!(transaction.execute("UPDATE graph_producer_members SET value_ref=? WHERE member_kind=8 AND unit_ref=101 AND valid_from=1",params![replacement])?,1);
+        assert!(StateRows::validate(&transaction).is_err());
+    }
+    let mut foreign = anchor.record.clone();
+    foreign.stream.tenant_id = [9; 16];
+    for (record,value,tenant) in [
+        (StateRows::decode_body::<FactAnchor>(&writer.query_row("SELECT anchor_fact FROM graph_producer_members WHERE member_kind=8 AND unit_ref=102",[],|row|row.get::<_,Vec<u8>>(0))?)?.record,anchor.value.clone(),anchor.record.stream.tenant_id),
+        (anchor.record.clone(),araphor_analysis_builtins::graph::GraphFactValueV1::Baseline {role_id:1,state_id:1,outside_reviewed_baseline:false,reviewed_policy_revision:"policy".into()},anchor.record.stream.tenant_id),
+        (foreign,anchor.value.clone(),[9;16]),
+    ] {
+        let transaction=writer.transaction()?;
+        let body=StateRows::encode(&GraphFactV1 {record_id:record,value})?;
+        assert_eq!(transaction.execute("UPDATE graph_fact_values SET tenant_id=?,body=? WHERE fact_id=?",params![tenant.as_slice(),body,fact_ref])?,1);
+        assert!(StateRows::validate(&transaction).is_err());
+    }
+    StateRows::validate(&writer)?;
+    let value = StateValue {
+        unit: 102,
+        state: UnitState {
+            state: GraphPackageStateV1::KubernetesObject,
+            position: Position {
+                commit_revision: 3,
+                ordinal: 0,
+            },
+            fact: Some(anchor.key.clone()),
+        },
+        anchor: Some((&anchor, fact_ref)),
+    };
+    let same_source = StateRows::intern(&writer, std::slice::from_ref(&value))?[0];
+    assert_ne!(same_source, original);
+    Fixture::publish(
+        &writer,
+        3,
+        &[Replacement {
+            unit: Some(102),
+            members: vec![Member {
+                kind: 8,
+                key: second_key,
+                value: same_source,
+                record: Some(102),
+                fact: Some(original_fact),
+                reason: None,
+                ordinal: 0,
+            }],
+        }],
+        false,
+    )?;
+    assert_eq!(
+        Fixture::current(&writer, 3)?,
+        GraphPackageStateV1::KubernetesAudit
+    );
+    StateRows::validate(&writer)?;
     Ok(())
 }
 
@@ -340,7 +458,7 @@ fn empty_state_retains_value() -> TestResult {
         "UPDATE graph_producer_versions SET selected_state_ref=NULL WHERE commit_revision=1",
         "UPDATE graph_producer_versions SET selected_state_ref=(SELECT selected_state_ref FROM graph_producer_versions WHERE commit_revision=4) WHERE commit_revision=1",
         "UPDATE graph_producer_versions SET state_count=1 WHERE commit_revision=1",
-        "UPDATE graph_unit_state_values SET value_hash=from_hex(repeat('00',32)) WHERE state_declared='WAITING'",
+        "UPDATE graph_unit_state_values SET value_key=from_hex('00') WHERE state_declared='WAITING'",
         "UPDATE graph_unit_state_values SET state_tag='UNKNOWN' WHERE state_declared='WAITING'",
         "UPDATE graph_unit_state_values SET state_declared='' WHERE state_declared='WAITING'",
     ] {

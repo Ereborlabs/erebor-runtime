@@ -78,12 +78,9 @@ fn native_rows_integrity() -> TestResult {
     assert!(metadata.snapshot.graph.subjects.is_empty());
     assert!(metadata.snapshot.graph.edges.is_empty());
     let mut writer = Connection::open_in_memory()?;
+    writer.execute_batch(&crate::AnalysisStore::notice_schema())?;
     writer.execute_batch(
-        "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
-        tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
-        method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
-        coverage_revision UBIGINT, commit_revision UBIGINT);
-        CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY,
+        "CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY,
         identity_json VARCHAR, tenant_id BLOB, cpu_id UINTEGER)",
     )?;
     writer.execute_batch(&GraphRows::schema())?;
@@ -98,7 +95,10 @@ fn native_rows_integrity() -> TestResult {
         ],
     )?;
     writer.execute(
-        "INSERT INTO analysis_results VALUES ('version', ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+        "INSERT INTO analysis_results
+                (result_id,tenant_id,processor_id,body,stream_key,method_version,first_cursor,
+                    facts_revision,coverage_revision,commit_revision,request_meta)
+             VALUES ('version', ?, ?, ?, ?, ?, ?, ?, ?, 1,CAST('' AS BLOB))",
         params![
             graph.scope.identity.tenant_id.as_slice(),
             crate::GRAPH_PROCESSOR,
@@ -169,7 +169,10 @@ fn native_rows_integrity() -> TestResult {
         ];
         next.validate()?;
         transaction.execute(
-            "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2)",
+            "INSERT INTO analysis_results
+                (result_id,tenant_id,processor_id,body,stream_key,method_version,first_cursor,
+                    facts_revision,coverage_revision,commit_revision,request_meta)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2,CAST('' AS BLOB))",
             params![
                 other,
                 next.scope.identity.tenant_id.as_slice(),
@@ -204,7 +207,10 @@ fn native_rows_integrity() -> TestResult {
         removed.findings.clear();
         removed.validate()?;
         transaction.execute(
-            "INSERT INTO analysis_results VALUES ('removed', ?, ?, ?, ?, ?, ?, ?, ?, 3)",
+            "INSERT INTO analysis_results
+                (result_id,tenant_id,processor_id,body,stream_key,method_version,first_cursor,
+                    facts_revision,coverage_revision,commit_revision,request_meta)
+             VALUES ('removed', ?, ?, ?, ?, ?, ?, ?, ?, 3,CAST('' AS BLOB))",
             params![
                 removed.scope.identity.tenant_id.as_slice(),
                 crate::GRAPH_PROCESSOR,
@@ -221,7 +227,10 @@ fn native_rows_integrity() -> TestResult {
         reentered.previous_result_id = Some("removed".into());
         reentered.validate()?;
         transaction.execute(
-            "INSERT INTO analysis_results VALUES ('reentered', ?, ?, ?, ?, ?, ?, ?, ?, 4)",
+            "INSERT INTO analysis_results
+                (result_id,tenant_id,processor_id,body,stream_key,method_version,first_cursor,
+                    facts_revision,coverage_revision,commit_revision,request_meta)
+             VALUES ('reentered', ?, ?, ?, ?, ?, ?, ?, ?, 4,CAST('' AS BLOB))",
             params![
                 reentered.scope.identity.tenant_id.as_slice(),
                 crate::GRAPH_PROCESSOR,
@@ -413,7 +422,10 @@ fn native_rows_integrity() -> TestResult {
         window.findings.clear();
         window.validate()?;
         transaction.execute(
-            "INSERT INTO analysis_results VALUES ('new-window', ?, ?, ?, ?, ?, ?, ?, ?, 5)",
+            "INSERT INTO analysis_results
+                (result_id,tenant_id,processor_id,body,stream_key,method_version,first_cursor,
+                    facts_revision,coverage_revision,commit_revision,request_meta)
+             VALUES ('new-window', ?, ?, ?, ?, ?, ?, ?, ?, 5,CAST('' AS BLOB))",
             params![
                 window.scope.identity.tenant_id.as_slice(),
                 crate::GRAPH_PROCESSOR,
@@ -450,7 +462,10 @@ fn native_rows_integrity() -> TestResult {
         )?;
         assert_eq!(subject_rows, graph.graph.subjects.len() as u64);
         transaction.execute(
-            "INSERT INTO analysis_results VALUES ('independent', ?, ?, ?, ?, ?, ?, ?, ?, 6)",
+            "INSERT INTO analysis_results
+                (result_id,tenant_id,processor_id,body,stream_key,method_version,first_cursor,
+                    facts_revision,coverage_revision,commit_revision,request_meta)
+             VALUES ('independent', ?, ?, ?, ?, ?, ?, ?, ?, 6,CAST('' AS BLOB))",
             params![
                 graph.scope.identity.tenant_id.as_slice(),
                 crate::GRAPH_PROCESSOR,
@@ -659,12 +674,9 @@ fn earlier_keys_keep_edge_membership() -> TestResult {
     second.validate()?;
 
     let writer = Connection::open_in_memory()?;
+    writer.execute_batch(&crate::AnalysisStore::notice_schema())?;
     writer.execute_batch(
-        "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
-            tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
-            method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
-            coverage_revision UBIGINT, commit_revision UBIGINT);
-         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB, cpu_id UINTEGER)",
+        "CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB, cpu_id UINTEGER)",
     )?;
     writer.execute_batch(&GraphRows::schema())?;
     writer.execute(
@@ -677,7 +689,10 @@ fn earlier_keys_keep_edge_membership() -> TestResult {
     )?;
     for (id, revision, graph) in [("first", 1, &first), ("second", 2, &second)] {
         writer.execute(
-            "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO analysis_results
+                (result_id,tenant_id,processor_id,body,stream_key,method_version,first_cursor,
+                    facts_revision,coverage_revision,commit_revision,request_meta)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,CAST('' AS BLOB))",
             params![
                 id,
                 graph.scope.identity.tenant_id.as_slice(),
@@ -754,12 +769,9 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
     second.validate()?;
 
     let mut writer = Connection::open_in_memory()?;
+    writer.execute_batch(&crate::AnalysisStore::notice_schema())?;
     writer.execute_batch(
-        "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
-            tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
-            method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
-            coverage_revision UBIGINT, commit_revision UBIGINT);
-         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB, cpu_id UINTEGER)",
+        "CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB, cpu_id UINTEGER)",
     )?;
     writer.execute_batch(&GraphRows::schema())?;
     writer.execute(
@@ -773,7 +785,10 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
     let mut second_ids = None;
     for (id, revision, graph) in [("first", 1, &first), ("second", 2, &second)] {
         writer.execute(
-            "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO analysis_results
+                (result_id,tenant_id,processor_id,body,stream_key,method_version,first_cursor,
+                    facts_revision,coverage_revision,commit_revision,request_meta)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,CAST('' AS BLOB))",
             params![
                 id,
                 graph.scope.identity.tenant_id.as_slice(),
@@ -832,7 +847,7 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
         assert!(matches!(
             NativeRows::edges(&transaction, &second),
             Err(crate::Error::GraphInvalid {
-                field: "duplicate graph edge value",
+                field: "graph edge native value",
                 ..
             })
         ));

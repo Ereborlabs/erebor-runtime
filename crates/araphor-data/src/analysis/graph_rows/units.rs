@@ -550,26 +550,61 @@ impl GraphRows {
         }
         let finding_values = unique_findings.into_values().collect::<Vec<_>>();
         let finding_ids = Self::intern_findings(writer, &subjects, &records, &finding_values)?;
-        let states = batch
+        let state_rows = batch
             .contributions
             .iter()
             .filter_map(|row| row.state.as_ref().map(|state| (row, state)))
             .map(|(row, state)| {
+                let anchor = state
+                    .fact
+                    .as_ref()
+                    .map(|key| -> Result<_> {
+                        let (_, anchor) = batch
+                            .basis
+                            .facts
+                            .get(key)
+                            .ok_or_else(|| Self::invalid("graph unit state fact"))?;
+                        if !records.contains_key(&anchor.record) {
+                            return Err(Self::invalid("graph unit state fact record"));
+                        }
+                        Ok(anchor)
+                    })
+                    .transpose()?;
+                Ok((row, state, anchor))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let bodies = state_rows
+            .iter()
+            .filter_map(|(_, _, anchor)| *anchor)
+            .map(|anchor| {
+                Self::encode_value(&crate::GraphFactV1 {
+                    record_id: anchor.record.clone(),
+                    value: anchor.value.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut facts = Self::intern_values(
+            writer,
+            metadata.scope.identity.tenant_id,
+            MemberKind::Fact,
+            bodies,
+        )?
+        .into_iter();
+        let states = state_rows
+            .into_iter()
+            .map(|(row, state, anchor)| {
+                let anchor = anchor
+                    .map(|anchor| -> Result<_> {
+                        let fact = facts
+                            .next()
+                            .ok_or_else(|| Self::invalid("graph unit state fact reference"))?;
+                        Ok((anchor, fact))
+                    })
+                    .transpose()?;
                 Ok(araphor_graph::StateValue {
                     unit: records[&row.record],
                     state: state.clone(),
-                    anchor: state
-                        .fact
-                        .as_ref()
-                        .map(|key| {
-                            batch
-                                .basis
-                                .facts
-                                .get(key)
-                                .map(|(_, fact)| fact.clone())
-                                .ok_or_else(|| Self::invalid("graph unit state fact"))
-                        })
-                        .transpose()?,
+                    anchor,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -642,8 +677,7 @@ impl GraphRows {
                     record: Some(records[&row.record]),
                     fact: states[state_index]
                         .anchor
-                        .as_ref()
-                        .map(Self::encode_value)
+                        .map(|(anchor, _)| Self::encode_value(anchor))
                         .transpose()?,
                     reason: None,
                     ordinal: 0,
@@ -738,11 +772,7 @@ impl GraphRows {
         }
         .identities(&needed)?;
         for (kind, key, value) in previous {
-            if identities
-                .get(&(kind, value))
-                .map(|identity| Self::hash(identity))
-                != Some(key)
-            {
+            if identities.get(&(kind, value)).map(Vec::as_slice) != Some(key.as_slice()) {
                 return Err(Self::invalid("graph member identity collision"));
             }
         }

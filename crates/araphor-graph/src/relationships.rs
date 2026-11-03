@@ -122,7 +122,7 @@ impl RelationshipRows {
             }
         }
         drop(statement);
-        let allocated = Self::allocate(writer, "graph_edge_values_seq", missing.len())?;
+        let allocated = NativeRows::allocate(writer, "graph_edge_values_seq", missing.len())?;
         let mut inserts = Vec::with_capacity(missing.len());
         for ((key, ordinals), value) in missing.into_iter().zip(allocated) {
             for ordinal in ordinals {
@@ -184,7 +184,7 @@ impl RelationshipRows {
             }
         }
         drop(statement);
-        let allocated = Self::allocate(writer, "graph_edge_properties_seq", missing.len())?;
+        let allocated = NativeRows::allocate(writer, "graph_edge_properties_seq", missing.len())?;
         let mut inserts = Vec::with_capacity(missing.len());
         for ((key, ordinals), value) in missing.into_iter().zip(allocated) {
             for ordinal in ordinals {
@@ -194,32 +194,6 @@ impl RelationshipRows {
         }
         if !inserts.is_empty() {
             Self::append_properties(writer, edges, &inserts)?;
-        }
-        Ok(values)
-    }
-
-    fn allocate(writer: &Connection, sequence: &'static str, count: usize) -> Result<Vec<u64>> {
-        if count == 0 {
-            return Ok(Vec::new());
-        }
-        let count =
-            i64::try_from(count).map_err(|_| NativeRows::invalid("graph value identity count"))?;
-        let mut statement = writer
-            .prepare(&format!("SELECT nextval('{sequence}') FROM range(?)"))
-            .context(DatabaseSnafu {
-                operation: "prepare Graph value identities",
-            })?;
-        let values = statement
-            .query_map(params![count], |row| row.get::<_, u64>(0))
-            .context(DatabaseSnafu {
-                operation: "allocate Graph value identities",
-            })?
-            .collect::<duckdb::Result<Vec<_>>>()
-            .context(DatabaseSnafu {
-                operation: "decode Graph value identities",
-            })?;
-        if values.len() != count as usize || values.contains(&0) {
-            return Err(NativeRows::invalid("graph value identity count"));
         }
         Ok(values)
     }

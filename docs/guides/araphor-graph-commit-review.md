@@ -1261,3 +1261,49 @@ A fresh Builtin library build and all 53 Graph tests pass. The test run takes
 53 checks in 1.50 seconds. These results do not measure event-to-finding
 latency or prove the pending native source work bounds. The independent
 source log is `/tmp/araphor-cdc-production-six-input-20261102.log`.
+
+## Native State and metadata value keys
+
+[UnitBatch::contexts](../../crates/araphor-data/src/analysis/graph_rows/units.rs) checks the exact context key, record, value, sensitivity, and metadata membership
+  -> [GraphRows::apply_units](../../crates/araphor-data/src/analysis/graph_rows/units.rs) sends only touched State facts to the existing native fact pool
+  -> [StateRows::intern](../../crates/araphor-graph/src/contributions/state.rs) resolves exact native State keys and appends only absent values
+  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) records State membership and the selected State reference
+  -> [StateRows::finish](../../crates/araphor-graph/src/contributions/state.rs) checks the selected State and supplies the default when no unit State remains
+
+State stores the native fact reference, context key, sensitivity, and source
+position. It does not hash the fact body or State value. Native State keys
+use MessagePack. One native sequence allocation and one buffered appender
+write the absent values. Repeated input keys preserve input order and reuse
+the same value ID. The existing singleton default-State write remains.
+
+The full member anchor remains available for validation. Native reads check
+the complete record, value, context key, sensitivity, source, and ordinal.
+Fact and Branch values use their exact native body index. Member keys use
+the existing typed binary encoding. No new dictionary, cache, or publisher
+is added. The standalone change preserves the previous complete metadata
+write order and ordinal layout.
+
+The existing context-State test uses the real context table and checks the
+native fact reference, complete key and body, sensitivity, repeated value,
+and historical State. Its first publication uses the scope's creation
+revision. The second publication names that first version as its base.
+All previous context and authority fault checks remain.
+
+Independent focused Linux qualification: **Done for this State change**.
+The standalone build passes without warnings. All 31 Graph owner tests and
+65 Data Graph owner cases pass across the focused runs. The real context
+case checks native fact references and revision 1 to 2. The corruption check
+rejects 20 damaged stores on reopen. The grouped run reaches its 180-second
+diagnostic cutoff during the 8,193-witness case. That case remains
+unqualified.
+
+The old unchanged fixture now uses one actual notice revision for both
+writes. The byte-limit fixture uses a bound below mandatory reference
+storage. Four native fixtures use the production result schema and view.
+The edge corruption case expects the exact native-key validation error.
+All previous rejection, rollback, retry, and history assertions remain.
+
+Logs include `/tmp/araphor-cdc-state-standalone-graph-20261103.log`,
+`/tmp/araphor-cdc-state-remaining-data-20261103.log`, and
+`/tmp/araphor-cdc-state-edge-final-20261103.log`. The complete managed Graph
+path, complete hash audit, and millisecond execution remain **Not done**.

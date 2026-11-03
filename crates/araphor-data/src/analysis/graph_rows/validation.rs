@@ -96,7 +96,7 @@ impl GraphRows {
         Self::validate_branches(reader)?;
         for table in ["graph_branch_values", "graph_fact_values"] {
             let mut statement = reader
-                .prepare(&format!("SELECT tenant_id,value_hash,body FROM {table}"))
+                .prepare(&format!("SELECT tenant_id,body FROM {table}"))
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare Graph typed validation",
                 })?;
@@ -107,10 +107,9 @@ impl GraphRows {
                 operation: "advance Graph typed validation",
             })? {
                 let tenant: Vec<u8> = Self::column(row, 0)?;
-                let hash: Vec<u8> = Self::column(row, 1)?;
-                let body: Vec<u8> = Self::column(row, 2)?;
-                if hash != Self::hash(&body) || tenant.len() != 16 {
-                    return Err(Self::invalid("graph typed value hash"));
+                let body: Vec<u8> = Self::column(row, 1)?;
+                if tenant.len() != 16 {
+                    return Err(Self::invalid("graph typed value tenant"));
                 }
                 if table == "graph_fact_values" {
                     let fact: crate::GraphFactV1 = Self::decode_value(&body)?;

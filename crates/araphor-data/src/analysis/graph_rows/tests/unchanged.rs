@@ -6,12 +6,9 @@ fn unchanged_findings_reuse_values_and_membership() -> TestResult {
     let first = fixture.snapshot;
     let path = fixture._directory.path().join("unchanged.duckdb");
     let writer = Connection::open(&path)?;
+    writer.execute_batch(&crate::AnalysisStore::notice_schema())?;
     writer.execute_batch(
-        "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
-            tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
-            method_version UBIGINT, first_cursor UBIGINT, facts_revision UBIGINT,
-            coverage_revision UBIGINT, commit_revision UBIGINT);
-         CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY,
+        "CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY,
             identity_json VARCHAR, tenant_id BLOB, cpu_id UINTEGER)",
     )?;
     writer.execute_batch(&GraphRows::schema())?;
@@ -26,7 +23,10 @@ fn unchanged_findings_reuse_values_and_membership() -> TestResult {
     )?;
     let insert_result = |writer: &Connection, id: &str, revision: u64, graph: &GraphSnapshotV1| {
         writer.execute(
-            "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO analysis_results
+                (result_id,tenant_id,processor_id,body,stream_key,method_version,first_cursor,
+                    facts_revision,coverage_revision,commit_revision,request_meta)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,CAST('' AS BLOB))",
             params![
                 id,
                 graph.scope.identity.tenant_id.as_slice(),

@@ -819,7 +819,7 @@ fn units_require_current_context() -> TestResult {
     let mut fixture = Fixture::new()?;
     let mut writer = Connection::open_in_memory()?;
     fixture.schema(&writer)?;
-    writer.execute_batch("CREATE TABLE context_versions(tenant_id BLOB,owner_id VARCHAR,entity_key BLOB,lifetime_key BLOB,owner_revision UBIGINT,valid_from_utc_ns BIGINT,valid_until_utc_ns BIGINT,sensitivity VARCHAR,body BLOB,commit_revision UBIGINT)")?;
+    writer.execute_batch(super::super::super::AnalysisStore::CONTEXT_SCHEMA)?;
     let key = crate::AnalysisContextKeyV1 {
         tenant_id: fixture.metadata.scope.identity.tenant_id,
         owner_id: "owner".into(),
@@ -837,14 +837,15 @@ fn units_require_current_context() -> TestResult {
         },
     };
     writer.execute(
-        "INSERT INTO context_versions VALUES(?,?,?,?,?,NULL,NULL,'tenant',?,1)",
+        "INSERT INTO context_versions VALUES(?,?,?,?,?,NULL,NULL,'tenant',?,1,?)",
         params![
             key.tenant_id.as_slice(),
             key.owner_id,
             key.entity_key,
             key.lifetime_key,
             key.owner_revision,
-            value.encode_context()?
+            value.encode_context()?,
+            crate::analysis::context::version_key(&key)?
         ],
     )?;
     fixture.metadata.input_manifest.context = vec![key.clone()];
@@ -860,7 +861,10 @@ fn units_require_current_context() -> TestResult {
         value: value.value.clone(),
     };
     evaluation.inputs[4].data = Fact::encode(std::slice::from_ref(&fact))?;
-    let output = fixture.output(&[0], false)?;
+    let mut output = fixture.output(&[0], false)?;
+    let mut contributions = Contribution::decode(&output.datasets[3])?;
+    contributions[0].state.as_mut().ok_or("fact state")?.fact = Some(key.clone());
+    output.datasets[3] = Contribution::encode(&contributions)?;
     UnitBatch::new(
         &writer,
         std::path::Path::new("units"),
@@ -869,6 +873,74 @@ fn units_require_current_context() -> TestResult {
         &fixture.pin,
         true,
     )?;
+    let unit = GraphRows::intern_records(
+        &writer,
+        &fixture.metadata.scope.identity,
+        std::slice::from_ref(&fixture.records[0].id),
+    )?[&fixture.records[0].id];
+    assert!(unit > 0);
+    let mut prior_state = None;
+    let mut prior_fact = None;
+    for revision in 1..=2 {
+        GraphRows::version(
+            &writer,
+            &format!("version-{revision}"),
+            1,
+            revision,
+            (revision > 1).then(|| "version-1"),
+        )?;
+        let mut current = evaluation.clone();
+        current.inputs[2].data = sdk::ChangeInputs {
+            reset: "reset".into(),
+            ports: Vec::new(),
+        }
+        .reset_input(revision == 1)?;
+        let effects = GraphRows::apply_units(
+            &writer,
+            std::path::Path::new("units"),
+            1,
+            revision,
+            &fixture.metadata,
+            &Fixture::returned(&current, &output),
+            &fixture.pin,
+        )?;
+        assert_eq!(effects.state, GraphPackageStateV1::NativeEffect);
+        let selected:u64=writer.query_row("SELECT selected_state_ref FROM graph_producer_versions WHERE scope_id=1 AND commit_revision=?",params![revision],|row|row.get(0))?;
+        if let Some(prior) = prior_state {
+            assert_eq!(selected, prior);
+        } else {
+            prior_state = Some(selected);
+        }
+        let (native_fact,body)=writer.query_row("SELECT state.fact_ref,state.fact_sensitivity,state.fact_tenant,state.fact_owner,state.fact_entity,state.fact_lifetime,state.fact_revision,fact.body,state.unit_ref,state.position_revision,state.position_ordinal,fact.tenant_id FROM graph_unit_state_values state JOIN graph_fact_values fact ON fact.fact_id=state.fact_ref WHERE state.value_ref=?",params![selected],|row| {
+            assert_eq!(row.get::<_,String>(1)?,"tenant");
+            assert_eq!(row.get::<_,Vec<u8>>(2)?,key.tenant_id);
+            assert_eq!(row.get::<_,String>(3)?,key.owner_id);
+            assert_eq!(row.get::<_,Vec<u8>>(4)?,key.entity_key);
+            assert_eq!(row.get::<_,Vec<u8>>(5)?,key.lifetime_key);
+            assert_eq!(row.get::<_,u64>(6)?,key.owner_revision);
+            assert_eq!(row.get::<_,u64>(8)?,unit);
+            assert_eq!(row.get::<_,u64>(9)?,fixture.records[0].position.commit_revision);
+            assert_eq!(row.get::<_,u32>(10)?,fixture.records[0].position.ordinal);
+            assert_eq!(row.get::<_,Vec<u8>>(11)?,key.tenant_id);
+            Ok((row.get::<_,u64>(0)?,row.get::<_,Vec<u8>>(7)?))
+        })?;
+        assert!(native_fact > 0);
+        if let Some(prior) = prior_fact {
+            assert_eq!(native_fact, prior);
+        } else {
+            prior_fact = Some(native_fact);
+        }
+        assert_eq!(GraphRows::decode_value::<crate::GraphFactV1>(&body)?, value);
+        araphor_graph::StateRows::validate(&writer)?;
+        assert_eq!(
+            araphor_graph::StateRows::current(&writer, 1, revision)?,
+            GraphPackageStateV1::NativeEffect
+        );
+    }
+    assert_eq!(
+        araphor_graph::StateRows::current(&writer, 1, 1)?,
+        GraphPackageStateV1::NativeEffect
+    );
     for fault in 0..5 {
         let mut evaluation = evaluation.clone();
         let mut output = output.clone();
@@ -918,7 +990,7 @@ fn units_require_current_context() -> TestResult {
                 &fixture.metadata,
                 &Fixture::returned(&evaluation, &output),
                 &fixture.pin,
-                true
+                true,
             )
             .and_then(|batch| batch
                 .subjects
@@ -938,7 +1010,7 @@ fn units_require_current_context() -> TestResult {
             &fixture.metadata,
             &Fixture::returned(&evaluation, &output),
             &fixture.pin,
-            true
+            true,
         )
         .is_err());
         let mut unrelated = fixture.evaluation(&[1], &[], true)?;

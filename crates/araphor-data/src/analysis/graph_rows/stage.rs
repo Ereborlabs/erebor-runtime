@@ -61,10 +61,7 @@ impl GraphStage<'_> {
             .chain(selected.iter().map(|(key, value)| (key, value.value)))
         {
             if (2..=4).contains(kind)
-                && identities
-                    .get(&(*kind, value))
-                    .map(|identity| GraphRows::hash(identity))
-                    != Some(key.clone())
+                && identities.get(&(*kind, value)).map(Vec::as_slice) != Some(key.as_slice())
             {
                 return Err(GraphRows::invalid("graph member identity collision"));
             }

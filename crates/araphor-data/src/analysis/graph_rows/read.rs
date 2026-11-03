@@ -100,7 +100,7 @@ impl GraphRows {
         header.snapshot.input_manifest.evidence = evidence;
         header.snapshot.input_positions = positions;
         let mut facts = Vec::new();
-        let mut statement=reader.prepare("SELECT v.body,v.tenant_id,v.value_hash,m.ordinal,m.member_key FROM graph_selected_members m LEFT JOIN graph_fact_values v ON v.fact_id=m.value_ref WHERE m.result_id=? AND m.member_kind=7 ORDER BY m.ordinal").context(AnalysisDatabaseSnafu {operation:"prepare Graph facts"})?;
+        let mut statement=reader.prepare("SELECT v.body,v.tenant_id,m.ordinal,m.member_key FROM graph_selected_members m LEFT JOIN graph_fact_values v ON v.fact_id=m.value_ref WHERE m.result_id=? AND m.member_kind=7 ORDER BY m.ordinal").context(AnalysisDatabaseSnafu {operation:"prepare Graph facts"})?;
         let mut rows = statement
             .query(params![result])
             .context(AnalysisDatabaseSnafu {
@@ -112,12 +112,11 @@ impl GraphRows {
             Self::check(control)?;
             let body: Vec<u8> = Self::column(row, 0)?;
             let stored: Vec<u8> = Self::column(row, 1)?;
-            let hash: Vec<u8> = Self::column(row, 2)?;
-            if stored != tenant || hash != Self::hash(&body) {
+            if stored != tenant {
                 return Err(Self::invalid("graph fact value"));
             }
-            let ordinal: u32 = Self::column(row, 3)?;
-            let key: Vec<u8> = Self::column(row, 4)?;
+            let ordinal: u32 = Self::column(row, 2)?;
+            let key: Vec<u8> = Self::column(row, 3)?;
             if ordinal as usize != facts.len() || key != Self::encode_value(&(ordinal as usize))? {
                 return Err(Self::invalid("graph fact ordinal"));
             }
@@ -143,7 +142,7 @@ impl GraphRows {
         drop(statement);
         if complete && !header.derive_branches {
             let mut branches = Vec::new();
-            let mut statement=reader.prepare("SELECT v.body,v.tenant_id,v.value_hash,m.ordinal,m.member_key FROM graph_selected_members m LEFT JOIN graph_branch_values v ON v.branch_id=m.value_ref WHERE m.result_id=? AND m.member_kind=6 ORDER BY m.ordinal,m.member_key").context(AnalysisDatabaseSnafu {operation:"prepare Graph branches"})?;
+            let mut statement=reader.prepare("SELECT v.body,v.tenant_id,m.ordinal,m.member_key FROM graph_selected_members m LEFT JOIN graph_branch_values v ON v.branch_id=m.value_ref WHERE m.result_id=? AND m.member_kind=6 ORDER BY m.ordinal,m.member_key").context(AnalysisDatabaseSnafu {operation:"prepare Graph branches"})?;
             let mut rows = statement
                 .query(params![result])
                 .context(AnalysisDatabaseSnafu {
@@ -155,13 +154,12 @@ impl GraphRows {
                 Self::check(control)?;
                 let body: Vec<u8> = Self::column(row, 0)?;
                 let stored: Vec<u8> = Self::column(row, 1)?;
-                let hash: Vec<u8> = Self::column(row, 2)?;
-                if stored != tenant || hash != Self::hash(&body) {
+                if stored != tenant {
                     return Err(Self::invalid("graph branch value"));
                 }
                 {
-                    let ordinal: u32 = Self::column(row, 3)?;
-                    let key: Vec<u8> = Self::column(row, 4)?;
+                    let ordinal: u32 = Self::column(row, 2)?;
+                    let key: Vec<u8> = Self::column(row, 3)?;
                     if ordinal as usize != branches.len()
                         || key != Self::encode_value(&(ordinal as usize))?
                     {

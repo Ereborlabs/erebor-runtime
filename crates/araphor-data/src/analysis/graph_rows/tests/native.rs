@@ -191,7 +191,7 @@ impl NativeRows {
         count: usize,
         control: Option<&AnalysisReadControl>,
     ) -> Result<Vec<GraphBranchV1>> {
-        let mut statement=writer.prepare("SELECT m.ordinal,v.tenant_id,v.body,v.value_hash FROM graph_selected_members m LEFT JOIN graph_branch_values v ON v.branch_id=m.value_ref WHERE m.result_id=? AND m.member_kind=6 ORDER BY m.ordinal").context(AnalysisDatabaseSnafu {operation:"prepare native branch fixture"})?;
+        let mut statement=writer.prepare("SELECT m.ordinal,v.tenant_id,v.body FROM graph_selected_members m LEFT JOIN graph_branch_values v ON v.branch_id=m.value_ref WHERE m.result_id=? AND m.member_kind=6 ORDER BY m.ordinal").context(AnalysisDatabaseSnafu {operation:"prepare native branch fixture"})?;
         let mut rows = statement
             .query(params![id])
             .context(AnalysisDatabaseSnafu {
@@ -204,11 +204,7 @@ impl NativeRows {
             GraphRows::check(control)?;
             let stored: Vec<u8> = GraphRows::column(row, 1)?;
             let body: Vec<u8> = GraphRows::column(row, 2)?;
-            let hash: Vec<u8> = GraphRows::column(row, 3)?;
-            if stored != tenant
-                || hash != GraphRows::hash(&body)
-                || GraphRows::column::<u32>(row, 0)? as usize != branches.len()
-            {
+            if stored != tenant || GraphRows::column::<u32>(row, 0)? as usize != branches.len() {
                 return Err(GraphRows::invalid("graph branch fixture value"));
             }
             branches.push(GraphRows::decode_value(&body)?);

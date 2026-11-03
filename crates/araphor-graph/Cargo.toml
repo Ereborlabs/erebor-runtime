@@ -13,7 +13,6 @@ erebor-runtime-error = { path = "../erebor-runtime-error" }
 rmp-serde.workspace = true
 serde.workspace = true
 serde-value = "=0.7.0"
-sha2.workspace = true
 snafu.workspace = true
 
 [dev-dependencies]

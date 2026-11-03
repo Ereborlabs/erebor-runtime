@@ -442,6 +442,7 @@ fn unchanged_refresh_keeps_receipt() -> TestResult {
     let mut fixture = CommitFixture::new()?;
     let rows = proposed(&mut fixture)?;
     let captured = proof(&fixture)?;
+    fixture.snapshot.context_notice_revision = captured.commit_revision;
     let sources = vec![(
         "context_versions".into(),
         fixture.store.meta()?.commit_revision,

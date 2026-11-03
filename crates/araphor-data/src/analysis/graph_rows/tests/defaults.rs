@@ -604,8 +604,10 @@ fn extracted_provenance_defaults() -> TestResult {
     }
     assert_eq!(captured.witnesses, request.witnesses);
     let bytes = captured
-        .input_bytes
-        .checked_sub(1)
+        .references
+        .len()
+        .checked_mul(std::mem::size_of::<crate::AnalysisReferenceV1>())
+        .and_then(|bytes| bytes.checked_sub(1))
         .ok_or("configured input bytes")?;
     let bounded = AnalysisExtractLimits {
         input_bytes: bytes,

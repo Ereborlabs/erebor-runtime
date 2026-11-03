@@ -66,12 +66,10 @@ CREATE TABLE graph_position_values (
     UNIQUE (evidence_id, commit_revision, ordinal), CHECK (commit_revision > 0)
 );
 CREATE TABLE graph_branch_values (
-    branch_id UBIGINT PRIMARY KEY, tenant_id BLOB NOT NULL,
-    value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32), body BLOB NOT NULL
+    branch_id UBIGINT PRIMARY KEY, tenant_id BLOB NOT NULL, body BLOB NOT NULL
 );
-CREATE INDEX graph_branch_hash ON graph_branch_values (value_hash);
+CREATE INDEX graph_branch_body ON graph_branch_values (body);
 CREATE TABLE graph_fact_values (
-    fact_id UBIGINT PRIMARY KEY, tenant_id BLOB NOT NULL,
-    value_hash BLOB NOT NULL CHECK (octet_length(value_hash) = 32), body BLOB NOT NULL
+    fact_id UBIGINT PRIMARY KEY, tenant_id BLOB NOT NULL, body BLOB NOT NULL
 );
-CREATE INDEX graph_fact_hash ON graph_fact_values (value_hash);
+CREATE INDEX graph_fact_body ON graph_fact_values (body);

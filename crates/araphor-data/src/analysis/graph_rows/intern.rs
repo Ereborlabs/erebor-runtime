@@ -57,59 +57,122 @@ impl GraphRows {
         tenant: [u8; 16],
         branches: &[GraphBranchV1],
     ) -> Result<Vec<u64>> {
-        if branches.is_empty() {
-            return Ok(Vec::new());
-        }
-        writer.execute_batch("CREATE TEMP TABLE graph_value_branches(ordinal UBIGINT,tenant_id BLOB,value_hash BLOB,body BLOB)").context(AnalysisDatabaseSnafu {operation:"create Graph branch candidates"})?;
-        {
-            let mut appender =
-                writer
-                    .appender("graph_value_branches")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "open Graph branch candidates",
-                    })?;
-            for (ordinal, branch) in branches.iter().enumerate() {
+        let bodies = branches
+            .iter()
+            .map(|branch| {
                 Self::check_branch(branch, tenant)?;
-                let body = Self::encode_value(branch)?;
-                appender
-                    .append_row(params![
-                        ordinal as u64,
-                        tenant.as_slice(),
-                        Self::hash(&body),
-                        body
-                    ])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "append Graph branch candidate",
-                    })?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush Graph branch candidates",
-            })?;
+                Self::encode_value(branch)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::intern_values(writer, tenant, MemberKind::Branch, bodies)
+    }
+
+    pub(super) fn intern_values(
+        writer: &Connection,
+        tenant: [u8; 16],
+        kind: MemberKind,
+        bodies: Vec<Vec<u8>>,
+    ) -> Result<Vec<u64>> {
+        let (table, column, sequence, operation) = match kind {
+            MemberKind::Fact => (
+                "graph_fact_values",
+                "fact_id",
+                "graph_fact_values_seq",
+                "intern Graph metadata facts",
+            ),
+            MemberKind::Branch => (
+                "graph_branch_values",
+                "branch_id",
+                "graph_branch_values_seq",
+                "intern Graph branch candidates",
+            ),
+            _ => return Err(Self::invalid("graph typed value kind")),
+        };
+        let mut ids = vec![0; bodies.len()];
+        let mut values = BTreeMap::<Vec<u8>, Vec<usize>>::new();
+        for (ordinal, body) in bodies.into_iter().enumerate() {
+            values.entry(body).or_default().push(ordinal);
         }
-        writer.execute_batch("INSERT INTO graph_branch_values SELECT nextval('graph_branch_values_seq'),c.* FROM (SELECT DISTINCT tenant_id,value_hash,body FROM graph_value_branches) c WHERE NOT EXISTS(SELECT 1 FROM graph_branch_values v WHERE v.tenant_id=c.tenant_id AND v.value_hash=c.value_hash AND v.body=c.body)").context(AnalysisDatabaseSnafu {operation:"intern Graph branch candidates"})?;
-        let mut statement=writer.prepare("SELECT c.ordinal,v.branch_id FROM graph_value_branches c JOIN graph_branch_values v ON v.tenant_id=c.tenant_id AND v.value_hash=c.value_hash AND v.body=c.body ORDER BY c.ordinal").context(AnalysisDatabaseSnafu {operation:"prepare Graph branch references"})?;
-        let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
-            operation: "read Graph branch references",
-        })?;
-        let mut values = Vec::with_capacity(branches.len());
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance Graph branch references",
-        })? {
-            if Self::column::<u64>(row, 0)? != values.len() as u64 {
-                return Err(Self::invalid("graph duplicate branch value"));
-            }
-            values.push(Self::column(row, 1)?);
+        if values.is_empty() {
+            return Ok(ids);
         }
-        drop(rows);
-        drop(statement);
-        writer
-            .execute_batch("DROP TABLE graph_value_branches")
+        let mut missing = Vec::new();
+        let mut statement = writer
+            .prepare(&format!(
+                "WITH candidates AS MATERIALIZED (SELECT {column},tenant_id FROM {table} WHERE body=?)
+                 SELECT {column} FROM candidates WHERE tenant_id=?"
+            ))
             .context(AnalysisDatabaseSnafu {
-                operation: "release Graph branch candidates",
+                operation: "prepare Graph typed value candidates",
             })?;
-        if values.len() != branches.len() {
-            return Err(Self::invalid("graph branch candidate count"));
+        for (body, ordinals) in &values {
+            let mut rows = statement.query(params![body, tenant.as_slice()]).context(
+                AnalysisDatabaseSnafu {
+                    operation: "read Graph typed value candidates",
+                },
+            )?;
+            let value = rows
+                .next()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "advance Graph typed value candidates",
+                })?
+                .map(|row| Self::column::<u64>(row, 0))
+                .transpose()?;
+            if value == Some(0)
+                || rows
+                    .next()
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "check unique Graph typed value",
+                    })?
+                    .is_some()
+            {
+                return Err(Self::invalid("graph duplicate typed value"));
+            }
+            if let Some(value) = value {
+                for ordinal in ordinals {
+                    ids[*ordinal] = value;
+                }
+            } else {
+                missing.push((body.as_slice(), ordinals.as_slice()));
+            }
         }
-        Ok(values)
+        drop(statement);
+        if !missing.is_empty() {
+            let count = i64::try_from(missing.len())
+                .map_err(|_| Self::invalid("graph typed value count"))?;
+            let mut statement = writer
+                .prepare(&format!("SELECT nextval('{sequence}') FROM range(?)"))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare Graph typed value identities",
+                })?;
+            let allocated = statement
+                .query_map(params![count], |row| row.get::<_, u64>(0))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "allocate Graph typed value identities",
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode Graph typed value identities",
+                })?;
+            if allocated.len() != missing.len() || allocated.contains(&0) {
+                return Err(Self::invalid("graph typed value count"));
+            }
+            drop(statement);
+            let mut appender = writer.appender(table).context(AnalysisDatabaseSnafu {
+                operation: "open Graph typed values",
+            })?;
+            for ((body, ordinals), value) in missing.into_iter().zip(allocated) {
+                appender
+                    .append_row(params![value, tenant.as_slice(), body])
+                    .context(AnalysisDatabaseSnafu { operation })?;
+                for ordinal in ordinals {
+                    ids[*ordinal] = value;
+                }
+            }
+            appender
+                .flush()
+                .context(AnalysisDatabaseSnafu { operation })?;
+        }
+        Ok(ids)
     }
 }

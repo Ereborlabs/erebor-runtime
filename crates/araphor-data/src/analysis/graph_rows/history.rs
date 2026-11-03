@@ -425,7 +425,6 @@ impl GraphRows {
             "CREATE TEMP TABLE graph_stage_evidence (cpu_id UINTEGER, durable_cursor UBIGINT, member_key BLOB);
              CREATE TEMP TABLE graph_stage_positions (cpu_id UINTEGER, durable_cursor UBIGINT,
                  position_revision UBIGINT, position_ordinal UINTEGER, member_key BLOB, list_ordinal UINTEGER);
-             CREATE TEMP TABLE graph_stage_facts (member_key BLOB, list_ordinal UINTEGER, value_hash BLOB, body BLOB);
              CREATE TEMP TABLE graph_stage_members (member_kind UTINYINT, member_key BLOB,
                  value_ref UBIGINT, ordinal UINTEGER, PRIMARY KEY (member_kind, member_key));",
         ).context(AnalysisDatabaseSnafu { operation: "stage Graph metadata" })?;
@@ -478,33 +477,14 @@ impl GraphRows {
                 operation: "flush Graph position stage",
             })?;
         }
-        {
-            let mut appender =
-                writer
-                    .appender("graph_stage_facts")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "stage Graph facts",
-                    })?;
-            for (index, fact) in metadata.facts.iter().enumerate() {
+        let bodies = metadata
+            .facts
+            .iter()
+            .map(|fact| {
                 fact.validate()?;
-                let body = Self::encode_value(fact)?;
-                let ordinal =
-                    u32::try_from(index).map_err(|_| Self::invalid("graph fact ordinal"))?;
-                appender
-                    .append_row(params![
-                        Self::encode_value(&index)?,
-                        ordinal,
-                        Self::hash(&body),
-                        body,
-                    ])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "stage Graph facts",
-                    })?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush Graph fact stage",
-            })?;
-        }
+                Self::encode_value(fact)
+            })
+            .collect::<Result<Vec<_>>>()?;
         writer
             .execute(
                 "INSERT INTO graph_evidence
@@ -532,22 +512,12 @@ impl GraphRows {
              WHERE saved.value_ref IS NULL",
             params![source],
         ).context(AnalysisDatabaseSnafu { operation: "intern Graph position batch" })?;
-        writer
-            .execute(
-                "INSERT INTO graph_fact_values
-             SELECT nextval('graph_fact_values_seq'), ?, stage.value_hash, stage.body
-             FROM (SELECT DISTINCT value_hash, body FROM graph_stage_facts) stage
-             WHERE NOT EXISTS (SELECT 1 FROM graph_fact_values saved
-                 WHERE saved.tenant_id = ? AND saved.value_hash = stage.value_hash
-                   AND saved.body = stage.body)",
-                params![
-                    metadata.scope.identity.tenant_id.as_slice(),
-                    metadata.scope.identity.tenant_id.as_slice()
-                ],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "intern Graph fact batch",
-            })?;
+        let facts = Self::intern_values(
+            writer,
+            metadata.scope.identity.tenant_id,
+            MemberKind::Fact,
+            bodies,
+        )?;
         writer.execute(
             "INSERT INTO graph_stage_members
              SELECT 0, stage.member_key, evidence.evidence_id, 0
@@ -567,19 +537,31 @@ impl GraphRows {
                  AND position.ordinal = stage.position_ordinal",
             params![source],
         ).context(AnalysisDatabaseSnafu { operation: "stage Graph position members" })?;
-        writer
-            .execute(
-                "INSERT INTO graph_stage_members
-             SELECT 7, stage.member_key, min(fact.fact_id), stage.list_ordinal
-             FROM graph_stage_facts stage
-             JOIN graph_fact_values fact ON fact.tenant_id = ?
-                 AND fact.value_hash = stage.value_hash AND fact.body = stage.body
-             GROUP BY stage.member_key, stage.list_ordinal",
-                params![metadata.scope.identity.tenant_id.as_slice()],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "stage Graph fact members",
+        {
+            let mut appender =
+                writer
+                    .appender("graph_stage_members")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "open Graph fact members",
+                    })?;
+            for (index, fact) in facts.into_iter().enumerate() {
+                let ordinal =
+                    u32::try_from(index).map_err(|_| Self::invalid("graph fact ordinal"))?;
+                appender
+                    .append_row(params![
+                        MemberKind::Fact as u8,
+                        Self::encode_value(&index)?,
+                        fact,
+                        ordinal
+                    ])
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "stage Graph fact members",
+                    })?;
+            }
+            appender.flush().context(AnalysisDatabaseSnafu {
+                operation: "flush Graph fact members",
             })?;
+        }
         let mut statement = writer
             .prepare("SELECT member_kind,member_key,value_ref,ordinal FROM graph_stage_members")
             .context(AnalysisDatabaseSnafu {
@@ -618,7 +600,6 @@ impl GraphRows {
         writer
             .execute_batch(
                 "DROP TABLE graph_stage_members;
-             DROP TABLE graph_stage_facts;
              DROP TABLE graph_stage_positions;
              DROP TABLE graph_stage_evidence;",
             )

@@ -1,5 +1,4 @@
 use super::*;
-use sha2::Sha256;
 
 #[test]
 fn branch_values_keep_history_order_and_duplicates() -> TestResult {
@@ -94,10 +93,9 @@ fn branch_values_keep_history_order_and_duplicates() -> TestResult {
             |row| row.get(0),
         )?;
         body.push(0);
-        let hash = Sha256::digest(&body);
         transaction.execute(
-            "UPDATE graph_branch_values SET body = ?, value_hash = ? WHERE branch_id = 1",
-            params![body, hash.as_slice()],
+            "UPDATE graph_branch_values SET body = ? WHERE branch_id = 1",
+            params![body],
         )?;
         assert!(NativeRows::read_branches(&transaction, "first", tenant, 3, None).is_err());
     }
