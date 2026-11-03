@@ -83,6 +83,31 @@ whole duration of that work. The source and summary are in
 `/tmp/araphor-live-fact-keys-gdb-exact-20261103.log` and
 `/tmp/araphor-live-fact-keys-stack-summary-20261103.txt`.
 
+### Retained join ordering measurement on 2026-11-03
+
+`SourceJoin` no longer adds native output requirements to every retained
+probe subtree. Real package arguments keep their `PackageExec` wrappers.
+The native optimizer still enforces SQL and package ordering requirements.
+The first join-orientation traversal remains.
+
+The connected first-plan time falls from 253.668 s to 223.212 s. Setup takes
+235.576 s, including configuration at 235.006 s and the first physical
+plan. The attempt stops after 425.979 s during its second plan. No finding,
+bulk result, or warm-arrival result is produced. The build takes 189.707 s.
+The log is `/tmp/araphor-live-join-order-20261103.log`.
+
+The paired completed setup stages are: configuration 265.085 s to
+235.006 s; listening 0.254317 s to 0.254086 s; subscriptions 0.073497 s to
+0.070954 s; and policy 0.238808 s to 0.229004 s. Inclusive startup falls
+from 265.666 s to 235.576 s. The externally interrupted totals are
+556.405 s and 425.979 s. These totals do not compare completed tests.
+The second-plan, event-observation, and shutdown durations are unknown.
+
+The measured source contains the recorded native optimizer and identity
+work. The isolated commit preserves its parent's first traversal and removes
+only the second traversal. This measurement does not qualify that isolated
+commit alone. Completed-workload qualification and the 100-times target
+remain **Not done**.
 **Measurement record: Done. Proposals 1 and 5: Approved; implementation in
 progress. Proposals 2, 3, 4, and 6: Not approved; implementation Not done.**
 The user approves retained execution state, change inputs, contribution

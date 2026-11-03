@@ -1,5 +1,23 @@
 # Araphor retained execution state review
 
+## Retained join ordering on 2026-11-03
+
+[SourceJoin](../../crates/araphor-query/src/sources/keys/planner.rs) selects the retained join side
+  -> [PackageExec](../../crates/araphor-query/src/definition/physical.rs) keeps native output requirements at each package argument
+  -> the native DataFusion optimizer enforces those requirements and SQL ordering
+
+`SourceJoin` no longer adds a second output-requirements wrapper to every
+retained probe subtree. The first join-orientation traversal remains.
+Graph ports receive checked scalar metadata or canonical Graph values.
+Their physical operator has no ordered-input contract. Real package
+arguments keep their existing native ordering wrapper.
+
+The connected first-plan time falls from 253.668 s to 223.212 s. The attempt
+stops after 425.979 s during the second plan and produces no finding. The
+[measurement record](../plans/araphor-reactive-execution-latency.md#retained-join-ordering-measurement-on-2026-11-03)
+states the source limit and nested intervals. Completed-workload
+qualification and the 100-times target remain **Not done**.
+
 ## Graph support fact join on 2026-11-03
 
 [Unit selection SQL](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql)

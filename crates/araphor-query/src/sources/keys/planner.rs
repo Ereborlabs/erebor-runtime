@@ -6,7 +6,6 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::JoinType;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
@@ -46,9 +45,9 @@ impl PhysicalOptimizerRule for SourceJoin {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = plan
+        Ok(plan
             .transform_up(|plan| {
                 let Some(join) = plan.as_any().downcast_ref::<HashJoinExec>() else {
                     return Ok(Transformed::no(plan));
@@ -68,23 +67,6 @@ impl PhysicalOptimizerRule for SourceJoin {
                     )));
                 }
                 Ok(Transformed::no(plan))
-            })?
-            .data;
-        Ok(plan
-            .transform_up(|plan| {
-                let Some(join) = plan.as_any().downcast_ref::<HashJoinExec>() else {
-                    return Ok(Transformed::no(plan));
-                };
-                if !Self::retained(join.right())? || !join.maintains_input_order()[1] {
-                    return Ok(Transformed::no(plan));
-                }
-                let right = OutputRequirements::new_add_mode()
-                    .optimize(Arc::clone(join.right()), config)?;
-                if Arc::ptr_eq(&right, join.right()) {
-                    return Ok(Transformed::no(plan));
-                }
-                let left = Arc::clone(join.left());
-                Ok(Transformed::yes(plan.with_new_children(vec![left, right])?))
             })?
             .data)
     }
