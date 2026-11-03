@@ -893,3 +893,57 @@ Logs are `/tmp/araphor-cdc-code-cache-wasm-20261103.log` and
 passes 29 cases and fails the obsolete fixed-cap fixture. The corrected
 fixture passes separately. These checks do not qualify full Graph
 execution, complete hash removal, or a latency improvement.
+
+
+## Managed state and admitted code on 2026-11-03
+
+[Instance::execute_step](../../crates/araphor-analysis/src/instance/mod.rs) invokes an admitted query program
+  -> [AnalysisStore::capture_managed](../../crates/araphor-data/src/analysis/managed/capture.rs) checks current heads and selects prior state
+  -> [Session::hydrate_source](../../crates/araphor-query/src/definition/replay.rs) restores prior parameters through the saved call
+  -> [PackageExec](../../crates/araphor-query/src/definition/physical.rs) calls the selected package implementation
+  -> [managed publication](../../crates/araphor-data/src/analysis/managed/commit.rs) checks inputs, authority, output, evidence, and current progress
+  -> [AnalysisStore::retain_managed](../../crates/araphor-data/src/analysis/managed/execution.rs) builds the in-memory committed state without archive reads
+  -> [managed publication](../../crates/araphor-data/src/analysis/managed/commit.rs) commits the transaction before it promotes that state
+
+Three package archive checks are removed from prior-state capture and
+in-memory retention. These paths use the admitted code contract. Durable
+prior state still checks its descriptor, target, artifact identity, and
+checkpoint schema. Cold code preparation, image restoration, and store
+reopen still validate the actual OCI archive. Graph and context validation
+remain at their existing owners.
+
+The existing [retained authority case](../../crates/araphor-analysis/src/instance/tests/reusing.rs)
+keeps executing its admitted plan when the saved archive is corrupt. It
+rejects cold preparation and inspection until the archive is restored.
+The existing [package restore case](../../crates/araphor-data/src/analysis/managed/tests/execution.rs)
+checks retained Arrow identity, malformed-archive rejection at the actual
+cold image reader, restoration with the same image pin, and a missing
+descriptor at durable state capture. The malformed input is a broken
+archive. Extra zero archive padding remains valid.
+
+The existing [checkpoint and atomic commit cases](../../crates/araphor-data/src/analysis/managed/tests.rs)
+hydrate prior parameters from their actual committed evaluations before
+state matching. Query already performs that operation in production.
+No input or output payload is added to durable storage. All prior state,
+schema, parameter, coverage, rebuild, rollback, and reopen assertions remain.
+
+Focused isolated qualification: **Done** against `3be36bd03` plus the
+five reviewed source files. Eight distinct Data cases pass across nine
+executions in 57.19 seconds. Restore takes 2.58 seconds; capture guards,
+2.82 seconds; atomic calls, 22.16 seconds; the retained-execution group,
+10.81 seconds; failure rollback, 2.63 seconds; recovery, 13.37 seconds; and
+replay commit, 2.82 seconds. The restore case also runs in that group.
+The unchanged Analysis authority case passes separately in 3.51 seconds.
+These durations are functional checks, not event latency. The Data group
+overlaps the final compilation work. The initial isolated build fails at
+linking after 1,679.91 seconds because the disk is full. Cleanup preserves
+the completed native library. The build retry passes in 122.54 seconds.
+
+Logs are `/tmp/araphor-retained-isolated-checks-20261103/timings.tsv`,
+`/tmp/araphor-retained-isolated-authority-20261103.log`, and
+`/tmp/araphor-retained-isolated-build-retry-20261103.log`. Scoped source
+formatting and whitespace checks pass. No full CI run is part of this cut.
+The earlier connected authority case passes in 3.72 seconds after a
+2.89-second failure. Those runs do not measure a speed improvement: the
+failed run ends before the full contract executes. The live Graph pipeline
+and the 100-times target remain **Not done**.

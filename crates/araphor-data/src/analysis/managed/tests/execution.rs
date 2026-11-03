@@ -168,7 +168,7 @@ fn execution_checks_heads_and_recovery_epoch() -> TestResult {
 }
 
 #[test]
-fn execution_checks_current_package_bytes() -> TestResult {
+fn execution_checks_package_restore() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit_model(&store, false, AnalysisSelectionV1::tenant([1; 16]), true)?;
@@ -193,18 +193,10 @@ fn execution_checks_current_package_bytes() -> TestResult {
                 operation: "read retained test artifact",
             })
     })?;
-    let mut changed = artifact.clone();
-    changed.push(0);
+    let changed = b"invalid".to_vec();
     store.writer()?.get_mut()?.execute(
         "UPDATE package_revisions SET artifact=? WHERE package_id='managed-fixture'",
         params![changed],
-    )?;
-    assert!(fixture
-        .capture_execution(&store, false, Some(Arc::clone(&execution)))
-        .is_err());
-    store.writer()?.get_mut()?.execute(
-        "UPDATE package_revisions SET artifact=? WHERE package_id='managed-fixture'",
-        params![artifact],
     )?;
     let warm = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
     assert!(Arc::ptr_eq(
@@ -217,12 +209,32 @@ fn execution_checks_current_package_bytes() -> TestResult {
             .batches[0]
             .column(0)
     ));
+    let pin = fixture
+        .instance
+        .spec
+        .definition
+        .images
+        .first()
+        .ok_or("managed image pin")?;
+    let control = AnalysisReadControl::default();
+    assert!(store
+        .retained_package_image([1; 16], pin, &control)
+        .is_err());
+    store.writer()?.get_mut()?.execute(
+        "UPDATE package_revisions SET artifact=? WHERE package_id='managed-fixture'",
+        params![artifact],
+    )?;
+    assert_eq!(
+        store
+            .retained_package_image([1; 16], pin, &control)?
+            .ok_or("restored package image")?
+            .digest(),
+        pin.digest
+    );
     store.writer()?.get_mut()?.execute(
         "DELETE FROM package_revisions WHERE package_id='managed-fixture'",
         [],
     )?;
-    assert!(fixture
-        .capture_execution(&store, false, Some(execution))
-        .is_err());
+    assert!(fixture.capture(&store, false).is_err());
     Ok(())
 }

@@ -4,7 +4,6 @@ use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
-use super::super::context::VerifiedPackages;
 use super::super::{AnalysisExtractionV1, AnalysisSelectionV1, AnalysisStore, PackageResultRefV1};
 use super::model::*;
 use crate::{AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result};
@@ -133,7 +132,6 @@ impl AnalysisStore {
         }
         let mut prior = BTreeMap::new();
         let mut states = BTreeMap::new();
-        let mut verified = VerifiedPackages::default();
         let retained = request
             .execution
             .as_ref()
@@ -158,13 +156,6 @@ impl AnalysisStore {
                         .get(call)
                         .filter(|state| state.revision == revision && state.result == id)
                     {
-                        let declaration = &instance.spec.manifest.calls[call];
-                        self.verify_package_revision(
-                            reader,
-                            instance.spec.tenant,
-                            &declaration.package,
-                            &mut verified,
-                        )?;
                         output.charge(state.allocated_bytes())?;
                         prior.insert(*call, std::sync::Arc::clone(state));
                         states.insert(
@@ -183,12 +174,6 @@ impl AnalysisStore {
                     output.charge(usize::try_from(bytes).unwrap_or(usize::MAX))?;
                     let state = Self::managed_prior_from(
                         reader, &instance, *call, &id, revision, output, control,
-                    )?;
-                    self.verify_package_revision(
-                        reader,
-                        instance.spec.tenant,
-                        &instance.spec.manifest.calls[call].package,
-                        &mut verified,
                     )?;
                     prior.insert(*call, std::sync::Arc::new(state));
                 }

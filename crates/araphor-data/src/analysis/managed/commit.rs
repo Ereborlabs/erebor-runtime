@@ -190,9 +190,9 @@ impl AnalysisStore {
                 operation: "begin managed publication",
             })?;
         let revision = self.package_next(&transaction)?;
-        let (receipt, projected, mut verified) =
+        let (receipt, projected, _) =
             self.managed_commit_rows(&transaction, input, revision, &evidence, project)?;
-        let retained = self.retain_managed(&transaction, input, &receipt, &mut verified)?;
+        let retained = Self::retain_managed(input, &receipt);
         let source_proof = input.attempt.5.as_ref().map(|frame| {
             (
                 std::sync::Arc::clone(frame),

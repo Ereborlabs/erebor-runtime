@@ -2,10 +2,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use araphor_analysis_sdk as sdk;
-use duckdb::Connection;
 
 use super::model::*;
-use crate::{AnalysisStore, AnalysisStoreMetaV1, Result, ResultContext};
+use crate::{AnalysisStore, AnalysisStoreMetaV1, ResultContext};
 
 #[derive(Debug, Default)]
 pub struct ManagedExecution {
@@ -150,25 +149,14 @@ impl ManagedPrior {
 
 impl AnalysisStore {
     pub(super) fn retain_managed(
-        &self,
-        reader: &Connection,
         input: &ManagedCommit<'_>,
         receipt: &ManagedReceipt,
-        verified: &mut crate::analysis::context::VerifiedPackages,
-    ) -> Result<Option<(Arc<ManagedExecution>, Committed)>> {
-        let Some(owner) = &input.attempt.4 else {
-            return Ok(None);
-        };
+    ) -> Option<(Arc<ManagedExecution>, Committed)> {
+        let owner = input.attempt.4.as_ref()?;
         let mut calls = input.attempt.3.clone();
         let instance = input.attempt.instance();
         for returned in input.returns {
             let declaration = &instance.spec.manifest.calls[&returned.call];
-            self.verify_package_revision(
-                reader,
-                instance.spec.tenant,
-                &declaration.package,
-                verified,
-            )?;
             let mut evaluation = returned.evaluation.clone();
             evaluation.checkpoint = None;
             evaluation.previous_outputs.clear();
@@ -214,6 +202,6 @@ impl AnalysisStore {
             instance,
             calls,
         };
-        Ok(Some((Arc::clone(owner), state)))
+        Some((Arc::clone(owner), state))
     }
 }

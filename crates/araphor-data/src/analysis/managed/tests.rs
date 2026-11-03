@@ -594,7 +594,18 @@ fn managed_calls_commit_atomically() -> TestResult {
         &AnalysisReadControl::default()
     )?
     .is_none());
-    let next = fixture.capture(&store, false)?;
+    let mut next = fixture.capture(&store, false)?;
+    for (call, evaluation) in [10, 11].into_iter().zip(&evaluations) {
+        next.hydrate_prior(
+            call,
+            &fixture.model,
+            evaluation.parameters.as_ref().map(|batch| sdk::Dataset {
+                name: "parameters".into(),
+                batches: vec![batch.clone()],
+            }),
+            None,
+        )?;
+    }
     assert_eq!(next.instance().progress, receipt.commit_revision);
     assert_ne!(
         next.prior(10).ok_or("first prior absent")?.result,
@@ -664,7 +675,7 @@ fn managed_calls_commit_atomically() -> TestResult {
         )?
         .ok_or("attempt absent")?;
     assert_eq!(retry.receipt().cloned(), Some(receipt.clone()));
-    let latest = fixture.capture(&reopened, false)?;
+    let mut latest = fixture.capture(&reopened, false)?;
     assert_eq!(latest.instance().progress, second_receipt.commit_revision);
     for call in [10, 11] {
         let retained = reopened.managed_result(
@@ -692,6 +703,18 @@ fn managed_calls_commit_atomically() -> TestResult {
                 .datasets[0]
                 .batches
         );
+        latest.hydrate_prior(
+            call,
+            &fixture.model,
+            second_evaluations[(call - 10) as usize]
+                .parameters
+                .as_ref()
+                .map(|batch| sdk::Dataset {
+                    name: "parameters".into(),
+                    batches: vec![batch.clone()],
+                }),
+            None,
+        )?;
         let prior = latest.prior(call).ok_or("current checkpoint absent")?;
         assert_eq!(prior.result, second_receipt.results[&call].result_id);
         assert_eq!(
@@ -881,14 +904,27 @@ fn managed_capture_keeps_guards() -> TestResult {
     ];
     let outputs = [fixture.output(12)?, fixture.output(13)?];
     fixture.publish(&store, &attempt, &eval, &outputs)?;
-    let eval = [
+    let stale_eval = [
         fixture.evaluation(&second, 10, None)?,
         fixture.evaluation(&second, 11, None)?,
     ];
     let before = store.meta()?;
-    assert!(fixture.publish(&store, &stale, &eval, &outputs).is_err());
+    assert!(fixture
+        .publish(&store, &stale, &stale_eval, &outputs)
+        .is_err());
     assert_eq!(store.meta()?, before);
-    let captured = fixture.capture(&store, false)?;
+    let mut captured = fixture.capture(&store, false)?;
+    for (call, evaluation) in [10, 11].into_iter().zip(&eval) {
+        captured.hydrate_prior(
+            call,
+            &fixture.model,
+            evaluation.parameters.as_ref().map(|batch| sdk::Dataset {
+                name: "parameters".into(),
+                batches: vec![batch.clone()],
+            }),
+            None,
+        )?;
+    }
     let input = request("guarded");
     let evaluation = fixture.evaluation(&input, 10, Some(&captured))?;
     let prior = captured.prior(10).ok_or("prior absent")?;
