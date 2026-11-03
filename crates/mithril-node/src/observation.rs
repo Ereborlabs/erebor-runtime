@@ -196,6 +196,10 @@ impl EffectObservationStore {
             .parent()
             .unwrap_or(&wal_root)
             .join("evidence-coverage-v1.json");
+        let wal = EvidenceWalOwner::open(&wal_root, limits)?;
+        let coverage = CoverageHealthOwner::open(coverage_path, canonicalizer, |snapshot| {
+            wal.validate_coverage(snapshot, canonicalizer)
+        })?;
         Ok(Self {
             inner: Arc::new(Inner {
                 discovery_context: RwLock::new(None),
@@ -218,8 +222,8 @@ impl EffectObservationStore {
                 evidence_progress: tokio::sync::watch::channel(()).0,
                 durable: Some(Mutex::new(DurableEvidence {
                     canonicalizer,
-                    wal: EvidenceWalOwner::open(&wal_root, limits)?,
-                    coverage: CoverageHealthOwner::open(coverage_path, canonicalizer)?,
+                    wal,
+                    coverage,
                 })),
             }),
         })
@@ -300,7 +304,8 @@ impl EffectObservationStore {
                     .map_err(|error| (Box::new(error), false))?;
                 let mut observations = Vec::with_capacity(events.len());
                 for (event, coverage) in events.iter().zip(coverage) {
-                    let Some((coverage_interval_id, temporal_coverage)) = coverage else {
+                    let Some((source_id, coverage_interval_id, temporal_coverage)) = coverage
+                    else {
                         erebor_telemetry::debug!(
                             "ignored a replayed effect observation",
                             cpu_id = %event.source_cpu_id,
@@ -308,8 +313,9 @@ impl EffectObservationStore {
                         );
                         continue;
                     };
-                    let mut observation = durable
-                        .canonicalizer
+                    let mut canonicalizer = durable.canonicalizer;
+                    canonicalizer.source_id = source_id;
+                    let mut observation = canonicalizer
                         .normalize_kernel(
                             *event,
                             coverage_interval_id,
@@ -995,8 +1001,8 @@ mod tests {
 
     use super::{
         observation_stage, physical_result_name, reason_name, CoverageGapReasonV1,
-        EffectObservationStore, EvidenceAckV1, EvidenceIdV1, EvidenceWalCapacityPolicyV1,
-        EvidenceWalLimits, ObservationCanonicalizer,
+        CoverageSnapshotV1, EffectObservationStore, EvidenceAckV1, EvidenceIdV1,
+        EvidenceWalCapacityPolicyV1, EvidenceWalLimits, ObservationCanonicalizer,
     };
 
     #[tokio::test]
@@ -1654,11 +1660,77 @@ mod tests {
             }
             .as_bytes(),
         )?;
+        let source_id = store
+            .coverage_snapshot()
+            .ok_or("coverage missing")?
+            .current_intervals()
+            .into_iter()
+            .find(|interval| interval.cpu_id == 0)
+            .ok_or("CPU source missing")?
+            .source_id;
         drop(store);
+
+        let coverage_path = directory.path().join("evidence-coverage-v1.json");
+        let state_bytes = std::fs::read(&coverage_path)?;
+        std::fs::remove_file(&coverage_path)?;
+        assert!(EffectObservationStore::durable(
+            8,
+            wal_root.clone(),
+            EvidenceWalLimits::default(),
+            canonicalizer()?,
+        )
+        .is_err());
+        assert!(!coverage_path.exists());
+        std::fs::write(&coverage_path, &state_bytes)?;
+
+        let mut tampered: CoverageSnapshotV1 = rmp_serde::from_slice(&state_bytes)?;
+        for interval in &mut tampered.history {
+            interval.source_id = EvidenceIdV1::new(41, 42);
+        }
+        for source in tampered.sources.values_mut() {
+            source.current.source_id = EvidenceIdV1::new(41, 42);
+        }
+        let changed_bytes = rmp_serde::to_vec_named(&tampered)?;
+        std::fs::write(&coverage_path, &changed_bytes)?;
+        assert!(EffectObservationStore::durable(
+            8,
+            wal_root.clone(),
+            EvidenceWalLimits::default(),
+            canonicalizer()?,
+        )
+        .is_err());
+        assert_eq!(std::fs::read(&coverage_path)?, changed_bytes);
+        std::fs::write(&coverage_path, &state_bytes)?;
+        for (tenant, root, boot) in [
+            (
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(51, 52),
+                EvidenceIdV1::new(5, 6),
+            ),
+            (
+                EvidenceIdV1::new(53, 54),
+                EvidenceIdV1::new(3, 4),
+                EvidenceIdV1::new(5, 6),
+            ),
+            (
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                EvidenceIdV1::new(55, 56),
+            ),
+        ] {
+            assert!(EffectObservationStore::durable(
+                8,
+                wal_root.clone(),
+                EvidenceWalLimits::default(),
+                ObservationCanonicalizer::new(tenant, root, 1, boot)?,
+            )
+            .is_err());
+            assert_eq!(std::fs::read(&coverage_path)?, state_bytes);
+        }
 
         let restarted = EffectObservationStore::durable(
             8,
-            wal_root,
+            wal_root.clone(),
             EvidenceWalLimits::default(),
             canonicalizer()?,
         )?;
@@ -1672,6 +1744,16 @@ mod tests {
         let before_replay = restarted
             .next_evidence_batch()
             .ok_or("evidence batch missing before replay")?;
+        let wire: mithril_control::EvidenceBatch = before_replay.clone().into();
+        assert_eq!(wire.source_id, source_id.to_be_bytes());
+        assert_eq!((wire.cpu_id, wire.source_epoch), (0, 1));
+        let restored = restarted
+            .coverage_snapshot()
+            .ok_or("restored coverage missing")?;
+        assert!(restored
+            .all_intervals()
+            .iter()
+            .all(|interval| interval.source_id == source_id));
         restarted.record_bytes(
             EffectObservationV1 {
                 observed_boottime_ns: 4,
@@ -1697,6 +1779,28 @@ mod tests {
         assert!(restarted
             .coverage_snapshot()
             .is_some_and(|snapshot| snapshot.supports_negative_claim()));
+        drop(restarted);
+        let next_epoch = EffectObservationStore::durable(
+            8,
+            wal_root,
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                2,
+                EvidenceIdV1::new(61, 62),
+            )?,
+        )?;
+        let historical: mithril_control::EvidenceBatch = next_epoch
+            .next_evidence_batch()
+            .ok_or("historical evidence missing")?
+            .into();
+        assert_eq!(historical.source_id, source_id.to_be_bytes());
+        assert_eq!((historical.cpu_id, historical.source_epoch), (0, 1));
+        assert_eq!(
+            historical.node_boot_id,
+            EvidenceIdV1::new(5, 6).to_be_bytes()
+        );
         Ok(())
     }
 

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
+use uuid::Uuid;
 
 use super::{
     CoverageGapReasonV1, CoverageStateV1, EvidenceIdV1, ObservationCanonicalizer,
@@ -72,20 +72,21 @@ impl CoverageIntervalV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct SourceCoverageV1 {
+pub(super) struct SourceCoverageV1 {
     last_observed_sequence: Option<u64>,
     last_health: Option<CoverageCountersV1>,
-    current: CoverageIntervalV1,
+    pub(super) current: CoverageIntervalV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoverageSnapshotV1 {
     pub schema_version: u32,
+    root_source_id: EvidenceIdV1,
     pub source_epoch: u64,
     pub revision: u64,
     pub history: Vec<CoverageIntervalV1>,
-    sources: BTreeMap<u32, SourceCoverageV1>,
+    pub(super) sources: BTreeMap<u32, SourceCoverageV1>,
 }
 
 impl CoverageSnapshotV1 {
@@ -145,7 +146,6 @@ pub struct CoverageHealthOwner {
 
 struct CoverageInner {
     path: PathBuf,
-    canonicalizer: ObservationCanonicalizer,
     snapshot: CoverageSnapshotV1,
 }
 
@@ -178,19 +178,37 @@ struct IntervalStart {
 }
 
 impl CoverageHealthOwner {
-    pub fn open(path: impl Into<PathBuf>, canonicalizer: ObservationCanonicalizer) -> Result<Self> {
+    pub fn open(
+        path: impl Into<PathBuf>,
+        canonicalizer: ObservationCanonicalizer,
+        check: impl FnOnce(Option<&CoverageSnapshotV1>) -> Result<()>,
+    ) -> Result<Self> {
         let path = path.into();
         let source_epoch = canonicalizer.source_epoch();
         let snapshot = if path.exists() {
             let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
-            let mut prior: CoverageSnapshotV1 =
-                serde_json::from_slice(&bytes).map_err(|error| {
-                    EvidenceStateSnafu {
-                        reason: format!("coverage state decoding failed: {error}"),
-                    }
-                    .build()
-                })?;
+            let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(&bytes));
+            let mut prior = CoverageSnapshotV1::deserialize(&mut decoder).map_err(|error| {
+                EvidenceStateSnafu {
+                    reason: format!("coverage state decoding failed: {error}"),
+                }
+                .build()
+            })?;
+            if decoder.position() != bytes.len() as u64 {
+                return EvidenceStateSnafu {
+                    reason: "coverage state has trailing bytes".to_owned(),
+                }
+                .fail();
+            }
             validate_snapshot(&prior)?;
+            if prior.root_source_id != canonicalizer.source_id || prior.source_epoch > source_epoch
+            {
+                return EvidenceStateSnafu {
+                    reason: "coverage state differs from the configured source".to_owned(),
+                }
+                .fail();
+            }
+            check(Some(&prior))?;
             if prior.source_epoch == source_epoch {
                 for source in prior.sources.values_mut() {
                     source.current.state = CoverageStateV1::Gapped;
@@ -220,6 +238,7 @@ impl CoverageHealthOwner {
 
                 CoverageSnapshotV1 {
                     schema_version: COVERAGE_SCHEMA_VERSION,
+                    root_source_id: canonicalizer.source_id,
                     source_epoch,
                     revision: prior.revision.checked_add(1).ok_or_else(|| {
                         EvidenceStateSnafu {
@@ -232,8 +251,10 @@ impl CoverageHealthOwner {
                 }
             }
         } else {
+            check(None)?;
             CoverageSnapshotV1 {
                 schema_version: COVERAGE_SCHEMA_VERSION,
+                root_source_id: canonicalizer.source_id,
                 source_epoch,
                 revision: 0,
                 history: Vec::new(),
@@ -248,11 +269,7 @@ impl CoverageHealthOwner {
         })?;
         fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
         let inner = Self {
-            inner: Arc::new(Mutex::new(CoverageInner {
-                path,
-                canonicalizer,
-                snapshot,
-            })),
+            inner: Arc::new(Mutex::new(CoverageInner { path, snapshot })),
         };
         inner.persist()?;
         Ok(inner)
@@ -423,13 +440,16 @@ impl CoverageHealthOwner {
         cpu_id: u32,
         sequence: u64,
     ) -> Result<Option<(EvidenceIdV1, TemporalCoverageV1)>> {
-        Ok(self.observe_batch(&[(cpu_id, sequence)])?.remove(0))
+        Ok(self
+            .observe_batch(&[(cpu_id, sequence)])?
+            .remove(0)
+            .map(|(_, interval, coverage)| (interval, coverage)))
     }
 
     pub(super) fn observe_batch(
         &self,
         observations: &[(u32, u64)],
-    ) -> Result<Vec<Option<(EvidenceIdV1, TemporalCoverageV1)>>> {
+    ) -> Result<Vec<Option<(EvidenceIdV1, EvidenceIdV1, TemporalCoverageV1)>>> {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner.commit(|inner| {
             observations
@@ -659,7 +679,7 @@ fn observe_one(
     inner: &mut CoverageInner,
     cpu_id: u32,
     sequence: u64,
-) -> Result<Option<(EvidenceIdV1, TemporalCoverageV1)>> {
+) -> Result<Option<(EvidenceIdV1, EvidenceIdV1, TemporalCoverageV1)>> {
     if sequence == 0 {
         return EvidenceStateSnafu {
             reason: "coverage observation sequence must be nonzero".to_owned(),
@@ -673,7 +693,7 @@ fn observe_one(
             ..CoverageCountersV1::default()
         },
     };
-    let (completed, interval_id, coverage) = {
+    let (completed, source_id, interval_id, coverage) = {
         let source = ensure_source(inner, baseline)?;
         if source
             .last_observed_sequence
@@ -702,10 +722,10 @@ fn observe_one(
         } else {
             TemporalCoverageV1::Gapped
         };
-        (completed, interval_id, coverage)
+        (completed, source.current.source_id, interval_id, coverage)
     };
     inner.snapshot.history.extend(completed);
-    Ok(Some((interval_id, coverage)))
+    Ok(Some((source_id, interval_id, coverage)))
 }
 
 fn ensure_source(
@@ -713,7 +733,14 @@ fn ensure_source(
     sample: EffectObservationCpuHealth,
 ) -> Result<&mut SourceCoverageV1> {
     if !inner.snapshot.sources.contains_key(&sample.cpu_id) {
-        let source_id = inner.canonicalizer.cpu_source_id(sample.cpu_id);
+        let source_id = inner
+            .snapshot
+            .history
+            .iter()
+            .rev()
+            .find(|interval| interval.cpu_id == sample.cpu_id)
+            .map(|interval| interval.source_id)
+            .unwrap_or_else(|| Uuid::new_v4().into_bytes().into());
         let revision = inner.snapshot.revision.saturating_add(1);
         let interval = interval(
             source_id,
@@ -839,15 +866,8 @@ fn interval(
     revision: u64,
     start: IntervalStart,
 ) -> CoverageIntervalV1 {
-    let mut digest = Sha256::new();
-    digest.update(b"MITHRIL-COVERAGE-INTERVAL-V1\0");
-    digest.update(source_id.to_be_bytes());
-    digest.update(source_epoch.to_be_bytes());
-    digest.update(cpu_id.to_be_bytes());
-    digest.update(revision.to_be_bytes());
-    digest.update(start.first_sequence.to_be_bytes());
     CoverageIntervalV1 {
-        interval_id: <[u8; 32]>::from(digest.finalize()).into(),
+        interval_id: Uuid::new_v4().into_bytes().into(),
         source_id,
         source_epoch,
         cpu_id,
@@ -880,16 +900,28 @@ fn bump_and_persist(inner: &mut CoverageInner) -> Result<()> {
 
 fn validate_snapshot(snapshot: &CoverageSnapshotV1) -> Result<()> {
     let mut interval_ids = std::collections::BTreeSet::new();
+    let mut cpu_sources = BTreeMap::new();
+    let mut source_cpus = BTreeMap::new();
+    let mut valid_identity = |interval: &CoverageIntervalV1| {
+        interval_ids.insert(interval.interval_id)
+            && cpu_sources
+                .insert(interval.cpu_id, interval.source_id)
+                .is_none_or(|source| source == interval.source_id)
+            && source_cpus
+                .insert(interval.source_id, interval.cpu_id)
+                .is_none_or(|cpu| cpu == interval.cpu_id)
+    };
     if snapshot.schema_version != COVERAGE_SCHEMA_VERSION
+        || snapshot.root_source_id.is_zero()
         || snapshot.source_epoch == 0
         || snapshot.history.iter().any(|interval| {
             interval.source_epoch > snapshot.source_epoch
-                || !interval_ids.insert(interval.interval_id)
+                || !valid_identity(interval)
                 || !interval_is_valid(interval, false)
         })
         || snapshot.sources.iter().any(|(cpu, source)| {
             *cpu != source.current.cpu_id
-                || !interval_ids.insert(source.current.interval_id)
+                || !valid_identity(&source.current)
                 || source.current.source_epoch != snapshot.source_epoch
                 || !interval_is_valid(&source.current, true)
                 || source.last_observed_sequence == Some(0)
@@ -941,7 +973,7 @@ fn interval_is_valid(interval: &CoverageIntervalV1, current: bool) -> bool {
 
 fn persist_snapshot(path: &Path, snapshot: &CoverageSnapshotV1) -> Result<()> {
     validate_snapshot(snapshot)?;
-    let bytes = serde_json::to_vec(snapshot).map_err(|error| {
+    let bytes = rmp_serde::to_vec_named(snapshot).map_err(|error| {
         EvidenceStateSnafu {
             reason: format!("coverage state encoding failed: {error}"),
         }
@@ -953,10 +985,11 @@ fn persist_snapshot(path: &Path, snapshot: &CoverageSnapshotV1) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, EffectObservationCpuHealth,
-        RecoveryProbeStatus,
+        CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, CoverageSnapshotV1,
+        EffectObservationCpuHealth, RecoveryProbeStatus,
     };
     use crate::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
+    use std::collections::BTreeMap;
 
     fn open_owner(path: &std::path::Path, epoch: u64) -> crate::Result<CoverageHealthOwner> {
         CoverageHealthOwner::open(
@@ -967,6 +1000,7 @@ mod tests {
                 epoch,
                 EvidenceIdV1::new(5, 6),
             )?,
+            |_| Ok(()),
         )
     }
 
@@ -999,6 +1033,19 @@ mod tests {
         let before = owner.snapshot();
         assert_eq!(before.current_intervals().len(), 4_097);
         assert_eq!(before.history.len(), 4_097);
+        let sources = before
+            .current_intervals()
+            .into_iter()
+            .map(|interval| (interval.cpu_id, interval.source_id))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            sources
+                .values()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            4_097
+        );
         drop(owner);
         let next = open_owner(&path, 2)?;
         let restarted = next.snapshot();
@@ -1012,6 +1059,10 @@ mod tests {
         next.mark_all_gapped(CoverageGapReasonV1::ControlDelay)?;
         next.recover_after_probe(&[health(1, 0)])?;
         let snapshot = next.snapshot();
+        assert!(snapshot
+            .all_intervals()
+            .iter()
+            .all(|interval| sources.get(&interval.cpu_id) == Some(&interval.source_id)));
         assert_eq!(snapshot.history.len(), restarted.history.len() + 3);
         assert!(snapshot
             .history
@@ -1020,7 +1071,12 @@ mod tests {
             .gap_reasons
             .contains(&CoverageGapReasonV1::ControlDelay));
         drop(next);
-        assert_eq!(open_owner(&path, 2)?.snapshot().history, snapshot.history);
+        let reopened = open_owner(&path, 2)?.snapshot();
+        assert_eq!(reopened.history, snapshot.history);
+        assert!(reopened
+            .all_intervals()
+            .iter()
+            .all(|interval| sources.get(&interval.cpu_id) == Some(&interval.source_id)));
         Ok(())
     }
 
@@ -1106,16 +1162,16 @@ mod tests {
         let observed = owner.observe_batch(&[(2, 1), (2, 2), (2, 2), (2, 3)])?;
         assert_eq!(observed.len(), 4);
         assert_eq!(
-            observed[0].map(|entry| entry.1),
+            observed[0].map(|entry| entry.2),
             Some(TemporalCoverageV1::Complete)
         );
         assert_eq!(
-            observed[1].map(|entry| entry.1),
+            observed[1].map(|entry| entry.2),
             Some(TemporalCoverageV1::Complete)
         );
         assert_eq!(observed[2], None);
         assert_eq!(
-            observed[3].map(|entry| entry.1),
+            observed[3].map(|entry| entry.2),
             Some(TemporalCoverageV1::Complete)
         );
         drop(owner);
@@ -1322,9 +1378,6 @@ mod tests {
             .all_intervals()
             .iter()
             .all(|interval| interval.source_id == source_id && interval.cpu_id == 2));
-        let encoded = serde_json::to_value(&snapshot)?;
-        assert!(encoded["sources"]["2"].get("source_id").is_none());
-        assert!(encoded["sources"]["2"].get("cpu_id").is_none());
         drop(owner);
 
         let reopened = open_owner(&path, 1)?;
@@ -1356,10 +1409,10 @@ mod tests {
                 owner.observe(2, 1)?;
             }
             drop(owner);
-            let mut snapshot: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+            let mut snapshot: CoverageSnapshotV1 = rmp_serde::from_slice(&std::fs::read(&path)?)?;
             for version in [1, super::COVERAGE_SCHEMA_VERSION + 1] {
-                snapshot["schema_version"] = serde_json::json!(version);
-                let bytes = serde_json::to_vec(&snapshot)?;
+                snapshot.schema_version = version;
+                let bytes = rmp_serde::to_vec_named(&snapshot)?;
                 std::fs::write(&path, &bytes)?;
                 assert!(matches!(
                     open_owner(&path, 1),
@@ -1368,6 +1421,12 @@ mod tests {
                 ));
                 assert_eq!(std::fs::read(&path)?, bytes);
             }
+            snapshot.schema_version = super::COVERAGE_SCHEMA_VERSION;
+            let mut trailing = rmp_serde::to_vec_named(&snapshot)?;
+            trailing.push(0);
+            std::fs::write(&path, &trailing)?;
+            assert!(open_owner(&path, 1).is_err());
+            assert_eq!(std::fs::read(&path)?, trailing);
         }
         Ok(())
     }
@@ -1381,17 +1440,50 @@ mod tests {
         owner.sample_health(&[health(0, 0)])?;
         drop(owner);
 
-        let mut snapshot: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
-        snapshot["sources"]["2"]["current"]["gap_reasons"] = serde_json::json!(["RING_LOSS"]);
-        std::fs::write(&path, serde_json::to_vec(&snapshot)?)?;
+        let mut snapshot: CoverageSnapshotV1 = rmp_serde::from_slice(&std::fs::read(&path)?)?;
+        let original = snapshot.clone();
+        snapshot
+            .sources
+            .get_mut(&2)
+            .ok_or("CPU source")?
+            .current
+            .gap_reasons = vec![CoverageGapReasonV1::RingLoss];
+        std::fs::write(&path, rmp_serde::to_vec_named(&snapshot)?)?;
         assert!(open_owner(&path, 1).is_err());
 
-        snapshot["sources"]["2"]["current"]["gap_reasons"] = serde_json::json!([]);
-        snapshot["sources"]["2"]["current"]["cpu_id"] = serde_json::json!(3);
-        let bytes = serde_json::to_vec(&snapshot)?;
+        snapshot
+            .sources
+            .get_mut(&2)
+            .ok_or("CPU source")?
+            .current
+            .gap_reasons
+            .clear();
+        snapshot
+            .sources
+            .get_mut(&2)
+            .ok_or("CPU source")?
+            .current
+            .cpu_id = 3;
+        let bytes = rmp_serde::to_vec_named(&snapshot)?;
         std::fs::write(&path, &bytes)?;
         assert!(open_owner(&path, 1).is_err());
         assert_eq!(std::fs::read(&path)?, bytes);
+
+        let mut root = original.clone();
+        root.root_source_id = EvidenceIdV1::new(91, 92);
+        let mut changed = original.clone();
+        changed.history[0].source_id = EvidenceIdV1::new(93, 94);
+        let mut shared = original;
+        let mut source = shared.sources[&2].clone();
+        source.current.cpu_id = 3;
+        source.current.interval_id = EvidenceIdV1::new(95, 96);
+        shared.sources.insert(3, source);
+        for snapshot in [root, changed, shared] {
+            let bytes = rmp_serde::to_vec_named(&snapshot)?;
+            std::fs::write(&path, &bytes)?;
+            assert!(open_owner(&path, 1).is_err());
+            assert_eq!(std::fs::read(&path)?, bytes);
+        }
         Ok(())
     }
 
@@ -1440,6 +1532,7 @@ mod tests {
             .path = blocked_path;
 
         assert!(owner.observe(2, 1).is_err());
+        assert!(owner.observe(3, 1).is_err());
         assert_eq!(owner.snapshot(), before);
         Ok(())
     }

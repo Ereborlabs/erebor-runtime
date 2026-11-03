@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::persistence::{atomic_write, sync_directory};
-use super::ObservationEnvelopeV1;
+use super::{CoverageSnapshotV1, ObservationCanonicalizer, ObservationEnvelopeV1};
 use crate::error::{EvidenceStateSnafu, IoSnafu};
 use crate::Result;
 
@@ -633,6 +633,46 @@ pub(super) struct EvidenceWalOwner {
 }
 
 impl EvidenceWalOwner {
+    pub(super) fn validate_coverage(
+        &self,
+        snapshot: Option<&CoverageSnapshotV1>,
+        canonicalizer: ObservationCanonicalizer,
+    ) -> Result<()> {
+        let Some(snapshot) = snapshot else {
+            if self.streams.is_empty() {
+                return Ok(());
+            }
+            return EvidenceStateSnafu {
+                reason: "evidence WAL has no coverage state".to_owned(),
+            }
+            .fail();
+        };
+        for identity in self.streams.keys() {
+            let matches = |interval: &super::CoverageIntervalV1| {
+                interval.source_id.to_be_bytes() == identity.source_id
+                    && interval.source_epoch == identity.source_epoch
+                    && interval.cpu_id == identity.cpu_id
+            };
+            let present = snapshot
+                .sources
+                .get(&identity.cpu_id)
+                .is_some_and(|source| matches(&source.current))
+                || snapshot.history.iter().any(matches);
+            if identity.tenant_id != canonicalizer.tenant_id.to_be_bytes()
+                || identity.source_epoch > canonicalizer.source_epoch()
+                || (identity.source_epoch == canonicalizer.source_epoch()
+                    && identity.node_boot_id != canonicalizer.node_boot_id.to_be_bytes())
+                || !present
+            {
+                return EvidenceStateSnafu {
+                    reason: "evidence WAL stream differs from its coverage identity".to_owned(),
+                }
+                .fail();
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn open(root: impl Into<PathBuf>, limits: EvidenceWalLimits) -> Result<Self> {
         limits.validate()?;
         let root = root.into();

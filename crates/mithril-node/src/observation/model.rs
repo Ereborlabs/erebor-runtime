@@ -1,5 +1,4 @@
 use erebor_interceptor_abi::{EffectObservationV1, KernelEffectOperationV1};
-use sha2::{Digest as _, Sha256};
 
 use crate::error::IdentityStateSnafu;
 use crate::Result;
@@ -13,10 +12,10 @@ pub use mithril_control::{
 
 #[derive(Clone, Copy, Debug)]
 pub struct ObservationCanonicalizer {
-    tenant_id: EvidenceIdV1,
-    source_id: EvidenceIdV1,
+    pub(super) tenant_id: EvidenceIdV1,
+    pub(super) source_id: EvidenceIdV1,
     source_epoch: u64,
-    node_boot_id: EvidenceIdV1,
+    pub(super) node_boot_id: EvidenceIdV1,
 }
 
 impl ObservationCanonicalizer {
@@ -62,7 +61,6 @@ impl ObservationCanonicalizer {
             }
             .fail();
         }
-        let source_id = self.cpu_source_id(event.source_cpu_id);
         let effect = kernel_effect(&event);
         let context_id = |id: EvidenceIdV1| {
             if id.is_zero() {
@@ -74,7 +72,7 @@ impl ObservationCanonicalizer {
         let observation = ObservationEnvelopeV1 {
             tenant_id: self.tenant_id,
             node_boot_id: self.node_boot_id,
-            source_id,
+            source_id: self.source_id,
             source_epoch: self.source_epoch,
             source_sequence: event.source_sequence,
             cpu_id: event.source_cpu_id,
@@ -105,15 +103,6 @@ impl ObservationCanonicalizer {
         };
         observation.validate()?;
         Ok(observation)
-    }
-
-    pub(crate) fn cpu_source_id(self, cpu_id: u32) -> EvidenceIdV1 {
-        let mut digest = Sha256::new();
-        digest.update(b"MITHRIL-KERNEL-SOURCE-V1\0");
-        digest.update(self.source_id.to_be_bytes());
-        digest.update(cpu_id.to_be_bytes());
-        let digest: EvidenceDigestV1 = digest.finalize().into();
-        digest.into()
     }
 }
 
@@ -391,24 +380,6 @@ mod tests {
             );
             assert_ne!(original.to_wire_record()?, changed.to_wire_record()?);
         }
-        Ok(())
-    }
-
-    #[test]
-    fn each_cpu_is_an_independent_ordered_source() -> crate::Result<()> {
-        let first = canonicalizer()?.normalize_kernel(
-            event(2),
-            EvidenceIdV1::new(30, 31),
-            TemporalCoverageV1::Complete,
-            100,
-        )?;
-        let second = canonicalizer()?.normalize_kernel(
-            event(3),
-            EvidenceIdV1::new(32, 33),
-            TemporalCoverageV1::Complete,
-            100,
-        )?;
-        assert_ne!(first.source_id, second.source_id);
         Ok(())
     }
 

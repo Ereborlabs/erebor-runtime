@@ -430,3 +430,33 @@ The native Query `fixed_window_keeps_cut` check also passes. These are
 functional results. They do not measure event-to-finding latency.
 Logs are `/tmp/araphor-cdc-node-tests-20261102.log` and
 `/tmp/araphor-cdc-node-query-window-20261102.log`.
+
+
+## Native source identity update on 2026-11-03
+
+`CoverageHealthOwner` allocates one native source ID for each CPU. It saves
+that ID in its existing coverage snapshot and reuses it across reopen and
+epoch changes. Each new coverage interval gets its own native ID. The
+configured root source ID identifies the allocation namespace. These IDs
+are not content digests.
+
+[EffectObservationStore::durable](../../../crates/mithril-node/src/observation.rs) opens the retained WAL and coverage snapshot
+  -> [EvidenceWal::validate_coverage](../../../crates/mithril-node/src/observation/wal.rs) checks retained stream identities before coverage state is saved
+  -> [CoverageHealthOwner::observe_batch](../../../crates/mithril-node/src/observation/coverage.rs) returns the saved CPU source ID, interval ID, and quality
+  -> [EffectObservationStore::record_events](../../../crates/mithril-node/src/observation.rs) supplies that source ID to the canonicalizer
+  -> [EvidenceWal::append](../../../crates/mithril-node/src/observation/wal.rs) assigns the durable cursor
+
+The snapshot uses strict MessagePack at the existing path. Decode rejects
+trailing bytes. Reopen checks the configured root, CPU-to-source mapping,
+interval IDs, tenant, source epoch, and boot identity for retained WAL streams in the current epoch. A missing
+coverage snapshot with retained WAL streams fails before new allocation
+state is saved. WAL framing recovery still runs at its existing owner.
+A failed coverage write preserves the prior in-memory snapshot.
+
+Focused Linux qualification: **Done**. All 52 Node observation cases pass.
+The existing cases cover 4,097 CPUs, source reuse, history, exact WAL bytes,
+replay, missing or changed snapshots, and failed persistence. The former
+pure CPU-hash case is replaced by these production-owner checks. The
+connected test build passes without warnings. The test log is
+`/tmp/araphor-cdc-node-native-ids-tests-20261103.log`. This result does not
+qualify physical kernel behavior or event-to-finding latency.
