@@ -1856,6 +1856,7 @@ impl AnalysisStore {
         let admission = std::time::Instant::now();
         let (coordinator, mut reader) = self.coordinated_reader(control)?;
         let mut phases = [std::time::Duration::ZERO; 7];
+        let mut headers = [std::time::Duration::ZERO; 5];
         phases[0] = admission.elapsed();
         let mut checkpoint = std::time::Instant::now();
         let explicit_traces = !selection.traces.is_all() && !selection.traces.as_slice().is_empty();
@@ -1944,6 +1945,7 @@ impl AnalysisStore {
             for identity in selection.sources.as_slice() {
                 control.check()?;
                 let key = identity.key();
+                let mut header = std::time::Instant::now();
                 let (receipt, commit_revision) = Self::read_receipt_from(snapshot, &self.root, identity, &key)?
                     .ok_or_else(|| self.state_error("the selected source is absent"))?;
                 if reference.is_some() && !matches!(mode, AnalysisReadModeV1::Metadata)
@@ -1953,17 +1955,25 @@ impl AnalysisStore {
                         output.meta.commit_revision, control)?;
                 }
                 output.charge(receipt.identity.node_id.capacity())?;
+                headers[0] += header.elapsed();
+                header = std::time::Instant::now();
                 let expired = self.extract_gaps(snapshot, identity, false, control, &mut output)?;
                 let recovery = self.extract_gaps(snapshot, identity, true, control, &mut output)?;
                 let retired = self.retired_source(snapshot,&receipt,output.meta.commit_revision,physical.commit_revision,control,&mut output)?;
                 let staged = retired.capacity().saturating_mul(size_of::<AnalysisGapV1>());
+                headers[1] += header.elapsed();
+                header = std::time::Instant::now();
                 let state = self.raw.until(control)?.source_state(&receipt,output.meta.commit_revision,&expired,&retired,control,(output.input_bytes.saturating_add(staged),output.limits.input_bytes))?;
                 self.check_selected_source(&receipt,state.covered)?;
                 drop(retired);
                 let pending = state.pending;
                 output.charge(pending.capacity() * size_of::<AnalysisGapV1>())?;
+                headers[2] += header.elapsed();
+                header = std::time::Instant::now();
                 let coverage_report = self.read_coverage_from(snapshot, &receipt)?;
                 output.charge(coverage_report.as_ref().map_or(0, Vec::capacity))?;
+                headers[3] += header.elapsed();
+                header = std::time::Instant::now();
                 let added = AnalysisExtractionV1::grow(
                     &mut output.sources,
                     output.input_bytes,
@@ -1981,6 +1991,7 @@ impl AnalysisStore {
                     coverage_report,
                     typed_report: None,
                 });
+                headers[4] += header.elapsed();
             }
             phases[3] = checkpoint.elapsed();
             checkpoint = std::time::Instant::now();
@@ -2418,6 +2429,9 @@ impl AnalysisStore {
                 coordinator_s=phases[0].as_secs_f64(), meta_s=phases[1].as_secs_f64(),
                 selection_s=phases[2].as_secs_f64(), sources_s=phases[3].as_secs_f64(),
                 traces_s=phases[4].as_secs_f64(), raw_s=phases[5].as_secs_f64(),
+                receipt_s=headers[0].as_secs_f64(), gaps_s=headers[1].as_secs_f64(),
+                source_state_s=headers[2].as_secs_f64(), coverage_s=headers[3].as_secs_f64(),
+                state_projection_s=headers[4].as_secs_f64(),
                 rest_s=phases[6].as_secs_f64(), elapsed_s=started.elapsed().as_secs_f64(),
                 "Source capture phase timing completed");
             erebor_telemetry::debug!(stage="capture",operation="complete",

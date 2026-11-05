@@ -135,6 +135,7 @@ impl NotificationRouter {
     }
 
     pub(super) fn save_bytes(&self, state: &mut NotificationObligationV1) -> Result<usize> {
+        let started = std::time::Instant::now();
         let previous = state.revision;
         state.revision = previous.checked_add(1).ok_or_else(|| {
             NotificationSnafu {
@@ -147,6 +148,18 @@ impl NotificationRouter {
             let body = state.encode()?;
             let bytes = body.len();
             self.persist(Self::state_key(state), body, previous, state.sensitivity)?;
+            erebor_telemetry::debug!(
+                stage = "notification_save_timing",
+                notification_id = %uuid::Uuid::from_bytes(state.key.notification_id),
+                result_id = state.finding.as_ref().map_or("", |finding| finding.result_id.as_str()),
+                finding_id = state.finding.as_ref().map_or("", |finding| finding.finding_id.as_str()),
+                previous_revision = previous,
+                state_revision = state.revision,
+                attempts = state.attempts.len(),
+                pending = state.attempts.iter().filter(|attempt| attempt.result.is_none()).count(),
+                elapsed_s = started.elapsed().as_secs_f64(),
+                "Notification state committed"
+            );
             Ok(bytes)
         })();
         if result.is_err() {

@@ -1,5 +1,20 @@
 # Araphor retained execution state review
 
+## Durable creation measurement, 2026-11-05
+
+Read [collector input](../../crates/mithril-control/src/service/causal.rs),
+then [notification persistence](../../crates/araphor-analysis/src/notification/store.rs).
+The input timer starts at collector entry. The successful save timer ends
+after the existing Data commit returns. State revision 0 to 1, with zero
+attempts, identifies first durable creation. Pending and delivery outcome
+saves remain separate. No query or validation is added by these probes.
+
+The unchanged exact incident test passes with 18 collector inputs and three
+first creations. Collector entry to creation takes 2.486490, 3.162650, and
+3.529450 seconds. This is trusted Control input, not physical Node arrival.
+The timed run establishes no performance gain. Creation below 100 milliseconds
+and the 100-fold target remain **Not done**. See the [measurement evidence](../plans/araphor-execution-handoff.md#durable-notification-creation-measurement-2026-11-05).
+
 ## Compiled component reuse, 2026-11-05
 
 Read [code selection and compilation](../../crates/araphor-package-runtime/src/wasm/cache.rs)

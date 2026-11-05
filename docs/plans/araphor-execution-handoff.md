@@ -1,5 +1,45 @@
 # Native execution performance handoff
 
+## Durable notification creation measurement, 2026-11-05
+
+The exact incident test passes in 29.47 seconds. This run adds timing fields;
+it does not establish a performance gain. The focused build passes in
+243.028503 seconds. The source is `dde5b1803` plus the reviewed input, capture,
+and durable notification timing probes.
+
+`CausalCollector::submit` starts the input timer at entry. Its successful log
+contains the actual committed cut revision. `NotificationRouter::save_bytes`
+logs only after its existing durable save returns. Revision 0 to 1, with zero
+delivery attempts, is first creation. Later pending and outcome saves are
+separate. The endpoint is durable notification creation, before delivery.
+
+| Input cut | Publication revision | Last collector entry to creation, seconds | Committed input to creation, seconds | Publication to creation, seconds | First save, seconds |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 27 | 29 | 2.486490 | 2.462698 | 0.553683 | 0.030440 |
+| 58 | 60 | 3.162650 | 3.141727 | 0.776586 | 0.027770 |
+| 79 | 81 | 3.529450 | 3.506265 | 0.878202 | 0.028393 |
+
+All 18 collector inputs and three first creations are present. All original
+assertions pass. These intervals start at trusted Control collector input;
+they do not measure physical Node event arrival. The test flushes raw WAL
+records before it submits these audit actions. The existing `causal_latency`
+log is emitted after extra validation reads; its log timestamp minus its
+elapsed value is not an exact input-start boundary.
+
+Result: **Done** for this measurement. Creation below 100 milliseconds and
+the 100-fold target remain **Not done**. The next implementation replaces
+repeated immutable Graph metadata joins inside Data's existing committed
+owner. Its build and performance are not yet qualified. No storage engine
+change is selected. Full CI and other test cases were not run.
+
+Proof: `/tmp/araphor-build-notification-boundary-20261105-a.log`,
+`/tmp/araphor-live-notification-boundary-20261105-a.log`, and
+`/tmp/araphor-notification-boundary-20261105-a.json`. The baseline probe patch
+is `/tmp/araphor-notification-boundary-baseline-20261105.patch`. The retained
+executable is `target/araphor-notice-comparison-20261105/notification-boundary`.
+The older `capture-phases` executable and completed incremental build files
+were removed to free space. Their logs remain.
+
 ## Compiled component reuse result, 2026-11-05
 
 The existing Wasm code cache now identifies one admitted implementation across

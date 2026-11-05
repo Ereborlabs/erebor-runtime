@@ -75,6 +75,8 @@ impl CausalCollector {
         inputs: Vec<CollectedAction>,
         control: &AnalysisReadControl,
     ) -> crate::Result<Vec<AnalysisContextRefV1>> {
+        let started = std::time::Instant::now();
+        let count = inputs.len();
         let mut contexts = Vec::with_capacity(inputs.len());
         for input in inputs {
             control.check()?;
@@ -97,7 +99,7 @@ impl CausalCollector {
                 _ => {
                     return Err(Code::Denied
                         .error("causal collector action permission")
-                        .into())
+                        .into());
                 }
             };
             if input.revision == 0 {
@@ -146,9 +148,23 @@ impl CausalCollector {
                 body,
             });
         }
-        Ok(self
+        let writing = std::time::Instant::now();
+        let references = self
             .data
-            .commit_contexts_guarded(&contexts, || control.check())?)
+            .commit_contexts_guarded(&contexts, || control.check())?;
+        erebor_telemetry::debug!(
+            stage = "causal_input_timing",
+            inputs = count,
+            cut_revision = references
+                .iter()
+                .map(|reference| reference.commit_revision)
+                .max()
+                .unwrap_or(0),
+            commit_s = writing.elapsed().as_secs_f64(),
+            elapsed_s = started.elapsed().as_secs_f64(),
+            "Trusted causal inputs committed"
+        );
+        Ok(references)
     }
 
     fn check_source(&self, record: &DiscoveryRecordIdV1) -> crate::Result<()> {
