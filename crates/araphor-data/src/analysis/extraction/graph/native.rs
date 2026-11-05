@@ -242,7 +242,7 @@ impl AnalysisStore {
                 )?;
             let mut seen = std::collections::BTreeSet::new();
             for row in catalog.read_findings(
-                &self.graph_engine,
+                self,
                 snapshot,
                 selection.tenant_id,
                 result,

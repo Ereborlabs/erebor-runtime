@@ -329,7 +329,7 @@ impl AnalysisStore {
             selected.ok_or_else(|| self.state_error("the selected graph header is absent"))?;
         if complete || findings {
             GraphRows::bound_findings(
-                    &self.graph_engine,
+                    self,
                 snapshot,
                 result_id,
                 None,

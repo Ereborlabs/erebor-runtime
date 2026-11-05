@@ -522,7 +522,7 @@ impl AnalysisStore {
                     return Ok(None);
                 };
                 GraphRows::bound_findings(
-                    &self.graph_engine,
+                    self,
                     reader,
                     result,
                     Some(id),
@@ -530,7 +530,7 @@ impl AnalysisStore {
                     &mut |_, bytes| batch.charge(bytes),
                 )?;
                 Ok(
-                    GraphRows::read_finding(&self.graph_engine, reader, result, id, &header, Some(control))?
+                    GraphRows::read_finding(self, reader, result, id, &header, Some(control))?
                         .map(|finding| (finding, None, false)),
                 )
             })();
@@ -635,7 +635,7 @@ impl AnalysisStore {
                     let header = GraphRows::read_summary(reader, tenant, &current.0, None)?
                         .ok_or_else(|| self.state_error("the current Graph header is absent"))?;
                     Self::legacy_finding_changed(
-                        &self.graph_engine,
+                        self,
                         reader,
                         tenant,
                         &reference,

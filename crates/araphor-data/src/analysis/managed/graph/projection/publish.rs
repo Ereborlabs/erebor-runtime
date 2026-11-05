@@ -18,40 +18,20 @@ impl DomainProjection {
         connection: &Transaction<'_>,
         result: &str,
         revision: u64,
+        heads: &BTreeMap<u64, u64>,
         pending: Option<&araphor_graph::PendingLayer>,
         memory: &super::super::super::budget::PreparedMemory<'_>,
-    ) -> Result<()> {
+    ) -> Result<Vec<(Coordinate, Coordinate)>> {
         if self.findings.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let started = std::time::Instant::now();
         let mut leases = Vec::new();
-        let mut heads = BTreeMap::new();
-        let mut query = connection.prepare(
-            "SELECT pin.writer_id,layer.revision FROM managed_graph_publication_layers pin
-             JOIN graph_layers layer ON layer.layer_id=pin.layer_id AND layer.writer_id=pin.writer_id
-             WHERE pin.result_id=?"
-        ).context(AnalysisDatabaseSnafu { operation: "prepare finding publication heads" })?;
-        let mut rows = query
-            .query(params![result])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read finding publication heads",
-            })?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance finding publication heads",
-        })? {
-            leases.push(memory.reserve(12 * std::mem::size_of::<(u64, u64)>())?);
-            let (writer, head) = (|| -> duckdb::Result<_> { Ok((row.get(0)?, row.get(1)?)) })()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "decode finding publication head",
-                })?;
-            heads.insert(writer, head);
-        }
         let mut current = Vec::<(Coordinate, u64)>::new();
         for (_, relation) in &self.findings {
             engine.visit_members(
                 *relation,
-                &heads,
+                heads,
                 None,
                 || memory.check().map_err(araphor_graph::Error::backend),
                 |member| {
@@ -66,7 +46,7 @@ impl DomainProjection {
             )?;
         }
         if current.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let mut touched = BTreeSet::<Coordinate>::new();
         if let Some(pending) = pending {
@@ -88,7 +68,7 @@ impl DomainProjection {
             })?;
         }
         if touched.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let heads_at = std::time::Instant::now();
         let mut known = BTreeMap::<Coordinate, Coordinate>::new();
@@ -298,6 +278,7 @@ impl DomainProjection {
             .filter(|(id, opened)| *opened == revision && !known.contains_key(id))
             .map(|(id, _)| *id)
             .collect::<BTreeSet<_>>();
+        let mut mappings = Vec::with_capacity(wanted.len());
         if !wanted.is_empty() {
             let mut append = connection
                 .appender("managed_graph_finding_values")
@@ -307,6 +288,7 @@ impl DomainProjection {
             for id in wanted {
                 memory.check()?;
                 let winner = canonical[locate(&id)?];
+                mappings.push((id, winner));
                 append
                     .append_row(params![id.0, id.1, winner.0, winner.1])
                     .context(AnalysisDatabaseSnafu {
@@ -327,6 +309,6 @@ impl DomainProjection {
             elapsed_s = started.elapsed().as_secs_f64(),
             "Graph finding dictionary publication completed"
         );
-        Ok(())
+        Ok(mappings)
     }
 }

@@ -212,14 +212,14 @@ impl GraphRows {
     }
 
     pub(in crate::analysis) fn bound_findings(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         reader: &Connection,
         result: &str,
         id: Option<&str>,
         source: &crate::EvidenceIntakeIdentityV1,
         charge: &mut impl FnMut(usize, usize) -> Result<()>,
     ) -> Result<()> {
-        if AnalysisStore::bound_native_findings(engine, reader,result,id,charge)? { return Ok(()); }
+        if AnalysisStore::bound_native_findings(store, reader,result,id,charge)? { return Ok(()); }
         let role = MemberKind::Finding as u8;
         let filter = if id.is_some() {
             "AND m.member_key=?"
@@ -1491,7 +1491,7 @@ impl GraphRows {
     }
 
     pub(in crate::analysis) fn read_finding_keys(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         reader: &Connection,
         result: &str,
         header: &GraphHeader,
@@ -1499,7 +1499,7 @@ impl GraphRows {
         control: Option<&AnalysisReadControl>,
     ) -> Result<BTreeMap<String, FindingV1>> {
         Ok(
-            Self::read_finding_keys_with_ids(engine, reader, result, header, ids, control)?
+            Self::read_finding_keys_with_ids(store, reader, result, header, ids, control)?
                 .into_iter()
                 .map(|(key, (_, finding))| (key, finding))
                 .collect(),
@@ -1507,7 +1507,7 @@ impl GraphRows {
     }
 
     pub(in crate::analysis) fn read_finding_keys_with_ids(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         reader: &Connection,
         result: &str,
         header: &GraphHeader,
@@ -1519,7 +1519,7 @@ impl GraphRows {
             let mut values = BTreeMap::new();
             for id in ids.iter().collect::<BTreeSet<_>>() {
                 Self::check(control)?;
-                if let Some((value,member)) = AnalysisStore::native_finding(engine, reader,header.snapshot.scope.identity.tenant_id,result,id)? {
+                if let Some((value,member)) = AnalysisStore::native_finding(store, reader,header.snapshot.scope.identity.tenant_id,result,id)? {
                     values.insert(id.clone(),(value,member.value));
                 }
             }
@@ -1675,7 +1675,7 @@ impl GraphRows {
     }
 
     pub(in crate::analysis) fn read_finding(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         reader: &Connection,
         result: &str,
         finding: &str,
@@ -1683,13 +1683,13 @@ impl GraphRows {
         control: Option<&AnalysisReadControl>,
     ) -> Result<Option<FindingV1>> {
         Ok(
-            Self::read_finding_with_id(engine, reader, result, finding, header, control)?
+            Self::read_finding_with_id(store, reader, result, finding, header, control)?
                 .map(|(_, finding)| finding),
         )
     }
 
     pub(in crate::analysis) fn read_finding_with_id(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         reader: &Connection,
         result: &str,
         finding: &str,
@@ -1698,11 +1698,11 @@ impl GraphRows {
     ) -> Result<Option<(u64, FindingV1)>> {
         Self::check(control)?;
         if AnalysisStore::native_graph_result(reader,result)? {
-            return AnalysisStore::native_finding(engine, reader,header.snapshot.scope.identity.tenant_id,result,finding)
+            return AnalysisStore::native_finding(store, reader,header.snapshot.scope.identity.tenant_id,result,finding)
                 .map(|value| value.map(|(id,member)| (id,member.value)));
         }
         Ok(Self::read_finding_keys_with_ids(
-            engine,
+            store,
             reader,
             result,
             header,

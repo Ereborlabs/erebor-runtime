@@ -1,5 +1,37 @@
 # Araphor retained execution state review
 
+## Native Graph metadata, 2026-11-05
+
+Read [managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs),
+then the [committed owner guard](../../crates/araphor-data/src/analysis/managed/reader/committed.rs)
+and its [Graph metadata](../../crates/araphor-data/src/analysis/managed/reader/committed/graph.rs).
+[Journal commit](../../crates/araphor-data/src/analysis/managed/graph/commit.rs)
+returns the actual producer and read pins. [Publication](../../crates/araphor-data/src/analysis/managed/graph/publication.rs)
+retains the same heads used by projection. The [dictionary append](../../crates/araphor-data/src/analysis/managed/graph/projection/publish.rs)
+returns only newly inserted canonical pairs. Empty findings do not remove a
+publication. The pending guard covers each new native key until Data commit.
+Recovery loads existing durable rows after validation. Operation reservations
+end with preparation; they do not enter the committed owner.
+
+[Native finding reads](../../crates/araphor-data/src/analysis/managed/graph/projection/native.rs)
+keep a snapshot visibility check and use exact immutable handles for heads,
+origins, and canonical references. [Provenance](../../crates/araphor-data/src/analysis/managed/graph/provenance.rs)
+uses exact parent read pins. The [reader](../../crates/araphor-data/src/analysis/managed/reader/graph.rs)
+reads visible context pins once per producer and transaction. It retains the
+original exact context key/revision join and omission behavior. Context
+selection keeps a matching fact or proof, or a context with neither kind of
+association. Current-head and live delivery checks remain fresh. The generic
+Graph engine contains no package or finding metadata.
+
+All ten unchanged exact tests pass in five alternating pairs. The paired
+whole-process median is 1.471178 seconds, or 4.41 percent, lower. Warm creation
+medians are 3.446111 and 3.815459 seconds. Every paired creation interval is
+lower; one initial difference is only 0.000856 seconds. One candidate also
+has fewer source-change restarts; the other four whole-test pairs remain
+faster. Nested capture costs are not added as savings. Creation below
+100 milliseconds and the 100-fold target remain **Not done**. Edge cases and
+migrated internal test callers have source review only. See the [metadata evidence](../plans/araphor-execution-handoff.md#native-graph-metadata-result-2026-11-05).
+
 ## Durable creation measurement, 2026-11-05
 
 Read [collector input](../../crates/mithril-control/src/service/causal.rs),

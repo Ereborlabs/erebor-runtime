@@ -2180,7 +2180,7 @@ impl AnalysisStore {
             let current = read.projects_field("notifications", "current_finding_result_id")
                 || read.projects_field("notifications", "same_graph_revision");
             let native = notifications::NativeNotifications::read(
-                &self.graph_engine, snapshot, selection, scope, &states, &capture, current, &mut output, control, &mut owners)?;
+                self, snapshot, selection, scope, &states, &capture, current, &mut output, control, &mut owners)?;
             for notifications::NotificationState { key, revision, obligation } in states {
                 control.check()?;
                 let scalar = obligation.finding.as_ref().filter(|reference|
@@ -2214,10 +2214,10 @@ impl AnalysisStore {
                             }
                             output.reference_result(&reference.result_id, graph_revision, AnalysisReferenceOriginV1::Notification)?;
                             {
-                                super::graph_rows::GraphRows::bound_findings(&self.graph_engine, snapshot,&reference.result_id,Some(&reference.finding_id),source,
+                                super::graph_rows::GraphRows::bound_findings(self, snapshot,&reference.result_id,Some(&reference.finding_id),source,
                                     &mut |scan,input| {output.scan(scan)?;output.charge(input)})?;
                                 let selected = super::graph_rows::GraphRows::read_finding_with_id(
-                    &self.graph_engine,
+                    self,
                                     snapshot, &reference.result_id, &reference.finding_id, &header, Some(control))?;
                                 finding_value_id = selected.as_ref().map(|(id, _)| *id);
                                 point_finding = selected.map(|(_, finding)| finding);
@@ -2303,9 +2303,9 @@ impl AnalysisStore {
                                 && selection.permits_graph(&current.snapshot)
                                 && (selection.graphs.is_empty() || selection.graphs.as_slice().contains(id))
                             {
-                                super::graph_rows::GraphRows::bound_findings(&self.graph_engine, snapshot,id,Some(&reference.finding_id),&current.snapshot.scope.identity,
+                                super::graph_rows::GraphRows::bound_findings(self, snapshot,id,Some(&reference.finding_id),&current.snapshot.scope.identity,
                                     &mut |scan,input| {output.scan(scan)?;output.charge(input)})?;
-                                let value=super::graph_rows::GraphRows::read_finding(&self.graph_engine, snapshot,id,&reference.finding_id,&current,Some(control))?
+                                let value=super::graph_rows::GraphRows::read_finding(self, snapshot,id,&reference.finding_id,&current,Some(control))?
                                     .ok_or_else(||self.state_error("the current notification finding is absent"))?;
                                 if selection.binding_ids.is_empty() || (!value.effects.is_empty() && value.effects.iter().all(|effect|
                                     effect.binding_id.is_some_and(|binding|selection.binding_ids.contains(&binding))))

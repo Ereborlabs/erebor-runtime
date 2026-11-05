@@ -2,14 +2,14 @@ use super::codec::ManagedCodec;
 use std::collections::BTreeMap;
 
 use araphor_analysis_sdk as sdk;
-use duckdb::{params, Connection, Transaction};
+use duckdb::{Connection, Transaction, params};
 use snafu::ResultExt as _;
 
 use super::super::context::VerifiedPackages;
 use super::super::{AnalysisStore, PackageResultRefV1};
+use super::PreparedManagedCommit;
 use super::model::*;
 use super::source::SourceEvidence;
-use super::PreparedManagedCommit;
 use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, PackageErrorCodeV1 as Code, Result, ResultContext,
 };
@@ -432,17 +432,25 @@ impl AnalysisStore {
         }
         imported.pin(transaction, &receipt, &prepared.derived)?;
         let inserted = std::time::Instant::now();
-        let (mut graph_relations, graph_work, graph_layer) = self.commit_graph_journals(
+        let (mut graph_relations, graph_work, graph_layer, origins) = self.commit_graph_journals(
             transaction,
             input,
             &receipt,
             revision,
             prepared.graph.take(),
-            &prepared.memory,
+            &mut prepared.memory,
         )?;
         let journal_at = std::time::Instant::now();
-        graph_relations.extend(self.publish_graph(transaction, input, &receipt, revision,
-            graph_layer.as_ref(), &prepared.memory)?);
+        let (published, mut graph_delta) = self.publish_graph(
+            transaction,
+            input,
+            &receipt,
+            revision,
+            graph_layer.as_ref(),
+            &mut prepared.memory,
+        )?;
+        graph_delta.origins = origins;
+        graph_relations.extend(published);
         let graph_at = std::time::Instant::now();
         let (mut projected, graph, root_cursors, input_proof) = project(
             transaction,
@@ -531,7 +539,14 @@ impl AnalysisStore {
             verified,
             (pins, call_pins, root_cursors, input_proof),
             graph_layer,
-            super::reader::ResultOwners::new(step, attempt, spec.clone(), revision, records),
+            super::reader::ResultOwners::new(
+                step,
+                attempt,
+                spec.clone(),
+                revision,
+                records,
+                graph_delta,
+            ),
         ))
     }
 

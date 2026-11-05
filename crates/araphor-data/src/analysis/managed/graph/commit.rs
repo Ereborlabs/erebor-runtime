@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_graph::{GraphStore, LayerRequest, PreparedLayers, WriterCut};
-use duckdb::{params, Connection, Transaction};
+use duckdb::{Connection, Transaction, params};
 use snafu::ResultExt as _;
 
 use super::ManagedGraphJournal;
@@ -373,11 +373,12 @@ impl AnalysisStore {
         receipt: &ManagedReceipt,
         revision: u64,
         prepared: Option<PreparedGraph>,
-        memory: &super::super::budget::PreparedMemory<'_>,
+        memory: &mut super::super::budget::PreparedMemory<'_>,
     ) -> Result<(
         Vec<&'static str>,
         (u64, u64, u64),
         Option<araphor_graph::PendingLayer>,
+        Vec<super::super::reader::GraphOrigin>,
     )> {
         let started = std::time::Instant::now();
         let Some(PreparedGraph {
@@ -389,9 +390,16 @@ impl AnalysisStore {
             proofs: _,
         }) = prepared
         else {
-            return Ok((Vec::new(), (0, 0, 0), None));
+            return Ok((Vec::new(), (0, 0, 0), None, Vec::new()));
         };
+        memory.charge(
+            journals
+                .len()
+                .checked_mul(12 * std::mem::size_of::<super::super::reader::GraphOrigin>())
+                .ok_or_else(|| Code::Limit.error("Graph origin metadata"))?,
+        )?;
         let mut requests = Vec::new();
+        let mut origins = Vec::with_capacity(journals.len());
         for journal in &journals {
             memory.check()?;
             let call = journal.call.call;
@@ -502,6 +510,47 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "attribute managed Graph layer",
                 })?;
+            memory.charge(
+                journal
+                    .work
+                    .reads
+                    .len()
+                    .checked_mul(12 * std::mem::size_of::<super::super::reader::GraphRead>())
+                    .ok_or_else(|| Code::Limit.error("Graph read metadata"))?,
+            )?;
+            let mut reads = Vec::with_capacity(journal.work.reads.len());
+            for row in &journal.work.reads {
+                let reference = &journal.work.origins[&araphor_graph::ReadOrigin {
+                    writer: row.writer,
+                    revision: row.revision,
+                }];
+                memory.charge(4 * (row.owner.len() + row.key.len() + reference.result_id.len()))?;
+                reads.push(super::super::reader::GraphRead {
+                    relation: row.relation,
+                    writer: row.writer,
+                    revision: row.revision,
+                    owner: row.owner.clone(),
+                    key: row.key.clone(),
+                    producer: reference.result_id.clone(),
+                });
+            }
+            reads.sort_by_key(|row| (row.revision, row.writer));
+            let facts = super::super::reader::GraphOrigin::read_facts(
+                connection,
+                input.attempt.1.spec.tenant,
+                &receipt.results[&call].result_id,
+                &mut |bytes| memory.charge(bytes),
+            )?;
+            origins.push(super::super::reader::GraphOrigin {
+                tenant: input.attempt.1.spec.tenant,
+                graph: journal.call.graph,
+                result: receipt.results[&call].result_id.clone(),
+                writer: request.writer,
+                revision,
+                restricted: floors[&call],
+                reads,
+                facts,
+            });
             Self::check_graph_rows(
                 connection,
                 &receipt.results[&call].result_id,
@@ -527,6 +576,7 @@ impl AnalysisStore {
             ],
             (staged, inserted, closed),
             Some(layer),
+            origins,
         ))
     }
 

@@ -12,6 +12,7 @@ use crate::{
 mod committed;
 mod graph;
 pub(in crate::analysis) use committed::CommittedOwners;
+pub(in crate::analysis) use committed::{GraphDelta, GraphOrigin, GraphPublication, GraphRead};
 pub(super) use committed::ResultOwners;
 
 pub(in crate::analysis) struct SelectedOwner {
@@ -69,6 +70,7 @@ pub(in crate::analysis) struct OwnerRead<'a> {
     selected: BTreeMap<String, Arc<SelectedOwner>>,
     attempts: BTreeMap<(String, String), String>,
     producers: BTreeMap<String, Arc<ProducerOwner>>,
+    contexts: BTreeMap<String, Arc<Vec<crate::AnalysisContextRefV1>>>,
     publications: BTreeMap<String, Option<Arc<PublicationOwner>>>,
     findings: Option<Arc<super::graph::projection::DomainProjection>>,
     memory: Option<super::PreparedMemory<'a>>,
@@ -90,6 +92,7 @@ impl<'a> OwnerRead<'a> {
             selected: BTreeMap::new(),
             attempts: BTreeMap::new(),
             producers: BTreeMap::new(),
+            contexts: BTreeMap::new(),
             publications: BTreeMap::new(),
             findings: None,
             memory: None,

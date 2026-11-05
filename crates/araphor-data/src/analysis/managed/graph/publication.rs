@@ -1,4 +1,4 @@
-use duckdb::{params, Connection, OptionalExt as _, Transaction};
+use duckdb::{Connection, OptionalExt as _, Transaction, params};
 use snafu::ResultExt as _;
 
 use crate::{
@@ -14,8 +14,8 @@ impl AnalysisStore {
         receipt: &ManagedReceipt,
         revision: u64,
         pending: Option<&araphor_graph::PendingLayer>,
-        memory: &super::super::budget::PreparedMemory<'_>,
-    ) -> Result<Vec<&'static str>> {
+        memory: &mut super::super::budget::PreparedMemory<'_>,
+    ) -> Result<(Vec<&'static str>, super::super::reader::GraphDelta)> {
         let started = std::time::Instant::now();
         let selected = input
             .attempt
@@ -29,7 +29,7 @@ impl AnalysisStore {
                 .iter()
                 .any(|returned| returned.graph.is_some())
         {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Default::default()));
         }
         let spec = &input.attempt.instance().spec;
         let graph: Option<u64> = connection
@@ -43,7 +43,7 @@ impl AnalysisStore {
                 operation: "read Definition Graph publication owner",
             })?;
         let Some(graph) = graph else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Default::default()));
         };
         if revision == 0 || receipt.selected.commit_revision != revision {
             return Err(Code::Invalid.error("Definition Graph publication revision"));
@@ -81,10 +81,40 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "pin Definition Graph writer heads",
             })?;
+        let mut heads = std::collections::BTreeMap::new();
+        let mut query = connection.prepare(
+            "SELECT pin.writer_id,layer.revision FROM managed_graph_publication_layers pin
+             JOIN graph_layers layer ON layer.layer_id=pin.layer_id AND layer.writer_id=pin.writer_id
+             WHERE pin.result_id=?"
+        ).context(AnalysisDatabaseSnafu { operation: "prepare finding publication heads" })?;
+        let mut rows =
+            query
+                .query(params![receipt.selected.result_id])
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read finding publication heads",
+                })?;
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "advance finding publication heads",
+        })? {
+            memory.charge(12 * std::mem::size_of::<(u64, u64)>())?;
+            let (writer, head) = (|| -> duckdb::Result<_> { Ok((row.get(0)?, row.get(1)?)) })()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode finding publication head",
+                })?;
+            heads.insert(writer, head);
+        }
         let pins_at = std::time::Instant::now();
         let projection = super::projection::DomainProjection::load(connection, Some(graph))?;
         let catalog_at = std::time::Instant::now();
-        projection.publish(&self.graph_engine, connection, &receipt.selected.result_id, revision, pending, memory)?;
+        let canonical = projection.publish(
+            &self.graph_engine,
+            connection,
+            &receipt.selected.result_id,
+            revision,
+            &heads,
+            pending,
+            memory,
+        )?;
         let completed = std::time::Instant::now();
         erebor_telemetry::debug!(
             stage = "graph_publication_timing", instance_id = %spec.id,
@@ -96,11 +126,22 @@ impl AnalysisStore {
             elapsed_s = completed.duration_since(started).as_secs_f64(),
             "Graph publication completed"
         );
-        Ok(vec![
-            "managed_graph_publications",
-            "managed_graph_publication_layers",
-            "managed_graph_finding_values",
-        ])
+        Ok((
+            vec![
+                "managed_graph_publications",
+                "managed_graph_publication_layers",
+                "managed_graph_finding_values",
+            ],
+            super::super::reader::GraphDelta {
+                publication: Some(super::super::reader::GraphPublication {
+                    graph,
+                    revision,
+                    heads,
+                }),
+                canonical,
+                origins: Vec::new(),
+            },
+        ))
     }
 
     pub(super) fn check_graph_publications(connection: &Connection) -> Result<()> {

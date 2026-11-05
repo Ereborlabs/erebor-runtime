@@ -15,47 +15,37 @@ struct FindingOrigin {
 impl AnalysisStore {
     fn finding_read_parents(
         engine: &araphor_graph::GraphStore,
-        reader: &duckdb::Connection,
         tenant: [u8; 16],
         owner: &FindingOrigin,
         wanted: &BTreeSet<DiscoveryRecordIdV1>,
         control: &AnalysisReadControl,
         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
+        validated: &super::super::OwnerRead<'_>,
     ) -> Result<Vec<(FindingOrigin, BTreeSet<DiscoveryRecordIdV1>)>> {
-        let mut query = reader.prepare_cached(
-            "SELECT origin.producer_id,pin.revision,pin.writer_id,pin.owner_key,pin.entity_key,
-                octet_length(encode(origin.producer_id))+octet_length(pin.owner_key)+octet_length(pin.entity_key)
-             FROM managed_graph_row_reads pin JOIN managed_graph_reads origin ON origin.result_id=pin.result_id
-                AND origin.writer_id=pin.writer_id AND origin.revision=pin.revision
-             JOIN managed_graph_results consumer ON consumer.result_id=pin.result_id AND consumer.writer_id=? AND consumer.revision=?
-             JOIN managed_graph_writers writer ON writer.writer_id=consumer.writer_id
-             JOIN managed_graphs graph ON graph.graph_id=writer.graph_id AND graph.tenant_id=?
-             JOIN graph_relations relation ON relation.graph_id=graph.graph_id AND relation.relation_id=pin.relation_id
-             JOIN managed_graph_results producer ON producer.result_id=origin.producer_id
-                AND producer.writer_id=pin.writer_id AND producer.revision=pin.revision
-             WHERE pin.result_id=? AND pin.relation_id=? AND pin.owner_key=? AND pin.entity_key=?
-             ORDER BY pin.revision,pin.writer_id"
-        ).context(AnalysisDatabaseSnafu { operation:"prepare native finding read parents" })?;
-        let mut input = query
-            .query(params![
-                owner.writer,
-                owner.revision,
-                tenant.as_slice(),
-                owner.result,
-                owner.relation,
-                owner.owner,
-                owner.key
-            ])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read native finding read parents",
-            })?;
         let mut parents = Vec::new();
-        while let Some(row) = input.next().context(AnalysisDatabaseSnafu {
-            operation: "advance native finding read parents",
-        })? {
-            let bytes: usize = row.get(5).context(AnalysisDatabaseSnafu {
-                operation: "bound native finding read parent",
-            })?;
+        let Some(consumer) = validated.graph_origin(owner.writer, owner.revision)? else {
+            return Ok(parents);
+        };
+        if consumer.result != owner.result {
+            return Ok(parents);
+        }
+        for pin in consumer.reads.iter().filter(|pin| {
+            pin.relation == owner.relation && pin.owner == owner.owner && pin.key == owner.key
+        }) {
+            let Some(producer) = validated.graph_origin(pin.writer, pin.revision)? else {
+                continue;
+            };
+            if producer.result != pin.producer || producer.graph != consumer.graph {
+                continue;
+            }
+            let (id, revision, writer, scope, key) = (
+                &pin.producer,
+                pin.revision,
+                pin.writer,
+                &pin.owner,
+                &pin.key,
+            );
+            let bytes = id.len() + scope.len() + key.len();
             charge(
                 bytes,
                 bytes
@@ -63,29 +53,18 @@ impl AnalysisStore {
                     .and_then(|bytes| bytes.checked_add(12 * std::mem::size_of::<FindingOrigin>()))
                     .ok_or_else(|| Code::Limit.error("native finding parent memory"))?,
             )?;
-            let (id, revision, writer, scope, key): (String, u64, u64, Vec<u8>, Vec<u8>) =
-                (|| -> duckdb::Result<_> {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                })()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "decode native finding read parent",
-                })?;
             control.check()?;
             let heads = BTreeMap::from([(writer, revision)]);
             let rows = engine.members(
                 owner.relation,
                 &heads,
-                Some(std::slice::from_ref(&key)),
+                Some(std::slice::from_ref(key)),
                 || control.check().map_err(araphor_graph::Error::backend),
             )?;
             for row in rows.into_iter().filter(|row| {
-                row.writer == writer && row.revision == revision && row.owner_key.as_ref() == scope
+                row.writer == writer
+                    && row.revision == revision
+                    && row.owner_key.as_ref() == scope.as_slice()
             }) {
                 let native = row.property_batch()?;
                 let bytes = native
@@ -96,8 +75,10 @@ impl AnalysisStore {
                 let port = araphor_analysis_types::FindingMember::port();
                 let data = sdk::Dataset {
                     name: port.name,
-                    batches: vec![sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
-                        .context(crate::AnalysisContractSnafu)?],
+                    batches: vec![
+                        sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
+                            .context(crate::AnalysisContractSnafu)?,
+                    ],
                 };
                 for member in araphor_analysis_types::FindingMember::decode(&data)
                     .context(crate::AnalysisContractSnafu)?
@@ -108,7 +89,7 @@ impl AnalysisStore {
                         || member.value.tenant_id != tenant
                         || araphor_analysis_types::DomainRelations::key(&member.value.finding_id)
                             .context(crate::AnalysisContractSnafu)?
-                            != key
+                            != *key
                     {
                         return Err(Code::Denied.error("native finding parent authority"));
                     }
@@ -197,12 +178,7 @@ impl AnalysisStore {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        reader
-            .execute_batch("CREATE TEMP TABLE native_finding_records(record_key BLOB PRIMARY KEY)")
-            .context(AnalysisDatabaseSnafu {
-                operation: "create native finding provenance selection",
-            })?;
-        let selected = (|| {
+        (|| {
             let mut witnesses = BTreeMap::new();
             let mut coverage = BTreeSet::new();
             let mut qualified = BTreeSet::new();
@@ -275,7 +251,7 @@ impl AnalysisStore {
                     .cloned()
                     .collect::<BTreeSet<_>>();
                 for (parent, records) in Self::finding_read_parents(
-                    engine, reader, tenant, &owner, &records, control, charge,
+                    engine, tenant, &owner, &records, control, charge, validated,
                 )? {
                     for record in &records {
                         uncovered.remove(record);
@@ -285,81 +261,32 @@ impl AnalysisStore {
                 if !uncovered.is_empty() {
                     return Err(Code::Denied.error("native finding origin witness"));
                 }
-                reader
-                    .execute("DELETE FROM native_finding_records", [])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "reset native finding provenance selection",
-                    })?;
-                {
-                    let mut append = reader.appender("native_finding_records").context(
-                        AnalysisDatabaseSnafu {
-                            operation: "open native finding provenance selection",
-                        },
-                    )?;
-                    for record in records {
-                        let key = araphor_analysis_types::DomainRelations::key(&record)
-                            .context(crate::AnalysisContractSnafu)?;
-                        charge(0, key.len() + std::mem::size_of::<DiscoveryRecordIdV1>())?;
-                        append
-                            .append_row(params![key])
-                            .context(AnalysisDatabaseSnafu {
-                                operation: "append native finding provenance selection",
-                            })?;
-                    }
-                    append.flush().context(AnalysisDatabaseSnafu {
-                        operation: "flush native finding provenance selection",
-                    })?;
+                let graph = validated
+                    .graph_origin(owner.writer, revision)?
+                    .ok_or_else(|| Code::Missing.error("native finding origin"))?;
+                let mut keys = BTreeSet::new();
+                for record in &records {
+                    let key = araphor_analysis_types::DomainRelations::key(record)
+                        .context(crate::AnalysisContractSnafu)?;
+                    charge(0, key.len() + std::mem::size_of::<DiscoveryRecordIdV1>())?;
+                    keys.insert(key);
                 }
-                let mut query = reader.prepare(
-                    "SELECT pin.owner_id,pin.entity_key,pin.lifetime_key,pin.owner_revision,pin.commit_revision,
-                        octet_length(encode(pin.owner_id))+octet_length(pin.entity_key)+octet_length(pin.lifetime_key)
-                     FROM context_refs pin JOIN context_versions context ON context.tenant_id=pin.tenant_id
-                        AND context.owner_id=pin.owner_id AND context.entity_key=pin.entity_key
-                        AND context.lifetime_key=pin.lifetime_key AND context.owner_revision=pin.owner_revision
-                        AND context.commit_revision=pin.commit_revision
-                     LEFT JOIN graph_fact_records fact ON fact.version_key=context.version_key
-                     WHERE pin.tenant_id=? AND pin.ref_id=? AND (
-                        fact.record_key IN (SELECT record_key FROM native_finding_records)
-                        OR EXISTS(SELECT 1 FROM managed_source_proofs proof JOIN native_finding_records wanted USING(record_key)
-                            WHERE proof.result_id=pin.ref_id AND proof.version_key=context.version_key AND proof.revision=context.commit_revision)
-                        OR (fact.version_key IS NULL AND NOT EXISTS(SELECT 1 FROM managed_source_proofs proof
-                            WHERE proof.result_id=pin.ref_id AND proof.version_key=context.version_key AND proof.revision=context.commit_revision)))",
-                ).context(AnalysisDatabaseSnafu { operation:"prepare native finding provenance contexts" })?;
-                let mut rows = query.query(params![tenant.as_slice(), origin]).context(
-                    AnalysisDatabaseSnafu {
-                        operation: "read native finding provenance contexts",
-                    },
-                )?;
-                while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                    operation: "advance native finding provenance contexts",
-                })? {
+                let visible = validated.producer_contexts(origin, charge)?;
+                for value in visible.iter() {
                     control.check()?;
-                    let bytes: u64 = row.get(5).context(AnalysisDatabaseSnafu {
-                        operation: "bound native finding provenance context",
-                    })?;
-                    let bytes = usize::try_from(bytes)
-                        .ok()
-                        .and_then(|bytes| bytes.checked_mul(4))
-                        .and_then(|bytes| {
-                            bytes.checked_add(4 * std::mem::size_of::<AnalysisContextRefV1>())
-                        })
-                        .ok_or_else(|| Code::Limit.error("native finding context memory"))?;
-                    charge(bytes, bytes)?;
-                    let value = (|| -> duckdb::Result<_> {
-                        Ok(AnalysisContextRefV1 {
-                            key: crate::AnalysisContextKeyV1 {
-                                tenant_id: tenant,
-                                owner_id: row.get(0)?,
-                                entity_key: row.get(1)?,
-                                lifetime_key: row.get(2)?,
-                                owner_revision: row.get(3)?,
-                            },
-                            commit_revision: row.get(4)?,
-                        })
-                    })()
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "decode native finding provenance context",
-                    })?;
+                    let fact = graph.facts.get(&value.key);
+                    let mut associated = fact.is_some();
+                    let mut matched = fact.is_some_and(|key| keys.contains(key));
+                    for (proof, context) in &record.proofs {
+                        if context == value {
+                            associated = true;
+                            matched |= records.contains(proof);
+                        }
+                    }
+                    if associated && !matched {
+                        continue;
+                    }
+                    let value = value.clone();
                     if contexts
                         .insert(value.key.clone(), value.clone())
                         .is_some_and(|prior| prior != value)
@@ -383,14 +310,6 @@ impl AnalysisStore {
             };
             revision.validate(tenant)?;
             Ok((witnesses.into_values().collect(), contexts, revision))
-        })();
-        let cleanup = reader
-            .execute_batch("DROP TABLE native_finding_records")
-            .context(AnalysisDatabaseSnafu {
-                operation: "release native finding provenance selection",
-            });
-        let value = selected?;
-        cleanup?;
-        Ok(value)
+        })()
     }
 }

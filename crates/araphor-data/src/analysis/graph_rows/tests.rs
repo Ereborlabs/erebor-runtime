@@ -938,7 +938,7 @@ fn native_row_read_cancel() -> TestResult {
         GraphRows::read_edges(writer, result, usize::MAX, Some(&control)).map(|_| ()),
         GraphRows::read_findings(writer, result, &header, Some(&control)).map(|_| ()),
         GraphRows::read_finding(
-            &fixture.store.graph_engine,
+            &fixture.store,
             writer,
             result,
             &fixture.snapshot.findings[0].finding_id,
@@ -981,7 +981,7 @@ fn native_finding_tenant() -> TestResult {
     )?;
     assert!(matches!(
         GraphRows::read_finding(
-            &fixture.store.graph_engine,
+            &fixture.store,
             &transaction,
             result,
             &fixture.snapshot.findings[0].finding_id,
@@ -1031,7 +1031,7 @@ fn duplicate_finding_membership_rejected() -> TestResult {
     let writer = fixture.store.writer_access()?;
     assert!(matches!(
         GraphRows::read_finding(
-            &fixture.store.graph_engine,
+            &fixture.store,
             writer.get()?,
             &fixture.request.result_id,
             finding,

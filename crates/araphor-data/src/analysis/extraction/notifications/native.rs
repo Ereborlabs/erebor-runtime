@@ -28,7 +28,7 @@ pub(in crate::analysis::extraction) struct Resolved<'a> {
 
 impl NativeNotifications {
     pub(in crate::analysis::extraction) fn read(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         scope: &AnalysisSelectionV1,
@@ -66,7 +66,7 @@ impl NativeNotifications {
                 operation: "create notification scalar requests",
             })?;
         let result = Self::capture(
-            engine, snapshot, selection, scope, &wanted, current, output, control, owners,
+            store, snapshot, selection, scope, &wanted, current, output, control, owners,
         );
         let cleanup = snapshot
             .execute_batch(
@@ -81,7 +81,7 @@ impl NativeNotifications {
     }
 
     fn capture(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         scope: &AnalysisSelectionV1,
@@ -123,7 +123,7 @@ impl NativeNotifications {
         let mut result = Self::default();
         if current {
             result.heads = AnalysisStore::finding_heads_on(
-                engine,
+                store,
                 snapshot,
                 selection.tenant_id,
                 Some(&ids),
@@ -162,7 +162,7 @@ impl NativeNotifications {
         result.read_headers(snapshot, selection, scope, owners, output, control)?;
         let headers = std::time::Instant::now();
         result.read_members(
-            engine, snapshot, selection, scope, wanted, &findings, owners, output, control,
+            store, snapshot, selection, scope, wanted, &findings, owners, output, control,
         )?;
         control.check()?;
         erebor_telemetry::debug!(
@@ -318,7 +318,7 @@ impl NativeNotifications {
 
     fn read_members(
         &mut self,
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         scope: &AnalysisSelectionV1,
@@ -352,7 +352,7 @@ impl NativeNotifications {
         for (result, ids) in requests {
             let keys = ids.into_values().collect::<Vec<_>>();
             let rows = findings.read_findings(
-                engine,
+                store,
                 snapshot,
                 selection.tenant_id,
                 &result,

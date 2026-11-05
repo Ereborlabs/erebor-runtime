@@ -1,5 +1,93 @@
 # Native execution performance handoff
 
+## Native Graph metadata result, 2026-11-05
+
+Data's existing committed owner now retains exact Graph publication heads,
+producer origins, row read pins, canonical references, and context fact
+associations. Fresh publications supply these values from their existing
+journal and mapping append loops. Recovery restores them from the same
+validated durable tables. The existing pending-owner guard removes new keys
+on failure and promotes them only after Data commit. Scratch reservations
+cover allocation and remain held through sealing and commit.
+
+Native finding reads no longer build a numeric VALUES string or join origin
+and canonical tables for each read. Provenance no longer creates a temporary
+record table or runs its parent/context association joins for each finding.
+The reader still checks publication visibility in its own snapshot. Visible
+context pins retain the exact key and revision join, including omission of
+missing rows. The native context filter keeps a matching fact or proof, or a
+context with no association. It retains every finding alias and the existing
+canonical and parent ordering. Current-head, original grant, state-version,
+lifecycle, route, commit, and pre-delivery checks keep their existing owners.
+The generic Graph engine gains no package or finding rules.
+
+The final focused build passes in 248.417418 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass.
+
+| Pair | First executable | Baseline test, seconds | Native metadata test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 32.55 | 31.35 | +1.2071 |
+| 2 | Native metadata | 33.14 | 31.70 | +1.4404 |
+| 3 | Baseline | 33.50 | 31.60 | +1.8994 |
+| 4 | Native metadata | 33.65 | 31.94 | +1.7129 |
+| 5 | Baseline | 33.34 | 31.87 | +1.4712 |
+
+Whole-process time is lower in all five pairs. The paired median saving is
+1.471178 seconds, or 4.41 percent. The paired range is 3.70 to 5.66 percent.
+First durable creation uses the same collector-entry and successful first-save
+boundaries in both executables.
+
+| Notification | Baseline creation median, seconds | Native creation median, seconds | Paired median saving, seconds |
+| --- | ---: | ---: | ---: |
+| Initial | 2.782743 | 2.680852 | 0.106743 |
+| First warm | 3.556552 | 3.446111 | 0.159436 |
+| Second warm | 3.951221 | 3.815459 | 0.150905 |
+
+Each creation interval is lower in all five pairs. The smallest initial
+saving is 0.000856 seconds; do not treat that pair as a separate clear gain.
+Summed notification member capture has medians of 1.125942 and 0.431562
+seconds. Complete notification capture has medians of 3.585807 and 2.613289
+seconds. These costs overlap the whole run and are not added as savings.
+Managed commit remains about 1.15 seconds at the last warm publication.
+
+Every run retains 16,402 public journal records, 18 collector inputs, three
+first durable notifications, five managed publications, 61 authority checks,
+and twelve Graph append batches. Graph apply work, append coordinates,
+publication cut/result pairs, and bulk physical work match within every pair.
+Bulk retains 64 pages, 16,384 rows, 60 reused pages, 262,144 physical frame
+rows, and 53,401,792 body bytes. Baselines record three source-change restart
+mentions each. Candidates record 3, 3, 2, 3, and 3. Thus one run also changes
+restart scheduling; do not assign all its end-to-end saving to metadata reads.
+The other four pairs remain faster. Excluding the changed-retry pair gives
+a paired whole-process median saving of 1.455803 seconds, or 4.37 percent.
+The remaining paired warm medians are 0.116437 and 0.143333 seconds lower.
+Capture counts are 25 for each baseline and 25, 24, 24, 24, and 25 for the
+candidates. Bulk timing is mixed.
+
+Result: **Done** for this replacement and focused comparison. Creation below
+100 milliseconds and the 100-fold target remain **Not done**. Full CI and
+other test targets were not run. Recovery, rollback, empty publications,
+cross-relation aliases, missing contexts, and finite budgets have source
+review only under this qualification. The migrated internal test callers
+retain their assertions but were not run.
+
+Proof: `/tmp/araphor-build-native-metadata-20261105-d.log` and
+`/tmp/araphor-native-metadata-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs. The baseline source is `22bf65761`. Both variants contain
+the same timing probes. Retained executables are
+`target/araphor-notice-comparison-20261105/notification-boundary` and
+`native-metadata`. Build C passed before the final accounting corrections;
+its executable was removed to free space. Builds A and B failed on internal
+caller and method-visibility wiring. No source edit, build, debugger, or other
+test runs during the final comparison.
+
+The next mutable metadata rewrite requires one Data transaction publication
+owner. The existing `commit_metadata` function does not cover raw projection,
+retention, segment cleanup, and direct autocommit SQL. Publishing on writer
+lease drop cannot cover intermediate commits seen by current readers. A
+StoreMeta-keyed cache is not selected. No storage engine change is selected.
+The next architecture is under review; implementation has not started.
+
 ## Durable notification creation measurement, 2026-11-05
 
 The exact incident test passes in 29.47 seconds. This run adds timing fields;

@@ -3,10 +3,16 @@ use std::sync::Mutex;
 
 type OwnerKey = ([u8; 16], String);
 
+mod graph;
+pub(in crate::analysis) use graph::{GraphDelta, GraphOrigin, GraphPublication, GraphRead};
+
 #[derive(Default)]
 struct Owners {
     selected: BTreeMap<OwnerKey, Arc<SelectedOwner>>,
     producers: BTreeMap<OwnerKey, Arc<ProducerOwner>>,
+    publications: BTreeMap<OwnerKey, Arc<GraphPublication>>,
+    origins: BTreeMap<(u64, u64), Arc<GraphOrigin>>,
+    canonical: BTreeMap<(u64, u64), (u64, u64)>,
 }
 
 #[derive(Default)]
@@ -15,6 +21,7 @@ pub(in crate::analysis) struct CommittedOwners(Mutex<Owners>);
 pub(in crate::analysis::managed) struct ResultOwners {
     selected: Arc<SelectedOwner>,
     producers: Vec<(String, Arc<ProducerOwner>)>,
+    graph: GraphDelta,
 }
 
 impl ResultOwners {
@@ -24,6 +31,7 @@ impl ResultOwners {
         spec: ManagedSpec,
         revision: u64,
         records: Vec<(String, Record)>,
+        graph: GraphDelta,
     ) -> Self {
         let selected = Arc::new(SelectedOwner {
             step,
@@ -46,6 +54,7 @@ impl ResultOwners {
         Self {
             selected,
             producers,
+            graph,
         }
     }
 }
@@ -54,6 +63,9 @@ pub(in crate::analysis::managed) struct PendingOwners<'a> {
     store: &'a CommittedOwners,
     selected: OwnerKey,
     producers: Vec<OwnerKey>,
+    publication: Option<OwnerKey>,
+    origins: Vec<(u64, u64)>,
+    canonical: Vec<(u64, u64)>,
     committed: bool,
 }
 
@@ -76,6 +88,15 @@ impl Drop for PendingOwners<'_> {
         owners.selected.remove(&self.selected);
         for key in &self.producers {
             owners.producers.remove(key);
+        }
+        if let Some(key) = &self.publication {
+            owners.publications.remove(key);
+        }
+        for key in &self.origins {
+            owners.origins.remove(key);
+        }
+        for key in &self.canonical {
+            owners.canonical.remove(key);
         }
     }
 }
@@ -133,9 +154,17 @@ impl CommittedOwners {
                 })
                 .collect::<Result<Vec<_>>>()?;
             store
-                .seal(ResultOwners::new(step, attempt, spec, revision, records))?
+                .seal(ResultOwners::new(
+                    step,
+                    attempt,
+                    spec,
+                    revision,
+                    records,
+                    GraphDelta::default(),
+                ))?
                 .commit();
         }
+        store.restore_graph(reader)?;
         Ok(store)
     }
 
@@ -177,10 +206,30 @@ impl CommittedOwners {
             owners.producers.insert(key.clone(), value);
             producers.push(key);
         }
+        let publication = values.graph.publication.map(|value| {
+            owners
+                .publications
+                .insert(selected.clone(), Arc::new(value));
+            selected.clone()
+        });
+        let mut origins = Vec::with_capacity(values.graph.origins.len());
+        for value in values.graph.origins {
+            let key = (value.writer, value.revision);
+            owners.origins.insert(key, Arc::new(value));
+            origins.push(key);
+        }
+        let mut canonical = Vec::with_capacity(values.graph.canonical.len());
+        for (key, value) in values.graph.canonical {
+            owners.canonical.insert(key, value);
+            canonical.push(key);
+        }
         Ok(PendingOwners {
             store: self,
             selected,
             producers,
+            publication,
+            origins,
+            canonical,
             committed: false,
         })
     }

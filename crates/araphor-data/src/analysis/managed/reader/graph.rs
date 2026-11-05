@@ -50,6 +50,84 @@ impl OwnerRead<'_> {
         Ok(Some(owner))
     }
 
+    pub(in crate::analysis) fn graph_origin(
+        &self,
+        writer: u64,
+        revision: u64,
+    ) -> Result<Option<Arc<GraphOrigin>>> {
+        self.control.check()?;
+        self.store
+            .managed_results
+            .graph_origin(self.tenant, writer, revision)
+    }
+
+    pub(in crate::analysis) fn producer_contexts(
+        &mut self,
+        result: &str,
+        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
+    ) -> Result<Arc<Vec<crate::AnalysisContextRefV1>>> {
+        self.control.check()?;
+        if let Some(contexts) = self.contexts.get(result) {
+            return Ok(Arc::clone(contexts));
+        }
+        self.charge(
+            result.len().saturating_mul(4)
+                + 12 * std::mem::size_of::<(String, Arc<Vec<crate::AnalysisContextRefV1>>)>(),
+            charge,
+        )?;
+        let mut query = self.reader.prepare(
+            "SELECT pin.owner_id,pin.entity_key,pin.lifetime_key,pin.owner_revision,pin.commit_revision,
+                octet_length(encode(pin.owner_id))+octet_length(pin.entity_key)+octet_length(pin.lifetime_key)
+             FROM context_refs pin JOIN context_versions context ON context.tenant_id=pin.tenant_id
+                AND context.owner_id=pin.owner_id AND context.entity_key=pin.entity_key
+                AND context.lifetime_key=pin.lifetime_key AND context.owner_revision=pin.owner_revision
+                AND context.commit_revision=pin.commit_revision
+             WHERE pin.tenant_id=? AND pin.ref_id=?"
+        ).context(AnalysisDatabaseSnafu { operation: "prepare visible producer contexts" })?;
+        let mut rows = query
+            .query(params![self.tenant.as_slice(), result])
+            .context(AnalysisDatabaseSnafu {
+                operation: "read visible producer contexts",
+            })?;
+        let mut contexts = Vec::new();
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "advance visible producer contexts",
+        })? {
+            self.control.check()?;
+            let bytes: usize = row.get(5).context(AnalysisDatabaseSnafu {
+                operation: "bound visible producer context",
+            })?;
+            let bytes = bytes
+                .checked_mul(4)
+                .and_then(|bytes| {
+                    bytes.checked_add(4 * std::mem::size_of::<crate::AnalysisContextRefV1>())
+                })
+                .ok_or_else(|| Code::Limit.error("native finding context memory"))?;
+            charge(bytes, bytes)?;
+            contexts.push(
+                (|| -> duckdb::Result<_> {
+                    Ok(crate::AnalysisContextRefV1 {
+                        key: crate::AnalysisContextKeyV1 {
+                            tenant_id: self.tenant,
+                            owner_id: row.get(0)?,
+                            entity_key: row.get(1)?,
+                            lifetime_key: row.get(2)?,
+                            owner_revision: row.get(3)?,
+                        },
+                        commit_revision: row.get(4)?,
+                    })
+                })()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode visible producer context",
+                })?,
+            );
+        }
+        let contexts = Arc::new(contexts);
+        self.contexts
+            .insert(result.to_owned(), Arc::clone(&contexts));
+        Ok(contexts)
+    }
+
     pub(in crate::analysis) fn finding_catalog(
         &mut self,
         reader: &Connection,
@@ -74,7 +152,7 @@ impl OwnerRead<'_> {
 
     pub(in crate::analysis) fn finding_rows(
         &mut self,
-        engine: &araphor_graph::GraphStore,
+        _engine: &araphor_graph::GraphStore,
         reader: &Connection,
         tenant: [u8; 16],
         result: &str,
@@ -82,7 +160,7 @@ impl OwnerRead<'_> {
         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
     ) -> Result<Vec<super::super::graph::projection::FindingRow>> {
         self.finding_catalog(reader, tenant, charge)?
-            .read_findings(engine, reader, tenant, result, keys, charge)
+            .read_findings(self.store, reader, tenant, result, keys, charge)
     }
 
     pub(in crate::analysis) fn finding(
@@ -111,14 +189,14 @@ impl OwnerRead<'_> {
 
     pub(in crate::analysis) fn finding_heads(
         &mut self,
-        engine: &araphor_graph::GraphStore,
+        _engine: &araphor_graph::GraphStore,
         reader: &Connection,
         tenant: [u8; 16],
         wanted: &[&String],
         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
     ) -> Result<BTreeMap<String, String>> {
         let catalog = self.finding_catalog(reader, tenant, charge)?;
-        AnalysisStore::read_finding_heads(engine, reader, tenant, wanted, &catalog, charge)
+        AnalysisStore::read_finding_heads(self.store, reader, tenant, wanted, &catalog, charge)
     }
 
     pub(in crate::analysis) fn finding_changed(

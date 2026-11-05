@@ -119,7 +119,7 @@ impl AnalysisStore {
             let header = GraphRows::read_summary(reader, tenant, &reference.result_id, None)?
                 .ok_or_else(|| self.state_error("the Graph header is absent"))?;
             let finding = GraphRows::read_finding(
-                &self.graph_engine,
+                self,
                 reader,
                 &reference.result_id,
                 &reference.finding_id,
@@ -134,7 +134,7 @@ impl AnalysisStore {
                 .build()
             })?;
             let changed = Self::legacy_finding_changed(
-                &self.graph_engine,
+                self,
                 reader,
                 tenant,
                 reference,
@@ -147,7 +147,7 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn legacy_finding_changed(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         reader: &Connection,
         tenant: [u8; 16],
         reference: &NotificationFindingRefV1,
@@ -161,7 +161,7 @@ impl AnalysisStore {
             Some(prior) => match GraphRows::read_summary(reader, tenant, &prior.result_id, None)? {
                 None => true,
                 Some(previous) => match GraphRows::read_finding(
-                    engine,
+                    store,
                     reader,
                     &prior.result_id,
                     &prior.finding_id,
@@ -186,7 +186,7 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn finding_heads_on(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         reader: &Connection,
         tenant: [u8; 16],
         wanted: Option<&[&str]>,
@@ -296,7 +296,7 @@ impl AnalysisStore {
                 operation: "decode native finding head",
             })?;
             for row in
-                catalog.read_findings(engine, reader, tenant, &result, keys.as_deref(), charge)?
+                catalog.read_findings(store, reader, tenant, &result, keys.as_deref(), charge)?
             {
                 let id = row.id()?;
                 charge(
@@ -339,7 +339,7 @@ impl AnalysisStore {
         let catalog = owners.finding_catalog(reader, tenant, &mut |_, _| Ok(()))?;
         let wanted = exact.map(|id| vec![id]);
         Ok(Self::finding_heads_on(
-            &self.graph_engine,
+            self,
             reader,
             tenant,
             wanted.as_deref(),
@@ -385,7 +385,7 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn read_finding_heads(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         reader: &Connection,
         tenant: [u8; 16],
         wanted: &[&String],
@@ -395,7 +395,7 @@ impl AnalysisStore {
         charge(0, wanted.len().saturating_mul(4 * size_of::<&str>()))?;
         let ids = wanted.iter().map(|id| id.as_str()).collect::<Vec<_>>();
         Ok(
-            Self::finding_heads_on(engine, reader, tenant, Some(&ids), catalog, charge)?
+            Self::finding_heads_on(store, reader, tenant, Some(&ids), catalog, charge)?
                 .into_iter()
                 .map(|(id, (result, _))| (id, result))
                 .collect(),
@@ -449,7 +449,7 @@ impl AnalysisStore {
                     let header = GraphRows::read_finding_header(reader, tenant, &result)?
                         .ok_or_else(|| self.state_error("the Graph header is absent"))?;
                     let values = GraphRows::read_finding_keys(
-                        &self.graph_engine,
+                        self,
                         reader,
                         &result,
                         &header,
@@ -500,7 +500,7 @@ impl AnalysisStore {
                 return Ok(None);
             };
             GraphRows::read_finding(
-                &self.graph_engine,
+                self,
                 reader,
                 result_id,
                 finding_id,
@@ -580,7 +580,7 @@ impl AnalysisStore {
                     .ok_or_else(|| self.state_error("the Graph header is absent"))?;
                 let ids = ids.into_iter().map(str::to_owned).collect::<Vec<_>>();
                 let findings = GraphRows::read_finding_keys(
-                    &self.graph_engine,
+                    self,
                     reader,
                     result,
                     &header,
@@ -680,7 +680,7 @@ impl AnalysisStore {
             let header = GraphRows::read_finding_header(reader, tenant, &result.0)?
                 .ok_or_else(|| self.state_error("the Graph header is absent"))?;
             let finding = GraphRows::read_finding(
-                &self.graph_engine,
+                self,
                 reader,
                 &result.0,
                 &reference.finding_id,
@@ -721,7 +721,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu { operation:"read historical Definition findings" })?
                 .collect::<duckdb::Result<Vec<_>>>().context(AnalysisDatabaseSnafu { operation:"decode historical Definition findings" })?;
             for id in ids {
-                if !catalog.read_findings(&self.graph_engine,reader,tenant,&id,Some(std::slice::from_ref(&key)),&mut |_,_| Ok(()))?.is_empty()
+                if !catalog.read_findings(self,reader,tenant,&id,Some(std::slice::from_ref(&key)),&mut |_,_| Ok(()))?.is_empty()
                     && Self::definition_graph(reader,tenant,&id,&mut owners)? {
                     if let Some((finding,basis)) = Self::definition_finding(&self.graph_engine,reader,tenant,&id,finding_id,&control,&mut owners)? {
                         if &basis == revision { return Ok(Some(finding)); }
@@ -743,7 +743,7 @@ impl AnalysisStore {
                 let header = GraphRows::read_finding_header(reader, tenant, &id)?
                     .ok_or_else(|| self.state_error("the Graph header is absent"))?;
                 if &header.snapshot.input_manifest == revision {
-                    return GraphRows::read_finding(&self.graph_engine, reader, &id, finding_id, &header, None);
+                    return GraphRows::read_finding(self, reader, &id, finding_id, &header, None);
                 }
             }
             Ok(None)

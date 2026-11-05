@@ -275,7 +275,7 @@ fn expiry_metadata_and_selected_values_keep_exact_state() -> TestResult {
     )?;
     transaction.execute("UPDATE graph_producer_members SET value_ref=? WHERE member_kind=4 AND scope_id IN (SELECT v.scope_id FROM graph_result_producers b JOIN graph_producer_versions v ON v.result_id=b.producer_result_id JOIN graph_producer_scopes s USING(scope_id) WHERE b.result_id=? AND s.producer_kind=1) AND member_key=?",params![prior_value,expired_ref.result_id,GraphRows::member_key(finding)?])?;
     assert!(matches!(
-        GraphRows::read_finding(&fixture.store.graph_engine, &transaction, &expired_ref.result_id, finding, &header, None),
+        GraphRows::read_finding(&fixture.store, &transaction, &expired_ref.result_id, finding, &header, None),
         Err(crate::Error::GraphInvalid {
             field: "graph expired finding value",
             ..

@@ -193,12 +193,13 @@ impl DomainProjection {
         connection: &Transaction<'_>,
         result: &str,
         revision: u64,
+        heads: &std::collections::BTreeMap<u64, u64>,
         pending: Option<&araphor_graph::PendingLayer>,
         memory: &super::super::budget::PreparedMemory<'_>,
-    ) -> Result<()> {
+    ) -> Result<Vec<((u64, u64), (u64, u64))>> {
         let started = std::time::Instant::now();
         let mut work = [std::time::Duration::ZERO; 4];
-        let outcome: Result<()> = (|| {
+        let outcome = (|| {
             let at = std::time::Instant::now();
             if let (Some(values), Some(members)) =
                 (Self::values(&self.edges), Self::visible(&self.edges))
@@ -228,9 +229,9 @@ impl DomainProjection {
                 }
             }
             let at = std::time::Instant::now();
-            self.publish_findings(engine, connection, result, revision, pending, memory)?;
+            let mappings = self.publish_findings(engine, connection, result, revision, heads, pending, memory)?;
             work[1] = at.elapsed();
-            Ok(())
+            Ok(mappings)
         })();
         if outcome.is_ok() {
             erebor_telemetry::debug!(
@@ -324,7 +325,7 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn bound_native_findings(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         connection: &Connection,
         result: &str,
         exact: Option<&str>,
@@ -339,7 +340,7 @@ impl AnalysisStore {
         let catalog = DomainProjection::load_scope(connection,None,Some(tenant.as_slice()),charge)?;
         let keys = exact.map(|id| DomainRelations::key(&id)).transpose().context(crate::AnalysisContractSnafu)?.map(|key| vec![key]);
         let mut seen = std::collections::BTreeSet::new();
-        for row in catalog.read_findings(engine,connection,tenant,result,keys.as_deref(),charge)? {
+        for row in catalog.read_findings(store,connection,tenant,result,keys.as_deref(),charge)? {
             if seen.insert(row.id()?.to_owned()) {
                 let bytes = row.member.property_batch()?.get_array_memory_size();
                 charge(bytes,bytes.saturating_mul(8))?;
@@ -386,17 +387,17 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn native_finding(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         connection: &Connection,
         tenant: [u8;16],
         result: &str,
         id: &str,
     ) -> Result<Option<(u64,FindingMember)>> {
-        Self::native_finding_on(engine,connection,tenant,result,id,&mut |_,_| Ok(()))
+        Self::native_finding_on(store,connection,tenant,result,id,&mut |_,_| Ok(()))
     }
 
     pub(in crate::analysis) fn native_finding_on(
-        engine: &araphor_graph::GraphStore,
+        store: &AnalysisStore,
         connection: &Connection,
         tenant: [u8;16],
         result: &str,
@@ -406,7 +407,7 @@ impl AnalysisStore {
         let catalog = DomainProjection::load_scope(connection,None,Some(tenant.as_slice()),charge)?;
         charge(0,id.len().saturating_add(16).saturating_mul(4))?;
         let key = DomainRelations::key(&id).context(crate::AnalysisContractSnafu)?;
-        let rows = catalog.read_findings(engine,connection,tenant,result,Some(&[key]),charge)?;
+        let rows = catalog.read_findings(store,connection,tenant,result,Some(&[key]),charge)?;
         match rows.first() {
             None => Ok(None),
             Some(row) => {
