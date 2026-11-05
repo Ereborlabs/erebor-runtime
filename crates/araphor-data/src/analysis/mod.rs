@@ -979,41 +979,26 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read source receipt",
             })?;
-        stored
-            .map(
-                |(
-                    identity_json,
-                    tenant,
-                    cpu_id,
-                    contiguous_cursor,
-                    coverage_revision,
-                    retained_floor,
-                    commit_revision,
-                )| {
-                    let saved: EvidenceIntakeIdentityV1 = serde_json::from_str(&identity_json)
-                        .context(JsonSnafu {
-                            path: root.join("analysis.duckdb"),
-                        })?;
-                    if &saved != identity || tenant != identity.tenant_id {
-                        return AnalysisStateSnafu {
-                            path: root.join("analysis.duckdb"),
-                            reason: "the source key does not match its durable identity".to_owned(),
-                        }
-                        .fail();
-                    }
-                    Ok((
-                        AnalysisSourceReceiptV1 {
-                            identity: saved,
-                            cpu_id,
-                            contiguous_cursor,
-                            coverage_revision,
-                            retained_floor,
-                        },
-                        commit_revision,
-                    ))
-                },
-            )
-            .transpose()
+        stored.map(|stored| Self::decode_receipt(root, identity, stored)).transpose()
+    }
+
+    fn decode_receipt(
+        root: &Path,
+        identity: &EvidenceIntakeIdentityV1,
+        stored: (String, Vec<u8>, u32, u64, u64, u64, u64),
+    ) -> Result<(AnalysisSourceReceiptV1, u64)> {
+        let (identity_json, tenant, cpu_id, contiguous_cursor, coverage_revision, retained_floor, commit_revision) = stored;
+        let saved: EvidenceIntakeIdentityV1 = serde_json::from_str(&identity_json)
+            .context(JsonSnafu { path: root.join("analysis.duckdb") })?;
+        if &saved != identity || tenant != identity.tenant_id {
+            return AnalysisStateSnafu {
+                path: root.join("analysis.duckdb"),
+                reason: "the source key does not match its durable identity".to_owned(),
+            }.fail();
+        }
+        Ok((AnalysisSourceReceiptV1 {
+            identity: saved, cpu_id, contiguous_cursor, coverage_revision, retained_floor,
+        }, commit_revision))
     }
 
     fn reject<T>(&self, reason: &str) -> Result<T> {

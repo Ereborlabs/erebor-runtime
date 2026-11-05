@@ -1,5 +1,30 @@
 # Araphor retained execution state review
 
+## Source header set reader, 2026-11-05
+
+Read [extraction](../../crates/araphor-data/src/analysis/extraction.rs), then
+[the set reader](../../crates/araphor-data/src/analysis/extraction/source/headers.rs)
+and [the shared receipt decoder](../../crates/araphor-data/src/analysis/mod.rs).
+One invocation reads receipts and exact coverage with native BLOB keys. A
+second query reads ordered expired, recovery, and retired gaps. Both use the
+same existing extraction transaction. Unqualified tables retain historical
+temporary views. Retired ranges still use the physical main table at the
+captured cut. Journal checks and output keep the resolved source order.
+Raw source state and legacy projection conditions retain their owners.
+The common input budget charges all live gap vectors. Retired scratch is
+released only after its vector is dropped. The old per-source readers are
+removed. There is no retained cache, archive, or engine change.
+
+All ten unchanged exact tests pass in five alternating pairs. The paired
+whole-process median is 1.010819 seconds, or 3.21 percent, lower. Collector
+entry to first durable notification creation has medians of 2.487646,
+3.195542, and 3.516677 seconds. Each paired interval is lower. Graph work,
+publication identities, and bulk physical work match. Capture counts differ
+in two candidates. The receipt timer includes coverage; compare receipt,
+gaps, and coverage together. Nested costs are not added. Creation below
+100 milliseconds and the 100-fold target remain **Not done**. Edge cases
+outside this test have source review only. See the [set reader evidence](../plans/araphor-execution-handoff.md#source-header-set-reader-result-2026-11-05).
+
 ## Native Graph metadata, 2026-11-05
 
 Read [managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs),

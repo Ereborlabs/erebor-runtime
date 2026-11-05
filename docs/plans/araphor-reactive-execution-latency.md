@@ -1,5 +1,83 @@
 # Araphor reactive execution in milliseconds
 
+## Source header set reader result, 2026-11-05
+
+Data now reads selected source receipts and coverage in one set query. A
+second ordered set query reads expired, recovery, and retired gaps. The
+reader uses the existing extraction transaction. Historical receipt and gap
+reads still use the bound temporary views. Retired ranges still use the
+physical main table and the captured revision. Native BLOB parameters retain
+source identity. No input or output archive, retained mutable cache, engine
+change, or DataFusion operator is added.
+
+The replacement removes the old per-source gap and retired-range readers.
+The shared receipt decoder retains identity, tenant, cursor, and revision
+checks. Journal checks and output retain the resolved source order. Raw
+source state, selection checks, and projection conditions keep their existing
+owners. The common extraction budget charges all live gap vectors, including
+retired ranges. A retired vector releases its charge only after it is dropped.
+
+The final focused build passes in 245.939550 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass.
+
+| Pair | First executable | Baseline test, seconds | Set reader test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Set reader | 30.54 | 28.52 | +2.0162 |
+| 2 | Baseline | 30.88 | 30.09 | +0.7873 |
+| 3 | Set reader | 31.21 | 30.20 | +1.0024 |
+| 4 | Baseline | 31.45 | 30.44 | +1.0108 |
+| 5 | Set reader | 31.53 | 30.26 | +1.2771 |
+
+Whole-process time is lower in all five pairs. The paired median saving is
+1.010819 seconds, or 3.21 percent. The paired range is 2.55 to 6.59 percent.
+The same successful collector-entry and first durable-save boundaries measure
+notification creation in both executables.
+
+| Notification | Baseline creation median, seconds | Set reader creation median, seconds | Paired median saving, seconds |
+| --- | ---: | ---: | ---: |
+| Initial | 2.641141 | 2.487646 | 0.152716 |
+| First warm | 3.407888 | 3.195542 | 0.207532 |
+| Second warm | 3.694563 | 3.516677 | 0.191452 |
+
+Each creation interval is lower in every pair. Initial paired savings range
+from 0.137982 to 0.192853 seconds. Warm savings range from 0.139467 to
+0.306007 seconds and from 0.129601 to 0.326330 seconds. These intervals
+start at trusted Control collector input, not physical Node event arrival.
+The endpoint is first durable notification creation, before delivery.
+
+Every run retains 16,402 public journal records, 18 collector inputs, three
+first durable notifications, five managed publications, 61 authority checks,
+and twelve Graph append batches. Paired Graph apply and append work, actual
+publication cuts and result IDs, and bulk physical work match. Bulk retains
+64 pages, 16,384 rows, 60 reused pages, 262,144 physical frame rows, and
+53,401,792 body bytes. Every run has three source-change restart mentions.
+Baselines have 25 capture spans each. Candidates have 25, 25, 26, 24, and 25.
+Capture scheduling can differ; nested costs are not added as savings.
+
+The receipt timer now includes coverage. Compare the complete header family:
+receipt plus gaps plus coverage. Across metadata captures for findings,
+routes, and notifications, the summed header median falls from 1.054507 to
+0.296805 seconds. For notification-only captures it falls from 1.027635 to
+0.295922 seconds. These are run sums, not one event's latency. The inclusive
+source timer still contains replay and state work. The final warm managed
+commit remains about 1.13 seconds. The first notification save remains about
+30 milliseconds. These owners still prevent creation below 100 milliseconds.
+
+Result: **Done** for this replacement and focused comparison. Creation below
+100 milliseconds and the 100-fold target remain **Not done**. Full CI and
+other test cases were not run. Historical views, wrong-tenant rows, missing
+coverage, recovery gaps, and finite budgets have source review only under
+this qualification. No source edit, build, debugger, or other test runs
+during the comparison.
+
+Proof: `/tmp/araphor-build-source-headers-20261105-b.log` and
+`/tmp/araphor-source-headers-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs. Baseline source: `ecb547d14`. Retained executables are
+`target/araphor-notice-comparison-20261105/native-metadata` and
+`source-headers`. Build A passed before the retired-vector accounting fix;
+its executable was removed. The older `component-reuse` executable was also
+removed for space. Its logs remain.
+
 ## Native Graph metadata result, 2026-11-05
 
 Data's existing committed owner now retains exact Graph publication heads,

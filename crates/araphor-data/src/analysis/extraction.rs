@@ -1942,37 +1942,26 @@ impl AnalysisStore {
                     }
                 }
             }
-            for identity in selection.sources.as_slice() {
+            let source_headers = source::SourceHeaders::read(
+                self, snapshot, selection.sources.as_slice(), physical.commit_revision,
+                (reference.is_some() && !matches!(mode, AnalysisReadModeV1::Metadata)
+                    && read.projected("events").is_some()).then_some((selection, &read)),
+                control, &mut output,
+            )?;
+            headers[0] += source_headers.receipt_s;
+            headers[1] += source_headers.gaps_s;
+            for source::SourceHeader { receipt, revision: commit_revision, expired,
+                recovery, retired, coverage: coverage_report } in source_headers.values {
                 control.check()?;
-                let key = identity.key();
                 let mut header = std::time::Instant::now();
-                let (receipt, commit_revision) = Self::read_receipt_from(snapshot, &self.root, identity, &key)?
-                    .ok_or_else(|| self.state_error("the selected source is absent"))?;
-                if reference.is_some() && !matches!(mode, AnalysisReadModeV1::Metadata)
-                    && read.projected("events").is_some()
-                {
-                    self.check_journal_source(snapshot, &key, selection, &read,
-                        output.meta.commit_revision, control)?;
-                }
-                output.charge(receipt.identity.node_id.capacity())?;
-                headers[0] += header.elapsed();
-                header = std::time::Instant::now();
-                let expired = self.extract_gaps(snapshot, identity, false, control, &mut output)?;
-                let recovery = self.extract_gaps(snapshot, identity, true, control, &mut output)?;
-                let retired = self.retired_source(snapshot,&receipt,output.meta.commit_revision,physical.commit_revision,control,&mut output)?;
-                let staged = retired.capacity().saturating_mul(size_of::<AnalysisGapV1>());
-                headers[1] += header.elapsed();
-                header = std::time::Instant::now();
-                let state = self.raw.until(control)?.source_state(&receipt,output.meta.commit_revision,&expired,&retired,control,(output.input_bytes.saturating_add(staged),output.limits.input_bytes))?;
+                let state = self.raw.until(control)?.source_state(&receipt,output.meta.commit_revision,&expired,&retired,control,(output.input_bytes,output.limits.input_bytes))?;
                 self.check_selected_source(&receipt,state.covered)?;
+                let retired_bytes = retired.capacity() * size_of::<AnalysisGapV1>();
                 drop(retired);
+                output.input_bytes -= retired_bytes;
                 let pending = state.pending;
                 output.charge(pending.capacity() * size_of::<AnalysisGapV1>())?;
                 headers[2] += header.elapsed();
-                header = std::time::Instant::now();
-                let coverage_report = self.read_coverage_from(snapshot, &receipt)?;
-                output.charge(coverage_report.as_ref().map_or(0, Vec::capacity))?;
-                headers[3] += header.elapsed();
                 header = std::time::Instant::now();
                 let added = AnalysisExtractionV1::grow(
                     &mut output.sources,
@@ -2502,72 +2491,7 @@ impl AnalysisStore {
         Ok(sensitivity)
     }
 
-    fn extract_gaps(
-        &self,
-        snapshot: &Connection,
-        identity: &EvidenceIntakeIdentityV1,
-        recovery: bool,
-        control: &AnalysisReadControl,
-        output: &mut AnalysisExtractionV1,
-    ) -> Result<Vec<AnalysisGapV1>> {
-        // A time filter does not remove a recorded source gap.
-        let sql = if recovery {
-            "SELECT first_cursor, last_cursor, commit_revision, NULL::UBIGINT, NULL::UBIGINT
-             FROM recovery_gaps
-             WHERE stream_key = ? AND tenant_id = ? ORDER BY first_cursor"
-        } else {
-            "SELECT first_cursor, last_cursor, commit_revision, source_revision, received_utc_ns
-             FROM expired_ranges
-             WHERE stream_key = ? AND tenant_id = ? ORDER BY first_cursor"
-        };
-        let mut statement = snapshot.prepare(sql).context(AnalysisDatabaseSnafu {
-            operation: "prepare selected coverage gaps",
-        })?;
-        let rows = statement
-            .query_map(
-                params![identity.key().as_slice(), identity.tenant_id.as_slice()],
-                |row| {
-                    Ok((
-                        AnalysisGapV1 {
-                            first_cursor: row.get(0)?,
-                            last_cursor: row.get(1)?,
-                            commit_revision: row.get(2)?,
-                        },
-                        row.get::<_, Option<u64>>(3)?,
-                        row.get::<_, Option<u64>>(4)?,
-                    ))
-                },
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read selected coverage gaps",
-            })?;
-        let mut gaps = Vec::new();
-        for row in rows {
-            control.check()?;
-            let (gap, accepted, intake) = row.context(AnalysisDatabaseSnafu {
-                operation: "decode selected coverage gap",
-            })?;
-            if gap.first_cursor == 0
-                || gap.last_cursor < gap.first_cursor
-                || gap.commit_revision == 0
-                || gap.commit_revision > output.meta.commit_revision
-                || (!recovery
-                    && (accepted
-                        .is_none_or(|revision| revision == 0 || revision >= gap.commit_revision)
-                        || intake.is_none_or(|intake| intake == 0)))
-            {
-                return self.reject("the selected source gap header is invalid");
-            }
-            let added = AnalysisExtractionV1::grow(
-                &mut gaps,
-                output.input_bytes,
-                output.limits.input_bytes,
-            )?;
-            output.charge(added)?;
-            gaps.push(gap);
-        }
-        Ok(gaps)
-    }
+
 }
 
 #[cfg(test)]
