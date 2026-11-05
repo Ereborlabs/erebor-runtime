@@ -379,6 +379,7 @@ dependencies = [
  "arrow-select",
  "duckdb",
  "erebor-runtime-error",
+ "erebor-telemetry",
  "snafu",
  "tempfile",
 ]

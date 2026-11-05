@@ -2,6 +2,15 @@
 
 ## Current package path, 2026-11-05
 
+[LayerKeys](../../crates/araphor-graph/src/layers/keys.rs) now resolves one
+batch per dictionary kind before member append. The public intern APIs use the
+same [dictionary core](../../crates/araphor-graph/src/dictionary.rs). Existing
+IDs remain in the durable tables. Borrowed keys, checked memory, cancellation,
+and transaction rollback keep their existing owners. Five alternating pairs
+of the exact test pass. All 25 matched apply spans are lower, with a 27.14
+percent median reduction in summed apply time. Mixed whole-test differences
+establish no overall gain or regression. See the [dictionary evidence](../plans/araphor-execution-handoff.md#graph-dictionary-batch-result-2026-11-05).
+
 [Source freshness checks](../../crates/araphor-data/src/analysis/dependencies.rs)
 now read the requested relation versions in one query for each freshness check.
 They compare the same captured pairs in the same order, including missing and

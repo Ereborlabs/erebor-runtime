@@ -1,5 +1,74 @@
 # Araphor reactive execution in milliseconds
 
+## Graph dictionary batch result, 2026-11-05
+
+Araphor Graph now resolves owners, entities, endpoints, and labels across all
+prepared rows in one transaction batch per dictionary kind. Public intern APIs
+use the same core. The two old insert implementations are removed. Existing
+tables, sequences, namespaces, scope checks, and ordinal/count checks remain.
+Borrowed key groups exist only during interning. Owned ID vectors and ranges
+end with apply. Existing Scratch accounting precedes allocation, and its
+cancellation check follows each group during import and result processing.
+Data still commits or rolls back the only durable transaction.
+
+The final focused build passes in 247.593942 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass with 16,402 records,
+five managed publications, three source-change restart mentions, 61 authority
+checks, and twelve append batches per run. The five matched apply spans have
+identical revision, writer, inserted-row, and closed-row counts in every pair.
+No source edit, build, debugger, or other test runs during the comparison.
+
+| Pair | First executable | Baseline test, seconds | Batched dictionary test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 38.46 | 38.69 | -0.2238 |
+| 2 | Batched dictionary | 39.93 | 39.31 | +0.6231 |
+| 3 | Baseline | 40.45 | 39.78 | +0.6837 |
+| 4 | Batched dictionary | 39.60 | 40.13 | -0.5217 |
+| 5 | Baseline | 39.60 | 39.74 | -0.1372 |
+
+Whole-process time has a paired median increase of 0.1372 seconds, or 0.35
+percent. Three pairs are slower and two are faster. The paired reduction ranges
+from -1.32 to +1.69 percent. These mixed and small differences establish no
+overall gain or regression. Notification capture counts are 24/25, 25/23,
+26/25, 25/25, and 25/25 for baseline/candidate. No separate arrival or bulk gain
+is claimed.
+
+All 25 matched Graph apply spans are lower. The paired reductions in summed
+apply time are 27.14, 28.13, 27.12, 27.29, and 26.99 percent. Their median is
+27.14 percent. The final apply median falls from 332.529 to 233.842 milliseconds.
+The median summed dictionary time falls from 652.738 to 286.903 milliseconds,
+a 56.05 percent reduction. These child spans do not establish a whole-test gain.
+
+The baseline measures dictionaries inside relation appends. The candidate
+measures the batch before those appends with `dictionaries_s`. Its apply
+`members_s` excludes that batch. The complete apply elapsed boundary and log
+filters are the same. Do not compare the candidate's `members_s` alone with
+the baseline's value. The complete apply spans include property writes, member
+writes, endpoint validation, native index seal, and existing control checks.
+
+Result: **Done** for the dictionary replacement and this focused comparison.
+The retained change has direct Graph apply evidence. Millisecond notification
+latency and the 100-fold target remain **Not done**. Full CI and other test
+targets were not run. Public empty-group, rollback, and reopen behavior have
+source review only under this qualification.
+
+Proof: `/tmp/araphor-build-graph-dictionaries-20261105-a.log` and
+`/tmp/araphor-graph-dictionary-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs in that directory. The baseline is `6fc96adc9` plus the
+reviewed Graph timing fields. Its patch is
+`/tmp/araphor-graph-apply-timing-baseline-20261105.patch`. Retained executables
+are `target/araphor-notice-comparison-20261105/graph-apply-timing` and
+`graph-dictionaries`. Older comparison executables were removed to free space;
+their logs remain. The preceding diagnostic build passes in 249.596766 seconds,
+and its exact test passes in 38.23 seconds. That single run is not a speed
+comparison.
+
+The next investigation is cold SourceIndex restoration after a subscription
+retry. The log shows a read of 16,396 historical event rows before the six-row
+current capture. This read precedes BeforeReplay. The complete restore cost
+is not isolated. No retry handoff change is implemented or qualified here.
+
+
 ## Source freshness reader result, 2026-11-05
 
 Data now reads the requested relation versions once in each freshness check.

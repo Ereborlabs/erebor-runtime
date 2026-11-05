@@ -7,7 +7,7 @@ repository.workspace = true
 
 [features]
 default = []
-store = ["dep:duckdb"]
+store = ["dep:duckdb", "dep:erebor-telemetry"]
 
 [dependencies]
 arrow-array = "=59.2.0"
@@ -16,6 +16,7 @@ arrow-select = "=59.2.0"
 arrow-cast = "=59.2.0"
 duckdb = { workspace = true, optional = true, features = ["appender-arrow"] }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+erebor-telemetry = { path = "../erebor-telemetry", optional = true }
 snafu.workspace = true
 
 [dev-dependencies]
