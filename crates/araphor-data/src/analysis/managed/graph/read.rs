@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use araphor_graph::{ Read, ReadOrigin};
+use araphor_graph::{Read, ReadOrigin};
 use duckdb::{params, Connection};
 use sdk::arrow_array::{Array, BinaryArray, UInt64Array};
 use snafu::ResultExt as _;
@@ -293,14 +293,18 @@ impl super::ManagedGraphCall {
         &self,
         connection: &Connection,
         origin: ReadOrigin,
+        owners: &mut super::super::OwnerRead<'_>,
     ) -> Result<PackageResultRefV1> {
         let (reference, call) = self.origin_key(connection, origin)?;
-        let (spec, _, actual) = AnalysisStore::managed_producer_from(
-            connection,
-            &self.attempt.1.grant.selection,
-            &reference,
+        let producer = owners.producer(
+            &reference.result_id,
+            reference.commit_revision,
+            &mut |_, _| Ok(()),
         )?;
-        if spec.id != self.attempt.1.spec.id || actual != call {
+        producer
+            .grant()
+            .permitted_by(&self.attempt.1.grant.selection)?;
+        if producer.selected.spec.id != self.attempt.1.spec.id || producer.record.call != call {
             return Err(Code::Denied.error("Graph result authority"));
         }
         Ok(reference)

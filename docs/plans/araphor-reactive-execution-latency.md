@@ -1,5 +1,60 @@
 # Araphor reactive execution in milliseconds
 
+## Graph origin preparation result, 2026-11-05
+
+Graph preparation now shares one committed `OwnerRead` across its journals.
+The runtime origin path no longer reconstructs immutable producer contracts.
+Origin identity, requested scope, selected instance, actual call, live witness
+pins, reference equality, and final parent/origin/disclosure checks retain
+their behavior. Profile replay and recovery keep their existing full validator.
+
+The final focused build passes in 239.029790 seconds. Five alternating pairs
+run the unchanged exact incident test with identical preparation timing fields.
+All ten runs pass with 16,402 records, five managed publications, and three
+source-change restart mentions per run. No source edit, build, debugger, or
+other test runs during the comparison.
+
+| Pair | First executable | Baseline test, seconds | Native origin test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 37.59 | 39.24 | -1.6496 |
+| 2 | Native origin | 40.55 | 39.46 | +1.0951 |
+| 3 | Baseline | 41.04 | 40.73 | +0.3134 |
+| 4 | Native origin | 40.87 | 40.72 | +0.1506 |
+| 5 | Baseline | 41.01 | 40.41 | +0.6043 |
+
+The whole-test paired median is 0.3134 seconds lower, or 0.76 percent.
+The paired reduction ranges from -4.38 to +2.70 percent. These mixed and small
+results do not establish an overall gain or regression. Capture counts are
+25/23, 25/25, 25/24, 25/25, and 25/25 for baseline/candidate.
+No separate arrival or bulk gain is claimed.
+
+Every nonzero origin loop is faster in its matched pair. In the last warm
+episode, its median falls from 254.104 to 105.720 milliseconds, a 58.4 percent
+reduction. The median complete prewriter preparation falls from 574.387 to
+432.947 milliseconds, a 24.6 percent reduction. Origin timing is part of Graph
+preparation timing. Do not add it to that parent span. The retained change
+has direct evidence for this boundary; it has no established whole-test gain.
+
+Result: **Done** for native origin preparation and this comparison.
+Millisecond notification latency and the 100-fold target remain **Not done**.
+Full CI and the legacy Data library-test target were not run. The preceding
+recovery, backup, and retention runtime qualification limits still apply.
+The next named cost is Graph work inside final publication. One final warm
+transaction spends about 677 milliseconds in Graph journals and publication,
+including about 353 milliseconds in Graph layer application and 263 milliseconds
+in Data publication. Those included spans must not be added twice.
+
+Proof: `/tmp/araphor-build-native-origin-20261105-a.log` and
+`/tmp/araphor-native-origin-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs in that directory. The baseline is `9731f1cc2` plus the same
+reviewed preparation timing fields. The retained executables are
+`target/araphor-notice-comparison-20261105/publication-timing` and `native-origin`.
+Older completed comparison executables were removed to free link space;
+all paired logs remain. Diagnostic build A failed at link while the disk was
+full. The unchanged diagnostic build B passed after cleanup, and its single
+38.49-second test run is not a speedup comparison.
+
+
 ## Committed authority reader result, 2026-11-05
 
 Data now retains the final typed selected-result and call metadata at commit.

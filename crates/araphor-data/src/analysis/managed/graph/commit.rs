@@ -124,6 +124,12 @@ impl AnalysisStore {
         let mut floors = BTreeMap::new();
         let mut origins = Vec::new();
         let mut proofs = BTreeMap::new();
+        let mut owners = super::super::OwnerRead::new(
+            self,
+            connection,
+            input.attempt.1.spec.tenant,
+            input.control,
+        );
         for call in input.attempt.1.spec.manifest.order()? {
             let Some(journal) = journals.get(&call) else {
                 continue;
@@ -171,11 +177,15 @@ impl AnalysisStore {
                     return Err(Code::Denied.error("Graph pending read authority"));
                 }
             }
+            let origin_at = std::time::Instant::now();
             for (origin, reference) in &journal.work.origins {
-                if journal.call.origin(connection, *origin)? != *reference {
+                if journal.call.origin(connection, *origin, &mut owners)? != *reference {
                     return Err(Code::Denied.error("Graph historical read authority"));
                 }
             }
+            erebor_telemetry::debug!(stage="graph_origin_timing",instance_id=%input.attempt.1.spec.id,
+                cut_revision=input.attempt.captured_revision(),call_id=call,origins=journal.work.origins.len(),
+                elapsed_s=origin_at.elapsed().as_secs_f64(),"Graph preparation origin validation completed");
             for row in &journal.work.reads {
                 if !journal
                     .work
@@ -330,7 +340,11 @@ impl AnalysisStore {
         revision: u64,
         prepared: Option<PreparedGraph>,
         memory: &super::super::budget::PreparedMemory<'_>,
-    ) -> Result<(Vec<&'static str>, (u64, u64, u64), Option<araphor_graph::PendingLayer>)> {
+    ) -> Result<(
+        Vec<&'static str>,
+        (u64, u64, u64),
+        Option<araphor_graph::PendingLayer>,
+    )> {
         let started = std::time::Instant::now();
         let Some(PreparedGraph {
             layers,
@@ -399,9 +413,10 @@ impl AnalysisStore {
             });
         }
         let prepared = std::time::Instant::now();
-        let (work, layer) = self.graph_engine.begin_layers(connection, revision, &requests)?.apply_prepared(
-            layers,
-            |writer, bytes, total| {
+        let (work, layer) = self
+            .graph_engine
+            .begin_layers(connection, revision, &requests)?
+            .apply_prepared(layers, |writer, bytes, total| {
                 let journal = journals
                     .iter()
                     .find(|journal| journal.call.writer == writer)
@@ -423,8 +438,7 @@ impl AnalysisStore {
                     .reserve(bytes)
                     .map(Some)
                     .map_err(araphor_graph::Error::backend)
-            },
-        )?;
+            })?;
         let applied = std::time::Instant::now();
         let (inserted, closed) =
             work.values()

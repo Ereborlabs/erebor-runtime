@@ -2,6 +2,13 @@
 
 ## Current package path, 2026-11-05
 
+The later Graph preparation change also passes ten exact-test runs in five
+alternating pairs. Every nonzero origin-validation loop is faster in its
+matched pair. The final warm median falls from 254.104 to 105.720 milliseconds;
+complete prewriter preparation falls from 574.387 to 432.947 milliseconds.
+The small, mixed whole-test differences establish no overall gain or regression.
+No separate arrival or bulk gain is claimed. See the [origin preparation evidence](../plans/araphor-execution-handoff.md#graph-origin-preparation-result-2026-11-05).
+
 The latest committed authority reader passes six exact-test runs in three
 alternating pairs. Test times are 44.10–46.12 seconds for the shared-reader
 baseline and 40.48–41.33 seconds for the committed owner. The median paired
@@ -175,6 +182,14 @@ it restores native handles. [Explicit recovery](../../crates/araphor-data/src/an
 replaces native metadata and Graph members before it reopens readers.
 [Backup reopening](../../crates/araphor-data/src/analysis/backup.rs) restores the
 Graph Shape registration on the new connection.
+
+[Graph preparation](../../crates/araphor-data/src/analysis/managed/graph/commit.rs)
+also shares one reader across all journals. Its runtime
+[origin lookup](../../crates/araphor-data/src/analysis/managed/graph/read.rs)
+uses the same committed producer handles. Origin identity, original scope,
+selected instance, actual call, and live witness checks remain. Final commit
+checks still compare the prepared parent, origin tuple, and disclosure state.
+The separate profile replay and recovery paths keep their full validator.
 
 The final focused build and six append-test runs pass. Recovery, backup, and
 retention transitions have source review only. Full CI was not run.

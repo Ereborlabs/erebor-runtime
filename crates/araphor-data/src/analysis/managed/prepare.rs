@@ -55,10 +55,14 @@ impl AnalysisStore {
                 }
             }
         };
+        let frozen = std::time::Instant::now();
         let mut reader = self.frozen_reader(input.control)?;
+        let ready = std::time::Instant::now();
         input.control.run(&mut reader,|connection| {
             Self::charge_packets(input,&evidence,&mut memory)?;
+            let charged=std::time::Instant::now();
             let attempt=self.check_managed_state(connection,input)?;
+            let state=std::time::Instant::now();
             let mut contracts=Vec::new();
             let mut seen=std::collections::BTreeSet::new();
             for returned in input.returns {
@@ -75,19 +79,29 @@ impl AnalysisStore {
                 contracts.push(Self::package_from(connection,input.attempt.1.spec.tenant,&declaration.package.package_id,&declaration.package.revision)?
                     .ok_or_else(|| Code::Missing.error("managed prepared package"))?);
             }
+            let contracted=std::time::Instant::now();
             let mut verified=self.check_managed_capture(connection,&attempt.capture,input.now_utc_ns,
                 (&evidence.witnesses,&evidence.contexts),input.attempt.4.as_ref()
                     .map(|owner| owner.packages(input.attempt.instance(),&attempt.capture)).unwrap_or_default())?;
+            let captured=std::time::Instant::now();
             let (packets,step)=self.prepare_packets(connection,&attempt,input,&evidence)?;
+            let packet_at=std::time::Instant::now();
             let snapshot=Self::read_meta_from(connection,&self.root)?.commit_revision;
             let derived=self.prepare_derived(connection,input,snapshot,&mut verified,&mut memory)?;
+            let derived_at=std::time::Instant::now();
             let source=input.attempt.5.as_ref().map(|frame| frame.input_selection()).transpose()?.flatten()
                 .as_ref().map(|selection| super::SourcePublication::prepare(connection,input,selection,&mut memory)).transpose()?;
+            let source_at=std::time::Instant::now();
             let graph=self.prepare_graph_journals(connection,input,&evidence,&derived,&mut memory)?;
             memory.check()?;
             let prepared=std::time::Instant::now();
             erebor_telemetry::debug!(stage="managed_prepare_timing",instance_id=%input.attempt.1.spec.id,
                 cut_revision=input.attempt.captured_revision(),elapsed_s=prepared.duration_since(started).as_secs_f64(),
+                evidence_s=frozen.duration_since(started).as_secs_f64(),reader_s=ready.duration_since(frozen).as_secs_f64(),
+                charge_s=charged.duration_since(ready).as_secs_f64(),state_s=state.duration_since(charged).as_secs_f64(),
+                contracts_s=contracted.duration_since(state).as_secs_f64(),capture_s=captured.duration_since(contracted).as_secs_f64(),
+                packets_s=packet_at.duration_since(captured).as_secs_f64(),derived_s=derived_at.duration_since(packet_at).as_secs_f64(),
+                source_s=source_at.duration_since(derived_at).as_secs_f64(),graph_s=prepared.duration_since(source_at).as_secs_f64(),
                 retained_bytes=memory.bytes(),peak_bytes=memory.peak(),"Managed change preparation completed");
             Ok(PreparedManagedCommit { input,evidence,packets,step:Some(step),derived,graph,source,verified,contracts,started,prepared,memory })
         })
