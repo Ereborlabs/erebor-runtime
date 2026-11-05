@@ -1592,6 +1592,12 @@ impl Session {
                     ..Default::default()
                 };
                 Engine::blocking(Arc::clone(&control), self.token()?, move || {
+                    let started = std::time::Instant::now();
+                    let mut history = std::time::Duration::ZERO;
+                    let mut reads = std::time::Duration::ZERO;
+                    let mut indexing = std::time::Duration::ZERO;
+                    let mut points = 0u64;
+                    let mut rows = 0u64;
                     let restored = (|| {
                         let (head, call, _) = store.managed_reference(
                             &owner,
@@ -1734,6 +1740,7 @@ impl Session {
                             reference = next;
                             call = actual;
                         }
+                        history = started.elapsed();
                         for point in chain.into_iter().rev() {
                             control.check()?;
                             let (reference, call, _) = store.managed_reference(
@@ -1784,6 +1791,7 @@ impl Session {
                             } else {
                                 usize::MAX
                             };
+                            let read_at = std::time::Instant::now();
                             let page = store.read_managed_reference(
                                 &selection,
                                 &reference,
@@ -1800,6 +1808,7 @@ impl Session {
                                 &control,
                                 owners.as_ref(),
                             )?;
+                            reads += read_at.elapsed();
                             let frame = page.state.source().cloned().ok_or_else(|| {
                                 araphor_data::PackageErrorCodeV1::Missing
                                     .error("source parent frame")
@@ -1811,13 +1820,33 @@ impl Session {
                             }
                             for batch in frame.datasets().iter().flat_map(|data| &data.batches) {
                                 memory.retain_input(batch, &decode).context(SqlSnafu)?;
+                                rows = rows.saturating_add(batch.num_rows() as u64);
                             }
+                            let index_at = std::time::Instant::now();
                             index.restore(frame, receipt, &control).context(SqlSnafu)?;
+                            indexing += index_at.elapsed();
+                            points += 1;
                         }
                         Ok(())
                     })();
                     if restored.is_err() {
                         index.discard_restore().context(SqlSnafu)?;
+                    } else {
+                        let elapsed = started.elapsed();
+                        erebor_telemetry::debug!(
+                            stage = "source_restore_timing",
+                            instance_id = %owner.spec.id,
+                            cut_revision = parent.position.commit_revision,
+                            result_revision = parent.result.commit_revision,
+                            points,
+                            rows,
+                            history_s = history.as_secs_f64(),
+                            reads_s = reads.as_secs_f64(),
+                            index_s = indexing.as_secs_f64(),
+                            other_s = elapsed.saturating_sub(history + reads + indexing).as_secs_f64(),
+                            elapsed_s = elapsed.as_secs_f64(),
+                            "Committed source index restoration completed"
+                        );
                     }
                     restored
                 })

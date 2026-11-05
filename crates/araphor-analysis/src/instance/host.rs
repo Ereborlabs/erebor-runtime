@@ -789,6 +789,7 @@ impl InstanceHost {
         let expected = &expected.0;
         let memory = Arc::clone(owner.session.memory());
         let mut retry_after_capacity = None;
+        let mut source_recovery = None;
         let mut capacity: Option<(crate::Error, u64, u64)> = None;
         'member: loop {
             control.check()?;
@@ -803,6 +804,7 @@ impl InstanceHost {
             let lifecycle = expected.lifecycle;
             let stage = Arc::clone(&operation);
             let notifications = self.notifications.clone();
+            let recovery = source_recovery.take();
             let opening = Engine::blocking(Arc::clone(&operation), (), move || {
                 Ok(
                     if opened.admitted.spec.destination == ManagedDestination::Notification {
@@ -817,7 +819,13 @@ impl InstanceHost {
                             .map(MemberStream::Notification)
                     } else {
                         opened
-                            .subscribe_on(stage, witness_expiry, lifecycle, retry_after_capacity)
+                            .subscribe_on(
+                                stage,
+                                witness_expiry,
+                                lifecycle,
+                                retry_after_capacity,
+                                recovery,
+                            )
                             .map(MemberStream::Managed)
                     },
                 )
@@ -928,7 +936,7 @@ impl InstanceHost {
                     let changed = recovery.changed(&waiting);
                     tokio::pin!(changed);
                     tokio::select! {
-                        result = &mut changed => result?,
+                        result = &mut changed => source_recovery = Some(result?),
                         _ = control.cancelled() => {
                             let _cancelled = waiting.cancel();
                             let _joined = changed.await;

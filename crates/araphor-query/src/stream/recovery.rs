@@ -18,6 +18,7 @@ pub struct SourceRecovery {
     revision: u64,
     now: u64,
     progress: Option<Progress>,
+    source_index: Option<Arc<crate::sources::SourceIndex>>,
     invalidated: bool,
 }
 
@@ -52,6 +53,7 @@ impl SourceRecovery {
             requests,
             now,
             progress: None,
+            source_index: None,
             invalidated: false,
         }
     }
@@ -85,7 +87,11 @@ impl SourceRecovery {
         }
     }
 
-    pub(crate) fn attach(error: &Error, progress: &Progress) {
+    pub(crate) fn attach(
+        error: &Error,
+        progress: &Progress,
+        source_index: Option<&Arc<crate::sources::SourceIndex>>,
+    ) {
         if let Some(failure) = Self::failure(error) {
             if let Some(recovery) = failure
                 .recovery
@@ -94,6 +100,7 @@ impl SourceRecovery {
                 .as_mut()
             {
                 recovery.progress = Some(progress.clone());
+                recovery.source_index = source_index.cloned();
             }
         }
     }
@@ -107,10 +114,32 @@ impl SourceRecovery {
             .take()
     }
 
-    pub async fn changed(mut self, control: &AnalysisReadControl) -> Result<()> {
+    /// Reuse the committed source index with the same native plan and memory owner.
+    pub fn resume(
+        mut self,
+        mut session: Session,
+        definition: &crate::definition::PreparedDefinition,
+    ) -> Session {
+        let original = self
+            .run
+            .managed
+            .as_ref()
+            .and_then(|(definition, _)| definition.executable(session.engine()));
+        let prepared = definition.executable(session.engine());
+        if Arc::ptr_eq(self.run.session.memory(), session.memory())
+            && original
+                .zip(prepared)
+                .is_some_and(|(original, prepared)| Arc::ptr_eq(&original, &prepared))
+        {
+            session.source_index = self.source_index.take();
+        }
+        session
+    }
+
+    pub async fn changed(mut self, control: &AnalysisReadControl) -> Result<Self> {
         control.check()?;
         if self.invalidated {
-            return Ok(());
+            return Ok(self);
         }
         let mut progress = self.progress.take().ok_or_else(|| {
             crate::InvalidSnafu {
@@ -124,19 +153,19 @@ impl SourceRecovery {
             self.now,
             Arc::clone(self.run.session.memory()),
         )?;
-        session.managed = self.managed;
+        session.managed = self.managed.clone();
         let selection = self.selection.project(&self.requests)?;
         let (meta, revision) = self
             .run
             .dependencies(&session, selection.clone(), None, None)
             .await?;
         if revision > self.revision {
-            return Ok(());
+            return Ok(self);
         }
         progress.checked(meta.commit_revision);
         loop {
             match control.query_async(progress.next(control, None)).await? {
-                Wake::Clock if progress.expired(progress.now()?) => return Ok(()),
+                Wake::Clock if progress.expired(progress.now()?) => return Ok(self),
                 Wake::Clock => {}
                 Wake::Source => {
                     let (meta, revision) = self
@@ -144,7 +173,7 @@ impl SourceRecovery {
                         .dependencies(&session, selection.clone(), None, None)
                         .await?;
                     if revision > self.revision {
-                        return Ok(());
+                        return Ok(self);
                     }
                     progress.checked(meta.commit_revision);
                 }

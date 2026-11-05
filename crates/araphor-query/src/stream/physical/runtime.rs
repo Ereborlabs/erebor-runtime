@@ -103,8 +103,19 @@ impl Runtime {
                 ),
             });
         }
+        let continuing = initial
+            .as_ref()
+            .and_then(|(_, _, session)| session.managed.as_ref())
+            .is_some_and(|managed| !managed.rebuild);
         let source_index = required
-            .then(|| crate::sources::SourceIndex::new(keys, Arc::clone(run.session.memory())))
+            .then(
+                || match run.session.source_index.as_ref().filter(|_| continuing) {
+                    Some(index) => Ok(Arc::clone(index)),
+                    None => {
+                        crate::sources::SourceIndex::new(keys, Arc::clone(run.session.memory()))
+                    }
+                },
+            )
             .transpose()
             .context(SqlSnafu)?;
         Ok(Self {
@@ -153,7 +164,11 @@ impl Runtime {
             .engine()
             .run(Arc::clone(session.control()), lease, async move {
                 let result = self.next_event().await.map_err(|error| {
-                    crate::stream::recovery::SourceRecovery::attach(&error, &self.progress);
+                    crate::stream::recovery::SourceRecovery::attach(
+                        &error,
+                        &self.progress,
+                        self.source_index.as_ref(),
+                    );
                     (error, self.snapshot.clone())
                 });
                 Ok((self, result))

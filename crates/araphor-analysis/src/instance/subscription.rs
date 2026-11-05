@@ -36,7 +36,7 @@ impl Instance {
         witness_expiry: u64,
         expected_lifecycle: u64,
     ) -> Result<Subscription> {
-        self.subscribe_on(control, witness_expiry, expected_lifecycle, None)
+        self.subscribe_on(control, witness_expiry, expected_lifecycle, None, None)
     }
 
     pub(super) fn subscribe_on(
@@ -45,6 +45,7 @@ impl Instance {
         witness_expiry: u64,
         expected_lifecycle: u64,
         retry_after_capacity: Option<u64>,
+        recovery: Option<araphor_query::follow::SourceRecovery>,
     ) -> Result<Subscription> {
         if self.admitted.spec.destination == araphor_data::ManagedDestination::Notification {
             return Err(Code::Unsupported
@@ -114,6 +115,10 @@ impl Instance {
             let session = self
                 .session
                 .operation(&control.within(grant.remaining()?)?, 0)?;
+            let session = match recovery {
+                Some(recovery) => recovery.resume(session, &self.prepared),
+                None => session,
+            };
             let binding = format!(
                 "{}:{}:{}",
                 uuid::Uuid::from_bytes(self.admitted.spec.tenant),

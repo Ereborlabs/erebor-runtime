@@ -2,6 +2,18 @@
 
 ## Current package path, 2026-11-05
 
+[SourceRecovery](../../crates/araphor-query/src/stream/recovery.rs) now transfers
+the committed source index after the failed subscription joins. The same Host
+member loop passes it to a fresh subscription. Reuse requires the same saved
+native plan and Memory owner. A fresh rebuild uses cold restoration. Failed
+views, call contexts, Graph resources, attempts, and controls keep their cleanup
+path. Data still commits source index changes only through the existing receipt.
+Five alternating pairs of the exact test pass. Cold restorations fall from
+three to zero in every pair. The paired whole-process median is 5.28 percent
+lower, and both warm arrivals are lower in every pair. Initial and bulk results
+are mixed. Millisecond latency and the 100-fold target remain **Not done**.
+See the [source continuation evidence](../plans/araphor-execution-handoff.md#source-index-continuation-result-2026-11-05).
+
 [LayerKeys](../../crates/araphor-graph/src/layers/keys.rs) now resolves one
 batch per dictionary kind before member append. The public intern APIs use the
 same [dictionary core](../../crates/araphor-graph/src/dictionary.rs). Existing

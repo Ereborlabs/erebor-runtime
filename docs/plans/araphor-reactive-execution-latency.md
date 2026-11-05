@@ -1,5 +1,71 @@
 # Araphor reactive execution in milliseconds
 
+## Source index continuation result, 2026-11-05
+
+The managed subscription now transfers its committed SourceIndex through the
+existing source recovery handle. Host first cancels and joins the failed
+subscription, checks its owner, and waits for the existing recovery signal.
+The next subscription uses the index only with the same Memory owner and the
+same saved native physical plan. Independent planning, a different memory
+owner, or a fresh rebuild uses cold restoration. These choices add no error
+or admission rule. DataFusion plan resets retain the source key identities.
+
+The transfer contains the existing committed Arrow buffers, indexes, and their
+reservations. Failed source views, package call contexts, attempts, Graph
+resources, and operation controls keep their existing cleanup path. Existing
+source scope, parent, projection, call receipt, retention, and commit checks
+remain. There is no new cache, archive, serialized input, or polling path.
+
+The final focused build passes in 201.408305 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass with 16,402 records,
+five managed publications, three source-change restart mentions, 61 authority
+checks, and twelve Graph append batches per run. Matched Graph apply revision,
+writer, inserted-row, and closed-row counts are equal in every pair. No source
+edit, build, debugger, or other test runs during the comparison.
+
+| Pair | First executable | Baseline test, seconds | Continued index test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 38.59 | 36.80 | +1.7859 |
+| 2 | Continued index | 39.90 | 37.10 | +2.7969 |
+| 3 | Baseline | 39.63 | 37.54 | +2.0964 |
+| 4 | Continued index | 39.26 | 37.10 | +2.1669 |
+| 5 | Baseline | 39.34 | 37.85 | +1.4886 |
+
+The paired whole-process median is 2.0964 seconds lower, or 5.28 percent.
+All five pairs are faster. The paired reduction ranges from 3.78 to 7.00
+percent. Both warm notification arrivals are lower in every pair. Their
+medians fall from 5.155959 to 4.047017 seconds and from 5.530882 to 4.458398
+seconds. Initial and bulk differences are mixed; no separate gain is claimed.
+Notification capture counts are 26/25, 25/25, 25/25, 25/25, and 25/24 for
+baseline/candidate. These five pairs do not establish tail latency.
+
+Every baseline run restores three source points and reads 32,852 restored
+frame rows. These rows include all restored datasets, not only raw events.
+The median summed restoration time is 2.769270 seconds. Every candidate run
+has zero cold restorations. This child cost is not added to the whole-test
+saving. The existing three source-change restarts still occur.
+
+Result: **Done** for source index continuation and this focused comparison.
+Millisecond notification latency and the 100-fold target remain **Not done**.
+Full CI and other test targets were not run. Independent-plan and rebuild
+fallbacks, cancellation, and the other recovery callers have source review
+only under this qualification.
+
+Proof: `/tmp/araphor-build-source-continuation-20261105-a.log` and
+`/tmp/araphor-source-continuation-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs in that directory. The baseline is `414538360` plus the
+reviewed restoration timing fields. Its patch is
+`/tmp/araphor-source-restore-timing-baseline-20261105.patch`. Retained executables
+are `target/araphor-notice-comparison-20261105/source-restore-timing` and
+`source-continuation`. Older executables were removed to free space; logs
+remain. The preceding diagnostic build passes in 198.647779 seconds, and its
+exact test passes in 38.06 seconds. That single run is not a speed comparison.
+
+The next investigation is repeated snapshot and journal frame work for the
+256-row event pages in the bulk interval. No page replacement is implemented
+or qualified here.
+
+
 ## Graph dictionary batch result, 2026-11-05
 
 Araphor Graph now resolves owners, entities, endpoints, and labels across all
