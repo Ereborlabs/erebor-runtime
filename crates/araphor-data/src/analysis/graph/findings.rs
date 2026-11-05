@@ -72,7 +72,7 @@ impl AnalysisStore {
         )?;
         self.read_snapshot(|reader| {
             let control = crate::AnalysisReadControl::default();
-            let mut owners = OwnerRead::new(reader, tenant, &control);
+            let mut owners = OwnerRead::new(self, reader, tenant, &control);
             let heads = self.current_keys_on(
                 reader,
                 tenant,
@@ -323,7 +323,7 @@ impl AnalysisStore {
         limit: usize,
     ) -> Result<Vec<(String, String)>> {
         let control = crate::AnalysisReadControl::default();
-        let mut owners = OwnerRead::new(reader, tenant, &control);
+        let mut owners = OwnerRead::new(self, reader, tenant, &control);
         self.current_keys_on(reader, tenant, after, exact, limit, &mut owners)
     }
 
@@ -377,7 +377,7 @@ impl AnalysisStore {
         }
         self.read_snapshot(|reader| {
             let control = crate::AnalysisReadControl::default();
-            let mut owners = OwnerRead::new(reader, tenant, &control);
+            let mut owners = OwnerRead::new(self, reader, tenant, &control);
             owners.finding_heads(&self.graph_engine, reader, tenant, &wanted, &mut |_, _| {
                 Ok(())
             })
@@ -418,7 +418,7 @@ impl AnalysisStore {
         self.check_graph_read(tenant, &[after, exact], "finding page scope")?;
         self.read_snapshot(|reader| {
             let control = crate::AnalysisReadControl::default();
-            let mut owners = OwnerRead::new(reader, tenant, &control);
+            let mut owners = OwnerRead::new(self, reader, tenant, &control);
             let keys = self.current_keys_on(reader, tenant, after, exact, limit, &mut owners)?;
             let mut requested = BTreeMap::<String, Vec<String>>::new();
             for (result, finding) in &keys {
@@ -484,7 +484,7 @@ impl AnalysisStore {
         )?;
         self.read_snapshot(|reader| {
             let control = crate::AnalysisReadControl::default();
-            let mut owners = OwnerRead::new(reader, tenant, &control);
+            let mut owners = OwnerRead::new(self, reader, tenant, &control);
             if Self::definition_graph(reader, tenant, result_id, &mut owners)? {
                 return Self::definition_finding(
                     &self.graph_engine,
@@ -541,7 +541,7 @@ impl AnalysisStore {
         }
         self.read_snapshot(|reader| {
             let control = crate::AnalysisReadControl::default();
-            let mut owners = OwnerRead::new(reader, tenant, &control);
+            let mut owners = OwnerRead::new(self, reader, tenant, &control);
             let mut results = BTreeMap::new();
             for (result, ids) in requested {
                 if Self::definition_graph(reader, tenant, result, &mut owners)? {
@@ -613,7 +613,7 @@ impl AnalysisStore {
         )?;
         self.read_snapshot(|reader| {
             let control = crate::AnalysisReadControl::default();
-            let mut owners = OwnerRead::new(reader, tenant, &control);
+            let mut owners = OwnerRead::new(self, reader, tenant, &control);
             let keys = self.current_keys_on(
                 reader,
                 tenant,
@@ -712,7 +712,7 @@ impl AnalysisStore {
         revision.validate(tenant)?;
         self.read_snapshot(|reader| {
             let control = crate::AnalysisReadControl::default();
-            let mut owners = OwnerRead::new(reader, tenant, &control);
+            let mut owners = OwnerRead::new(self, reader, tenant, &control);
             let catalog = owners.finding_catalog(reader, tenant, &mut |_, _| Ok(()))?;
             let key = araphor_analysis_types::DomainRelations::key(&finding_id).context(crate::AnalysisContractSnafu)?;
             let mut query = reader.prepare("SELECT publication.result_id FROM managed_graph_publications publication JOIN managed_graphs graph USING(graph_id) WHERE graph.tenant_id=? ORDER BY publication.result_id")

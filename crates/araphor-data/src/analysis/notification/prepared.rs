@@ -308,7 +308,7 @@ impl AnalysisStore {
             let valid = references.iter().filter(|reference| NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
                 && NotificationGrantV1::identifier(&reference.result_id, usize::MAX)).collect::<Vec<_>>();
             let ids = valid.iter().map(|reference| &reference.finding_id).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
-            let mut owners = OwnerRead::with_budget(reader, tenant, control, budget)?;
+            let mut owners = OwnerRead::with_budget(self, reader, tenant, control, budget)?;
             let heads = owners.finding_heads(&self.graph_engine, reader, tenant, &ids, &mut |_, bytes| batch.charge(bytes));
             if owners.memory_failed() {
                 return Err(heads.err().unwrap_or_else(|| crate::PackageErrorCodeV1::Limit.error("notification owner memory")));

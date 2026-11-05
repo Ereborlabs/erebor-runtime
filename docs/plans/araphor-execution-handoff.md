@@ -1,5 +1,71 @@
 # Native execution performance handoff
 
+## Committed authority reader result, 2026-11-05
+
+Data now retains the final typed selected-result and call metadata at commit.
+`OwnerRead` uses those handles after the existing tenant, processor, result,
+and revision query proves visibility in its database snapshot. It no longer
+decodes and reconstructs the immutable contracts. Existing scope checks stay
+at their callers. Selected-result and actual-call witness checks still run
+once per reader. Missing evidence pins remain permitted only after their saved
+expiry according to the database snapshot clock.
+
+The final focused build passes in 252.818794 seconds. Three alternating pairs
+run the unchanged exact incident test. All six runs pass with 16,402 records,
+five managed publications, and three source-change restart mentions per run.
+No source edit, build, debugger, or other test runs during the comparison.
+
+| Pair | First executable | Shared reader test, seconds | Committed authority test, seconds | Process reduction |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Shared reader | 44.10 | 40.48 | 8.20 percent |
+| 2 | Committed authority | 46.06 | 40.78 | 11.44 percent |
+| 3 | Shared reader | 46.12 | 41.33 | 10.35 percent |
+
+The median paired reduction is 10.35 percent, or 4.7792 seconds. All three
+pairs also have lower initial and warm arrival times. The median measurements
+are:
+
+| Boundary | Shared reader, seconds | Committed authority, seconds |
+| --- | ---: | ---: |
+| Initial notification | 3.988862 | 3.393343 |
+| Background records to package publication | 7.611097 | 7.469857 |
+| Second notification | 6.558421 | 5.601720 |
+| Third notification | 7.412637 | 6.117422 |
+
+The bulk difference is small and does not establish a separate bulk gain.
+Notification capture counts are 24/26, 24/25, and 23/25 for baseline/candidate.
+Median summed capture time falls from 7.664434 to 3.310242 seconds. These child
+spans can overlap other work; do not add them to wall time. The sample provides
+no confidence-interval or p99 claim.
+
+The commit owner moves the actual final Step and Record values after proof
+assignment and SQL insertion. It retains no checkpoint, input/output batch,
+journal, or preparation reservation. Data seals the handles before database
+COMMIT. Failure removes them before writer release. Successful COMMIT keeps
+them before the revision wake. Initial open restores typed handles after the
+existing full recovery validation. Explicit recovery replaces both native
+owners before readers reopen. Backup reopening also restores Graph registration
+on the new connection. Immutable validation remains in recovery and other
+existing integrity owners. This change adds no new policy, validation rule,
+limit, subscription, timeout, workload, or durable archive.
+
+Result: **Done** for committed authority ownership and this comparison.
+Millisecond latency and the 100-fold target remain **Not done**. Full CI and
+the legacy Data library-test target were not run. Recovery, backup, and retention
+transitions have source review only; this append test does not qualify them.
+The next measured delivery cost is final preparation plus commit, approximately
+1.5 seconds in the last warm episode. Its preparation substeps need separate
+timing before another rewrite is selected.
+
+Proof: `/tmp/araphor-build-committed-owners-20261105-b.log` and
+`/tmp/araphor-committed-owner-pairs-20261105/{settings,results,summary}.json`,
+with six run logs in that directory. Baseline source is `e13642aae`.
+The retained executables are
+`target/araphor-notice-comparison-20261105/shared-owner` and `committed-owners`.
+The older `4fb390924` comparison executable was removed to free build space.
+Its paired logs remain available. The `native-layers` executable is retained.
+
+
 ## Standalone finding reader result, 2026-11-05
 
 Each public finding read now uses one `OwnerRead` for its database snapshot.

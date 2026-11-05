@@ -2052,7 +2052,7 @@ impl AnalysisStore {
             if envelope.is_some() {
                 return Ok((capture.finish(output, end, true, control)?, None));
             }
-            let mut owners = super::managed::OwnerRead::new(snapshot, selection.tenant_id, control);
+            let mut owners = super::managed::OwnerRead::new(self, snapshot, selection.tenant_id, control);
             let removals = if let AnalysisReadModeV1::Changes(after) = mode {
                 self.raw_removals(snapshot, selection, &trace_info, after, control, &mut output)?
             } else {

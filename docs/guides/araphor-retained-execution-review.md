@@ -2,6 +2,15 @@
 
 ## Current package path, 2026-11-05
 
+The latest committed authority reader passes six exact-test runs in three
+alternating pairs. Test times are 44.10–46.12 seconds for the shared-reader
+baseline and 40.48–41.33 seconds for the committed owner. The median paired
+process reduction is 10.35 percent. Median arrival times fall from 3.988862 to
+3.393343 seconds initially, from 6.558421 to 5.601720 seconds for the second
+notification, and from 7.412637 to 6.117422 seconds for the third. The bulk
+difference does not establish a gain. The millisecond and 100-fold targets
+remain **Not done**. See the [committed authority evidence](../plans/araphor-execution-handoff.md#committed-authority-reader-result-2026-11-05).
+
 This section covers the native Graph reader. Three alternating pairs of the
 exact incident test pass with all 16,402 records. Baseline test time is
 70.51–71.87 seconds. Native reader time is 47.44–47.68 seconds. The median
@@ -124,8 +133,9 @@ one catalog and authority owner for its read transaction.
 create that owner once per snapshot. Definition classification, current heads,
 finding values, and the existing provenance traversal use it until the
 snapshot ends. Each use retains its existing proof and reference checks.
-No authority handle crosses the snapshot boundary. Extraction and notification
-capture keep their existing owners.
+Reader-scoped validation and live witness checks do not cross the snapshot
+boundary. Committed metadata remains in the Data owner. Extraction and
+notification capture keep their existing reader lifetimes.
 [Notification lookup](../../crates/araphor-data/src/analysis/extraction/notifications/native.rs)
 uses IDs from existing notification references. Package code chooses the IDs
 before Data commits them. No host code predicts a package's future findings.
@@ -135,6 +145,39 @@ unchanged workload and assertions. Each run has five publications and 24
 notification captures. Full CI and the legacy Data library-test target were
 not run. Rollback injection and durable restoration have source review only.
 See the [paired evidence](../plans/araphor-execution-handoff.md#native-graph-reader-result-2026-11-05).
+
+### Data committed authority owner
+
+[CommittedOwners](../../crates/araphor-data/src/analysis/managed/reader/committed.rs)
+retains Data's typed selected-result and actual-call metadata. It does not
+retain package input/output batches, checkpoints, journals, or preparation
+reservations. The generic Graph engine has no package metadata.
+
+[Managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs)
+assigns the final proof references and writes each call Record
+  -> it writes the final selected Step and completed Attempt
+  -> Data seals those same typed values before database COMMIT
+  -> successful COMMIT keeps the handles, then publishes the revision wake
+  -> failure removes the provisional handles before the writer is released
+
+[OwnerRead](../../crates/araphor-data/src/analysis/managed/reader.rs)
+checks result visibility with the existing tenant, processor, and revision query
+  -> it gets the exact native selected or call handle
+  -> it checks live witness pins once for the selected union and actual call
+  -> existing callers check requested scope, current heads, and finding values
+
+[Witness pin checks](../../crates/araphor-data/src/analysis/managed/source/check.rs)
+still require exact identity, expiry, and Live segment binding. Missing pins
+remain permitted only after their saved expiry at the database snapshot clock.
+The immutable contract validators remain available to recovery and other
+existing integrity owners. Initial open runs full recovery validation before
+it restores native handles. [Explicit recovery](../../crates/araphor-data/src/analysis/connection.rs)
+replaces native metadata and Graph members before it reopens readers.
+[Backup reopening](../../crates/araphor-data/src/analysis/backup.rs) restores the
+Graph Shape registration on the new connection.
+
+The final focused build and six append-test runs pass. Recovery, backup, and
+retention transitions have source review only. Full CI was not run.
 
 ### Source reading route
 

@@ -186,8 +186,15 @@ impl AnalysisStore {
                 operation: "begin managed publication",
             })?;
         let revision = self.package_next(&transaction)?;
-        let (receipt, projected, verified, (pin_rows, call_pins, root_cursors, input_proof), graph_layer) =
-            self.managed_commit_rows(&transaction, &mut prepared, revision, project)?;
+        let (
+            receipt,
+            projected,
+            verified,
+            (pin_rows, call_pins, root_cursors, input_proof),
+            graph_layer,
+            owners,
+        ) = self.managed_commit_rows(&transaction, &mut prepared, revision, project)?;
+        let owners = self.managed_results.seal(owners)?;
         let retained = Self::retain_managed(input, &receipt, verified, input_proof);
         let source_proof = input.attempt.5.as_ref().map(|frame| {
             (
@@ -214,7 +221,10 @@ impl AnalysisStore {
         self.crash_at("managed.before");
         let prepared = std::time::Instant::now();
         self.commit_metadata(transaction, "commit complete managed step")?;
-        if let Some(layer) = graph_layer { layer.commit(); }
+        if let Some(layer) = graph_layer {
+            layer.commit();
+        }
+        owners.commit();
         let committed = std::time::Instant::now();
         if let Some((frame, proof)) = source_proof {
             frame.commit_proof(proof);
@@ -296,6 +306,7 @@ impl AnalysisStore {
             Option<std::sync::Arc<crate::analysis::graph_rows::store::InputProof>>,
         ),
         Option<araphor_graph::PendingLayer>,
+        super::reader::ResultOwners,
     )> {
         let started = std::time::Instant::now();
         let input = prepared.input();
@@ -347,7 +358,9 @@ impl AnalysisStore {
             cached,
         )?;
         for packet in &mut packets {
-            packet.record.graph_proof = prepared.graph.as_mut()
+            packet.record.graph_proof = prepared
+                .graph
+                .as_mut()
                 .and_then(|graph| graph.take_proof(packet.call));
             packet.record.derived = imported
                 .calls
@@ -402,15 +415,18 @@ impl AnalysisStore {
         }
         let mut pins = 0u64;
         let mut call_pins = BTreeMap::new();
+        let mut records = Vec::with_capacity(packets.len());
         for packet in packets {
+            let id = packet.id.clone();
             let call = packet.call;
-            let rows = self.insert_managed(
+            let (rows, record) = self.insert_managed(
                 transaction,
                 spec,
                 packet,
                 revision,
                 (&evidence.witnesses, &segments),
             )?;
+            records.push((id, record));
             call_pins.insert(call, rows);
             pins = pins.saturating_add(rows);
         }
@@ -470,7 +486,7 @@ impl AnalysisStore {
             transaction,
             spec,
             &receipt.selected.result_id,
-            step,
+            &step,
             revision,
         )?;
         pins = pins.saturating_add(Self::insert_references(
@@ -514,6 +530,7 @@ impl AnalysisStore {
             verified,
             (pins, call_pins, root_cursors, input_proof),
             graph_layer,
+            super::reader::ResultOwners::new(step, attempt, spec.clone(), revision, records),
         ))
     }
 
@@ -866,7 +883,7 @@ impl AnalysisStore {
         packet: Packet,
         revision: u64,
         evidence: (&[crate::AnalysisWitnessV1], &[u64]),
-    ) -> Result<u64> {
+    ) -> Result<(u64, Record)> {
         let segments = packet
             .record
             .witnesses
@@ -904,14 +921,14 @@ impl AnalysisStore {
         transaction.execute("UPDATE managed_calls SET state_revision = ?, result_id = ? WHERE tenant_id = ? AND instance_id = ? AND call_id = ?",
             params![revision, packet.id, spec.tenant.as_slice(), spec.id, packet.call])
             .context(AnalysisDatabaseSnafu { operation: "advance independent managed call" })?;
-        Ok(pins)
+        Ok((pins, packet.record))
     }
 
     fn insert_managed_step(
         transaction: &Transaction<'_>,
         spec: &ManagedSpec,
         id: &str,
-        step: Step,
+        step: &Step,
         revision: u64,
     ) -> Result<()> {
         transaction.execute("INSERT INTO analysis_results (result_id, tenant_id, processor_id, body, request_meta, commit_revision) VALUES (?, ?, 'managed-definition-v1', ?, ?, ?)",

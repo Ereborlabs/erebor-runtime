@@ -31,7 +31,7 @@ impl OwnerRead<'_> {
             params![tenant.as_slice(), result],
             |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
         ).optional().context(AnalysisDatabaseSnafu { operation: "read Definition Graph owner" })?;
-        let Some((revision, instance, graph, bytes)) = header else {
+        let Some((revision, instance, _graph, bytes)) = header else {
             self.publications.insert(result.to_owned(), None);
             return Ok(None);
         };
@@ -43,28 +43,6 @@ impl OwnerRead<'_> {
         let selected = self.selected(result, charge)?;
         if revision == 0 || selected.revision() != revision || selected.instance() != instance {
             return Err(Code::Denied.error("Definition Graph selected owner"));
-        }
-        let invalid: bool = reader.query_row(
-            "SELECT (NOT EXISTS(
-                SELECT 1 FROM managed_graph_results result JOIN graph_writers writer USING(writer_id)
-                WHERE writer.graph_id=? AND result.revision=?
-             ) AND NOT EXISTS(SELECT 1 FROM managed_source_publications source
-                WHERE source.result_id=? AND source.tenant_id=? AND source.instance_id=? AND source.revision=?)) OR EXISTS(
-                SELECT 1 FROM managed_graph_publication_layers pin
-                LEFT JOIN graph_layers layer ON layer.layer_id=pin.layer_id AND layer.writer_id=pin.writer_id
-                LEFT JOIN graph_writers writer ON writer.writer_id=pin.writer_id
-                WHERE pin.result_id=? AND (layer.layer_id IS NULL OR writer.graph_id IS DISTINCT FROM ?
-                    OR layer.revision>? OR EXISTS(SELECT 1 FROM graph_layers later
-                        WHERE later.writer_id=pin.writer_id AND later.revision>layer.revision AND later.revision<=?))
-             ) OR EXISTS(
-                SELECT 1 FROM graph_writers writer WHERE writer.graph_id=?
-                    AND EXISTS(SELECT 1 FROM graph_layers layer WHERE layer.writer_id=writer.writer_id AND layer.revision<=?)
-                    AND NOT EXISTS(SELECT 1 FROM managed_graph_publication_layers pin WHERE pin.result_id=? AND pin.writer_id=writer.writer_id)
-             )",
-            params![graph,revision,result,tenant.as_slice(),instance,revision,result,graph,revision,revision,graph,revision,result], |row| row.get(0),
-        ).context(AnalysisDatabaseSnafu { operation: "check Definition Graph writer pins" })?;
-        if invalid {
-            return Err(Code::Denied.error("Definition Graph writer pins"));
         }
         let owner = Arc::new(PublicationOwner { selected });
         self.publications

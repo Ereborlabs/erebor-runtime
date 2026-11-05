@@ -322,6 +322,8 @@ impl AnalysisStore {
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))? = raw;
         self.raw_dirty.store(false, Ordering::Release);
         self.raw_pending.store(false, Ordering::Release);
+        self.graph_engine.recover(&connection)?;
+        self.managed_results.replace(&connection)?;
         self.readers.reopen(&connection, &self.root)?;
         *writer = Some(connection);
         let recovered = *self.revision.borrow() != meta.commit_revision;

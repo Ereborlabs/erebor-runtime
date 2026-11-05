@@ -12,7 +12,7 @@ mod prepare;
 pub use prepare::PreparedManagedCommit;
 mod read;
 mod reader;
-pub(in crate::analysis) use reader::OwnerRead;
+pub(in crate::analysis) use reader::{CommittedOwners, OwnerRead};
 mod reference;
 mod removal;
 mod schema;

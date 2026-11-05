@@ -63,18 +63,24 @@ impl VTab for PropertyShape {
 
 impl GraphStore {
     pub fn install(connection: &Connection) -> Result<Self> {
-        let shape = Arc::new(Mutex::new(None));
+        let store = Self {
+            shape: Arc::new(Mutex::new(None)),
+            committed: Arc::default(),
+        };
+        store.recover(connection)?;
+        Ok(store)
+    }
+
+    pub fn recover(&self, connection: &Connection) -> Result<()> {
         connection
             .register_table_function_with_extra_info::<PropertyShape, Shape>(
                 "__araphor_graph_shape",
-                &shape,
+                &self.shape,
             )
             .context(DatabaseSnafu {
                 operation: "install Graph property schema function",
             })?;
-        let store = Self { shape, committed: Arc::default() };
-        store.restore(connection)?;
-        Ok(store)
+        self.restore(connection)
     }
 
     pub fn create_relation(

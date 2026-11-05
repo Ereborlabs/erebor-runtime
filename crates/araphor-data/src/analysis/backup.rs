@@ -224,6 +224,7 @@ impl AnalysisStore {
         self.crash_at("backup.closed");
         let result = self.copy_backup(destination, &meta, &files);
         let connection = self.reopen_backup(&meta)?;
+        self.graph_engine.recover(&connection)?;
         self.readers.reopen(&connection, &self.root)?;
         *writer.connection = Some(connection);
         self.write_ready.store(true, Ordering::Release);

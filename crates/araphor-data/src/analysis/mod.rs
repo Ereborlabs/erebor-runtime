@@ -109,6 +109,7 @@ pub struct AnalysisStore {
     write_monitor: Arc<read::ReadMonitor>,
     writer: WaitMutex<Option<Connection>>,
     graph_engine: araphor_graph::GraphStore,
+    managed_results: managed::CommittedOwners,
     raw: WaitMutex<raw::RawJournal>,
     raw_dirty: AtomicBool,
     raw_pending: AtomicBool,
@@ -556,7 +557,9 @@ impl AnalysisStore {
         let (capacity, _) = watch::channel(());
         let readers = connection::ReaderPool::new(&writer)?;
         let graph_engine = araphor_graph::GraphStore::install(&writer)?;
+        let managed_results = managed::CommittedOwners::restore(&writer)?;
         Ok(Self {
+            managed_results,
             root,
             store_uuid: meta.store_uuid,
             notification_owner: AtomicBool::new(false),

@@ -371,12 +371,7 @@ impl GraphStore {
             .context(DatabaseSnafu {
                 operation: "decode retained Graph relations",
             })?;
-        let mut index = self.committed.write().map_err(|_| {
-            ConflictSnafu {
-                resource: "Graph layer index",
-            }
-            .build()
-        })?;
+        let mut index = Members::default();
         for (relation, kind) in relations {
             let endpoints = if kind == 1 {
                 "source.entity_key,target.entity_key,label.label_key"
@@ -465,6 +460,12 @@ impl GraphStore {
                 }
             }
         }
+        *self.committed.write().map_err(|_| {
+            ConflictSnafu {
+                resource: "Graph layer index",
+            }
+            .build()
+        })? = index;
         Ok(())
     }
 }

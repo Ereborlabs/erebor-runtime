@@ -9,7 +9,10 @@ use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, AnalysisStore, PackageErrorCodeV1 as Code, Result,
 };
 
+mod committed;
 mod graph;
+pub(in crate::analysis) use committed::CommittedOwners;
+pub(super) use committed::ResultOwners;
 
 pub(in crate::analysis) struct SelectedOwner {
     pub(super) step: Step,
@@ -59,6 +62,7 @@ impl ProducerOwner {
 
 // This owner is valid only inside its reader transaction.
 pub(in crate::analysis) struct OwnerRead<'a> {
+    store: &'a AnalysisStore,
     reader: &'a Connection,
     tenant: [u8; 16],
     control: &'a AnalysisReadControl,
@@ -73,11 +77,13 @@ pub(in crate::analysis) struct OwnerRead<'a> {
 
 impl<'a> OwnerRead<'a> {
     pub(in crate::analysis) fn new(
+        store: &'a AnalysisStore,
         reader: &'a Connection,
         tenant: [u8; 16],
         control: &'a AnalysisReadControl,
     ) -> Self {
         Self {
+            store,
             reader,
             tenant,
             control,
@@ -92,12 +98,13 @@ impl<'a> OwnerRead<'a> {
     }
 
     pub(in crate::analysis) fn with_budget(
+        store: &'a AnalysisStore,
         reader: &'a Connection,
         tenant: [u8; 16],
         control: &'a AnalysisReadControl,
         budget: &'a dyn super::ManagedBudget,
     ) -> Result<Self> {
-        let mut owner = Self::new(reader, tenant, control);
+        let mut owner = Self::new(store, reader, tenant, control);
         owner.memory = Some(super::PreparedMemory::new(control, budget)?);
         Ok(owner)
     }
@@ -137,15 +144,15 @@ impl<'a> OwnerRead<'a> {
         id: &str,
         processor: &str,
         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         self.control.check()?;
-        let bytes: u64 = self
+        let (bytes, revision): (u64, u64) = self
             .reader
             .query_row(
-                "SELECT octet_length(request_meta) FROM analysis_results
+                "SELECT octet_length(request_meta),commit_revision FROM analysis_results
              WHERE tenant_id=? AND result_id=? AND processor_id=?",
                 params![self.tenant.as_slice(), id, processor],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "bound immutable managed owner",
@@ -159,7 +166,8 @@ impl<'a> OwnerRead<'a> {
                     .and_then(|bytes| bytes.checked_add(8 * std::mem::size_of::<SelectedOwner>()))
             })
             .ok_or_else(|| Code::Limit.error("immutable managed owner memory"))?;
-        self.charge(bytes, charge)
+        self.charge(bytes, charge)?;
+        Ok(revision)
     }
 
     fn bound_attempt(
@@ -197,21 +205,18 @@ impl<'a> OwnerRead<'a> {
         if let Some(owner) = self.selected.get(id) {
             return Ok(Arc::clone(owner));
         }
-        self.bound(id, "managed-definition-v1", charge)?;
-        let (step, revision) = AnalysisStore::managed_step_header(self.reader, self.tenant, id)?;
-        self.bound_attempt(&step.instance, &step.attempt, charge)?;
-        let (attempt, spec) =
-            AnalysisStore::validate_selected_owner(self.reader, self.tenant, id, &step, revision)?;
+        let revision = self.bound(id, "managed-definition-v1", charge)?;
+        let owner = self
+            .store
+            .managed_results
+            .selected(self.tenant, id, revision)?;
+        self.bound_attempt(&owner.step.instance, &owner.step.attempt, charge)?;
+        AnalysisStore::check_witness_pins(self.reader, id, &owner.step.witnesses)?;
+        let step = &owner.step;
         let alias = (step.instance.clone(), step.attempt.clone());
         if self.attempts.get(&alias).is_some_and(|prior| prior != id) {
             return Err(Code::Conflict.error("immutable selected attempt identity"));
         }
-        let owner = Arc::new(SelectedOwner {
-            step,
-            attempt,
-            spec,
-            revision,
-        });
         self.attempts.insert(alias, id.to_owned());
         self.selected.insert(id.to_owned(), Arc::clone(&owner));
         Ok(owner)
@@ -230,44 +235,22 @@ impl<'a> OwnerRead<'a> {
             }
             return Ok(Arc::clone(owner));
         }
-        self.bound(id, "managed-package-v1", charge)?;
-        let (record, saved) = AnalysisStore::managed_meta_from(self.reader, self.tenant, id)?;
+        let saved = self.bound(id, "managed-package-v1", charge)?;
         if saved != revision {
             return Err(Code::Conflict.error("Graph producer revision"));
         }
-        let alias = (record.instance.clone(), record.attempt.clone());
-        let selected = match self.attempts.get(&alias) {
-            Some(id) => id.clone(),
-            None => {
-                self.bound_attempt(&record.instance, &record.attempt, charge)?;
-                let (attempt, _) = AnalysisStore::managed_call_owner(
-                    self.reader,
-                    self.tenant,
-                    id,
-                    revision,
-                    &record,
-                )?;
-                attempt
-                    .receipt
-                    .ok_or_else(|| Code::Missing.error("managed producer receipt"))?
-                    .selected
-                    .result_id
-            }
-        };
-        let selected = self.selected(&selected, charge)?;
-        AnalysisStore::validate_call_header(
-            self.reader,
-            self.tenant,
-            id,
-            &record,
-            revision,
-            &selected.step,
-            selected.revision,
-            &selected.attempt,
-            &selected.spec,
-            charge,
-        )?;
-        let owner = Arc::new(ProducerOwner { record, selected });
+        let owner = self
+            .store
+            .managed_results
+            .producer(self.tenant, id, revision)?;
+        let selected = owner
+            .selected
+            .attempt
+            .receipt
+            .as_ref()
+            .ok_or_else(|| Code::Invalid.error("unpublished managed result"))?;
+        self.selected(&selected.selected.result_id, charge)?;
+        AnalysisStore::check_witness_pins(self.reader, id, &owner.record.witnesses)?;
         self.producers.insert(id.to_owned(), Arc::clone(&owner));
         Ok(owner)
     }

@@ -179,6 +179,7 @@ impl ManagedGraphTransaction {
                 .as_mut()
                 .ok_or_else(|| Code::Incomplete.error("Graph invocation authority"))?;
             let mut owners = super::super::reader::OwnerRead::new(
+                store,
                 connection,
                 self.call.attempt.1.spec.tenant,
                 control,

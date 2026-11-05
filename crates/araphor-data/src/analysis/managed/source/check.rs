@@ -108,6 +108,72 @@ impl AnalysisStore {
         {
             return Err(Code::Invalid.error("managed evidence pin order"));
         }
+        Self::check_witness_pins(connection, result, witnesses)?;
+        let mut expected = contexts
+            .iter()
+            .map(|value| (&value.key, value.commit_revision))
+            .collect::<BTreeMap<_, _>>();
+        let mut query = connection
+            .prepare(
+                "SELECT pin.tenant_id,pin.owner_id,pin.entity_key,pin.lifetime_key,pin.owner_revision,
+                    pin.commit_revision,canonical.owner_revision IS NOT NULL
+                 FROM context_refs pin LEFT JOIN context_versions canonical
+                    ON canonical.tenant_id=pin.tenant_id AND canonical.owner_id=pin.owner_id
+                    AND canonical.entity_key=pin.entity_key AND canonical.lifetime_key=pin.lifetime_key
+                    AND canonical.owner_revision=pin.owner_revision
+                    AND canonical.commit_revision=pin.commit_revision
+                 WHERE pin.ref_id=?",
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare managed context pins",
+            })?;
+        let mut rows = query
+            .query(params![result])
+            .context(AnalysisDatabaseSnafu {
+                operation: "read managed context pins",
+            })?;
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "advance managed context pins",
+        })? {
+            let native = (|| -> duckdb::Result<_> {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, u64>(4)?,
+                    row.get::<_, u64>(5)?,
+                    row.get::<_, bool>(6)?,
+                ))
+            })()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode managed context pin",
+            })?;
+            let key = crate::AnalysisContextKeyV1 {
+                tenant_id: native
+                    .0
+                    .try_into()
+                    .map_err(|_| Code::Invalid.error("managed context pin tenant"))?,
+                owner_id: native.1,
+                entity_key: native.2,
+                lifetime_key: native.3,
+                owner_revision: native.4,
+            };
+            if expected.remove(&key) != Some(native.5) || !native.6 {
+                return Err(Code::Invalid.error("managed context pin value"));
+            }
+        }
+        if !expected.is_empty() {
+            return Err(Code::Missing.error("managed context pin"));
+        }
+        Ok(())
+    }
+
+    pub(in crate::analysis::managed) fn check_witness_pins(
+        connection: &Connection,
+        result: &str,
+        witnesses: &[crate::AnalysisWitnessV1],
+    ) -> Result<()> {
         let mut expected = witnesses
             .iter()
             .map(|value| ((value.identity.key(), value.cursor), value))
@@ -168,63 +234,6 @@ impl AnalysisStore {
             {
                 return Err(Code::Missing.error("managed source witness binding"));
             }
-        }
-        let mut expected = contexts
-            .iter()
-            .map(|value| (&value.key, value.commit_revision))
-            .collect::<BTreeMap<_, _>>();
-        let mut query = connection
-            .prepare(
-                "SELECT pin.tenant_id,pin.owner_id,pin.entity_key,pin.lifetime_key,pin.owner_revision,
-                    pin.commit_revision,canonical.owner_revision IS NOT NULL
-                 FROM context_refs pin LEFT JOIN context_versions canonical
-                    ON canonical.tenant_id=pin.tenant_id AND canonical.owner_id=pin.owner_id
-                    AND canonical.entity_key=pin.entity_key AND canonical.lifetime_key=pin.lifetime_key
-                    AND canonical.owner_revision=pin.owner_revision
-                    AND canonical.commit_revision=pin.commit_revision
-                 WHERE pin.ref_id=?",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare managed context pins",
-            })?;
-        let mut rows = query
-            .query(params![result])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read managed context pins",
-            })?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance managed context pins",
-        })? {
-            let native = (|| -> duckdb::Result<_> {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
-                    row.get::<_, u64>(4)?,
-                    row.get::<_, u64>(5)?,
-                    row.get::<_, bool>(6)?,
-                ))
-            })()
-            .context(AnalysisDatabaseSnafu {
-                operation: "decode managed context pin",
-            })?;
-            let key = crate::AnalysisContextKeyV1 {
-                tenant_id: native
-                    .0
-                    .try_into()
-                    .map_err(|_| Code::Invalid.error("managed context pin tenant"))?,
-                owner_id: native.1,
-                entity_key: native.2,
-                lifetime_key: native.3,
-                owner_revision: native.4,
-            };
-            if expected.remove(&key) != Some(native.5) || !native.6 {
-                return Err(Code::Invalid.error("managed context pin value"));
-            }
-        }
-        if !expected.is_empty() {
-            return Err(Code::Missing.error("managed context pin"));
         }
         Ok(())
     }
