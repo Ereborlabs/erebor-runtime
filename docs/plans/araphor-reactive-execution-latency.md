@@ -1,5 +1,51 @@
 # Araphor reactive execution in milliseconds
 
+## Paired notification lookup trial, 2026-11-05
+
+Five pairs ran the exact incident test. Each pair ran the baseline and the
+candidate in sequence. Pair order alternated. Both executables used the same
+debug profile, workload, assertions, timeouts, test arguments, and log filters.
+No build, debugger, or other test ran during this comparison. Source files did
+not change between runs. All ten runs passed.
+
+The baseline Rust source is commit `4fb390924`. Commit `f7315d20` changes only
+documents. The candidate changed only
+`crates/araphor-data/src/analysis/extraction/notifications/native.rs`.
+It encoded finding IDs from existing notification references as native Graph
+keys and joined those keys to member identities. Packages still chose the IDs.
+The trial did not change publication, producer, grant, or canonical-value checks.
+
+| Pair | First executable | Baseline test, seconds | Candidate test, seconds | Candidate minus baseline process, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 71.17 | 73.82 | +2.6454 |
+| 2 | Candidate | 75.24 | 75.33 | +0.0830 |
+| 3 | Baseline | 75.35 | 75.61 | +0.2663 |
+| 4 | Candidate | 76.99 | 76.81 | -0.1869 |
+| 5 | Baseline | 76.22 | 76.17 | -0.0446 |
+
+The median paired process difference is +0.0830 seconds, or +0.1103 percent.
+Baseline process times range from 71.2083 to 77.0312 seconds. Candidate process
+times range from 73.8537 to 76.8443 seconds. This small sample does not establish
+a gain or a clear regression. It provides no confidence-interval claim.
+Single-run comparisons such as 72.96 versus 77.35 seconds do not establish a
+performance change. The 77.35-second run also used diagnostic sampling.
+Earlier single-run speed factors in this document are reference ratios only.
+They do not prove that the source change caused the timing difference.
+
+Every run has five managed publications and three source-change restart
+mentions. Pair 4 has 23 baseline notification captures and 24 candidate
+captures. All other runs have 24 captures. Do not treat summed child spans as
+a controlled operator comparison or add them to test wall time.
+
+Result: **Not done** for a measured gain. The baseline remains in source.
+The candidate has no performance commit. Millisecond latency and the 100-fold
+target remain **Not done**.
+
+Proof: `/tmp/araphor-notice-pairs-20261105/settings.json`, `results.json`,
+`summary.json`, and the ten run logs in that directory. The executables are
+`target/araphor-notice-comparison-20261105/baseline` and `candidate`.
+
+
 ## Rejected managed Follow experiment
 
 A destination-independent Follow mode passed the focused build in 300.542283
