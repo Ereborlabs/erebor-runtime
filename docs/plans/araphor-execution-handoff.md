@@ -1,5 +1,34 @@
 # Native execution performance handoff
 
+## Rejected managed Follow experiment
+
+A destination-independent Follow mode passed the focused build in 300.542283
+seconds. The exact incident test passed in 89.78 seconds (89.834356 seconds
+for the process). Initial notification arrival took 6.838329807 seconds.
+Later arrival took 11.986557737 and 13.522251567 seconds. Background records
+reached publication in 10.532505173 seconds. The workload, assertions, and
+timeouts did not change.
+
+The experiment removed three subscription restarts. It increased complete
+managed publications from five to eight and notification scalar captures
+from 24 to 27. It completed intermediate cuts that the prior freshness guard
+had rejected. Removing the restarts did not improve this workload.
+
+Three public Data integration checks passed: both append race windows kept
+the old input cut; finite registration rejected a changed source; and Follow
+publication rejected a physically retired consumed witness without partial
+results, pins, or progress. The legacy Data library-test target did not build.
+Its errors include references to the removed Process detector and old Graph
+types. The integration result does not qualify that target.
+
+Result: **Rejected** for this performance task. All experiment source and test
+changes were removed. The Rust source is restored to commit `4fb390924`.
+The current qualified result remains 72.96 seconds. The experiment patch is
+`/tmp/araphor-rejected-follow-20261104.patch`. Build and run proof is in
+`/tmp/araphor-build-follow-20261104-a.log`,
+`/tmp/araphor-live-follow-20261104-a.log`, and
+`/tmp/araphor-check-follow-integration-20261104-b.log`.
+
 ## Package input result, 2026-11-05
 
 The focused build passes in 263.059719 seconds. The exact incident test passes

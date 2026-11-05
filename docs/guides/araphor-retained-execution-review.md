@@ -17,6 +17,63 @@ Araphor Graph and stages changes. Data commits Graph, finding, and progress
 changes together. The notification subscription delivers the resulting finding.
 The target requires millisecond latency and a measured 100-fold improvement.
 
+### Current builtin causal package
+
+The default Definition calls `HF-CAUSAL-001` revision `1`, export `detect`.
+That export also consumes the package's `index` outputs. Package code owns both
+operations. The generic Graph engine has no incident rules.
+
+The index stores these entity identities:
+
+| Entity | Identity |
+| --- | --- |
+| Source | Authenticated tenant, node, boot, label, source, and source epoch |
+| Record | Source identity, CPU, and durable cursor |
+| Actor | Exact native task identity and process instance |
+| Credential | Tenant, authority, lease, and principal |
+| Request | Tenant, cluster, carried request ID, and audit ID |
+| Pod | Tenant, cluster, UID, and creation revision |
+| Binding | Tenant, cluster, binding ID, and destination node |
+
+The links connect credential acquisition, authenticated requests, token
+issuance, Pod creation, scheduling, and container admission. Each audit context
+owns its contributions. Each edge retains exact record and context references,
+the context revision, and disclosure requirements. The graph stores no raw event
+body archive.
+
+An audit or coverage change selects connected references through keyed Graph
+adjacency in both directions. The index clears changed contributions and stages
+replacement links. Native SQL loads the selected canonical records and audit
+versions. Rust package code matches the incident chain. The pattern matcher
+does not execute a graph query.
+
+The detector requires successful credential acquisition, an issuance to a
+different authority or principal, and use of that issued credential to create
+a Pod. The same named container must be privileged and mount host `/` with
+write access. Exact creation, scheduler binding, and admission references must
+place it on a different node. Actor, process, socket, object, and proof checks
+bind the audit claims to canonical evidence. Shared names and nearby times do
+not establish the chain.
+
+A complete chain with consistent proof and coverage produces a Critical,
+Confirmed finding. Conflicts or incomplete canonical coverage produce
+CoverageInsufficient with explicit limits. Related denied or failed actions
+can be supporting evidence. They cannot replace a successful chain step.
+Missing chain steps produce no finding. The detector does not prove host-root
+execution or remote deletion. It does not implement a general attack-path
+matcher or every credential-access bypass.
+
+### Source freshness limit
+
+Ordinary Selected subscriptions still use the conservative source freshness
+check at registration and publication. An overlapping input change can stop
+an evaluation and restart its retained source owner. A trial extended the
+older Graph destination's captured-cut Follow mode to all subscriptions.
+It removed three restarts but increased complete publications from five to
+eight. The unchanged incident test slowed from 72.96 to 89.78 seconds.
+That trial and its new tests were removed. The current source has no change
+from that experiment. Its proof remains in the planning record.
+
 ### Source reading route
 
 [Default Definitions](../../packages/default-definitions/causal.yaml) name package calls in ordinary SQL
