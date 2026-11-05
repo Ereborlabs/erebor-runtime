@@ -37,6 +37,7 @@ pub(super) struct Runtime {
     ended: bool,
     initial: Option<(Arc<crate::execution::Permit>, u64, Session)>,
     source_index: Option<Arc<crate::sources::SourceIndex>>,
+    append_read: Option<Arc<crate::sources::AppendRead>>,
 }
 
 struct WindowCut {
@@ -118,6 +119,10 @@ impl Runtime {
             )
             .transpose()
             .context(SqlSnafu)?;
+        let append_read = (run.operation == Operation::Append)
+            .then(|| crate::sources::AppendRead::new(run.session.memory()))
+            .transpose()
+            .context(SqlSnafu)?;
         Ok(Self {
             revision,
             captured: run.resume_revision(),
@@ -138,6 +143,7 @@ impl Runtime {
             ended: false,
             initial,
             source_index,
+            append_read,
         })
     }
 
@@ -299,6 +305,7 @@ impl Runtime {
             }
         };
         session.source_index = self.source_index.clone();
+        session.append_read = self.append_read.clone();
         let calls = session.calls.clone().ok_or_else(Self::state_error)?;
         let mut observed = None;
         let execution = async {

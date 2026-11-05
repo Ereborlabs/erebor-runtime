@@ -13,6 +13,7 @@ use super::{AnalysisRecordV1, AnalysisStore};
 use crate::EvidenceIntakeIdentityV1;
 use crate::{AnalysisDatabaseSnafu, IoSnafu, Result};
 
+#[derive(Clone)]
 pub(super) struct SegmentRange {
     pub(super) segment_id: u64,
     pub(super) byte_start: u64,
@@ -24,6 +25,25 @@ pub(super) struct SegmentRange {
 }
 
 impl SegmentRange {
+    pub(super) fn window(
+        &self,
+        after: Option<super::StorePositionV1>,
+        limit: usize,
+    ) -> Option<Self> {
+        let mut next = self.clone();
+        next.reader = self.reader.window(after, limit)?;
+        next.first_cursor = next.reader.first();
+        Some(next)
+    }
+
+    pub(super) fn end(&self) -> super::StorePositionV1 {
+        self.reader.end()
+    }
+
+    pub(super) fn metadata_bytes(&self) -> usize {
+        self.reader.metadata_bytes()
+    }
+
     pub(super) fn read(&self, root: &Path) -> Result<(Vec<AnalysisRecordV1>, usize, usize)> {
         if self
             .byte_end

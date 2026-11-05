@@ -45,14 +45,15 @@ pub use workload::{
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use analysis::RetentionResultV1;
 pub use analysis::{
-    AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1, AnalysisContextRefV1,
-    AnalysisContextVersionV1, AnalysisExtractLimits, AnalysisExtractionV1, AnalysisGapV1,
-    AnalysisPositionPageV1, AnalysisProcessorResultV1, AnalysisReadControl, AnalysisReadModeV1,
-    AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1, AnalysisReferenceOriginV1,
-    AnalysisReferenceV1, AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSelectionV1,
-    AnalysisSourceReceiptV1, AnalysisSourceSnapshotV1, AnalysisSourceStatusV1, AnalysisStore,
-    AnalysisStoreMetaV1, AnalysisStreamIdentityV1, AnalysisTableRead, AnalysisTableRequests,
-    AnalysisWitnessV1, ContextSensitivityV1, CoverageChanges, CoverageRecord, CoverageReportRef,
+    AnalysisAppendRead, AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1,
+    AnalysisContextRefV1, AnalysisContextVersionV1, AnalysisExtractLimits, AnalysisExtractionV1,
+    AnalysisGapV1, AnalysisPositionPageV1, AnalysisProcessorResultV1, AnalysisReadControl,
+    AnalysisReadModeV1, AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1,
+    AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisResultCommitV1,
+    AnalysisResultReceiptV1, AnalysisSelectionV1, AnalysisSourceReceiptV1,
+    AnalysisSourceSnapshotV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
+    AnalysisStreamIdentityV1, AnalysisTableRead, AnalysisTableRequests, AnalysisWitnessV1,
+    ContextSensitivityV1, CoverageChanges, CoverageRecord, CoverageReportRef,
     EvidenceRetentionOwner, EvidenceStoreOutcomeV1, GraphCommit, GraphLease, GraphManifest,
     ProcessorClassV1, ProcessorHealthV1, ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1,
     RetentionLimitsV1, RetentionStepV1, SegmentFile, Selection, StorageHealthV1, StorageLimitsV1,

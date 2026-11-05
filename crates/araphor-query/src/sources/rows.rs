@@ -686,6 +686,17 @@ impl SourceSnapshot {
             },
             now: self.now,
         };
+        let append = match mode {
+            ReadMode::Page(after) => self
+                .append
+                .lock()
+                .map_err(|_| {
+                    DataFusionError::Internal("the append reader binding is poisoned".into())
+                })?
+                .clone()
+                .map(|append| (append, after)),
+            _ => None,
+        };
         let (mut page, managed) = if let Some(reference) = self.reference.get() {
             let captured = self
                 .store
@@ -693,8 +704,8 @@ impl SourceSnapshot {
                 .map_err(data_error)?;
             (captured.page, Some(captured.state))
         } else {
-            match &self.managed {
-                Some(managed) => {
+            match (&self.managed, append) {
+                (Some(managed), _) => {
                     let captured = self
                         .store
                         .read_managed_tables_filtered(
@@ -708,7 +719,23 @@ impl SourceSnapshot {
                         .map_err(data_error)?;
                     (captured.page, Some(captured.state))
                 }
-                None => (
+                (None, Some((append, after))) => {
+                    let (page, meta) = append.read(
+                        &self.store,
+                        selected,
+                        &self.selection,
+                        read,
+                        after,
+                        limits,
+                        control,
+                        &reservation,
+                        data_error,
+                    )?;
+                    ArrowSnapshot::check_store(&page.extraction.meta, &meta)
+                        .map_err(|source| DataFusionError::External(Box::new(source)))?;
+                    (page, None)
+                }
+                (None, None) => (
                     self.store
                         .read_tables_filtered(
                             selected,

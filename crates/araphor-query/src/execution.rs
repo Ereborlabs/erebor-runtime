@@ -707,6 +707,7 @@ impl Engine {
             nested_permit: None,
             definition: None,
             source_index: None,
+            append_read: None,
             workers: None,
             context_init: None,
             output_rows: self.limits.output_rows,
@@ -872,6 +873,7 @@ pub struct Session {
     pub(crate) nested_permit: Option<Arc<Permit>>,
     pub(crate) definition: Option<Arc<crate::definition::PreparedDefinition>>,
     pub(crate) source_index: Option<Arc<crate::sources::SourceIndex>>,
+    pub(crate) append_read: Option<Arc<crate::sources::AppendRead>>,
     pub(crate) workers: Option<araphor_package_runtime::TaskTracker>,
     context_init: Option<Arc<ContextInit>>,
     output_rows: usize,
@@ -1047,6 +1049,7 @@ impl Session {
             nested_permit: self.nested_permit.clone(),
             definition: self.definition.clone(),
             source_index: None,
+            append_read: None,
             workers: self.workers.clone(),
             context_init: self.context_init.clone(),
             output_rows: self.output_rows,
@@ -1884,6 +1887,9 @@ impl Session {
         }
         if let Some(index) = &source_index {
             snapshot.bind_index(Arc::clone(index)).context(SqlSnafu)?;
+        }
+        if let Some(append) = &self.append_read {
+            snapshot.bind_append(Arc::clone(append)).context(SqlSnafu)?;
         }
         let mut config = context.session_config().clone();
         config.set_extension(Arc::clone(&permit));

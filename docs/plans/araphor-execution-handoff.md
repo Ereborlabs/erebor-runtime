@@ -1,5 +1,81 @@
 # Native execution performance handoff
 
+## Bounded append reader result, 2026-11-05
+
+Each Append Runtime now owns a Data reader with a resolved source header and
+one immutable journal range. Fresh page evaluations use the saved native
+DataFusion plan and the existing 256-row input boundary. One raw scanner serves
+ordinary and retained reads. It seeks from the emitted output position, so a
+partial output page does not skip captured rows. Data opens a short read for
+current store metadata, replay floor, and trace read authority. Its maintenance
+lease remains active through Arrow construction. DataFusion reservations cover
+retained metadata before allocation. Finite input limits keep their existing
+admission path.
+
+Retention applies to projected events and trace-output requests. A changed
+selection, projection, event range, or journal range opens the ordinary read
+boundary. Mixed, measurement, and header-only requests use the ordinary reader.
+These fallbacks add no error. The reader retains no frame bodies or database
+connection. The old raw loop is removed from the extraction owner.
+
+The final focused build passes in 210.750102 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass with 16,402 records,
+five managed publications, three source-change restart mentions, 61 authority
+checks, and twelve Graph append batches per run. Matched Graph apply revisions,
+writers, inserted rows, and closed rows are equal in every pair. No source edit,
+build, debugger, or other test runs during the comparison.
+
+| Pair | First executable | Baseline test, seconds | Retained reader test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 36.54 | 34.68 | +1.8546 |
+| 2 | Retained reader | 37.68 | 34.93 | +2.7460 |
+| 3 | Baseline | 37.32 | 35.02 | +2.3037 |
+| 4 | Retained reader | 37.70 | 34.92 | +2.7749 |
+| 5 | Baseline | 37.95 | 35.15 | +2.8058 |
+
+All five pairs are faster. The paired whole-process median is 2.745986 seconds
+lower, or 7.28 percent. The paired reduction ranges from 5.07 to 7.38 percent.
+The complete bulk interval is lower in every pair. Its medians are 7.503524
+and 4.756654 seconds; its paired median reduction is 36.35 percent. Initial
+and warm notification differences are mixed. No separate arrival gain or tail
+latency result is claimed. Notification capture counts are 25/25, 25/22, 25/25,
+25/25, and 24/24 for baseline/candidate.
+
+Each bulk interval still reads 64 pages and emits 16,384 rows. Each candidate
+uses the retained reader for 60 pages; each baseline uses it for zero pages.
+Summed capture time has medians of 6.305653 and 1.491186 seconds. Its paired
+median reduction is 76.05 percent. The statistical units are the five paired
+run totals, not the 64 pages. Physical work stays at 262,144 frame rows and
+53,401,792 body bytes per run. Summed raw-read medians are 0.356238 and
+0.383343 seconds. There is no raw-frame read gain. Capture and bulk intervals
+overlap other work; their savings are not added to the whole-process saving.
+
+Result: **Done** for the bounded reader and this focused comparison.
+Millisecond notification latency and the 100-fold target remain **Not done**.
+Full CI and other test targets were not run. Bounded-memory, trace-output,
+retention, cancellation, and mixed-request fallback cases have source review
+only under this qualification.
+
+Proof: `/tmp/araphor-build-append-reader-20261105-c.log` and
+`/tmp/araphor-append-reader-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs in that directory. The baseline is `b065516ba` plus seven
+capture timing lines. Its patch is
+`/tmp/araphor-append-capture-timing-baseline-20261105.patch`. Retained executables
+are `target/araphor-notice-comparison-20261105/append-capture-timing` and
+`append-reader`. Earlier executables were removed to free space; logs remain.
+The preceding exact test passes in 34.75 seconds. That single run is not a
+speed comparison. An earlier draft failed with `InputTooLarge` in 12.80
+seconds because unlimited input starts with a zero-byte reservation. The
+final reader grows that native reservation before transfer. The test and its
+limits were not changed.
+
+The diagnostic records five managed commits with 5.289147 seconds of total
+elapsed work. Their transaction work is 3.292142 seconds and preparation is
+1.553976 seconds. These are nested totals, not one notification interval.
+The next investigation must isolate the largest remaining Graph publication
+owner before another replacement.
+
+
 ## Source index continuation result, 2026-11-05
 
 The managed subscription now transfers its committed SourceIndex through the

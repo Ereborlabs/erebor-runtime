@@ -1,5 +1,27 @@
 # Araphor retained execution state review
 
+## Bounded append reader, 2026-11-05
+
+[Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) gives each
+Append subscription one [Data reader](../../crates/araphor-data/src/analysis/extraction/append.rs).
+It retains a typed source header and one immutable journal descriptor.
+[Query](../../crates/araphor-query/src/sources/append.rs) retains its native
+DataFusion memory reservation. Fresh page evaluations keep the saved physical
+plan, page limits, timeout, and call-context completion. The
+[common raw scanner](../../crates/araphor-data/src/analysis/extraction/raw.rs)
+uses the emitted output position for each window. A short read checks current
+metadata, replay floor, and trace authority. Its maintenance lease covers row
+construction. Changed inputs or a completed range use the ordinary reader.
+Requests other than projected events or trace output also use that reader.
+
+Five alternating pairs of the unchanged exact test pass. Each candidate uses
+the retained path for 60 of 64 bulk pages. Physical frame work is equal.
+The paired median reductions are 76.05 percent for summed capture time,
+36.35 percent for the complete bulk interval, and 7.28 percent for the whole
+process. Initial and warm arrival differences are mixed. These nested costs
+are not added together. Millisecond latency and the 100-fold target remain
+**Not done**. See the [append reader evidence](../plans/araphor-execution-handoff.md#bounded-append-reader-result-2026-11-05).
+
 ## Current package path, 2026-11-05
 
 [SourceRecovery](../../crates/araphor-query/src/stream/recovery.rs) now transfers

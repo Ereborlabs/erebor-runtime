@@ -35,6 +35,9 @@ use futures_util::StreamExt as _;
 
 use crate::memory::Memory;
 
+mod append;
+pub(crate) use append::AppendRead;
+
 #[cfg(test)]
 mod bounds;
 mod index;
@@ -324,6 +327,7 @@ pub struct SourceSnapshot {
     memory: Arc<Memory>,
     captured: Mutex<Option<rows::Captured>>,
     index: Mutex<Option<Arc<SourceIndex>>>,
+    append: Mutex<Option<Arc<AppendRead>>>,
     view: Mutex<Option<Arc<SourceView>>>,
     reads: Mutex<BTreeMap<usize, lineage::NativeRead>>,
     keys: Mutex<BTreeMap<usize, Arc<keys::KeySlot>>>,
@@ -477,6 +481,7 @@ impl SourceSnapshot {
             memory,
             captured: Mutex::new(None),
             index: Mutex::new(None),
+            append: Mutex::new(None),
             view: Mutex::new(None),
             reads: Mutex::new(BTreeMap::new()),
             keys: Mutex::new(BTreeMap::new()),
@@ -635,6 +640,13 @@ impl SourceSnapshot {
 
     fn data_error(error: araphor_data::Error) -> DataFusionError {
         DataFusionError::External(Box::new(error))
+    }
+
+    pub(crate) fn bind_append(&self, append: Arc<AppendRead>) -> Result<()> {
+        *self.append.lock().map_err(|_| {
+            DataFusionError::Internal("the append reader binding is poisoned".into())
+        })? = Some(append);
+        Ok(())
     }
 
     pub(crate) fn bind_index(&self, index: Arc<SourceIndex>) -> Result<()> {

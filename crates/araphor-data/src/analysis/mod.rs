@@ -50,9 +50,9 @@ pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
 pub use coverage::{CoverageChanges, CoverageRecord, CoverageReportRef};
 pub use extraction::{
-    AnalysisExtractLimits, AnalysisExtractionV1, AnalysisPositionPageV1, AnalysisReadModeV1,
-    AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1,
-    AnalysisTableRead, AnalysisTableRequests, Selection,
+    AnalysisAppendRead, AnalysisExtractLimits, AnalysisExtractionV1, AnalysisPositionPageV1,
+    AnalysisReadModeV1, AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1,
+    AnalysisSourceSnapshotV1, AnalysisTableRead, AnalysisTableRequests, Selection,
 };
 pub use graph::{GraphCommit, GraphLease, GraphManifest, GraphSourceSummary};
 pub use graph_rows::CanonicalGraph;

@@ -23,11 +23,15 @@ use crate::{
 
 type IndexedNotificationGraph = (Vec<u8>, u64, u64, u64, Option<bool>, u64);
 
+mod append;
+pub use append::AnalysisAppendRead;
+
 mod changes;
 mod discovery;
 mod graph;
 mod notifications;
 mod package;
+mod raw;
 mod selection;
 mod source;
 mod tables;
@@ -651,7 +655,7 @@ impl ReadBudget<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AnalysisSourceSnapshotV1 {
     pub receipt: AnalysisSourceReceiptV1,
     pub commit_revision: u64,
@@ -1639,7 +1643,7 @@ impl AnalysisStore {
             control,
             None,
             Some(bytes),
-        )?;
+         None,)?;
         Ok((selection, page))
     }
 
@@ -1652,7 +1656,7 @@ impl AnalysisStore {
     ) -> Result<AnalysisPositionPageV1> {
         self.read_tables_inner(
             selection, selection, None, None, read, limits, control, None, None,
-        )
+         None,)
         .map(|(page, _)| page)
     }
 
@@ -1676,7 +1680,7 @@ impl AnalysisStore {
             control,
             context_owners,
             None,
-        )
+         None,)
         .map(|(page, _)| page)
     }
 
@@ -1716,7 +1720,7 @@ impl AnalysisStore {
             control,
             context_owners,
             None,
-        )?;
+         None,)?;
         let state = state.ok_or_else(|| self.state_error("the managed capture is absent"))?;
         Ok(super::ManagedPage { page, state })
     }
@@ -1749,7 +1753,7 @@ impl AnalysisStore {
             control,
             context_owners,
             None,
-        )?;
+         None,)?;
         Ok(super::ManagedPage {
             page,
             state: state.ok_or_else(|| self.state_error("the referenced capture is absent"))?,
@@ -1771,7 +1775,9 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         context_owners: Option<&BTreeSet<String>>,
         envelope: Option<usize>,
+        mut append: Option<&mut append::AppendCapture<'_>>,
     ) -> Result<(AnalysisPositionPageV1, Option<super::ManagedCapture>)> {
+        let started = std::time::Instant::now();
         control.check()?;
         if envelope.is_some()
             && (managed.is_some()
@@ -1852,7 +1858,7 @@ impl AnalysisStore {
         let unscoped_notifications = selection.sources.is_all()
             && selection.nodes.is_empty()
             && selection.binding_ids.is_empty();
-        let mut journal_work = (0u64, 0u64, 0u64, 0u64, 0u64);
+        let mut journal_work = (0u64, 0u64, 0u64, 0u64, 0u64, std::time::Duration::ZERO);
         let result = control.run(&mut reader, |snapshot| {
             let (meta, physical) = match reference {
                 Some(reference) => self.bind_reference(snapshot, reference, control)?,
@@ -1884,7 +1890,7 @@ impl AnalysisStore {
                 commit_revision: meta.commit_revision,
                 ordinal: u32::MAX,
             };
-            let mut after = match mode {
+            let after = match mode {
                 AnalysisReadModeV1::Complete | AnalysisReadModeV1::Metadata => None,
                 AnalysisReadModeV1::Page(after) => after,
                 AnalysisReadModeV1::Changes(after) => Some(after),
@@ -2059,135 +2065,15 @@ impl AnalysisStore {
                 Vec::new()
             };
             let mut removals = removals.into_iter().peekable();
-            let mut scanned = 0;
-            let mut row_bytes = 0_usize;
-            let mut exhausted = false;
-            'scan: loop {
-                control.check()?;
-                if matches!(mode, AnalysisReadModeV1::Metadata) {
-                    after = Some(end);
-                    exhausted = true;
-                    break;
-                }
-                let limit = match mode {
-                    AnalysisReadModeV1::Complete | AnalysisReadModeV1::Metadata | AnalysisReadModeV1::Changes(_) => {
-                        usize::MAX
-                    }
-                    AnalysisReadModeV1::Page(_) => limits.page_rows - scanned,
-                };
-                if limit == 0 {
-                    exhausted = self
-                        .selected_position(selection, after, end.commit_revision, 1, control)?
-                        .is_none();
-                    if exhausted {
-                        after = Some(end);
-                    }
-                    break;
-                }
-                let selected =
-                    self.selected_position(selection, after, end.commit_revision, limit, control)?;
-                let Some((identity, cpu, range)) = selected else {
-                    after = Some(end);
-                    exhausted = true;
-                    break;
-                };
-                if matches!(mode, AnalysisReadModeV1::Page(_))
-                    && output.scanned_bytes != 0
-                    && output.scanned_bytes.saturating_add(range.scan_bytes) > limits.scan_bytes
-                {
-                    break;
-                }
-                output.scan(range.scan_bytes)?;
-                let (records,frame_rows,body_bytes)=range.read(&self.root)?;
-                journal_work.0=journal_work.0.saturating_add(1);
-                journal_work.1=journal_work.1.saturating_add(records.len() as u64);
-                journal_work.2=journal_work.2.saturating_add(range.scan_bytes as u64);
-                journal_work.3=journal_work.3.saturating_add(frame_rows as u64);
-                journal_work.4=journal_work.4.saturating_add(body_bytes as u64);
-                erebor_telemetry::debug!(stage="capture",operation="journal_read",
-                    instance_id=%managed.as_ref().map_or("",|capture|capture.instance().spec.id.as_str()),
-                    cut_revision=output.meta.commit_revision,
-                    source_name=match identity {RawIdentity::Evidence(_)=>"events",RawIdentity::Diagnostic(_)=>"trace_output"},
-                    rows=records.len(),bytes=range.scan_bytes,
-                    frame_rows,body_bytes,
-                    first_cursor=records.first().map_or(0,|record|record.cursor),
-                    last_cursor=records.last().map_or(0,|record|record.cursor),
-                    "Journal range read completed");
-                for record in records {
-                    control.check()?;
-                    while let Some(removal) = removals.next_if(|removal| {
-                        removal.revision < record.position.commit_revision
-                    }) {
-                        output.remove_raw(&mut capture, &removal, control)?;
-                    }
-                    let page_bytes = matches!(mode, AnalysisReadModeV1::Page(_)).then_some(&mut row_bytes);
-                    let consumed = match &identity {
-                        RawIdentity::Evidence(identity) => {
-                            let decoded = decode_events
-                            .then(|| EvidenceRecord::try_from(record.framed_record.as_slice()))
-                            .transpose()?;
-                            let selected = selection.binding_ids.is_empty()
-                                || decoded
-                                    .as_ref()
-                                    .and_then(|record| record.decision_context.as_ref())
-                                    .is_some_and(|context| {
-                                        selection.binding_ids.iter().any(|id| {
-                                            id.as_slice() == context.binding_id.as_slice()
-                                        })
-                                    });
-                            if selected {
-                                capture.event(identity,
-                                    cpu.ok_or_else(|| self.state_error("the selected evidence CPU is absent"))?,
-                                    range.intake, &record, decoded.as_ref(),
-                                    checked_catalog,
-                                    &mut output.row_budget(control, page_bytes))?
-                            } else {
-                                true
-                            }
-                        }
-                        RawIdentity::Diagnostic(identity) => {
-                            let trace = trace_info
-                                .iter()
-                                .find(|trace| trace.identity == identity)
-                                .ok_or_else(|| {
-                                    self.state_error("the selected trace identity is absent")
-                                })?;
-                            if !trace.selected {
-                                scanned += 1;
-                                after = Some(record.position);
-                                continue;
-                            }
-                            let payload = TraceRecord::read(&record.framed_record, &self.root)?;
-                            let (kind, bytes) = match &payload {
-                                TracePayload::Metadata(bytes) => ("metadata", bytes),
-                                TracePayload::Data(bytes) => ("data", bytes),
-                                TracePayload::Diagnostic(bytes) => ("diagnostic", bytes),
-                                TracePayload::Terminal(bytes) => {
-                                    let terminal = TraceRecord::terminal(bytes, &self.root)?;
-                                    if terminal.execution_id != identity.execution_id
-                                        || terminal.last_sequence + 1 != record.cursor
-                                    {
-                                        return self.reject(
-                                            "the selected trace terminal identity changed",
-                                        );
-                                    }
-                                    ("terminal", bytes)
-                                }
-                            };
-                            capture.frame(identity, trace.target_index, record.cursor,
-                                record.position, kind, bytes,
-                                &mut output.row_budget(control, page_bytes))?
-                        }
-                    };
-                    if !consumed {
-                        break 'scan;
-                    }
-                    #[cfg(any(test, feature = "test-fixtures"))]
-                    control.test_read_step()?;
-                    scanned += 1;
-                    after = Some(record.position);
-                }
-            }
+            let (after, exhausted) = self.scan_raw(
+                &mut raw::RawScan {
+                    selection, read: &read, traces: &trace_info, mode, end, after,
+                    decode_events, checked_catalog,
+                    instance: managed.as_ref().map(|capture| capture.instance().spec.id.as_str()),
+                    frozen: None, retain: append.as_deref_mut(),
+                },
+                &mut output, &mut capture, &mut removals, control, &mut journal_work,
+            )?;
             if let AnalysisReadModeV1::Changes(after) = mode {
                 for removal in removals {
                     output.remove_raw(&mut capture, &removal, control)?;
@@ -2516,6 +2402,7 @@ impl AnalysisStore {
                 cut_revision=page.extraction.meta.commit_revision,source_name="journal",
                 read_count=journal_work.0,rows=journal_work.1,bytes=journal_work.2,
                 frame_rows=journal_work.3,body_bytes=journal_work.4,
+                journal_s=journal_work.5.as_secs_f64(),elapsed_s=started.elapsed().as_secs_f64(),
                 "Source capture completed");
         }
         result

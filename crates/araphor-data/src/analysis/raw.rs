@@ -1076,8 +1076,9 @@ impl From<AnalysisSourceReceiptV1> for RawSource {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct RawRead {
-    file: SegmentFile,
+    file: std::sync::Arc<SegmentFile>,
     frame_start: u64,
     frame_bytes: usize,
     span: RawRange,
@@ -1086,9 +1087,54 @@ pub(super) struct RawRead {
     intake: u64,
     first: u64,
     last: u64,
+    available_last: u64,
 }
 
 impl RawRead {
+    pub(super) fn window(
+        &self,
+        after: Option<super::StorePositionV1>,
+        limit: usize,
+    ) -> Option<Self> {
+        if limit == 0 || after.is_some_and(|after| after.commit_revision > self.revision) {
+            return None;
+        }
+        let first = after
+            .filter(|after| after.commit_revision == self.revision)
+            .map_or(self.first, |after| {
+                self.span
+                    .first
+                    .saturating_add(
+                        (u64::from(after.ordinal) + 1).saturating_sub(u64::from(self.span.ordinal)),
+                    )
+                    .max(self.first)
+            });
+        if first > self.available_last {
+            return None;
+        }
+        let mut next = self.clone();
+        next.first = first;
+        next.last = self
+            .available_last
+            .min(first.saturating_add(limit as u64 - 1));
+        Some(next)
+    }
+
+    pub(super) fn end(&self) -> super::StorePositionV1 {
+        super::StorePositionV1 {
+            commit_revision: self.revision,
+            ordinal: self.span.ordinal + (self.available_last - self.span.first) as u32,
+        }
+    }
+
+    pub(super) fn first(&self) -> u64 {
+        self.first
+    }
+
+    pub(super) fn metadata_bytes(&self) -> usize {
+        std::mem::size_of::<SegmentFile>() + self.file.path().as_os_str().len()
+    }
+
     pub(super) fn read(&self, root: &Path) -> Result<(Vec<super::AnalysisRecordV1>, usize, usize)> {
         let commit = RawCommit::read(&self.file, self.frame_start, self.frame_bytes)?;
         let span = commit
@@ -1430,7 +1476,10 @@ impl RawJournal {
                 if first > last {
                     continue;
                 }
+                let available_last = last;
                 let last = last.min(first.saturating_add(limit as u64 - 1));
+                let mut reader = self.freeze(entry, index, first, last)?;
+                reader.available_last = available_last;
                 return Ok(Some((
                     entry.identity.clone(),
                     entry.commit.kind.cpu(),
@@ -1441,7 +1490,7 @@ impl RawJournal {
                         first_cursor: first,
                         scan_bytes: entry.frame_bytes,
                         intake: entry.commit.intake,
-                        reader: self.freeze(entry, index, first, last)?,
+                        reader,
                     },
                 )));
             }
@@ -1704,7 +1753,7 @@ impl RawJournal {
         last: u64,
     ) -> Result<RawRead> {
         Ok(RawRead {
-            file: SegmentFile::reader(self.segment_path(entry.reference.id)?)?,
+            file: std::sync::Arc::new(SegmentFile::reader(self.segment_path(entry.reference.id)?)?),
             frame_start: entry.reference.offset - entry.frame_bytes as u64,
             frame_bytes: entry.frame_bytes,
             span: entry.commit.spans[index].clone(),
@@ -1713,6 +1762,7 @@ impl RawJournal {
             intake: entry.commit.intake,
             first,
             last,
+            available_last: last,
         })
     }
     fn prepare(
