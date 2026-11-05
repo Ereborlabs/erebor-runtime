@@ -101,9 +101,66 @@ routing, or job lifecycle. Data maps admitted package calls to those scopes.
 Package code decides which nodes, edges, and properties to change.
 
 Physical keys use stable storage coordinates. Retain original binary keys
-and typed properties as values. Complete the dictionary and Arrow chunk
-layout before implementation. It must preserve valid existing keys, values,
-canonical bytes, and quota behavior without imposing a new public size limit.
+and typed properties as values. The layout below preserves valid existing
+keys, values, canonical bytes, and quota behavior. Physical fragmentation
+does not impose a new public size limit.
+
+### Physical records and access
+
+Keep the current unsigned 64-bit graph, writer, relation, entity, owner,
+label, layer, and property references. Encode integer key fields in big-endian
+order so Fjall prefix and range reads have the required order. A record-kind
+prefix separates records within a keyspace. Data owns database and keyspace
+handles; Araphor Graph operates through the transaction supplied by Data.
+
+| Key fields after record kind | Value or access |
+| --- | --- |
+| Layer | Writer, parent layer, and Data revision |
+| Writer, Data revision | Layer; seek the last entry at or before the requested revision |
+| Layer, change ordinal | Immutable membership addition or removal and its member reference |
+| Writer, owner, relation, entity, opened revision | Member properties, endpoints, and optional closed revision |
+| Relation, entity, writer, owner, opened revision | Historical member reference |
+| Relation, source entity, writer, owner, edge entity, opened revision | Outgoing historical member reference |
+| Relation, target entity, writer, owner, edge entity, opened revision | Incoming historical member reference |
+| Relation, label, writer, owner, edge entity, opened revision | Label member reference |
+| Writer, owner, relation, entity | Current member reference for owner clears and updates |
+| Relation, entity | Current node contribution count for endpoint checks |
+| Relation, property reference | Property chunk and row coordinates |
+| Relation, chunk, fragment ordinal | Arrow IPC bytes for immutable properties |
+
+The membership interval keeps the current rule: a member is visible when its
+opened revision is at or before its selected writer head, and its closed
+revision is absent or after that head. Index postings select candidate
+members. The membership record supplies the interval and property reference.
+An index update does not change an immutable layer's recorded changes.
+
+Apply all additions and removals to the pending transaction before endpoint
+validation. Update node contribution counts for the complete delta. Check new
+edges and edges incident to changed nodes through adjacency indexes. A removed
+contribution must not remove an endpoint that another owner still supplies.
+Retain historical postings while retained results can select their intervals.
+
+Dictionary lookup uses exact bytes. Its scope is the current writer for
+owners, relation for entities, and graph for labels. A physical dictionary
+key contains the dictionary kind, scope, parent fragment reference, and a
+binary key fragment. Its value contains a stable fragment reference. A
+terminal reference identifies the complete original key. Store that original
+key under its terminal reference for reverse lookup.
+
+An ordinary key needs one dictionary lookup. A key that exceeds Fjall's key
+width uses successive fragments under the preceding reference. Derive the
+fragment size from the engine key width less the encoded key header. Empty
+keys have one empty terminal fragment. A terminal can also be the parent of
+a longer key. Compare complete fragments; no hash or truncated key establishes
+equality. Allocate new references in the same transaction as their first use.
+
+Keep the existing `(relation, property_ref)` logical identity. Its storage
+mapping selects an immutable Arrow chunk and row. Keep the staged RecordBatch
+in Arrow through preparation and live publication. Encode its durable chunk
+once with the existing Arrow IPC implementation. Split the byte stream only
+where the engine value width requires it. Read the fragments as one IPC
+stream. No JSON row conversion or durable package output batch is added.
+Retain the existing relation schema and canonical property values.
 
 ## Commit and snapshot flow
 
@@ -149,8 +206,68 @@ outside the writer scope.
 Raw-only commits can retain an unchanged metadata root. The existing raw
 segments stay authoritative; no second raw payload archive or forced engine
 transaction is added to each raw append. A published view binds the metadata
-snapshot, exact raw prefix, Graph heads, and file leases. A later metadata
+snapshot, exact raw prefix, and Graph heads. A finite read scope holds the
+file lease. A later metadata
 commit publishes the matching new view before it signals consumers.
+
+### Published Data view
+
+Data holds an `Arc` to the current view behind a short publication lock. The
+view contains the Fjall Snapshot, Data revision, and immutable raw index root.
+Graph heads come from that same snapshot. The engine sequence number does
+not replace the Data revision or input position. A raw-only publication can
+advance the view's Data revision while it retains the same metadata snapshot.
+Return that view revision in read metadata; do not return an older catalog
+revision as the captured input cut.
+[Snapshot implementation](https://github.com/fjall-rs/fjall/blob/3.1.13/src/snapshot.rs).
+
+The raw index root uses a mature persistent ordered map. An append changes
+only paths for affected source receipts, journal entries, segment ends, and
+cursor ranges. An unchanged branch is shared. Do not clone the complete raw
+catalog for an input. Reconstruct this index from the current durable raw
+format during recovery; no new raw payload format is required.
+
+The serialized Data writer prepares the next raw index root before it makes
+the durable append or metadata commit. After success, it creates the matching
+engine snapshot when required and replaces the published view. Native Graph
+cache entries are visible only through a committed view. Consumers receive
+CDC signals after this publication. No reader opens a fresh engine snapshot
+outside the published view.
+
+A finite Data read first acquires the existing maintenance read lease, then
+clones the published view. This does not acquire the Data writer or project
+raw entries into a SQL catalog. Raw reads obey that view's exact committed
+segment ends. The maintenance lease prevents retention or recovery from
+removing files during the read. Release it when capture finishes. A saved
+subscription, Graph view, or inactive engine snapshot does not retain that
+file lease. Existing application evidence pins protect retained step inputs.
+The bounded AppendRead can keep its existing selected RawRead across pages.
+It still checks the current replay floor and holds the per-page maintenance
+lease. The published root does not pin every raw segment for a subscription.
+
+Retention and recovery acquire the Data writer, then the maintenance write
+lease. They finish existing finite reads before changing available raw
+ranges. Normal metadata commits and appends without rotation do not need
+that exclusive maintenance lease. Keep
+this lock order; a reader must not wait for the writer while it holds a
+maintenance read lease.
+
+Raw rotation and sealing retain their existing maintenance write scope.
+Resolve physical segment names from stable segment IDs at read time. A
+published raw descriptor must not retain an obsolete open-file path after
+rotation.
+
+Charge new raw index nodes, dictionary fragments, Graph delta/index entries,
+Arrow chunk buffers, and published-view storage to their existing owners
+before allocation. Shared nodes and Arrow buffers have one retained charge
+until their last reference is released. Release private charges on rollback.
+Configure Fjall caches and write buffers from the existing storage resource
+contract. Do not add an independent public quota.
+
+After an uncertain commit, stop writes and new captures until recovery
+rebuilds the published view from the durable database and raw log. Recovery
+must preserve the current accepted-revision and state checks. A Graph cache
+or pending view cannot decide whether a commit became durable.
 
 Engine MVCC protects active snapshots. Durable Graph results still need
 application historical keys and references. Subscriptions read retained
@@ -186,9 +303,9 @@ state, contexts, finding projections, notification state, source metadata,
 validation, retention, backup, and recovery. Remove the old authoritative
 path when the selected replacement covers these owners.
 
-The next concrete design work is the binary key/chunk layout and the published
-view mechanism. Specify their ownership, memory charges, and recovery before
-production edits. Do not add a permanent multi-backend framework or retain a
+The binary key/chunk layout and published-view mechanism above define the
+replacement boundaries. Implementation and qualification remain **Not done**.
+Do not add a permanent multi-backend framework or retain a
 second Graph head authority to make an incremental cutover appear atomic.
 
 Qualification must preserve new input after capture, shared ownership,
@@ -202,4 +319,5 @@ durable commit call is about 52 milliseconds. The implementation must remove
 the SQL storage request work as well as replace the engine. No engine gain,
 100-millisecond creation result, or 100-fold result is established.
 
-Review evidence: `/tmp/araphor-log-graph-storage-review-20261105.json`.
+Review evidence: `/tmp/araphor-log-graph-storage-review-20261105.json` and
+`/tmp/araphor-log-graph-layout-review-20261105.json`.
