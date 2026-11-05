@@ -1,5 +1,31 @@
 # Araphor retained execution state review
 
+## Native finding publication, 2026-11-05
+
+Read [publication](../../crates/araphor-data/src/analysis/managed/graph/publication.rs)
+first, then the [property dictionary](../../crates/araphor-data/src/analysis/managed/graph/projection/publish.rs).
+Data reads current pinned writer heads and visits every current member alias.
+The existing [pending layer](../../crates/araphor-graph/src/committed.rs)
+provides actual added and closed members. Its guard remains armed through
+projection and commit. Generic [property visitation](../../crates/araphor-graph/src/properties.rs)
+includes property-only rows. Neither Graph API knows a package or finding ID.
+
+Data groups `properties.value` with native Arrow sort and partition kernels.
+It checks all current aliases of each changed tenant/finding key. The canonical
+candidate order is effective property reference, then candidate relation.
+The emitted pair uses the existing canonical mapping when present. Only
+current rows opened at this publication revision receive missing mappings.
+The fixed recognized finding schema has no float leaves. Binary reason data
+stays binary. The dictionary and its reservations end with publication.
+
+Five alternating pairs of the unchanged exact test pass with equal work.
+All 25 matched projection spans are lower. The paired median reductions are
+77.26 percent for complete projection and 3.23 percent for the whole process.
+Both warm notification intervals are lower in every pair; initial results are
+mixed. The nested costs are not added. Millisecond latency and the 100-fold
+target remain **Not done**. Edge cases outside the exact incident case have
+source review only. See the [publication evidence](../plans/araphor-execution-handoff.md#native-finding-publication-result-2026-11-05).
+
 ## Bounded append reader, 2026-11-05
 
 [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) gives each

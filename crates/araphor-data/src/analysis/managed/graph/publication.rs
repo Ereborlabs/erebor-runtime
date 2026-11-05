@@ -8,11 +8,15 @@ use crate::{
 
 impl AnalysisStore {
     pub(in crate::analysis::managed) fn publish_graph(
+        &self,
         connection: &Transaction<'_>,
         input: &ManagedCommit<'_>,
         receipt: &ManagedReceipt,
         revision: u64,
+        pending: Option<&araphor_graph::PendingLayer>,
+        memory: &super::super::budget::PreparedMemory<'_>,
     ) -> Result<Vec<&'static str>> {
+        let started = std::time::Instant::now();
         let selected = input
             .attempt
             .source_frame()
@@ -63,6 +67,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "publish Definition Graph cut",
             })?;
+        let metadata_at = std::time::Instant::now();
         connection
             .execute(
                 "INSERT INTO managed_graph_publication_layers
@@ -76,8 +81,21 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "pin Definition Graph writer heads",
             })?;
-        super::projection::DomainProjection::load(connection, Some(graph))?
-            .publish(connection, &receipt.selected.result_id)?;
+        let pins_at = std::time::Instant::now();
+        let projection = super::projection::DomainProjection::load(connection, Some(graph))?;
+        let catalog_at = std::time::Instant::now();
+        projection.publish(&self.graph_engine, connection, &receipt.selected.result_id, revision, pending, memory)?;
+        let completed = std::time::Instant::now();
+        erebor_telemetry::debug!(
+            stage = "graph_publication_timing", instance_id = %spec.id,
+            cut_revision = input.attempt.captured_revision(), publication_revision = revision,
+            metadata_s = metadata_at.duration_since(started).as_secs_f64(),
+            pins_s = pins_at.duration_since(metadata_at).as_secs_f64(),
+            catalog_s = catalog_at.duration_since(pins_at).as_secs_f64(),
+            projection_s = completed.duration_since(catalog_at).as_secs_f64(),
+            elapsed_s = completed.duration_since(started).as_secs_f64(),
+            "Graph publication completed"
+        );
         Ok(vec![
             "managed_graph_publications",
             "managed_graph_publication_layers",

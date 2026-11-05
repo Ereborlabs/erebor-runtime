@@ -441,7 +441,8 @@ impl AnalysisStore {
             &prepared.memory,
         )?;
         let journal_at = std::time::Instant::now();
-        graph_relations.extend(Self::publish_graph(transaction, input, &receipt, revision)?);
+        graph_relations.extend(self.publish_graph(transaction, input, &receipt, revision,
+            graph_layer.as_ref(), &prepared.memory)?);
         let graph_at = std::time::Instant::now();
         let (mut projected, graph, root_cursors, input_proof) = project(
             transaction,

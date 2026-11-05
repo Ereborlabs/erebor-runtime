@@ -1,4 +1,5 @@
 mod native;
+mod publish;
 pub(in crate::analysis) use native::FindingRow;
 
 use araphor_analysis_sdk as sdk;
@@ -186,98 +187,63 @@ impl DomainProjection {
         ))
     }
 
-    pub(super) fn publish(&self, connection: &Transaction<'_>, result: &str) -> Result<()> {
-        if let (Some(values), Some(members)) =
-            (Self::values(&self.edges), Self::visible(&self.edges))
-        {
-            let invalid: bool = connection.query_row(&format!(
-                "WITH touched AS (
-                    SELECT DISTINCT properties.properties.key AS key
-                    FROM managed_graph_publications publication
-                    JOIN graph_writers writer ON writer.graph_id=publication.graph_id
-                    JOIN graph_members member ON member.writer_id=writer.writer_id
-                        AND (member.valid_from=publication.revision OR member.valid_to=publication.revision)
-                    JOIN ({values}) properties ON properties.relation_id=member.relation_id
-                        AND properties.properties_ref=member.properties_ref
-                    WHERE publication.result_id=?
-                 ) SELECT EXISTS(SELECT 1 FROM ({members}) current JOIN touched
-                    ON touched.key=current.properties.key WHERE current.result_id=?
-                 GROUP BY current.properties.key HAVING count(DISTINCT struct_pack(
-                    proof:=current.properties.proof_quality,
-                    coverage:=current.properties.required_coverage_interval_ids,
-                    first_time:=current.properties.first_boottime_ns,
-                    last_time:=current.properties.last_boottime_ns))>1)"
-            ), params![result,result], |row| row.get(0))
-                .context(AnalysisDatabaseSnafu { operation: "check native public relationship conflicts" })?;
-            if invalid {
-                return Err(Code::Conflict.error("public Graph relationship value"));
+    pub(super) fn publish(
+        &self,
+        engine: &araphor_graph::GraphStore,
+        connection: &Transaction<'_>,
+        result: &str,
+        revision: u64,
+        pending: Option<&araphor_graph::PendingLayer>,
+        memory: &super::super::budget::PreparedMemory<'_>,
+    ) -> Result<()> {
+        let started = std::time::Instant::now();
+        let mut work = [std::time::Duration::ZERO; 4];
+        let outcome: Result<()> = (|| {
+            let at = std::time::Instant::now();
+            if let (Some(values), Some(members)) =
+                (Self::values(&self.edges), Self::visible(&self.edges))
+            {
+                let invalid: bool = connection.query_row(&format!(
+                    "WITH touched AS (
+                        SELECT DISTINCT properties.properties.key AS key
+                        FROM managed_graph_publications publication
+                        JOIN graph_writers writer ON writer.graph_id=publication.graph_id
+                        JOIN graph_members member ON member.writer_id=writer.writer_id
+                            AND (member.valid_from=publication.revision OR member.valid_to=publication.revision)
+                        JOIN ({values}) properties ON properties.relation_id=member.relation_id
+                            AND properties.properties_ref=member.properties_ref
+                        WHERE publication.result_id=?
+                     ) SELECT EXISTS(SELECT 1 FROM ({members}) current JOIN touched
+                        ON touched.key=current.properties.key WHERE current.result_id=?
+                     GROUP BY current.properties.key HAVING count(DISTINCT struct_pack(
+                        proof:=current.properties.proof_quality,
+                        coverage:=current.properties.required_coverage_interval_ids,
+                        first_time:=current.properties.first_boottime_ns,
+                        last_time:=current.properties.last_boottime_ns))>1)"
+                ), params![result,result], |row| row.get(0))
+                    .context(AnalysisDatabaseSnafu { operation: "check native public relationship conflicts" })?;
+                work[0] = at.elapsed();
+                if invalid {
+                    return Err(Code::Conflict.error("public Graph relationship value"));
+                }
             }
+            let at = std::time::Instant::now();
+            self.publish_findings(engine, connection, result, revision, pending, memory)?;
+            work[1] = at.elapsed();
+            Ok(())
+        })();
+        if outcome.is_ok() {
+            erebor_telemetry::debug!(
+                stage = "graph_projection_timing", result_id = result,
+                relationships_s = work[0].as_secs_f64(),
+                findings_s = work[1].as_secs_f64(),
+                missing_s = work[2].as_secs_f64(),
+                canonical_s = work[3].as_secs_f64(),
+                elapsed_s = started.elapsed().as_secs_f64(),
+                "Graph finding projection completed"
+            );
         }
-        let (Some(values), Some(members)) = (Self::values(&self.findings), self.members()) else {
-            return Ok(());
-        };
-        let invalid: bool = connection.query_row(&format!(
-            "WITH touched AS (
-                SELECT DISTINCT properties.properties.value.tenant_id AS tenant_id,
-                    properties.properties.value.finding_id AS finding_id
-                FROM managed_graph_publications publication
-                JOIN graph_writers writer ON writer.graph_id=publication.graph_id
-                JOIN graph_members member ON member.writer_id=writer.writer_id
-                    AND (member.valid_from=publication.revision OR member.valid_to=publication.revision)
-                JOIN ({values}) properties ON properties.relation_id=member.relation_id
-                    AND properties.properties_ref=member.properties_ref
-                WHERE publication.result_id=?
-             ) SELECT EXISTS(SELECT 1 FROM ({members}) current JOIN touched
-                ON touched.tenant_id=current.properties.value.tenant_id
-                    AND touched.finding_id=current.properties.value.finding_id
-             WHERE current.result_id=?
-             GROUP BY current.properties.value.tenant_id,current.properties.value.finding_id
-             HAVING count(DISTINCT current.properties.value)>1)"
-        ), params![result,result], |row| row.get(0))
-            .context(AnalysisDatabaseSnafu { operation: "check native public finding conflicts" })?;
-        if invalid {
-            return Err(Code::Conflict.error("public Graph finding value"));
-        }
-        let missing: bool = connection
-            .query_row(
-                &format!(
-                    "SELECT EXISTS(SELECT 1 FROM ({members}) current
-             JOIN managed_graph_publications publication USING(result_id)
-             LEFT JOIN managed_graph_finding_values known ON known.relation_id=current.relation_id
-                AND known.properties_ref=current.properties_ref
-             WHERE current.result_id=? AND current.valid_from=publication.revision
-                AND known.properties_ref IS NULL)"
-                ),
-                params![result],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "check new native finding properties",
-            })?;
-        if !missing {
-            return Ok(());
-        }
-        connection.execute(&format!(
-            "INSERT INTO managed_graph_finding_values
-             WITH properties AS MATERIALIZED ({values}),wanted AS (
-                SELECT DISTINCT current.relation_id,current.properties_ref,current.properties.value AS value
-                FROM ({members}) current LEFT JOIN managed_graph_finding_values known
-                    ON known.relation_id=current.relation_id AND known.properties_ref=current.properties_ref
-                JOIN managed_graph_publications publication USING(result_id)
-                WHERE current.result_id=? AND current.valid_from=publication.revision
-                    AND known.properties_ref IS NULL
-             ) SELECT wanted.relation_id,wanted.properties_ref,
-                COALESCE(known.canonical_relation_id,candidate.relation_id),
-                COALESCE(known.canonical_properties_ref,candidate.properties_ref)
-             FROM wanted JOIN properties candidate ON candidate.properties.value.tenant_id=wanted.value.tenant_id
-                AND candidate.properties.value.finding_id=wanted.value.finding_id
-                AND candidate.properties.value IS NOT DISTINCT FROM wanted.value
-             LEFT JOIN managed_graph_finding_values known ON known.relation_id=candidate.relation_id
-                AND known.properties_ref=candidate.properties_ref
-             QUALIFY row_number() OVER(PARTITION BY wanted.relation_id,wanted.properties_ref
-                ORDER BY COALESCE(known.canonical_properties_ref,candidate.properties_ref),candidate.relation_id)=1"
-        ), params![result]).context(AnalysisDatabaseSnafu { operation: "bind canonical native finding values" })?;
-        Ok(())
+        outcome
     }
 
     pub(super) fn validate(&self, connection: &Connection) -> Result<()> {

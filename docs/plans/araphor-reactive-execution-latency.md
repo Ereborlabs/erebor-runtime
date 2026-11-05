@@ -1,5 +1,89 @@
 # Araphor reactive execution in milliseconds
 
+## Native finding publication result, 2026-11-05
+
+Data now uses one read-scoped Arrow property dictionary for finding
+publication. It replaces the old finding conflict query, missing-map query,
+and canonical-value INSERT query. Araphor Graph supplies all actual property
+rows and the added and closed members from its existing pending-layer guard.
+These generic APIs contain no package or finding rules. Data owns the fixed
+finding protocol and actual emitted IDs. Native Arrow sort and partition
+kernels group complete values. There is no new execution runtime, persistent
+cache, finding-value DTO decode, or serialized value archive.
+
+The dictionary includes property-only rows. Equality uses `properties.value`
+and excludes the anchor. Current conflicts include every alias of each
+changed tenant/finding ID, including IDs from closed members. Mapping applies
+only to current rows opened at this publication revision that lack a mapping.
+Candidates retain the existing order: effective canonical property reference,
+then candidate relation. Output uses the existing canonical relation/reference
+when present. The recognized finding schema has no float leaves. Its declared
+reason details remain binary IPC. No general float-equality result is claimed.
+The pending guard remains armed through Data commit. Existing relationship
+publication and transaction rollback keep their owners. Existing preparation
+reservations cover the new scratch. Exact-coordinate deduplication limits
+conflict materialization; the original current rows retain mapping eligibility.
+
+The final focused build passes in 254.975033 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass with 16,402 records,
+five managed publications, three source-change restart mentions, 61 authority
+checks, and twelve Graph append batches per run. Projection result IDs,
+publication cut/revision pairs, and Graph apply work are equal in every pair.
+No source edit, build, debugger, or other test runs during the comparison.
+
+| Pair | First executable | Baseline test, seconds | Native dictionary test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 33.12 | 32.80 | +0.3205 |
+| 2 | Native dictionary | 34.44 | 33.11 | +1.3274 |
+| 3 | Baseline | 35.10 | 34.35 | +0.7561 |
+| 4 | Native dictionary | 34.84 | 33.71 | +1.1300 |
+| 5 | Baseline | 34.73 | 33.61 | +1.1237 |
+
+All five pairs are faster. The paired whole-process median is 1.123713 seconds
+lower, or 3.23 percent. The paired reduction ranges from 0.97 to 3.85 percent.
+Both warm notification intervals are lower in every pair. Their medians fall
+from 4.068349 to 3.861763 seconds and from 4.503582 to 4.299611 seconds.
+Initial differences are mixed. Bulk intervals are lower by 0.07 to 0.21 seconds;
+no large separate bulk gain is claimed. Notification capture counts are
+24/25, 24/24, 25/24, 24/25, and 26/24 for baseline/candidate.
+
+All 25 matched complete projection spans are lower. Summed projection time
+has medians of 1.059270 and 0.246690 seconds, with a paired median reduction
+of 77.26 percent. Complete Graph publication medians are 1.181071 and
+0.369012 seconds, with a paired median reduction of 68.78 percent. These
+child costs are not added to the whole-process saving. The statistical units
+are five paired run totals. The old `findings_s` field measures one conflict
+query; the new field measures the complete dictionary. Only complete
+projection/publication boundaries are compared across these implementations.
+
+Both variants retain the same 64 bulk pages, 16,384 bulk rows, 60 retained
+pages, 262,144 physical frame rows, and 53,401,792 body bytes. Raw capture
+and raw-read differences are mixed. No separate raw-read gain is claimed.
+Result: **Done** for the finding publication replacement and this focused
+comparison. Millisecond notification latency and the 100-fold target remain
+**Not done**. Full CI and other test targets were not run. Property-only,
+null, cross-relation canonical, rollback, recovery, and finite-budget edge
+cases have source review only under this qualification.
+
+Proof: `/tmp/araphor-build-finding-dictionary-20261105-a.log` and
+`/tmp/araphor-finding-dictionary-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs in that directory. The baseline is `d694c9882` plus the
+reviewed timing fields in
+`/tmp/araphor-graph-publication-timing-baseline-20261105.patch`. Retained
+executables are `target/araphor-notice-comparison-20261105/graph-publication-timing`
+and `finding-dictionary`. Earlier executables were removed to free space;
+logs and source records remain. The preceding exact test passes in 32.33
+seconds. That single run is not a speed comparison.
+
+The diagnostic build passes in 242.581530 seconds, and its exact test passes
+in 33.93 seconds. Its publication projection totals 1.039943 seconds:
+0.424933 seconds for finding conflicts, 0.096943 seconds for the missing-map
+probe, and 0.517978 seconds for canonical insertion. Native layer preparation
+totals 0.435063 seconds. This attribution selected the replaced owner. The
+next investigation must use the remaining measured Graph costs; no storage
+engine change is selected here.
+
+
 ## Bounded append reader result, 2026-11-05
 
 Each Append Runtime now owns a Data reader with a resolved source header and

@@ -70,6 +70,18 @@ pub struct PendingLayer {
 }
 
 impl PendingLayer {
+    pub fn visit_changes(&self, mut visit: impl FnMut(&Member) -> Result<()>) -> Result<()> {
+        let index = self.index.read().map_err(|_| ConflictSnafu {
+            resource: "Graph member index",
+        }.build())?;
+        for identity in self.added.iter().chain(&self.closed) {
+            if let Some(row) = index.rows.get(identity) {
+                visit(&row.member)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn commit(mut self) {
         self.committed = true;
     }

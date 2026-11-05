@@ -83,6 +83,7 @@ impl AnalysisStore {
         derived: &super::super::source::import::PreparedDerived,
         memory: &mut super::super::budget::PreparedMemory<'_>,
     ) -> Result<Option<PreparedGraph>> {
+        let started = std::time::Instant::now();
         let mut journals = BTreeMap::<u64, &Arc<ManagedGraphJournal>>::new();
         for returned in input.returns {
             let declaration = &input.attempt.1.spec.manifest.calls[&returned.call];
@@ -118,6 +119,8 @@ impl AnalysisStore {
         if journals.is_empty() {
             return Ok(None);
         }
+        let collected_at = std::time::Instant::now();
+        let mut work = [std::time::Duration::ZERO; 6];
         let mut cuts = Vec::new();
         let mut relations = BTreeMap::new();
         let mut ordered = Vec::new();
@@ -134,6 +137,7 @@ impl AnalysisStore {
             let Some(journal) = journals.get(&call) else {
                 continue;
             };
+            let linked_at = std::time::Instant::now();
             let manifest = &input.attempt.1.spec.manifest;
             let mut ancestors = std::collections::BTreeSet::new();
             let mut pending = manifest.calls[&call]
@@ -178,14 +182,18 @@ impl AnalysisStore {
                 }
             }
             let origin_at = std::time::Instant::now();
+            work[0] += origin_at.duration_since(linked_at);
             for (origin, reference) in &journal.work.origins {
                 if journal.call.origin(connection, *origin, &mut owners)? != *reference {
                     return Err(Code::Denied.error("Graph historical read authority"));
                 }
             }
+            let origin_time = origin_at.elapsed();
+            work[5] += origin_time;
             erebor_telemetry::debug!(stage="graph_origin_timing",instance_id=%input.attempt.1.spec.id,
                 cut_revision=input.attempt.captured_revision(),call_id=call,origins=journal.work.origins.len(),
-                elapsed_s=origin_at.elapsed().as_secs_f64(),"Graph preparation origin validation completed");
+                elapsed_s=origin_time.as_secs_f64(),"Graph preparation origin validation completed");
+            let reads_at = std::time::Instant::now();
             for row in &journal.work.reads {
                 if !journal
                     .work
@@ -198,6 +206,8 @@ impl AnalysisStore {
                     return Err(Code::Denied.error("Graph read row origin"));
                 }
             }
+            let disclosure_at = std::time::Instant::now();
+            work[0] += disclosure_at.duration_since(reads_at);
             let contexts = journal
                 .call
                 .attempt
@@ -243,6 +253,8 @@ impl AnalysisStore {
                     .ok_or_else(|| Code::Denied.error("Graph predecessor disclosure"))?;
             }
             floors.insert(call, floor);
+            let contract_at = std::time::Instant::now();
+            work[1] += contract_at.duration_since(disclosure_at);
             let declaration = &input.attempt.1.spec.manifest.calls[&call];
             let package =
                 Self::managed_contract(connection, input.attempt.1.spec.tenant, declaration)?;
@@ -251,11 +263,15 @@ impl AnalysisStore {
                 .iter()
                 .find(|model| model.name == declaration.export)
                 .ok_or_else(|| Code::Invalid.error("domain Graph export"))?;
+            let domain_at = std::time::Instant::now();
+            work[2] += domain_at.duration_since(contract_at);
             if let Some(proof) = self.check_domain_journal(
                 connection, journal, &package, model, derived, floor, memory,
             )? {
                 proofs.insert(call, proof);
             }
+            let relations_at = std::time::Instant::now();
+            work[3] += relations_at.duration_since(domain_at);
             for relation in &journal.call.spec.relations {
                 relations.insert(journal.call.relations[&relation.name], relation.engine());
             }
@@ -265,7 +281,9 @@ impl AnalysisStore {
                 revision: input.attempt.captured_revision(),
             });
             ordered.push(&journal.work.journal);
+            work[4] += relations_at.elapsed();
         }
+        let staged_at = std::time::Instant::now();
         let staged = ordered
             .iter()
             .flat_map(|journal| journal.batches())
@@ -278,6 +296,8 @@ impl AnalysisStore {
                     .checked_add(rows as u64)
                     .ok_or_else(|| Code::Limit.error("Graph staged row count"))
             })?;
+        let layers_at = std::time::Instant::now();
+        work[4] += layers_at.duration_since(staged_at);
         let layers = GraphStore::prepare_layers(
             connection,
             &cuts,
@@ -307,13 +327,14 @@ impl AnalysisStore {
                     .map_err(araphor_graph::Error::backend)
             },
         )?;
+        let owned_at = std::time::Instant::now();
         memory.charge(
             journals
                 .len()
                 .checked_mul(12 * std::mem::size_of::<Arc<ManagedGraphJournal>>())
                 .ok_or_else(|| Code::Limit.error("Graph preparation metadata"))?,
         )?;
-        let journals = input
+        let journals: Vec<_> = input
             .attempt
             .1
             .spec
@@ -322,6 +343,19 @@ impl AnalysisStore {
             .into_iter()
             .filter_map(|call| journals.get(&call).map(|journal| Arc::clone(journal)))
             .collect();
+        let completed = std::time::Instant::now();
+        erebor_telemetry::debug!(
+            stage = "graph_prepare_timing", instance_id = %input.attempt.1.spec.id,
+            cut_revision = input.attempt.captured_revision(), journals = journals.len(), staged_rows = staged,
+            contracts_s = collected_at.duration_since(started).as_secs_f64(),
+            linkage_s = work[0].as_secs_f64(), origins_s = work[5].as_secs_f64(),
+            disclosure_s = work[1].as_secs_f64(), models_s = work[2].as_secs_f64(),
+            domain_s = work[3].as_secs_f64(), metadata_s = work[4].as_secs_f64(),
+            layers_s = owned_at.duration_since(layers_at).as_secs_f64(),
+            ownership_s = completed.duration_since(owned_at).as_secs_f64(),
+            elapsed_s = completed.duration_since(started).as_secs_f64(),
+            "Graph layer preparation completed"
+        );
         Ok(Some(PreparedGraph {
             layers,
             journals,

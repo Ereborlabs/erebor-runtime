@@ -242,6 +242,26 @@ impl GraphStore {
         Ok(identities)
     }
 
+    pub fn visit_properties(
+        &self,
+        connection: &Connection,
+        relation: u64,
+        mut visit: impl FnMut(RecordBatch) -> Result<()>,
+    ) -> Result<()> {
+        let mut query = connection
+            .prepare(&format!("SELECT property_ref,properties FROM graph_properties_{relation}"))
+            .context(DatabaseSnafu {
+                operation: "prepare Graph property rows",
+            })?;
+        let rows = query.query_arrow([]).context(DatabaseSnafu {
+            operation: "read Graph property rows",
+        })?;
+        for batch in rows {
+            visit(batch)?;
+        }
+        Ok(())
+    }
+
     fn check_properties(schema: &Schema) -> Result<()> {
         fn check(kind: &DataType) -> bool {
             match kind {
