@@ -12,6 +12,16 @@ input replacement's matched prepared reservation remains 22,796,472 bytes,
 compared with 380,210,812 bytes before it. This is charged retention, not RSS.
 Millisecond latency and the 100-fold target remain **Not done**.
 
+The subsequent standalone finding reader change also passes ten exact-test
+runs in five alternating pairs. Each public read snapshot now shares one
+`OwnerRead` across heads, publication authority, values, and provenance.
+Batch and history reads share that owner across their requested results.
+The replaced fresh-owner wrappers are removed. The paired process reduction
+is 2.49 percent at the median, with a range of 0.92 to 4.67 percent.
+Notification arrival and bulk differences do not establish a gain. Pair 1
+has 23 baseline captures and 25 candidate captures; all other runs have 24.
+See the [standalone read evidence](../plans/araphor-execution-handoff.md#standalone-finding-reader-result-2026-11-05).
+
 ### Intended end state
 
 An incremental commit wakes the ordinary Definition subscription. A saved
@@ -110,6 +120,12 @@ keeps every alias. Point and extraction readers use the existing representative
 order. Provenance follows every matching origin.
 [OwnerRead](../../crates/araphor-data/src/analysis/managed/reader/graph.rs) retains
 one catalog and authority owner for its read transaction.
+[Standalone finding APIs](../../crates/araphor-data/src/analysis/graph/findings.rs)
+create that owner once per snapshot. Definition classification, current heads,
+finding values, and the existing provenance traversal use it until the
+snapshot ends. Each use retains its existing proof and reference checks.
+No authority handle crosses the snapshot boundary. Extraction and notification
+capture keep their existing owners.
 [Notification lookup](../../crates/araphor-data/src/analysis/extraction/notifications/native.rs)
 uses IDs from existing notification references. Package code chooses the IDs
 before Data commits them. No host code predicts a package's future findings.

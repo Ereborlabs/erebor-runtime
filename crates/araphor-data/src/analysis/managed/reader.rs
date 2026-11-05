@@ -32,10 +32,6 @@ impl PublicationOwner {
         self.selected.revision()
     }
 
-    pub(in crate::analysis) fn instance(&self) -> &str {
-        self.selected.instance()
-    }
-
     pub(in crate::analysis) fn grant(&self) -> &crate::PackageGrantV1 {
         self.selected.grant()
     }

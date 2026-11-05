@@ -36,81 +36,105 @@ impl AnalysisStore {
              WHERE pin.result_id=? AND pin.relation_id=? AND pin.owner_key=? AND pin.entity_key=?
              ORDER BY pin.revision,pin.writer_id"
         ).context(AnalysisDatabaseSnafu { operation:"prepare native finding read parents" })?;
-        let mut input = query.query(params![owner.writer,owner.revision,tenant.as_slice(),owner.result,owner.relation,owner.owner,owner.key])
-            .context(AnalysisDatabaseSnafu { operation:"read native finding read parents" })?;
+        let mut input = query
+            .query(params![
+                owner.writer,
+                owner.revision,
+                tenant.as_slice(),
+                owner.result,
+                owner.relation,
+                owner.owner,
+                owner.key
+            ])
+            .context(AnalysisDatabaseSnafu {
+                operation: "read native finding read parents",
+            })?;
         let mut parents = Vec::new();
-        while let Some(row) = input.next().context(AnalysisDatabaseSnafu { operation:"advance native finding read parents" })? {
-            let bytes:usize = row.get(5).context(AnalysisDatabaseSnafu { operation:"bound native finding read parent" })?;
-            charge(bytes,bytes.checked_mul(4).and_then(|bytes| bytes.checked_add(12*std::mem::size_of::<FindingOrigin>())).ok_or_else(|| Code::Limit.error("native finding parent memory"))?)?;
-            let (id,revision,writer,scope,key):(String,u64,u64,Vec<u8>,Vec<u8>) = (|| -> duckdb::Result<_> { Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)) })()
-                .context(AnalysisDatabaseSnafu { operation:"decode native finding read parent" })?;
+        while let Some(row) = input.next().context(AnalysisDatabaseSnafu {
+            operation: "advance native finding read parents",
+        })? {
+            let bytes: usize = row.get(5).context(AnalysisDatabaseSnafu {
+                operation: "bound native finding read parent",
+            })?;
+            charge(
+                bytes,
+                bytes
+                    .checked_mul(4)
+                    .and_then(|bytes| bytes.checked_add(12 * std::mem::size_of::<FindingOrigin>()))
+                    .ok_or_else(|| Code::Limit.error("native finding parent memory"))?,
+            )?;
+            let (id, revision, writer, scope, key): (String, u64, u64, Vec<u8>, Vec<u8>) =
+                (|| -> duckdb::Result<_> {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode native finding read parent",
+                })?;
             control.check()?;
-            let heads = BTreeMap::from([(writer,revision)]);
-            let rows = engine.members(owner.relation,&heads,Some(std::slice::from_ref(&key)),|| control.check().map_err(araphor_graph::Error::backend))?;
-            for row in rows.into_iter().filter(|row| row.writer==writer && row.revision==revision && row.owner_key.as_ref()==scope) {
+            let heads = BTreeMap::from([(writer, revision)]);
+            let rows = engine.members(
+                owner.relation,
+                &heads,
+                Some(std::slice::from_ref(&key)),
+                || control.check().map_err(araphor_graph::Error::backend),
+            )?;
+            for row in rows.into_iter().filter(|row| {
+                row.writer == writer && row.revision == revision && row.owner_key.as_ref() == scope
+            }) {
                 let native = row.property_batch()?;
-                let bytes = native.get_array_memory_size().checked_mul(20).ok_or_else(|| Code::Limit.error("native finding parent memory"))?;
-                charge(bytes,bytes)?;
+                let bytes = native
+                    .get_array_memory_size()
+                    .checked_mul(20)
+                    .ok_or_else(|| Code::Limit.error("native finding parent memory"))?;
+                charge(bytes, bytes)?;
                 let port = araphor_analysis_types::FindingMember::port();
-                let data = sdk::Dataset { name:port.name,batches:vec![sdk::Dataset::normalize_batch(native,Arc::new(port.schema)).context(crate::AnalysisContractSnafu)?] };
-                for member in araphor_analysis_types::FindingMember::decode(&data).context(crate::AnalysisContractSnafu)? {
-                    if revision==0 || revision>=owner.revision || writer==0 || member.value.tenant_id!=tenant
-                        || araphor_analysis_types::DomainRelations::key(&member.value.finding_id).context(crate::AnalysisContractSnafu)?!=key {
+                let data = sdk::Dataset {
+                    name: port.name,
+                    batches: vec![sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
+                        .context(crate::AnalysisContractSnafu)?],
+                };
+                for member in araphor_analysis_types::FindingMember::decode(&data)
+                    .context(crate::AnalysisContractSnafu)?
+                {
+                    if revision == 0
+                        || revision >= owner.revision
+                        || writer == 0
+                        || member.value.tenant_id != tenant
+                        || araphor_analysis_types::DomainRelations::key(&member.value.finding_id)
+                            .context(crate::AnalysisContractSnafu)?
+                            != key
+                    {
                         return Err(Code::Denied.error("native finding parent authority"));
                     }
                     let mut records = member.value.evidence.into_iter().collect::<BTreeSet<_>>();
                     records.insert(member.anchor.record);
-                    if let Some(fact) = member.anchor.fact { records.insert(fact.record); }
+                    if let Some(fact) = member.anchor.fact {
+                        records.insert(fact.record);
+                    }
                     records.retain(|record| wanted.contains(record));
-                    if !records.is_empty() { parents.push((FindingOrigin { result:id.clone(),revision,relation:owner.relation,writer,owner:scope.clone(),key:key.clone() },records)); }
+                    if !records.is_empty() {
+                        parents.push((
+                            FindingOrigin {
+                                result: id.clone(),
+                                revision,
+                                relation: owner.relation,
+                                writer,
+                                owner: scope.clone(),
+                                key: key.clone(),
+                            },
+                            records,
+                        ));
+                    }
                 }
             }
         }
         Ok(parents)
-    }
-
-    pub(in crate::analysis) fn native_finding_basis(
-        engine: &araphor_graph::GraphStore,
-        reader: &duckdb::Connection,
-        tenant: [u8; 16],
-        result: &str,
-        findings: &BTreeSet<String>,
-        control: &AnalysisReadControl,
-        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-    ) -> Result<(
-        Vec<AnalysisWitnessV1>,
-        Vec<AnalysisContextRefV1>,
-        crate::GraphRevisionV1,
-    )> {
-        Self::finding_basis(engine, reader, tenant, result, findings, control, charge, true)
-    }
-
-    fn finding_basis(
-        engine: &araphor_graph::GraphStore,
-        reader: &duckdb::Connection,
-        tenant: [u8; 16],
-        result: &str,
-        findings: &BTreeSet<String>,
-        control: &AnalysisReadControl,
-        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-        require_proof: bool,
-    ) -> Result<(
-        Vec<AnalysisWitnessV1>,
-        Vec<AnalysisContextRefV1>,
-        crate::GraphRevisionV1,
-    )> {
-        let mut owners = super::super::OwnerRead::new(reader, tenant, control);
-        Self::finding_basis_on(
-            engine,
-            reader,
-            tenant,
-            result,
-            findings,
-            control,
-            charge,
-            require_proof,
-            &mut owners,
-        )
     }
 
     pub(in crate::analysis) fn finding_basis_on(
@@ -129,27 +153,43 @@ impl AnalysisStore {
         crate::GraphRevisionV1,
     )> {
         validated.check_reader(reader, tenant)?;
-        let mut owners = BTreeMap::<FindingOrigin,BTreeSet<DiscoveryRecordIdV1>>::new();
+        let mut owners = BTreeMap::<FindingOrigin, BTreeSet<DiscoveryRecordIdV1>>::new();
         for id in findings {
             control.check()?;
-            let key = araphor_analysis_types::DomainRelations::key(id).context(crate::AnalysisContractSnafu)?;
-            let rows = validated.finding_rows(engine,reader,tenant,result,Some(&[key]),charge)?;
+            let key = araphor_analysis_types::DomainRelations::key(id)
+                .context(crate::AnalysisContractSnafu)?;
+            let rows =
+                validated.finding_rows(engine, reader, tenant, result, Some(&[key]), charge)?;
             let mut present = false;
             for row in rows {
                 control.check()?;
                 let member = row.decode(charge)?;
-                if member.value.tenant_id!=tenant || member.value.finding_id!=*id || row.origin_revision==0 || row.origin.is_empty() {
+                if member.value.tenant_id != tenant
+                    || member.value.finding_id != *id
+                    || row.origin_revision == 0
+                    || row.origin.is_empty()
+                {
                     return Err(Code::Denied.error("native finding origin authority"));
                 }
-                let origin = FindingOrigin { result:row.origin, revision:row.origin_revision, relation:row.member.relation,
-                    writer:row.member.writer, owner:row.member.owner_key.to_vec(),key:row.member.key.to_vec() };
+                let origin = FindingOrigin {
+                    result: row.origin,
+                    revision: row.origin_revision,
+                    relation: row.member.relation,
+                    writer: row.member.writer,
+                    owner: row.member.owner_key.to_vec(),
+                    key: row.member.key.to_vec(),
+                };
                 let records = owners.entry(origin).or_default();
                 records.extend(member.value.evidence);
                 records.insert(member.anchor.record);
-                if let Some(fact) = member.anchor.fact { records.insert(fact.record); }
-                present=true;
+                if let Some(fact) = member.anchor.fact {
+                    records.insert(fact.record);
+                }
+                present = true;
             }
-            if !present { return Err(Code::Missing.error("native finding provenance membership")); }
+            if !present {
+                return Err(Code::Missing.error("native finding provenance membership"));
+            }
         }
         let evidence = owners
             .values()
@@ -234,9 +274,9 @@ impl AnalysisStore {
                     })
                     .cloned()
                     .collect::<BTreeSet<_>>();
-                for (parent, records) in
-                    Self::finding_read_parents(engine, reader, tenant, &owner, &records, control, charge)?
-                {
+                for (parent, records) in Self::finding_read_parents(
+                    engine, reader, tenant, &owner, &records, control, charge,
+                )? {
                     for record in &records {
                         uncovered.remove(record);
                     }

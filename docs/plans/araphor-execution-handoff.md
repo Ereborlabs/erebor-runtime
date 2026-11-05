@@ -1,5 +1,50 @@
 # Native execution performance handoff
 
+## Standalone finding reader result, 2026-11-05
+
+Each public finding read now uses one `OwnerRead` for its database snapshot.
+Current heads, publication authority, finding values, and provenance use that
+owner. Batch and history reads also share it across their requested results.
+The replaced fresh-owner wrappers are removed. The external extraction helper
+keeps its existing lifetime. Package execution, subscription capture, proof
+checks, reference checks, legacy behavior, and errors retain their behavior.
+
+The final focused build passes in 240.437556 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass with 16,402 records,
+five managed publications, and three source-change restart mentions per run.
+No source edit, build, debugger, or other test runs during the comparison.
+
+| Pair | First executable | Native reader test, seconds | Shared owner test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Native reader | 46.31 | 45.89 | 0.4246 |
+| 2 | Shared owner | 47.54 | 46.36 | 1.1829 |
+| 3 | Native reader | 47.80 | 46.40 | 1.3979 |
+| 4 | Shared owner | 47.22 | 45.01 | 2.2078 |
+| 5 | Native reader | 47.31 | 46.46 | 0.8499 |
+
+Every pair has lower candidate process time. The median paired reduction is
+2.49 percent, or 1.1829 seconds. The reduction ranges from 0.92 to 4.67 percent.
+This supports a modest standalone read improvement. The small sample provides
+no confidence-interval or p99 claim. Pair 1 has 23 baseline notification
+captures and 25 candidate captures. All other runs have 24 captures.
+
+Median arrival times are 4.011697 versus 4.002755 seconds initially,
+6.584442 versus 6.591742 seconds for the second notification, and 7.541165
+versus 7.432977 seconds for the third. Median bulk time is 7.548405 versus
+7.585560 seconds. These differences do not establish an arrival or bulk gain.
+Complete test time includes standalone point and history verification.
+
+Result: **Done** for shared finding read ownership and this comparison.
+Millisecond latency and the 100-fold target remain **Not done**. Full CI and
+the legacy Data library-test target were not run, as in the preceding record.
+
+Proof: `/tmp/araphor-build-shared-finding-owner-20261105-b.log` and
+`/tmp/araphor-shared-owner-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs in that directory. The baseline source is `6b59e7767`.
+The retained executables are
+`target/araphor-notice-comparison-20261105/native-layers` and `shared-owner`.
+
+
 ## Native Graph reader result, 2026-11-05
 
 The final focused build passes in 258.773250 seconds. Three alternating pairs

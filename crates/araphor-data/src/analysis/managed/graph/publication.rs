@@ -7,25 +7,6 @@ use crate::{
 };
 
 impl AnalysisStore {
-    pub(in crate::analysis) fn managed_graph_publication(
-        reader: &Connection,
-        tenant: [u8; 16],
-        result: &str,
-        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-    ) -> Result<Option<(u64, String, crate::PackageGrantV1)>> {
-        let control = crate::AnalysisReadControl::default();
-        let mut owners = super::super::OwnerRead::new(reader, tenant, &control);
-        Ok(owners
-            .publication(reader, tenant, result, charge)?
-            .map(|owner| {
-                (
-                    owner.revision(),
-                    owner.instance().to_owned(),
-                    owner.grant().clone(),
-                )
-            }))
-    }
-
     pub(in crate::analysis::managed) fn publish_graph(
         connection: &Transaction<'_>,
         input: &ManagedCommit<'_>,
