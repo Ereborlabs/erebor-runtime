@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use araphor_data::{AnalysisReadControl, ManagedFrontier, ManagedRead};
+use araphor_data::{AnalysisReadControl, ManagedAttempt, ManagedFrontier, ManagedRead};
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{dml::InsertOp, LogicalPlanBuilder};
@@ -24,7 +24,7 @@ pub trait ManagedPublication: TableProvider {
         invocation: &Invocation,
         frontier: &ManagedFrontier,
         control: &AnalysisReadControl,
-    ) -> Result<()>;
+    ) -> Result<Option<Arc<ManagedAttempt>>>;
 }
 
 struct FixedClock {

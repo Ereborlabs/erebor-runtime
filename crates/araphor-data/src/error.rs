@@ -7,6 +7,10 @@ use snafu::{Location, Snafu};
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
     #[snafu(transparent)]
+    PreparedNotification { source: std::sync::Arc<Error> },
+    #[snafu(transparent)]
+    GraphFacility { source: araphor_graph::Error },
+    #[snafu(transparent)]
     Definition {
         source: araphor_discovery_definition::Error,
     },
@@ -301,8 +305,15 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
+    pub(crate) fn unprepared(&self) -> &Self {
+        match self {
+            Self::PreparedNotification { source } => source.unprepared(),
+            _ => self,
+        }
+    }
+
     pub(crate) fn stored_artifact(self) -> Self {
-        let invalid = match &self {
+        let invalid = match self.unprepared() {
             Self::Package { code, .. } => matches!(
                 code,
                 crate::PackageErrorCodeV1::Invalid
@@ -378,30 +389,27 @@ impl From<araphor_package::Error> for Error {
     }
 }
 
-impl From<araphor_graph::Error> for Error {
-    fn from(source: araphor_graph::Error) -> Self {
+impl From<araphor_analysis_types::Error> for Error {
+    fn from(source: araphor_analysis_types::Error) -> Self {
         match source {
-            araphor_graph::Error::Invalid { field, location } => {
+            araphor_analysis_types::Error::Allocation { resource, .. } => {
+                AnalysisInputTooLargeSnafu { resource }.build()
+            }
+            araphor_analysis_types::Error::Invalid { field, location } => {
                 Self::GraphInvalid { field, location }
             }
-            araphor_graph::Error::Encoding { source, location } => {
+            araphor_analysis_types::Error::Json { source, location } => {
+                Self::GraphEncoding { source, location }
+            }
+            araphor_analysis_types::Error::Encoding { source, location } => {
                 Self::GraphNativeEncoding { source, location }
             }
-            araphor_graph::Error::Decoding { source, location } => {
+            araphor_analysis_types::Error::Decoding { source, location } => {
                 Self::GraphNativeDecoding { source, location }
             }
-            araphor_graph::Error::Contract { source, location } => {
+            araphor_analysis_types::Error::Contract { source, location } => {
                 Self::AnalysisContract { source, location }
             }
-            araphor_graph::Error::Database {
-                operation,
-                source,
-                location,
-            } => Self::AnalysisDatabase {
-                operation,
-                source,
-                location,
-            },
         }
     }
 }
@@ -409,6 +417,8 @@ impl From<araphor_graph::Error> for Error {
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::PreparedNotification { source } => source.status_code(),
+            Self::GraphFacility { source } => source.status_code(),
             Self::Definition { source } => source.status_code(),
             Self::Package { code, .. } => match code {
                 crate::PackageErrorCodeV1::Invalid | crate::PackageErrorCodeV1::Limit => {
@@ -479,6 +489,8 @@ impl ErrorExt for Error {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
+            Self::PreparedNotification { source } => source.retry_hint(),
+            Self::GraphFacility { source } => source.retry_hint(),
             Self::Definition { source } => source.retry_hint(),
             Self::AnalysisContract { source, .. } => source.retry_hint(),
             Self::AnalysisBusy { .. }
@@ -491,7 +503,10 @@ impl ErrorExt for Error {
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
-        self
+        match self {
+            Self::PreparedNotification { source } => source.as_any(),
+            _ => self,
+        }
     }
 }
 

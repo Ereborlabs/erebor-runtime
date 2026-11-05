@@ -101,7 +101,9 @@ impl SubscribeExec {
                             safe = false;
                         }
                     } else {
-                        safe &= provider.is::<SourceProvider>() || provider.is::<EmptyTable>();
+                        safe &= provider.is::<SourceProvider>()
+                            || provider.is::<EmptyTable>()
+                            || provider.is::<crate::definition::physical::graph::GraphProvider>();
                     }
                 } else {
                     safe = false;
@@ -393,10 +395,7 @@ impl SubscribeExec {
             ),
         };
         let state = runtime::Runtime::new(self, context, run, initial, progress, reusable)?;
-        Ok(Box::pin(stream::try_unfold(
-            state,
-            |mut state| async move { Ok(state.next().await?.map(|output| (output, state))) },
-        )))
+        Ok(Box::pin(stream::try_unfold(state, runtime::Runtime::next)))
     }
 
     #[cfg(test)]

@@ -19,14 +19,10 @@ pub(super) fn detector_bundle() -> Result<PackageBundleV1> {
 }
 
 pub(super) fn bundles() -> Result<Vec<PackageBundleV1>> {
-    [
-        (Detector::Process, "process"),
-        (Detector::Credentials, "credentials"),
-        (Detector::Kubernetes, "kubernetes"),
-    ]
-    .into_iter()
-    .map(|(detector, filename)| bundle(detector.descriptor(), filename))
-    .collect()
+    [(Detector::Credentials, "credentials")]
+        .into_iter()
+        .map(|(detector, filename)| bundle(detector.descriptor(), filename))
+        .collect()
 }
 
 fn bundle(descriptor: araphor_analysis_sdk::Package, filename: &str) -> Result<PackageBundleV1> {
@@ -44,11 +40,9 @@ fn bundle(descriptor: araphor_analysis_sdk::Package, filename: &str) -> Result<P
     let qualification = Qualification::inspect(&artifact, exports.clone(), target)?;
     let artifact = PackageArtifactV1 {
         descriptor,
-        implementations: vec![PackageImplementationV1::Native {
-            export: exports[0].clone(),
-            artifact,
-            qualification: Some(qualification),
-        }],
+        implementations: exports.into_iter().map(|export| PackageImplementationV1::Native {
+            export, artifact: artifact.clone(), qualification: Some(qualification.clone()),
+        }).collect(),
         fixtures: Vec::new(),
     };
     Ok(PackageBundleV1 {

@@ -4,7 +4,7 @@ use snafu::ResultExt as _;
 
 use super::super::graph_rows::GraphHeader;
 use super::super::AnalysisStore;
-use super::model::{Attempt, ManagedDestination, Step};
+use super::model::{Attempt, ManagedDestination, ManagedSpec, Step};
 use crate::{
     AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, PackageErrorCodeV1 as Code, Result,
     GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
@@ -25,6 +25,14 @@ impl AnalysisStore {
             || reference.commit_revision > selected_revision
         {
             return Err(Code::Invalid.error("managed Graph publication"));
+        }
+        let native: bool = reader.query_row(
+            "SELECT EXISTS(SELECT 1 FROM managed_source_publications WHERE result_id=? AND tenant_id=?
+             AND stream_key=? AND revision=?)",
+            params![reference.result_id,tenant.as_slice(),source.key(),reference.commit_revision],|row| row.get(0),
+        ).context(AnalysisDatabaseSnafu { operation:"check native source publication reference" })?;
+        if native {
+            return Ok(());
         }
         let retained: Option<(Vec<u8>, Vec<u8>, u64, u64)> = reader
             .query_row(
@@ -62,6 +70,17 @@ impl AnalysisStore {
         step: &Step,
         revision: u64,
     ) -> Result<(Attempt, sdk::Schema)> {
+        let (attempt, spec) = Self::validate_selected_owner(reader, tenant, id, step, revision)?;
+        Ok((attempt, spec.manifest.selected_schema))
+    }
+
+    pub(super) fn validate_selected_owner(
+        reader: &Connection,
+        tenant: [u8; 16],
+        id: &str,
+        step: &Step,
+        revision: u64,
+    ) -> Result<(Attempt, ManagedSpec)> {
         let attempt = Self::managed_attempt_from(reader, tenant, &step.instance, &step.attempt)?
             .ok_or_else(|| Code::Missing.error("managed selected attempt"))?;
         let spec =
@@ -91,6 +110,12 @@ impl AnalysisStore {
             return Err(Code::Invalid.error("retained managed selected contract"));
         }
         Self::check_source_evidence(reader, &attempt, step)?;
+        Self::check_source_proofs(
+            reader,
+            id,
+            (&step.witnesses, &step.derived, &step.proofs),
+            attempt.capture.revision,
+        )?;
         match (&spec.destination, &receipt.graph) {
             (ManagedDestination::Graph { source, .. }, Some(reference)) => {
                 Self::check_graph_publication(reader, tenant, source, reference, revision)?;
@@ -104,12 +129,21 @@ impl AnalysisStore {
         }
         let mut dependencies = attempt.capture.dependencies.clone();
         dependencies.extend(receipt.results.values().cloned());
-        dependencies.extend(receipt.graph.iter().cloned());
+        dependencies.extend(
+            receipt
+                .graph
+                .iter()
+                .filter(|graph| graph.result_id != receipt.selected.result_id)
+                .cloned(),
+        );
         dependencies.sort_by(|left, right| left.result_id.cmp(&right.result_id));
         dependencies.dedup();
         if step.dependencies != dependencies {
             return Err(Code::Invalid.error("managed selected dependencies"));
         }
+        let mut derived = Vec::new();
+        let mut proofs = std::collections::BTreeMap::new();
+        let mut origins = std::collections::BTreeMap::new();
         for (call, reference) in &receipt.results {
             let (record, saved) = Self::managed_meta_from(reader, tenant, &reference.result_id)?;
             if saved != reference.commit_revision
@@ -120,8 +154,60 @@ impl AnalysisStore {
             {
                 return Err(Code::Invalid.error("managed selected call binding"));
             }
+            derived = Self::join_contexts(&derived, &record.derived)?;
+            for origin in record.origins {
+                origins.insert(origin.result_id.clone(), origin);
+            }
+            for (record, reference) in record.proofs {
+                if proofs
+                    .insert((record, reference.key.clone()), reference.clone())
+                    .is_some_and(|prior| prior != reference)
+                {
+                    return Err(Code::Conflict.error("selected call proof identity"));
+                }
+            }
         }
-        Ok((attempt, spec.manifest.selected_schema))
+        Self::check_source_step(reader, &attempt, id, step, revision)?;
+        if let Some(source) = &step.source {
+            derived = Self::join_contexts(&derived, &source.derived)?;
+            for (record, reference) in &source.proofs {
+                if proofs
+                    .insert((record.clone(), reference.key.clone()), reference.clone())
+                    .is_some_and(|prior| prior != *reference)
+                {
+                    return Err(Code::Conflict.error("selected source proof identity"));
+                }
+            }
+            for origin in &source.origins {
+                if origins
+                    .insert(origin.result_id.clone(), origin.clone())
+                    .is_some_and(|prior| prior != *origin)
+                {
+                    return Err(Code::Conflict.error("selected source origin identity"));
+                }
+            }
+        }
+        let proofs = proofs
+            .into_iter()
+            .map(|((record, _), reference)| (record, reference))
+            .collect::<Vec<_>>();
+        if derived != step.derived
+            || origins.into_values().collect::<Vec<_>>() != step.origins
+            || proofs != step.proofs
+        {
+            return Err(Code::Invalid.error("managed derived evidence union"));
+        }
+        Self::check_derived_refs(
+            reader,
+            &attempt,
+            &step.derived,
+            &step.origins,
+            &step.contexts,
+            &step.witnesses,
+            revision,
+            id,
+        )?;
+        Ok((attempt, spec))
     }
 
     pub(super) fn check_selected(data: &sdk::Dataset, schema: &sdk::Schema) -> Result<()> {

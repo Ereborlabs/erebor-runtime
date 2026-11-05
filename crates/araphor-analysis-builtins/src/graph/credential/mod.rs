@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
+mod input;
 mod join;
+pub(in crate::graph) use input::CandidateInput;
 
 #[derive(Default)]
 pub(in crate::graph) struct CredentialIndex {
@@ -87,7 +89,7 @@ impl CredentialIndex {
                 }
                 FactValue::Channel {
                     socket_object_id, ..
-                } if record.network() => {
+                } => {
                     index
                         .channel_by_socket
                         .entry(*socket_object_id)
@@ -183,6 +185,69 @@ impl CredentialIndex {
             computation.anchor_key(computation.facts[index].record, Some(index as u32))
         });
         candidates
+    }
+
+    pub(in crate::graph) fn support(
+        &self,
+        computation: &Computation,
+        row: u32,
+    ) -> sdk::Result<BTreeSet<u32>> {
+        let root = computation.record(row)?;
+        let mut support = BTreeSet::from([row]);
+        for candidate in self.candidates(computation, row) {
+            let credential = &computation.facts[candidate];
+            let read = computation.record(credential.record)?;
+            if read.position > root.position || !computation.bounded(read, root) {
+                continue;
+            }
+            support.insert(credential.record);
+            let FactValue::Credential {
+                object_id,
+                principal_id,
+                ..
+            } = &credential.value
+            else {
+                return Err(Computation::invalid("graph credential candidate"));
+            };
+            let mut authorities = BTreeSet::new();
+            authorities.extend(
+                self.authority_by_object
+                    .get(object_id)
+                    .into_iter()
+                    .flatten(),
+            );
+            if let Some(principal) = principal_id {
+                authorities.extend(
+                    self.authority_by_principal
+                        .get(principal)
+                        .into_iter()
+                        .flatten(),
+                );
+            }
+            for &candidate in authorities {
+                let authority = &computation.facts[candidate];
+                let record = computation.record(authority.record)?;
+                if record.position > root.position || !computation.bounded(read, record) {
+                    continue;
+                }
+                support.insert(authority.record);
+                let FactValue::AuthorityUse {
+                    socket_object_id, ..
+                } = &authority.value
+                else {
+                    return Err(Computation::invalid("graph authority candidate"));
+                };
+                if let Some(socket) = socket_object_id {
+                    for &channel in self.channel_by_socket.get(socket).into_iter().flatten() {
+                        let record = computation.record(channel)?;
+                        if record.position <= root.position && computation.bounded(read, record) {
+                            support.insert(channel);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(support)
     }
 }
 

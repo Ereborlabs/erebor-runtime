@@ -90,6 +90,7 @@ impl AnalysisStore {
         Self::check_managed_idle(&transaction, spec.tenant, &spec.id)?;
         Self::check_managed_images(&transaction, spec)?;
         Self::check_managed_addressable(&transaction, spec)?;
+        self.admit_graph(&transaction, spec)?;
         let revision = self.package_next(&transaction)?;
         transaction
             .execute(

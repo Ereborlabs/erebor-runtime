@@ -71,10 +71,13 @@ pub use araphor_analysis_builtins::discovery::{
 pub use analysis::AnalysisCommitStage;
 
 pub use analysis::{
-    ManagedAttempt, ManagedCall, ManagedCapture, ManagedChanges, ManagedCommit, ManagedDestination,
-    ManagedExecution, ManagedExit, ManagedFrontier, ManagedGraphOperation, ManagedInstance,
+    ManagedAttempt, ManagedCall, ManagedCapture, ManagedChanges, ManagedCommit, PreparedManagedCommit,
+    ManagedDerivedSource, ManagedDestination, ManagedExecution, ManagedExit, ManagedFrontier,
+    ManagedBudget, ManagedGraphJournal, ManagedGraphOperation, ManagedGraphTransaction, ManagedInstance,
     ManagedLease, ManagedManifest, ManagedMember, ManagedPage, ManagedPrior, ManagedRead,
     ManagedReceipt, ManagedRequest, ManagedResume, ManagedReturn, ManagedSourceBlock,
-    ManagedSourceFrame, ManagedSourceRead, ManagedSourceRef, ManagedSourceRows, ManagedSpec,
-    ManagedStatus, ManagedTerminal, RetainedCall, SourceScope,
+    ManagedInputSelection, ManagedSourceFrame, ManagedSourceHistory, ManagedSourceRead, ManagedSourceRef,
+    ManagedSourceRows, ManagedSpec, ManagedStatus, ManagedTerminal, RetainedCall, SourceScope,
 };
+
+pub use analysis::graph_rows::store::{InputProof, ResolvedInput};

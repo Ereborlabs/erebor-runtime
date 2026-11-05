@@ -1,8 +1,8 @@
 use super::*;
 
-impl NotificationRouter {
+impl NotificationCycle<'_, '_> {
     pub(super) fn captured_route(
-        &self,
+        &mut self,
         subject: &NotificationObligationV1,
         kind: NotificationDeliveryKindV1,
     ) -> Result<ApprovedNotificationRouteV1> {
@@ -25,7 +25,7 @@ impl NotificationRouter {
     }
 
     pub(super) fn delivery_failure(
-        &self,
+        &mut self,
         state: &NotificationObligationV1,
         route: &ApprovedNotificationRouteV1,
         now: u64,
@@ -49,7 +49,7 @@ impl NotificationRouter {
     }
 
     pub(super) fn captured_delivery(
-        &self,
+        &mut self,
         state: &NotificationObligationV1,
         pending: &NotificationAttemptV1,
         kind: NotificationDeliveryKindV1,
@@ -59,18 +59,12 @@ impl NotificationRouter {
         let finding = subject
             .finding
             .as_ref()
-            .map(|reference| {
-                self.store.graph_finding(
-                    state.key.tenant_id,
-                    &reference.result_id,
-                    &reference.finding_id,
-                )
-            })
+            .map(|reference| self.prepared.historical(reference))
             .transpose()?
             .flatten()
             .map(|(finding, revision)| NotificationFindingV1 {
-                finding_id: finding.finding_id,
-                revision,
+                finding_id: finding.finding_id.clone(),
+                revision: revision.clone(),
             });
         let overdue = subject.overdue(pending.started_utc_ns);
         Ok(NotificationDeliveryV1 {

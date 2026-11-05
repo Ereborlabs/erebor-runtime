@@ -1,9 +1,82 @@
 use super::*;
 
 impl SourceSnapshot {
+    pub(crate) fn fork_before(&self) -> Result<Arc<Self>> {
+        self.control.check().map_err(Self::data_error)?;
+        let reference = self.reference.get().ok_or_else(|| {
+            DataFusionError::Execution("the before source reference is absent".into())
+        })?;
+        let view = self
+            .source_view()?
+            .ok_or_else(|| DataFusionError::Execution("the before source view is absent".into()))?;
+        let captured = self
+            .captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
+        let captured = captured.as_ref().ok_or_else(|| {
+            DataFusionError::Execution("the before source capture is absent".into())
+        })?;
+        if self.attempt.get().is_some()
+            || self
+                .index
+                .lock()
+                .map_err(|_| DataFusionError::Internal("source index lock is poisoned".into()))?
+                .is_some()
+            || !captured.ports.is_empty()
+            || !captured.lineage.is_empty()
+            || captured
+                .tables
+                .iter()
+                .any(|(origin, (_, _, _, input))| origin.durable().is_none() || input.is_some())
+        {
+            return Err(DataFusionError::Execution(
+                "the before source template contains execution state".into(),
+            ));
+        }
+        let memory = self.memory.reserve_input(
+            captured
+                ._memory
+                .size()
+                .saturating_add(size_of::<Captured>())
+                .saturating_add(size_of::<Self>())
+                .saturating_add(self.selection.allocation_bytes()),
+        )?;
+        let fork = Self::new(
+            Arc::clone(&self.store),
+            self.selection.clone(),
+            self.limits,
+            self.control
+                .within(self.control.remaining().map_err(Self::data_error)?)
+                .map_err(Self::data_error)?,
+            self.extract_timeout,
+            self.now,
+            Arc::clone(&self.memory),
+            None,
+        );
+        fork.bind_reference(reference.clone())?;
+        *fork
+            .view
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source view lock is poisoned".into()))? =
+            Some(view);
+        *fork
+            .captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))? =
+            Some(Captured {
+                receipt: Arc::clone(&captured.receipt),
+                removals: captured.removals.clone(),
+                _memory: memory,
+                tables: captured.tables.clone(),
+                ports: BTreeMap::new(),
+                lineage: BTreeMap::new(),
+            });
+        Ok(fork)
+    }
+
     pub(crate) fn capture_before(
         &self,
-        reference: &araphor_data::ManagedAttempt,
+        reference: &Arc<araphor_data::ManagedAttempt>,
         current: &Self,
         requests: &AnalysisTableRequests,
         bounds: ScanBounds,

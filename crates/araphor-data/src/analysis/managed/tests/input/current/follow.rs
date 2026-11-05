@@ -399,6 +399,8 @@ fn publish(
         .zip(&outputs)
         .zip(calls)
         .map(|((evaluation, output), call)| ManagedReturn {
+            graph: None,
+            retained: None,
             call,
             evaluation,
             output,
@@ -434,15 +436,18 @@ fn publish(
         })
         .collect::<TestResult<_>>()?;
     let (receipt, result) = graph.store.commit_managed_graph(
-        &ManagedCommit {
+        graph.store.prepare_managed(&ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
             completed: true,
             attempt,
             now_utc_ns: 10,
             returns: &returns,
             selected: &selected,
             selected_schema: &fixture.model.outputs[0].schema,
-        },
+        })?,
         Some(crate::analysis::graph::GraphCommit {
+            input_proof: None,
             request,
             metadata,
             contexts: Vec::new(),
@@ -574,14 +579,16 @@ fn graph_empty_step_has_no_publication() -> TestResult {
         batches: Vec::new(),
     };
     let (receipt, graph_result) = graph.store.commit_managed_graph(
-        &ManagedCommit {
+        graph.store.prepare_managed(&ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
             completed: true,
             attempt: &attempt,
             now_utc_ns: 10,
             returns: &[],
             selected: &selected,
             selected_schema: &fixture.model.outputs[0].schema,
-        },
+        })?,
         None,
         || Ok(()),
     )?;

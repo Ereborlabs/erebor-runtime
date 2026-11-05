@@ -295,7 +295,8 @@ impl GraphRows {
             lineage.as_str(),
             "SELECT EXISTS(SELECT 1 FROM graph_sources s LEFT JOIN source_receipts r USING(stream_key) WHERE r.stream_key IS NULL OR r.tenant_id<>s.tenant_id)",
             "SELECT EXISTS(SELECT 1 FROM graph_evidence e LEFT JOIN graph_sources s USING(source_ref) WHERE s.source_ref IS NULL OR e.durable_cursor=0)",
-            "SELECT EXISTS(SELECT 1 FROM graph_producer_scopes s LEFT JOIN graph_sources src USING(source_ref) WHERE src.source_ref IS NULL OR src.tenant_id<>s.tenant_id OR s.created_revision=0 OR s.first_cursor=0 OR (s.producer_kind=0 AND (s.instance_id='' OR s.package_id='' OR s.package_revision='' OR s.image_digest='')))",
+            "SELECT EXISTS(SELECT 1 FROM graph_producer_scopes s LEFT JOIN graph_sources src USING(source_ref) WHERE (s.source_ref IS NOT NULL AND (src.source_ref IS NULL OR src.tenant_id<>s.tenant_id)) OR s.created_revision=0 OR s.first_cursor=0 OR (s.producer_kind=0 AND (s.instance_id IS NULL OR s.instance_id='' OR s.view_id IS NULL OR s.view_id='' OR s.call_id IS NULL)))",
+            "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) WHERE (s.producer_kind=0 AND (v.package_id IS NULL OR v.package_id='' OR v.package_revision IS NULL OR v.package_revision='' OR v.image_digest IS NULL OR v.image_digest='')) OR (s.producer_kind<>0 AND (v.package_id IS NOT NULL OR v.package_revision IS NOT NULL OR v.image_digest IS NOT NULL)))",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) WHERE s.producer_kind<>0 AND v.selected_state_ref IS NOT NULL)",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v LEFT JOIN graph_producer_scopes s USING(scope_id) WHERE s.scope_id IS NULL)",
             "SELECT EXISTS(SELECT 1 FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) LEFT JOIN analysis_results r ON r.result_id=v.result_id WHERE s.producer_kind=0 AND (r.result_id IS NULL OR r.processor_id<>'managed-package-v1' OR r.tenant_id<>s.tenant_id OR r.commit_revision<>v.commit_revision))",
@@ -364,8 +365,8 @@ impl GraphRows {
             }
         }
         Self::validate_metadata(reader, &registry)?;
-        araphor_graph::FindingRows::validate(reader)?;
-        araphor_graph::StateRows::validate(reader)?;
+        crate::analysis::graph_rows::store::FindingRows::validate(reader)?;
+        crate::analysis::graph_rows::store::StateRows::validate(reader)?;
         Self::validate_branches(reader)?;
         for table in ["graph_branch_values", "graph_fact_values"] {
             let mut statement = reader

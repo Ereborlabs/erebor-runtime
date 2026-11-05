@@ -4,8 +4,7 @@ use snafu::ResultExt as _;
 
 use super::{AnalysisContextKeyV1, AnalysisStore};
 use crate::{
-    AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStreamIdentityV1,
-    EvidenceIntakeIdentityV1, JsonSnafu, Result,
+    AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStreamIdentityV1, JsonSnafu, Result,
 };
 
 mod graph;
@@ -48,13 +47,7 @@ impl TryFrom<&str> for ProcessorClassV1 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProcessorScopeV1 {
-    pub processor_id: String,
-    pub method_version: u64,
-    pub identity: EvidenceIntakeIdentityV1,
-}
+pub use araphor_analysis_builtins::discovery::ProcessorScopeV1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AnalysisWitnessV1 {
@@ -190,12 +183,6 @@ impl From<&crate::DiscoveryProfileV1> for ProfileHeader {
                     .map_or(0, |range| range.first_cursor),
             ),
         }
-    }
-}
-
-impl ProcessorScopeV1 {
-    pub(super) fn valid(&self) -> bool {
-        !self.processor_id.is_empty() && self.method_version > 0 && self.identity.valid()
     }
 }
 
@@ -780,7 +767,14 @@ impl AnalysisStore {
                 operation: "read immutable result",
             })?;
         let mut context_write = None;
-        let inserted = self.context_rows(transaction, contexts, false, None, &mut context_write)?;
+        let inserted = self.context_rows(
+            transaction,
+            contexts,
+            false,
+            None,
+            &mut context_write,
+            &mut super::context::VerifiedPackages::default(),
+        )?;
         let mut references = std::borrow::Cow::Borrowed(input.context_refs.as_slice());
         if !inserted.is_empty() {
             references.to_mut().extend(inserted);

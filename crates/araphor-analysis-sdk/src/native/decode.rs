@@ -7,7 +7,7 @@ pub(super) struct Decoder {
 }
 
 impl Decoder {
-    fn new(copy_bytes: Option<usize>) -> Self {
+    pub(super) fn new(copy_bytes: Option<usize>) -> Self {
         Self {
             copy_bytes,
             bytes: 0,
@@ -26,43 +26,13 @@ impl Decoder {
         }
         let mut inputs = decoder.vector(request.input_count)?;
         for input in unsafe { decoder.slice(request.inputs, request.input_count)? } {
-            let data = unsafe {
-                decoder.dataset(&input.data, model.inputs.iter().map(|input| &input.port))?
-            };
-            let window = if input.revision.window.is_null() {
-                None
-            } else {
-                let window = unsafe { decoder.one(input.revision.window)? };
-                Some(crate::SourceWindow {
-                    source: unsafe { decoder.bytes(window.source)? }.to_vec(),
-                    start_utc_ns: window.start_utc_ns,
-                    end_utc_ns: window.end_utc_ns,
-                })
-            };
-            let state = match input.coverage.state {
-                0 => crate::CoverageState::Complete,
-                1 => crate::CoverageState::Gapped,
-                2 => crate::CoverageState::Unknown,
-                _ => return Err(Error::contract(ErrorCode::Invalid, "native coverage")),
-            };
-            let mut reasons = decoder.vector(input.coverage.limit_count)?;
-            for reason in
-                unsafe { decoder.slice(input.coverage.limits, input.coverage.limit_count)? }
-            {
-                reasons.push(unsafe { decoder.text(*reason)? });
-            }
-            inputs.push(crate::Input {
-                data,
-                revision: crate::Revision {
-                    owner: unsafe { decoder.text(input.revision.owner)? },
-                    id: unsafe { decoder.text(input.revision.id)? },
-                    window,
-                },
-                coverage: crate::Coverage {
-                    state,
-                    limits: reasons,
-                },
-            });
+            let name = unsafe { decoder.text(input.data.name)? };
+            let port = model
+                .inputs
+                .iter()
+                .find(|port| port.port.name == name)
+                .ok_or_else(|| Error::contract(ErrorCode::Invalid, "native dataset"))?;
+            inputs.push(unsafe { decoder.input(input, Some(&port.port.schema))? });
         }
         let mut previous_outputs = decoder.vector(request.previous_output_count)?;
         for data in
@@ -89,6 +59,50 @@ impl Decoder {
         };
         model.input(&evaluation)?;
         Ok((evaluation, model))
+    }
+
+    pub(super) unsafe fn input(
+        &mut self,
+        input: &abi::Input,
+        schema: Option<&crate::Schema>,
+    ) -> Result<crate::Input> {
+        let name = unsafe { self.text(input.data.name)? };
+        let batches =
+            unsafe { streams::read_checked(input.data.batches, schema, self.remaining())? };
+        self.account(&batches)?;
+        let data = crate::Dataset { name, batches };
+        let window = if input.revision.window.is_null() {
+            None
+        } else {
+            let window = unsafe { self.one(input.revision.window)? };
+            Some(crate::SourceWindow {
+                source: unsafe { self.bytes(window.source)? }.to_vec(),
+                start_utc_ns: window.start_utc_ns,
+                end_utc_ns: window.end_utc_ns,
+            })
+        };
+        let state = match input.coverage.state {
+            0 => crate::CoverageState::Complete,
+            1 => crate::CoverageState::Gapped,
+            2 => crate::CoverageState::Unknown,
+            _ => return Err(Error::contract(ErrorCode::Invalid, "native coverage")),
+        };
+        let mut reasons = self.vector(input.coverage.limit_count)?;
+        for reason in unsafe { self.slice(input.coverage.limits, input.coverage.limit_count)? } {
+            reasons.push(unsafe { self.text(*reason)? });
+        }
+        Ok(crate::Input {
+            data,
+            revision: crate::Revision {
+                owner: unsafe { self.text(input.revision.owner)? },
+                id: unsafe { self.text(input.revision.id)? },
+                window,
+            },
+            coverage: crate::Coverage {
+                state,
+                limits: reasons,
+            },
+        })
     }
 
     pub(super) unsafe fn output(
@@ -203,7 +217,7 @@ impl Decoder {
         })
     }
 
-    unsafe fn text(&mut self, value: abi::Bytes) -> Result<String> {
+    pub(super) unsafe fn text(&mut self, value: abi::Bytes) -> Result<String> {
         std::str::from_utf8(unsafe { self.bytes(value)? })
             .map(str::to_owned)
             .map_err(|_| Error::contract(ErrorCode::Invalid, "native UTF-8"))
@@ -218,7 +232,7 @@ impl Decoder {
         unsafe { self.slice(pointer, 1) }.map(|values| &values[0])
     }
 
-    unsafe fn slice<'a, T>(&mut self, pointer: *const T, count: u64) -> Result<&'a [T]> {
+    pub(super) unsafe fn slice<'a, T>(&mut self, pointer: *const T, count: u64) -> Result<&'a [T]> {
         let count = usize::try_from(count)
             .map_err(|_| Error::contract(ErrorCode::Limit, "native count"))?;
         let bytes = count
@@ -237,7 +251,7 @@ impl Decoder {
         Ok(unsafe { std::slice::from_raw_parts(pointer, count) })
     }
 
-    fn remaining(&self) -> Option<usize> {
+    pub(super) fn remaining(&self) -> Option<usize> {
         self.copy_bytes
             .map(|limit| limit.saturating_sub(self.bytes))
     }

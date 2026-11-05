@@ -82,9 +82,21 @@ impl AnalysisStore {
             .checked_add(1)
             .and_then(|value| i64::try_from(value).ok());
         self.read_snapshot(|reader| {
-            let mut statement = reader
-                .prepare_cached(
-                    "WITH heads AS (
+            self.context_heads_from(reader, tenant, owner, limit, limit_value)
+        })
+    }
+
+    pub(in crate::analysis) fn context_heads_from(
+        &self,
+        reader: &duckdb::Connection,
+        tenant: [u8; 16],
+        owner: &str,
+        limit: usize,
+        limit_value: Option<i64>,
+    ) -> Result<Vec<AnalysisContextVersionV1>> {
+        let mut statement = reader
+            .prepare_cached(
+                "WITH heads AS (
                      SELECT entity_key, lifetime_key, MAX(owner_revision) AS owner_revision
                      FROM context_versions WHERE tenant_id = ? AND owner_id = ?
                      GROUP BY entity_key, lifetime_key
@@ -97,55 +109,54 @@ impl AnalysisStore {
                      AND c.entity_key = h.entity_key AND c.lifetime_key = h.lifetime_key
                      AND c.owner_revision = h.owner_revision
                  ORDER BY h.entity_key, h.lifetime_key",
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare context heads",
-                })?;
-            let mut rows = statement
-                .query(params![
-                    tenant.as_slice(),
-                    owner,
-                    limit_value,
-                    tenant.as_slice(),
-                    owner
-                ])
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read context heads",
-                })?;
-            let mut versions = Vec::new();
-            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                operation: "advance context heads",
-            })? {
-                if versions.len() == limit {
-                    return crate::AnalysisInputTooLargeSnafu {
-                        resource: "context heads",
-                    }
-                    .fail();
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare context heads",
+            })?;
+        let mut rows = statement
+            .query(params![
+                tenant.as_slice(),
+                owner,
+                limit_value,
+                tenant.as_slice(),
+                owner
+            ])
+            .context(AnalysisDatabaseSnafu {
+                operation: "read context heads",
+            })?;
+        let mut versions = Vec::new();
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "advance context heads",
+        })? {
+            if versions.len() == limit {
+                return crate::AnalysisInputTooLargeSnafu {
+                    resource: "context heads",
                 }
-                let present: Option<u64> = row.get(7).context(AnalysisDatabaseSnafu {
-                    operation: "decode context head presence",
-                })?;
-                if present.is_none() {
-                    return Err(self.state_error("the context head is absent"));
-                }
-                let (key, stored) =
-                    Self::context_row(tenant, owner, row).context(AnalysisDatabaseSnafu {
-                        operation: "decode context head",
-                    })?;
-                let index: Vec<u8> = row.get(8).context(AnalysisDatabaseSnafu {
-                    operation: "decode context head index",
-                })?;
-                if index != super::version_key(&key)? {
-                    return Self::reject_path(
-                        &self.root,
-                        "the context version index has a foreign row",
-                    );
-                }
-                let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
-                Self::validate_stored_context_packages(reader, &version)?;
-                versions.push(version);
+                .fail();
             }
-            Ok(versions)
-        })
+            let present: Option<u64> = row.get(7).context(AnalysisDatabaseSnafu {
+                operation: "decode context head presence",
+            })?;
+            if present.is_none() {
+                return Err(self.state_error("the context head is absent"));
+            }
+            let (key, stored) =
+                Self::context_row(tenant, owner, row).context(AnalysisDatabaseSnafu {
+                    operation: "decode context head",
+                })?;
+            let index: Vec<u8> = row.get(8).context(AnalysisDatabaseSnafu {
+                operation: "decode context head index",
+            })?;
+            if index != super::version_key(&key)? {
+                return Self::reject_path(
+                    &self.root,
+                    "the context version index has a foreign row",
+                );
+            }
+            let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
+            Self::validate_stored_context_packages(reader, &version)?;
+            versions.push(version);
+        }
+        Ok(versions)
     }
 }

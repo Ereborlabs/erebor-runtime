@@ -46,7 +46,8 @@ pub(crate) use index::{SourceIndex, SourceKey, SourceView};
 mod port;
 mod rows;
 pub(crate) use port::PortExec;
-pub use port::{PortSource, SourcePort};
+pub use port::{PortRead, PortSource, SourcePort};
+mod lineage;
 mod schema;
 #[cfg(test)]
 mod tests;
@@ -54,7 +55,7 @@ mod work;
 
 pub(crate) use journal::Changes;
 pub use rows::ArrowSnapshot;
-pub(crate) use rows::{Captured, CapturedRequests};
+pub(crate) use rows::{Captured, CapturedRequests, MetadataRead};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum SourceOrigin {
@@ -96,6 +97,7 @@ pub(crate) type WindowBound = (
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ScanBounds {
+    pub(crate) canonical_events: bool,
     pub(crate) fields: BTreeMap<&'static str, Interval>,
     pub(crate) events: Option<Vec<(u64, u64)>>,
     pub(crate) windows: Vec<WindowBound>,
@@ -178,7 +180,20 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
             });
             return Ok(TreeNodeRecursion::Jump);
         }
+        self.bounds.canonical_events |= package.is_some_and(|package| {
+            package
+                .logical_call()
+                .model()
+                .is_some_and(|model| model.graph.is_some())
+        });
         if let Some(port) = node.downcast_ref::<PortExec>() {
+            self.bounds
+                .qualified
+                .entry(port.family)
+                .or_default()
+                .insert(port.read);
+        }
+        if let Some(port) = node.downcast_ref::<crate::definition::physical::graph::GraphExec>() {
             self.bounds
                 .qualified
                 .entry(port.family)
@@ -300,7 +315,8 @@ pub struct SourceSnapshot {
     store: Arc<AnalysisStore>,
     selection: AnalysisSelectionV1,
     managed: Option<araphor_data::ManagedRead>,
-    reference: OnceLock<araphor_data::ManagedAttempt>,
+    reference: OnceLock<Arc<araphor_data::ManagedAttempt>>,
+    attempt: OnceLock<Arc<araphor_data::ManagedAttempt>>,
     limits: AnalysisExtractLimits,
     control: AnalysisReadControl,
     extract_timeout: Option<Duration>,
@@ -309,7 +325,7 @@ pub struct SourceSnapshot {
     captured: Mutex<Option<rows::Captured>>,
     index: Mutex<Option<Arc<SourceIndex>>>,
     view: Mutex<Option<Arc<SourceView>>>,
-    reads: Mutex<BTreeMap<usize, SourceImage>>,
+    reads: Mutex<BTreeMap<usize, lineage::NativeRead>>,
     keys: Mutex<BTreeMap<usize, Arc<keys::KeySlot>>>,
     work: ExecutionPlanMetricsSet,
     reported: AtomicBool,
@@ -392,10 +408,12 @@ impl SourceSnapshot {
         if indexed && bounds.events.is_some() {
             bounds.events = Some(vec![(0, u64::MAX)]);
         }
-        if !indexed {
+        if !indexed && !bounds.canonical_events {
             return Ok(());
         }
-        bounds.fields.clear();
+        if indexed {
+            bounds.fields.clear();
+        }
         for (name, columns) in requests {
             if let Some(columns) = columns {
                 let schema = &Self::schemas()[name];
@@ -412,6 +430,9 @@ impl SourceSnapshot {
                     if let Ok(index) = schema.index_of(name) {
                         columns.insert(index);
                     }
+                }
+                if name == "events" && bounds.canonical_events {
+                    columns.insert(schema.index_of("framed_record")?);
                 }
             }
         }
@@ -448,6 +469,7 @@ impl SourceSnapshot {
             selection,
             managed,
             reference: OnceLock::new(),
+            attempt: OnceLock::new(),
             limits,
             control,
             extract_timeout,
@@ -641,10 +663,42 @@ impl SourceSnapshot {
         Ok(())
     }
 
-    pub(crate) fn bind_reference(&self, reference: araphor_data::ManagedAttempt) -> Result<()> {
+    pub(crate) fn bind_reference(
+        &self,
+        reference: Arc<araphor_data::ManagedAttempt>,
+    ) -> Result<()> {
+        if self.attempt.get().is_some() {
+            return Err(DataFusionError::Execution(
+                "the current attempt is already bound".into(),
+            ));
+        }
         self.reference.set(reference).map_err(|_| {
             DataFusionError::Execution("the journal reference is already bound".into())
         })
+    }
+
+    pub(crate) fn bind_attempt(&self, attempt: Arc<araphor_data::ManagedAttempt>) -> Result<()> {
+        if self.reference.get().is_some() {
+            return Err(DataFusionError::Execution(
+                "the historical reference is already bound".into(),
+            ));
+        }
+        self.snapshot()?
+            .managed()
+            .ok_or_else(|| DataFusionError::Execution("the managed capture is absent".into()))?
+            .check_current(&attempt)
+            .map_err(Self::data_error)?;
+        self.attempt
+            .set(attempt)
+            .map_err(|_| DataFusionError::Execution("the current attempt is already bound".into()))
+    }
+
+    pub(crate) fn attempt(&self) -> Option<&Arc<araphor_data::ManagedAttempt>> {
+        self.attempt.get()
+    }
+
+    pub(crate) fn graph_store(&self) -> &Arc<AnalysisStore> {
+        &self.store
     }
 
     pub(crate) fn source_view(&self) -> Result<Option<Arc<SourceView>>> {
@@ -720,11 +774,24 @@ impl SourceSnapshot {
             .reads
             .lock()
             .map_err(|_| DataFusionError::Internal("source read lock is poisoned".into()))?;
-        if *reads.entry(id).or_insert(image) != image {
+        let bytes =
+            std::mem::size_of::<lineage::NativeRead>().saturating_add(rows.len().saturating_mul(
+                std::mem::size_of::<Arc<araphor_data::ManagedSourceRows>>()
+                    + 2 * std::mem::size_of::<usize>(),
+            ));
+        let memory = self.memory.reserve_input(bytes)?;
+        let read = reads.entry(id).or_insert_with(|| lineage::NativeRead {
+            image,
+            rows: Vec::new(),
+            _memory: Vec::new(),
+        });
+        if read.image != image {
             return Err(DataFusionError::Internal(
                 "the source read image differs".into(),
             ));
         }
+        read.rows.extend(rows.into_iter().map(Arc::new));
+        read._memory.push(memory);
         Ok(())
     }
 
@@ -1157,6 +1224,7 @@ impl DataSource for SourceData {
             )
         })?;
         let batches = current.project(&self.origin, &self.indices, &self.schema)?;
+        snapshot.record_header(self.read, self.origin.name(), &batches, &current.receipt);
         snapshot.record_work(
             self.read,
             self.origin.name(),

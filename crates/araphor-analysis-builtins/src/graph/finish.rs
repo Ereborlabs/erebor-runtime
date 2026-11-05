@@ -3,25 +3,27 @@ use super::*;
 impl Detector {
     fn required_inputs(self) -> &'static [&'static str] {
         match self {
-            Self::Process => &["exact-task-entry-role", "kernel-effect", "source-coverage"],
             Self::Credentials => &[
                 "reviewed-credential",
                 "exact-local-channel",
                 "authoritative-operation",
                 "source-coverage",
             ],
-            Self::Kubernetes => &[
-                "carried-request-proof",
-                "Kubernetes-audit",
-                "object-owner-scheduler",
-                "remote-runtime-admission",
-            ],
         }
     }
 }
 
-impl GraphPackageCheckpointV1 {
-    pub fn from_package(
+pub trait CheckpointExt {
+    fn from_package(
+        package: &sdk::Package,
+        model: &sdk::Model,
+        state: GraphPackageStateV1,
+        accepted: u64,
+        observed: u64,
+    ) -> Self;
+}
+impl CheckpointExt for GraphPackageCheckpointV1 {
+    fn from_package(
         package: &sdk::Package,
         model: &sdk::Model,
         state: GraphPackageStateV1,
@@ -76,8 +78,19 @@ impl Computation {
     }
 }
 
-impl GraphBranchV1 {
-    pub fn from_finding(finding: &Finding, reason: &FindingReasonV1) -> Self {
+pub trait BranchExt {
+    fn from_finding(finding: &Finding, reason: &FindingReasonV1) -> Self;
+    fn from_value(finding: &FindingV1) -> Self;
+    fn from_parts(
+        package_id: &str,
+        subject_id: &GraphSubjectKeyV1,
+        evidence: &[crate::discovery::DiscoveryRecordIdV1],
+        limits: &[String],
+        reason: &FindingReasonV1,
+    ) -> Self;
+}
+impl BranchExt for GraphBranchV1 {
+    fn from_finding(finding: &Finding, reason: &FindingReasonV1) -> Self {
         Self::from_parts(
             &finding.package_id,
             &finding.subject_id,
@@ -87,7 +100,7 @@ impl GraphBranchV1 {
         )
     }
 
-    pub fn from_value(finding: &FindingV1) -> Self {
+    fn from_value(finding: &FindingV1) -> Self {
         Self::from_parts(
             &finding.package_id,
             &finding.subject_id,

@@ -140,6 +140,7 @@ dependencies = [
  "araphor-data",
  "araphor-detector-example",
  "araphor-discovery-definition",
+ "araphor-graph",
  "araphor-package",
  "araphor-query",
  "async-trait",
@@ -164,7 +165,9 @@ name = "araphor-analysis-builtins"
 version = "0.1.0"
 dependencies = [
  "araphor-analysis-sdk",
+ "araphor-analysis-types",
  "araphor-component-build",
+ "araphor-graph",
  "erebor-interceptor-abi",
  "rmp-serde",
  "schemars 1.2.2",
@@ -181,6 +184,7 @@ dependencies = [
 name = "araphor-analysis-sdk"
 version = "0.1.0"
 dependencies = [
+ "araphor-graph",
  "arrow-array",
  "arrow-buffer",
  "arrow-cast",
@@ -198,6 +202,33 @@ dependencies = [
  "tempfile",
  "wit-bindgen 0.61.1",
  "wit-parser",
+]
+
+[[package]]
+name = "araphor-analysis-types"
+version = "0.1.0"
+dependencies = [
+ "araphor-analysis-sdk",
+ "erebor-interceptor-abi",
+ "erebor-runtime-error",
+ "rmp-serde",
+ "schemars 1.2.2",
+ "serde",
+ "serde-value",
+ "serde_arrow",
+ "serde_bytes",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+ "uuid",
+]
+
+[[package]]
+name = "araphor-causal-component"
+version = "0.1.0"
+dependencies = [
+ "araphor-analysis-builtins",
+ "araphor-analysis-sdk",
 ]
 
 [[package]]
@@ -267,6 +298,7 @@ version = "0.1.0"
 dependencies = [
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
+ "araphor-analysis-types",
  "araphor-discovery-definition",
  "araphor-graph",
  "araphor-package",
@@ -287,6 +319,7 @@ dependencies = [
  "rustix 1.1.4",
  "schemars 1.2.2",
  "serde",
+ "serde-value",
  "serde_arrow",
  "serde_bytes",
  "serde_json",
@@ -307,6 +340,7 @@ version = "0.1.0"
 dependencies = [
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
+ "araphor-analysis-types",
  "araphor-component-build",
 ]
 
@@ -339,24 +373,14 @@ dependencies = [
 name = "araphor-graph"
 version = "0.1.0"
 dependencies = [
- "araphor-analysis-builtins",
- "araphor-analysis-sdk",
+ "arrow-array",
+ "arrow-cast",
+ "arrow-schema",
+ "arrow-select",
  "duckdb",
  "erebor-runtime-error",
- "rmp-serde",
- "serde",
- "serde-value",
- "serde_json",
  "snafu",
  "tempfile",
-]
-
-[[package]]
-name = "araphor-kubernetes-component"
-version = "0.1.0"
-dependencies = [
- "araphor-analysis-builtins",
- "araphor-analysis-sdk",
 ]
 
 [[package]]
@@ -418,14 +442,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "araphor-process-component"
-version = "0.1.0"
-dependencies = [
- "araphor-analysis-builtins",
- "araphor-analysis-sdk",
-]
-
-[[package]]
 name = "araphor-query"
 version = "0.1.0"
 dependencies = [
@@ -433,6 +449,7 @@ dependencies = [
  "araphor-analysis-sdk",
  "araphor-data",
  "araphor-discovery-definition",
+ "araphor-graph",
  "araphor-package",
  "araphor-package-runtime",
  "arrow-buffer",
@@ -5114,6 +5131,7 @@ dependencies = [
  "araphor-analysis-sdk",
  "araphor-data",
  "araphor-discovery-definition",
+ "araphor-graph",
  "araphor-observability",
  "araphor-query",
  "arrow-array",

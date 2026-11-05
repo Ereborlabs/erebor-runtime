@@ -164,6 +164,24 @@ impl Memory {
                 .saturating_add(reason.code.capacity())
                 .saturating_add(Self::schema_heap(&reason.details));
         }
+        if let Some(graph) = &model.graph {
+            bytes = bytes.saturating_add(
+                graph
+                    .relations
+                    .capacity()
+                    .saturating_mul(size_of::<crate::GraphRelation>()),
+            );
+            for relation in &graph.relations {
+                bytes = bytes
+                    .saturating_add(relation.name.capacity())
+                    .saturating_add(Self::schema_heap(&relation.properties));
+                if let crate::GraphKind::Edge { from, to } = &relation.kind {
+                    bytes = bytes
+                        .saturating_add(from.capacity())
+                        .saturating_add(to.capacity());
+                }
+            }
+        }
         if let Some(checkpoint) = &model.checkpoint {
             bytes = bytes.saturating_add(Self::ports(&checkpoint.datasets));
         }

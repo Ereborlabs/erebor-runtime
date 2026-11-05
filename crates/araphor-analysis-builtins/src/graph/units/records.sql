@@ -1,11 +1,11 @@
-WITH support AS (
-    SELECT UNNEST(support) AS item FROM units
-), selected AS (
-    SELECT DISTINCT item['record'] AS id FROM support
+WITH selected AS (
+    SELECT record AS id FROM units
+), references AS (
+    SELECT UNNEST(facts.value['policy']['observations']) AS id
+    FROM selected JOIN graph_facts facts ON facts.record = selected.id
+    WHERE facts.value['tag'] = 'POLICY'
+), wanted AS (
+    SELECT id FROM selected UNION SELECT id FROM references
 )
-SELECT r.id, r.position, r.effect, r.ingested_utc_ns, r.observed_boottime_ns,
-    r.profile_generation_ref_id, r.original_kernel_sequence, r.coverage_interval_id,
-    r.process_instance_id, r.entry_instance_id, r.binding_id, r.role_id,
-    r.state_id, r.entry_rule_id, r.proof_quality
-FROM graph_records r JOIN selected ON selected.id = r.id
-ORDER BY r.id
+SELECT records.* FROM graph_records records JOIN wanted ON records.id = wanted.id
+ORDER BY records.id

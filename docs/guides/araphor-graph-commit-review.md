@@ -1,5 +1,22 @@
 # Araphor Graph Commit Review
 
+The [current package reading route](araphor-retained-execution-review.md#current-package-path-2026-11-05)
+covers default Definition startup, package-owned Graph processing, Data commit,
+and notification delivery in the current working tree. The exact replacement
+test passes with the replay replacement. The sections below retain earlier
+source states and their limits.
+
+
+## Current retirement boundary on 2026-11-04
+
+The denial-based process detector and Kubernetes placeholder are removed from
+source and the default Definition. They do not prove causal graph detection.
+The current [handoff](../plans/araphor-execution-handoff.md#current-causal-replacement-on-2026-11-04)
+requires one ordinary Definition over its admitted sources and package-owned
+causal traversal. The replacement is **Not done**. The retained source states
+and qualification records below do not qualify this replacement.
+
+
 The [native edge property section](#native-edge-property-keys) gives the
 current property-key reading route. The
 [shared Graph section](#shared-graph-values-and-storage-controls) records

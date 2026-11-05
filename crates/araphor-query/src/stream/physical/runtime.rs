@@ -130,11 +130,37 @@ impl Runtime {
         })
     }
 
-    pub(super) async fn next(&mut self) -> std::result::Result<Option<Event>, StreamError> {
-        self.next_event().await.map_err(|error| {
-            crate::stream::recovery::SourceRecovery::attach(&error, &self.progress);
-            (error, self.snapshot.clone())
-        })
+    pub(super) async fn next(mut self) -> std::result::Result<Option<(Event, Self)>, StreamError> {
+        let session = Arc::clone(&self.run.session);
+        let lease = session
+            .workers
+            .as_ref()
+            .map(araphor_package_runtime::TaskTracker::token);
+        if session
+            .workers
+            .as_ref()
+            .is_some_and(araphor_package_runtime::TaskTracker::is_closed)
+        {
+            return Err((
+                crate::InvalidSnafu {
+                    field: "execution scope",
+                }
+                .build(),
+                None,
+            ));
+        }
+        let (state, result) = session
+            .engine()
+            .run(Arc::clone(session.control()), lease, async move {
+                let result = self.next_event().await.map_err(|error| {
+                    crate::stream::recovery::SourceRecovery::attach(&error, &self.progress);
+                    (error, self.snapshot.clone())
+                });
+                Ok((self, result))
+            })
+            .await
+            .map_err(|error| (error, None))?;
+        Ok(result?.map(|event| (event, state)))
     }
 
     async fn next_event(&mut self) -> Result<Option<Event>> {
@@ -434,26 +460,43 @@ impl Runtime {
                     };
                     let publication = Arc::clone(publication);
                     let invocation = calls.invocation().clone();
-                    if let Err(error) = captured
+                    let admitted = captured
                         .blocking(move |snapshot, control| {
-                            publication.admit(snapshot, &invocation, &frontier, control)
-                        })
-                        .await
-                    {
-                        if self.run.follow
-                            && matches!(
-                                &error,
-                                crate::Error::Data {
-                                    source: araphor_data::Error::AnalysisConflict { .. }
-                                        | araphor_data::Error::AnalysisSourceChanged { .. }
+                            let attempt =
+                                publication.admit(snapshot, &invocation, &frontier, control)?;
+                            if let Some(attempt) = &attempt {
+                                let request = attempt.request();
+                                if request.id != invocation.id
+                                    || request.seed != invocation.seed
+                                    || request.frontier.as_ref() != Some(&frontier)
+                                {
+                                    return Err(araphor_data::PackageErrorCodeV1::Conflict
+                                        .error("managed admission identity")
+                                        .into());
                                 }
-                            )
-                        {
-                            if let Some(recovery) = recovery {
-                                return Err(recovery.invalidated().failed(error));
                             }
+                            Ok(attempt)
+                        })
+                        .await;
+                    match admitted {
+                        Ok(Some(attempt)) => captured.bind_attempt(attempt)?,
+                        Ok(None) => {}
+                        Err(error) => {
+                            if self.run.follow
+                                && matches!(
+                                    &error,
+                                    crate::Error::Data {
+                                        source: araphor_data::Error::AnalysisConflict { .. }
+                                            | araphor_data::Error::AnalysisSourceChanged { .. }
+                                    }
+                                )
+                            {
+                                if let Some(recovery) = recovery {
+                                    return Err(recovery.invalidated().failed(error));
+                                }
+                            }
+                            return Err(error);
                         }
-                        return Err(error);
                     }
                 }
                 let (captured, mut pending) = captured.into_parts();
@@ -630,12 +673,10 @@ impl Runtime {
                 .ok_or_else(Self::state_error);
         }
         let now = self.progress.time()?;
-        let selection = self.run.selection(now)?;
         let snapshot = self
             .run
             .session
-            .at(selection, now)
-            .metadata(self.run.sources())
+            .subscription_metadata(self.run.sources(), now, self.run.selection_window()?)
             .await?;
         self.check_store(&snapshot.page.extraction.meta)?;
         self.run

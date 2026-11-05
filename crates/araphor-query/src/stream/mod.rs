@@ -55,12 +55,19 @@ impl Run {
     }
 
     pub(crate) fn selection(&self, now: u64) -> crate::Result<araphor_data::AnalysisSelectionV1> {
-        if let Some(window) = &self.window {
-            if !crate::definition::PackageCall::contains(&self.plan).context(crate::SqlSnafu)? {
-                return Ok(window.selection(self.session.selection(), now));
-            }
+        if let Some(window) = self.selection_window()? {
+            return Ok(window.selection(self.session.selection(), now));
         }
         Ok(self.session.selection().clone())
+    }
+
+    pub(crate) fn selection_window(&self) -> crate::Result<Option<&crate::follow::Window>> {
+        if self.window.is_some()
+            && !crate::definition::PackageCall::contains(&self.plan).context(crate::SqlSnafu)?
+        {
+            return Ok(self.window.as_ref());
+        }
+        Ok(None)
     }
 
     pub(crate) async fn dependencies(

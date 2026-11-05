@@ -52,6 +52,46 @@ impl SourceScope {
 }
 
 impl ManagedSourceFrame {
+    pub fn attribute_rows(
+        &self,
+        call: u64,
+        rows: &[Arc<ManagedSourceRows>],
+        lease: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> Result<()> {
+        self.attribute_input(call, rows, &[], lease)
+    }
+
+    pub fn attribute_input(
+        &self,
+        call: u64,
+        rows: &[Arc<ManagedSourceRows>],
+        derived: &[Arc<ManagedDerivedSource>],
+        lease: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> Result<()> {
+        for rows in rows {
+            self.check_rows(rows)?;
+        }
+        self.check_derived_lineage(rows, derived)?;
+        let mut selected = self
+            .selected
+            .lock()
+            .map_err(|_| Code::Conflict.error("managed source selection lock"))?;
+        if selected.frozen {
+            return Err(Code::Conflict.error("frozen source call attribution"));
+        }
+        let source = selected.calls.entry(call).or_default();
+        source
+            .cells
+            .extend(rows.iter().map(|rows| Arc::clone(&rows.cells)));
+        for value in derived {
+            if !source.derived.iter().any(|prior| Arc::ptr_eq(prior, value)) {
+                source.derived.push(Arc::clone(value));
+            }
+        }
+        source.leases.push(lease);
+        Ok(())
+    }
+
     pub(super) fn new(
         tables: Vec<sdk::Dataset>,
         removals: BTreeMap<AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
@@ -63,6 +103,7 @@ impl ManagedSourceFrame {
             removals,
             proof: Arc::default(),
             selected: Arc::default(),
+            coverage: Vec::new(),
         }
     }
 
@@ -113,10 +154,12 @@ impl ManagedSourceFrame {
             scope: Arc::clone(&self.scope),
             proof: Arc::clone(&self.proof),
             rows: Arc::new(rows),
+            table: table.into(),
+            batch: Arc::new(batch.clone()),
         })
     }
 
-    pub fn record_rows(&self, rows: &ManagedSourceRows) -> Result<()> {
+    fn check_rows(&self, rows: &ManagedSourceRows) -> Result<()> {
         if !self.scope.same_owner(&rows.scope) {
             return Err(Code::Conflict.error("managed source row scope"));
         }
@@ -152,6 +195,11 @@ impl ManagedSourceFrame {
         for context in &rows.contexts {
             self.scope.check_context(context)?;
         }
+        Ok(())
+    }
+
+    pub fn record_rows(&self, rows: &ManagedSourceRows) -> Result<()> {
+        self.check_rows(rows)?;
         let mut selected = self
             .selected
             .lock()
@@ -171,6 +219,7 @@ impl ManagedSourceFrame {
                 .entry((context.key.clone(), context.commit_revision))
                 .or_insert_with(|| context.clone());
         }
+        selected.cells.push(Arc::clone(&rows.cells));
         Ok(())
     }
 
@@ -178,6 +227,7 @@ impl ManagedSourceFrame {
         &self,
         capture: &super::super::model::Capture,
         expiry: u64,
+        memory: &mut super::super::budget::PreparedMemory<'_>,
     ) -> Result<SourceEvidence> {
         if self.scope.tenant != capture.tenant
             || self.scope.instance != capture.instance
@@ -197,6 +247,10 @@ impl ManagedSourceFrame {
             .selected
             .lock()
             .map_err(|_| Code::Conflict.error("managed source selection lock"))?;
+        memory.charge(SourceEvidence::metadata_bytes(
+            selected.witnesses.values().chain(&capture.witnesses),
+            selected.contexts.values().chain(&capture.contexts),
+        )?)?;
         selected.frozen = true;
         let mut witnesses = selected.witnesses.clone();
         for witness in witnesses.values_mut() {
@@ -227,7 +281,11 @@ impl ManagedSourceBlock {
         }
     }
 
-    pub fn select(&self, indices: &[usize]) -> Result<ManagedSourceRows> {
+    pub fn select(
+        &self,
+        indices: &[usize],
+        lease: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> Result<ManagedSourceRows> {
         let mut witnesses = BTreeMap::new();
         let mut contexts = BTreeMap::new();
         let mut selected_position = StorePositionV1 {
@@ -262,6 +320,13 @@ impl ManagedSourceBlock {
             witnesses: witnesses.into_values().collect(),
             contexts: contexts.into_values().collect(),
             selected_position,
+            cells: Arc::new(SourceCells {
+                table: Arc::clone(&self.table),
+                batch: Arc::clone(&self.batch),
+                rows: Arc::clone(&self.rows),
+                indices: indices.to_vec(),
+                _lease: lease,
+            }),
         })
     }
 }
@@ -336,7 +401,10 @@ impl SourceRow {
         }
     }
 
-    fn array<'a, T: Array + 'static>(batch: &'a sdk::RecordBatch, name: &str) -> Result<&'a T> {
+    pub(super) fn array<'a, T: Array + 'static>(
+        batch: &'a sdk::RecordBatch,
+        name: &str,
+    ) -> Result<&'a T> {
         batch
             .column_by_name(name)
             .and_then(|array| array.as_any().downcast_ref::<T>())
@@ -351,6 +419,21 @@ impl AnalysisStore {
         attempt: &Attempt,
         step: &Step,
     ) -> Result<()> {
+        let started = std::time::Instant::now();
+        let witnessed = |values: &[crate::AnalysisWitnessV1], value: &crate::AnalysisWitnessV1| {
+            values
+                .binary_search_by(|witness| {
+                    (&witness.identity, witness.cursor).cmp(&(&value.identity, value.cursor))
+                })
+                .ok()
+                .is_some_and(|index| values[index] == *value)
+        };
+        let contextual = |values: &[AnalysisContextRefV1], value: &AnalysisContextRefV1| {
+            values
+                .binary_search_by(|context| context.key.cmp(&value.key))
+                .ok()
+                .is_some_and(|index| values[index] == *value)
+        };
         let capture = &attempt.capture;
         let scope = Self::managed_version_from(
             reader,
@@ -368,14 +451,21 @@ impl AnalysisStore {
                 .contexts
                 .windows(2)
                 .any(|pair| pair[0].key >= pair[1].key)
+            || capture.witnesses.windows(2).any(|pair| {
+                (&pair[0].identity, pair[0].cursor) >= (&pair[1].identity, pair[1].cursor)
+            })
+            || capture
+                .contexts
+                .windows(2)
+                .any(|pair| pair[0].key >= pair[1].key)
             || capture
                 .witnesses
                 .iter()
-                .any(|value| !step.witnesses.contains(value))
+                .any(|value| !witnessed(&step.witnesses, value))
             || capture
                 .contexts
                 .iter()
-                .any(|value| !step.contexts.contains(value))
+                .any(|value| !contextual(&step.contexts, value))
         {
             return Err(Code::Invalid.error("managed source evidence order"));
         }
@@ -385,7 +475,7 @@ impl AnalysisStore {
             .ok_or_else(|| Code::Invalid.error("managed source evidence receipt"))?
             .selected;
         for witness in &step.witnesses {
-            if !capture.witnesses.contains(witness) {
+            if !witnessed(&capture.witnesses, witness) {
                 let valid = match &witness.identity {
                     AnalysisStreamIdentityV1::Evidence(source) => {
                         source.valid()
@@ -399,10 +489,9 @@ impl AnalysisStore {
                     return Err(Code::Invalid.error("managed source witness expiry"));
                 }
             }
-            AnalysisStore::check_witness_ref(reader,&selected.result_id,witness)?;
         }
         for context in &step.contexts {
-            if !capture.contexts.contains(context)
+            if !contextual(&capture.contexts, context)
                 && (!context.key.valid()
                     || context.key.tenant_id != scope.tenant_id
                     || (!scope.contexts.is_all()
@@ -411,17 +500,24 @@ impl AnalysisStore {
             {
                 return Err(Code::Invalid.error("managed source context scope"));
             }
-            let stored: Option<u64> = reader.query_row(
-                "SELECT commit_revision FROM context_versions WHERE tenant_id = ? AND owner_id = ?
-                    AND entity_key = ? AND lifetime_key = ? AND owner_revision = ?",
-                params![context.key.tenant_id.as_slice(), context.key.owner_id, context.key.entity_key,
-                    context.key.lifetime_key, context.key.owner_revision], |row| row.get(0),
-            ).optional().context(AnalysisDatabaseSnafu { operation: "read canonical source context" })?;
-            if stored != Some(context.commit_revision) || context.commit_revision > capture.revision
-            {
+            if context.commit_revision > capture.revision {
                 return Err(Code::Invalid.error("managed source context binding"));
             }
         }
+        Self::check_source_pins(
+            reader,
+            &selected.result_id,
+            &step.witnesses,
+            &Self::join_contexts(&step.contexts, &step.derived)?,
+        )?;
+        erebor_telemetry::debug!(
+            stage = "source_evidence_timing",
+            result_id = %selected.result_id,
+            witness_count = step.witnesses.len(),
+            context_count = step.contexts.len(),
+            elapsed_s = started.elapsed().as_secs_f64(),
+            "Managed source evidence validation completed"
+        );
         Ok(())
     }
 }

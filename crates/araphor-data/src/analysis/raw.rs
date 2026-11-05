@@ -814,6 +814,7 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("evidence.before");
         let body_bytes = commit.body.len() as u64;
+        let created = !raw.sources.contains_key(&key);
         let prior_cursor = raw
             .sources
             .get(&key)
@@ -854,6 +855,7 @@ impl AnalysisStore {
         self.write_ready.store(true, Ordering::Release);
         self.raw_pending.store(true, Ordering::Release);
         self.revision.send_replace(revision);
+        if created { self.activations.send_replace(revision); }
         Ok((
             raw.outcome(&identity, batch.last_cursor),
             raw.sources[&key].receipt.clone(),
@@ -1610,6 +1612,22 @@ impl RawJournal {
             return None;
         }
         Some((entry, index))
+    }
+
+    pub(super) fn record_position(
+        &self, record: &crate::DiscoveryRecordIdV1, cut: u64,
+    ) -> Option<super::StorePositionV1> {
+        let (entry, index) = self.locate_retained(&record.stream.key(), record.durable_cursor, cut)?;
+        let span = entry.commit.spans.get(index)?;
+        if entry.identity != record.stream || entry.commit.kind.cpu() != Some(record.cpu_id)
+            || entry.commit.revision == 0 || entry.commit.revision > cut
+            || !(span.first..=span.last).contains(&record.durable_cursor)
+        { return None; }
+        let offset = u32::try_from(record.durable_cursor.checked_sub(span.first)?).ok()?;
+        Some(super::StorePositionV1 {
+            commit_revision: entry.commit.revision,
+            ordinal: span.ordinal.checked_add(offset)?,
+        })
     }
 
     pub(super) fn select_ranges(

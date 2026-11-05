@@ -1,8 +1,8 @@
 use super::*;
 
-impl NotificationRouter {
+impl NotificationCycle<'_, '_> {
     pub(super) fn schedule(
-        &self,
+        &mut self,
         finding: &FindingV1,
         result_id: &str,
         routes: &[ApprovedNotificationRouteV1],
@@ -38,7 +38,7 @@ impl NotificationRouter {
             if !states.is_empty() {
                 return Ok((count, states));
             }
-            let mut state = self.obligation(finding, result_id, first_seen);
+            let mut state = self.obligation(finding, result_id, first_seen)?;
             state.failure = Some(NotificationFailureV1::NoRoute);
             self.insert(state, &mut states)?;
             return Ok((1, states));
@@ -61,10 +61,11 @@ impl NotificationRouter {
                 continue;
             }
             let pending = states.iter().position(|state| state.route.is_none());
-            let mut state = pending.map_or_else(
-                || self.obligation(finding, result_id, first_seen),
-                |index| states.remove(index),
-            );
+            let mut state = if let Some(index) = pending {
+                states.remove(index)
+            } else {
+                self.obligation(finding, result_id, first_seen)?
+            };
             if pending.is_some() {
                 self.update_finding(&mut state, finding, result_id)?;
                 state.finding_revision = state.revision.checked_add(1).ok_or_else(|| {
@@ -99,25 +100,20 @@ impl NotificationRouter {
     }
 
     fn update_finding(
-        &self,
+        &mut self,
         state: &mut NotificationObligationV1,
         finding: &FindingV1,
         result_id: &str,
     ) -> Result<bool> {
         let changed_finding = match &state.finding {
             Some(reference) if reference.result_id == result_id => false,
-            Some(reference) => {
-                self.store
-                    .notification_finding_value(
-                        finding.tenant_id,
-                        &NotificationFindingRefV1 {
-                            finding_id: finding.finding_id.clone(),
-                            result_id: result_id.into(),
-                        },
-                        Some(reference),
-                    )?
-                    .1
-            }
+            Some(reference) => self.prepared.changed(
+                &NotificationFindingRefV1 {
+                    finding_id: finding.finding_id.clone(),
+                    result_id: result_id.into(),
+                },
+                reference,
+            )?,
             None => true,
         };
         let source = NotificationPriorityV1::from(finding.severity);
@@ -182,12 +178,19 @@ impl NotificationRouter {
     }
 
     pub(super) fn obligation(
-        &self,
+        &mut self,
         finding: &FindingV1,
         result_id: &str,
         now: u64,
-    ) -> NotificationObligationV1 {
-        NotificationObligationV1 {
+    ) -> Result<NotificationObligationV1> {
+        self.prepared.charge(
+            8 * (std::mem::size_of::<NotificationObligationV1>()
+                + finding.finding_id.len()
+                + finding.package_id.len()
+                + result_id.len()
+                + finding.required_action.as_ref().map_or(0, String::len)),
+        )?;
+        Ok(NotificationObligationV1 {
             schema_version: 1,
             key: NotificationKeyV1 {
                 tenant_id: finding.tenant_id,
@@ -217,11 +220,11 @@ impl NotificationRouter {
             human_acknowledgement: None,
             agent_receipt: None,
             advisory: None,
-        }
+        })
     }
 
     pub(super) fn insert(
-        &self,
+        &mut self,
         mut state: NotificationObligationV1,
         states: &mut Vec<NotificationObligationV1>,
     ) -> Result<()> {

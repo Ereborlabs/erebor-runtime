@@ -2,9 +2,10 @@ use std::ffi::c_void;
 
 use arrow_array::ffi_stream::FFI_ArrowArrayStream;
 
-use crate::{Error, ErrorCode, Result, CONTRACT_VERSION};
+use crate::{Error, ErrorCode, Result};
 
-pub const ACCESSOR_SYMBOL: &[u8] = b"araphor_analysis_get_api_v1\0";
+pub const ABI_VERSION: u32 = 2;
+pub const ACCESSOR_SYMBOL: &[u8] = b"araphor_analysis_get_api_v2\0";
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -99,6 +100,7 @@ pub struct NativeError {
 
 #[repr(C)]
 pub struct Request {
+    pub struct_size: u64,
     pub export_name: Bytes,
     pub inputs: *const Input,
     pub input_count: u64,
@@ -109,6 +111,51 @@ pub struct Request {
     pub checkpoint: *const Checkpoint,
     pub cancelled: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub cancel_context: *mut c_void,
+    pub host: *const HostApi,
+}
+
+#[repr(C)]
+pub struct HostResponse {
+    pub input: *const Input,
+    pub copy_limit: u64,
+    pub error: NativeError,
+    pub private_data: *mut c_void,
+}
+
+impl Default for HostResponse {
+    fn default() -> Self {
+        Self {
+            input: std::ptr::null(),
+            copy_limit: 0,
+            error: NativeError { code: 0, field: Bytes::new(&[]) },
+            private_data: std::ptr::null_mut(),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct HostApi {
+    pub abi_version: u32,
+    pub struct_size: u64,
+    pub context: *mut c_void,
+    pub read: Option<unsafe extern "C" fn(*mut c_void, Bytes, *const Dataset, *mut HostResponse) -> u32>,
+    pub stage: Option<unsafe extern "C" fn(*mut c_void, *const Dataset, *mut HostResponse) -> u32>,
+    pub release: Option<unsafe extern "C" fn(*mut HostResponse)>,
+}
+
+impl HostApi {
+    pub fn validate(&self) -> Result<()> {
+        if self.abi_version != ABI_VERSION
+            || self.struct_size != std::mem::size_of::<Self>() as u64
+            || self.context.is_null()
+            || self.read.is_none()
+            || self.stage.is_none()
+            || self.release.is_none()
+        {
+            return Err(Error::contract(ErrorCode::Incompatible, "native host table"));
+        }
+        Ok(())
+    }
 }
 
 #[repr(C)]
@@ -153,7 +200,7 @@ pub struct Api {
 
 impl Api {
     pub fn validate(&self) -> Result<()> {
-        if self.contract_version != CONTRACT_VERSION
+        if self.contract_version != ABI_VERSION
             || self.struct_size != std::mem::size_of::<Self>() as u64
             || self.evaluate.is_none()
             || self.release.is_none()

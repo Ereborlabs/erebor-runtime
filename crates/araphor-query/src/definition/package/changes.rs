@@ -208,6 +208,7 @@ impl Packages {
         provider: &dyn ContextProvider,
         model: &sdk::Model,
         complete: InputPlans,
+        call: u64,
     ) -> Result<PlannedInputs> {
         let contract = model.change_inputs.as_ref().ok_or_else(|| {
             InvalidSnafu {
@@ -233,6 +234,7 @@ impl Packages {
             );
             ports.insert(id, slot);
         }
+        let mut images = BTreeMap::new();
         for pair in &contract.ports {
             let base = complete
                 .get(&pair.after)
@@ -243,18 +245,7 @@ impl Packages {
                     }
                     .build()
                 })?;
-            for (name, image) in [
-                ("before", SourceImage::Before),
-                ("after", SourceImage::After),
-                ("inserted", SourceImage::Inserted),
-                ("removed", SourceImage::Removed),
-            ] {
-                let plan = image.plan(&base).context(SqlSnafu)?;
-                tables.insert(
-                    format!("{name}.{}", pair.after),
-                    Arc::new(ViewTable::new(plan, None)),
-                );
-            }
+            images.insert(pair.after.clone(), base);
         }
         let mut pending = Vec::new();
         for (slot, input) in model.inputs.iter().enumerate() {
@@ -275,7 +266,7 @@ impl Packages {
                 if let Some(pair) = pair {
                     if pair.before == input.port.name {
                         if let sdk::InputSource::Query(sql) = &input.source {
-                            return self.plan(provider, &tables, sql);
+                            return self.plan(provider, &tables, Some(&images), sql);
                         }
                     }
                     let image = if pair.before == input.port.name {
@@ -283,7 +274,12 @@ impl Packages {
                     } else {
                         SourceImage::After
                     };
-                    let base = image.plan(&complete[&pair.after].0).context(SqlSnafu)?;
+                    let base = match (&pair.current, image) {
+                        (Some(sql), SourceImage::After) => {
+                            self.plan(provider, &tables, Some(&images), sql)?
+                        }
+                        _ => image.plan(&complete[&pair.after].0).context(SqlSnafu)?,
+                    };
                     let key = model
                         .inputs
                         .iter()
@@ -329,8 +325,22 @@ impl Packages {
                     return Ok(plan.clone());
                 }
                 match &input.source {
-                    sdk::InputSource::Query(sql) | sdk::InputSource::Lookup(sql) => {
-                        self.plan(provider, &tables, sql)
+                    sdk::InputSource::Lookup(sql) => {
+                        let mut scoped = tables.clone();
+                        if let Some(graph) = &model.graph {
+                            for relation in &graph.relations {
+                                scoped.insert(
+                                    format!("graph.{}", relation.name),
+                                    Arc::new(super::super::physical::graph::GraphProvider::new(
+                                        call, relation,
+                                    )?),
+                                );
+                            }
+                        }
+                        self.plan(provider, &scoped, Some(&images), sql)
+                    }
+                    sdk::InputSource::Query(sql) => {
+                        self.plan(provider, &tables, Some(&images), sql)
                     }
                     _ => InvalidSnafu {
                         field: "change input source",

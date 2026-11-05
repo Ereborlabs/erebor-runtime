@@ -153,6 +153,7 @@ fn native_header_encoding_bounds() -> TestResult {
         }
         encoder.bytes(&damaged)?;
         let error = GraphHeader::decode(&encoder.into_writer())
+            .map_err(crate::Error::from)
             .err()
             .ok_or_else(|| std::io::Error::other(format!("accepted damaged header {index}")))?;
         assert!(
@@ -195,11 +196,13 @@ fn native_header_row_counts() -> TestResult {
         header.finding_count as u64,
     )?;
     assert!(matches!(
-        header.check_shape(
-            (header.subject_count + 1) as u64,
-            header.edge_count as u64,
-            header.finding_count as u64
-        ),
+        header
+            .check_shape(
+                (header.subject_count + 1) as u64,
+                header.edge_count as u64,
+                header.finding_count as u64
+            )
+            .map_err(crate::Error::from),
         Err(crate::Error::GraphInvalid {
             field: "graph row counts",
             ..
@@ -323,7 +326,7 @@ fn native_header_integer_format() -> TestResult {
         }
         encoder.bytes(metadata)?;
         assert!(matches!(
-            GraphHeader::decode(&encoder.into_writer()),
+            GraphHeader::decode(&encoder.into_writer()).map_err(crate::Error::from),
             Err(crate::Error::GraphInvalid {
                 field: "graph header format",
                 ..

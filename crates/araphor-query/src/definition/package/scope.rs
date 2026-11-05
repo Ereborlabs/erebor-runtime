@@ -17,11 +17,19 @@ use datafusion::logical_expr::{
 pub(super) struct Scope<'a> {
     pub provider: &'a dyn ContextProvider,
     pub tables: &'a BTreeMap<String, Arc<dyn TableProvider>>,
+    pub images: Option<&'a BTreeMap<String, datafusion::logical_expr::LogicalPlan>>,
 }
 
 impl ContextProvider for Scope<'_> {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let options = self.provider.options();
+        if name.catalog().is_none() && name.schema() == Some("graph") {
+            if let Some(table) = self.tables.get(&format!("graph.{}", name.table())) {
+                return Ok(provider_as_source(Arc::clone(table)));
+            }
+            return datafusion::common::plan_err!("Graph relation '{name}' is not declared");
+        }
+
         let image = match name.schema() {
             Some("before") => Some(crate::sources::SourceImage::Before),
             Some("after") => Some(crate::sources::SourceImage::After),
@@ -34,6 +42,11 @@ impl ContextProvider for Scope<'_> {
             .is_none_or(|catalog| catalog == options.catalog.default_catalog)
         {
             if let Some(image) = image {
+                if let Some(plan) = self.images.and_then(|images| images.get(name.table())) {
+                    return Ok(provider_as_source(Arc::new(
+                        datafusion::catalog::view::ViewTable::new(image.plan(plan)?, None),
+                    )));
+                }
                 if let Some(table) = self.tables.get(&format!(
                     "{}.{}",
                     name.schema().unwrap_or_default(),

@@ -123,7 +123,7 @@ impl Fixture {
 fn aggregate(plan: &Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let mut aggregate = None;
     plan.apply(|node| {
-        if node.as_any().is::<AggregateExec>() {
+        if node.is::<AggregateExec>() {
             aggregate = Some(Arc::clone(node));
             Ok(TreeNodeRecursion::Stop)
         } else {
@@ -232,7 +232,7 @@ async fn native_zero_column_rows() {
     let source = source.unwrap();
     assert!(source.schema().fields().is_empty());
     let aggregate = aggregate(&plan);
-    let native = aggregate.as_any().downcast_ref::<AggregateExec>().unwrap();
+    let native = aggregate.downcast_ref::<AggregateExec>().unwrap();
     let after = fixture
         .run(
             native.input(),
@@ -353,7 +353,7 @@ async fn binding_schema_is_exact() {
         .await;
     let source = source.unwrap();
     let aggregate = aggregate(&plan);
-    let native = aggregate.as_any().downcast_ref::<AggregateExec>().unwrap();
+    let native = aggregate.downcast_ref::<AggregateExec>().unwrap();
     for schema in [
         Arc::new(Schema::new(vec![Field::new(
             "wrong",
@@ -408,7 +408,7 @@ async fn unsupported_plans_stay_batch() {
         let plan = fixture.plan(sql, vec![]).await;
         let logical = crate::planner::subscription::Subscribe::runtime(plan, false).unwrap();
         let physical = fixture.state.create_physical_plan(&logical).await.unwrap();
-        let subscription = physical.as_any().downcast_ref::<SubscribeExec>().unwrap();
+        let subscription = physical.downcast_ref::<SubscribeExec>().unwrap();
         assert!(!subscription.maintained(), "{sql}");
     }
 }
@@ -425,7 +425,7 @@ async fn integral_sum_uses_state() {
         let plan = fixture.plan(sql, vec![]).await;
         let logical = crate::planner::subscription::Subscribe::runtime(plan, false).unwrap();
         let physical = fixture.state.create_physical_plan(&logical).await.unwrap();
-        let subscription = physical.as_any().downcast_ref::<SubscribeExec>().unwrap();
+        let subscription = physical.downcast_ref::<SubscribeExec>().unwrap();
         assert!(subscription.maintained(), "{sql}");
     }
 }

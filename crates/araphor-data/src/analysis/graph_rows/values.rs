@@ -146,7 +146,7 @@ impl GraphRows {
     }
 
     pub(in crate::analysis) fn decode_subject(row: &Row<'_>) -> Result<GraphSubjectKeyV1> {
-        araphor_graph::SubjectRows::decode(row).map_err(Into::into)
+        crate::analysis::graph_rows::store::SubjectRows::decode(row).map_err(Into::into)
     }
 
     #[cfg(test)]
@@ -160,6 +160,7 @@ impl GraphRows {
         serde_plain::from_str(label).map_err(|_| Self::invalid("graph scalar label"))
     }
     pub(super) fn read_ids(row: &Row<'_>, index: usize) -> Result<Vec<u64>> {
-        araphor_graph::FindingRows::evidence_references(row, index).map_err(Into::into)
+        crate::analysis::graph_rows::store::FindingRows::evidence_references(row, index)
+            .map_err(Into::into)
     }
 }

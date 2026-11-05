@@ -168,7 +168,7 @@ async fn unused_ctes_record_providers() {
     .unwrap();
     assert_eq!(scans, ["events"]);
     assert_eq!(coverage.schema().field(0).name(), "first_cursor");
-    let scan = events.as_any().downcast_ref::<MemTable>().unwrap();
+    let scan = events.downcast_ref::<MemTable>().unwrap();
     assert_eq!(scan.schema().field(4).name(), "__row_index");
 }
 

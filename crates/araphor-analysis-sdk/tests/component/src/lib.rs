@@ -12,6 +12,7 @@ pub struct RuntimeFixture;
 impl Guest for RuntimeFixture {
     fn evaluate(
         input: types::Evaluation,
+        _graph: Option<&sdk::guest::bindings::araphor::analysis::graph::Transaction>,
     ) -> std::result::Result<types::Output, types::EvaluationError> {
         Self::execute(input.into())
             .map(Into::into)
@@ -449,6 +450,7 @@ impl RuntimeFixture {
                 affected: "affected".into(),
                 before: "removed".into(),
                 after: "input".into(),
+                current: None,
             }],
         });
         sdk::Package::new(

@@ -127,10 +127,21 @@ impl SourceDemand {
             if let LogicalPlan::TableScan(scan) = plan {
                 let provider = source_as_provider(&scan.source).ok();
                 if let Some(provider) = &provider {
+                    if let Some(source) =
+                        provider.downcast_ref::<crate::definition::physical::graph::GraphProvider>()
+                    {
+                        origins.insert(SourceOrigin::Port(source.family));
+                    }
                     if let Some(source) = provider.downcast_ref::<SourcePort>() {
-                        origins.insert(SourceOrigin::Port(source.slot));
-                        if !scoped {
-                            origins.extend(source.origins().iter().cloned());
+                        if source.is_native() {
+                            for input in source.inputs() {
+                                origins.extend(Self::collect_with_views(input, scoped, views)?);
+                            }
+                        } else {
+                            origins.insert(SourceOrigin::Port(source.slot));
+                            if !scoped {
+                                origins.extend(source.origins().iter().cloned());
+                            }
                         }
                     }
                     if let Some(source) = provider.downcast_ref::<SourceProvider>() {
@@ -192,6 +203,11 @@ impl<'a> Planner<'a> {
             poll_fn(|context| crate::parser::Parser::stack(|| planning.as_mut().poll(context)))
                 .await?;
         crate::definition::PackageCall::expose_programs(plan)
+    }
+
+    pub fn reads_only(plan: &LogicalPlan, table: &str) -> Result<bool> {
+        Self::sources(plan)
+            .map(|sources| sources == BTreeSet::from([SourceOrigin::Durable(table.into())]))
     }
 
     pub(crate) fn sources(plan: &LogicalPlan) -> Result<BTreeSet<SourceOrigin>> {

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1345,6 +1344,7 @@ async fn physical_preserves_context() {
             "context_scalar".into(),
             Arc::clone(registered.scalar_functions().values().next().unwrap()),
         )]),
+        registered.higher_order_functions().clone(),
         HashMap::from([(
             "context_aggregate".into(),
             Arc::clone(registered.aggregate_functions().values().next().unwrap()),
@@ -1433,9 +1433,6 @@ impl Drop for PollGuard {
 
 #[async_trait::async_trait]
 impl TableProvider for Gate {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

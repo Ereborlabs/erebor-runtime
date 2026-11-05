@@ -1,34 +1,33 @@
 use araphor_analysis_sdk as sdk;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod commands;
 mod contract;
 mod credential;
 mod edges;
 mod finding;
 mod finish;
-mod kubernetes;
 mod model;
 mod native;
-mod observation;
 mod policy;
-mod process;
 mod units;
 
 pub use contract::ReasonDetails;
+pub use finding::FindingResolve;
+pub use finish::{BranchExt, CheckpointExt};
 pub use model::*;
 
 pub const GRAPH_WINDOW_NS: u64 = 300_000_000_000;
 pub const GRAPH_WITNESS_TTL_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
+#[cfg(test)]
 use GraphContextActionV1 as ContextClass;
 use GraphFactValueV1 as FactValue;
 use GraphReadPathV1 as ReadPath;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Detector {
-    Process,
     Credentials,
-    Kubernetes,
 }
 
 struct Computation {

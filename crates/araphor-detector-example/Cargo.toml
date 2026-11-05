@@ -11,6 +11,7 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk", features = ["guest"] }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
+araphor-analysis-types = { path = "../araphor-analysis-types" }
 
 [dev-dependencies]
 araphor-component-build = { path = "../araphor-component-build" }

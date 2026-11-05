@@ -281,8 +281,8 @@ fn source_rows_keep_selected_evidence() -> TestResult {
     )?;
     let frame = first.state.source().ok_or("initial source frame")?;
     let block = frame.row_handles("events", 0)?;
-    assert!(block.select(&[3]).is_err());
-    let selected = block.select(&[1, 1])?;
+    assert!(block.select(&[3], std::sync::Arc::new(())).is_err());
+    let selected = block.select(&[1, 1], std::sync::Arc::new(()))?;
     assert_eq!(selected.witnesses().len(), 1);
     let concurrent = fixture.read(
         &store,
@@ -306,7 +306,7 @@ fn source_rows_keep_selected_evidence() -> TestResult {
     let changed = next.state.source().ok_or("changed source frame")?;
     changed.record_rows(&selected)?;
     let rows = changed.row_handles("events", 0)?;
-    changed.record_rows(&rows.select(&[0, 1])?)?;
+    changed.record_rows(&rows.select(&[0, 1], std::sync::Arc::new(()))?)?;
     let mut input = request("rows-next");
     input.witness_expiry = 200;
     let attempt = store.register_managed_attempt(&next.state, &input, || Ok(()))?;
@@ -326,7 +326,9 @@ fn source_rows_keep_selected_evidence() -> TestResult {
         fixture.fixture.current(&store)?.progress,
         receipt.commit_revision
     );
-    assert!(changed.record_rows(&block.select(&[0])?).is_err());
+    assert!(changed
+        .record_rows(&block.select(&[0], std::sync::Arc::new(()))?)
+        .is_err());
     let receipt = fixture
         .fixture
         .publish(&store, &attempt, &evaluations, &outputs)?;
@@ -507,7 +509,7 @@ fn source_frames_reject_basis() -> TestResult {
         .source()
         .ok_or("initial source")?
         .row_handles("events", 0)?
-        .select(&[0])?;
+        .select(&[0], std::sync::Arc::new(()))?;
     fixture.execution.clear();
     store
         .writer()?
@@ -525,7 +527,9 @@ fn source_frames_reject_basis() -> TestResult {
         fresh.proof().ok_or("recovered proof")?.as_ref(),
         &receipt.selected
     );
-    let fresh = fresh.row_handles("events", 0)?.select(&[0])?;
+    let fresh = fresh
+        .row_handles("events", 0)?
+        .select(&[0], std::sync::Arc::new(()))?;
     let next = fixture.read(
         &store,
         ManagedSourceRead::Changes(reference),

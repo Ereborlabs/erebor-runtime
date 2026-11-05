@@ -98,6 +98,14 @@ pub(super) unsafe fn read(
     schema: &Schema,
     copy_bytes: Option<usize>,
 ) -> Result<Vec<RecordBatch>> {
+    unsafe { read_checked(pointer, Some(schema), copy_bytes) }
+}
+
+pub(super) unsafe fn read_checked(
+    pointer: *mut FFI_ArrowArrayStream,
+    schema: Option<&Schema>,
+    copy_bytes: Option<usize>,
+) -> Result<Vec<RecordBatch>> {
     if pointer.is_null()
         || unsafe {
             (*pointer).release.is_none()
@@ -115,10 +123,11 @@ pub(super) unsafe fn read(
         private_data: pointer.cast::<c_void>(),
     };
     let reader = ArrowArrayStreamReader::try_new(borrowed)?;
-    if reader.schema().as_ref() != schema {
+    if schema.is_some_and(|schema| reader.schema().as_ref() != schema) {
         return Err(Error::contract(ErrorCode::Invalid, "native stream schema"));
     }
     let mut batches = Vec::new();
+    let schema = reader.schema();
     let mut bytes = 0_usize;
     for batch in reader {
         let batch = batch?;
@@ -138,6 +147,9 @@ pub(super) unsafe fn read(
             .try_reserve_exact(1)
             .map_err(|_| Error::contract(ErrorCode::Limit, "native allocation"))?;
         batches.push(batch);
+    }
+    if batches.is_empty() {
+        batches.push(RecordBatch::new_empty(schema));
     }
     Ok(batches)
 }

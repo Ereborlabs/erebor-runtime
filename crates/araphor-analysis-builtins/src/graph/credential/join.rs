@@ -83,7 +83,8 @@ impl Computation {
                             continue;
                         }
                         let channel = self.record(row)?;
-                        if channel.position <= horizon
+                        if channel.network()
+                            && channel.position <= horizon
                             && channel.same_lifetime(read)
                             && channel.same_task(read)
                             && self.bounded(read, channel)

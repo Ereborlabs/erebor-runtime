@@ -16,6 +16,7 @@ struct Exchange {
     _permit: Arc<Permit>,
     _image: Arc<MemoryReservation>,
     _scope: Option<araphor_package_runtime::TaskTrackerToken>,
+    _graph: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
 impl PackageExec {
@@ -41,6 +42,21 @@ impl PackageExec {
             .bundle()
             .artifact(&self.call.package)
             .map_err(external)?;
+        let _model = artifact
+            .descriptor
+            .exports
+            .iter()
+            .find(|model| model.name == evaluation.export)
+            .ok_or_else(|| internal("package export is absent"))?;
+        let source = context
+            .session_config()
+            .get_extension::<crate::sources::SourceSnapshot>()
+            .ok_or_else(|| internal("Graph source snapshot is absent"))?;
+        let graph = owner.bind_graph(self, &source, context).await?;
+        let control = match &graph {
+            Some(host) => Arc::clone(&host.control),
+            None => Arc::new(owner.control.operation().map_err(external)?),
+        };
         let wasm = matches!(
             artifact
                 .implementation(&evaluation.export)
@@ -107,6 +123,10 @@ impl PackageExec {
                 output.size()
             }
         });
+        let guard = match &graph {
+            Some(host) => Some(host.enter_guest().await?),
+            None => None,
+        };
         let lease = Exchange {
             _image: Arc::clone(&self.call._image),
             _input: input,
@@ -117,6 +137,7 @@ impl PackageExec {
                 .scope
                 .as_ref()
                 .map(araphor_package_runtime::TaskTracker::token),
+            _graph: guard,
         };
         let (evaluation, result) = owner
             .runtime
@@ -124,15 +145,24 @@ impl PackageExec {
                 Arc::clone(&self.call.bundle),
                 self.call.package.clone(),
                 evaluation,
-                owner.control.within(None).map_err(external)?,
+                control.within(None).map_err(external)?,
                 &owner.workers,
                 copy_bytes,
                 self.prepared.clone(),
                 admission,
+                graph
+                    .as_ref()
+                    .map(|host| Arc::clone(host) as Arc<dyn sdk::InvocationService + Send + Sync>),
                 lease,
             )
             .await
-            .map_err(external)?;
+            .map_err(|error| {
+                graph
+                    .as_ref()
+                    .and_then(|host| host.failure(&error))
+                    .unwrap_or_else(|| external(error))
+            })?;
+        owner.control.check().map_err(external)?;
         Ok((retained, evaluation, result, output))
     }
 }

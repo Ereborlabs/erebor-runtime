@@ -7,7 +7,7 @@ fn graph_appender_constraint_rollback() -> TestResult {
     assert!(!fixture.snapshot.graph.subjects.is_empty());
     assert!(!fixture.snapshot.graph.edges.is_empty());
     assert!(!fixture.snapshot.findings.is_empty());
-    let original = araphor_graph::FindingRows::SCHEMA;
+    let original = crate::analysis::graph_rows::store::FindingRows::SCHEMA;
     let (_, table) = original
         .split_once("CREATE TABLE graph_finding_values ")
         .ok_or("finding value table")?;

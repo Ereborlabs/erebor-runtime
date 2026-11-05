@@ -2,15 +2,16 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
-use araphor_analysis_builtins::graph::Detector;
+use araphor_analysis_builtins::graph::Unit;
 use araphor_analysis_sdk as sdk;
 use araphor_data::{ManagedDestination, ManagedSourceRead, PackageErrorCodeV1 as Code};
 use araphor_query::execution::Session;
-use araphor_query::sources::{PortSource, SourceImage, SourceSnapshot};
-use datafusion::arrow::array::{Array, BinaryArray, BooleanArray, StringArray, UInt64Array};
+use araphor_query::sources::{PortRead, PortSource, SourceImage, SourceSnapshot};
+use datafusion::arrow::array::{
+    Array, BinaryArray, BooleanArray, StringArray, UInt32Array, UInt64Array,
+};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
-use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use futures_util::future::BoxFuture;
@@ -24,6 +25,7 @@ pub(super) enum MetadataPort {
     Control,
     Window,
     Status,
+    Prefix,
 }
 
 impl MetadataPort {
@@ -37,6 +39,7 @@ impl MetadataPort {
             Self::Control => "graph_control",
             Self::Window => "window",
             Self::Status => "graph_status",
+            Self::Prefix => "graph_prefix",
         };
         let driver = LogicalPlanBuilder::empty(true)
             .build()
@@ -80,11 +83,26 @@ impl MetadataPort {
                 Field::new("coverage_revision", DataType::UInt64, true),
                 Field::new("notice_context_revision", DataType::UInt64, true),
                 Field::new("notice_coverage_revision", DataType::UInt64, true),
+                Field::new("expired", DataType::Boolean, false),
             ]),
-            Self::Window => Detector::window_port().schema,
+            Self::Window => Unit::window_port().schema,
             Self::Status => Schema::new(vec![
                 Field::new("restricted", DataType::Boolean, false),
                 Field::new("zero_crossing", DataType::Boolean, false),
+                Field::new("append_only", DataType::Boolean, false),
+            ]),
+            Self::Prefix => Schema::new(vec![
+                Field::new("available", DataType::Boolean, false),
+                Field::new("tenant_id", DataType::Binary, false),
+                Field::new("node_id", DataType::Utf8, false),
+                Field::new("node_boot_id", DataType::Binary, false),
+                Field::new("label_epoch", DataType::UInt64, false),
+                Field::new("source_id", DataType::Binary, false),
+                Field::new("source_epoch", DataType::UInt64, false),
+                Field::new("cpu_id", DataType::UInt32, false),
+                Field::new("coverage_interval_id", DataType::Binary, false),
+                Field::new("kernel_sequence", DataType::UInt64, false),
+                Field::new("temporal_coverage", DataType::UInt32, false),
             ]),
         })
     }
@@ -107,13 +125,21 @@ impl PortSource for MetadataPort {
     fn reusable(&self) -> bool {
         true
     }
+    fn snapshot_bound(&self) -> bool {
+        true
+    }
+    fn after_is_current(&self) -> bool {
+        matches!(self, Self::Control)
+    }
     fn key_columns(&self) -> &[(usize, usize)] {
         &[]
     }
 
-    fn header(&self, image: SourceImage, _header: &LogicalPlan) -> Result<Option<LogicalPlan>> {
+    fn header(&self, image: SourceImage, header: &LogicalPlan) -> Result<Option<LogicalPlan>> {
         if matches!(self, Self::Control | Self::Status) && image == SourceImage::Before {
             LogicalPlanBuilder::empty(true).build().map(Some)
+        } else if matches!(self, Self::Status) && image == SourceImage::After {
+            Ok(Some(header.clone()))
         } else {
             Ok(None)
         }
@@ -126,7 +152,7 @@ impl PortSource for MetadataPort {
         header: Vec<sdk::RecordBatch>,
         source: Arc<SourceSnapshot>,
         context: Arc<TaskContext>,
-    ) -> BoxFuture<'a, Result<(sdk::Input, MemoryReservation)>> {
+    ) -> BoxFuture<'a, Result<PortRead>> {
         async move {
             Self::scalar(&driver)?;
             if matches!(self, Self::Status) {
@@ -144,13 +170,13 @@ impl PortSource for MetadataPort {
             }
             let kind = *self;
             let callback = Arc::clone(&context);
-            source
-                .blocking(&context, (), move |source, control| {
+            let operation =
+                move |source: &Arc<SourceSnapshot>, control: &araphor_data::AnalysisReadControl| {
                     (|| -> Result<_> {
                         let input = match kind {
                             Self::Capture => {
                                 Self::scalar(&header)?;
-                                let (resume, revision) = source.with_capture(|_, capture, _| {
+                                let (resume, revision, instance, generation, cut) = source.with_capture(|_, capture, _| {
                                     let frame = capture
                                         .source()
                                         .ok_or_else(|| Code::Invalid.error("Graph source frame"))?;
@@ -172,8 +198,16 @@ impl PortSource for MetadataPort {
                                             capture.revision(),
                                             capture.time_utc_ns(),
                                         ),
+                                        capture.instance().spec.id.clone(),
+                                        capture.instance().generation,
+                                        capture.revision(),
                                     ))
                                 })?;
+                                erebor_telemetry::debug!(
+                                    stage = "source_capture_flags", instance_id = %instance,
+                                    generation, cut_revision = cut, image = ?image,
+                                    resume_window = resume, "Native source capture flags"
+                                );
                                 sdk::Input {
                                     data: sdk::Dataset {
                                         name: "graph_capture".into(),
@@ -301,9 +335,10 @@ impl PortSource for MetadataPort {
                                         Ok((source.clone(), base, metadata, revision))
                                     })?;
                                 let selected = if before {
-                                    let (metadata, _) = metadata.as_ref().ok_or_else(|| {
-                                        Projection::invalid("Graph before header")
-                                    })?;
+                                    let metadata = &metadata
+                                        .as_ref()
+                                        .ok_or_else(|| Projection::invalid("Graph before header"))?
+                                        .manifest;
                                     Some((
                                         identity.key(),
                                         metadata.first_cursor,
@@ -321,16 +356,17 @@ impl PortSource for MetadataPort {
                                         || base.as_ref().is_some_and(|base| {
                                             base.result_id.is_empty() || base.commit_revision == 0
                                         })
-                                        || metadata.as_ref().is_some_and(|(metadata, _)| {
-                                            metadata.first_cursor != first
-                                                || metadata.scope.identity != identity
+                                        || metadata.as_ref().is_some_and(|summary| {
+                                            let metadata = &summary.manifest;
+                                            metadata.scope.identity != identity
                                         })
                                     {
                                         return Err(Projection::invalid("Graph selected window"));
                                     }
                                     let deadline = metadata
                                         .as_ref()
-                                        .map(|(metadata, _)| metadata.witness_deadline_utc_ns)
+                                        .filter(|summary| summary.manifest.first_cursor == first)
+                                        .map(|summary| summary.manifest.witness_deadline_utc_ns)
                                         .or_else(|| {
                                             source
                                                 .time_utc_ns()
@@ -339,130 +375,181 @@ impl PortSource for MetadataPort {
                                         .ok_or_else(|| {
                                             Projection::invalid("Graph window deadline")
                                         })?;
-                                    rows.push((key, first, last, base, deadline));
-                                }
-                                let batches = if let Some((key, first, last, base, deadline)) =
-                                    rows.first()
-                                {
-                                    let progress = if before {
-                                        None
-                                    } else {
-                                        let (consumed, floor, accepted) =
-                                            Projection::progress(&header, &identity)?;
-                                        Some((
-                                            consumed,
-                                            floor,
-                                            accepted,
-                                            Projection::coverage_revision(&header, &identity)?,
-                                        ))
-                                    };
-                                    let count = metadata.as_ref().and_then(|(_, count)| *count);
-                                    let notices = if before {
-                                        (
-                                            metadata.as_ref().map(|(metadata, _)| {
-                                                metadata.context_notice_revision
-                                            }),
-                                            None,
-                                        )
-                                    } else {
-                                        let batch = header
-                                            .iter()
-                                            .find(|batch| batch.num_rows() != 0)
+                                    let expired = if before {
+                                        metadata
+                                            .as_ref()
                                             .ok_or_else(|| {
-                                                Projection::invalid("Graph control notice row")
-                                            })?;
-                                        let bound = Projection::column::<UInt64Array>(
-                                            batch,
-                                            "notice_base_revision",
-                                        )?;
-                                        if base.as_ref().is_some_and(|base| {
-                                            bound.is_null(0)
-                                                || bound.value(0) != base.commit_revision
-                                        }) {
-                                            return Err(Projection::invalid(
-                                                "Graph control notice base",
-                                            ));
-                                        }
-                                        let contexts = Projection::column::<UInt64Array>(
-                                            batch,
-                                            "notice_context_revision",
-                                        )?;
-                                        let coverage = Projection::column::<UInt64Array>(
-                                            batch,
-                                            "notice_coverage_revision",
-                                        )?;
-                                        if contexts.is_null(0) || coverage.is_null(0) {
-                                            return Err(Projection::invalid(
-                                                "Graph control notice",
-                                            ));
-                                        }
-                                        (Some(contexts.value(0)), Some(coverage.value(0)))
+                                                Projection::invalid("Graph before lifecycle")
+                                            })?
+                                            .expired
+                                    } else {
+                                        source.with_capture(|_, capture, _| {
+                                            capture
+                                                .source()
+                                                .ok_or_else(|| {
+                                                    Code::Incomplete.error("Graph lifecycle source")
+                                                })?
+                                                .expired_window(
+                                                    &identity,
+                                                    first,
+                                                    deadline,
+                                                    capture.time_utc_ns(),
+                                                )
+                                        })?
                                     };
-                                    Projection::begin(
-                                        source,
-                                        &callback,
-                                        &identity,
-                                        *first,
-                                        *last,
-                                        *deadline,
-                                        base.as_ref(),
-                                        metadata.as_ref(),
-                                        progress,
-                                        &memory,
-                                    )?;
-                                    vec![sdk::RecordBatch::try_new(
-                                        kind.schema(),
-                                        vec![
-                                            Arc::new(BinaryArray::from_vec(vec![key.as_slice()])),
-                                            Arc::new(UInt64Array::from(vec![*first])),
-                                            Arc::new(UInt64Array::from(vec![*last])),
-                                            Arc::new(StringArray::from(vec![base
-                                                .as_ref()
-                                                .map(|base| base.result_id.as_str())])),
-                                            Arc::new(UInt64Array::from(vec![base
-                                                .as_ref()
-                                                .map(|base| base.commit_revision)])),
-                                            Arc::new(UInt64Array::from(vec![*deadline])),
-                                            Arc::new(UInt64Array::from(vec![
-                                                araphor_data::GRAPH_WINDOW_NS,
-                                            ])),
-                                            Arc::new(UInt64Array::from(vec![count])),
-                                            Arc::new(BinaryArray::from_vec(vec![identity
-                                                .tenant_id
-                                                .as_slice()])),
-                                            Arc::new(StringArray::from(vec![identity
-                                                .node_id
-                                                .as_str()])),
-                                            Arc::new(BinaryArray::from_vec(vec![identity
-                                                .node_boot_id
-                                                .as_slice()])),
-                                            Arc::new(UInt64Array::from(vec![identity.label_epoch])),
-                                            Arc::new(BinaryArray::from_vec(vec![identity
-                                                .source_id
-                                                .as_slice()])),
-                                            Arc::new(UInt64Array::from(vec![
-                                                identity.source_epoch,
-                                            ])),
-                                            Arc::new(UInt64Array::from(vec![
-                                                progress.map(|value| value.0)
-                                            ])),
-                                            Arc::new(UInt64Array::from(vec![
-                                                progress.map(|value| value.1)
-                                            ])),
-                                            Arc::new(UInt64Array::from(vec![
-                                                progress.map(|value| value.2)
-                                            ])),
-                                            Arc::new(UInt64Array::from(vec![
-                                                progress.map(|value| value.3)
-                                            ])),
-                                            Arc::new(UInt64Array::from(vec![notices.0])),
-                                            Arc::new(UInt64Array::from(vec![notices.1])),
-                                        ],
-                                    )
-                                    .map_err(Projection::external)?]
-                                } else {
-                                    vec![sdk::RecordBatch::new_empty(kind.schema())]
-                                };
+                                    rows.push((key, first, last, base, deadline, expired));
+                                }
+                                let batches =
+                                    if let Some((key, first, last, base, deadline, expired)) =
+                                        rows.first()
+                                    {
+                                        let progress = if before {
+                                            None
+                                        } else {
+                                            let (consumed, floor, accepted) =
+                                                Projection::progress(&header, &identity)?;
+                                            Some((
+                                                consumed,
+                                                floor,
+                                                accepted,
+                                                Projection::coverage_revision(&header, &identity)?,
+                                            ))
+                                        };
+                                        let count = metadata
+                                            .as_ref()
+                                            .filter(|summary| {
+                                                summary.manifest.first_cursor == *first
+                                            })
+                                            .and_then(|summary| summary.restricted_count);
+                                        let notices = if before {
+                                            (
+                                                metadata.as_ref().map(|summary| {
+                                                    summary.manifest.context_notice_revision
+                                                }),
+                                                None,
+                                            )
+                                        } else {
+                                            let batch = header
+                                                .iter()
+                                                .find(|batch| batch.num_rows() != 0)
+                                                .ok_or_else(|| {
+                                                    Projection::invalid("Graph control notice row")
+                                                })?;
+                                            let bound = Projection::column::<UInt64Array>(
+                                                batch,
+                                                "notice_base_revision",
+                                            )?;
+                                            if base.as_ref().is_some_and(|base| {
+                                                bound.is_null(0)
+                                                    || bound.value(0) != base.commit_revision
+                                            }) {
+                                                return Err(Projection::invalid(
+                                                    "Graph control notice base",
+                                                ));
+                                            }
+                                            let contexts = Projection::column::<UInt64Array>(
+                                                batch,
+                                                "notice_context_revision",
+                                            )?;
+                                            let coverage = Projection::column::<UInt64Array>(
+                                                batch,
+                                                "notice_coverage_revision",
+                                            )?;
+                                            if contexts.is_null(0) || coverage.is_null(0) {
+                                                return Err(Projection::invalid(
+                                                    "Graph control notice",
+                                                ));
+                                            }
+                                            (Some(contexts.value(0)), Some(coverage.value(0)))
+                                        };
+                                        let (instance, generation, cut, resume) = source.with_capture(|_, capture, _| {
+                                            Ok((capture.instance().spec.id.clone(), capture.instance().generation, capture.revision(),
+                                                !capture.rebuild() && capture.source().is_some_and(|frame|
+                                                    matches!(frame.read(), ManagedSourceRead::Changes(_)))))
+                                        })?;
+                                        erebor_telemetry::debug!(
+                                            stage = "source_window", instance_id = %instance, generation, cut_revision = cut,
+                                            image = ?image, first_cursor = *first, last_cursor = *last,
+                                            base_revision = base.as_ref().map_or(0, |base| base.commit_revision),
+                                            base_first = metadata.as_ref().map_or(0, |summary| summary.manifest.first_cursor),
+                                            base_last = metadata.as_ref().map_or(0, |summary| summary.manifest.last_cursor),
+                                            consumed_cursor = progress.map_or(0, |value| value.0),
+                                            retained_floor = progress.map_or(0, |value| value.1),
+                                            contiguous_cursor = progress.map_or(0, |value| value.2),
+                                            resume_window = resume, expired = *expired,
+                                            "Source window selected"
+                                        );
+                                        Projection::begin(
+                                            source,
+                                            &callback,
+                                            &identity,
+                                            *first,
+                                            *last,
+                                            *deadline,
+                                            base.as_ref(),
+                                            metadata.as_ref(),
+                                            *expired,
+                                            progress,
+                                            &memory,
+                                        )?;
+                                        vec![sdk::RecordBatch::try_new(
+                                            kind.schema(),
+                                            vec![
+                                                Arc::new(BinaryArray::from_vec(vec![
+                                                    key.as_slice()
+                                                ])),
+                                                Arc::new(UInt64Array::from(vec![*first])),
+                                                Arc::new(UInt64Array::from(vec![*last])),
+                                                Arc::new(StringArray::from(vec![base
+                                                    .as_ref()
+                                                    .map(|base| base.result_id.as_str())])),
+                                                Arc::new(UInt64Array::from(vec![base
+                                                    .as_ref()
+                                                    .map(|base| base.commit_revision)])),
+                                                Arc::new(UInt64Array::from(vec![*deadline])),
+                                                Arc::new(UInt64Array::from(vec![
+                                                    araphor_data::GRAPH_WINDOW_NS,
+                                                ])),
+                                                Arc::new(UInt64Array::from(vec![count])),
+                                                Arc::new(BinaryArray::from_vec(vec![identity
+                                                    .tenant_id
+                                                    .as_slice()])),
+                                                Arc::new(StringArray::from(vec![identity
+                                                    .node_id
+                                                    .as_str()])),
+                                                Arc::new(BinaryArray::from_vec(vec![identity
+                                                    .node_boot_id
+                                                    .as_slice()])),
+                                                Arc::new(UInt64Array::from(vec![
+                                                    identity.label_epoch,
+                                                ])),
+                                                Arc::new(BinaryArray::from_vec(vec![identity
+                                                    .source_id
+                                                    .as_slice()])),
+                                                Arc::new(UInt64Array::from(vec![
+                                                    identity.source_epoch,
+                                                ])),
+                                                Arc::new(UInt64Array::from(vec![
+                                                    progress.map(|value| value.0)
+                                                ])),
+                                                Arc::new(UInt64Array::from(vec![
+                                                    progress.map(|value| value.1)
+                                                ])),
+                                                Arc::new(UInt64Array::from(vec![
+                                                    progress.map(|value| value.2)
+                                                ])),
+                                                Arc::new(UInt64Array::from(vec![
+                                                    progress.map(|value| value.3)
+                                                ])),
+                                                Arc::new(UInt64Array::from(vec![notices.0])),
+                                                Arc::new(UInt64Array::from(vec![notices.1])),
+                                                Arc::new(BooleanArray::from(vec![*expired])),
+                                            ],
+                                        )
+                                        .map_err(Projection::external)?]
+                                    } else {
+                                        vec![sdk::RecordBatch::new_empty(kind.schema())]
+                                    };
                                 drop(metadata);
                                 sdk::Input {
                                     data: sdk::Dataset {
@@ -503,21 +590,23 @@ impl PortSource for MetadataPort {
                                                 "witness_deadline_utc_ns",
                                             )?
                                             .value(row),
+                                            Projection::column::<BooleanArray>(batch, "expired")?
+                                                .value(row),
                                         ));
                                     }
                                 }
-                                let (key, first, deadline) = selected
+                                let (key, first, deadline, expired) = selected
                                     .ok_or_else(|| Projection::invalid("Graph window is absent"))?;
                                 let generation = source.with_capture(|_, capture, _| {
                                     Ok(capture.instance().generation)
                                 })?;
                                 let revision = format!(
-                                    "{generation}:{first}:{deadline}:{}:{}",
+                                    "{generation}:{first}:{deadline}:{expired}:{}:{}",
                                     araphor_data::GRAPH_WINDOW_NS,
                                     araphor_data::GRAPH_SCHEMA_VERSION,
                                 );
                                 sdk::Input {
-                                    data: Detector::window_data(&key, first, deadline)
+                                    data: Unit::window_data(&key, first, deadline, expired)
                                         .map_err(Projection::external)?,
                                     revision: sdk::Revision {
                                         owner: "araphor-analysis.GraphWindow".into(),
@@ -529,6 +618,132 @@ impl PortSource for MetadataPort {
                                         limits: Vec::new(),
                                     },
                                 }
+                            }
+                            Self::Prefix => {
+                                let run = super::GraphRun::from_context(
+                                    &callback,
+                                    &callback
+                                        .session_config()
+                                        .get_extension::<super::GraphRun>()
+                                        .and_then(|run| run.projection.upgrade())
+                                        .ok_or_else(|| {
+                                            Projection::invalid("Graph prefix projection")
+                                        })?,
+                                )?;
+                                let (identity, base, first, last, deadline) = {
+                                    let capture = run
+                                        .captured
+                                        .lock()
+                                        .unwrap_or_else(|error| error.into_inner());
+                                    let capture = capture.as_ref().ok_or_else(|| {
+                                        Projection::invalid("Graph prefix header")
+                                    })?;
+                                    (
+                                        capture.metadata.scope.identity.clone(),
+                                        capture.base.clone(),
+                                        capture.metadata.first_cursor,
+                                        capture.metadata.last_cursor,
+                                        capture.metadata.witness_deadline_utc_ns,
+                                    )
+                                };
+                                let proof = base
+                                    .as_ref()
+                                    .map(|base| {
+                                        source.with_capture(|_, capture, _| {
+                                            Ok(capture.graph_input(base).cloned())
+                                        })
+                                    })
+                                    .transpose()?
+                                    .flatten()
+                                    .filter(|proof| proof.scope(&identity, first, last));
+                                let mut rows = proof
+                                    .as_ref()
+                                    .map(|proof| proof.boundaries().collect::<Vec<_>>())
+                                    .unwrap_or_default();
+                                let eligible = run.projection.upgrade().is_some_and(|owner| {
+                                    owner.append_stable && owner.facts.local_observations()
+                                });
+                                let available = eligible
+                                    && deadline > source.time_utc_ns()
+                                    && proof.is_some()
+                                    && !rows.is_empty();
+                                if rows.is_empty() {
+                                    rows.push((0, identity.source_id, 0));
+                                }
+                                let len = rows.len();
+                                let input = sdk::Input {
+                                    data: sdk::Dataset {
+                                        name: "graph_prefix".into(),
+                                        batches: vec![sdk::RecordBatch::try_new(
+                                            kind.schema(),
+                                            vec![
+                                                Arc::new(BooleanArray::from(vec![available; len])),
+                                                Arc::new(BinaryArray::from_iter_values(
+                                                    std::iter::repeat_n(
+                                                        identity.tenant_id.as_slice(),
+                                                        len,
+                                                    ),
+                                                )),
+                                                Arc::new(StringArray::from_iter_values(
+                                                    std::iter::repeat_n(
+                                                        identity.node_id.as_str(),
+                                                        len,
+                                                    ),
+                                                )),
+                                                Arc::new(BinaryArray::from_iter_values(
+                                                    std::iter::repeat_n(
+                                                        identity.node_boot_id.as_slice(),
+                                                        len,
+                                                    ),
+                                                )),
+                                                Arc::new(UInt64Array::from(vec![
+                                                    identity
+                                                        .label_epoch;
+                                                    len
+                                                ])),
+                                                Arc::new(BinaryArray::from_iter_values(
+                                                    std::iter::repeat_n(
+                                                        identity.source_id.as_slice(),
+                                                        len,
+                                                    ),
+                                                )),
+                                                Arc::new(UInt64Array::from(vec![
+                                                    identity
+                                                        .source_epoch;
+                                                    len
+                                                ])),
+                                                Arc::new(UInt32Array::from_iter_values(
+                                                    rows.iter().map(|row| row.0),
+                                                )),
+                                                Arc::new(BinaryArray::from_iter_values(
+                                                    rows.iter().map(|row| row.1),
+                                                )),
+                                                Arc::new(UInt64Array::from_iter_values(
+                                                    rows.iter().map(|row| row.2),
+                                                )),
+                                                Arc::new(UInt32Array::from(vec![1; len])),
+                                            ],
+                                        )
+                                        .map_err(Projection::external)?],
+                                    },
+                                    revision: sdk::Revision {
+                                        owner: "araphor-graph.InputProof".into(),
+                                        id: format!(
+                                            "{}:{}:{}",
+                                            source.with_capture(|_, capture, _| Ok(
+                                                capture.revision()
+                                            ))?,
+                                            first,
+                                            last
+                                        ),
+                                        window: None,
+                                    },
+                                    coverage: sdk::Coverage {
+                                        state: sdk::CoverageState::Complete,
+                                        limits: Vec::new(),
+                                    },
+                                };
+                                input
                             }
                             Self::Status => {
                                 return Err(Projection::invalid("Graph status dispatch"))
@@ -543,9 +758,14 @@ impl PortSource for MetadataPort {
                         Ok((input, memory))
                     })()
                     .map_err(|source| araphor_query::Error::Sql { source })
-                })
-                .await
+                };
+            if matches!(kind, Self::Capture | Self::Window | Self::Prefix) {
+                source.inline(&context, operation)
+            } else {
+                source.blocking(&context, (), operation).await
+            }
         }
+        .map(|result| result.map(Into::into))
         .boxed()
     }
 }
@@ -568,11 +788,33 @@ impl PortSource for Port {
     fn reusable(&self) -> bool {
         true
     }
+    fn snapshot_bound(&self) -> bool {
+        true
+    }
     fn key_columns(&self) -> &[(usize, usize)] {
-        if self.index == 2 {
+        if self.index >= 2 {
             &[]
         } else {
             &[(0, 0)]
+        }
+    }
+
+    fn driver(&self, image: SourceImage, driver: &LogicalPlan) -> Result<Option<LogicalPlan>> {
+        if self.index >= 2 && image == SourceImage::After {
+            Ok(Some(driver.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn header_required(&self, driver: &[sdk::RecordBatch]) -> Result<bool> {
+        if self.index != 3 {
+            return Ok(true);
+        }
+        match driver.iter().map(sdk::RecordBatch::num_rows).sum::<usize>() {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(Projection::invalid("source selection control rows")),
         }
     }
 
@@ -583,8 +825,51 @@ impl PortSource for Port {
         header: Vec<sdk::RecordBatch>,
         source: Arc<SourceSnapshot>,
         context: Arc<TaskContext>,
-    ) -> BoxFuture<'a, Result<(sdk::Input, MemoryReservation)>> {
-        self.owner
-            .read_bound(self.index, image, driver, header, source, context)
+    ) -> BoxFuture<'a, Result<PortRead>> {
+        if self.index == 3 {
+            async move {
+                if !self.header_required(&driver)? {
+                    return source.inline(&context, |source, _| {
+                        let memory = source
+                            .memory()
+                            .reserve_input(0)
+                            .map_err(|source| araphor_query::Error::Sql { source })?;
+                        Ok((
+                            sdk::Input {
+                                data: sdk::Dataset {
+                                    name: "__source_selection".into(),
+                                    batches: vec![sdk::RecordBatch::new_empty(Arc::new(
+                                        sdk::Schema::empty(),
+                                    ))],
+                                },
+                                revision: sdk::Revision {
+                                    owner: "araphor-analysis.SourceSelection".into(),
+                                    id: "empty".into(),
+                                    window: None,
+                                },
+                                coverage: sdk::Coverage {
+                                    state: sdk::CoverageState::Complete,
+                                    limits: Vec::new(),
+                                },
+                            },
+                            memory,
+                        )
+                            .into())
+                    });
+                }
+                let status = header
+                    .iter()
+                    .find(|batch| batch.num_rows() != 0)
+                    .ok_or_else(|| Projection::invalid("source selection status"))?
+                    .slice(0, 1);
+                self.owner
+                    .read_bound(3, image, header, vec![status], source, context)
+                    .await
+            }
+            .boxed()
+        } else {
+            self.owner
+                .read_bound(self.index, image, driver, header, source, context)
+        }
     }
 }

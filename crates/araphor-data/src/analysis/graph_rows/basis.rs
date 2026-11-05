@@ -87,14 +87,17 @@ impl CallBasis {
         Ok((record, fact))
     }
 
-    pub(super) fn local_for(&self, unit: &Unit, anchor: &Anchor) -> Result<(u32, Option<u32>)> {
+    pub(super) fn local_for(
+        &self,
+        support: &[araphor_analysis_builtins::graph::UnitSupport],
+        anchor: &Anchor,
+    ) -> Result<(u32, Option<u32>)> {
         let local = self.local(anchor)?;
-        if !unit
-            .support
+        if !support
             .iter()
             .any(|support| support.record == anchor.record)
             || anchor.fact.as_ref().is_some_and(|fact| {
-                !unit.support.iter().any(|support| {
+                !support.iter().any(|support| {
                     support.record == fact.record && support.facts.contains(&fact.key)
                 })
             })

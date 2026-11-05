@@ -318,7 +318,7 @@ fn graph_fact(
         record_id: record.id.clone(),
         value,
     };
-    fact.validate()?;
+    fact.validate().map_err(araphor_data::Error::from)?;
     let body = fact.encode_context().map_err(|error| {
         crate::error::DiscoverySnafu {
             code: "GRAPH_CONTEXT_ENCODING",
@@ -336,6 +336,10 @@ fn graph_fact(
 }
 
 impl araphor_analysis::GraphFacts for super::context::ControlContextOwner {
+    fn local_observations(&self) -> bool {
+        true
+    }
+
     fn plans<'a>(
         &'a self,
         session: &'a araphor_query::execution::Session,

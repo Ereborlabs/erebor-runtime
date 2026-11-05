@@ -131,6 +131,10 @@ impl NotificationRouter {
     }
 
     pub(super) fn save(&self, state: &mut NotificationObligationV1) -> Result<()> {
+        self.save_bytes(state).map(|_| ())
+    }
+
+    pub(super) fn save_bytes(&self, state: &mut NotificationObligationV1) -> Result<usize> {
         let previous = state.revision;
         state.revision = previous.checked_add(1).ok_or_else(|| {
             NotificationSnafu {
@@ -141,7 +145,9 @@ impl NotificationRouter {
         })?;
         let result = (|| {
             let body = state.encode()?;
-            self.persist(Self::state_key(state), body, previous, state.sensitivity)
+            let bytes = body.len();
+            self.persist(Self::state_key(state), body, previous, state.sensitivity)?;
+            Ok(bytes)
         })();
         if result.is_err() {
             state.revision = previous;

@@ -312,6 +312,10 @@ impl MtlsFixture {
         })
     }
 
+    pub(crate) fn peer(&self, node: &str) -> Result<(CertificateFiles, String), Box<dyn StdError>> {
+        self.certificates.peer(&self.path().join(node), node)
+    }
+
     pub(crate) fn path(&self) -> &Path {
         self.directory.path()
     }

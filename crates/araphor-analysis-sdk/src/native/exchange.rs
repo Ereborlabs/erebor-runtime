@@ -18,7 +18,7 @@ pub(super) struct Exchange {
 }
 
 impl Exchange {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             streams: Streams::new(),
             windows: Vec::new(),
@@ -39,7 +39,25 @@ impl Exchange {
         let value = checked.evaluation();
         let mut frame = Self::new();
         for input in &value.inputs {
-            let data = frame.dataset(&input.data, model.inputs.iter().map(|input| &input.port))?;
+            let port = model.inputs.iter().find(|port| port.port.name == input.data.name)
+                .ok_or_else(|| Error::contract(ErrorCode::Invalid, "native input"))?;
+            let data = frame.input(input, &port.port.schema)?;
+            frame.inputs.push(data);
+        }
+        for data in &value.previous_outputs {
+            let data = frame.dataset(data, &model.outputs)?;
+            frame.previous_outputs.push(data);
+        }
+        if let Some(batch) = &value.parameters {
+            frame.parameters = frame.streams.add(vec![batch.clone()], &model.parameters);
+        }
+        frame.set_checkpoint(value.checkpoint.as_ref(), model)?;
+        Ok(frame)
+    }
+
+    pub(super) fn input(&mut self, input: &crate::Input, schema: &crate::Schema) -> Result<abi::Input> {
+        let port = crate::Port::new(&input.data.name, schema.clone());
+            let data = self.dataset(&input.data, std::slice::from_ref(&port))?;
             let window = input
                 .revision
                 .window
@@ -51,7 +69,7 @@ impl Exchange {
                         end_utc_ns: value.end_utc_ns,
                     });
                     let pointer = &*item as *const _;
-                    frame.windows.push(item);
+                    self.windows.push(item);
                     pointer
                 })
                 .unwrap_or(std::ptr::null());
@@ -66,8 +84,8 @@ impl Exchange {
                 limits: limits.as_ptr(),
                 limit_count: limits.len() as u64,
             };
-            frame.coverage.push(limits);
-            frame.inputs.push(abi::Input {
+            self.coverage.push(limits);
+            Ok(abi::Input {
                 data,
                 revision: abi::Revision {
                     owner: abi::Bytes::new(input.revision.owner.as_bytes()),
@@ -75,17 +93,7 @@ impl Exchange {
                     window,
                 },
                 coverage,
-            });
-        }
-        for data in &value.previous_outputs {
-            let data = frame.dataset(data, &model.outputs)?;
-            frame.previous_outputs.push(data);
-        }
-        if let Some(batch) = &value.parameters {
-            frame.parameters = frame.streams.add(vec![batch.clone()], &model.parameters);
-        }
-        frame.set_checkpoint(value.checkpoint.as_ref(), model)?;
-        Ok(frame)
+            })
     }
 
     pub(super) fn output(model: &Model, value: &Output) -> Result<Self> {
@@ -121,7 +129,7 @@ impl Exchange {
         Ok(frame)
     }
 
-    fn dataset<'p>(
+    pub(super) fn dataset<'p>(
         &mut self,
         data: &crate::Dataset,
         ports: impl IntoIterator<Item = &'p crate::Port>,

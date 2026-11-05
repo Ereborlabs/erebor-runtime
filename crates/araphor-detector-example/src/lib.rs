@@ -74,6 +74,23 @@ impl sdk::Guest for BurstDetector {
             }
             contributions.push(Contribution {
                 record: unit.record,
+                support: records
+                    .iter()
+                    .enumerate()
+                    .map(|(row, record)| {
+                        let mut keys = facts
+                            .iter()
+                            .filter(|fact| fact.record as usize == row)
+                            .map(|fact| fact.key.clone())
+                            .collect::<Vec<_>>();
+                        keys.sort();
+                        UnitSupport {
+                            record: record.id.clone(),
+                            proof: record.proof_quality,
+                            facts: keys,
+                        }
+                    })
+                    .collect(),
                 subjects: Vec::new(),
                 relationships: Vec::new(),
                 findings: Vec::new(),

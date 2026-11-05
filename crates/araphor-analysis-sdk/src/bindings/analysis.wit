@@ -99,12 +99,23 @@ interface host {
     cancelled: func() -> bool;
 }
 
+interface graph {
+    use types.{dataset, input, evaluation-error};
+
+    resource transaction {
+        read: func(name: string, arguments: dataset) -> result<input, evaluation-error>;
+        stage: func(commands: dataset) -> result<_, evaluation-error>;
+    }
+}
+
 interface analysis {
     use types.{evaluation, output, evaluation-error};
-    evaluate: func(input: evaluation) -> result<output, evaluation-error>;
+    use graph.{transaction};
+    evaluate: func(input: evaluation, graph: option<borrow<transaction>>) -> result<output, evaluation-error>;
 }
 
 world analysis-package {
     import host;
+    import graph;
     export analysis;
 }

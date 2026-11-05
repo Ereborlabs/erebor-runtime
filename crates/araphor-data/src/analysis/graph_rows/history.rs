@@ -28,7 +28,6 @@ pub(super) struct Member {
 pub(super) struct ProducerPin<'a> {
     pub(super) instance: &'a str,
     pub(super) call: u64,
-    pub(super) declaration: &'a crate::ManagedCall,
 }
 
 impl GraphRows {
@@ -270,15 +269,8 @@ impl GraphRows {
     }
 
     pub(super) fn bind_result(writer: &Connection, graph: &str, producer: &str) -> Result<()> {
-        writer
-            .execute(
-                "INSERT INTO graph_result_producers VALUES(?,?)",
-                params![graph, producer],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "bind Graph producer result",
-            })?;
-        Ok(())
+        crate::analysis::graph_rows::store::Relations::bind_result(writer, graph, producer)
+            .map_err(Into::into)
     }
 
     pub(super) fn new_scope(
@@ -292,20 +284,15 @@ impl GraphRows {
         let id = Self::next_id(writer, "graph_producer_scopes")?;
         writer
             .execute(
-                "INSERT INTO graph_producer_scopes VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO graph_producer_scopes VALUES(?,?,?,?,?,?,?,?,?)",
                 params![
                     id,
                     metadata.scope.identity.tenant_id.as_slice(),
                     source,
                     kind,
                     pin.as_ref().map(|pin| pin.instance),
+                    pin.as_ref().map(|pin| pin.instance),
                     pin.as_ref().map(|pin| pin.call),
-                    pin.as_ref()
-                        .map(|pin| pin.declaration.package.package_id.as_str()),
-                    pin.as_ref()
-                        .map(|pin| pin.declaration.package.revision.as_str()),
-                    pin.as_ref()
-                        .map(|pin| pin.declaration.image.digest.as_str()),
                     metadata.first_cursor,
                     created
                 ],
@@ -350,7 +337,7 @@ impl GraphRows {
         let ManagedDestination::Graph { source, .. } = &spec.destination else {
             return Err(Self::invalid("graph call destination"));
         };
-        let row: Option<ManagedProducerRow> = writer.query_row("SELECT s.scope_id,v.commit_revision,s.tenant_id,src.stream_key,s.instance_id,s.call_id,s.package_id,s.package_revision,s.image_digest,s.producer_kind FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) JOIN graph_sources src USING(source_ref) JOIN source_receipts receipt ON receipt.stream_key=src.stream_key AND receipt.tenant_id=src.tenant_id WHERE v.result_id=?",params![result.result_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?))).optional().context(AnalysisDatabaseSnafu {operation:"read managed Graph producer"})?;
+        let row: Option<ManagedProducerRow> = writer.query_row("SELECT s.scope_id,v.commit_revision,s.tenant_id,src.stream_key,s.instance_id,s.call_id,v.package_id,v.package_revision,v.image_digest,s.producer_kind FROM graph_producer_versions v JOIN graph_producer_scopes s USING(scope_id) JOIN graph_sources src USING(source_ref) JOIN source_receipts receipt ON receipt.stream_key=src.stream_key AND receipt.tenant_id=src.tenant_id WHERE v.result_id=?",params![result.result_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?))).optional().context(AnalysisDatabaseSnafu {operation:"read managed Graph producer"})?;
         let row = row.ok_or_else(|| Self::invalid("graph call result"))?;
         if row.1 != result.commit_revision
             || row.2 != spec.tenant
@@ -379,46 +366,10 @@ impl GraphRows {
         revision: u64,
         base: Option<&str>,
     ) -> Result<()> {
-        let latest: Option<(String,u64)> = writer
-            .query_row(
-                "SELECT result_id,commit_revision FROM graph_producer_versions WHERE scope_id=? ORDER BY commit_revision DESC LIMIT 1",
-                params![scope],
-                |row| Ok((row.get(0)?,row.get(1)?)),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read Graph producer frontier",
-            })?;
-        if let Some((id, cut)) = latest {
-            if base != Some(id.as_str()) || cut >= revision {
-                return Err(Self::invalid("graph producer stale base"));
-            }
-        } else {
-            let created: u64 = writer
-                .query_row(
-                    "SELECT created_revision FROM graph_producer_scopes WHERE scope_id=?",
-                    params![scope],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "check new Graph producer scope",
-                })?;
-            if base.is_some() || created != revision {
-                return Err(Self::invalid("graph producer fresh base"));
-            }
-        }
-        writer
-            .execute(
-                "INSERT INTO graph_producer_versions
-                    (result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,
-                        finding_count,state_count,selected_state_ref)
-                 VALUES(?,?,?,?,0,0,0,0,NULL)",
-                params![result, scope, revision, base],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "insert Graph producer version",
-            })?;
-        Ok(())
+        crate::analysis::graph_rows::store::Relations::version(
+            writer, result, scope, revision, base,
+        )
+        .map_err(Into::into)
     }
 
     pub(super) fn write_metadata(
@@ -427,9 +378,14 @@ impl GraphRows {
         revision: u64,
         metadata: &GraphManifest,
     ) -> Result<(u64, u64, u64)> {
-        let (replacements, staged) = Self::metadata_members(writer, metadata, None)?;
-        let mut work =
-            araphor_graph::Contributions::apply(writer, scope, revision, &replacements, false)?;
+        let (replacements, staged, _, _) = Self::metadata_members(writer, metadata, None)?;
+        let mut work = crate::analysis::graph_rows::store::Contributions::apply(
+            writer,
+            revision,
+            &BTreeMap::from([(scope, (false, replacements))]),
+        )?
+        .remove(&scope)
+        .ok_or_else(|| Self::invalid("graph producer work"))?;
         work.0 = work.0.saturating_add(staged);
         Ok(work)
     }
@@ -437,8 +393,14 @@ impl GraphRows {
     pub(super) fn metadata_members(
         writer: &Connection,
         metadata: &GraphManifest,
-        removed: Option<&[crate::DiscoveryRecordIdV1]>,
-    ) -> Result<(Vec<araphor_graph::Replacement>, u64)> {
+        delta: Option<(&[crate::DiscoveryRecordIdV1], &super::units::ContextValues)>,
+    ) -> Result<(
+        Vec<crate::analysis::graph_rows::store::Replacement>,
+        u64,
+        BTreeMap<crate::DiscoveryRecordIdV1, u64>,
+        BTreeMap<u64, u64>,
+    )> {
+        let removed = delta.map(|(removed, _)| removed);
         let keys = metadata
             .input_manifest
             .evidence
@@ -453,8 +415,7 @@ impl GraphRows {
             return Err(Self::invalid("graph metadata context count"));
         }
         writer.execute_batch(
-            "CREATE TEMP TABLE graph_metadata_positions(evidence_id UBIGINT,commit_revision UBIGINT,ordinal UINTEGER,list_ordinal UBIGINT);
-             CREATE TEMP TABLE graph_metadata_facts(list_ordinal UBIGINT,context_key BLOB)"
+            "CREATE TEMP TABLE graph_metadata_positions(evidence_id UBIGINT,commit_revision UBIGINT,ordinal UINTEGER,list_ordinal UBIGINT)"
         ).context(AnalysisDatabaseSnafu { operation: "stage Graph metadata values" })?;
         {
             let mut appender =
@@ -479,55 +440,6 @@ impl GraphRows {
                 operation: "flush Graph metadata positions",
             })?;
         }
-        let mut bodies = Vec::with_capacity(metadata.facts.len());
-        {
-            let mut appender =
-                writer
-                    .appender("graph_metadata_facts")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "open Graph metadata facts",
-                    })?;
-            for (index, fact) in metadata.facts.iter().enumerate() {
-                fact.validate()?;
-                let body = Self::encode_value(fact)?;
-                let key = removed
-                    .map(|_| {
-                        super::super::context::version_key(&metadata.input_manifest.context[index])
-                    })
-                    .transpose()?;
-                appender
-                    .append_row(params![index as u64, key])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "append Graph metadata fact",
-                    })?;
-                bodies.push(body);
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush Graph metadata facts",
-            })?;
-        }
-        if removed.is_some() {
-            let mut statement=writer.prepare("SELECT c.list_ordinal,v.body FROM graph_metadata_facts c LEFT JOIN context_versions v ON v.version_key=c.context_key")
-                .context(AnalysisDatabaseSnafu { operation:"prepare canonical Graph metadata facts" })?;
-            let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
-                operation: "read canonical Graph metadata facts",
-            })?;
-            let mut count = 0;
-            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                operation: "advance canonical Graph metadata facts",
-            })? {
-                let index: u64 = Self::column(row, 0)?;
-                let fact = crate::GraphFactV1::decode_context(&Self::column::<Vec<u8>>(row, 1)?)
-                    .map_err(|_| Self::invalid("graph metadata canonical fact"))?;
-                if metadata.facts.get(index as usize) != Some(&fact) {
-                    return Err(Self::invalid("graph metadata canonical fact"));
-                }
-                count += 1;
-            }
-            if count != metadata.facts.len() {
-                return Err(Self::invalid("graph metadata canonical fact count"));
-            }
-        }
         writer.execute_batch(
             "INSERT INTO graph_position_values
              SELECT nextval('graph_position_values_seq'),c.evidence_id,c.commit_revision,c.ordinal
@@ -535,15 +447,41 @@ impl GraphRows {
              WHERE NOT EXISTS(SELECT 1 FROM graph_position_values v WHERE v.evidence_id=c.evidence_id
                 AND v.commit_revision=c.commit_revision AND v.ordinal=c.ordinal)"
         ).context(AnalysisDatabaseSnafu { operation: "intern Graph metadata positions" })?;
-        let facts = Self::intern_values(
-            writer,
-            metadata.scope.identity.tenant_id,
-            MemberKind::Fact,
-            bodies,
-        )?
-        .into_iter()
-        .enumerate()
-        .collect::<BTreeMap<_, _>>();
+        let facts = if let Some((_, canonical)) = delta {
+            metadata
+                .input_manifest
+                .context
+                .iter()
+                .enumerate()
+                .map(|(index, key)| {
+                    let (fact, _, _, reference) = canonical
+                        .get(key)
+                        .ok_or_else(|| Self::invalid("graph metadata canonical fact"))?;
+                    if metadata.facts.get(index) != Some(fact) {
+                        return Err(Self::invalid("graph metadata canonical fact"));
+                    }
+                    Ok((index, *reference))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?
+        } else {
+            let bodies = metadata
+                .facts
+                .iter()
+                .map(|fact| {
+                    fact.validate()?;
+                    Self::encode_value(fact)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Self::intern_values(
+                writer,
+                metadata.scope.identity.tenant_id,
+                MemberKind::Fact,
+                bodies,
+            )?
+            .into_iter()
+            .enumerate()
+            .collect()
+        };
         let mut positions=writer.prepare(
             "SELECT c.list_ordinal,v.value_ref FROM graph_metadata_positions c
              JOIN graph_position_values v USING(evidence_id,commit_revision,ordinal) ORDER BY c.list_ordinal"
@@ -570,7 +508,7 @@ impl GraphRows {
             .map(|record| {
                 Ok((
                     records[record],
-                    vec![araphor_graph::Member {
+                    vec![crate::analysis::graph_rows::store::Member {
                         kind: 0,
                         key: Self::member_key(record)?,
                         value: records[record],
@@ -586,7 +524,7 @@ impl GraphRows {
             members
                 .get_mut(&records[record])
                 .ok_or_else(|| Self::invalid("graph metadata position record"))?
-                .push(araphor_graph::Member {
+                .push(crate::analysis::graph_rows::store::Member {
                     kind: 1,
                     key: if removed.is_some() {
                         Self::member_key(record)?
@@ -608,7 +546,7 @@ impl GraphRows {
             members
                 .get_mut(&records[&fact.record_id])
                 .ok_or_else(|| Self::invalid("graph metadata fact record"))?
-                .push(araphor_graph::Member {
+                .push(crate::analysis::graph_rows::store::Member {
                     kind: 7,
                     key: if removed.is_some() {
                         super::super::context::version_key(&metadata.input_manifest.context[index])?
@@ -627,10 +565,16 @@ impl GraphRows {
                 });
         }
         writer
-            .execute_batch("DROP TABLE graph_metadata_positions; DROP TABLE graph_metadata_facts")
+            .execute_batch("DROP TABLE graph_metadata_positions")
             .context(AnalysisDatabaseSnafu {
                 operation: "release Graph metadata values",
             })?;
+        let native_positions = metadata
+            .input_positions
+            .iter()
+            .enumerate()
+            .map(|(index, (record, _))| (records[record], positions[&index]))
+            .collect();
         if let Some(removed) = removed {
             for record in removed {
                 members.entry(records[record]).or_default();
@@ -638,20 +582,26 @@ impl GraphRows {
             Ok((
                 members
                     .into_iter()
-                    .map(|(unit, members)| araphor_graph::Replacement {
-                        unit: Some(unit),
-                        members,
-                    })
+                    .map(
+                        |(unit, members)| crate::analysis::graph_rows::store::Replacement {
+                            unit: Some(unit),
+                            members,
+                        },
+                    )
                     .collect(),
                 (keys.len() + metadata.input_positions.len() + metadata.facts.len()) as u64,
+                records,
+                native_positions,
             ))
         } else {
             Ok((
-                vec![araphor_graph::Replacement {
+                vec![crate::analysis::graph_rows::store::Replacement {
                     unit: None,
                     members: members.into_values().flatten().collect(),
                 }],
                 (keys.len() + metadata.input_positions.len() + metadata.facts.len()) as u64,
+                records,
+                native_positions,
             ))
         }
     }
@@ -913,10 +863,8 @@ impl GraphRows {
     }
 
     pub(super) fn check_union(writer: &Connection, result: &str) -> Result<()> {
-        let invalid:bool=writer.query_row("SELECT EXISTS(SELECT 1 FROM graph_selected_members WHERE result_id=? AND member_kind IN (2,3,4) GROUP BY member_kind,member_key HAVING count(DISTINCT value_ref)>1) OR EXISTS(SELECT 1 FROM graph_selected_members m JOIN graph_edge_values e ON e.edge_id=m.value_ref WHERE m.result_id=? AND m.member_kind=3 AND (NOT EXISTS(SELECT 1 FROM graph_selected_members s WHERE s.result_id=m.result_id AND s.member_kind=2 AND s.value_ref=e.from_ref) OR NOT EXISTS(SELECT 1 FROM graph_selected_members s WHERE s.result_id=m.result_id AND s.member_kind=2 AND s.value_ref=e.to_ref))) OR EXISTS(SELECT 1 FROM graph_selected_members m JOIN graph_finding_values f ON f.value_id=m.value_ref WHERE m.result_id=? AND m.member_kind=4 AND NOT EXISTS(SELECT 1 FROM graph_selected_members s WHERE s.result_id=m.result_id AND s.member_kind=2 AND s.value_ref=f.subject_ref))",params![result,result,result],|row|row.get(0)).context(AnalysisDatabaseSnafu {operation:"validate Graph producer merge"})?;
-        if invalid {
-            return Err(Self::invalid("graph producer merge"));
-        }
-        Ok(())
+        crate::analysis::graph_rows::store::Relations::new(writer)
+            .check_union(result)
+            .map_err(Into::into)
     }
 }

@@ -267,6 +267,11 @@ impl AnalysisStore {
     }
 
     fn validate_contexts(writer: &Connection, root: &Path) -> Result<()> {
+        let orphan: bool = writer.query_row("SELECT EXISTS(SELECT 1 FROM graph_fact_records fact LEFT JOIN context_versions context USING(version_key) WHERE context.version_key IS NULL)", [], |row| row.get(0))
+            .context(AnalysisDatabaseSnafu { operation: "validate canonical fact references" })?;
+        if orphan {
+            return Self::reject_path(root, "the canonical fact context is absent");
+        }
         let mut after = -1_i64;
         loop {
             let mut statement = writer
@@ -326,6 +331,7 @@ impl AnalysisStore {
                 } else if key.owner_id == crate::NOTIFICATION_ROUTE_OWNER {
                     crate::ApprovedNotificationRouteV1::try_from(&context)?;
                 }
+                Self::check_fact_index(writer, &context)?;
                 after = position;
             }
         }
@@ -597,6 +603,31 @@ impl AnalysisStore {
             "tenant_id, instance_id, call_id, state_revision, result_id FROM managed_calls",
             "tenant_id, instance_id, attempt_id, generation, contract, completed FROM managed_attempts",
             "tenant_id, result_id, dependency_id, commit_revision FROM managed_edges",
+            "graph_id, tenant_id, instance_id FROM managed_graphs",
+            "result_id, graph_id, revision, previous_result_id FROM managed_graph_publications",
+            "result_id, writer_id, layer_id FROM managed_graph_publication_layers",
+            "relation_id, properties_ref, canonical_relation_id, canonical_properties_ref FROM managed_graph_finding_values",
+            "result_id, record_key, version_key, revision, stream_key, cpu_id, source_cursor FROM managed_source_proofs",
+            "result_id, tenant_id, instance_id, stream_key, revision, attempt_id, generation, previous_result_id, captured_revision, captured_ordinal, first_cursor, last_cursor, witness_deadline, coverage_revision, context_notice, record_count, restricted_count, subject_count, relationship_count, finding_count, expired FROM managed_source_publications",
+            "tenant_id, instance_id, stream_key, record_key, cpu_id, source_cursor, position_revision, position_ordinal, origin_result_id, restricted, valid_from, valid_to FROM managed_source_members",
+            "result_id, ordinal, cpu_id, report_revision, interval_id, interval_revision, state FROM managed_source_coverage",
+            "result_id, ordinal, reason FROM managed_source_reasons",
+            "result_id, first_cursor, last_cursor FROM managed_source_gaps",
+            "writer_id, graph_id, call_id FROM managed_graph_writers",
+            "relation_id, graph_id, relation_name, contract FROM managed_graph_relations",
+            "writer_id, layer_id, revision, result_id, restricted FROM managed_graph_results",
+            "result_id, writer_id, revision, producer_id FROM managed_graph_reads",
+            "result_id, relation_id, writer_id, owner_key, entity_key, revision FROM managed_graph_row_reads",
+            "result_id, producer_id, revision FROM managed_source_reads",
+            "result_id, version_key, revision FROM managed_context_imports",
+            "writer_id, graph_id FROM graph_writers",
+            "relation_id, graph_id, entity_kind, from_relation, to_relation FROM graph_relations",
+            "layer_id, writer_id, revision, parent_id FROM graph_layers",
+            "entity_ref, relation_id, entity_key FROM graph_entities",
+            "writer_id, owner_ref, owner_key FROM graph_writer_owners",
+            "label_ref, graph_id, label_key FROM graph_labels",
+            "writer_id, owner_ref, relation_id, entity_kind, entity_key, entity_ref, properties_ref, from_ref, to_ref, label_ref, valid_from, valid_to FROM graph_members",
+            "version_key, record_key, stream_key, source_cursor FROM graph_fact_records",
             "relation_name, last_changed_revision FROM relation_revisions",
             "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor, commit_revision FROM source_receipts",
             "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor, commit_revision FROM source_versions",

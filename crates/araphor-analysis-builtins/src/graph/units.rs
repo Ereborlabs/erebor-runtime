@@ -3,74 +3,51 @@ use std::sync::{Arc, OnceLock};
 use super::{credential::CredentialIndex, *};
 
 impl Detector {
-    pub fn window_port() -> sdk::Port {
-        sdk::Port::new(
-            "window",
-            sdk::Schema::new(vec![
-                sdk::Field::new("source_key", sdk::DataType::Binary, false),
-                sdk::Field::new("first_cursor", sdk::DataType::UInt64, false),
-                sdk::Field::new("witness_deadline_utc_ns", sdk::DataType::UInt64, false),
-                sdk::Field::new("window_ns", sdk::DataType::UInt64, false),
-            ]),
-        )
-    }
-
-    pub fn window_data(source: &[u8], first: u64, deadline: u64) -> sdk::Result<sdk::Dataset> {
-        if source.is_empty() || first == 0 || deadline == 0 {
-            return Err(sdk::Error::contract(
-                sdk::ErrorCode::Invalid,
-                "graph window configuration",
-            ));
-        }
-        let port = Self::window_port();
-        Ok(sdk::Dataset {
-            name: port.name,
-            batches: vec![sdk::RecordBatch::try_new(
-                Arc::new(port.schema),
-                vec![
-                    Arc::new(sdk::arrow_array::BinaryArray::from_vec(vec![source])),
-                    Arc::new(sdk::arrow_array::UInt64Array::from(vec![first])),
-                    Arc::new(sdk::arrow_array::UInt64Array::from(vec![deadline])),
-                    Arc::new(sdk::arrow_array::UInt64Array::from(vec![GRAPH_WINDOW_NS])),
-                ],
-            )?],
-        })
-    }
-
     pub fn descriptor(self) -> sdk::Package {
         self.declaration().clone()
     }
 
     pub fn supports_units(model: &sdk::Model) -> bool {
-        let expected = &Self::Process.declaration().exports[0];
-        model.input_mode == sdk::InputMode::Resolved
-            && model.checkpoint.is_none()
-            && model.change_inputs == expected.change_inputs
-            && model
-                .inputs
-                .iter()
-                .map(|input| &input.port)
-                .eq(expected.inputs.iter().map(|input| &input.port))
-            && model.outputs == expected.outputs
-            && model
-                .inputs
-                .iter()
-                .enumerate()
-                .all(|(slot, input)| match slot {
-                    0 => matches!(input.source, sdk::InputSource::Query(_)),
-                    3 | 4 => matches!(input.source, sdk::InputSource::Lookup(_)),
-                    _ => input.source == expected.inputs[slot].source,
-                })
+        [Self::Credentials].into_iter().any(|detector| {
+            let expected = &detector.declaration().exports[0];
+            model.input_mode == sdk::InputMode::Resolved
+                && model.checkpoint.is_none()
+                && model.change_inputs == expected.change_inputs
+                && model
+                    .inputs
+                    .iter()
+                    .map(|input| &input.port)
+                    .eq(expected.inputs.iter().map(|input| &input.port))
+                && model.outputs == expected.outputs
+                && model
+                    .inputs
+                    .iter()
+                    .enumerate()
+                    .all(|(slot, input)| match slot {
+                        0 => matches!(input.source, sdk::InputSource::Query(_)),
+                        3 | 4 => matches!(input.source, sdk::InputSource::Lookup(_)),
+                        _ => input.source == expected.inputs[slot].source,
+                    })
+        })
+    }
+
+    fn unit_query(image: &str, scoped: bool) -> String {
+        include_str!("units/selection.sql")
+            .replace(
+                "{scope}",
+                if scoped {
+                    "JOIN affected ON affected.record = source.record"
+                } else {
+                    ""
+                },
+            )
+            .replace("{image}", image)
     }
 
     fn declaration(self) -> &'static sdk::Package {
-        static PROCESS: OnceLock<sdk::Package> = OnceLock::new();
         static CREDENTIALS: OnceLock<sdk::Package> = OnceLock::new();
-        static KUBERNETES: OnceLock<sdk::Package> = OnceLock::new();
         let declaration = match self {
-            Self::Process => &PROCESS,
             Self::Credentials => &CREDENTIALS,
-            Self::Kubernetes => &KUBERNETES,
         };
         declaration.get_or_init(|| self.build_units())
     }
@@ -78,11 +55,6 @@ impl Detector {
     fn build_units(self) -> sdk::Package {
         let mut subjects = SubjectChange::port();
         subjects.kind = sdk::OutputKind::Subjects;
-        let mut relationships = RelationshipChange::port();
-        relationships.kind = sdk::OutputKind::Relationships;
-        let mut findings = FindingChange::port();
-        findings.kind = sdk::OutputKind::Findings;
-        findings.evidence_required = true;
         let mut model = sdk::Model::new(
             "detect",
             vec![
@@ -92,30 +64,25 @@ impl Detector {
                 Observation::port(),
                 Fact::port(),
                 Unit::affected_port(),
-                Self::window_port(),
+                Unit::window_port(),
             ],
-            vec![
-                subjects,
-                relationships,
-                findings,
-                Contribution::port(),
-                GraphPackageStateV1::port(),
-            ],
+            vec![subjects],
         );
-        let support = match self {
-            Self::Credentials => include_str!("units/credential.sql"),
-            _ => "SELECT id AS root_id, id AS support_id FROM qualified",
-        };
-        model.inputs[0].source = sdk::InputSource::Query(format!(
-            include_str!("units/selection.sql"),
-            support = support
-        ));
-        model.inputs[1].source = sdk::InputSource::Query(
-            "SELECT prior.* FROM before.units prior JOIN affected \
-             ON prior.record = affected.record ORDER BY prior.record"
-                .into(),
-        );
-        model.inputs[3].source = sdk::InputSource::Lookup(include_str!("units/records.sql").into());
+        let mut relations = araphor_analysis_types::DomainRelations::declarations();
+        if matches!(self, Self::Credentials) {
+            relations.push(credential::CandidateInput::relation());
+        }
+        model.graph = Some(sdk::GraphSpec {
+            access: sdk::GraphAccess::ReadWrite,
+            relations,
+        });
+        model.inputs[0].source = sdk::InputSource::Query(Self::unit_query("", false));
+        model.inputs[1].source = sdk::InputSource::Query(Self::unit_query("before.", true));
+        model.inputs[3].source =
+            sdk::InputSource::Lookup(include_str!("units/candidates.sql").replace(
+                "{network}",
+                &(erebor_interceptor_abi::KernelEffectFamilyV1::Network as u32).to_string(),
+            ));
         model.inputs[4].source = sdk::InputSource::Lookup(include_str!("units/facts.sql").into());
         model.inputs[5].source = sdk::InputSource::Query("SELECT record FROM graph_dirty".into());
         model.inputs[6].source =
@@ -127,6 +94,7 @@ impl Detector {
                 affected: "affected".into(),
                 before: "unit_removals".into(),
                 after: "units".into(),
+                current: Some(Self::unit_query("after.", true)),
             }],
         });
         model.reasons = self
@@ -153,54 +121,139 @@ impl Detector {
                 "graph unit package",
             ));
         }
+        let graph = checked.graph()?;
+        if Unit::expired(&checked.evaluation().input("window")?.data)? {
+            return super::commands::GraphCommands::expire(&graph);
+        }
         let units = Unit::decode(&checked.evaluation().input("units")?.data)?;
         let records = Observation::read(checked)?;
         let facts = Fact::read(checked)?;
-        Computation::indexed(records, facts, Manifest { window_ns: 0 }, self)?.unit_output(units)
+        let removals = Unit::decode(&checked.evaluation().input("unit_removals")?.data)?;
+        let reset = checked
+            .model()
+            .change_inputs
+            .as_ref()
+            .ok_or_else(|| Computation::invalid("graph change contract"))?
+            .is_reset(checked.evaluation())?;
+        let owners = units
+            .iter()
+            .chain(&removals)
+            .map(|unit| araphor_analysis_types::DomainRelations::key(&unit.record))
+            .collect::<sdk::Result<BTreeSet<_>>>()?;
+        if reset {
+            graph.clear_scope().map_err(sdk::Error::backend)?;
+        } else if !owners.is_empty() {
+            graph
+                .clear_owners(sdk::arrow_array::BinaryArray::from_iter_values(
+                    owners.iter().map(Vec::as_slice),
+                ))
+                .map_err(sdk::Error::backend)?;
+        }
+        Computation::indexed(records, facts, Manifest { window_ns: 0 }, self)?
+            .unit_output(units, &graph)
     }
 }
 
 impl Unit {
+    pub fn window_port() -> sdk::Port {
+        sdk::Port::new(
+            "window",
+            sdk::Schema::new(vec![
+                sdk::Field::new("source_key", sdk::DataType::Binary, false),
+                sdk::Field::new("first_cursor", sdk::DataType::UInt64, false),
+                sdk::Field::new("witness_deadline_utc_ns", sdk::DataType::UInt64, false),
+                sdk::Field::new("window_ns", sdk::DataType::UInt64, false),
+                sdk::Field::new("expired", sdk::DataType::Boolean, false),
+            ]),
+        )
+    }
+
+    pub fn window_data(
+        source: &[u8],
+        first: u64,
+        deadline: u64,
+        expired: bool,
+    ) -> sdk::Result<sdk::Dataset> {
+        if source.is_empty() || first == 0 || deadline == 0 {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Invalid,
+                "graph window configuration",
+            ));
+        }
+        let port = Self::window_port();
+        Ok(sdk::Dataset {
+            name: port.name,
+            batches: vec![sdk::RecordBatch::try_new(
+                Arc::new(port.schema),
+                vec![
+                    Arc::new(sdk::arrow_array::BinaryArray::from_vec(vec![source])),
+                    Arc::new(sdk::arrow_array::UInt64Array::from(vec![first])),
+                    Arc::new(sdk::arrow_array::UInt64Array::from(vec![deadline])),
+                    Arc::new(sdk::arrow_array::UInt64Array::from(vec![GRAPH_WINDOW_NS])),
+                    Arc::new(sdk::arrow_array::BooleanArray::from(vec![expired])),
+                ],
+            )?],
+        })
+    }
+
+    fn expired(data: &sdk::Dataset) -> sdk::Result<bool> {
+        use sdk::arrow_array::Array as _;
+        if data
+            .batches
+            .iter()
+            .map(sdk::RecordBatch::num_rows)
+            .sum::<usize>()
+            != 1
+        {
+            return Err(Computation::invalid("graph window row"));
+        }
+        let batch = data
+            .batches
+            .iter()
+            .find(|batch| batch.num_rows() != 0)
+            .ok_or_else(|| Computation::invalid("graph window row"))?;
+        let expired = batch
+            .column_by_name("expired")
+            .and_then(|array| {
+                array
+                    .as_any()
+                    .downcast_ref::<sdk::arrow_array::BooleanArray>()
+            })
+            .filter(|array| !array.is_null(0))
+            .ok_or_else(|| Computation::invalid("graph window retention"))?;
+        Ok(expired.value(0))
+    }
+
     fn rows(
         &self,
         records: &BTreeMap<&crate::discovery::DiscoveryRecordIdV1, u32>,
         computation: &Computation,
     ) -> sdk::Result<BTreeSet<u32>> {
-        if self
-            .support
-            .windows(2)
-            .any(|pair| pair[0].record >= pair[1].record)
-        {
-            return Err(Computation::invalid("graph unit support order"));
-        }
-        let mut rows = BTreeSet::new();
-        for support in &self.support {
-            let &row = records
-                .get(&support.record)
-                .ok_or_else(|| Computation::invalid("graph unit support record"))?;
-            if support.proof != computation.record(row)?.proof_quality
-                || support.facts.windows(2).any(|pair| pair[0] >= pair[1])
-                || !support
-                    .facts
-                    .iter()
-                    .eq(computation.facts(row).map(|(_, fact)| &fact.key))
-            {
-                return Err(Computation::invalid("graph unit support value"));
-            }
-            rows.insert(row);
-        }
-        let row = records
+        let &row = records
             .get(&self.record)
             .ok_or_else(|| Computation::invalid("graph unit record"))?;
-        if !rows.contains(row) {
-            return Err(Computation::invalid("graph unit root support"));
+        let mut rows = BTreeSet::from([row]);
+        for (_, fact) in computation.facts(row) {
+            if let FactValue::Policy(policy) = &fact.value {
+                for id in &policy.observations {
+                    rows.insert(
+                        *records
+                            .get(id)
+                            .ok_or_else(|| Computation::invalid("graph policy support record"))?,
+                    );
+                }
+            }
         }
         Ok(rows)
     }
 }
 
 impl Computation {
-    fn unit_output(mut self, units: Vec<Unit>) -> sdk::Result<sdk::Output> {
+    fn unit_output(
+        mut self,
+        units: Vec<Unit>,
+        graph: &araphor_graph::Transaction<sdk::GraphTransport<'_>>,
+    ) -> sdk::Result<sdk::Output> {
         let record_ids = self
             .records
             .iter()
@@ -211,68 +264,69 @@ impl Computation {
             .enumerate()
             .map(|(row, id)| (id, row as u32))
             .collect::<BTreeMap<_, _>>();
-        let index = match self.detector {
-            Detector::Credentials => Some(CredentialIndex::new(&self)?),
-            _ => None,
-        };
+        let index = Some(CredentialIndex::new(&self)?);
         let mut subjects = Vec::new();
-        let mut relationships = Vec::new();
-        let mut findings = Vec::new();
-        let mut contributions = Vec::with_capacity(units.len());
-        let mut output = sdk::Output::default();
+        let mut commands = super::commands::GraphCommands::default();
         let mut seen = BTreeSet::new();
-        for unit in units {
+        for unit in &units {
             if !seen.insert(unit.record.clone()) {
                 return Err(Self::invalid("graph duplicate unit"));
             }
-            self.allowed_rows = Some(unit.rows(&record_rows, &self)?);
+        }
+        if matches!(self.detector, Detector::Credentials) {
+            let rows = units
+                .iter()
+                .map(|unit| {
+                    record_rows
+                        .get(&unit.record)
+                        .copied()
+                        .ok_or_else(|| Self::invalid("graph unit record"))
+                })
+                .collect::<sdk::Result<Vec<_>>>()?;
+            credential::CandidateInput::stage(&self, rows, graph)?;
+        }
+        for unit in units {
+            let mut support = unit.rows(&record_rows, &self)?;
+            self.allowed_rows = None;
             self.manifest.window_ns = unit.window_ns;
             let row = *record_rows
                 .get(&unit.record)
                 .ok_or_else(|| Self::invalid("graph unit record"))?;
-            let state = match self.detector {
-                Detector::Process => self
-                    .process_unit(row)?
-                    .map(|marker| {
-                        Ok::<_, sdk::Error>(UnitState {
-                            state: GraphPackageStateV1::from_marker(&marker)?,
-                            position: self.records[row as usize].position,
-                            fact: None,
-                        })
-                    })
-                    .transpose()?,
-                Detector::Credentials => self
-                    .credential_event(
+            if let Some(index) = &index {
+                support.extend(index.support(&self, row)?);
+            }
+            let references = support
+                .iter()
+                .flat_map(|&row| self.facts(row))
+                .filter_map(|(_, fact)| match &fact.value {
+                    FactValue::Policy(policy) => Some(policy.observations.iter()),
+                    _ => None,
+                })
+                .flatten()
+                .filter_map(|id| record_rows.get(id).copied())
+                .collect::<Vec<_>>();
+            support.extend(references);
+            self.allowed_rows = Some(support);
+            match self.detector {
+                Detector::Credentials => {
+                    if let Some(marker) = self.credential_event(
                         row,
                         index
                             .as_ref()
                             .ok_or_else(|| Self::invalid("graph credential index"))?,
-                    )?
-                    .map(|marker| {
-                        Ok::<_, sdk::Error>(UnitState {
-                            state: GraphPackageStateV1::from_marker(&marker)?,
-                            position: self.records[row as usize].position,
-                            fact: None,
-                        })
-                    })
-                    .transpose()?,
-                Detector::Kubernetes => self.kubernetes_unit(row)?,
-            };
-            let mut contribution = Contribution {
-                record: unit.record,
-                subjects: Vec::new(),
-                relationships: Vec::new(),
-                findings: Vec::new(),
-                state,
-            };
+                    )? {
+                        GraphPackageStateV1::from_marker(&marker)?;
+                    }
+                }
+            }
+            let owner = araphor_analysis_types::DomainRelations::key(&unit.record)?;
             let keys = self
                 .subjects
                 .iter()
                 .map(|subject| subject.key.clone())
                 .collect::<Vec<_>>();
             for subject in self.subjects.drain(..) {
-                contribution.subjects.push(subjects.len() as u64);
-                subjects.push(SubjectChange {
+                let value = SubjectChange {
                     anchor: Anchor::from_positions(
                         subject.record,
                         subject.context,
@@ -280,24 +334,28 @@ impl Computation {
                         &self.facts,
                     )?,
                     key: subject.key,
-                });
+                };
+                commands.subject(&owner, value.clone())?;
+                subjects.push(value);
             }
             self.subject_indices.clear();
             for value in std::mem::take(&mut self.edges).into_values() {
-                contribution.relationships.push(relationships.len() as u64);
-                relationships.push(RelationshipChange {
-                    anchor: Anchor::from_positions(
-                        value.record,
-                        value.fact,
-                        &record_ids,
-                        &self.facts,
-                    )?,
-                    key: RelationshipIdentity::from_keys(&value.edge.key, &keys, &record_ids)?,
-                    proof_quality: value.edge.proof_quality,
-                    required_coverage_interval_ids: value.edge.required_coverage_interval_ids,
-                    first_boottime_ns: value.edge.first_boottime_ns,
-                    last_boottime_ns: value.edge.last_boottime_ns,
-                });
+                commands.edge(
+                    &owner,
+                    RelationshipChange {
+                        anchor: Anchor::from_positions(
+                            value.record,
+                            value.fact,
+                            &record_ids,
+                            &self.facts,
+                        )?,
+                        key: RelationshipIdentity::from_keys(&value.edge.key, &keys, &record_ids)?,
+                        proof_quality: value.edge.proof_quality,
+                        required_coverage_interval_ids: value.edge.required_coverage_interval_ids,
+                        first_boottime_ns: value.edge.first_boottime_ns,
+                        last_boottime_ns: value.edge.last_boottime_ns,
+                    },
+                )?;
             }
             for mut finding in std::mem::take(&mut self.findings).into_values() {
                 finding.sensitivity = if unit.restricted {
@@ -305,47 +363,27 @@ impl Computation {
                 } else {
                     ContextSensitivityV1::Tenant
                 };
-                let reference = sdk::RowRef {
-                    dataset: "findings".into(),
-                    row: findings.len() as u64,
-                };
-                let details = ReasonDetails::from_finding(&finding, &record_rows)?;
-                for &row in &details.evidence {
-                    output.evidence.push(sdk::EvidenceLink {
-                        output: reference.clone(),
-                        input: sdk::RowRef {
-                            dataset: "records".into(),
-                            row: u64::from(row),
-                        },
-                    });
-                }
-                output.reasons.push(sdk::ReasonValue {
-                    output: reference,
-                    code: finding.reason_code.clone(),
-                    details: ReasonDetails::encode(&[details])?.batches.remove(0),
-                });
                 let anchor = Anchor::from_positions(
                     finding.record,
                     finding.context,
                     &record_ids,
                     &self.facts,
                 )?;
-                contribution.findings.push(findings.len() as u64);
-                findings.push(FindingChange::from_local(finding, anchor));
+                let reason =
+                    FindingReasonV1::from_analysis_code(&finding.package_id, &finding.reason_code)?;
+                commands.finding(
+                    &owner,
+                    araphor_analysis_types::FindingMember {
+                        anchor,
+                        value: finding.into_finding(reason),
+                    },
+                )?;
             }
-            contributions.push(contribution);
         }
-        let state = GraphPackageStateV1::from_marker(match self.detector {
-            Detector::Kubernetes => "KUBERNETES_PROOF_MISSING",
-            _ => "WAITING",
-        })?;
-        output.datasets = vec![
-            SubjectChange::encode(&subjects)?,
-            RelationshipChange::encode(&relationships)?,
-            FindingChange::encode(&findings)?,
-            Contribution::encode(&contributions)?,
-            GraphPackageStateV1::encode(&[state])?,
-        ];
-        Ok(output)
+        commands.stage(graph)?;
+        Ok(sdk::Output {
+            datasets: vec![SubjectChange::encode(&subjects)?],
+            ..Default::default()
+        })
     }
 }

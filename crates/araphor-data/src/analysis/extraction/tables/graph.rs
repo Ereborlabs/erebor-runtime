@@ -133,6 +133,168 @@ macro_rules! graph_row {
 }
 
 impl Capture<'_> {
+    pub(in crate::analysis::extraction) fn definition_finding(
+        &mut self,
+        result: &str,
+        revision: u64,
+        restricted: bool,
+        finding: &crate::FindingV1,
+        value: u64,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<bool> {
+        let row = self
+            .tables
+            .get("findings")
+            .map_or(0, |table| table.total_rows);
+        if !self.finding_row(
+            result,
+            revision,
+            if restricted {
+                ContextSensitivityV1::HostRestricted
+            } else {
+                ContextSensitivityV1::Tenant
+            },
+            None,
+            finding,
+            Some(value),
+            budget,
+        )? {
+            return Ok(false);
+        }
+        self.record_finding(result, &finding.finding_id, budget)?;
+        let key = (finding.tenant_id, finding.finding_id.clone());
+        budget.charge(size_of::<([u8; 16], String)>() + key.1.capacity())?;
+        if self
+            .latest
+            .get(&key)
+            .is_none_or(|(prior, _)| *prior <= revision)
+        {
+            self.latest.insert(key, (revision, row));
+        }
+        Ok(true)
+    }
+
+    pub(in crate::analysis::extraction) fn definition_manifest(
+        &mut self,
+        tenant: [u8; 16],
+        result: &str,
+        revision: u64,
+        counts: (u64, u64),
+        previous: Option<&str>,
+        restricted: bool,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<bool> {
+        use sdk::arrow_array::{ArrayRef, BinaryArray, StringArray, UInt64Array};
+        if self.read.projected("graph_manifest").is_none() {
+            return Ok(true);
+        }
+        let fields = Self::graph_fields();
+        let names = fields
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        let schema = Arc::clone(&self.table("graph_manifest", &names, budget)?.schema);
+        let columns = schema
+            .fields()
+            .iter()
+            .map(|field| -> ArrayRef {
+                match field.name().as_str() {
+                    "tenant_id" => Arc::new(BinaryArray::from_vec(vec![tenant.as_slice()])),
+                    "graph_result_id" => Arc::new(StringArray::from(vec![result])),
+                    "commit_revision" => Arc::new(UInt64Array::from(vec![revision])),
+                    "graph_sensitivity" => Arc::new(StringArray::from(vec![if restricted {
+                        "host_restricted"
+                    } else {
+                        "tenant"
+                    }])),
+                    "subject_count" => Arc::new(UInt64Array::from(vec![counts.0])),
+                    "relationship_count" => Arc::new(UInt64Array::from(vec![counts.1])),
+                    "previous_result_id" => Arc::new(StringArray::from(vec![previous])),
+                    _ => sdk::arrow_array::new_null_array(field.data_type(), 1),
+                }
+            })
+            .collect::<Vec<_>>();
+        let batch = sdk::RecordBatch::try_new(schema, columns).map_err(arrow_error)?;
+        let admitted = self
+            .table("graph_manifest", &names, budget)?
+            .append_native(batch, budget)?;
+        if admitted && !self.graph_manifests.contains(result) {
+            budget.charge(result.len() + 4 * size_of::<String>())?;
+            self.graph_manifests.insert(result.into());
+        }
+        Ok(admitted)
+    }
+
+    pub(in crate::analysis::extraction) fn native_findings(
+        &mut self,
+        batch: sdk::RecordBatch,
+        result: &str,
+        revision: u64,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<bool> {
+        use sdk::arrow_array::{Array as _, BinaryArray, StringArray};
+        let width = batch.num_columns().checked_sub(2).ok_or_else(overflow)?;
+        let tenants = batch
+            .column(width)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| invalid("the native finding tenant is absent"))?;
+        let ids = batch
+            .column(width + 1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| invalid("the native finding identity is absent"))?;
+        if tenants.null_count() != 0 || ids.null_count() != 0 {
+            return Err(invalid("the native finding identity is null"));
+        }
+        let schemas = AnalysisStore::table_schemas();
+        let schema = schemas
+            .get("findings")
+            .ok_or_else(|| invalid("the native findings schema is absent"))?;
+        let names = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        let start = self.table("findings", &names, budget)?.total_rows;
+        let projected = batch
+            .project(&(0..width).collect::<Vec<_>>())
+            .map_err(arrow_error)?;
+        let projected = sdk::Dataset::normalize_batch(
+            projected,
+            Arc::clone(&self.table("findings", &names, budget)?.schema),
+        )
+        .map_err(|source| crate::Error::AnalysisContract {
+            source,
+            location: snafu::location!(),
+        })?;
+        if !self
+            .table("findings", &names, budget)?
+            .append_native(projected, budget)?
+        {
+            return Ok(false);
+        }
+        for row in 0..batch.num_rows() {
+            budget.check()?;
+            let tenant = <[u8; 16]>::try_from(tenants.value(row))
+                .map_err(|_| invalid("the native finding tenant is invalid"))?;
+            let id = ids.value(row);
+            self.record_finding(result, id, budget)?;
+            let key = (tenant, id.to_owned());
+            if !self.latest.contains_key(&key) {
+                budget.charge(size_of::<([u8; 16], String)>() + id.len())?;
+            }
+            if self
+                .latest
+                .get(&key)
+                .is_none_or(|(prior, _)| *prior <= revision)
+            {
+                self.latest.insert(key, (revision, start + row));
+            }
+        }
+        Ok(true)
+    }
+
     pub(in crate::analysis::extraction) fn finding_basis(
         &self,
         result: &str,
@@ -188,19 +350,18 @@ impl Capture<'_> {
     }
 
     pub(in crate::analysis::extraction) fn graph_witnesses(&self) -> bool {
-        !self.graph_expiry
-            && (self.read.projects_field("graph_manifest", "metadata")
-                || self.read.projects_field("graph_manifest", "snapshot")
-                || [
-                    "findings",
-                    "relationships",
-                    "graph_subjects",
-                    "graph_branches",
-                    "correlation_packages",
-                    "policy_observations",
-                ]
-                .iter()
-                .any(|name| self.read.projected(name).is_some()))
+        self.read.projects_field("graph_manifest", "metadata")
+            || self.read.projects_field("graph_manifest", "snapshot")
+            || [
+                "findings",
+                "relationships",
+                "graph_subjects",
+                "graph_branches",
+                "correlation_packages",
+                "policy_observations",
+            ]
+            .iter()
+            .any(|name| self.read.projected(name).is_some())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -265,11 +426,10 @@ impl Capture<'_> {
                 .get("findings")
                 .map_or(0, |table| table.total_rows);
             if !self.finding_row(
-                graph,
                 result_id,
                 commit_revision,
                 sensitivity,
-                &source_key,
+                Some(&source_key),
                 finding,
                 finding_value_ids.get(&finding.finding_id).copied(),
                 budget,
@@ -400,10 +560,23 @@ impl Capture<'_> {
         )
     }
 
-    graph_row! {
-        finding_row, finding_fields, "findings";
-        self, budget, graph, result_id, commit_revision, sensitivity, source_key;
-        finding: &crate::FindingV1, finding_value_id: Option<u64>;
+    table_row! {
+        #[allow(clippy::too_many_arguments)]
+        pub(in crate::analysis::extraction) fn finding_row(
+            &mut self, result_id: &str, commit_revision: u64,
+            sensitivity: ContextSensitivityV1, source_key: Option<&[u8]>,
+            finding: &crate::FindingV1, finding_value_id: Option<u64>,
+            budget: &mut ReadBudget<'_>,
+        );
+        schema finding_fields;
+        row(self, "findings", budget);
+        setup {}
+        fields {
+        tenant_id => Binary(false): Some(finding.tenant_id.as_slice()),
+        source_key => Binary(true): source_key,
+        graph_result_id => Utf8(false): Some(result_id),
+        commit_revision => UInt64(false): Some(commit_revision),
+        graph_sensitivity => Utf8(false): Some(<&str>::from(sensitivity)),
         finding_id => Utf8(false): Some(finding.finding_id.as_str()),
         finding_value_id => UInt64(false): Some(finding_value_id.ok_or_else(|| invalid("the Graph finding value is absent"))?),
         package_id => Utf8(false): Some(finding.package_id.as_str()),
@@ -422,7 +595,7 @@ impl Capture<'_> {
         required_coverage_interval_ids => Json(false): Some(&finding.required_coverage_interval_ids),
         policy_provenance => Json(false): Some(&finding.policy_provenance),
         effects => Json(false): Some(&finding.effects),
-        reason => Utf8(false): { budget.charge(4096)?; Some(araphor_graph::FindingRows::reason_label(&finding.reason)?) },
+        reason => Utf8(false): { budget.charge(4096)?; Some(crate::analysis::graph_rows::store::FindingRows::reason_label(&finding.reason)?) },
         severity => Utf8(false): Some(match finding.severity {
             FindingSeverityV1::Info => "info",
             FindingSeverityV1::Warning => "warning",
@@ -432,6 +605,7 @@ impl Capture<'_> {
         sensitivity => Utf8(false): Some(<&str>::from(finding.sensitivity)),
         required_action => Utf8(true): finding.required_action.as_deref(),
         limits => Json(false): Some(&finding.limits),
+        }
     }
 
     graph_row! {
@@ -808,7 +982,7 @@ impl Capture<'_> {
 
     pub(super) fn graph_fields() -> Vec<sdk::Field> {
         use sdk::DataType::*;
-        vec![
+        let fields = vec![
             sdk::Field::new("tenant_id", Binary, false),
             sdk::Field::new("source_key", Binary, false),
             sdk::Field::new("graph_result_id", Utf8, false),
@@ -835,6 +1009,14 @@ impl Capture<'_> {
             sdk::Field::new("snapshot", Binary, false),
             sdk::Field::new("metadata", Binary, false),
             context_ref_field(),
-        ]
+        ];
+        fields
+            .into_iter()
+            .map(|field| match field.name().as_str() {
+                "tenant_id" | "graph_result_id" | "commit_revision" | "graph_sensitivity"
+                | "subject_count" | "relationship_count" => field,
+                _ => field.with_nullable(true),
+            })
+            .collect()
     }
 }

@@ -110,7 +110,7 @@ impl Fixture {
         let plan = state.create_physical_plan(&plan).await.unwrap();
         let mut aggregate = None;
         plan.apply(|plan| {
-            if plan.as_any().is::<AggregateExec>() {
+            if plan.is::<AggregateExec>() {
                 aggregate = Some(Arc::clone(plan));
                 Ok(TreeNodeRecursion::Stop)
             } else {
@@ -119,13 +119,7 @@ impl Fixture {
         })
         .unwrap();
         let aggregate = aggregate.unwrap();
-        let mut source = Arc::clone(
-            aggregate
-                .as_any()
-                .downcast_ref::<AggregateExec>()
-                .unwrap()
-                .input(),
-        );
+        let mut source = Arc::clone(aggregate.downcast_ref::<AggregateExec>().unwrap().input());
         loop {
             let children = source.children();
             let next = match children.as_slice() {
@@ -164,7 +158,7 @@ impl Fixture {
             input.recv().await.map(|message| (message, input))
         });
         let output = execute(
-            plan.as_any().downcast_ref::<AggregateExec>().unwrap(),
+            plan.downcast_ref::<AggregateExec>().unwrap(),
             Box::pin(input),
             Arc::clone(&source),
             Arc::clone(&context),
@@ -379,22 +373,14 @@ async fn native_child_completes_cut() {
          FROM input WHERE flag IS NOT FALSE)",
     )
     .await;
-    let native = fixture
-        .plan
-        .as_any()
-        .downcast_ref::<AggregateExec>()
-        .unwrap();
+    let native = fixture.plan.downcast_ref::<AggregateExec>().unwrap();
     assert!(!Arc::ptr_eq(native.input(), &fixture.source));
     let (mut filtered, mut projected) = (false, false);
     native
         .input()
         .apply(|plan| {
-            filtered |= plan
-                .as_any()
-                .is::<datafusion::physical_plan::filter::FilterExec>();
-            projected |= plan
-                .as_any()
-                .is::<datafusion::physical_plan::projection::ProjectionExec>();
+            filtered |= plan.is::<datafusion::physical_plan::filter::FilterExec>();
+            projected |= plan.is::<datafusion::physical_plan::projection::ProjectionExec>();
             Ok(TreeNodeRecursion::Continue)
         })
         .unwrap();
@@ -494,7 +480,6 @@ async fn unsupported_aggregates_are_explicit() {
     assert_eq!(
         compiled
             .aggregate
-            .as_any()
             .downcast_ref::<AggregateExec>()
             .unwrap()
             .mode(),
@@ -509,7 +494,7 @@ async fn unsupported_aggregates_are_explicit() {
         if sql.contains("DISTINCT") {
             let mut distinct = false;
             plan.apply(|node| {
-                if let Some(native) = node.as_any().downcast_ref::<AggregateExec>() {
+                if let Some(native) = node.downcast_ref::<AggregateExec>() {
                     assert!(native.aggr_expr()[0].is_distinct());
                     distinct = true;
                     return Ok(TreeNodeRecursion::Stop);
@@ -529,11 +514,7 @@ async fn native_partial_mode_is_explicit() {
     let (single, source) = fixture.canonical("SELECT COUNT(*) FROM events").await;
     let compiled = SubscribeExec::compile(&single).unwrap().unwrap();
     assert!(Arc::ptr_eq(&compiled.source, &source));
-    let native = compiled
-        .aggregate
-        .as_any()
-        .downcast_ref::<AggregateExec>()
-        .unwrap();
+    let native = compiled.aggregate.downcast_ref::<AggregateExec>().unwrap();
     assert_eq!(native.mode(), &AggregateMode::Single);
     let partial = AggregateExec::try_new(
         AggregateMode::Partial,
@@ -561,7 +542,6 @@ async fn replacement_keeps_eligibility() {
             .unwrap();
         assert_eq!(
             replacement
-                .as_any()
                 .downcast_ref::<SubscribeExec>()
                 .unwrap()
                 .maintained(),
@@ -580,7 +560,6 @@ async fn replacement_keeps_eligibility() {
             .data;
         let replacement = replacement.with_new_children(vec![child]).unwrap();
         assert!(!replacement
-            .as_any()
             .downcast_ref::<SubscribeExec>()
             .unwrap()
             .maintained());
@@ -589,7 +568,6 @@ async fn replacement_keeps_eligibility() {
             .unwrap();
         assert_eq!(
             restored
-                .as_any()
                 .downcast_ref::<SubscribeExec>()
                 .unwrap()
                 .maintained(),
@@ -656,11 +634,7 @@ async fn failed_transaction_releases_source() {
         ))
     });
     let mut output = execute(
-        fixture
-            .plan
-            .as_any()
-            .downcast_ref::<AggregateExec>()
-            .unwrap(),
+        fixture.plan.downcast_ref::<AggregateExec>().unwrap(),
         Box::pin(input),
         Arc::clone(&fixture.source),
         Arc::clone(&fixture.context),
@@ -717,11 +691,7 @@ async fn upstream_error_releases_execution_before_delivery() {
         }
     });
     let mut output = execute(
-        fixture
-            .plan
-            .as_any()
-            .downcast_ref::<AggregateExec>()
-            .unwrap(),
+        fixture.plan.downcast_ref::<AggregateExec>().unwrap(),
         Box::pin(input),
         Arc::clone(&fixture.source),
         Arc::clone(&fixture.context),
@@ -770,11 +740,7 @@ async fn execute_states_are_independent() {
     };
     fixture.send(change).await;
     let mut independent = execute(
-        fixture
-            .plan
-            .as_any()
-            .downcast_ref::<AggregateExec>()
-            .unwrap(),
+        fixture.plan.downcast_ref::<AggregateExec>().unwrap(),
         Box::pin(stream::iter([Ok(independent_change)])),
         Arc::clone(&fixture.source),
         Arc::clone(&fixture.context),

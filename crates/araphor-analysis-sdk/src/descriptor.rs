@@ -125,11 +125,14 @@ impl Model {
             }
         }
         Self::ports(self.outputs.iter())?;
+        if let Some(graph) = &self.graph {
+            graph.validate()?;
+        }
         if let Some(changes) = &self.change_inputs {
             changes.validate(self)?;
         }
         Self::schema(&self.parameters)?;
-        if self.outputs.is_empty() {
+        if self.outputs.is_empty() && self.graph.is_none() {
             return Err(Error::contract(ErrorCode::Invalid, "outputs or reasons"));
         }
         if !self.tolerance.absolute.is_finite()

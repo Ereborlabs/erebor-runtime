@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
@@ -75,10 +74,6 @@ impl DisplayAs for Sink {
 
 #[async_trait]
 impl TableProvider for Sink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> sdk::arrow_schema::SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -121,10 +116,6 @@ impl TableProvider for Sink {
 
 #[async_trait]
 impl DataSink for Sink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &sdk::arrow_schema::SchemaRef {
         &self.schema
     }

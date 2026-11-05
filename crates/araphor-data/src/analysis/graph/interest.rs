@@ -35,6 +35,46 @@ impl Drop for GraphLease {
 }
 
 impl AnalysisStore {
+    pub fn graph_members(
+        &self, selection: &AnalysisSelectionV1, control: &AnalysisReadControl,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<(u64,Vec<(EvidenceIntakeIdentityV1,bool,bool)>)> {
+        if !selection.valid() { return self.reject("the Graph inventory selection is invalid"); }
+        self.read_snapshot(|reader| {
+            control.check()?;
+            let revision = Self::read_meta_from(reader,&self.root)?.commit_revision;
+            let mut query = reader.prepare(
+                "SELECT source.identity_json,NOT coalesce(progress.retired,false),progress.stream_key IS NOT NULL,
+                    octet_length(encode(source.identity_json))
+                 FROM source_receipts source LEFT JOIN processor_progress progress
+                    ON progress.tenant_id=source.tenant_id AND progress.stream_key=source.stream_key
+                    AND progress.processor_id=? AND progress.method_version=? WHERE source.tenant_id=?",
+            ).context(AnalysisDatabaseSnafu { operation:"prepare Graph source inventory" })?;
+            let mut rows = query.query(params![GRAPH_PROCESSOR,GRAPH_SCHEMA_VERSION,selection.tenant_id.as_slice()])
+                .context(AnalysisDatabaseSnafu { operation:"read Graph source inventory" })?;
+            let mut members = Vec::new();
+            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu { operation:"advance Graph source inventory" })? {
+                control.check()?;
+                let bytes: u64 = row.get(3).context(AnalysisDatabaseSnafu { operation:"bound Graph source inventory" })?;
+                let bytes = usize::try_from(bytes).ok().and_then(|bytes| bytes.checked_mul(4))
+                    .and_then(|bytes| bytes.checked_add(4*std::mem::size_of::<(EvidenceIntakeIdentityV1,bool,bool)>()))
+                    .ok_or_else(|| PackageErrorCodeV1::Limit.error("Graph source inventory memory"))?;
+                charge(bytes)?;
+                let (identity,active,present): (String,bool,bool) = (|| -> duckdb::Result<_> {
+                    Ok((row.get(0)?,row.get(1)?,row.get(2)?))
+                })().context(AnalysisDatabaseSnafu { operation:"decode Graph source inventory" })?;
+                let identity: EvidenceIntakeIdentityV1 = serde_json::from_str(&identity)
+                    .map_err(|_| PackageErrorCodeV1::Invalid.error("Graph source inventory identity"))?;
+                if !identity.valid() || identity.tenant_id!=selection.tenant_id {
+                    return self.reject("the Graph inventory source is invalid");
+                }
+                if selection.includes_source(&identity) { members.push((identity,active,present)); }
+            }
+            members.sort_unstable();
+            Ok((revision,members))
+        })
+    }
+
     pub fn graph_enabled(&self) -> bool {
         self.graph_owner
             .lock()
@@ -152,6 +192,7 @@ impl AnalysisStore {
         check()?;
         self.commit_metadata(transaction, "commit Graph registration")?;
         self.revision.send_replace(revision);
+        self.activations.send_replace(revision);
         Ok(())
     }
 }

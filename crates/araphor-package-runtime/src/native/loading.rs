@@ -117,10 +117,14 @@ impl NativeLibrary {
         checked: &sdk::CheckedEvaluation<'_>,
         copy_bytes: Option<usize>,
         control: &AnalysisReadControl,
+        host: Option<&(dyn sdk::InvocationService + Send + Sync)>,
     ) -> Result<sdk::Output> {
         control.check()?;
-        let invocation = sdk::native::Invocation::new(checked, || control.check().is_err())
+        let mut invocation = sdk::native::Invocation::new(checked, || control.check().is_err())
             .map_err(|source| crate::AnalysisContractSnafu.into_error(source))?;
+        if let Some(host) = host {
+            invocation.bind_host(host).map_err(Self::failure)?;
+        }
         // The library pin covers copying output and all producer release callbacks.
         let result = unsafe { invocation.call(&*self.api, copy_bytes) }.map_err(Self::failure);
         control.check()?;

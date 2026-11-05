@@ -32,8 +32,24 @@ pub(crate) struct KeyRead {
     pub(crate) key: SourceKey,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct KeyFormat {
+    pub(super) converter: Arc<RowConverter>,
+    pub(super) data_types: Arc<[DataType]>,
+}
+
+impl KeyFormat {
+    pub(super) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.converter, &other.converter)
+            && Arc::ptr_eq(&self.data_types, &other.data_types)
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct KeySlot {
+    id: usize,
+    cut: u64,
+    snapshot: usize,
     state: Mutex<KeyState>,
     ready: Notify,
 }
@@ -43,6 +59,7 @@ struct KeyState {
     keys: Arc<BTreeSet<Vec<u8>>>,
     finished: bool,
     failed: bool,
+    format: Option<KeyFormat>,
     memory: MemoryReservation,
 }
 
@@ -129,6 +146,14 @@ impl SourceSnapshot {
             if cached(&node)? {
                 return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
             }
+            if let Some(port) = node.downcast_ref::<PortExec>() {
+                if port
+                    .shared_slot()
+                    .is_some_and(|slot| !converters.contains_key(&slot))
+                {
+                    return Ok(Transformed::yes(port.disable_sharing()));
+                }
+            }
             if let Some(source) = SourceData::from_plan(node.as_ref()) {
                 if source
                     .origin
@@ -176,12 +201,21 @@ impl SourceSnapshot {
         if let Some(slot) = keys.get(&id) {
             return Ok(Arc::clone(slot));
         }
+        let memory = self.memory.reserve_input(
+            size_of::<KeySlot>() + size_of::<(usize, Arc<KeySlot>)>() + 6 * size_of::<usize>(),
+        )?;
         let slot = Arc::new(KeySlot {
+            id,
+            cut: self
+                .snapshot()
+                .map_or(0, |snapshot| snapshot.page.extraction.meta.commit_revision),
+            snapshot: std::ptr::from_ref(self) as usize,
             state: Mutex::new(KeyState {
                 keys: Arc::default(),
                 finished: false,
                 failed: false,
-                memory: self.memory.reserve_input(0)?,
+                format: None,
+                memory,
             }),
             ready: Notify::new(),
         });
@@ -191,6 +225,49 @@ impl SourceSnapshot {
 }
 
 impl KeySlot {
+    fn trace(&self, action: &'static str, failed: bool) {
+        erebor_telemetry::debug!(
+            stage = "source_key_lifecycle",
+            action,
+            key_slot = self.id,
+            cut_revision = self.cut,
+            snapshot_id = self.snapshot,
+            failed,
+            "Native source key lifecycle changed"
+        );
+    }
+
+    fn set_format(&self, format: KeyFormat) -> Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| DataFusionError::Internal("the source key state is poisoned".into()))?;
+        if state.finished
+            || state.failed
+            || state
+                .format
+                .as_ref()
+                .is_some_and(|saved| !saved.same(&format))
+        {
+            return datafusion::common::exec_err!("the source key format differs");
+        }
+        state.format = Some(format);
+        Ok(())
+    }
+
+    pub(super) fn format(&self) -> Result<KeyFormat> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| DataFusionError::Internal("the source key state is poisoned".into()))?;
+        state
+            .format
+            .as_ref()
+            .filter(|_| state.finished && !state.failed)
+            .cloned()
+            .ok_or_else(|| DataFusionError::Execution("the source key format is absent".into()))
+    }
+
     fn add(&self, values: &Rows) -> Result<()> {
         let mut state = self
             .state
@@ -223,6 +300,7 @@ impl KeySlot {
         state.failed |= failed;
         state.finished = true;
         drop(state);
+        self.trace("finish", failed);
         self.ready.notify_waiters();
     }
 
@@ -240,9 +318,11 @@ impl KeySlot {
                         .error("native source key build"));
                 }
                 if state.finished {
+                    self.trace("ready", false);
                     return Ok(Arc::clone(&state.keys));
                 }
             }
+            self.trace("wait", false);
             ready.await;
         }
     }
@@ -346,9 +426,22 @@ impl ExecutionPlan for KeyBuildExec {
             .ok_or_else(|| {
                 DataFusionError::Execution("the source key snapshot is absent".into())
             })?;
+        let slot = snapshot.key_slot(self.slot)?;
+        slot.trace("start", false);
+        slot.set_format(KeyFormat {
+            converter: Arc::clone(&self.converter),
+            data_types: Arc::clone(&self.data_types),
+        })?;
+        let input = match self.input.execute(partition, context) {
+            Ok(input) => input,
+            Err(error) => {
+                slot.finish(true);
+                return Err(error);
+            }
+        };
         Ok(Box::pin(KeyStream {
-            input: self.input.execute(partition, context)?,
-            slot: snapshot.key_slot(self.slot)?,
+            input,
+            slot,
             expressions: Arc::clone(&self.expressions),
             converter: Arc::clone(&self.converter),
             data_types: Arc::clone(&self.data_types),
@@ -417,6 +510,7 @@ impl RecordBatchStream for KeyStream {
 impl Drop for KeyStream {
     fn drop(&mut self) {
         if !self.ended {
+            self.slot.trace("drop", true);
             self.slot.finish(true);
         }
     }

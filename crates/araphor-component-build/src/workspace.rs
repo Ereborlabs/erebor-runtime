@@ -8,24 +8,19 @@ use crate::{error, ComponentBuilder, Result};
 const TARGET: &str = "wasm32-unknown-unknown";
 const GUESTS: &[(&str, &str, &str)] = &[
     (
+        "araphor-causal-component",
+        "crates/araphor-analysis-builtins/components/causal",
+        "causal.wasm",
+    ),
+    (
         "araphor-discovery-component",
         "crates/araphor-analysis-builtins/components/discovery",
         "discovery.wasm",
     ),
     (
-        "araphor-process-component",
-        "crates/araphor-analysis-builtins/components/process",
-        "process.wasm",
-    ),
-    (
         "araphor-credentials-component",
         "crates/araphor-analysis-builtins/components/credentials",
         "credentials.wasm",
-    ),
-    (
-        "araphor-kubernetes-component",
-        "crates/araphor-analysis-builtins/components/kubernetes",
-        "kubernetes.wasm",
     ),
     (
         "araphor-detector-example",
@@ -41,6 +36,8 @@ const GUESTS: &[(&str, &str, &str)] = &[
 const SHARED: &[&str] = &[
     "crates/araphor-analysis-sdk",
     "crates/araphor-analysis-builtins",
+    "crates/araphor-graph",
+    "crates/araphor-analysis-types",
     "crates/araphor-component-build",
     "crates/erebor-runtime-error",
     "crates/erebor-interceptor-abi",

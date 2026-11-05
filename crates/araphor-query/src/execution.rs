@@ -15,7 +15,9 @@ use datafusion::catalog::memory::{
     MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
 };
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
-use datafusion::common::runtime::{set_join_set_tracer, JoinSetTracer, JoinSetTracerError};
+use datafusion::common::runtime::{
+    set_join_set_tracer, JoinSetTracer, JoinSetTracerError, SpawnedTask,
+};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::MemTable;
 use datafusion::execution::config::SessionConfig;
@@ -45,6 +47,7 @@ use crate::sources::{ArrowSnapshot, ReadMode, ScanBounds, SourceSnapshot};
 use crate::{BusySnafu, InvalidSnafu, Result, SqlSnafu};
 
 mod admission;
+mod coverage;
 mod tables;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -307,6 +310,11 @@ impl Engine {
             .with_target_partitions(1)
             .with_batch_size(200);
         config.options_mut().execution.planning_concurrency = 1;
+        // Keep scalar SQL inside the package input scope.
+        config
+            .options_mut()
+            .optimizer
+            .enable_physical_uncorrelated_scalar_subquery = false;
         // shortcut: Keep leaf pushdown disabled until native join schema checks pass.
         config
             .options_mut()
@@ -329,7 +337,14 @@ impl Engine {
             })?;
         rules.insert(distribution, Arc::new(crate::sources::SourceJoin));
         rules.push(Arc::new(crate::sources::SourceLookup));
+        let mut functions = state
+            .scalar_functions()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        functions.push(Arc::new(coverage::CoverageProof::function()));
         let state = SessionStateBuilder::new_from_existing(state)
+            .with_scalar_functions(functions)
             .with_physical_optimizer_rules(rules)
             .build();
         Ok(Arc::new(Self {
@@ -480,6 +495,46 @@ impl Engine {
             })
         });
         Self::join_worker(control, pending, worker, receive).await
+    }
+
+    pub(crate) async fn run<T: Send + 'static>(
+        self: &Arc<Self>,
+        control: Arc<AnalysisReadControl>,
+        lease: impl Send + 'static,
+        operation: impl Future<Output = Result<T>> + Send + 'static,
+    ) -> Result<T> {
+        let handle = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| {
+                BusySnafu {
+                    resource: "execution runtime",
+                }
+                .build()
+            })?
+            .handle();
+        let mut pending = PendingRead {
+            control: Arc::clone(&control),
+            active: true,
+        };
+        let engine = Arc::clone(self);
+        let worker = {
+            let _entered = handle.enter();
+            SpawnedTask::spawn(
+                async move {
+                    let _engine = engine;
+                    let _lease = lease;
+                    operation.await
+                }
+                .in_current_span()
+                .with_current_subscriber(),
+            )
+        };
+        let result = worker.await;
+        pending.active = false;
+        result.map_err(|source| crate::Error::Sql {
+            source: DataFusionError::External(Box::new(source)),
+        })?
     }
 
     async fn plan_physical(
@@ -812,7 +867,7 @@ pub struct Session {
     pub(crate) tables: Arc<LocalTables>,
     pub(crate) calls: Option<Arc<crate::definition::CallContext>>,
     pub(crate) managed: Option<araphor_data::ManagedRead>,
-    pub(crate) reference: Option<araphor_data::ManagedAttempt>,
+    pub(crate) reference: Option<Arc<araphor_data::ManagedAttempt>>,
     pub(crate) replay_frontier: Option<ReplayFrontier>,
     pub(crate) nested_permit: Option<Arc<Permit>>,
     pub(crate) definition: Option<Arc<crate::definition::PreparedDefinition>>,
@@ -955,6 +1010,26 @@ impl Session {
                 .context(SqlSnafu)
         })
         .await
+    }
+
+    pub(crate) async fn subscription_metadata(
+        &self,
+        sources: &AnalysisTableRequests,
+        now: u64,
+        window: Option<&crate::follow::Window>,
+    ) -> Result<Arc<ArrowSnapshot>> {
+        let control = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
+        control.check()?;
+        let capture = crate::sources::MetadataRead::new(
+            self,
+            sources,
+            now,
+            window,
+            control.within(control.remaining()?)?,
+        )
+        .context(SqlSnafu)?;
+        let scope = self.token()?;
+        Engine::blocking(control, scope, move || capture.capture().context(SqlSnafu)).await
     }
 
     pub(crate) fn at(&self, selection: AnalysisSelectionV1, now: u64) -> Self {

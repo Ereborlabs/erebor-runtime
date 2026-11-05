@@ -14,7 +14,7 @@ use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::build_join_schema;
-use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+use datafusion::physical_plan::joins::{CrossJoinExec, HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -23,7 +23,7 @@ use datafusion::physical_plan::unnest::UnnestExec;
 use datafusion::physical_plan::{ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions};
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{KeyBuildExec, KeyRead};
+use super::{KeyBuildExec, KeyFormat, KeyRead};
 use crate::sources::{PortExec, SourceData, SourceImage, SourceKey};
 
 #[derive(Debug)]
@@ -33,12 +33,17 @@ pub(crate) struct SourceJoin;
 pub(crate) struct SourceLookup;
 
 impl SourceJoin {
-    fn retained(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
-        let mut found = false;
+    fn rank(plan: &Arc<dyn ExecutionPlan>) -> Result<u8> {
+        let mut rank = 0;
         plan.apply(|node| {
+            if node.is::<crate::definition::physical::PackageExec>() {
+                return Ok(TreeNodeRecursion::Jump);
+            }
             if let Some(port) = node.downcast_ref::<PortExec>() {
-                found = !port.key_columns().is_empty() && Self::retained(port.driver())?;
-                return Ok(if found {
+                if !port.key_columns().is_empty() && Self::rank(port.driver())? != 0 {
+                    rank = 2;
+                }
+                return Ok(if rank == 2 {
                     TreeNodeRecursion::Stop
                 } else {
                     TreeNodeRecursion::Jump
@@ -51,12 +56,11 @@ impl SourceJoin {
                         .durable()
                         .is_some_and(araphor_data::AnalysisTableRead::source_rows)
             }) {
-                found = true;
-                return Ok(TreeNodeRecursion::Stop);
+                rank = rank.max(1);
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
-        Ok(found)
+        Ok(rank)
     }
 }
 
@@ -71,14 +75,14 @@ impl PhysicalOptimizerRule for SourceJoin {
                 let Some(join) = plan.downcast_ref::<HashJoinExec>() else {
                     return Ok(Transformed::no(plan));
                 };
-                let left = Self::retained(join.left())?;
-                let right = Self::retained(join.right())?;
-                if left && !right {
+                let left = Self::rank(join.left())?;
+                let right = Self::rank(join.right())?;
+                if left > right {
                     return Ok(Transformed::yes(
                         join.swap_inputs(PartitionMode::CollectLeft)?,
                     ));
                 }
-                if right && join.partition_mode() != &PartitionMode::CollectLeft {
+                if right != 0 && join.partition_mode() != &PartitionMode::CollectLeft {
                     return Ok(Transformed::yes(Arc::new(
                         join.builder()
                             .with_partition_mode(PartitionMode::CollectLeft)
@@ -165,10 +169,21 @@ impl SourceLookup {
         converter: Arc<RowConverter>,
         data_types: Arc<[DataType]>,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if plan.fetch().is_some() {
+        if plan.fetch().is_some()
+            || columns
+                .iter()
+                .any(datafusion::physical_expr_common::physical_expr::is_volatile)
+        {
             return Ok(None);
         }
         if let Some(port) = plan.downcast_ref::<PortExec>() {
+            if port.is_bound() {
+                return Ok(None);
+            }
+            let demand = crate::sources::port::PortDemand {
+                slot,
+                expressions: columns.clone().into(),
+            };
             let schema = port.driver().schema();
             let mut mapping = vec![None; plan.schema().fields().len()];
             for &(output, input) in port.key_columns() {
@@ -176,21 +191,21 @@ impl SourceLookup {
                     as Arc<dyn PhysicalExpr>);
             }
             let Some(columns) = Self::map_keys(columns, &mapping)? else {
+                port.trace_lookup(slot, false);
                 return Ok(None);
             };
-            let Some(driver) = Self::bind(
+            let driver = Self::bind(
                 Arc::clone(port.driver()),
                 columns,
                 slot,
                 converter,
                 data_types,
-            )?
-            else {
+            )?;
+            port.trace_lookup(slot, driver.is_some());
+            let Some(driver) = driver else {
                 return Ok(None);
             };
-            return Ok(Some(
-                port.replace_inputs([driver, Arc::clone(&port.inputs()[1])])?,
-            ));
+            return Ok(Some(port.bind_driver(driver, demand)?));
         }
         if let Some(source) = SourceData::from_plan(plan.as_ref()) {
             if !matches!(source.image, Some(SourceImage::Before | SourceImage::After)) {
@@ -219,10 +234,54 @@ impl SourceLookup {
             });
             return Ok(Some(DataSourceExec::from_data_source(source)));
         }
-        if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
-            if join.contains_projection() {
-                return Ok(None);
+        if let Some(join) = plan.downcast_ref::<CrossJoinExec>() {
+            let (_, indices) = build_join_schema(
+                join.left().schema().as_ref(),
+                join.right().schema().as_ref(),
+                &JoinType::Inner,
+            );
+            for side in [JoinSide::Left, JoinSide::Right] {
+                let input = if side == JoinSide::Left {
+                    join.left()
+                } else {
+                    join.right()
+                };
+                let schema = input.schema();
+                let mapping = indices
+                    .iter()
+                    .map(|column| {
+                        (column.side == side).then(|| {
+                            Arc::new(Column::new(schema.field(column.index).name(), column.index))
+                                as Arc<dyn PhysicalExpr>
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let Some(mapped) = Self::map_keys(columns.clone(), &mapping)? else {
+                    continue;
+                };
+                let Some(bound) = Self::bind(
+                    Arc::clone(input),
+                    mapped,
+                    slot,
+                    Arc::clone(&converter),
+                    Arc::clone(&data_types),
+                )?
+                else {
+                    continue;
+                };
+                let children = if side == JoinSide::Left {
+                    vec![bound, Arc::clone(join.right())]
+                } else {
+                    vec![Arc::clone(join.left()), bound]
+                };
+                return Ok(Some(plan.replace_children(
+                    children,
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+                )?));
             }
+            return Ok(None);
+        }
+        if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
             let sides: &[JoinSide] = match join.join_type() {
                 JoinType::Inner => &[JoinSide::Left, JoinSide::Right],
                 JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => &[JoinSide::Left],
@@ -234,6 +293,17 @@ impl SourceLookup {
                 join.right().schema().as_ref(),
                 join.join_type(),
             );
+            let indices = match &join.projection {
+                Some(projection) => projection
+                    .iter()
+                    .map(|&index| {
+                        indices.get(index).cloned().ok_or_else(|| {
+                            DataFusionError::Internal("the native join projection differs".into())
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                None => indices,
+            };
             for side in sides {
                 let input = if *side == JoinSide::Left {
                     join.left()
@@ -425,6 +495,12 @@ impl SourceLookup {
                     if Self::cached(child, calls)? {
                         return Ok(TreeNodeRecursion::Jump);
                     }
+                    if let Some(slot) = child
+                        .downcast_ref::<PortExec>()
+                        .and_then(PortExec::shared_slot)
+                    {
+                        dependencies.insert(slot);
+                    }
                     if let Some(key) =
                         SourceData::from_plan(child.as_ref()).and_then(|source| source.key.as_ref())
                     {
@@ -444,6 +520,16 @@ impl SourceLookup {
         PortExec::apply(plan, &mut |plan| {
             if Self::cached(plan, calls)? {
                 return Ok(TreeNodeRecursion::Jump);
+            }
+            if let Some(slot) = plan
+                .downcast_ref::<PortExec>()
+                .and_then(PortExec::shared_slot)
+            {
+                if !producers.contains_key(&slot) {
+                    return datafusion::common::plan_err!(
+                        "the source demand slot has no matching producer"
+                    );
+                }
             }
             if let Some(read) =
                 SourceData::from_plan(plan.as_ref()).and_then(|source| source.key.as_ref())
@@ -480,18 +566,18 @@ impl SourceLookup {
     }
 }
 
-impl PhysicalOptimizerRule for SourceLookup {
-    fn optimize(
-        &self,
+impl SourceLookup {
+    fn optimize_plan(
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
+        formats: &mut Vec<KeyFormat>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(plan
             .transform_down(|plan| {
                 if let Some(port) = plan.downcast_ref::<PortExec>() {
                     return Ok(Transformed::yes(port.replace_inputs([
-                        self.optimize(Arc::clone(&port.inputs()[0]), config)?,
-                        self.optimize(Arc::clone(&port.inputs()[1]), config)?,
+                        Self::optimize_plan(Arc::clone(&port.inputs()[0]), config, formats)?,
+                        Self::optimize_plan(Arc::clone(&port.inputs()[1]), config, formats)?,
                     ])?));
                 }
                 let Some(join) = plan.downcast_ref::<HashJoinExec>() else {
@@ -506,7 +592,7 @@ impl PhysicalOptimizerRule for SourceLookup {
                 ) {
                     return Ok(Transformed::no(plan));
                 }
-                let rows = |columns: &[Arc<dyn PhysicalExpr>]| -> Result<Option<(Arc<RowConverter>, Arc<[DataType]>)>> {
+                let mut rows = |columns: &[Arc<dyn PhysicalExpr>]| -> Result<Option<(Arc<RowConverter>, Arc<[DataType]>)>> {
                     let data_types = columns
                         .iter()
                         .map(|column| column.data_type(join.left().schema().as_ref()))
@@ -515,7 +601,16 @@ impl PhysicalOptimizerRule for SourceLookup {
                     if !RowConverter::supports_fields(&fields) {
                         return Ok(None);
                     }
-                    Ok(Some((Arc::new(RowConverter::new(fields)?), data_types.into())))
+                    if let Some(format) = formats.iter().find(|format| format.data_types.as_ref() == data_types.as_slice()) {
+                        return Ok(Some((Arc::clone(&format.converter), Arc::clone(&format.data_types))));
+                    }
+                    let format = KeyFormat {
+                        converter: Arc::new(RowConverter::new(fields)?),
+                        data_types: data_types.into(),
+                    };
+                    let output = (Arc::clone(&format.converter), Arc::clone(&format.data_types));
+                    formats.push(format);
+                    Ok(Some(output))
                 };
                 let slot = crate::sources::SourceProvider::identity()
                     .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -575,6 +670,16 @@ impl PhysicalOptimizerRule for SourceLookup {
                 )?))
             })?
             .data)
+    }
+}
+
+impl PhysicalOptimizerRule for SourceLookup {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Self::optimize_plan(plan, config, &mut Vec::new())
     }
 
     fn name(&self) -> &str {

@@ -1,7 +1,42 @@
 use super::*;
+use datafusion::arrow::array::{Array, RecordBatch};
 use datafusion::physical_plan::metrics::MetricBuilder;
 
 impl SourceSnapshot {
+    pub(super) fn record_header(
+        &self,
+        read: usize,
+        name: &str,
+        batches: &[RecordBatch],
+        receipt: &ArrowSnapshot,
+    ) {
+        if name != "graph_state" {
+            return;
+        }
+        let Some(batch) = batches.iter().find(|batch| batch.num_rows() != 0) else {
+            return;
+        };
+        let value = |name| {
+            batch
+                .column_by_name(name)
+                .and_then(|array| {
+                    array
+                        .as_any()
+                        .downcast_ref::<datafusion::arrow::array::UInt64Array>()
+                })
+                .and_then(|array| (!array.is_null(0)).then(|| array.value(0)))
+        };
+        erebor_telemetry::debug!(
+            stage = "source_header",
+            instance_id = receipt.managed().map_or("", |capture| capture.instance().spec.id.as_str()),
+            cut_revision = receipt.page.extraction.meta.commit_revision, read_id = read,
+            consumed_cursor = ?value("consumed_cursor"), resume_floor = ?value("resume_floor"),
+            contiguous_cursor = ?value("contiguous_cursor"), retained_floor = ?value("retained_floor"),
+            capture_time = ?value("capture_time_utc_ns"),
+            "Native source header read"
+        );
+    }
+
     pub(super) fn record_work<'a>(
         &self,
         read: usize,

@@ -6,7 +6,7 @@ use super::{
     MAX_RESULT_BYTES,
 };
 use crate::{
-    DiscoveryEncodingSnafu, DiscoveryProfileV1, ManagedCommit, ManagedDestination, ManagedReceipt,
+    DiscoveryEncodingSnafu, DiscoveryProfileV1, ManagedDestination, ManagedReceipt,
     PackageErrorCodeV1 as Code, Result,
 };
 
@@ -114,10 +114,11 @@ impl AnalysisStore {
 
     pub fn commit_managed_profile(
         &self,
-        managed: &ManagedCommit<'_>,
+        prepared: crate::PreparedManagedCommit<'_>,
         packet: Option<ProfileCommit>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<(ManagedReceipt, Option<AnalysisResultReceiptV1>)> {
+        let managed = prepared.input();
         let ManagedDestination::DiscoveryProfile {
             source,
             call,
@@ -145,8 +146,8 @@ impl AnalysisStore {
         }
         let mut profile_receipt = None;
         let (receipt, _) = self.commit_managed_projection(
-            managed,
-            |transaction, revision, publication, _, _| {
+            prepared,
+            |transaction, revision, publication, _, _, _, _| {
                 let declaration = &managed.attempt.instance().spec.manifest.calls[call];
                 let descriptor =
                     Self::managed_contract(transaction, source.tenant_id, declaration)?;
@@ -168,7 +169,7 @@ impl AnalysisStore {
                     return Err(Code::Invalid.error("managed profile schema"));
                 }
                 let Some(packet) = packet else {
-                    return Ok((Vec::new(), None, Default::default()));
+                    return Ok((Vec::new(), None, Default::default(), None));
                 };
                 let id = packet.request.result_id.clone();
                 let result = publication
@@ -187,6 +188,7 @@ impl AnalysisStore {
                                 },
                                 None,
                                 Default::default(),
+                                None,
                             ))
                         }
                     };
@@ -197,7 +199,7 @@ impl AnalysisStore {
                     std::slice::from_ref(origin.as_ref().unwrap_or(result)),
                 )?;
                 profile_receipt = Some(write.receipt);
-                Ok((write.relations, None, Default::default()))
+                Ok((write.relations, None, Default::default(), None))
             },
             check,
         )?;

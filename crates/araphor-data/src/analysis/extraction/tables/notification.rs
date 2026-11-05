@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    AnalysisContextVersionV1, ApprovedNotificationRouteV1, FindingV1, NotificationFailureV1,
+    AnalysisContextVersionV1, ApprovedNotificationRouteV1, NotificationFailureV1,
     NotificationObligationV1, NotificationPriorityV1, NotificationSinkHealthV1,
 };
 
@@ -97,7 +97,7 @@ impl Capture<'_> {
         pub(in crate::analysis::extraction) fn notification(
             &mut self,
             obligation: &NotificationObligationV1,
-            finding: Option<&FindingV1>,
+            finding_available: bool,
             finding_value_id: Option<u64>,
             current_result: Option<&str>,
             same_revision: bool,
@@ -108,7 +108,7 @@ impl Capture<'_> {
         schema notification_fields;
         row(self, "notifications", budget);
         setup {
-            if finding.is_some()
+            if finding_available
                 && self.read.projects_field("notifications", "finding_value_id")
                 && finding_value_id.is_none()
             {
@@ -142,7 +142,7 @@ impl Capture<'_> {
             finding_id => Utf8(true):obligation.finding.as_ref().map(|value|value.finding_id.as_str()),
             finding_result_id => Utf8(true):obligation.finding.as_ref().map(|value|value.result_id.as_str()),
             finding_value_id => UInt64(true):finding_value_id,
-            finding_available => Boolean(false):Some(finding.is_some()),
+            finding_available => Boolean(false):Some(finding_available),
             current_finding_result_id => Utf8(true):current_result,
             same_graph_revision => Boolean(false):Some(same_revision),
             package_id => Utf8(false):Some(&obligation.package_id),

@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use crate::Schema;
 
 mod changes;
+mod graph;
 pub use changes::{ChangeInput, ChangeInputs};
+pub use graph::{GraphKind, GraphRelation, GraphSpec};
 
 pub const CONTRACT_VERSION: u32 = 1;
 
@@ -84,12 +86,21 @@ pub enum InputMode {
     Resolved,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphAccess {
+    Read,
+    ReadWrite,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
     pub name: String,
     pub inputs: Vec<InputPort>,
     pub input_mode: InputMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<GraphSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_inputs: Option<ChangeInputs>,
     pub parameters: Schema,
@@ -112,6 +123,7 @@ impl Model {
             name: name.into(),
             inputs: inputs.into_iter().map(InputPort::from).collect(),
             input_mode: InputMode::Provided,
+            graph: None,
             change_inputs: None,
             parameters: Schema::empty(),
             outputs,

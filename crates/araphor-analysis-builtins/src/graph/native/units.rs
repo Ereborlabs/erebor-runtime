@@ -40,7 +40,6 @@ struct UnitRow {
     record: RecordIdRow,
     window_ns: u64,
     restricted: bool,
-    support: Vec<SupportRow>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -55,7 +54,6 @@ impl From<&Unit> for UnitRow {
             record: RecordIdRow::from(&value.record),
             window_ns: value.window_ns,
             restricted: value.restricted,
-            support: value.support.iter().map(SupportRow::from).collect(),
         }
     }
 }
@@ -68,11 +66,6 @@ impl TryFrom<UnitRow> for Unit {
             record: value.record.try_into()?,
             window_ns: value.window_ns,
             restricted: value.restricted,
-            support: value
-                .support
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<sdk::Result<_>>()?,
         })
     }
 }
@@ -111,6 +104,7 @@ impl TryFrom<UnitStateRow> for UnitState {
 #[serde(deny_unknown_fields)]
 struct ContributionRow {
     record: RecordIdRow,
+    support: Vec<SupportRow>,
     subjects: Vec<u64>,
     relationships: Vec<u64>,
     findings: Vec<u64>,
@@ -121,6 +115,7 @@ impl From<&Contribution> for ContributionRow {
     fn from(value: &Contribution) -> Self {
         Self {
             record: RecordIdRow::from(&value.record),
+            support: value.support.iter().map(SupportRow::from).collect(),
             subjects: value.subjects.clone(),
             relationships: value.relationships.clone(),
             findings: value.findings.clone(),
@@ -135,6 +130,11 @@ impl TryFrom<ContributionRow> for Contribution {
     fn try_from(value: ContributionRow) -> sdk::Result<Self> {
         Ok(Self {
             record: value.record.try_into()?,
+            support: value
+                .support
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<sdk::Result<_>>()?,
             subjects: value.subjects,
             relationships: value.relationships,
             findings: value.findings,

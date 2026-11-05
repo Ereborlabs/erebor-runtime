@@ -1409,9 +1409,7 @@ async fn native_append_execution() {
         schema.fields().len() + 2
     );
     let physical = state.create_physical_plan(&logical).await.unwrap();
-    assert!(physical
-        .as_any()
-        .is::<crate::stream::physical::SubscribeExec>());
+    assert!(physical.is::<crate::stream::physical::SubscribeExec>());
     assert_eq!(physical.schema(), schema);
     let children = physical.children();
     assert_eq!(children.len(), 1);
@@ -1638,9 +1636,7 @@ async fn native_subscribe_execution() {
     crate::planner::subscription::Subscribe::maintainable(&plan).unwrap();
     let logical = crate::planner::subscription::Subscribe::runtime(plan, false).unwrap();
     let physical = state.create_physical_plan(&logical).await.unwrap();
-    assert!(physical
-        .as_any()
-        .is::<crate::stream::physical::SubscribeExec>());
+    assert!(physical.is::<crate::stream::physical::SubscribeExec>());
     {
         use datafusion::physical_plan::execution_plan::{
             Boundedness, EmissionType, SchedulingType,
@@ -1973,7 +1969,6 @@ async fn replacement_reads_source_bounds() {
         .data;
     let replaced = physical.with_new_children(vec![child]).unwrap();
     let subscription = replaced
-        .as_any()
         .downcast_ref::<crate::stream::physical::SubscribeExec>()
         .unwrap();
     let mut stream = subscription

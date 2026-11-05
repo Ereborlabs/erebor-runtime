@@ -8,6 +8,7 @@ pub use araphor_data::{AnalysisReadControl, PackageErrorCodeV1};
 pub use tokio_util::task::task_tracker::{TaskTracker, TaskTrackerToken};
 
 mod error;
+mod host;
 mod limits;
 pub mod native;
 pub mod wasm;
@@ -206,6 +207,7 @@ impl Runtime {
             None,
             None,
             None,
+            None,
             (),
         )
         .await
@@ -222,6 +224,7 @@ impl Runtime {
         copy_bytes: Option<usize>,
         prepared: Option<Prepared>,
         admission: Option<wasm::EvaluationPermit>,
+        host: Option<Arc<dyn sdk::InvocationService + Send + Sync>>,
         lease: impl Send + 'static,
     ) -> Result<(sdk::Evaluation, sdk::Output)> {
         let worker_token = workers.token();
@@ -242,6 +245,21 @@ impl Runtime {
                 .into());
         }
         let artifact = bundle.bundle().artifact(&package)?;
+        let host = match host {
+            Some(service) => {
+                let spec = artifact
+                    .descriptor
+                    .check_evaluation(&evaluation)
+                    .context(AnalysisContractSnafu)?
+                    .model()
+                    .graph
+                    .clone()
+                    .ok_or_else(|| PackageErrorCodeV1::Denied.error("Graph capability"))?;
+                Some(Arc::new(host::HostAccess { service, spec })
+                    as Arc<dyn sdk::InvocationService + Send + Sync>)
+            }
+            None => None,
+        };
         let wasm = match artifact.implementation(&evaluation.export)? {
             PackageImplementationV1::Wasm { .. } => Some(self.wasm()?),
             PackageImplementationV1::Native { .. } => {
@@ -295,6 +313,7 @@ impl Runtime {
                         &stage,
                         copy_bytes,
                         admission,
+                        host,
                     )?;
                     Ok((evaluation, output))
                 } else {
@@ -308,12 +327,17 @@ impl Runtime {
                             .error("native qualification")
                             .into());
                     };
-                    let checked = artifact
+                    let mut checked = artifact
                         .descriptor
                         .check_evaluation(&evaluation)
                         .context(AnalysisContractSnafu)?;
+                    if let Some(host) = &host {
+                        checked
+                            .bind_host(host.as_ref())
+                            .context(AnalysisContractSnafu)?;
+                    }
                     let library = native::NativeLibrary::load(bytes, qualification, &stage)?;
-                    let output = library.call(&checked, copy_bytes, &stage)?;
+                    let output = library.call(&checked, copy_bytes, &stage, host.as_deref())?;
                     checked
                         .validate_output(&output)
                         .context(AnalysisContractSnafu)?;

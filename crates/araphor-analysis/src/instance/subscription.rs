@@ -523,7 +523,7 @@ impl ManagedPublication for sink::Publication {
         invocation: &Invocation,
         frontier: &ManagedFrontier,
         control: &AnalysisReadControl,
-    ) -> araphor_query::Result<()> {
+    ) -> araphor_query::Result<Option<Arc<araphor_data::ManagedAttempt>>> {
         let (state, witness_expiry, mode) = self.managed()?;
         let captured = snapshot
             .managed()
@@ -567,9 +567,10 @@ impl ManagedPublication for sink::Publication {
                 .error("managed subscription attempt completed")
                 .into());
         }
+        let attempt = Arc::new(attempt);
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
-        state.attempt = Some(Arc::new(attempt));
-        Ok(())
+        state.attempt = Some(Arc::clone(&attempt));
+        Ok(Some(attempt))
     }
 }
 

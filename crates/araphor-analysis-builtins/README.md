@@ -1,35 +1,42 @@
 # Built-in analysis algorithms
 
-This crate contains the current discovery and graph computations. Production
-owners in `araphor-data` execute installed native or Wasm components built from this code.
-Local SDK fixtures call the same computation directly. The crate depends on the
-analysis SDK. It has no Control, DuckDB, or host-store dependency.
+This crate contains package implementations for Discovery and graph analysis.
+Query calls the installed native or Wasm exports through Package Runtime.
+Data owns the atomic commit. Local SDK fixtures call the same computation.
+The crate depends on the analysis SDK. It has no Control, DuckDB, or host-store
+dependency.
 
 `discovery::Discovery::package()` declares four exports: `atoms`, `merge`,
 `groups`, and `compare`. `graph::Detector::descriptor()` declares `detect` for
-`HF-PROC-001`, `HF-DW-001`, or `HF-XNODE-001`. Call `evaluate` with an SDK
+`HF-DW-001`. The denial-based process detector and the Kubernetes placeholder
+have been removed. The multi-source causal replacement is not qualified.
+`causal::Causal::descriptor()` declares `HF-CAUSAL-001` with `index` and
+`detect` exports. `index` changes the causal graph and returns canonical proof
+keys. `detect` reads those keys through native DataFusion joins and stages a
+cross-node privileged-workload finding. The exports share the host transaction.
+The default Definition is `packages/default-definitions/causal.yaml`. It uses
+the same admission and Instance Host as an operator Definition. Runtime and
+performance qualification are not complete.
+Call `evaluate` with an SDK
 `Evaluation`. Each call checks inputs and outputs against its descriptor.
 The declarations and ports are initialized once. A guest wrapper can pass an
 immutable `CheckedEvaluation` to reuse the input check within one invocation.
 Output validation remains at the guest and host boundaries.
 
-The host supplies exact record references, selected context, and qualified
-facts. Graph outputs contain subject selections, relationship candidates,
-finding candidates, evidence references, reasons, and checkpoint state. The
-host constructs and validates domain identities, proof, findings, and stored
-results. A candidate cannot grant authority or perform a preventive action.
+The host supplies canonical inputs and checks evidence authority. Package
+code selects the graph nodes, edges, and findings. It stages explicit changes
+through the common SDK Graph transaction. Data owns the atomic commit.
+The package cannot commit the transaction or grant authority.
 
-The built-in row types use one Arrow binary value per typed row. `Rows::port`
-puts the type, JSON encoding, and generated JSON schema in field metadata.
-`Rows::encode` and `Rows::decode` check schemas and Arrow values.
-Integer values retain their exact widths. This format does not put a complete
-graph in one row. SDK authors can also use ordinary Arrow columns directly.
+Graph ports use native Arrow columns. Generic `Rows` helpers remain for
+other package contracts. They do not define the Graph transport.
 
 Graph computation receives the fields needed for its decisions. The host keeps
 the complete original records and maps returned row references to them. Each
-graph call replays a complete retained window; a prior checkpoint does not
-replace missing evidence. Discovery retains exact host keys for comparison and
-uses host ordering ranks for bounded evidence samples.
+call declares its inputs and changes. A prior result does not replace missing
+evidence. The retained credential computation still has source and policy
+limits. It does not prove cross-node detection. Discovery retains exact host
+keys for comparison and uses host ordering ranks for bounded evidence samples.
 
 Run the standalone computation tests with:
 
@@ -53,7 +60,7 @@ rtk proxy rustup target add wasm32-unknown-unknown
 ```
 
 A host Cargo build runs [build.rs](build.rs). The script calls
-`ComponentBuilder::workspace` to build the four required components, the SDK
+`ComponentBuilder::workspace` to build the current components, the SDK
 runtime fixture, and the detector example. The guest build uses the locked
 dependencies, release profile, and fixed `araphor-analysis-v1` compile-time seed.
 The component builder validates the packed components.

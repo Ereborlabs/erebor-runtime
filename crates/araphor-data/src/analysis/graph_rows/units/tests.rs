@@ -178,6 +178,7 @@ impl Fixture {
                 affected: "affected".into(),
                 before: "unit_removals".into(),
                 after: "units".into(),
+                current: None,
             }],
         };
         let mut removed = Unit::encode(
@@ -240,6 +241,7 @@ impl Fixture {
             .iter()
             .enumerate()
             .map(|(row, index)| Contribution {
+                support: self.unit(*index).support,
                 record: self.records[*index].id.clone(),
                 subjects: if empty { Vec::new() } else { vec![row as u64] },
                 relationships: Vec::new(),
@@ -272,6 +274,8 @@ impl Fixture {
         output: &'a sdk::Output,
     ) -> crate::ManagedReturn<'a> {
         crate::ManagedReturn {
+            graph: None,
+            retained: None,
             call: 1,
             evaluation,
             output,
@@ -362,16 +366,25 @@ fn units_keep_shared_state() -> TestResult {
                 .then(|| format!("version-{}", revision - 1))
                 .as_deref(),
         )?;
-        let effects = GraphRows::apply_units(
+        let canonical = GraphRows::canonical_contexts(
             &writer,
             std::path::Path::new("units"),
-            1,
+            &fixture.metadata,
+        )?;
+        let (_, _, mut records, positions) =
+            GraphRows::metadata_members(&writer, &fixture.metadata, Some((&[], &canonical)))?;
+        let effects = GraphRows::apply_units(
+            &writer,
             revision,
             &fixture.metadata,
-            &Fixture::returned(&evaluation, &output),
-            &fixture.pin,
+            &[(1, &Fixture::returned(&evaluation, &output), &fixture.pin)],
             false,
-        )?;
+            &mut records,
+            &positions,
+            &canonical,
+        )?
+        .remove(&(1))
+        .ok_or("native unit effects")?;
         assert_eq!(effects.state, expected);
         assert_eq!(writer.query_row("SELECT subject_count FROM graph_producer_versions WHERE scope_id=1 AND commit_revision=?",params![revision],|row|row.get::<_,u64>(0))?,count);
         assert_eq!(writer.query_row("SELECT state_count FROM graph_producer_versions WHERE scope_id=1 AND commit_revision=?",params![revision],|row|row.get::<_,u64>(0))?,match revision {1=>2,3=>0,_=>1});
@@ -383,9 +396,9 @@ fn units_keep_shared_state() -> TestResult {
         ))?,
         1
     );
-    araphor_graph::StateRows::validate(&writer)?;
+    crate::analysis::graph_rows::store::StateRows::validate(&writer)?;
     assert_eq!(
-        araphor_graph::StateRows::current(&writer, 1, 1)?,
+        crate::analysis::graph_rows::store::StateRows::current(&writer, 1, 1)?,
         GraphPackageStateV1::CredentialObserved
     );
     Ok(())
@@ -511,16 +524,19 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
         },
     ])?;
     let output = fixture.output(&[0, 1, 2], false)?;
+    let canonical =
+        GraphRows::canonical_contexts(&writer, std::path::Path::new("units"), &fixture.metadata)?;
+    let (_, _, _, positions) =
+        GraphRows::metadata_members(&writer, &fixture.metadata, Some((&[], &canonical)))?;
     let batch = UnitBatch::new(
-        &writer,
-        std::path::Path::new("units"),
+        &canonical,
         &fixture.metadata,
         &Fixture::returned(&evaluation, &output),
         &fixture.pin,
         true,
         false,
     )?;
-    let mut dependencies = batch.dependencies(&writer, &record_ids)?;
+    let mut dependencies = batch.dependencies(&record_ids, &positions)?;
     let graph: crate::GraphSnapshotV1 =
         serde_json::from_slice(include_bytes!("../tests/graph.json"))?;
     let subjects = GraphRows::intern_subjects(&writer, &graph.graph.subjects)?;
@@ -556,15 +572,17 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
         ),
     ]
     .into_iter()
-    .map(|(kind, key, value)| araphor_graph::Member {
-        kind,
-        key,
-        value,
-        record: Some(record_ids[&records[0]]),
-        fact: Some(bytes.clone()),
-        reason: (kind == 4).then(|| reason.clone()),
-        ordinal: 0,
-    })
+    .map(
+        |(kind, key, value)| crate::analysis::graph_rows::store::Member {
+            kind,
+            key,
+            value,
+            record: Some(record_ids[&records[0]]),
+            fact: Some(bytes.clone()),
+            reason: (kind == 4).then(|| reason.clone()),
+            ordinal: 0,
+        },
+    )
     .collect::<Vec<_>>();
     members.extend(dependencies.remove(&records[0]).ok_or("unit support")?);
     for (revision, result, base, members) in [
@@ -584,13 +602,23 @@ fn historical_call_members_require_unit_anchors() -> TestResult {
         let replacements = if revision == 3 {
             Vec::new()
         } else {
-            vec![araphor_graph::Replacement {
+            vec![crate::analysis::graph_rows::store::Replacement {
                 unit: Some(record_ids[&records[0]]),
                 members,
             }]
         };
-        araphor_graph::Contributions::apply(&writer, scope, revision, &replacements, false)?;
-        araphor_graph::StateRows::finish(&writer, scope, revision, &GraphPackageStateV1::Waiting)?;
+        crate::analysis::graph_rows::store::Contributions::apply(
+            &writer,
+            revision,
+            &std::collections::BTreeMap::from([(scope, (false, (&replacements).to_vec()))]),
+        )
+        .map(|mut work| work.remove(&(scope)).expect("native scope work"))?;
+        crate::analysis::graph_rows::store::StateRows::finish(
+            &writer,
+            scope,
+            revision,
+            &GraphPackageStateV1::Waiting,
+        )?;
     }
     GraphRows::validate_history(&writer, std::path::Path::new("units"))?;
     GraphRows::validate_call_members(&writer, std::path::Path::new("units"), scope, 2, 1)?;
@@ -821,15 +849,19 @@ fn units_reject_forged_outputs() -> TestResult {
             }
         }
         assert!(
-            UnitBatch::new(
+            GraphRows::canonical_contexts(
                 &writer,
                 std::path::Path::new("units"),
+                &fixture.metadata
+            )
+            .and_then(|canonical| UnitBatch::new(
+                &canonical,
                 &fixture.metadata,
                 &Fixture::returned(&evaluation, &output),
                 &fixture.pin,
                 true,
-                false,
-            )
+                false
+            ))
             .and_then(|batch| batch
                 .subjects
                 .iter()
@@ -894,8 +926,7 @@ fn units_require_current_context() -> TestResult {
     contributions[0].state.as_mut().ok_or("fact state")?.fact = Some(key.clone());
     output.datasets[3] = Contribution::encode(&contributions)?;
     UnitBatch::new(
-        &writer,
-        std::path::Path::new("units"),
+        &GraphRows::canonical_contexts(&writer, std::path::Path::new("units"), &fixture.metadata)?,
         &fixture.metadata,
         &Fixture::returned(&evaluation, &output),
         &fixture.pin,
@@ -924,16 +955,25 @@ fn units_require_current_context() -> TestResult {
             ports: Vec::new(),
         }
         .reset_input(revision == 1)?;
-        let effects = GraphRows::apply_units(
+        let canonical = GraphRows::canonical_contexts(
             &writer,
             std::path::Path::new("units"),
-            1,
+            &fixture.metadata,
+        )?;
+        let (_, _, mut records, positions) =
+            GraphRows::metadata_members(&writer, &fixture.metadata, Some((&[], &canonical)))?;
+        let effects = GraphRows::apply_units(
+            &writer,
             revision,
             &fixture.metadata,
-            &Fixture::returned(&current, &output),
-            &fixture.pin,
+            &[(1, &Fixture::returned(&current, &output), &fixture.pin)],
             false,
-        )?;
+            &mut records,
+            &positions,
+            &canonical,
+        )?
+        .remove(&(1))
+        .ok_or("native unit effects")?;
         assert_eq!(effects.state, GraphPackageStateV1::NativeEffect);
         let selected:u64=writer.query_row("SELECT selected_state_ref FROM graph_producer_versions WHERE scope_id=1 AND commit_revision=?",params![revision],|row|row.get(0))?;
         if let Some(prior) = prior_state {
@@ -961,14 +1001,14 @@ fn units_require_current_context() -> TestResult {
             prior_fact = Some(native_fact);
         }
         assert_eq!(GraphRows::decode_value::<crate::GraphFactV1>(&body)?, value);
-        araphor_graph::StateRows::validate(&writer)?;
+        crate::analysis::graph_rows::store::StateRows::validate(&writer)?;
         assert_eq!(
-            araphor_graph::StateRows::current(&writer, 1, revision)?,
+            crate::analysis::graph_rows::store::StateRows::current(&writer, 1, revision)?,
             GraphPackageStateV1::NativeEffect
         );
     }
     assert_eq!(
-        araphor_graph::StateRows::current(&writer, 1, 1)?,
+        crate::analysis::graph_rows::store::StateRows::current(&writer, 1, 1)?,
         GraphPackageStateV1::NativeEffect
     );
     for fault in 0..5 {
@@ -1014,15 +1054,19 @@ fn units_require_current_context() -> TestResult {
             }
         }
         assert!(
-            UnitBatch::new(
+            GraphRows::canonical_contexts(
                 &writer,
                 std::path::Path::new("units"),
+                &fixture.metadata
+            )
+            .and_then(|canonical| UnitBatch::new(
+                &canonical,
                 &fixture.metadata,
                 &Fixture::returned(&evaluation, &output),
                 &fixture.pin,
                 true,
-                false,
-            )
+                false
+            ))
             .and_then(|batch| batch
                 .subjects
                 .iter()
@@ -1035,34 +1079,45 @@ fn units_require_current_context() -> TestResult {
     {
         let transaction = writer.transaction()?;
         transaction.execute_batch("UPDATE context_versions SET sensitivity='host_restricted'")?;
-        assert!(UnitBatch::new(
+        assert!(GraphRows::canonical_contexts(
             &transaction,
             std::path::Path::new("units"),
+            &fixture.metadata
+        )
+        .and_then(|canonical| UnitBatch::new(
+            &canonical,
             &fixture.metadata,
             &Fixture::returned(&evaluation, &output),
             &fixture.pin,
             true,
-            true,
-        )
+            true
+        ))
         .is_err());
         let mut unrelated = fixture.evaluation(&[1], &[], true)?;
         let unrelated_output = fixture.output(&[1], false)?;
-        assert!(UnitBatch::new(
+        assert!(GraphRows::canonical_contexts(
             &transaction,
             std::path::Path::new("units"),
+            &fixture.metadata
+        )
+        .and_then(|canonical| UnitBatch::new(
+            &canonical,
             &fixture.metadata,
             &Fixture::returned(&unrelated, &unrelated_output),
             &fixture.pin,
             true,
-            true,
-        )
+            true
+        ))
         .is_err());
         let mut units = Unit::decode(&unrelated.inputs[0].data)?;
         units[0].restricted = true;
         unrelated.inputs[0].data = Unit::encode(&units)?;
         UnitBatch::new(
-            &transaction,
-            std::path::Path::new("units"),
+            &GraphRows::canonical_contexts(
+                &transaction,
+                std::path::Path::new("units"),
+                &fixture.metadata,
+            )?,
             &fixture.metadata,
             &Fixture::returned(&unrelated, &unrelated_output),
             &fixture.pin,

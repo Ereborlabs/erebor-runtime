@@ -563,12 +563,18 @@ impl Window {
         original: &AnalysisSelectionV1,
         now: u64,
     ) -> AnalysisSelectionV1 {
+        let mut selection = original.clone();
+        self.apply_selection(&mut selection, now);
+        selection
+    }
+
+    pub(crate) fn apply_selection(&self, selection: &mut AnalysisSelectionV1, now: u64) {
         let Self::Moving {
             inclusive,
             exclusive,
         } = self
         else {
-            return original.clone();
+            return;
         };
         let threshold = |width: &u64| (i128::from(now) - i128::from(*width)) / 1000;
         let micros = inclusive
@@ -578,13 +584,11 @@ impl Window {
             .max()
             .unwrap_or(0);
         let lower = u64::try_from(micros.max(0) * 1000).unwrap_or(u64::MAX);
-        let mut selection = original.clone();
-        selection.received_from = match original.received_from {
+        selection.received_from = match selection.received_from {
             Bound::Included(value) if value >= lower => Bound::Included(value),
             Bound::Excluded(value) if value >= lower => Bound::Excluded(value),
             _ => Bound::Included(lower),
         };
-        selection
     }
 
     pub(crate) fn expiry(&self, received: Option<u64>) -> Option<u64> {

@@ -469,10 +469,6 @@ struct PlanningGate {
 
 #[async_trait::async_trait]
 impl TableProvider for PlanningGate {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> datafusion::arrow::datatypes::SchemaRef {
         self.inner.schema()
     }
@@ -627,9 +623,7 @@ async fn native_first_clock_time() {
     let logical =
         crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), false).unwrap();
     let physical = state.create_physical_plan(&logical).await.unwrap();
-    assert!(physical
-        .as_any()
-        .is::<crate::stream::physical::SubscribeExec>());
+    assert!(physical.is::<crate::stream::physical::SubscribeExec>());
     assert_eq!(physical.schema(), schema);
     let context = state.task_ctx();
     drop(state);
@@ -745,9 +739,7 @@ async fn native_page_follow_properties() {
         let logical =
             crate::planner::subscription::Subscribe::runtime(plan.as_ref().clone(), true).unwrap();
         let physical = state.create_physical_plan(&logical).await.unwrap();
-        assert!(physical
-            .as_any()
-            .is::<crate::stream::physical::SubscribeExec>());
+        assert!(physical.is::<crate::stream::physical::SubscribeExec>());
         assert_eq!(physical.schema(), schema);
         assert_eq!(
             physical.properties().boundedness,

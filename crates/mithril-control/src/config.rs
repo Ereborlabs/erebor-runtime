@@ -62,6 +62,8 @@ pub struct ControlConfig {
     #[serde(default)]
     pub graph_enabled: bool,
     #[serde(default)]
+    pub package_definitions: Option<PathBuf>,
+    #[serde(default)]
     pub control_store_directory: Option<PathBuf>,
     #[serde(default)]
     pub kubernetes_policy: Option<PolicyDesiredStateConfigV1>,
@@ -85,7 +87,6 @@ pub struct ControlRuntimeParts {
     pub data_error: Option<crate::Error>,
     pub instances: Option<Arc<araphor_analysis::InstanceHost>>,
     pub discovery: Option<Arc<araphor_analysis::DiscoveryOwner>>,
-    pub graph: Option<Arc<araphor_analysis::GraphOwner>>,
     pub discovery_error: Option<crate::Error>,
 }
 
@@ -106,6 +107,7 @@ impl ControlConfig {
         clock: Arc<dyn crate::IntakeClock>,
     ) -> Result<ControlRuntimeParts> {
         self.validate()?;
+        let definitions_enabled = self.graph_enabled || self.package_definitions.is_some();
         let store_directory = self
             .control_store_directory
             .as_ref()
@@ -126,7 +128,7 @@ impl ControlConfig {
                         .is_empty();
                     let instances = if retained
                         || self.discovery
-                        || self.graph_enabled
+                        || definitions_enabled
                         || self
                             .client
                             .as_ref()
@@ -137,9 +139,9 @@ impl ControlConfig {
                                 .as_ref()
                                 .and_then(|client| client.investigation.as_ref())
                                 .map(|config| config.query.clone()),
-                            self.graph_enabled,
+                            definitions_enabled,
                         )?;
-                        if self.graph_enabled {
+                        if definitions_enabled {
                             packages.notifications(&self.notifications)?;
                         }
                         Some(Arc::clone(&packages.instances))
@@ -168,11 +170,11 @@ impl ControlConfig {
                     None,
                 ),
             };
-        let graph = if self.graph_enabled && control.analysis_store().is_some() {
-            Some(Arc::new(control.analysis_packages(None)?.graph()?))
-        } else {
-            None
-        };
+        if definitions_enabled && control.analysis_store().is_some() {
+            control
+                .analysis_packages(None)?
+                .start_definitions(self.package_definitions.as_deref())?;
+        }
         control = control.with_evidence_limits(self.evidence_admission)?;
         if let Some(trust) = self.authority_trust {
             control = control.with_authority_trust(trust)?;
@@ -208,7 +210,6 @@ impl ControlConfig {
             data_error,
             instances,
             discovery,
-            graph,
             discovery_error,
         })
     }
@@ -496,7 +497,6 @@ mod tests {
             let parts = ControlConfig::load(&path)?.into_parts()?;
             assert!(parts.data_error.is_some());
             assert!(parts.discovery.is_none());
-            assert!(parts.graph.is_none());
             assert!(parts.control.analysis_store().is_none());
             assert!(parts.instances.is_none());
             assert_eq!(parts.control.allowed_nodes().len(), 1);

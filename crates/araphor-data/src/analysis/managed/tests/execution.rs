@@ -6,7 +6,20 @@ fn execution_retains_only_committed_state() -> TestResult {
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit_model(&store, false, AnalysisSelectionV1::tenant([1; 16]), true)?;
     let execution = Arc::new(ManagedExecution::default());
-    let captured = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
+    let declaration = &fixture.instance.spec.manifest.calls[&10];
+    let bundle = store
+        .retained_package_image([1; 16], &declaration.image, &AnalysisReadControl::default())?
+        .ok_or("execution package image")?;
+    let context = crate::AnalysisContextVersionV1::from_package(
+        &bundle,
+        [1; 16],
+        &declaration.package,
+        &declaration.export,
+        "rows",
+    )?;
+    let reference = store.intern_context(&context)?;
+    let mut captured = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
+    captured.contract.contexts.push(reference.clone());
     let input = request("retained-first");
     let attempt = store.register_managed_attempt(&captured, &input, || Ok(()))?;
     let evaluations = [
@@ -21,8 +34,24 @@ fn execution_retains_only_committed_state() -> TestResult {
         .is_err());
     let unchanged = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
     assert!(unchanged.prior(10).is_none());
+    assert_eq!(execution.metadata_bytes(), 0);
     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
-    let warm = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
+    let mut warm = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
+    assert!(
+        execution
+            .packages(&warm.instance, &warm.contract)
+            .metadata_bytes()
+            > 0
+    );
+    let mut recovered = warm.contract.clone();
+    recovered.recovery += 1;
+    assert_eq!(
+        execution
+            .packages(&warm.instance, &recovered)
+            .metadata_bytes(),
+        0
+    );
+    warm.contract.contexts.push(reference.clone());
     let cold = fixture.capture(&store, false)?;
     for call in [10, 11] {
         let warm = warm.prior(call).ok_or("warm prior")?;
@@ -52,6 +81,56 @@ fn execution_retains_only_committed_state() -> TestResult {
             outputs[(call - 10) as usize].datasets[0].batches
         );
     }
+    let idle = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
+    let proofs = execution.packages(&idle.instance, &idle.contract);
+    assert!(proofs.metadata_bytes() > 0);
+    let attempt = store.register_managed_attempt(&idle, &request("retained-empty"), || Ok(()))?;
+    let selected = sdk::Dataset {
+        name: "selected".into(),
+        batches: vec![sdk::RecordBatch::new_empty(Arc::new(
+            fixture.model.outputs[0].schema.clone(),
+        ))],
+    };
+    let empty = Fixture::publish(&store,
+        &ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
+            completed: true,
+            attempt: &attempt,
+            now_utc_ns: 10,
+            returns: &[],
+            selected: &selected,
+            selected_schema: &fixture.model.outputs[0].schema,
+        },
+        || Ok(()),
+    )?;
+    assert!(empty.results.is_empty());
+    warm = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
+    assert!(proofs.shares_roots(&execution.packages(&warm.instance, &warm.contract)));
+    for removed in [false, true] {
+        let mut changed = warm.instance.clone();
+        if removed {
+            changed.spec.manifest.calls.remove(&10);
+        } else {
+            changed
+                .spec
+                .manifest
+                .calls
+                .get_mut(&10)
+                .ok_or("active call")?
+                .image
+                .image
+                .revision
+                .push_str("-changed");
+        }
+        assert_eq!(
+            execution
+                .packages(&changed, &warm.contract)
+                .metadata_bytes(),
+            0
+        );
+    }
+    warm.contract.contexts.push(reference.clone());
     let next = request("retained-next");
     let attempt = store.register_managed_attempt(&warm, &next, || Ok(()))?;
     let evaluations = [
@@ -75,7 +154,8 @@ fn execution_retains_only_committed_state() -> TestResult {
         .is_none());
     let outputs = [fixture.output(4)?, fixture.output(5)?];
     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
-    let current = fixture.capture_execution(&store, false, Some(execution))?;
+    let mut current = fixture.capture_execution(&store, false, Some(Arc::clone(&execution)))?;
+    assert!(proofs.shares_roots(&execution.packages(&current.instance, &current.contract)));
     assert_eq!(
         current.prior(10).ok_or("current prior")?.result,
         receipt.results[&10].result_id
@@ -84,6 +164,16 @@ fn execution_retains_only_committed_state() -> TestResult {
         .prior(10)
         .and_then(|prior| prior.retained.as_ref())
         .is_some_and(|retained| retained.evaluation.previous_outputs.is_empty()));
+    current.contract.contexts.push(reference);
+    store.writer()?.get_mut()?.execute(
+        "UPDATE package_revisions SET artifact=? WHERE package_id='managed-fixture'",
+        params![b"changed".as_slice()],
+    )?;
+    assert!(store
+        .register_managed_attempt(&current, &request("retained-tampered"), || Ok(()))
+        .is_err());
+    execution.clear();
+    assert_eq!(execution.metadata_bytes(), 0);
     Ok(())
 }
 

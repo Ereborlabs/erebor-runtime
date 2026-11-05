@@ -1,5 +1,7 @@
 #![allow(clippy::result_large_err)]
 
+pub(crate) mod causal;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     pin::Pin,

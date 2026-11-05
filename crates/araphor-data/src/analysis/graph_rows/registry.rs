@@ -57,14 +57,16 @@ impl GraphRows {
         }
         drop(rows);
         drop(statement);
-        let subjects = araphor_graph::SubjectRows::registry(reader)?;
+        let subjects = crate::analysis::graph_rows::store::SubjectRows::registry(reader)?;
         for (id, subject) in &subjects {
             keys.insert((2, *id), Self::member_key(subject)?);
         }
-        for (id, key) in araphor_graph::RelationshipRows::registry(reader, &subjects, &evidence)? {
+        for (id, key) in crate::analysis::graph_rows::store::RelationshipRows::registry(
+            reader, &subjects, &evidence,
+        )? {
             keys.insert((3, id), Self::member_key(&key)?);
         }
-        let columns = araphor_graph::FindingRows::COLUMNS
+        let columns = crate::analysis::graph_rows::store::FindingRows::COLUMNS
             .split_once(',')
             .ok_or_else(|| Self::invalid("graph finding columns"))?
             .1;
@@ -81,8 +83,9 @@ impl GraphRows {
         while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
             operation: "advance Graph finding registry",
         })? {
-            let (subject, records) = araphor_graph::FindingRows::references(row)?;
-            let finding = araphor_graph::FindingRows::decode(
+            let (subject, records) =
+                crate::analysis::graph_rows::store::FindingRows::references(row)?;
+            let finding = crate::analysis::graph_rows::store::FindingRows::decode(
                 row,
                 subjects
                     .get(&subject)

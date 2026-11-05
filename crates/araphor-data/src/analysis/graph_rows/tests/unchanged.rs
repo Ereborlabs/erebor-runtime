@@ -6,6 +6,7 @@ fn unchanged_findings_reuse_values_and_membership() -> TestResult {
     let first = fixture.snapshot;
     let path = fixture._directory.path().join("unchanged.duckdb");
     let writer = Connection::open(&path)?;
+    writer.execute_batch(crate::AnalysisStore::CONTEXT_SCHEMA)?;
     writer.execute_batch(&crate::AnalysisStore::notice_schema())?;
     writer.execute_batch(
         "CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY,

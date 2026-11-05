@@ -112,10 +112,21 @@ impl Publication {
             return Err(Code::Invalid.error("notification publication mode").into());
         };
         let check = || self.owner.check_notification(*lifecycle, control);
+        let budget = self
+            .owner
+            .session
+            .memory()
+            .managed_budget(control, self.owner.query.limits().input_bytes);
         router
-            .consume_rows(tenant, now, batches, &check, &mut |delivery| {
-                Ok(sink.deliver(delivery))
-            })
+            .consume_bounded(
+                tenant,
+                now,
+                batches,
+                control,
+                budget.as_ref(),
+                &check,
+                &mut |delivery| Ok(sink.deliver(delivery)),
+            )
             .map(|_| ())
     }
 }
@@ -303,6 +314,7 @@ impl DataSink for Publication {
             Operation::Version { .. } => &[PackageActionV1::Run, PackageActionV1::Update],
             _ => &[PackageActionV1::Run],
         };
+        let input_limit = limits.input_bytes;
         let caller = mode.caller().map(|(grant, action)| (grant.clone(), action));
         acknowledgement.prepare_ack(context)?;
         let published = receipt
@@ -315,6 +327,8 @@ impl DataSink for Publication {
                         evaluation: returned.evaluation(),
                         output: returned.output(),
                         changes: returned.changes(),
+                        graph: returned.graph(),
+                        retained: returned.retained(),
                     })
                     .collect::<Vec<_>>();
                 let now = SystemTime::now()
@@ -357,19 +371,22 @@ impl DataSink for Publication {
                                 control,
                             )?,
                     ),
-                    ManagedDestination::Graph {
-                        operation: ManagedGraphOperation::Expire,
-                        ..
-                    } => crate::graph::GraphConversion::expiry(
-                        &task,
-                        &captured,
-                        &selected.batches,
-                        control,
-                    )?,
                     _ => None,
                 };
                 let completed = graph.as_ref().is_none_or(|converted| converted.completed)
                     && profile.as_ref().is_none_or(|converted| !converted.replan);
+                let budget = owner.session.memory().managed_budget(control, input_limit);
+                let managed = ManagedCommit {
+                    control,
+                    budget: budget.as_ref(),
+                    completed,
+                    attempt: &attempt,
+                    now_utc_ns: now,
+                    returns: &returns,
+                    selected: &selected,
+                    selected_schema: schema.as_ref(),
+                };
+                let prepared = owner.query.store().prepare_managed(&managed)?;
                 Instance::authorize_actions_for(
                     owner.authority.as_ref(),
                     &owner.admitted.grant,
@@ -380,14 +397,6 @@ impl DataSink for Publication {
                         .map(|(grant, action)| (grant, *action, control)),
                     || {
                         control.check()?;
-                        let managed = ManagedCommit {
-                            completed,
-                            attempt: &attempt,
-                            now_utc_ns: now,
-                            returns: &returns,
-                            selected: &selected,
-                            selected_schema: schema.as_ref(),
-                        };
                         let receipt = match &owner.admitted.spec.destination {
                             ManagedDestination::Notification => {
                                 return Err(Code::Unsupported.error("notification managed commit"))
@@ -395,7 +404,7 @@ impl DataSink for Publication {
                             ManagedDestination::Selected => owner
                                 .query
                                 .store()
-                                .commit_managed(&managed, || control.check())?,
+                                .commit_managed(prepared, || control.check())?,
                             ManagedDestination::DiscoveryProfile { .. } => {
                                 let converted = profile.ok_or_else(|| {
                                     Code::Incomplete.error("managed profile conversion")
@@ -403,20 +412,21 @@ impl DataSink for Publication {
                                 owner
                                     .query
                                     .store()
-                                    .commit_managed_profile(&managed, converted.packet, || {
+                                    .commit_managed_profile(prepared, converted.packet, || {
                                         control.check()
                                     })?
                                     .0
                             }
                             ManagedDestination::Graph { .. } => {
                                 if let Some(converted) = graph {
-                                    let evaluate = matches!(
-                                        owner.admitted.spec.destination,
-                                        ManagedDestination::Graph {
-                                            operation: ManagedGraphOperation::Evaluate,
-                                            ..
-                                        }
-                                    );
+                                    let evaluate = !converted.expired
+                                        && matches!(
+                                            owner.admitted.spec.destination,
+                                            ManagedDestination::Graph {
+                                                operation: ManagedGraphOperation::Evaluate,
+                                                ..
+                                            }
+                                        );
                                     let deadline = converted.deadline;
                                     if evaluate {
                                         crate::graph::GraphConversion::check_deadline(deadline)?;
@@ -425,7 +435,7 @@ impl DataSink for Publication {
                                         .query
                                         .store()
                                         .commit_managed_graph(
-                                            &managed,
+                                            prepared,
                                             Some(converted.packet),
                                             || {
                                                 control.check()?;
@@ -442,7 +452,7 @@ impl DataSink for Publication {
                                     owner
                                         .query
                                         .store()
-                                        .commit_managed_graph(&managed, None, || control.check())?
+                                        .commit_managed_graph(prepared, None, || control.check())?
                                         .0
                                 }
                             }

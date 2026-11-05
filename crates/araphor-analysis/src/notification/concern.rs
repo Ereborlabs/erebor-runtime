@@ -1,9 +1,9 @@
 use super::*;
 use araphor_data::analysis::NotificationLookup;
 
-impl NotificationRouter {
+impl NotificationCycle<'_, '_> {
     pub(super) fn refresh_concern(
-        &self,
+        &mut self,
         state: &mut NotificationObligationV1,
         now: u64,
     ) -> Result<()> {
@@ -27,7 +27,9 @@ impl NotificationRouter {
         }
         Ok(())
     }
+}
 
+impl NotificationRouter {
     pub fn submit_concern(
         &self,
         grant: &NotificationGrantV1,
@@ -132,7 +134,7 @@ impl NotificationRouter {
             }),
             unconfirmed_concern: Some(concern),
             route: Some((&route.policy).into()),
-            escalation: Self::escalation(&route.policy, &routes),
+            escalation: NotificationCycle::escalation(&route.policy, &routes),
             first_seen_utc_ns: now,
             deadline_utc_ns: Some(
                 now.checked_add(route.policy.acknowledgement_ns)

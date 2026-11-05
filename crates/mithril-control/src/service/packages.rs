@@ -7,14 +7,14 @@ use araphor_query::execution::{Engine, Limits};
 
 use super::ControlPlane;
 
-mod graph;
+mod definitions;
 
 pub(crate) struct ControlPackages {
     pub(crate) query: Arc<Engine>,
     pub(crate) instances: Arc<araphor_analysis::InstanceHost>,
     authority: Arc<ControlPackageAuthority>,
-    facts: Option<Arc<dyn araphor_analysis::GraphFacts>>,
     limits: Limits,
+    images: Vec<araphor_data::PackageBundle>,
 }
 
 struct ControlPackageAuthority {
@@ -74,7 +74,7 @@ impl ControlPlane {
                 .or_default()
                 .push(node.node_id.clone());
         }
-        let mut bundles = araphor_analysis::GraphProgram::images();
+        let mut bundles = vec![araphor_analysis::Package::causal_bundle()];
         bundles.push(araphor_analysis::Package::discovery_bundle()?);
         let bundles = bundles
             .into_iter()
@@ -84,6 +84,12 @@ impl ControlPlane {
             })
             .collect::<araphor_data::Result<Vec<_>>>()?;
         let pins = bundles.iter().map(|(_, digest)| digest.clone()).collect();
+        let images = bundles
+            .into_iter()
+            .map(|(bundle, _)| {
+                araphor_data::PackageBundle::try_from(bundle).map_err(araphor_data::Error::from)
+            })
+            .collect::<araphor_data::Result<Vec<_>>>()?;
         let authority = Arc::new(ControlPackageAuthority {
             tenants,
             pins,
@@ -134,8 +140,8 @@ impl ControlPlane {
             query,
             instances,
             authority,
-            facts,
             limits,
+            images,
         });
         *installed = Some(runtime.clone());
         Ok(runtime)
@@ -276,7 +282,7 @@ impl ControlPackageAuthority {
         }
     }
 
-    fn graph_grant(&self, tenant: [u8; 16]) -> Option<PackageGrantV1> {
+    fn definition_grant(&self, tenant: [u8; 16]) -> Option<PackageGrantV1> {
         let nodes = self
             .tenants
             .get(&tenant)
@@ -305,7 +311,7 @@ impl ControlPackageAuthority {
         Self::notification(grant)
             || self.tenants.contains_key(&grant.selection.tenant_id)
                 && (*grant == self.grant(grant.selection.tenant_id)
-                    || self.graph_grant(grant.selection.tenant_id).as_ref() == Some(grant))
+                    || self.definition_grant(grant.selection.tenant_id).as_ref() == Some(grant))
     }
 
     fn denied() -> araphor_data::Error {
@@ -550,12 +556,12 @@ mod tests {
         };
         assert_eq!(
             authority
-                .graph_grant([1; 16])
+                .definition_grant([1; 16])
                 .map(|grant| grant.selection.nodes),
             Some(vec!["node-a".to_owned()])
         );
-        assert!(authority.graph_grant([2; 16]).is_none());
-        assert!(authority.graph_grant([3; 16]).is_none());
+        assert!(authority.definition_grant([2; 16]).is_none());
+        assert!(authority.definition_grant([3; 16]).is_none());
     }
 
     #[test]

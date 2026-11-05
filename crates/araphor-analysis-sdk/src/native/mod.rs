@@ -2,11 +2,12 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use crate::{CheckedEvaluation, Error, ErrorCode, Output, Result, CONTRACT_VERSION};
+use crate::{CheckedEvaluation, Error, ErrorCode, Output, Result};
 
 mod abi;
 mod decode;
 mod exchange;
+mod host;
 mod streams;
 pub use abi::*;
 use decode::Decoder;
@@ -35,6 +36,7 @@ pub struct Invocation<'a, F: Fn() -> bool> {
     checked: &'a CheckedEvaluation<'a>,
     cancelled: Box<F>,
     exchange: Exchange,
+    host: Option<&'a dyn crate::InvocationService>,
 }
 
 impl<'a, F: Fn() -> bool> Invocation<'a, F> {
@@ -43,20 +45,31 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
             checked,
             cancelled: Box::new(cancelled),
             exchange: Exchange::evaluation(checked)?,
+            host: None,
         })
+    }
+
+    pub fn bind_host(&mut self, host: &'a dyn crate::InvocationService) -> Result<()> {
+        if self.host.is_some() || self.checked.model().graph.is_none() {
+            return Err(Error::contract(ErrorCode::Unauthorized, "Graph capability"));
+        }
+        self.host = Some(host);
+        Ok(())
     }
 
     /// Call the native table and copy all returned storage into the host.
     ///
     /// # Safety
     /// The table and callbacks must be valid until this call returns.
-    /// The producer must obey the v1 pointer and ownership contract.
+    /// The producer must obey the v2 pointer and ownership contract.
     pub unsafe fn call(mut self, api: &Api, copy_bytes: Option<usize>) -> Result<Output> {
         api.validate()?;
         if (self.cancelled)() {
             return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
         }
-        let request = self.request();
+        let mut scope = self.host.map(host::HostContext);
+        let table = scope.as_mut().map(host::HostContext::table);
+        let request = self.request(table.as_ref().map_or(std::ptr::null(), |table| table));
         let mut response = Response::default();
         let guard = ResponseGuard {
             api,
@@ -108,10 +121,11 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
         .map_err(|_| Error::contract(ErrorCode::Invalid, "native output"))?
     }
 
-    fn request(&mut self) -> Request {
+    fn request(&mut self, host: *const HostApi) -> Request {
         let evaluation = self.checked.evaluation();
         let context = &evaluation.context;
         Request {
+            struct_size: std::mem::size_of::<Request>() as u64,
             export_name: Bytes::new(evaluation.export.as_bytes()),
             inputs: self.exchange.inputs.as_ptr(),
             input_count: self.exchange.inputs.len() as u64,
@@ -127,6 +141,7 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
             checkpoint: self.exchange.checkpoint_ptr(),
             cancelled: Some(cancel_callback::<F>),
             cancel_context: (&mut *self.cancelled as *mut F).cast(),
+            host,
         }
     }
 }
@@ -160,7 +175,7 @@ struct OwnedResponse {
 impl Api {
     pub const fn for_guest<G: crate::Guest>() -> Self {
         Self {
-            contract_version: CONTRACT_VERSION,
+            contract_version: ABI_VERSION,
             struct_size: std::mem::size_of::<Self>() as u64,
             evaluate: Some(evaluate::<G>),
             release: Some(release),
@@ -217,6 +232,9 @@ unsafe fn evaluate_guest<G: crate::Guest>(request: *const Request) -> Result<Box
         return Err(Error::contract(ErrorCode::Invalid, "native request"));
     }
     let request = unsafe { &*request };
+    if request.struct_size != std::mem::size_of::<Request>() as u64 {
+        return Err(Error::contract(ErrorCode::Incompatible, "native request size"));
+    }
     let cancellation = request.cancelled.map(|call| (call, request.cancel_context));
     let _scope = CancellationScope(CANCELLATION.with(|current| current.replace(cancellation)));
     if cancelled() {
@@ -224,7 +242,17 @@ unsafe fn evaluate_guest<G: crate::Guest>(request: *const Request) -> Result<Box
     }
     let package = G::package();
     let (evaluation, model) = unsafe { Decoder::evaluation(&package, request)? };
-    let checked = crate::CheckedEvaluation::new(&package, model, &evaluation);
+    let mut checked = crate::CheckedEvaluation::new(&package, model, &evaluation);
+    let host = if request.host.is_null() {
+        None
+    } else {
+        let table = unsafe { Decoder::new(None).one(request.host)? };
+        table.validate()?;
+        Some(host::HostProxy(table))
+    };
+    if let Some(host) = &host {
+        checked.bind_host(host)?;
+    }
     let output = G::compute(&checked)?;
     if cancelled() {
         return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
@@ -252,13 +280,13 @@ unsafe extern "C" fn release(response: *mut Response) {
     }));
 }
 
-/// Export a Rust guest through the native v1 table.
+/// Export a Rust guest through the native v2 table.
 #[macro_export]
 macro_rules! export_native {
     ($guest:ty) => {
         #[allow(unsafe_code)]
         #[no_mangle]
-        pub extern "C" fn araphor_analysis_get_api_v1() -> *const $crate::native::Api {
+        pub extern "C" fn araphor_analysis_get_api_v2() -> *const $crate::native::Api {
             static API: $crate::native::Api = $crate::native::Api::for_guest::<$guest>();
             &API
         }

@@ -40,8 +40,46 @@ impl NotificationRouter {
         check: &dyn Fn() -> Result<()>,
         effect: &mut Effect<'_>,
     ) -> Result<NotificationUpdate> {
+        let control = araphor_data::AnalysisReadControl::default();
+        let memory = araphor_query::memory::Memory::new(None, None);
+        let budget = memory.managed_budget(&control, usize::MAX);
+        self.consume_bounded(
+            tenant,
+            now,
+            batches,
+            &control,
+            budget.as_ref(),
+            check,
+            effect,
+        )
+    }
+
+    pub(crate) fn consume_bounded(
+        &self,
+        tenant: [u8; 16],
+        now: u64,
+        batches: &[araphor_analysis_sdk::RecordBatch],
+        control: &araphor_data::AnalysisReadControl,
+        budget: &dyn araphor_data::ManagedBudget,
+        check: &dyn Fn() -> Result<()>,
+        effect: &mut Effect<'_>,
+    ) -> Result<NotificationUpdate> {
         let started = std::time::Instant::now();
         NotificationErrorCodeV1::Invalid.require(now > 0, "notification evaluation time")?;
+        let bytes = batches
+            .iter()
+            .try_fold(0usize, |bytes, batch| {
+                bytes.checked_add(batch.get_array_memory_size())
+            })
+            .and_then(|bytes| bytes.checked_mul(12))
+            .ok_or_else(|| {
+                NotificationSnafu {
+                    code: NotificationErrorCodeV1::Limit,
+                    field: "notification request memory",
+                }
+                .build()
+            })?;
+        let _work_memory = budget.reserve(bytes)?;
         let mut work = Vec::new();
         for batch in batches {
             let invalid = || {
@@ -102,21 +140,21 @@ impl NotificationRouter {
             }
         }
         let decoded = std::time::Instant::now();
-        let ids = work
+        if work.is_empty() {
+            return Ok(NotificationUpdate::default());
+        }
+        check()?;
+        let _guard = self.lock()?;
+        let references = work
             .iter()
-            .filter_map(|(reference, _)| reference.as_ref())
-            .filter(|reference| {
-                NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
-                    && NotificationGrantV1::identifier(&reference.result_id, usize::MAX)
-            })
-            .map(|reference| reference.finding_id.clone())
+            .filter_map(|(reference, _)| reference.clone())
             .collect::<Vec<_>>();
-        let heads = if ids.is_empty() {
-            None
-        } else {
-            check()?;
-            self.store.notification_finding_heads(tenant, &ids).ok()
-        };
+        let keys = work.iter().filter_map(|(_, key)| *key).collect::<Vec<_>>();
+        let prepared =
+            self.store
+                .prepare_notifications(tenant, &references, &keys, control, budget)?;
+        let mut cycle = NotificationCycle::new(self, tenant, prepared);
+        let heads = Some(cycle.prepared.heads().clone());
         let resolved = std::time::Instant::now();
         erebor_telemetry::debug!(
             tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
@@ -165,7 +203,6 @@ impl NotificationRouter {
                 continue;
             }
             check()?;
-            let _guard = self.lock()?;
             let mut states = Vec::new();
             if let Some(reference) = reference {
                 let identity = (reference.finding_id.clone(), reference.result_id.clone());
@@ -174,7 +211,7 @@ impl NotificationRouter {
                         continue;
                     }
                 } else {
-                    let result = self.route_states(tenant, &reference, now);
+                    let result = cycle.route_states(tenant, &reference, now);
                     routed.insert(identity, result.is_ok());
                     match result {
                         Ok((count, values)) => {
@@ -193,7 +230,7 @@ impl NotificationRouter {
             }
             if let Some(key) = key {
                 if !handled.contains(&key) && !states.iter().any(|state| state.key == key) {
-                    match self.state(key) {
+                    match cycle.state(key) {
                         Ok(state) => states.push(state),
                         Err(error) => {
                             erebor_telemetry::warn!(error; "Notification state read failed",
@@ -207,7 +244,7 @@ impl NotificationRouter {
             }
             for state in states {
                 if handled.insert(state.key) {
-                    self.consume_state(state, now, check, effect, &mut update)?;
+                    cycle.consume_state(state, now, check, effect, &mut update)?;
                 }
             }
         }
@@ -220,7 +257,7 @@ impl NotificationRouter {
             rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
             routed_items = update.routed.len(), handled_states = handled.len(),
             decode_s = decoded.duration_since(started).as_secs_f64(),
-            heads_s = resolved.duration_since(decoded).as_secs_f64(),
+            prepare_s = resolved.duration_since(decoded).as_secs_f64(),
             processing_s = completed.duration_since(resolved).as_secs_f64(),
             elapsed_s = completed.duration_since(started).as_secs_f64(),
             graph_results_sample = ?update.routed.iter().map(|(reference, _)|
@@ -230,9 +267,11 @@ impl NotificationRouter {
         );
         Ok(update)
     }
+}
 
+impl NotificationCycle<'_, '_> {
     fn consume_state(
-        &self,
+        &mut self,
         mut state: NotificationObligationV1,
         now: u64,
         check: &dyn Fn() -> Result<()>,

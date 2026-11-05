@@ -133,7 +133,29 @@ fn descriptor_preserves_owners() -> TestResult {
             vec![sdk::ChangeInput {
                 affected: "affected".into(),
                 before: "unit_removals".into(),
-                after: "units".into()
+                after: "units".into(),
+                current: Some(
+                    r#"WITH roots AS (
+    SELECT source.* FROM after.__graph_roots source JOIN affected ON affected.record = source.id
+), support_rows AS (
+    SELECT root.id AS root_id, UNNEST(array_concat([root.id],
+        COALESCE(policy.value['policy']['observations'], []))) AS support_id
+    FROM roots root LEFT JOIN after.__graph_support_facts policy
+        ON policy.record = root.id AND policy.value['tag'] = 'POLICY'
+), support_ids AS (
+    SELECT DISTINCT root_id, support_id FROM support_rows
+)
+SELECT members.root_id AS record, config.window_ns, config.restricted,
+    array_agg(named_struct('record', selected.id, 'proof', selected.proof_quality,
+        'facts', COALESCE(fact_keys.keys, [])) ORDER BY selected.id) AS support
+FROM support_ids members JOIN after.graph_records selected ON selected.id = members.support_id
+LEFT JOIN after.__graph_fact_keys fact_keys ON fact_keys.record = selected.id
+CROSS JOIN after.graph_settings config
+GROUP BY members.root_id, config.window_ns, config.restricted
+ORDER BY members.root_id
+"#
+                    .into()
+                ),
             }]
         );
         let inspected = package.inspect()?;

@@ -46,6 +46,7 @@ fn image(target: &str) -> TestResult<PackageBundleV1> {
             affected: "affected".into(),
             before: "removed".into(),
             after: "input".into(),
+            current: None,
         }],
     });
     model
@@ -368,7 +369,10 @@ async fn named_inputs_keep_phase() -> TestResult {
             session.register_table(name, Arc::clone(&table))?;
             session.register_table("input", table)?;
             let prepared = session
-                .prepare_definition(&Fixture::definition(&format!("SELECT value FROM {name}")), None)
+                .prepare_definition(
+                    &Fixture::definition(&format!("SELECT value FROM {name}")),
+                    None,
+                )
                 .await?;
             let output = session
                 .execute_definition(&prepared, araphor_query::definition::Invocation::default())
@@ -376,9 +380,10 @@ async fn named_inputs_keep_phase() -> TestResult {
             assert_eq!(values(&output.batches)?, [7]);
             drop(output);
             let error = session
-                .prepare_definition(&Fixture::definition(
-                    r#"SELECT * FROM "runtime-fixture"."1".changes()"#,
-                ), None)
+                .prepare_definition(
+                    &Fixture::definition(r#"SELECT * FROM "runtime-fixture"."1".changes()"#),
+                    None,
+                )
                 .await
                 .err()
                 .ok_or("Named input crossed the change phase")?;
@@ -434,6 +439,7 @@ async fn lookup_keeps_historical_provenance() -> TestResult {
             affected: "affected_support".into(),
             before: "copy_removed".into(),
             after: "copy".into(),
+            current: None,
         });
     fixture.install(&image)?;
     fixture.context(2)?;
@@ -689,9 +695,29 @@ async fn ordered_input_keeps_ctes() -> TestResult {
 
 async fn source_changes(target: &str) -> TestResult {
     let fixture = Fixture::new(Default::default())?;
-    fixture.install(&image(target)?)?;
+    let mut image = image(target)?;
+    if target == "sql" {
+        image.artifacts[0].descriptor.exports[0].inputs[1].source = sdk::InputSource::Query(
+            "SELECT prior.* FROM before.input prior JOIN affected ON prior.value=affected.value ORDER BY prior.value".into(),
+        );
+    }
+    fixture.install(&image)?;
     fixture.context(1)?;
     let instance = fixture.admit("source-changes", r#"SELECT * FROM "runtime-fixture"."1".changes(input => (SELECT owner_revision AS value FROM context_versions ORDER BY owner_revision DESC))"#).await?;
+    if target == "sql" {
+        let call = *instance
+            .admitted()
+            .spec
+            .manifest
+            .calls
+            .keys()
+            .next()
+            .ok_or("source change call")?;
+        assert_eq!(
+            instance.prepared.before_inputs()?,
+            BTreeSet::from([(call, 1)])
+        );
+    }
     let lifecycle = fixture.start(&instance)?;
     let control = Arc::new(AnalysisReadControl::default());
     let mut stream = instance.subscribe(Arc::clone(&control), u64::MAX, lifecycle)?;

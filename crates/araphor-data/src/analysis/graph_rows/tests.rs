@@ -78,6 +78,7 @@ fn native_rows_integrity() -> TestResult {
     assert!(metadata.snapshot.graph.subjects.is_empty());
     assert!(metadata.snapshot.graph.edges.is_empty());
     let mut writer = Connection::open_in_memory()?;
+    writer.execute_batch(crate::AnalysisStore::CONTEXT_SCHEMA)?;
     writer.execute_batch(&crate::AnalysisStore::notice_schema())?;
     writer.execute_batch(
         "CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY,
@@ -675,6 +676,7 @@ fn earlier_keys_keep_edge_membership() -> TestResult {
 
     let writer = Connection::open_in_memory()?;
     writer.execute_batch(&crate::AnalysisStore::notice_schema())?;
+    writer.execute_batch(crate::AnalysisStore::CONTEXT_SCHEMA)?;
     writer.execute_batch(
         "CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB, cpu_id UINTEGER)",
     )?;
@@ -770,6 +772,7 @@ fn edge_lookup_reuses_and_retries_large_batch() -> TestResult {
 
     let mut writer = Connection::open_in_memory()?;
     writer.execute_batch(&crate::AnalysisStore::notice_schema())?;
+    writer.execute_batch(crate::AnalysisStore::CONTEXT_SCHEMA)?;
     writer.execute_batch(
         "CREATE TABLE source_receipts (stream_key BLOB PRIMARY KEY, tenant_id BLOB, cpu_id UINTEGER)",
     )?;

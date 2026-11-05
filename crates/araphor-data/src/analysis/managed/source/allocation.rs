@@ -162,7 +162,9 @@ impl super::super::model::ManagedAttempt {
 impl ManagedSourceBlock {
     pub fn selection_bytes(&self, indices: &[usize]) -> Option<(usize, usize)> {
         let mut scratch = 0usize;
-        let mut retained = size_of::<ManagedSourceRows>();
+        let mut retained = size_of::<ManagedSourceRows>()
+            .checked_add(size_of::<SourceCells>() + 4 * size_of::<Arc<SourceCells>>())?
+            .checked_add(indices.len().checked_mul(size_of::<usize>())?)?;
         for index in indices {
             let (heap, value, entry) = match self.rows.get(*index)? {
                 SourceRow::Event(witness, _) => (
@@ -197,9 +199,55 @@ impl ManagedSourceBlock {
 }
 
 impl ManagedSourceFrame {
+    pub fn block_bytes(&self, table: &str, batch: usize) -> Option<usize> {
+        let batch = self
+            .tables
+            .iter()
+            .find(|data| data.name == table)?
+            .batches
+            .get(batch)?;
+        let mut heap = 0usize;
+        for name in match table {
+            "events" => &["node_id"][..],
+            "context_versions" => &["owner_id"][..],
+            _ => return None,
+        } {
+            let values = batch
+                .column_by_name(name)?
+                .as_any()
+                .downcast_ref::<sdk::arrow_array::StringArray>()?;
+            for value in values.iter().flatten() {
+                heap = heap.checked_add(value.len())?;
+            }
+        }
+        if table == "context_versions" {
+            for name in ["entity_key", "lifetime_key"] {
+                let values = batch
+                    .column_by_name(name)?
+                    .as_any()
+                    .downcast_ref::<sdk::arrow_array::BinaryArray>()?;
+                for value in values.iter().flatten() {
+                    heap = heap.checked_add(value.len())?;
+                }
+            }
+        }
+        heap.checked_add(batch.num_rows().checked_mul(size_of::<SourceRow>())?)?
+            .checked_add(size_of::<ManagedSourceBlock>() + size_of::<sdk::RecordBatch>())?
+            .checked_add(
+                batch
+                    .num_columns()
+                    .checked_mul(size_of::<sdk::arrow_array::ArrayRef>())?,
+            )?
+            .checked_add(6 * size_of::<usize>())?
+            .checked_add(table.len())
+    }
+
     pub fn allocated_bytes(&self) -> usize {
         let record = self;
         let mut bytes = size_of::<Self>()
+            .saturating_add(self.coverage.capacity().saturating_mul(size_of::<super::coverage::SourceCoverage>()))
+            .saturating_add(self.coverage.iter().map(super::coverage::SourceCoverage::allocated_bytes)
+                .fold(0usize, usize::saturating_add))
             .saturating_add(self.scope.allocated_bytes().unwrap_or(usize::MAX))
             .saturating_add(size_of::<OnceLock<Arc<PackageResultRefV1>>>())
             .saturating_add(size_of::<Mutex<SourceSelection>>())

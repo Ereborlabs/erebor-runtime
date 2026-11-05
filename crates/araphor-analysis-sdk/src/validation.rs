@@ -50,6 +50,7 @@ pub struct CheckedEvaluation<'a> {
     evaluation: &'a Evaluation,
     package: &'a Package,
     model: &'a Model,
+    host: Option<&'a dyn crate::InvocationHost>,
 }
 
 impl<'a> CheckedEvaluation<'a> {
@@ -58,6 +59,7 @@ impl<'a> CheckedEvaluation<'a> {
             package,
             model,
             evaluation,
+            host: None,
         }
     }
 
@@ -71,6 +73,19 @@ impl<'a> CheckedEvaluation<'a> {
 
     pub fn model(&self) -> &Model {
         self.model
+    }
+
+    pub fn bind_host(&mut self, host: &'a dyn crate::InvocationHost) -> Result<()> {
+        if self.model.graph.is_none() || self.host.is_some() {
+            return Err(Error::contract(ErrorCode::Unauthorized, "Graph capability"));
+        }
+        self.host = Some(host);
+        Ok(())
+    }
+
+    pub fn host(&self) -> Result<&dyn crate::InvocationHost> {
+        self.host
+            .ok_or_else(|| Error::contract(ErrorCode::Unauthorized, "Graph capability"))
     }
 
     pub fn validate_output(&self, output: &Output) -> Result<()> {

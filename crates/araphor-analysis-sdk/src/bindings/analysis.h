@@ -1,5 +1,5 @@
-#ifndef ARAPHOR_ANALYSIS_V1_H
-#define ARAPHOR_ANALYSIS_V1_H
+#ifndef ARAPHOR_ANALYSIS_V2_H
+#define ARAPHOR_ANALYSIS_V2_H
 
 #include <stdint.h>
 
@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 #define ARAPHOR_ANALYSIS_CONTRACT_VERSION 1u
+#define ARAPHOR_ANALYSIS_ABI_VERSION 2u
 
 struct ArrowArrayStream;
 
@@ -97,6 +98,26 @@ typedef struct {
 } araphor_analysis_error_v1;
 
 typedef struct {
+    const araphor_analysis_input_v1 *input;
+    uint64_t copy_limit;
+    araphor_analysis_error_v1 error;
+    void *private_data;
+} araphor_analysis_host_response_v2;
+
+typedef struct {
+    uint32_t abi_version;
+    uint64_t struct_size;
+    void *context;
+    uint32_t (*read)(void *context, araphor_analysis_bytes_v1 name,
+                     const araphor_analysis_dataset_v1 *arguments,
+                     araphor_analysis_host_response_v2 *response);
+    uint32_t (*stage)(void *context, const araphor_analysis_dataset_v1 *commands,
+                      araphor_analysis_host_response_v2 *response);
+    void (*release)(araphor_analysis_host_response_v2 *response);
+} araphor_analysis_host_v2;
+
+typedef struct {
+    uint64_t struct_size;
     araphor_analysis_bytes_v1 export_name;
     const araphor_analysis_input_v1 *inputs;
     uint64_t input_count;
@@ -107,7 +128,8 @@ typedef struct {
     const araphor_analysis_checkpoint_v1 *checkpoint;
     int32_t (*cancelled)(void *context);
     void *cancel_context;
-} araphor_analysis_request_v1;
+    const araphor_analysis_host_v2 *host;
+} araphor_analysis_request_v2;
 
 typedef struct {
     const araphor_analysis_dataset_v1 *datasets;
@@ -132,17 +154,21 @@ typedef struct {
 /* The producer releases unread output streams and all response buffers. */
 /* Release clears owned fields. A second release does not change state. */
 /* A nonzero cancellation result requires an incomplete result. */
+/* Graph callbacks and their context expire when evaluate returns. */
+/* The host table is null when the export has no Graph capability. */
+/* A read-only Graph capability must reject stage calls. */
+/* Release each host response after the consumer copies all returned data. */
 /* Pointers stay inside one worker process. */
 /* Panics and exceptions must not cross this boundary. */
 typedef struct {
     uint32_t contract_version;
     uint64_t struct_size;
-    uint32_t (*evaluate)(const araphor_analysis_request_v1 *request,
+    uint32_t (*evaluate)(const araphor_analysis_request_v2 *request,
                          araphor_analysis_response_v1 *response);
     void (*release)(araphor_analysis_response_v1 *response);
-} araphor_analysis_api_v1;
+} araphor_analysis_api_v2;
 
-const araphor_analysis_api_v1 *araphor_analysis_get_api_v1(void);
+const araphor_analysis_api_v2 *araphor_analysis_get_api_v2(void);
 
 #ifdef __cplusplus
 }

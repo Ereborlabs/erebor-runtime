@@ -2,6 +2,9 @@ use super::super::*;
 use super::fixture::*;
 use super::{derive, TestResult};
 
+mod credential;
+mod policy;
+
 #[test]
 fn selection_keeps_affected_roots() -> TestResult {
     let input = credential_input()?.normalized()?;

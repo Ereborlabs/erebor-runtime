@@ -12,6 +12,14 @@ impl AnalysisStore {
         self.commit_context_values(inputs, false, None, &mut || Ok(()))
     }
 
+    pub fn commit_contexts_guarded(
+        &self,
+        inputs: &[AnalysisContextVersionV1],
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<AnalysisContextRefV1>> {
+        self.commit_context_values(inputs, false, None, &mut check)
+    }
+
     pub fn commit_context(&self, input: &AnalysisContextVersionV1) -> Result<u64> {
         self.commit_context_value(input, false, None)
             .map(|reference| reference.commit_revision)
@@ -103,8 +111,14 @@ impl AnalysisStore {
                 operation: "begin context version",
             })?;
         let mut revision = None;
-        let references =
-            self.context_rows(&transaction, inputs, intern, expected, &mut revision)?;
+        let references = self.context_rows(
+            &transaction,
+            inputs,
+            intern,
+            expected,
+            &mut revision,
+            &mut super::VerifiedPackages::default(),
+        )?;
         let Some(revision) = revision else {
             check()?;
             return Ok(references);
@@ -132,6 +146,10 @@ impl AnalysisStore {
         Ok(references)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The context write keeps its transaction and package admission proof."
+    )]
     pub(in crate::analysis) fn context_rows(
         &self,
         writer: &Connection,
@@ -139,6 +157,7 @@ impl AnalysisStore {
         intern: bool,
         expected: Option<u64>,
         revision: &mut Option<u64>,
+        verified: &mut super::VerifiedPackages,
     ) -> Result<Vec<AnalysisContextRefV1>> {
         let path = self.root.join("analysis.duckdb");
         let mut references = Vec::with_capacity(inputs.len());
@@ -160,7 +179,8 @@ impl AnalysisStore {
             };
             if let Some((saved, commit_revision)) = &stored {
                 if saved == input {
-                    Self::validate_stored_context_packages(writer, saved)?;
+                    Self::check_fact_index(writer, saved)?;
+                    self.verify_context_packages(writer, saved, verified)?;
                     references.push(AnalysisContextRefV1 {
                         key: key.clone(),
                         commit_revision: *commit_revision,
@@ -168,14 +188,17 @@ impl AnalysisStore {
                     continue;
                 }
             }
-            Self::validate_context_packages(writer, input)?;
+            Self::context_packages(writer, input, verified)?;
             if intern {
                 if let Some(reference) = self.context_retry(writer, input, true)? {
+                    let mut saved = input.clone();
+                    saved.key = reference.key.clone();
+                    Self::check_fact_index(writer, &saved)?;
                     references.push(reference);
                     continue;
                 }
             } else if let Some((saved, _)) = stored {
-                Self::validate_stored_context_packages(writer, &saved)?;
+                self.verify_context_packages(writer, &saved, verified)?;
                 return AnalysisConflictSnafu.fail();
             }
             self.storage.check_context(input.body.len() as u64)?;
@@ -225,6 +248,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert context version",
                 })?;
+            Self::insert_fact_index(writer, input)?;
             if let Some(keys) = &notification {
                 self.write_notification_head(writer, input, current, keys, notification_prior)?;
             }

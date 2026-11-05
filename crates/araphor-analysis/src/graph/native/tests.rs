@@ -629,7 +629,7 @@ impl Fixture {
                     .map_err(|error| error.to_string())?,
             );
         }
-        if Detector::supports_units(model) {
+        if araphor_analysis_builtins::graph::Detector::supports_units(model) {
             let empty = program
                 .outputs
                 .get("contributions")

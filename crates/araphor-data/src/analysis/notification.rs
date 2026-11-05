@@ -80,37 +80,45 @@ impl AnalysisStore {
         entity: &[u8],
     ) -> Result<Option<AnalysisContextVersionV1>> {
         let state_key = NotificationKeys::state(tenant, entity)?;
-        self.read_snapshot(|reader| {
-            let head: Option<(u64, u64)> = reader
-                .query_row(
-                    "SELECT owner_revision, commit_revision FROM notification_heads
+        self.read_snapshot(|reader| self.notification_head_from(reader, tenant, entity, &state_key))
+    }
+
+    fn notification_head_from(
+        &self,
+        reader: &Connection,
+        tenant: [u8; 16],
+        entity: &[u8],
+        state_key: &[u8],
+    ) -> Result<Option<AnalysisContextVersionV1>> {
+        let head: Option<(u64, u64)> = reader
+            .query_row(
+                "SELECT owner_revision, commit_revision FROM notification_heads
                      WHERE state_key = ?",
-                    params![state_key.as_slice()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read exact notification head",
-                })?;
-            let Some((owner_revision, commit_revision)) = head else {
-                return Ok(None);
-            };
-            let key = AnalysisContextKeyV1 {
-                tenant_id: tenant,
-                owner_id: NOTIFICATION_STATE_OWNER.into(),
-                entity_key: entity.to_vec(),
-                lifetime_key: b"obligation".to_vec(),
-                owner_revision,
-            };
-            let (context, stored_revision) = Self::read_context_from(reader, &self.root, &key)?
-                .ok_or_else(|| self.state_error("the notification head has no context version"))?;
-            if stored_revision != commit_revision
-                || NotificationKeys::from_context(&context)?.state != state_key
-            {
-                return Err(self.state_error("the notification head differs from its context"));
-            }
-            Ok(Some(context))
-        })
+                params![state_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read exact notification head",
+            })?;
+        let Some((owner_revision, commit_revision)) = head else {
+            return Ok(None);
+        };
+        let key = AnalysisContextKeyV1 {
+            tenant_id: tenant,
+            owner_id: NOTIFICATION_STATE_OWNER.into(),
+            entity_key: entity.to_vec(),
+            lifetime_key: b"obligation".to_vec(),
+            owner_revision,
+        };
+        let (context, stored_revision) = Self::read_context_from(reader, &self.root, &key)?
+            .ok_or_else(|| self.state_error("the notification head has no context version"))?;
+        if stored_revision != commit_revision
+            || NotificationKeys::from_context(&context)?.state != state_key
+        {
+            return Err(self.state_error("the notification head differs from its context"));
+        }
+        Ok(Some(context))
     }
 
     pub(in crate::analysis) fn write_notification_head(
@@ -218,58 +226,68 @@ impl AnalysisStore {
         };
         let lookup_key = NotificationKeys::lookup(tenant, lookup)?;
         self.read_snapshot(|reader| {
-            let mut statement = reader
-                .prepare_cached(query)
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare notification lookup",
-                })?;
-            let heads = statement
-                .query_map(params![lookup_key.as_slice(), limit], |row| {
-                    Ok((
-                        row.get::<_, Vec<u8>>(0)?,
-                        row.get::<_, u64>(1)?,
-                        row.get::<_, u64>(2)?,
-                        row.get::<_, Vec<u8>>(3)?,
-                    ))
-                })
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read notification heads",
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "decode notification heads",
-                })?;
-            heads
-                .into_iter()
-                .map(|(entity_key, owner_revision, commit_revision, state_key)| {
-                    let key = AnalysisContextKeyV1 {
-                        tenant_id: tenant,
-                        owner_id: NOTIFICATION_STATE_OWNER.into(),
-                        entity_key,
-                        lifetime_key: b"obligation".to_vec(),
-                        owner_revision,
-                    };
-                    let (context, stored_revision) =
-                        Self::read_context_from(reader, &self.root, &key)?.ok_or_else(|| {
-                            self.state_error("the notification head has no context version")
-                        })?;
-                    let keys = NotificationKeys::from_context(&context)?;
-                    let matched = match lookup {
-                        NotificationLookup::Finding(..) => keys.finding.as_deref(),
-                        NotificationLookup::Concern(..) => keys.concern.as_deref(),
-                    };
-                    if stored_revision != commit_revision
-                        || keys.state != state_key
-                        || matched != Some(lookup_key.as_slice())
-                    {
-                        return Err(
-                            self.state_error("the notification head lookup is inconsistent")
-                        );
-                    }
-                    Ok(context)
-                })
-                .collect()
+            self.notification_states_from(reader, tenant, lookup, query, limit, &lookup_key)
         })
+    }
+
+    fn notification_states_from(
+        &self,
+        reader: &Connection,
+        tenant: [u8; 16],
+        lookup: NotificationLookup<'_>,
+        query: &str,
+        limit: Option<i64>,
+        lookup_key: &[u8],
+    ) -> Result<Vec<AnalysisContextVersionV1>> {
+        let mut statement = reader
+            .prepare_cached(query)
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare notification lookup",
+            })?;
+        let heads = statement
+            .query_map(params![lookup_key, limit], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read notification heads",
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode notification heads",
+            })?;
+        heads
+            .into_iter()
+            .map(|(entity_key, owner_revision, commit_revision, state_key)| {
+                let key = AnalysisContextKeyV1 {
+                    tenant_id: tenant,
+                    owner_id: NOTIFICATION_STATE_OWNER.into(),
+                    entity_key,
+                    lifetime_key: b"obligation".to_vec(),
+                    owner_revision,
+                };
+                let (context, stored_revision) = Self::read_context_from(reader, &self.root, &key)?
+                    .ok_or_else(|| {
+                        self.state_error("the notification head has no context version")
+                    })?;
+                let keys = NotificationKeys::from_context(&context)?;
+                let matched = match lookup {
+                    NotificationLookup::Finding(..) => keys.finding.as_deref(),
+                    NotificationLookup::Concern(..) => keys.concern.as_deref(),
+                };
+                if stored_revision != commit_revision
+                    || keys.state != state_key
+                    || matched != Some(lookup_key)
+                {
+                    return Err(self.state_error("the notification head lookup is inconsistent"));
+                }
+                Ok(context)
+            })
+            .collect()
     }
 
     pub(super) fn validate_notification_heads(writer: &Connection, root: &Path) -> Result<()> {
@@ -383,3 +401,6 @@ impl AnalysisStore {
 
 #[cfg(test)]
 mod tests;
+
+mod prepared;
+pub use prepared::PreparedNotificationBatch;

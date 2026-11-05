@@ -73,7 +73,6 @@ impl NotificationRouter {
             .map(|(count, _)| count)
     }
 
-    // The caller holds the router lock.
     pub(super) fn route_states(
         &self,
         tenant: [u8; 16],
@@ -81,9 +80,22 @@ impl NotificationRouter {
         now: u64,
     ) -> Result<(usize, Vec<NotificationObligationV1>)> {
         NotificationErrorCodeV1::Invalid.require(now > 0, "finding reference")?;
-        let (finding, _) = self
-            .store
-            .notification_finding_value(tenant, reference, None)?;
+        self.with_cycle(tenant, std::slice::from_ref(reference), &[], |cycle| {
+            cycle.route_states(tenant, reference, now)
+        })
+    }
+}
+
+impl NotificationCycle<'_, '_> {
+    pub(super) fn route_states(
+        &mut self,
+        tenant: [u8; 16],
+        reference: &NotificationFindingRefV1,
+        now: u64,
+    ) -> Result<(usize, Vec<NotificationObligationV1>)> {
+        NotificationErrorCodeV1::Invalid.require(now > 0, "finding reference")?;
+        let finding = self.prepared.finding(reference)?.clone();
+        self.prepared.check_related(reference)?;
         let routes = self.routes(tenant)?;
         self.schedule(&finding, &reference.result_id, &routes, now)
     }

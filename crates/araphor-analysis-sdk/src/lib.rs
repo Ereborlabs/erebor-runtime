@@ -31,6 +31,9 @@ pub use memory::schema_allocated_bytes;
 pub use model::*;
 pub use validation::{CheckedEvaluation, Guest};
 
+mod host;
+pub use host::{GraphTransport, InvocationHost, InvocationService, Transfer};
+
 pub(crate) use error::*;
 
 #[cfg(test)]

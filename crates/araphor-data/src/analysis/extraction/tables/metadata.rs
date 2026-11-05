@@ -2,33 +2,71 @@ use super::*;
 use crate::{AnalysisSourceReceiptV1, CoverageInterval, CoverageReport};
 use prost::Message as _;
 
-impl Capture<'_> {
-    pub(in crate::analysis) fn coverage_report(
-        bytes: &[u8],
-        receipt: &crate::AnalysisSourceReceiptV1,
-        budget: &mut ReadBudget<'_>,
-    ) -> Result<CoverageReport> {
-        if bytes.is_empty() {
-            return Err(invalid("the coverage report size is invalid"));
-        }
-        budget.charge(bytes.len().checked_mul(128).ok_or_else(overflow)?)?;
-        let report =
-            CoverageReport::decode(bytes).map_err(|source| crate::Error::EvidenceDecode {
-                source,
-                frame_bytes: bytes.len(),
-                location: snafu::location!(),
-            })?;
-        if report.source_id.as_slice() != receipt.identity.source_id
-            || report.source_epoch != receipt.identity.source_epoch
-            || report.cpu_id != receipt.cpu_id
-            || report.revision != receipt.coverage_revision
+impl AnalysisSourceReceiptV1 {
+    pub(in crate::analysis) fn check_coverage(&self, report: &CoverageReport) -> Result<()> {
+        if report.source_id.as_slice() != self.identity.source_id
+            || report.source_epoch != self.identity.source_epoch
+            || report.cpu_id != self.cpu_id
+            || report.revision != self.coverage_revision
             || report.revision == 0
         {
             return Err(invalid(
                 "the coverage report differs from its captured source receipt",
             ));
         }
+        Ok(())
+    }
+
+    pub(in crate::analysis) fn decode_coverage(
+        &self,
+        bytes: &[u8],
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<CoverageReport> {
+        if bytes.is_empty() {
+            return Err(invalid("the coverage report size is invalid"));
+        }
+        charge(bytes.len().checked_mul(128).ok_or_else(overflow)?)?;
+        let report =
+            CoverageReport::decode(bytes).map_err(|source| crate::Error::EvidenceDecode {
+                source,
+                frame_bytes: bytes.len(),
+                location: snafu::location!(),
+            })?;
+        self.check_coverage(&report)?;
+        charge(0)?;
         Ok(report)
+    }
+}
+
+impl crate::AnalysisSourceSnapshotV1 {
+    pub(in crate::analysis) fn typed_coverage(
+        &mut self,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<Arc<CoverageReport>>> {
+        charge(0)?;
+        if let Some(report) = &self.typed_report {
+            self.receipt.check_coverage(report)?;
+            return Ok(Some(Arc::clone(report)));
+        }
+        let Some(bytes) = &self.coverage_report else {
+            if self.receipt.coverage_revision != 0 {
+                return Err(invalid("the captured coverage revision has no report"));
+            }
+            return Ok(None);
+        };
+        let report = Arc::new(self.receipt.decode_coverage(bytes, charge)?);
+        self.typed_report = Some(Arc::clone(&report));
+        Ok(Some(report))
+    }
+}
+
+impl Capture<'_> {
+    pub(in crate::analysis) fn coverage_report(
+        bytes: &[u8],
+        receipt: &crate::AnalysisSourceReceiptV1,
+        budget: &mut ReadBudget<'_>,
+    ) -> Result<CoverageReport> {
+        receipt.decode_coverage(bytes, &mut |bytes| budget.charge(bytes))
     }
 
     pub(super) fn metadata(
@@ -58,23 +96,15 @@ impl Capture<'_> {
             extraction.graph_enabled,
             extraction.notification_enabled,
         );
-        let sources = std::mem::take(&mut extraction.sources);
+        let mut sources = std::mem::take(&mut extraction.sources);
         let traversal = extraction
             .graph_traversal()
             .map(|receipt| (receipt.max_hops, receipt.hop_boundary));
         let mut budget = extraction.sink(control);
         if self.read.requests.contains_key("coverage") {
-            for source in &sources {
+            for source in &mut sources {
                 budget.check()?;
-                let report = if let Some(bytes) = &source.coverage_report {
-                    let report = Self::coverage_report(bytes, &source.receipt, &mut budget)?;
-                    Some(report)
-                } else {
-                    if source.receipt.coverage_revision != 0 {
-                        return Err(invalid("the captured coverage revision has no report"));
-                    }
-                    None
-                };
+                let report = source.typed_coverage(&mut |bytes| budget.charge(bytes))?;
                 self.coverage(
                     "coverage",
                     &source.receipt,

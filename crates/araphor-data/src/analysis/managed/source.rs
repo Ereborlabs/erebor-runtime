@@ -33,6 +33,32 @@ pub(super) struct SourceEvidence {
     pub contexts: Vec<crate::AnalysisContextRefV1>,
 }
 
+impl SourceEvidence {
+    pub(super) fn metadata_bytes<'a>(
+        witnesses: impl Iterator<Item=&'a crate::AnalysisWitnessV1>,
+        contexts: impl Iterator<Item=&'a crate::AnalysisContextRefV1>,
+    ) -> Result<usize> {
+        let mut bytes=0usize;
+        for value in witnesses {
+            let node=match &value.identity {
+                AnalysisStreamIdentityV1::Evidence(source)=>&source.node_id,
+                AnalysisStreamIdentityV1::Diagnostic(source)=>&source.node_id,
+            };
+            bytes=bytes.checked_add(12 * (std::mem::size_of::<crate::AnalysisWitnessV1>()
+                +std::mem::size_of::<AnalysisStreamIdentityV1>()))
+                .and_then(|bytes| bytes.checked_add(node.capacity().checked_mul(4)?))
+                .ok_or_else(|| Code::Limit.error("managed evidence memory"))?;
+        }
+        for value in contexts {
+            bytes=bytes.checked_add(12 * (std::mem::size_of::<crate::AnalysisContextRefV1>()
+                +std::mem::size_of::<crate::AnalysisContextKeyV1>()))
+                .and_then(|bytes| bytes.checked_add(value.key.allocated_bytes().checked_mul(4)?))
+                .ok_or_else(|| Code::Limit.error("managed context memory"))?;
+        }
+        Ok(bytes)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ManagedSourceFrame {
     pub(super) tables: Vec<sdk::Dataset>,
@@ -40,6 +66,7 @@ pub struct ManagedSourceFrame {
     pub(super) proof: Arc<OnceLock<Arc<PackageResultRefV1>>>,
     scope: Arc<SourceScope>,
     selected: Arc<Mutex<SourceSelection>>,
+    coverage: Vec<coverage::SourceCoverage>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,8 +88,26 @@ pub struct SourceScope {
 #[derive(Debug, Default)]
 struct SourceSelection {
     frozen: bool,
+    input: Option<Arc<ManagedInputSelection>>,
     witnesses: BTreeMap<(AnalysisStreamIdentityV1, u64), crate::AnalysisWitnessV1>,
     contexts: BTreeMap<(crate::AnalysisContextKeyV1, u64), crate::AnalysisContextRefV1>,
+    cells: Vec<Arc<SourceCells>>,
+    calls: BTreeMap<u64, SourceCall>,
+}
+
+#[derive(Default)]
+struct SourceCall {
+    cells: Vec<Arc<SourceCells>>,
+    leases: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+    derived: Vec<Arc<ManagedDerivedSource>>,
+}
+
+impl std::fmt::Debug for SourceCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceCall")
+            .field("reads", &self.cells.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +115,8 @@ pub struct ManagedSourceBlock {
     scope: Arc<SourceScope>,
     proof: Arc<OnceLock<Arc<PackageResultRefV1>>>,
     rows: Arc<Vec<SourceRow>>,
+    table: Arc<str>,
+    batch: Arc<sdk::RecordBatch>,
 }
 
 #[derive(Clone, Debug)]
@@ -85,11 +132,38 @@ pub struct ManagedSourceRows {
     witnesses: Vec<crate::AnalysisWitnessV1>,
     contexts: Vec<crate::AnalysisContextRefV1>,
     selected_position: StorePositionV1,
+    cells: Arc<SourceCells>,
+}
+
+struct SourceCells {
+    table: Arc<str>,
+    batch: Arc<sdk::RecordBatch>,
+    rows: Arc<Vec<SourceRow>>,
+    indices: Vec<usize>,
+    _lease: Arc<dyn std::any::Any + Send + Sync>,
+}
+
+impl std::fmt::Debug for SourceCells {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceCells")
+            .field("table", &self.table)
+            .field("rows", &self.indices.len())
+            .finish_non_exhaustive()
+    }
 }
 
 mod allocation;
+mod canonical;
+mod check;
+mod coverage;
+mod derived;
+pub use derived::{ManagedDerivedSource, ManagedSourceHistory};
+pub(in crate::analysis::managed) mod import;
 mod reader;
 mod selection;
+mod input;
+pub use input::ManagedInputSelection;
+pub(in crate::analysis) mod publication;
 
 impl ManagedSourceRead {
     pub fn after(&self) -> Option<StorePositionV1> {

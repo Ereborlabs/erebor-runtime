@@ -1,5 +1,1728 @@
 # Araphor retained execution state review
 
+## Current package path, 2026-11-05
+
+This section covers the current working tree. The exact incident test passes
+with all 16,402 records in 72.96 seconds. The full result is 1.48 times faster
+than the first passing workload. The third notification is 1.91 times faster.
+The package input replacement reduces the matched bulk prepared reservation
+from 380,210,812 to 22,796,472 bytes. This value is charged retention, not RSS.
+Millisecond latency and the 100-fold target remain **Not done**.
+
+### Intended end state
+
+An incremental commit wakes the ordinary Definition subscription. A saved
+native DataFusion plan selects inputs and calls package code. The package uses
+Araphor Graph and stages changes. Data commits Graph, finding, and progress
+changes together. The notification subscription delivers the resulting finding.
+The target requires millisecond latency and a measured 100-fold improvement.
+
+### Source reading route
+
+[Default Definitions](../../packages/default-definitions/causal.yaml) name package calls in ordinary SQL
+  -> [ControlPackages::start_definitions](../../crates/mithril-control/src/service/packages/definitions.rs) reads the default folder or an operator folder and admits normal instances
+  -> [InstanceHost](../../crates/araphor-analysis/src/instance/host.rs) owns managed subscriptions and lifecycle
+  -> [PackageExec::change_inputs](../../crates/araphor-query/src/definition/physical/changes.rs) executes native plans for declared change inputs
+  -> [BeforeReplay](../../crates/araphor-query/src/definition/replay.rs) validates one historical call and captures the union of its Before inputs
+  -> [SourceSnapshot::fork_before](../../crates/araphor-query/src/sources/rows/before.rs) shares immutable captured rows and gives each plan separate mutable state
+  -> [Causal package](../../crates/araphor-analysis-builtins/src/causal/index.rs) selects affected entities and stages package-defined Graph changes
+  -> [Causal detector](../../crates/araphor-analysis-builtins/src/causal/detect.rs) checks cross-node evidence and stages a finding
+  -> [GraphAuthority](../../crates/araphor-data/src/analysis/managed/graph/authority.rs) retains validated invocation authority and checks live state with short reads
+  -> [Graph engine](../../crates/araphor-graph/src/read.rs) reads package-agnostic relations at the captured cut
+  -> [PreparedManagedCommit](../../crates/araphor-data/src/analysis/managed/prepare.rs) prepares bounded changes outside the final writer transaction
+  -> [Managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs) validates current authority and commits changes and progress atomically
+  -> [Notification publication](../../crates/araphor-analysis/src/instance/sink.rs) sends selected subscription rows to the notification router
+  -> [PreparedNotificationBatch](../../crates/araphor-data/src/analysis/notification/prepared.rs) captures exact route, state, subject, finding, and basis versions in one bounded read
+  -> [NotificationCycle](../../crates/araphor-analysis/src/notification/cycle.rs) preserves pending-state writes and current delivery checks
+
+### Owner lifetimes
+
+Control uses the same admission and instance APIs for default and operator
+Definitions. Each Definition can contain zero or more package calls. Installing
+an image does not start an analysis. Definition SQL selects the package export.
+The default folder does not grant trust to an image.
+
+The managed execution creates one `BeforeReplay` only when compatible prior
+inputs are needed. The owner retains one validated historical reference, one
+historical Session, one CallContext, native plans, and a captured source template.
+Each input keeps its declared pair, schema, image, revision, coverage, and trace
+checks. A fork shares the Arrow receipt, canonical buffers, and SourceView. Its
+keys, ports, lineage, read tracking, and index start empty. Query memory charges
+the copied metadata before cloning. Success and failure both finish the shared
+CallContext. Failure also cancels the historical operation. No replay state
+survives the invocation.
+
+[Runtime::metadata_update](../../crates/araphor-query/src/stream/physical/runtime.rs)
+receives a health update after an unrelated commit or a clock change.
+  -> [Session::subscription_metadata](../../crates/araphor-query/src/execution.rs) creates one bounded header read
+  -> [MetadataRead](../../crates/araphor-query/src/sources/rows/metadata.rs) reserves input memory before copying header selections and demand names
+  -> [Window::apply_selection](../../crates/araphor-query/src/follow/window.rs) applies the existing time bound when the plan has no package call
+  -> [AnalysisStore::subscription_metadata](../../crates/araphor-data/src/analysis/extraction.rs) reads current source, trace, and store headers in one Data snapshot
+  -> [Capture::finish](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) checks availability with the original demand names
+  -> [Runtime::metadata_update](../../crates/araphor-query/src/stream/physical/runtime.rs) returns a health update without changing evaluated progress
+
+The header read retains exact source, trace, node, binding, and time bounds.
+The read does not copy context, profile, Graph, result, or notification selectors.
+Session keeps its full metadata read for cursor recovery and other callers.
+An established subscription keeps its prior evaluated snapshot, requests, cursor,
+and deadline. A pending relevant commit remains pending. A deadline that requires
+execution still uses the existing full evaluation path. The header read returns
+no row authority. One memory lease moves with the normalized demand map. The
+remaining read lease moves with the returned header. Temporary scope memory is
+released when the read ends. Native DataFusion plans and Arrow buffers keep
+their existing owners.
+
+Package code owns incident matching and node and edge changes. Native and guest
+packages use the same SDK Graph operations. The generic Graph engine has no
+package or detector rules. A package cannot commit. Data remains the transaction
+owner. The old finite Graph analysis API remains a retirement item; its presence
+does not provide a second startup path for the default causal Definition.
+
+The causal index now declares only audit and coverage change inputs. Its
+[descriptor](../../crates/araphor-analysis-builtins/src/causal/descriptor.rs)
+uses native SQL for Before, After, and affected keys. The raw event input pair
+and its key conversion are removed. The
+[coverage owner](../../crates/araphor-analysis-builtins/src/causal/coverage.rs)
+groups rows by exact source and CPU. Each returned group requires one receipt
+and consistent report and floor fields. Exact expired ranges can include loss
+above an unchanged retained floor. Recovery and pending ranges cause a new
+evaluation but do not permanently retire an index reference. A missing current
+source prevents restaging and clears reached prior owners. Old references remain
+in the frontier so the detector can clear findings. Reset clears both writers.
+
+The [index](../../crates/araphor-analysis-builtins/src/causal/index.rs) seeds
+the old and current audit entities and source entities. Graph adjacency selects
+connected references. The [detector query](../../crates/araphor-analysis-builtins/src/causal/records.sql)
+still reads each requested canonical event and its coverage. Data can still
+process every journal record in its native source view. Unrelated raw keys no
+longer enter the index package input or its evidence pins. The append test
+checks initial reset, late audit arrival, and the full background drain.
+Nonprefix retirement, recovery, source absence, and re-registration remain
+source-reviewed boundaries until their runtime cases pass. The input
+replacement passes the exact append test in 72.96 seconds.
+
+The Graph authority binds before the package transfer reserves memory.
+Binding checks the registered attempt, captured source state, admitted model,
+and relation contracts. The owner retains the actual attempt Arc, call ID,
+compatible call-head set, and original native authority bytes. Each operation
+uses a new short Data reader. The operation checks pending status, exact
+current authority, lifecycle, generation, progress, completion, call heads,
+source freshness, trace revocation, context proof, dependencies, and expiry.
+
+The first read of a historical producer validates its full record, selected
+owner, spec, pins, Graph proof, and original grant. Later reads check the exact
+canonical result, Graph layer, writer, revision, tenant, instance, and call.
+The original grant must still permit the bound scope. The owner retains no
+Graph result values. Freeze drops authority scratch and certificates. The
+existing journal retains exact origin references and row pins. Final Data
+preparation and commit keep their full validation. The third index invocation takes 1.681420 seconds in the passing run.
+
+Data owns pending attempt writes. A pending request and capture remain
+immutable until success or termination sets `completed` in the same transaction.
+The initial bind and final commit validate full contracts. The scalar live
+guard does not detect an unsupported direct database edit to a pending contract
+after binding. Startup recovery keeps its existing full corruption checks.
+
+[AnalysisStore::read_tables_inner](../../crates/araphor-data/src/analysis/extraction.rs)
+opens one immutable Data read snapshot.
+  -> [OwnerRead](../../crates/araphor-data/src/analysis/managed/reader.rs) owns selected, producer, and publication proofs for that snapshot
+  -> [OwnerRead::publication](../../crates/araphor-data/src/analysis/managed/reader/graph.rs) validates the selected owner and complete Graph writer pins before retaining a proof
+  -> [Graph extraction](../../crates/araphor-data/src/analysis/extraction/graph/native.rs) uses that proof and checks each actual producer against the original requested scope
+  -> [NativeNotifications](../../crates/araphor-data/src/analysis/extraction/notifications/native.rs) reads scalar values with the same owner and tenant relation SQL
+  -> [AnalysisStore::finding_basis_on](../../crates/araphor-data/src/analysis/managed/graph/provenance.rs) selects exact records, contexts, coverage, and parent evidence with the same producer proofs
+
+The owner retains no Graph values or permission decisions. Each cache use checks
+the reader, tenant, and cancellation control. The first producer read keeps full
+call, source pin, context pin, proof, and dependency validation. Canonical context
+writes and recovery validate encoded context keys. Provenance does not rebuild
+those same context pins in a second temporary table. Its requested-record table
+and canonical context, fact, source-proof, coverage, and parent checks remain.
+Each caller checks the historical grant against the original scope. Existing
+live expiry checks remain at their current owners. The read context ends with
+the reader transaction. It cannot cross a commit or an asynchronous wait.
+
+The prepared router creates its existing budgeted owner before the current-head
+read. Current heads, requested finding values, historical comparisons, and basis
+reads share the tenant relation SQL. Publication proofs borrow their validated
+grants. Map entries and shared allocation metadata are charged before insertion.
+No permission or finding-value cache survives the read. Standalone point APIs
+create their own read owner at their boundary.
+
+The prepared notification batch owns one bounded read result. The batch stores
+exact historical subjects for pending attempts. The router checks live grants
+and lifecycle before effects. It saves pending state before delivery and saves
+the outcome with the existing compare-and-set check. The batch adds no durable
+input or output archive.
+
+```mermaid
+sequenceDiagram
+    participant Def as Definition subscription
+    participant Plan as Native DataFusion plan
+    participant Pkg as Package
+    participant Data as Data transaction
+    participant Notice as Notification subscription
+    Data-->>Def: Publish incremental commit
+    Def->>Plan: Execute saved plan
+    Plan->>Pkg: Supply declared inputs
+    Pkg->>Pkg: Read Graph and stage changes
+    Pkg-->>Data: Return output and journal
+    Data->>Data: Commit changes and progress
+    Data-->>Notice: Publish selected finding
+    Notice->>Notice: Save pending state and deliver
+```
+
+The [single incident test](../../crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs)
+checks all 16,402 records, exact six-record evidence, two nodes, four sources,
+public finding and revision reads, notification references, and atomic call
+publication revisions. The current passing logs are
+`/tmp/araphor-build-audit-input-20261105-a.log` and
+`/tmp/araphor-live-audit-input-20261105-a.log`. These results cover this focused
+case. They do not qualify the full workspace or the latency target.
+
+
+This guide covers the retained native execution path and the Graph relation
+replacement in the working tree on 2026-11-04. The replacement removes
+repeated membership reconstruction and frozen context reads.
+
+## Intended end state
+
+The user has authorized a real Hugging Face incident workload in the single
+incremental test. The process detector and Kubernetes placeholder are removed.
+The new causal package must use one ordinary Definition over its admitted
+source scope. Failed attempts and successful effects remain separate evidence.
+The [current handoff](../plans/araphor-execution-handoff.md#current-causal-replacement-on-2026-11-04)
+records the agreed replacement and its unqualified boundaries.
+
+Data's [domain input owner](../../crates/araphor-data/src/analysis/managed/graph/domain.rs)
+checks each source input, then joins the canonical proof basis for the staged
+commands. [EvidenceBasis](../../crates/araphor-data/src/graph/evidence.rs)
+checks native identities against each observation's source. A declared package
+finding need not consume policy metadata. The source still checks actual
+record identity, effects, coverage, disclosure, and declared reason authority.
+These changes are under review. They have no passing runtime result yet.
+
+The last unchanged live run failed in 218.337689 s during coverage reporting.
+Eleven nonempty Graph receipts completed. Bulk drain and later arrivals did
+not finish. The Shared future repair removed the observed parked input fill.
+A complete passing test, millisecond latency, and the 100-fold target remain
+**Not done**. The sections below retain earlier source states and results.
+
+
+## Native journal reduction
+
+Read [Journal](../../crates/araphor-graph/src/journal.rs) first. The private
+edit retains the first relevant base-presence assertion. Later commands
+cannot replace that assertion. Clear barriers select the final surviving
+rows. Original batches remain available for Data domain validation.
+
+[GraphStore::prepare_layers](../../crates/araphor-graph/src/layers/prepared.rs)
+checks every original schema and stored relation namespace before the Data
+writer is acquired. The admitted Data descriptor remains the logical schema
+authority. The native storage comparison permits the existing Arrow storage
+conversions. [BaseRows](../../crates/araphor-graph/src/layers/base.rs) reads
+only touched identities and requested clear ranges at each captured cut.
+It rejects duplicate identities and false base assertions. Preparation
+retains exact opening revisions and native Arrow property rows.
+[PendingGraph::apply_prepared](../../crates/araphor-graph/src/layers.rs)
+consumes those rows and closes the exact intervals after a parent check.
+The final endpoint guard checks affected edges across all Graph writers.
+The generic Graph owner contains no package or finding rules.
+
+Partial runs exercise native journal reduction. The exact incident test
+must still complete. The current evidence does not establish a timing gain.
+
+
+
+## Managed change preparation
+
+Start with [Instance publication](../../crates/araphor-analysis/src/instance/sink.rs),
+then read [PreparedManagedCommit](../../crates/araphor-data/src/analysis/managed/prepare.rs).
+The tracked worker prepares before it enters the authority commit closure.
+Preparation uses one pinned, controlled Data reader transaction. The opaque
+token borrows the actual managed input. It is not Clone and holds no connection.
+All destination commit APIs consume this token. There is no inline fallback.
+
+The preparation owner builds revision-free call packets, checked canonical
+context slots, source membership keys and counts, and native Graph layers.
+Read [prepared imports](../../crates/araphor-data/src/analysis/managed/source/import.rs)
+for fixed references, context ordinal slots, per-call attribution, the union,
+and preencoded pin keys. Read [canonical context rows](../../crates/araphor-data/src/analysis/context/batch.rs)
+for immutable body and fact-index equality. A fresh supplied context keeps
+its import flag when another handle has the same historical reference.
+The final transaction can bind an exact context committed after capture.
+
+[PreparedMemory](../../crates/araphor-data/src/analysis/managed/budget.rs)
+uses the actual commit worker control and the existing Query memory pool.
+It charges new retained buffers and temporary decode work. Graph writer
+limits also apply. The token retains its memory owner after its buffers.
+It adds no durable input or output copy.
+
+Read [the final commit](../../crates/araphor-data/src/analysis/managed/commit.rs)
+and [Graph preparation and publication](../../crates/araphor-data/src/analysis/managed/graph/commit.rs)
+next. Before writes, Data checks the registered attempt, store, schema,
+recovery, live grant, exact target version, captured instance and call heads,
+source parent, Graph parents, and writer and historical origin identities.
+An origin check includes its original call ID even if no row pin exists.
+Data then binds revisions, imports canonical contexts, writes call and
+source pins, applies Graph layers, publishes findings, and advances progress.
+The exact context conflict join, final endpoint guard, public-domain conflict
+checks, source expiry claims, domain counts, and final caller check remain
+inside this transaction. Retained-state promotion and subscription wakes
+occur after COMMIT.
+
+The focused library check passes in 37.97 s. The exact target build with
+the final guard and charges passes in 255.382395 s. The unchanged live case
+fails in 249.617853 s with `Elapsed(())`. Four initial notices pass in
+9.269059 to 15.727428 s. Fourteen nonempty Graph publications complete
+before teardown. A fifteenth completes during teardown. Bulk drain and
+warm arrivals remain unqualified. The largest healthy writer hold is
+10.819473 s, including 5.641296 s in actual COMMIT. The largest Status header
+is 13.842859 s. These boundaries overlap and must not be added.
+
+The native diagnostic used `sum_by_name`, which excludes built-in compute,
+output, and spill metrics. Their zeros are unread values. The corrected
+reader uses native `MetricsSet::sum` with the metric name. Its exact build
+is in progress. Millisecond latency and the 100-times target remain
+**Not done**.
+
+
+
+## Current qualification before Status
+
+[GraphPublication::prepare_on](../../crates/araphor-analysis/src/graph/native.rs)
+now uses explicit After row providers for the current resolver. The existing
+[SourceLookup](../../crates/araphor-query/src/sources/keys/planner.rs) can bind
+keys to those providers. Complete fallback identities come from the admitted
+canonical event driver. The old full-resolved identity enumeration is
+removed. Status and dirty each join their own selected identities to current
+payloads. Their keyed driver bindings are separate. A partial Status result
+cannot become the complete dirty target. LEFT joins retain missing keys.
+Changed, Control, Prefix, and header image rules remain separate. Full Before
+imaging can overwrite the explicit After event and context row providers.
+
+Corrected native metrics at cut 210 show 3329 build rows for 1024 selected
+rows and a 15.859990-second Status header. The largest reported local
+aggregate takes 2.456017 s. The unchanged case fails after 355.522293 s on
+client authentication expiry. Twenty-one nonempty Graph publications
+complete; bulk drain and warm arrivals do not. This supports the changed
+work order but proves no complete-workload gain.
+
+The focused library check passes in 38.93 s. The exact target build passes
+in 208.161715 s. The unchanged live case fails in 250.916525 s with
+`Elapsed(())`. Thirteen nonempty Graph publications complete before teardown;
+a fourteenth completes during teardown. Healthy source heads reach 769,
+769, 769, and 2049 members. Bulk drain and later arrivals do not complete.
+
+[PortExec](../../crates/araphor-query/src/sources/port.rs) reports four keyed
+After event readers. However, the resolver still returns 769 current rows
+for 512 selected keys. Internal canonical join keys do not prove external
+demand binding. A healthy Status header takes 23.169358 s.
+
+The reviewer agrees with a native join-direction correction in
+[SourceJoin](../../crates/araphor-query/src/sources/keys/planner.rs).
+An explicitly keyed Port has priority over a plain retained row reader.
+Native input swapping places that Port on the probe side before distribution
+enforcement. SourceLookup can then bind external keys before internal joins.
+The focused check passes in 30.90 s. Its exact build passes in 215.017859 s.
+The unchanged case fails in 345.660874 s on client authentication expiry.
+Twenty-two nonempty publications complete before teardown. A twenty-third
+completes during teardown. Healthy source heads reach 2049, 1793, 1281,
+and 1025 members. The resolver still reads 513 rows for 256 selected keys.
+The largest healthy Status header takes 19.801407 s. No complete-workload
+gain is established.
+
+The next correction carries keys through native HashJoin output projections.
+SourceLookup uses the native output indices to map the complete join columns.
+It keeps the existing preserved-side rules and native join, projection,
+filter, null rules, and output schema. Static Port bind-outcome events and
+the numeric projected-join count support runtime inspection. The reviewer
+agrees with this correction. The focused check passes in 32.19 s. The exact
+build passes in 219.815549 s. The unchanged case fails in 345.157697 s on
+client authentication expiry. Twelve nonempty publications complete before
+teardown. Healthy heads reach 1025, 769, 1281, and 1281 members.
+
+At cut 101, actual payloads read 512 selected rows at cursors 258 to 769,
+or 768 selected rows at cursors 258 to 1025. The false full fallback still
+builds 769 or 1025 one-row batches and returns no rows. The largest healthy
+Status header takes 63.841803 s. Source selection takes 73.945485 s and
+includes dependent work. A Facts worker records 0.650100 s of work and
+44.540863 s of return delay through cleanup and asynchronous resumption.
+Do not assign that whole delay to SQL or to one fallback operator.
+
+The current correction replaces that complete fallback step. Metadata-only
+Status and dirty conditions use separate existing native source Ports with
+no keys. Native INNER scope joins build these gates before they probe
+current identities. An empty build can finish without reading the probe.
+Identities now use the unchanged record expression on the original admitted
+event selection. The complete payload validator remains on requested data.
+Identity demand grants no source receipt or proof. The reviewer agrees with
+this correction. The focused check passes in 13.10 s. The exact build passes
+in 167.362110 s. The unchanged case fails in 340.604655 s on client
+authentication expiry. Eleven nonempty publications complete before
+teardown. Healthy heads reach 1025, 1025, 1025, and 257 members. Bulk drain
+and later arrivals remain unqualified.
+
+The user requires a complete passing run before more performance work.
+The current correction removes repeated equivalent input execution. In the
+projected lookup run, four 257-row windows use 148 resolver executions and
+96 Facts callbacks. The ranked run uses 8 resolver executions and 4 Facts
+callbacks for the same windows. Partial binding had disabled shared input.
+
+Read [PortDemand and PortScope](../../crates/araphor-query/src/sources/port.rs)
+and [SourceSnapshot::bind_shared](../../crates/araphor-query/src/sources/rows/package.rs).
+The existing binding owner stores complete and partial inputs separately.
+A partial match requires equal physical expressions and exact native row
+keys under the same native converter and type identities. The existing
+family, image, clock, and captured snapshot also apply. No second input
+store is added. Schema, lineage, cancellation, and memory checks remain.
+
+[SourceLookup](../../crates/araphor-query/src/sources/keys/planner.rs)
+shares native converters for equal ordered key types within one optimizer
+invocation. [KeySlot](../../crates/araphor-query/src/sources/keys.rs) retains
+the actual producer format. Before replay can use another format and then
+does not reuse that input. A missing Before producer disables sharing but
+retains the bound marker. Non-shareable ports execute without this binding.
+
+The reviewer finds no source blockers. The focused Query and Analysis
+library check passes in 37.41 s. The exact build passes in 237.560929 s.
+The unchanged live case fails in 317.646154 s; the wrapper records
+317.756361 s. Four initial notices pass in 10.301214 to 17.309578 s.
+Facts executes once per input, instead of 24 times. Five nonempty Graph
+publications complete. At cut 203, event intake reaches cursor 4096, but
+source 33 retains Graph publication 20 at cursor 1. The existing progress
+check fails. The log is `/tmp/araphor-live-scoped-binding-20261104.log`.
+
+Call 1 does not complete at cuts 71, 73, 81, and 118. Its sibling calls
+complete. The cause is not proved. Numeric key-producer and shared-binding
+lifecycle events now identify the snapshot, slot, family, read, and action.
+They report no row values, expressions, or schemas. The reviewer agrees with
+these diagnostics. The diagnostic build passes in 265.892248 s. Its unchanged
+live case fails in 351.163505 s on client authentication expiry. Seven
+nonempty Graph publications complete. Immediate demand keys finish before
+the stalled shared bindings. The log is
+`/tmp/araphor-live-binding-lifecycle-20261104.log`.
+
+Read the shared binding owner again for the current repair. The old Tokio
+OnceCell lets only its first reader drive input preparation. A native join
+can retain that pending reader while a later package input waits. The owner
+now uses a Shared future and a weak pending reference, as the existing
+CallContext does for package calls. Any active waiter can drive the same
+preparation. Success records the completed read ID. Abandonment permits a
+new initializer. There is no new task or input store. Exact scopes, Before
+rules, schema checks, cancellation, and lineage remain in force. Fill and
+waiter metadata stay charged to the captured snapshot before allocation or
+polling. This covers waker storage retained after a waiter stops.
+
+The reviewer finds no source blocker. The final focused library check
+passes in 33.80 s. The exact build is in progress in
+`/tmp/araphor-build-shared-fill-20261104.log`. No live result covers this
+repair. The test and the 100-times target remain **Not done**.
+
+
+## Owned SQL input reuse
+
+[GraphExec](../../crates/araphor-query/src/definition/physical/graph/lookup.rs)
+uses the existing
+[shared source binding](../../crates/araphor-query/src/sources/rows/package.rs)
+for the canonical full Graph Input. Each provider family belongs to one
+declared call and Lookup relation. SourceSnapshot binds each actual
+captured attempt. A scan applies its own projection after the shared binding.
+The first Data read records trusted row origins. Later aliases retain
+that Input and its Arrow leases.
+
+[GraphService](../../crates/araphor-query/src/definition/physical/graph.rs)
+checks SQL input access under the same gate that protects guest entry and
+freeze. Guest entry and freeze close SQL input access. SQL input access
+cannot observe later package edits. Direct SDK reads use `read_inner` and
+remain current. No second cache, query operator, or transaction owner is
+added. The unchanged live case must prove the read count and elapsed time.
+
+
+## Notification scalar capture
+
+[NotificationState](../../crates/araphor-data/src/analysis/extraction/notifications.rs)
+decodes each selected obligation once.
+[NativeNotifications](../../crates/araphor-data/src/analysis/extraction/notifications/native.rs)
+resolves original membership, current heads, canonical value IDs, and
+publication ownership for the requested finding keys. The Data read owns
+these temporary relations. It uses no persistent cache or payload copy.
+The tenant catalog is loaded once for the read.
+[The catalog reader](../../crates/araphor-data/src/analysis/managed/graph/projection.rs)
+checks the complete MessagePack structure before typed schema decoding.
+It charges raw buffers, a conservative structural bound, and retained schema
+memory. Selected states retain a context key and a decoded obligation.
+The focused Query and Analysis library check passes in 38.01 s. The reviewer
+accepts the source. The exact target build passes in 245.901805 s. The unchanged
+live case fails in 169.173813 s with `Elapsed(())`. Four initial notifications
+pass in 8.722233 to 15.324871 s. Twelve Graph publications commit; the last
+append commits during teardown. Bulk drain and later arrivals do not complete.
+For source 36, evaluation to router entry falls from 11.669007 s to 3.741663 s.
+This interval includes capture and scheduling. The full workload and the
+100 times target remain Not done.
+
+[The extraction owner](../../crates/araphor-data/src/analysis/extraction.rs)
+registers original and permitted current references. Unbound scalar reads
+use availability directly.
+[The Arrow notification table](../../crates/araphor-data/src/analysis/extraction/tables/notification.rs)
+receives that Boolean. Binding and manifest requests still read canonical
+evidence. The router still reads the full finding when actual delivery
+requires it. The generic Graph engine has no notification rules.
+
+## Current Graph owner boundary
+
+The current Data source publication owner is
+[publication.rs](../../crates/araphor-data/src/analysis/managed/source/publication.rs).
+The canonical input receipt is
+[input.rs](../../crates/araphor-data/src/analysis/managed/source/input.rs).
+Routine owner reads use immutable scalar references in
+[read.rs](../../crates/araphor-data/src/analysis/managed/source/publication/read.rs).
+Explicit revision reads use
+[revision.rs](../../crates/araphor-data/src/analysis/managed/source/publication/revision.rs).
+
+The native notification path uses
+[finding provenance](../../crates/araphor-data/src/analysis/managed/graph/provenance.rs),
+[scalar projection](../../crates/araphor-data/src/analysis/extraction/graph/native.rs),
+and [dependency revisions](../../crates/araphor-data/src/analysis/dependencies.rs).
+The source admission adapter in
+[feed.rs](../../crates/araphor-analysis/src/graph/feed.rs) now reads Data
+inventory and lifecycle notices. It uses the existing Definition host.
+It has no separate source-query subscription.
+
+The common Graph client now has a writer-scoped `owned` read. Data retains
+exact row identities in the invocation read ledger. The
+[domain basis](../../crates/araphor-data/src/analysis/managed/graph/domain/basis.rs)
+checks unchanged native values and exact proof-loss changes against those
+rows. New claims still require canonical input evidence. Production admission,
+conversion, and capture no longer use the separate host expiry path.
+
+[Control selection](../../crates/mithril-control/src/service/packages/graph-control.sql) selects a window whose retained proof expires
+  -> [Selection port](../../crates/araphor-analysis/src/graph/native/node.rs) records the sealed input receipt and keeps one gate row for an empty selection
+  -> [Detector::compute](../../crates/araphor-analysis-builtins/src/graph/units.rs) reads the authenticated Window input
+  -> [GraphCommands::expire](../../crates/araphor-analysis-builtins/src/graph/commands.rs) reads owned rows before it stages explicit proof-loss changes
+  -> [DomainProjection](../../crates/araphor-data/src/analysis/managed/graph/projection.rs) checks the final source-retention claims
+  -> [SourcePublication::publish](../../crates/araphor-data/src/analysis/managed/source/publication.rs) publishes the one-shot expired state in the same transaction
+
+[Finding provenance](../../crates/araphor-data/src/analysis/managed/graph/provenance.rs) follows exact finding-row read pins to the original witnesses. It retains the requested evidence only.
+
+The unused private root relation and full Unit/support copies are removed.
+The exact build passes in 316.030355 s. The unchanged live case fails in
+149.504977 s. Its first Graph execution returns the masked error `Graph host`.
+No Graph publication completes. The first notification expires after
+90.229616 s. The run log is `/tmp/araphor-live-owned-expiry-20261104.log`.
+
+The next diagnostic build passes in 285.564122 s. Its unchanged live case
+fails in 149.010167 s. The retained host cause is `AnalysisBusy: read control`
+at `analysis/read.rs:337`. Three parallel package calls share one native
+interrupt slot through the Definition control. No Graph publication completes.
+The run log is `/tmp/araphor-live-graph-cause-20261104.log`.
+
+[PackageExec::guest](../../crates/araphor-query/src/definition/physical/guest.rs)
+now creates one operation control for each actual invocation. The runtime and
+[GraphService](../../crates/araphor-query/src/definition/physical/graph.rs)
+share that control. Runtime cancellation can interrupt the active Graph
+callback. Parallel invocations have separate native slots. The native overlap
+guard remains in force. The reviewer agrees with this change. The exact build
+passes in 232.123725 s. The unchanged live case fails in 150.865488 s.
+All three package calls complete. Their reported intervals are 147.160 ms,
+154.909 ms, and 337.761 ms. The first native Graph commit then rejects
+`range(UBIGINT)` during property identity allocation. No publication completes.
+The run log is `/tmp/araphor-live-call-control-20261104.log`.
+
+[GraphStore::append_properties](../../crates/araphor-graph/src/properties.rs)
+now checks the row count with `i64::try_from` before it binds the signed range
+argument. Identity count and nonzero checks remain in force. The reviewer
+agrees with this correction. Its exact build passes in 296.944431 s. The
+unchanged live case fails in 364.822259 s. Four initial notifications complete
+in 12.614454 s, 22.647062 s, 41.350293 s, and 43.668153 s. Four native Graph
+publications complete. No bulk publication completes. The first projection
+takes 1.628140 s; the complete commit takes 2.019670 s. The run ends with
+`Unauthenticated: Client authentication expired or failed`. The run log is
+`/tmp/araphor-live-property-count-20261104.log`.
+
+[Managed freshness](../../crates/araphor-data/src/analysis/managed/read.rs)
+now treats native source publications as immutable input leaves. The existing
+[native_source_cut](../../crates/araphor-data/src/analysis/managed/source/publication/read.rs)
+checks the exact tenant, result, revision, registered attempt, generation,
+and captured cut. A malformed publication fails closed. Ordinary Definition
+and call freshness checks stay in force. New work still uses current source
+guards and publication parent checks. This corrects the repeated rejection
+of the prior Graph publication at `managed/commit.rs:597`. The reviewer agrees
+with the correction. Its exact build passes in 299.954965 s. The unchanged
+live case fails in 171.718207 s. The first notification completes in
+14.521128 s. The second source has an event, Graph publication, and finding,
+but no notification. Its notification deadline expires after 90.268920 s.
+The freshness loop does not recur. The run log is
+`/tmp/araphor-live-source-leaf-20261104.log`.
+
+The notification subscription stops with `the current notification Graph
+index is absent`. An idle Definition step publishes a Graph head without a
+fresh Graph journal or source receipt. The finding-head query selects that
+head, but it has no source notification index.
+
+[The publication owner](../../crates/araphor-data/src/analysis/managed/graph/publication.rs)
+now skips a Graph head only when both a fresh Graph journal and sealed source
+selection are absent. A fresh empty or read-only journal still publishes.
+A source selection still publishes when calls are retained.
+[Recovery](../../crates/araphor-data/src/analysis/managed/schema.rs) requires
+the publication for actual Graph results or an exact source publication.
+The reviewer agrees with these paired changes. The exact build passes in
+279.133830 s. The unchanged live case has finished in
+`/tmp/araphor-live-idle-graph-20261104.log`.
+
+The unchanged live case fails in 336.747302 s. Four initial notifications
+complete in 12.340655 s, 21.347495 s, 28.487721 s, and 36.086261 s.
+Four nonempty native Graph publications complete at the initial cursor only.
+No bulk package call or publication completes. Data receives all 4,096 events
+for the first source. The idle projection now takes 9 to 11 microseconds;
+this result does not prove an improvement for the complete workload.
+
+Bulk execution fails before package code. The log has repeated
+`the before source image differs` and `conflicting Graph capture header`
+errors. The old selection query combines Before roots with the current
+`graph_window`. Selection takes 21.168 s at cut 228, including 18.882 s in
+its header. These intervals contain nested work and must not be added.
+The log is `/tmp/araphor-live-idle-graph-20261104.log`.
+
+The replacement input path is under review. It will remove full Unit support
+aggregation and the frozen support-fact scan. Historical roots will use exact
+source membership identities. Package Lookup SQL will request canonical
+records through native DataFusion joins with private candidate metadata.
+The same invocation Graph transaction will serve those reads and package
+code. Actual predecessor inputs must complete before Graph binding. The
+replacement has no build or live proof. The complete workload and the
+100 times target remain **Not done**.
+
+The flat input replacement now passes the focused Query and Analysis library
+check in 34.77 s. The exact unchanged test target build passes in 294.975564 s.
+Its log is `/tmp/araphor-build-flat-input-20261104.log`. The unchanged live case
+has finished in `/tmp/araphor-live-flat-input-20261104.log`.
+
+The flat-input live case fails in 134.893773 s. The first notice expires after
+90.203996 s. No package call or Graph publication completes. Startup takes
+44.482158 s, including 44.039886 s for configuration. The managed subscription
+rejects the new Graph provider with `a retained source subscription requires
+a reusable native plan`. This result gives no bulk performance comparison.
+
+The retained-plan owner now recognizes that exact provider. The provider
+retains only call identity, relation, schema, and source family. Each execution
+gets its actual host from the TaskContext and resets the read identity. Other
+provider and expression reuse checks remain in force. The reviewer agrees
+with this correction. Its exact build passes in 222.217538 s. The build log is
+`/tmp/araphor-build-graph-lookup-reuse-20261104.log`. The unchanged live case is
+finished in `/tmp/araphor-live-graph-lookup-reuse-20261104.log`.
+
+The corrected provider build passes in 222.217538 s. Its unchanged live case
+fails in 331.131550 s. Four initial notices pass in 11.244687 s, 18.262584 s,
+29.806101 s, and 30.672545 s. The run has 20 source-backed Graph publications;
+only nine stage Graph edits. These include the four initial results, four
+old-root evaluations, and one 512-root bulk result. Raw source 33 reaches
+cursor 4,096, but its latest Graph publication reports cursor 1. Later
+source-backed publications can have zero changed roots. The failure is the
+existing subscription-progress assertion. It is not an authentication error.
+The log is `/tmp/araphor-live-graph-lookup-reuse-20261104.log`.
+
+The old Before-image and capture-header errors do not recur. This does not
+prove complete incremental processing. Selection reaches 16.459418 s at cut
+227, including a 14.896947 s header. The 512-root publication at cut 99 takes
+6.003124 s for row work; its combined Graph and source publication stage
+takes 4.796571 s. That stage includes Graph journal application, domain
+publication, and the source callback. It does not isolate one Graph owner.
+A separate commit waits 6.076051 s for the writer. These overlapping
+intervals must not be added.
+
+The root After driver now uses native source imaging. SourceLookup can map
+keys through a native CrossJoin only when every expression belongs to one
+child. It preserves the lifecycle child and native join execution. The
+reviewed diagnostics report selected and frozen window bounds, source
+progress, source publication bounds, and the parts of the combined commit
+interval. They add no queries or per-row logs. The focused Query and Analysis
+library check passes in 37.54 s. The reviewer accepts the native imaging,
+CrossJoin key mapping, and timing boundaries. The exact target build passes
+in 243.739724 s. The unchanged live case fails in 347.315088 s with client
+authentication expiry. Four initial notices pass in 11.421090 s, 18.238251 s,
+28.511040 s, and 29.763973 s. The logs are
+`/tmp/araphor-build-source-window-20261104.log` and
+`/tmp/araphor-live-source-window-20261104.log`.
+
+The run has 24 source publications. Seven stage Graph edits; each inserts
+eight rows. No new-root bulk mutation completes. At cut 71, source 33 selects
+window 1 to 1 while its header reports consumed cursor 1 and contiguous
+cursor 257. At cut 80, it selects window 1 to 257, but publication 99 retains
+one record and selects zero new records. The source image parent has already
+advanced past those new rows. Later Inserted inputs cannot recover them.
+The internal Control branch inputs still need diagnosis.
+
+The largest source count interval is 1.161726 s for a zero-row selection.
+The largest journal apply interval is 0.928771 s for an old-root evaluation.
+These intervals do not qualify bulk Graph performance. A Graph SQL read can
+also overlap the same invocation's guest transfer. The run has one
+`Graph transfer overlap` error.
+
+Graph SQL reads, guest execution, and freeze now share one per-call gate.
+The tracked worker retains that gate until it exits. The reviewer accepts
+this change. The entered-key correction reads actual identity rows through
+the existing source cursor index. Native SQL adds the newly covered identities
+to the shared changed-key relation before status and package input selection.
+Canonical keyed reads remain the proof authority. Arbitrary selections retain
+the complete invalidation path. The final focused library check passes in
+12.32 s. The port rejects unsupported delta images. A checked native Arrow
+memory bound covers encoding before allocation. The final cancellation check
+also covers an empty result. The reviewer accepts the final code. The exact
+target build passes in 205.355698 s. Its unchanged live case fails in
+343.495093 s with authentication expiry. Four initial notices pass in
+10.786400 s, 17.377505 s, 27.340496 s, and 29.306023 s. Twenty Graph and source
+publications have commit receipts. All retain cursor 1 and one record.
+A later row-work result at cut 225 has no commit receipt and is excluded.
+The logs are `/tmp/araphor-build-entered-keys-20261104.log` and
+`/tmp/araphor-live-entered-keys-20261104.log`.
+
+The native source header rows and actual Capture resume flags are current.
+At source 34 cut 97, Control None selects 1 to 769; Control After selects
+1 to 1 for the same base and captured cut. At source 35 cut 174, None selects
+1 to 2,561; After selects 1 to 1. The strict capture-header guard rejects
+both attempts. No Graph transfer overlap occurs in this run. No extended
+window publishes, so the entered-key recovery still has no live proof.
+
+The native Control arbitration query now uses one CASE selection. The old
+work UNION and priority sort are removed. Exact head joins retain expiry and
+notice metadata. A filtered eligibility relation precedes the retained-event
+probe. Control opts in to the current port for its After image. This preserves
+its prepared plan, source family, current binding, clock, and lineage. Before
+and the strict capture-header guard stay in force. The reviewer accepts this
+replacement. The exact target build passes in 208.276888 s. Its log is
+`/tmp/araphor-build-case-control-20261104.log`. The unchanged live case fails
+in 155.200669 s. Four initial notices pass in 10.762951 s, 17.563189 s,
+27.800547 s, and 29.091419 s. Each source selects window 1 to 257. All four
+bulk publications have Graph commit receipts and 257 source members. No
+capture-header or Graph overlap error occurs. The run log is
+`/tmp/araphor-live-case-control-20261104.log`.
+
+The failure is a 15 s upload acknowledgement timeout. The log does not
+identify EvidenceAck or CoverageAck. Bulk Graph apply takes 1.288 to
+1.351 s. The first two writer holds take 5.480 s and 4.856 s. The last
+bulk commit waits 14.003 s for the writer. Two bulk commit receipts occur
+after teardown starts. These receipts do not prove that bulk drain passes.
+Input and guest work also remain slow. No warm arrival completes.
+
+The reviewer agrees to replace the Graph journal replay. The journal now
+retains its first base assertion across edits and clears. The commit owner
+checks the touched open membership after writer-head checks. It validates
+every original staged relation and command schema. It persists only final
+surviving properties and members. The old SQL edit ordering, state replay,
+and alternate public edit API are removed. Data retains domain checks,
+provenance, and the only transaction commit. The generic Graph commit
+receives the existing per-writer budget through a callback. It checks
+cancellation and reserves scratch memory before native Arrow allocation.
+The base owner reserves from actual sparse row counts and key lengths.
+It verifies those bounds before each key copy. The final focused Query and
+Analysis library check passes in 42.91 s. The exact target build passes in
+259.022666 s. The build log is
+`/tmp/araphor-build-native-reduction-20261104.log`. Its unchanged live case
+fails in 151.482379 s. The failure is `ControlRpc: Cancelled: Timeout expired`
+at `mithril-node/src/control.rs:812`. Four initial notices pass in 10.505221 s,
+17.132293 s, 27.103592 s, and 29.131767 s. All four first bulk source
+publications have 257 members. The fourth commit completes during teardown.
+No new base, schema, capture-header, or overlap guard fails. The run log is
+`/tmp/araphor-live-native-reduction-20261104.log`.
+
+For the same 257-record first bulk windows, Graph apply takes 1.009 to
+1.064 s, against 1.288 to 1.351 s in the prior run. Complete writer holds
+take 4.314 to 4.770 s. This is a bounded stage reduction. It does not prove
+complete bulk drain or the 100 times target.
+
+The remaining input path reads one owned candidate relation 12 times per
+source frame. Those worker intervals total 2.335 to 3.094 s per bulk frame.
+They are aggregate intervals, not total CPU time. The reviewer agrees to
+reuse the full canonical Input through the existing SourceSnapshot binding
+before per-scan projection. SQL input access closes under the existing
+GraphService gate at guest entry and journal freeze. Direct SDK Graph reads
+stay current. Host and source controls still check each read. The final
+focused Query and Analysis library check passes in 29.88 s. The reviewer
+accepts the input binding and phase guards. The exact build passes in
+212.962373 s. Its log is `/tmp/araphor-build-owned-input-reuse-20261104.log`.
+The unchanged live case fails in 209.808713 s with `ControlRpc:
+DeadlineExceeded: Control unary RPC timed out` at `control.rs:811`.
+The run log is `/tmp/araphor-live-owned-input-reuse-20261104.log`.
+
+All four initial notices pass in 9.898918 s, 16.733534 s, 22.630665 s,
+and 28.987879 s. Each frame now has one owned Graph input worker, against
+12 in the prior run. No input-phase, overlap, or capture-header guard fails.
+Twelve Graph publications have commit receipts: four initial windows,
+four 257-record windows, and four append windows through cursor 1,025.
+The append windows select 768 new records. The last receipt completes
+during teardown. Bulk drain and later arrivals remain unqualified.
+
+The fourth notification capture still takes about 11.669 s before its
+sink callback. In the prior run, that interval grows from 0.239 s with
+zero old obligations to 11.452 s with three old obligations. Data capture
+completes only 7 to 11 ms before the routing callback starts. Thirteen
+logical scans do not prove thirteen database reads. The notification
+capture loop reads original, current, and previous Graph headers and
+full finding properties for each obligation. It reloads global admitted
+relation shapes for each native finding read.
+
+The largest source selection interval is 15.707727 s at cut 104. It
+includes a 14.185242 s header interval. These intervals are nested and
+must not be added. Repeated frozen metadata reads and worker scheduling
+still need separate attribution. The next owner replacement is under
+review. No complete-workload or 100 times improvement is proved.
+
+The reviewer agrees to replace native notification capture with one
+read-scoped scalar relation. Selected notification contexts decode once.
+One tenant catalog load supplies current-head and pinned-membership queries.
+Current heads keep the existing tenant-wide legacy and native ordering.
+Source and Graph filters apply after head selection. Original availability
+uses the pinned original membership, independent of the current head.
+Native publication ownership uses SOURCE_OWNER, source identity, revision,
+and instance checks. Canonical finding value IDs remain nonzero.
+
+Ordinary native notification capture no longer reconstructs original,
+current, and previous full findings. It registers the same finding and
+result references. Native revision equivalence remains exact result ID
+equality. Binding filters and requested Graph manifests retain canonical
+evidence reads. Route, deadline, retry, and actual delivery behavior stay
+at their existing owners. No persistent index, payload archive, query
+operator, or Graph domain dependency is added. The replacement is under
+source review. It has no completed exact build or live result.
+The full workload and the 100 times target remain **Not done**.
+
+
+The active Unit schema now contains only record identity, window duration,
+and disclosure configuration. The old support aggregation SQL, frozen support
+port, and fact-key aggregation view are removed. The root port reads exact
+prior membership identities and scalar metadata for Before. It has no event,
+fact, Window, Control, or GraphRun dependency in that image. The After image
+uses canonical current records and the native lifecycle gate.
+
+Package Lookup SQL can read `graph.<relation>` for a relation declared by
+that model. This first source uses the invocation writer's owned metadata.
+Native DataFusion executes the joins and canonical record requests. The source
+has no equality lookup optimization; do not claim one. Graph-independent
+actual inputs complete before one invocation transaction is bound. Graph
+inputs and guest code share that transaction. The new source rejects an
+unresolved package dependency in its Graph-dependent input closure. Existing
+package compositions do not acquire that new source by default.
+
+The credential package retains only candidate matching fields and canonical
+record IDs in its private relation. It retains competing and negative
+candidates. Rust still checks time, position, lifetime, and conflicts. It
+stages metadata for current roots in one batch after explicit clears. It does
+not retain event, Fact, Unit, or support payloads in that relation. All three
+existing actual package calls remain in the Definition.
+
+Generic Graph-call replay and the old example Contribution output path remain
+unqualified. Old Unit support test fixtures still need migration. The exact
+incident test has no source change. The full workload and the 100 times
+target remain **Not done**.
+
+Read the new input owners in this order:
+
+1. [Flat Unit input](../../crates/araphor-analysis-builtins/src/graph/model/units.rs)
+   and [selection SQL](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql).
+2. [RootPort](../../crates/araphor-analysis/src/graph/native/roots.rs) for exact
+   historical membership and current lifecycle checks. Read
+   [EnteredPort](../../crates/araphor-analysis/src/graph/native/entered.rs) and
+   [the source cursor index](../../crates/araphor-query/src/sources/index/keys.rs)
+   for identities that enter an extended window.
+3. [GraphProvider and GraphExec](../../crates/araphor-query/src/definition/physical/graph/lookup.rs)
+   for the declared native table source, input receipt, and fresh read identity.
+4. [GraphService](../../crates/araphor-query/src/definition/physical/graph.rs)
+   and [change input execution](../../crates/araphor-query/src/definition/physical/changes.rs)
+   for actual predecessor ordering, worker cancellation, and transaction reuse.
+   [Guest execution](../../crates/araphor-query/src/definition/physical/guest.rs)
+   retains the same per-call gate through its tracked worker.
+5. [Candidate input](../../crates/araphor-analysis-builtins/src/graph/credential/input.rs)
+   and [candidate SQL](../../crates/araphor-analysis-builtins/src/graph/units/candidates.sql)
+   for private metadata and canonical record selection.
+
+The host freezes the journal after successful output validation in
+[PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs).
+Package code has no commit method. The latest focused library check passes
+in 12.32 s. The exact target build is in progress. The latest completed live
+case fails as recorded above. It does not cover the entered-key correction.
+
+
+ This does not repair idle heads
+that an older binary already stored. No bulk timing or overall speed improvement is proved.
+
+Complete native public readers, obsolete code removal, old expiry test-helper
+migration, historical candidate input work, and the latency target remain
+**Not done**.
+
+This section records the user correction on 2026-11-04. This section
+supersedes the earlier ownership descriptions below. The older sections
+record the previous implementation and measurements. Their moved source
+links now point to the Data adapter.
+
+[GraphSpec](../../crates/araphor-analysis-sdk/src/model/graph.rs) A package model declares optional Graph access and native Arrow property schemas
+  -> [Relation](../../crates/araphor-graph/src/relation.rs) the engine defines generic node and edge command schemas
+  -> [CheckedEvaluation::graph](../../crates/araphor-analysis-sdk/src/host.rs) package code obtains the supplied engine transaction client
+  -> [HostAccess](../../crates/araphor-package-runtime/src/host.rs) the shared runtime checks the admitted relations and schemas
+  -> [PackageExec::guest](../../crates/araphor-query/src/definition/physical/guest.rs) Query supplies the optional shared Graph service
+  -> [ManagedGraphTransaction](../../crates/araphor-data/src/analysis/managed/graph/transaction.rs) Data binds the actual call, journal, and callback lifetime
+  -> [Journal::prepare](../../crates/araphor-graph/src/journal.rs) the engine checks ordered edits against the bound base and staged state
+  -> [Journal::publish](../../crates/araphor-graph/src/journal.rs) the engine accepts a prepared stage after the caller reserves memory
+  -> [GraphService](../../crates/araphor-query/src/definition/physical/graph.rs) Query freezes the successful call journal and carries its memory leases
+  -> [PendingGraph::apply_prepared](../../crates/araphor-graph/src/layers.rs) the engine converts native journals and applies all requested writer layers
+  -> [commit_graph_journals](../../crates/araphor-data/src/analysis/managed/graph/commit.rs) Data applies the journals in the complete Definition transaction
+
+The engine contains opaque graph, writer, relation, owner, and entity
+identities. It has no package, SDK, detector, or finding dependency. The
+engine has no package commit method. The SDK and runtime carry the same
+optional invocation resource for native and Wasm packages. Builtin code
+has no separate engine privilege.
+
+
+[Mutation entry points](../../crates/araphor-graph/src/store.rs) borrow
+`duckdb::Transaction`. The installed binding's `is_autocommit()` method is a
+constant stub and cannot prove transaction state. Data keeps commit and
+rollback ownership. [Call evidence](../../crates/araphor-data/src/analysis/managed/source/canonical.rs)
+selects the actual call and declared ancestor input cells. The Definition
+result keeps the complete source read set. [Native pin checks](../../crates/araphor-data/src/analysis/managed/source/check.rs)
+compare per-result metadata with `evidence_refs` and `context_refs`.
+[Predecessor capture](../../crates/araphor-query/src/definition/physical/graph.rs)
+includes successful fresh journals that were complete at binding time.
+[Publication checks](../../crates/araphor-data/src/analysis/managed/graph/commit.rs)
+check that captured set without requiring returns from skipped static calls.
+
+
+[Definition Graph publications](../../crates/araphor-data/src/analysis/managed/graph/publication.rs)
+pin all visible writer layers to the existing selected result in the same
+transaction. This catalog needs no Graph destination or evidence source.
+[Canonical coverage](../../crates/araphor-data/src/analysis/managed/source/coverage.rs)
+checks the original Data coverage batches before Data seals derived values.
+It checks requested current-epoch intervals and source gaps. Missing required
+columns fail closed. The exact-cut metadata fallback and native public
+projection remain unfinished. The schema version is 39.
+
+The exact target build passes in 253.654040 s. The unchanged live case fails
+in 347.226456 s after four initial notifications. Historical metadata captures
+incorrectly request a current source seal and retry. The corrected
+[historical source path](../../crates/araphor-analysis/src/graph/native/capture.rs)
+uses the bound reference, guarded frozen reads, and no new import handle.
+The later corrections and publication catalog have no exact live proof yet.
+
+[Portable domain types](../../crates/araphor-analysis-types/src/lib.rs) hold
+observation, fact, finding, checkpoint, model, and Arrow contracts.
+[The Data adapter](../../crates/araphor-data/src/analysis/graph_rows/store/mod.rs)
+holds typed persistence, input proofs, and finding projection.
+[The current publication path](../../crates/araphor-data/src/analysis/graph_rows/publication.rs)
+still recognizes the builtin contribution contract. This path is pending
+replacement. The named incident test still exercises this older mutation
+path through production OCI/Wasm packages and a saved native Definition
+subscription. The test does not yet qualify the corrected Graph facility.
+
+Focused library checks pass. The exact target build passes in 343.507598 s.
+The unchanged live case fails during planning in 7.723330 s with
+`NotImplemented("Graph support fact delta image")`. No event processing
+runs. The run proves no speed improvement. Integration and the performance
+target are **Not done**.
+
+[Scope::get_table_source](../../crates/araphor-query/src/definition/package/scope.rs)
+now resolves a complete input image only when native SQL requests that
+image. [Packages::change_plans](../../crates/araphor-query/src/definition/package/changes.rs)
+supplies the original complete plans. The removed eager image loop caused
+the early failure above. The retry build passes in 343.739126 s. The
+unchanged case fails during physical planning in 9.393989 s. DataFusion
+rejects `EXISTS` in the prefix projection. The run processes no events.
+The reviewed correction uses native one-row aggregates and a cross join.
+The next focused build is in progress in
+`/tmp/araphor-build-graph-admitted-20261104.log`.
+
+[ManagedPublication::admit](../../crates/araphor-query/src/follow/managed.rs)
+now returns the exact optional registered attempt. The production
+[publication adapter](../../crates/araphor-analysis/src/instance/subscription.rs)
+returns the same `Arc` that its sink retains.
+[SourceSnapshot::bind_attempt](../../crates/araphor-query/src/sources/mod.rs)
+binds that attempt before execution starts.
+[ManagedCapture::check_current](../../crates/araphor-data/src/analysis/managed/model.rs)
+checks the normalized capture, complete instance, and source and execution
+identities. Query also checks invocation and frontier identity. This
+binding does not yet supply the Graph service or change mutation ownership.
+
+The registered-attempt build passes in 236.819293 s. The unchanged case
+fails in 134.437902 s. Its first notification gate expires after
+90.185894 s. The Graph subscription rejects a support callback dataset
+name mismatch. [SupportPort::read](../../crates/araphor-analysis/src/graph/native/support.rs)
+now returns the registered `__graph_support_facts` name. Port schema and
+name validation stay strict. No performance gain is proved.
+
+[Data admission](../../crates/araphor-data/src/analysis/managed/graph.rs)
+now registers relations from canonical package descriptors and binds an
+actual attempt and call to a stable writer and captured head. This path
+does not require an event source or a Graph destination.
+[Data opening](../../crates/araphor-data/src/analysis/mod.rs) installs the
+generic schema and one native property adapter. The schema version is 35.
+[Native properties](../../crates/araphor-graph/src/properties.rs) use the
+existing Arrow type mapper, a temporary schema binding, and the native
+appender. The binding clears on success and failure. Unsupported lossless
+property types fail admission.
+[Keyed reads](../../crates/araphor-graph/src/read.rs) select the captured
+membership cut, reject broken selected references, and check declared
+schemas before native Arrow normalization. A caller reserves each batch
+before normalization and accumulation.
+
+The Data library check passes. The exact target build is in progress in
+`/tmp/araphor-build-graph-catalog-20261104.log`. The runtime service,
+frozen journal delivery, and common commit integration remain **Not done**.
+
+## Current integration review route
+
+[GraphService](../../crates/araphor-query/src/definition/physical/graph.rs)
+uses the existing input pool and tracked blocking worker. Native, Wasm,
+and builtin invocations use the same service trait. The service has no
+package commit operation.
+[Data journal delivery](../../crates/araphor-data/src/analysis/managed/graph/commit.rs)
+checks exact attempt, actual call, retained state, declared predecessors,
+and historical origin grants. It validates the captured pre-state before
+new call rows advance their heads. Generic layer application stays in the
+borrowed transaction.
+
+[Canonical source cells](../../crates/araphor-data/src/analysis/managed/source.rs)
+retain Data-created batches, selected indices, and reservation-only leases.
+[Native lineage](../../crates/araphor-query/src/sources/lineage.rs) follows
+port aliases and shared bindings. Input collection attributes that lineage
+to the actual call. [EvidenceBasis](../../crates/araphor-data/src/graph/evidence.rs)
+holds the moved read-only domain checks. It does not dispatch packages or
+infer mutations. [DomainRelations](../../crates/araphor-analysis-types/src/relations.rs)
+defines portable Arrow contracts. [Fact indexing](../../crates/araphor-data/src/analysis/context/facts.rs)
+records canonical identities without a payload copy. Context insertion and
+recovery check index consistency. The current store schema version is 38.
+
+Read Data `analysis/managed/source/derived.rs` next. A native source adapter
+seals canonical rows and pending derived facts in Data handles. Query
+`PortRead` carries a handle beside the Arrow result. Shared port lineage
+copies the same handle. At actual input collection, Data checks raw and
+derived lineage together. A Before image supplies no current import.
+The frozen reader seals historical context and proof refs in its existing
+validated read. Data imports pending canonical values in the complete
+Definition transaction. Raw captured refs and derived refs stay separate.
+Native import receipts and historical origin pins supply recovery checks.
+Data `context/batch.rs` performs native batch context conflict checks and
+absent-row inserts. Source `check.rs` joins immutable refs with canonical
+bytes, identity rows, witnesses, and native receipts. Source `import.rs`
+appends native import and origin pins. This batch code has library checks
+only. It has no live SQL or performance proof yet.
+
+
+**Result: Not done.** The builtin Graph capability, canonical domain
+validation from these cells, direct native public projections, package
+state migration, source lifecycle replacement, and historical replay are
+unfinished. The incident case still uses the old mutation path. Focused
+library checks pass. The last exact target build passes in 243.060148 s;
+its live run fails in 347.387118 s after 25 nonempty bulk publications.
+The later integration source has no exact target result yet. The full
+workload and 100-times target remain unproved.
+
+## Graph relation replacement review route
+
+[Feed](../../crates/araphor-analysis/src/graph/feed.rs) A committed source change wakes the existing subscription
+  -> [SourceSnapshot](../../crates/araphor-query/src/sources/rows/package.rs) Query pins the exact source and Graph cut
+  -> [Relations::frozen](../../crates/araphor-data/src/analysis/graph_rows/store/relations/frozen.rs) Graph selects stable value IDs and membership through the bound indexes
+  -> Partial [Projection::read_bound](../../crates/araphor-analysis/src/graph/native/capture.rs) Graph supplies requested native Arrow columns and explicit membership changes
+  -> [PackageExec](../../crates/araphor-query/src/definition/physical.rs) DataFusion executes the saved native plan and package calls
+  -> Partial [GraphRows::stage_managed](../../crates/araphor-data/src/analysis/graph_rows/publication.rs) Graph prepares only changed values, membership, and adjacency
+  -> [AnalysisStore::commit_managed](../../crates/araphor-data/src/analysis/managed/commit.rs) Data checks current authority, source cuts, context proofs, and expected state
+  -> [Relations::apply](../../crates/araphor-data/src/analysis/graph_rows/store/relations/apply.rs) Graph applies producer and metadata changes through Data's transaction
+  -> [Graph commit](../../crates/araphor-data/src/analysis/progress/graph.rs) Data commits Graph, findings, state, progress, and replay references together
+  -> Partial [Source follow](../../crates/araphor-query/src/follow/mod.rs) Data publishes committed changes to dependent subscriptions
+
+[Managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs) A check or transaction fails
+  -> [Transaction owner](../../crates/araphor-data/src/analysis/connection.rs) Data rolls back all changes
+  -> [Relations::apply](../../crates/araphor-data/src/analysis/graph_rows/store/relations/apply.rs) Graph publishes no new head or retained state
+  -> [Managed capture](../../crates/araphor-data/src/analysis/managed/read.rs) A retry uses the same committed parent and input position
+
+The partial lines identify current limits. Analysis still builds native
+Arrow input from verified context values. Public Graph extraction still
+uses Data's capture code. Data still prepares authorized producer changes.
+Subscription dependency selection still uses its existing implementation.
+These lines do not establish the complete Graph owner or the latency target.
+
+Read [Relations](../../crates/araphor-data/src/analysis/graph_rows/store/relations.rs) first. Data creates
+this borrowed owner for one operation. `head` selects a source at a committed
+cut. `read_snapshot` reads and checks the compact header and metadata counts
+in one query. `Snapshot` borrows the same connection. `frozen` rejects a
+snapshot from another connection. Graph opens and commits no store.
+
+Read [Changes](../../crates/araphor-data/src/analysis/graph_rows/store/relations/changes.rs) next.
+The change reader compares the exact producer cuts. A native requested-key
+relation restricts normal reads to the touched keys. Shared owners with the
+same value produce one selected value. Conflicting selected values fail.
+A full check computes distinct counts from all selected values. A normal
+check preserves the original touched-key endpoint checks, including keys
+whose selected value does not change. Empty key requests still check cuts.
+
+Read [Apply](../../crates/araphor-data/src/analysis/graph_rows/store/relations/apply.rs) after Changes.
+The owner checks producer bases and removed support. It applies contributions
+through the existing borrowed transaction. Metadata counts and the compact
+header change with the producer bindings. Data retains final authority,
+source and context proofs, state, progress, durable COMMIT, and publication.
+No reader can observe the staged result before Data commits.
+
+Read [frozen input](../../crates/araphor-data/src/analysis/graph_rows/store/relations/frozen.rs) and its
+[Data bridge](../../crates/araphor-data/src/analysis/graph_rows/read.rs) together.
+Graph uses the requested record keys to select units. It validates every
+matched unit, including a unit with no fact or proof. Separate native queries
+read facts and proofs. The queries do not form a fact-by-proof product.
+The fact query includes the complete stored context row. Data decodes this
+row and checks grants and stored package provenance. Data does not issue a
+second length query or a point read for each selected fact.
+
+Graph checks the canonical fact, source, unit, context key, record, ordinal,
+revision, and duplicate rules. Data supplies the actual opening capture cut
+for each proof. A direct historical result uses the same Graph owner and
+retains its optional fact conversion behavior. Every selected direct context
+still passes Data validation before a non-fact can be skipped. Deadline and
+resource callbacks return the original Data errors. Native SQL cancellation
+remains under `AnalysisReadControl::run`.
+
+```mermaid
+sequenceDiagram
+    participant Q as DataFusion source port
+    participant D as Data
+    participant G as Graph Relations
+    Q->>D: Read exact captured Graph keys
+    D->>G: Read snapshot and frozen membership
+    G->>G: Select units, facts, and proofs
+    G->>D: Verify joined context and opening cut
+    D-->>G: Verified context and captured revision
+    G-->>D: Selected context values and proofs
+    D-->>Q: Verified input for native Arrow projection
+```
+
+The current schema and public encodings are unchanged. The Graph owner now
+holds their codecs and checks. No new durable archive, head registry,
+content-hash change detector, or store is present. Temporary frozen-record
+and frozen-unit tables are removed. Rust request buffers and retained output
+remain subject to Data's memory limits. Dropping the operation drops these
+buffers. Data closes the read transaction before it returns its connection.
+
+The qualification test is
+[`follows_incremental_sources`](../../crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs).
+The first successful replacement build takes 235.600379 seconds. It covers
+the frozen owner before the final memory-accounting correction. The named
+live run fails in 267.578013 seconds at the unchanged Control unary deadline.
+Four initial and eight bulk Graph publications commit. The log is
+`/tmp/araphor-live-relations-frozen-20261104.log`. That diagnostic does not
+qualify the later accounting and timing source. The complete owner, full workload,
+millisecond latency, and 100-times target remain **Not done**.
+
+## Native subscription task owner
+
+Read [SubscribeExec::execute_committed](../../crates/araphor-query/src/stream/physical.rs),
+[Runtime::next](../../crates/araphor-query/src/stream/physical/runtime.rs), and
+[Engine::run](../../crates/araphor-query/src/execution.rs) together. One requested
+pull moves the current Runtime into a native DataFusion `SpawnedTask` on the
+existing Query runtime. This replaces caller-driven subscription polling for
+Follow and the native subscription plan. The old caller-polled closure is
+removed. Input execution, Before replay, package calls, and publication stay
+inside the same native physical plan.
+
+The task returns the same Runtime and its exact nested result. Query does
+not queue or prefetch a batch. Existing Arrow reservations, output checks,
+row order, and backpressure keep their current owner. The task holds the
+Engine until it stops. Engine shutdown uses `shutdown_background`, including
+when its last reference drops on a Query worker.
+
+The task holds an explicit outer subscription worker token. It does not
+hold a call worker token. `calls.finish()` can therefore join its own calls
+without waiting for the task that runs it. Existing read controls check
+cancellation and deadlines. The task boundary adds no cancellation select
+that could discard a recovery snapshot. Dropping a pull aborts the native
+task and cancels its root control through `PendingRead`. Tracked blocking
+callbacks keep their tokens until they stop. Subscription `cancel_and_join`
+waits for these tokens. Only a runtime or task failure maps to an error
+without the Runtime's captured snapshot.
+
+Before this change, the unchanged test records a 0.070171-second Graph
+worker operation followed by a 3.388672-second return interval during bulk
+processing. It fails in 135.254775 seconds at the original Control timeout.
+The log is `/tmp/araphor-live-source-dispatch-timing-20261104.log`. These
+measurements select the execution owner replacement. They do not prove its
+gain. The corrected source passes the named build in 224.452313 seconds.
+The unchanged live case is in progress in
+`/tmp/araphor-live-subscription-owner-20261104.log`. Runtime qualification
+and the performance target remain **Not done**.
+
+The native-owner run then fails in 288.512691 seconds at an unchanged
+15-second upload ACK wait. The exact ACK is not identified. Thirteen
+nonempty Graph publications commit before shutdown. No bulk drain or later
+arrival completes. Source-worker return delays still reach 5.522833 seconds.
+The selected cut 224 spends about 85 seconds before its final 10.310135-second
+transaction. Native input and support execution remains the larger measured
+interval. The native task owner is implemented; the workload and performance
+target remain **Not done**.
+
+## Native resolved input
+
+Read [ResolvedInput](../../crates/araphor-data/src/analysis/graph_rows/store/input.rs) and its
+[native SQL](../../crates/araphor-data/src/analysis/graph_rows/store/input/resolved.sql) first. The
+query groups full candidate and acknowledgement values by their five
+binding fields. It joins this material to canonical events. Missing
+material becomes typed empty lists. Full-value DISTINCT preserves context
+conflict detection. SQL NULL fields do not match. A record-key aggregate
+preserves the old collapse of identical canonical events without grouping
+the full nested event. The existing event driver still rejects duplicate
+selected values and differences from the central journal.
+
+Read [Control interpretation](../../crates/mithril-control/src/store/graph/native.rs)
+next. Control supplies native candidate keys and interprets signed policy
+material. Its resolver still checks complete context identity, candidate
+keys, source identity, and conflicting versions. Its changed-input query
+still includes Inserted, Removed, After, Before, and context cutoff rules.
+The old Control resolution SQL file is removed.
+
+Read [Graph input preparation](../../crates/araphor-analysis/src/graph/native.rs)
+and [SourcePort::native](../../crates/araphor-query/src/sources/port.rs) together.
+Graph supplies the complete native event, resolution, and coverage plan.
+Status, Dirty, Records, and Facts scan the same native source family. Query
+uses its existing captured binding. It adds no Graph cache owner. A bound
+key demand clears sharing. Before, source image, statement clock, and
+capture identity remain separate. Query does not preload a window before
+a consumer requests the source.
+
+The native port has no SDK input metadata of its own. Scoped
+[source demand](../../crates/araphor-query/src/planner/mod.rs) walks its
+driver with the same scope rule. Nested custom sources remain opaque.
+Existing [input receipts](../../crates/araphor-query/src/inputs/receipt.rs)
+use those origins and actual physical bounds. No default revision or
+coverage is supplied. Shared aliases preserve optional metadata and the
+same Arrow buffers. Failed initialization remains unpublished and retryable.
+
+Native collection holds the existing permit and worker lease. It checks
+cancellation before collection and after binding. Native Arrow buffers and
+headers use existing input reservations. This intermediate relation does
+not retain Graph evidence. Records and Facts retain only the evidence that
+their downstream consumers select, through the existing Graph projection.
+
+The named build is in progress in
+`/tmp/araphor-build-resolved-input-20261104.log`. Runtime qualification and
+the performance target remain **Not done**. The preceding bulk diagnostic
+identifies repeated nested aggregation and policy resolution. Its six
+debugger pauses total 20.577583 seconds, so it proves no speed factor.
+
+The named build then passes in 278.513541 seconds. The unchanged case fails
+in 344.596022 seconds when client authentication expires. All four initial
+notices and twenty nonempty Graph publications complete. Confirmed Graph
+input frontiers are 1537, 1537, 1793, and 1793. No bulk drain or later arrival
+completes. The log is `/tmp/araphor-live-resolved-input-20261104.log`.
+The last completed cut spends 76.426214 seconds on input and packages.
+It captures 512 changed rows but still qualifies 1793 current records and
+reconstructs historical support. Runtime completion and the 100-times
+target remain **Not done**.
+
+## Scoped native Graph support
+
+This section covers the current working tree. The named build is in
+progress. Runtime qualification and the 100-times target are **Not done**.
+
+[ChangeInput](../../crates/araphor-analysis-sdk/src/model/changes.rs) declares a scoped Current query and a complete reset target.
+  -> [Packages::change_plans](../../crates/araphor-query/src/definition/package/changes.rs) prepares Current with affected bindings and the final native semijoin.
+  -> [SupportPort](../../crates/araphor-analysis/src/graph/native/support.rs) merges pinned Graph facts with captured dirty facts.
+  -> [Relations::frozen](../../crates/araphor-data/src/analysis/graph_rows/store/relations/frozen.rs) validates native membership, context values, and source proof refs at the exact Graph head.
+  -> [Unit SQL](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql) binds roots and explicit policy references.
+  -> [Record input](../../crates/araphor-analysis-builtins/src/graph/units/records.sql) reads roots and typed fact candidates by native keys.
+  -> [CredentialIndex](../../crates/araphor-analysis-builtins/src/graph/credential/mod.rs) selects causal support inside the package Rust implementation.
+  -> [Computation::unit_output](../../crates/araphor-analysis-builtins/src/graph/units.rs) returns results and exact Contribution support.
+  -> Pending replacement: [Detector::supports_units](../../crates/araphor-analysis-builtins/src/graph/units.rs) still admits the old builtin contribution contract.
+  -> [UnitBatch](../../crates/araphor-data/src/analysis/graph_rows/units.rs) validates contribution support and stores exact dependencies.
+  -> [GraphPublication::convert_graph](../../crates/araphor-analysis/src/graph/native/commit.rs) validates actual package inputs and prepares a compact input proof.
+  -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) commits the result before it promotes retained execution state.
+
+[InputProof](../../crates/araphor-data/src/analysis/graph_rows/store/input/proof.rs) contains sequence
+bounds and counts per CPU and effective interval. It contains no event or
+package row archive. A captured proof must match the prior Graph head and
+source basis. Data copies the guarded reference into ManagedCapture once.
+Ports do not read mutable retained execution state during a query.
+
+[MetadataPort::Prefix](../../crates/araphor-analysis/src/graph/native/node.rs)
+emits the committed complete sequence bounds as metadata. The existing
+native coverage SQL checks both bounds against the captured reports. A
+missing proof emits an unavailable row. Empty or NULL qualification cannot
+permit incremental execution. Pending, recovery, and expired ranges for
+the same source prevent prefix reuse.
+
+The append path also requires a stable point selection, local policy
+observations, strictly later source positions, and no sensitivity zero
+crossing. [Projection::read_status](../../crates/araphor-analysis/src/graph/native/capture.rs)
+selects that path. Full invalidation reads all current roots and adds pinned
+prior IDs through [Relations::inputs](../../crates/araphor-data/src/analysis/graph_rows/store/relations/read.rs).
+A prior ID absent from current roots becomes an explicit removal. Cold
+execution, recovery, and scope mismatch use this complete path.
+
+The existing managed commit owner promotes proofs after COMMIT. A Graph
+projection without a valid proof clears the retained proof. An empty commit
+keeps the old proof and its original source and Graph anchors. It does not
+advance those anchors from an empty progress receipt. A later basis mismatch
+therefore uses full invalidation.
+
+## Definition, package, and Graph owners
+
+An OCI image is a package. A Definition owns the subscription SQL and OCI
+pins. SQL calls an export; the export implementation owns analysis. The
+current Mithril Graph exports contain Rust code compiled into the installed
+Wasm artifacts. Graph supplies source data, proof checks, and membership.
+Data owns the atomic commit. Session subscription methods are Query runtime
+operations. They do not perform detector analysis.
+
+[GraphPublication](../../crates/araphor-analysis/src/graph/native.rs) keeps
+all admitted calls for receipt identity and authority. Its `graph_calls`
+set contains only calls with the canonical Graph contract.
+[Managed Graph commit](../../crates/araphor-data/src/analysis/progress/graph.rs)
+passes that exact subset to Graph staging. Generic managed verification
+and result insertion still process every call in the same transaction.
+The generic Graph path no longer requires the three Mithril package IDs.
+The fixed [Control Definition](../../crates/mithril-control/src/service/packages/graph-calls.sql)
+still calls those three images.
+
+[The named test](../../crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs)
+uses this production path. Its four public Follow streams observe events,
+Graph heads, findings, and notifications. It does not call `Package::subscribe`
+or inject Graph output. This fixed composition does not qualify SQL-only
+Definitions, mixed output kinds, repeated Graph calls from one package, a
+YAML loader, or external notification delivery. Graph checkpoints still
+permit one Graph call per package ID. Runtime and performance qualification
+of the current source remain **Not done** until the named run completes.
+
+## Package mutation transaction boundary
+
+The user further corrects the transaction boundary on 2026-11-03.
+The package requests its inputs and chooses its analysis, incremental
+strategy, and exact Graph additions, updates, and removals. It operates
+inside the supplied transaction and cannot commit. Data commits or rolls
+back the complete Definition transaction. The canonical Unit contract
+above is not the accepted generic package interface.
+
+The implementer and reviewer agree to replace host-inferred Graph writes
+with explicit package mutation commands through the existing Arrow output
+transport. Ordinary output rows have no Graph side effect. Empty commands
+preserve the prior state. Builtin Unit and contribution logic stays private
+to those packages. Graph values, codecs, validation, and the transaction
+builder move to a guest-safe Graph core. Native storage remains optional.
+There is no new host import or package commit method. This replacement is
+**Not done**. Implementation must remove the old generic Unit inference.
+
+The earlier ownership build passes in 254.215715 s in
+`/tmp/araphor-build-package-owners-20261104c.log`. That build does not cover
+this corrected transaction design. No live result covers either change.
+The unchanged named test and 100-times target remain **Not done**.
+
+## Shared source binding in one captured execution
+
+[SourcePort::scan](../../crates/araphor-query/src/sources/port.rs) prepares a deterministic native source plan
+  -> the source must explicitly permit one result and its effects for each snapshot and source image
+  -> the port must have no bound key demand, package calls, clock expressions, runtime window, or local table
+  -> a provider that was already imaged cannot share its binding
+  -> [SourceSnapshot::bind_shared](../../crates/araphor-query/src/sources/rows/package.rs) selects a binding by provider family, image, and statement clock
+  -> the first consumer executes the existing native driver, header, and callback
+  -> the existing captured-input owner stores the checked Arrow data, revision, and coverage
+  -> concurrent consumers bind the same Arrow buffers to their distinct read IDs
+  -> a failed initializer publishes no shared binding
+  -> a new source snapshot has no prior binding
+
+The snapshot accounts for the binding registry before insertion. No lock
+remains held during an asynchronous wait. Each consumer holds its checked
+permit and worker lease through the wait and checks cancellation and the
+deadline after it. The native parser, planner, optimizer, join rules, and
+keyed record and fact reads retain separate bindings. Graph metadata and
+complete-driver Records, Facts, and affected-unit reads opt in. The public
+capability defaults to false. Native source errors retain their original
+type. [SourceLookup::bind](../../crates/araphor-query/src/sources/keys/planner.rs)
+clears the shared binding when it applies a key demand to a port driver.
+
+The [focused source tests](../../crates/araphor-query/src/sources/port/tests.rs)
+cover concurrent reads, Arrow and metadata sharing, source cut, image and
+clock isolation, failed initialization, cancellation during a wait, foreign
+contexts, keyed ports, and sources that do not permit sharing. All five
+binding checks pass. Both existing input-memory checks also pass. Their
+fixtures now reserve against the complete input pool, including the
+separate request-metadata reservation. Capacity and assertions are
+unchanged. The check log is
+`/tmp/araphor-shared-port-fixture-checks-20261103.log`. The combined focused
+build passes in 290.791496 s. Live qualification remains **Not done**.
+
+The original live-case build also passes. Its isolated run fails in
+183.793047 s at the existing Control unary RPC timeout. The first initial
+check records 96 native event reads, against 242 before this change.
+Initial notifications still take 13.863268 to 19.213600 s. Records and
+Facts callbacks remain repeated. No bulk Graph publication completes.
+The run log is `/tmp/araphor-live-shared-port-20261103.log`. The complete
+workload and performance target remain **Not done**.
+
+The next change extends sharing to complete-driver Records and Facts.
+Its focused regression commits two real journal rows and captures a
+managed source view. Its capture uses the admitted requests from native
+preparation and the production request projection. Two full reads must
+share one callback. Native SourceLookup joins then apply key 1, key 2,
+and an unmatched key in that same capture. Each must execute a separate
+callback with its exact rows. An empty native join build must not probe
+the source. Runtime qualification of this extension is **Not done**.
+
+## Batched native Graph driver decoding
+
+[Projection::decode_rows](../../crates/araphor-analysis/src/graph/native/capture.rs)
+finds contiguous rows with valid record IDs and matching event and resolved
+presence. Each present run uses native Arrow slices. The native affected-ID
+and resolved-row decoders execute once for the run. Event decoding uses the
+run offset. Payload and coverage checks use the original driver row.
+
+The resolved decoder still checks canonical facts against their contexts.
+Source identity, nested record binding, conflicting payloads, facts and
+proofs, removals, and duplicate coverage checks remain. Null-ID padding is
+ignored. A mixed event and resolved null state is an error. No nullable
+StructArray is converted to a RecordBatch.
+
+The [decoder checks](../../crates/araphor-analysis/src/graph/native/capture/tests.rs)
+cover two initial present rows, padding, a removed row, and a later present
+run. They compare records, positions, contexts, proofs, removals, and
+coverage. They also reject altered facts, record binding, and mismatched
+presence. The three decoder checks and the production credential SQL
+regression pass in `/tmp/araphor-driver-decoder-analysis-checks-20261103.log`.
+The combined focused build passes in 354.668514 s. The final test-source
+build passes in 224.864988 s, including its queue wait. Both input-memory
+checks and four binding checks pass. The managed key-demand check exposes
+missing fixture admission input. Its correction uses the native prepared
+request map. Its rerun and live qualification are **Not done**.
+
+The admission-fixture build retry passes in 232.892912 s, including its
+queue wait. All five binding checks now pass in 8.723559 s. The log is
+`/tmp/araphor-key-demand-admission-checks-20261103.log`. The original-feature
+live build passes in 372.578288 s, including its queue wait. No build is
+active when the unchanged live test starts. Live qualification remains
+**Not done**.
+
+The unchanged live case fails in 163.639195 s at the existing Control
+transport timeout. All four initial notifications pass in 10.499888 to
+14.817532 s. Records and Facts callbacks execute once for each image.
+The first bulk affected callback takes 2.879023 s. Three bulk Graph
+publications commit roots 2 through 257. A fourth projection has no
+commit receipt before teardown. The run log is
+`/tmp/araphor-live-driver-decoder-20261103.log`. Full qualification remains
+**Not done**.
+
+## Saved native Before inputs
+
+The preceding live transport failure comes from
+[Node coverage reporting](../../crates/mithril-node/src/control.rs#L598).
+The native unary timeout is 10 s. The
+[test input owner](../../crates/mithril-e2e/src/discovery/packages/required/input.rs#L96)
+uses separate 15-second ACK waits. All limits remain unchanged. Coverage
+and managed publication use the same Data writer. The logs do not prove
+that the failed request waited at that lock.
+
+[PackageExec::before_reusable](../../crates/araphor-query/src/definition/physical.rs) checks the admitted and optimized input
+  -> the input must have immutable supported providers and no package call, local table, clock, or runtime window
+  -> native dynamic filter pushdown must be disabled
+  -> the physical input must have no scalar-subquery execution state
+  -> [Session::replay_before](../../crates/araphor-query/src/definition/replay.rs) checks the exact historical reference and declaration
+  -> native `reset_plan_states` resets the saved physical input
+  -> a fresh historical source snapshot supplies its source cut, task context, and key slots
+  -> the existing normalization and final read checks apply
+
+An ineligible input uses the existing native planning path. The replay
+retains the existing lookup-binding walk and call-binding filter. No
+second plan cache or input archive is added. The focused named-Before
+check first fails with `the materialized port is not bound`. The log is
+`/tmp/araphor-before-policy-analysis-checks-20261103.log`.
+
+All six native port checks pass in 11.482162 s. The reset check uses one
+saved native join with separate captured cuts, exact key demands, source
+revisions, coverage, and cancellation controls. The log is
+`/tmp/araphor-before-reset-query-checks-20261103.log`. This binary precedes
+the local named-view binding correction.
+
+The attempted named-view binding correction does not remove the failure.
+A debugger trace identifies Port 23 under a native scalar subquery during
+the subscription read. The trace precedes historical replay. DataFusion
+55 collects scalar subqueries across the package's logical children and
+executes them before the package binds its inputs. The local binding
+change is removed.
+
+[Engine configuration](../../crates/araphor-query/src/execution.rs) sets
+the native `enable_physical_uncorrelated_scalar_subquery` option to false.
+The existing DataFusion `ScalarSubqueryToJoin` optimizer then keeps the
+calculation inside its native child plan. No custom evaluator or optimizer
+is added. The corrected scalar and Before checks are **Not done**. The
+debugger log is `/tmp/araphor-before-binding-gdb-stack-20261103.log`.
+
+The scalar correction clears the missing-port error. Ten Query checks
+and seven Analysis checks pass. The named-Before case reaches its restored
+input check, then receives `[4, 5]` instead of the required `[5, 4]`.
+The assertion is unchanged.
+
+[PackageExec](../../crates/araphor-query/src/definition/physical.rs) now
+records each physical child's native output ordering before optimization.
+Its `required_input_ordering` method returns the exact native hard
+requirements. Replacement and reset retain them. This preserves the
+package's consumed order when the native output-order helper stops at a
+semi join. No custom sorting is added. Qualification of this correction
+remains **Not done**.
+
+## Native policy support selection
+
+[Unit selection](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql) reads each distinct base support row once
+  -> a native left join reads its policy facts
+  -> native array concatenation and `UNNEST` emit the base ID and policy observation IDs
+  -> the existing distinct support set removes repeated IDs
+  -> the final qualified join excludes absent records
+
+The ordered support, fact keys, window, proof, and sensitivity fields
+retain their checks. The native policy regression passes. It covers
+duplicate observations, repeated policy rows, absent referenced records,
+an empty policy, and a root without a policy. The three decoder checks
+and credential SQL regression also pass in the same log. These results
+do not qualify live latency.
+
+The native input-order build passes in 318.275160 s. The named-Before
+case now passes in 20.328811 s. It retains the exact `[5, 4]` assertion,
+prepared-plan eligibility, source, coverage, and replay checks. Ten Query
+checks pass in 52.578568 s. Seven more Analysis checks pass in 24.185028 s.
+Their logs use the `/tmp/araphor-native-order-` prefix. The new credential
+test name is shortened to `credential_support_keeps_matches`; its query
+and assertions are unchanged. Its rebuild is pending. Full-workload
+qualification remains **Not done**.
+
+## Nullable Graph context correction on 2026-11-03
+
+[The unchanged incident case](../../crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs) sends an event without a matching policy candidate
+  -> the former native context SQL preserves the left-join row with null candidate fields
+  -> [GraphContext::resolve_function](../../crates/mithril-control/src/store/graph/native.rs) skips a pair only when both context and key are null
+  -> the resolver rejects a pair with only one null field
+  -> the resolver converts each valid context or acknowledgement through a native Arrow slice
+  -> [Projection::decode_rows](../../crates/araphor-analysis/src/graph/native/capture.rs) converts only the checked live event and resolved row
+
+The backtrace identifies the former candidate-context conversion at
+`native.rs:238`. The source converted the full nullable struct before its
+padding checks. Raw candidate and event arrays now reject null rows before
+conversion. The correction keeps source, key, value, revision, duplicate,
+and removed-row checks. Arrow slices share the existing buffers.
+
+The later [Graph input SQL](../../crates/araphor-data/src/analysis/graph_rows/store/input/resolved.sql)
+replaces the former query. An unmatched event now receives empty candidate
+and acknowledgement lists. The resolver keeps the same null checks.
+
+The diagnostic uses the unchanged test binary from `ae421299e` with
+`RUST_BACKTRACE=1`. The log is
+`/tmp/araphor-live-backtrace-20261103-resume-host.log`. The process was
+interrupted after the backtrace at 197.800930 s. This partial run proves
+the failure location. It does not prove a completed-workload duration.
+Source review and scoped formatting pass. The focused build of the two
+correction files passes in 165.815919 s. The build log is
+`/tmp/araphor-build-null-guard-20261103.log`. The unchanged live case clears
+the former panic but fails at the bulk-upload RPC gate in 211.526321 s.
+The log is `/tmp/araphor-live-null-guard-20261103.log`. Complete runtime
+qualification remains **Not done**.
+
+## In-memory Graph metadata callbacks on 2026-11-03
+
+[MetadataPort::read](../../crates/araphor-analysis/src/graph/native/node.rs) reads a Capture or Window port
+  -> [SourceSnapshot::read_context](../../crates/araphor-query/src/sources/rows.rs) checks the exact snapshot, task owner, permit, cancellation, and deadline
+  -> `SourceSnapshot::inline` retains the permit and worker tokens during the synchronous callback
+  -> the existing callback reads captured metadata and emits its Arrow batch
+  -> the existing memory owner accounts for the input and metadata
+  -> `SourceSnapshot::inline` checks cancellation and the deadline after the callback
+
+Control and Status reads retain blocking database execution. Blocking reads
+use the same context checks and retain the same lease in their worker.
+This change adds no query plan, cache, stored input, or new execution owner.
+Source review and the focused build pass. The build takes 233.106215 s.
+The combined run with grouped Graph staging is interrupted at 332.009710 s
+during bulk input. Four initial source checks pass in 16.141075 s,
+17.224624 s, 18.817237 s, and 21.019806 s. The bulk input path remains slow.
+This partial run proves no completed-workload speed factor. Logs are
+`/tmp/araphor-build-grouped-inline-retry-20261103.log` and
+`/tmp/araphor-live-grouped-inline-20261103.log`.
+
+## Grouped Graph publication on 2026-11-03
+
+[GraphRows::stage_managed](../../crates/araphor-data/src/analysis/graph_rows/publication.rs) stages the current Graph input
+  -> [GraphRows::canonical_contexts](../../crates/araphor-data/src/analysis/graph_rows/units.rs) checks each context key, version, typed value, and sensitivity once
+  -> [GraphRows::metadata_members](../../crates/araphor-data/src/analysis/graph_rows/history.rs) interns evidence and exact positions once
+  -> [GraphRows::apply_units](../../crates/araphor-data/src/analysis/graph_rows/units.rs) validates each detector input and groups its replacements by scope
+  -> [Contributions::apply](../../crates/araphor-data/src/analysis/graph_rows/store/contributions.rs) applies one scope-qualified membership difference
+  -> [StateRows](../../crates/araphor-data/src/analysis/graph_rows/store/contributions/state.rs) advances each scope through the same borrowed transaction
+  -> Data retains the authority, expected-base, progress, rollback, and commit checks
+
+Each detector result uses the same publication revision. The native stage
+and difference tables include scope ID. Empty reset scopes remain in the
+scope table. The owner checks actual insertion and closure totals before
+it returns per-scope work. Shared metadata references retain their additive
+rule. State anchors reuse only the checked native fact reference.
+
+The focused build passes. The combined live run above does not complete.
+The first Graph transaction work changes from 3.056601 s in the null-only
+run to 2.720714 s. These values exclude COMMIT and writer acquisition.
+This stage reduction does not establish the event-latency target.
+
+## Native window input and historical read bounds
+
+The latency plan records the earlier credential SQL. The current package
+Rust implementation supplies that support.
+
+[Credential support SQL](../plans/araphor-reactive-execution-latency.md) reads the existing `graph_window.window_ns`
+  -> [Detector::window_data](../../crates/araphor-analysis-builtins/src/graph/units.rs) supplies the same shared window value
+  -> [Final unit selection](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql) retains the dynamic Status sensitivity check
+
+[GraphRows::frozen_facts](../../crates/araphor-data/src/analysis/graph_rows/read.rs) validates the committed header and source
+  -> the reader checks cancellation for each requested record
+  -> the reader skips point queries beyond that header's exact last cursor
+  -> historical point queries retain their source, value, and duplicate checks
+
+This change adds no scan limit, cache, hash, or stored input. The unchanged
+incident case remains the performance workload. The focused build passes
+in 327.370464 s. The live run fails in 386.893326 s when client
+authentication expires during bulk work. Initial notifications take
+15.203800 s, 16.025288 s, 17.219505 s, and 24.075662 s. No nullable-struct
+panic occurs. Full runtime qualification remains **Not done**. Logs are
+`/tmp/araphor-build-window-pruning-20261103.log` and
+`/tmp/araphor-live-window-pruning-20261103.log`.
+
+## Native frozen record joins
+
+[GraphRows::metadata_prior](../../crates/araphor-data/src/analysis/graph_rows/publication.rs)
+reads old members for all touched metadata units with one native join.
+It preserves the previous row-shape and duplicate checks. The temporary
+unit table exists only inside the current Data transaction. The exact
+live run reduces the first bulk metadata stage from 0.749–0.986 s to
+0.189–0.238 s. The workload still fails at the Control transport timeout.
+
+[GraphRows::frozen_facts](../../crates/araphor-data/src/analysis/graph_rows/read.rs)
+now uses native joins for historical record units, facts, and proof
+references. Read this method with
+[AnalysisReadControl::run](../../crates/araphor-data/src/analysis/read.rs),
+which owns the reader transaction and rollback.
+
+A frozen record request enters the existing reader transaction
+  -> exact eligible record keys enter `graph_frozen_records` with checked ordinals
+  -> the unit join retains scope, historical cut, source, CPU, anchor, and duplicate checks
+  -> only validated units enter `graph_frozen_units`
+  -> fact and proof joins use checked ordinals to recover the original record
+  -> the existing context grant, canonical value, byte, revision, and provenance checks apply
+  -> both temporary tables are removed, including after partial creation or a query error
+  -> the original error takes precedence over cleanup errors
+  -> the reader transaction rolls back before the connection returns to the pool
+
+The empty request and legacy path without a stored restricted count retain
+their previous behavior. The query input is the exact requested set. No
+new cap, cache, archive, or serialization format is added. The implementer
+and reviewer agree on the direction and actual diff. The focused build
+passes in 277.813300 s. The exact live run fails in 342.751252 s when
+client authentication expires. Twelve bulk Graph publications complete,
+and all four sources reach cursor 1281. Full workload completion,
+millisecond latency, and the 100-times target remain **Not done**.
+
+## Frozen Graph snapshot reader
+
+Read [AnalysisStore::graph_frozen_facts](../../crates/araphor-data/src/analysis/graph.rs)
+with [AnalysisStore::frozen_reader](../../crates/araphor-data/src/analysis/connection.rs).
+Only this validated Graph metadata read uses the new method. It obtains
+the same reader permit, maintenance lease, pooled connection, and native
+read transaction. All store, schema, recovery, source, captured-cut,
+context, and proof checks remain.
+
+[Source extraction](../../crates/araphor-data/src/analysis/extraction.rs)
+projects pending journal records before it captures the SQL revision.
+[Managed publication](../../crates/araphor-data/src/analysis/managed/commit.rs)
+also projects them before it commits Graph rows. Frozen metadata does not
+read raw records or files. It therefore does not need projection of later
+durable journal arrivals. The general reader projection gate and raw
+fsync path are unchanged. The actual diff has reviewer approval. The build
+passes in 276.121812 s. The exact live case fails in 359.858935 s at the
+Control transport timeout. It reaches cursor 1025 on all four sources.
+Header-only callbacks still take up to 7.198205 s. This result does not
+prove a clear latency improvement. Full qualification remains **Not done**.
+
+The next diagnostic adds two debug events in the same frozen-read owners.
+`frozen_read_timing` measures reader acquisition, captured-owner checks,
+frozen query work, and the complete snapshot. `frozen_query_timing`
+measures header, unit, fact, context, and proof work. Empty requests emit
+the header event. Query phase time excludes temporary-table cleanup;
+the outer frozen time includes it. Snapshot time also includes transaction
+rollback. These intervals are nested. The events carry identifiers and
+counts, with no record or context payloads. Behavior is unchanged. The
+focused build and named live run remain **Not done**.
+
+## Native package admission reuse
+
+[ManagedExecution::packages](../../crates/araphor-data/src/analysis/managed/execution.rs) checks the exact instance, store, schema, recovery epoch, revision, and rebuild state
+  -> [VerifiedPackages::seed](../../crates/araphor-data/src/analysis/context/provenance.rs) supplies prior native root proofs without prior transaction flags
+  -> the transaction reads current package rows and compares their complete stored values
+  -> a mismatch takes the existing decode and native admission path
+  -> [NativePackageContext::check_bundle](../../crates/araphor-data/src/package/provenance.rs) checks the root, digest, selected package, export, and output
+  -> [Managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs) promotes used roots and exact active-manifest roots after the metadata commit succeeds
+
+The existing execution owner accounts for the stored row buffers and native
+bundle data. Clear or recovery mismatch prevents reuse. The change adds no
+store-wide package cache, change hash, serialization format, or durable
+input. Two provenance tests and three retained-execution tests pass. The
+focused live build passes in 307.855314 s. The unchanged live run fails in
+396.060782 s at the bulk RPC timeout. Warm expiry verification takes
+approximately 0.088 to 0.136 s. Full-workload qualification and the
+performance target remain **Not done**. The run log is
+`/tmp/araphor-live-admission-proof-20261103.log`.
+
+An empty managed commit retains proofs for active package images in the
+same tenant. Removed images and foreign tenants do not retain unused
+proofs. The next transaction still reads and compares all stored package
+rows. Transaction flags are cleared. Two provenance checks and three
+execution checks pass in 40.700816 s. The log is
+`/tmp/araphor-empty-proof-checks-20261103.log`.
+
+[Graph row timing](../../crates/araphor-data/src/analysis/progress/graph.rs)
+records separate context, preparation, stage, result, publication, edge,
+reference, and completion intervals. These timers do not change write
+order or transaction ownership. Live qualification remains **Not done**.
+
+## Earlier credential support query
+
+The package Rust implementation now supplies causal support. The latency
+plan records the earlier SQL query and its measurements below.
+
+[The production credential query](../plans/araphor-reactive-execution-latency.md) selects each root and its optional credential reads
+  -> one candidate stage removes duplicate trigger matches
+  -> optional authority and channel joins retain the root position and original read time
+  -> native `UNNEST` emits the root, read, authority, and channel IDs
+  -> [Unit selection](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql) removes support duplicates and retains policy references and sensitivity
+
+The join chain removes repeated candidate subqueries. It retains roots
+without matching reads and the existing task, process, principal, socket,
+position, and time tests. It does not add an authority-to-channel time
+bound or an authority-time ceiling at the root. No query cache or new
+executor is added. Build, focused SQL verification, and live qualification
+remain **Not done**.
+
+The [credential SQL regression](../../crates/araphor-analysis/src/graph/tests/binding/credential.rs)
+passes. It executes the production descriptor query on native encoded
+inputs and uses the production SDK normalization before Unit decoding.
+It checks optional matches, duplicate triggers, zero task cookies, the
+original read-time window, and authority time after the root time. The
+six corrected Graph database fixtures also pass. Live qualification of
+this SQL change remains **Not done**.
+
+The combined build with the batched edge lookup passes in 283.806963 s.
+The unchanged live case fails in 348.557070 s when client authentication
+expires during bulk processing. Four initial notifications take 14.256900 s,
+15.463520 s, 16.687549 s, and 19.025972 s. Each initial check records 242
+native source reads. No bulk Graph publication completes. The log is
+`/tmp/araphor-live-linear-credential-edge-20261103.log`. This result does
+not qualify the full workload or the performance target.
+
+## Batched edge value lookup
+
+[RelationshipRows::intern](../../crates/araphor-data/src/analysis/graph_rows/store/relationships.rs) retains the existing subject, evidence, property, and value-key checks
+  -> it stages each unique requested edge key once
+  -> one native DuckDB join reads the matching stored rows
+  -> `check_value` compares each stored key with its typed columns
+  -> the reader rejects zero IDs and duplicate stored keys before it assigns input ordinals
+  -> the existing allocator and Arrow append path write missing values
+
+The temporary table is removed after success or error. Property interning
+is unchanged. Six native value tests and 19 contribution tests pass. The
+tests retain duplicate input order, history, corruption rejection, rollback,
+reopen, and same-writer retry checks. The log is
+`/tmp/araphor-graph-batched-edge-checks-20261103.log`. Full live qualification
+remains **Not done**.
+
 ## Latest qualification at handoff
 
 The latest focused build passes in 191.591930 s. The unchanged live case
@@ -269,9 +1992,12 @@ fails at the unchanged 90.146 s first-notification gate and finishes in
 
 ## Graph support fact join on 2026-11-03
 
+This section records the earlier SQL join. The current package Rust
+implementation supplies causal support.
+
 [Unit selection SQL](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql)
 selects the changed Graph units
-  -> [credential support SQL](../../crates/araphor-analysis-builtins/src/graph/units/credential.sql) selects causal support without a fact-key join on each record relation
+  -> [credential support SQL](../plans/araphor-reactive-execution-latency.md) selects causal support without a fact-key join on each record relation
   -> [the support aggregate](../../crates/araphor-analysis-builtins/src/graph/units/selection.sql) joins the grouped fact keys once at their actual use
   -> [the native planner](../../crates/araphor-query/src/planner/subscription.rs) plans the resulting SQL with DataFusion
 
@@ -325,8 +2051,8 @@ the earlier sections. Those sections do not qualify the new Replay path.
   -> [PackageExec::change_inputs](../../crates/araphor-query/src/definition/physical/changes.rs) Query binds the committed base and current target to the prepared native difference plans
   -> [PackageExec::evaluate](../../crates/araphor-query/src/definition/physical.rs) package physical execution receives changed units and their current lookup rows
   -> [GraphRows::stage_managed](../../crates/araphor-data/src/analysis/graph_rows/publication.rs) Data checks each producer base and validates current unit support
-  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph replaces the changed unit members in Data's transaction
-  -> [StateRows::current](../../crates/araphor-graph/src/contributions/state.rs) Graph selects the current package state from active unit members
+  -> [Contributions::apply](../../crates/araphor-data/src/analysis/graph_rows/store/contributions.rs) Graph replaces the changed unit members in Data's transaction
+  -> [StateRows::current](../../crates/araphor-data/src/analysis/graph_rows/store/contributions/state.rs) Graph selects the current package state from active unit members
   -> [AnalysisStore::retain_managed](../../crates/araphor-data/src/analysis/managed/execution.rs) Data prepares retained state from checked live inputs, targets, and output
   -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits output changes, saved state, progress, and replay references
   -> [ManagedExecution::promote](../../crates/araphor-data/src/analysis/managed/execution.rs) Data replaces retained state after the commit succeeds
@@ -605,13 +2331,13 @@ revision. Snapshot and unpaired support inputs keep row-based identity.
 
 [UnitBatch::new](../../crates/araphor-data/src/analysis/graph_rows/units.rs) Data validates one contribution for each changed unit
   -> [GraphRows::apply_units](../../crates/araphor-data/src/analysis/graph_rows/units.rs) Data interns the changed native values and their current evidence
-  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph closes removed or changed intervals before it opens replacement intervals
-  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph updates logical counts from touched-key presence changes
+  -> [Contributions::apply](../../crates/araphor-data/src/analysis/graph_rows/store/contributions.rs) Graph closes removed or changed intervals before it opens replacement intervals
+  -> [Contributions::apply](../../crates/araphor-data/src/analysis/graph_rows/store/contributions.rs) Graph updates logical counts from touched-key presence changes
   -> [ProducerChanges::resolve_metadata](../../crates/araphor-data/src/analysis/graph_rows/publication.rs) Data uses the same derived state for result metadata and publication
   -> [AnalysisStore::commit_managed_projection](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits the existing transaction
 
 [GraphRows::write_metadata](../../crates/araphor-data/src/analysis/graph_rows/history.rs) Data prepares the result metadata contribution
-  -> [Contributions::apply](../../crates/araphor-graph/src/contributions.rs) Graph uses the same member comparison and interval writer
+  -> [Contributions::apply](../../crates/araphor-data/src/analysis/graph_rows/store/contributions.rs) Graph uses the same member comparison and interval writer
 
 Data supplies one batch for each scope and version. Graph opens no store and
 commits no transaction. The member history includes an interned event
@@ -620,14 +2346,14 @@ members. An omitted unit remains unchanged. Shared logical members survive
 removal of one owner. Equal replacements preserve their intervals. A reset
 replaces the scope's active members. It does not remove historical values.
 
-[SubjectRows](../../crates/araphor-graph/src/subjects.rs),
-[RelationshipRows](../../crates/araphor-graph/src/relationships.rs), and
-[FindingRows](../../crates/araphor-graph/src/findings.rs) own native value
+[SubjectRows](../../crates/araphor-data/src/analysis/graph_rows/store/subjects.rs),
+[RelationshipRows](../../crates/araphor-data/src/analysis/graph_rows/store/relationships.rs), and
+[FindingRows](../../crates/araphor-data/src/analysis/graph_rows/store/findings.rs) own native value
 schema, interning, and decoding. Data retains source, context, package, and
 result authorization. Existing DataFusion table providers read the selected
 historical cut. No query planner or second Graph store is added.
 
-[StateRows](../../crates/araphor-graph/src/contributions/state.rs) stores the
+[StateRows](../../crates/araphor-data/src/analysis/graph_rows/store/contributions/state.rs) stores the
 existing typed package state as a unit member. Process and credential state
 use native record identity order. Kubernetes state uses context key order.
 Source position proves provenance; it does not select the summary. The
@@ -640,8 +2366,8 @@ values, logical counts, and the selected state.
 [GraphRows::call_scope](../../crates/araphor-data/src/analysis/graph_rows/history.rs)
 checks the exact source, instance, call, package, image, and producer version.
 The result-to-producer-cut relation still selects historical Graphs. The
-[Graph owner tests](../../crates/araphor-graph/src/contributions/tests.rs),
-[state tests](../../crates/araphor-graph/src/contributions/state/tests.rs), and
+[Graph owner tests](../../crates/araphor-data/src/analysis/graph_rows/store/contributions/tests.rs),
+[state tests](../../crates/araphor-data/src/analysis/graph_rows/store/contributions/state/tests.rs), and
 [Data unit tests](../../crates/araphor-data/src/analysis/graph_rows/units/tests.rs)
 exercise these rules. Current-source run results remain pending.
 

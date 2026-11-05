@@ -1,3 +1,4 @@
+use araphor_analysis_builtins::graph::{BranchExt};
 use super::*;
 
 pub struct Graph<'a> {
@@ -164,7 +165,7 @@ impl<'a> Graph<'a> {
     }
 
     pub fn supports(model: &sdk::Model) -> bool {
-        algorithm::Detector::supports_units(model)
+        araphor_analysis_builtins::graph::Detector::supports_units(model)
     }
 
     pub fn apply(mut self, call: &PackageCall, result: &CallResult) -> Result<Self> {

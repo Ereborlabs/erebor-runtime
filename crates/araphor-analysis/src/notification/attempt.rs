@@ -1,27 +1,27 @@
 use super::*;
 
-impl NotificationRouter {
+impl NotificationCycle<'_, '_> {
     pub(super) fn send(
-        &self,
+        &mut self,
         state: &mut NotificationObligationV1,
         effect: &mut Effect<'_>,
         kind: NotificationDeliveryKindV1,
         now: u64,
     ) -> Result<bool> {
-        let Some(number) = self.prepare_attempt(state, kind, now)? else {
+        let Some((number, subject)) = self.prepare_attempt(state, kind, now)? else {
             return Ok(false);
         };
-        let result = self.attempt_result(state, effect, kind, number, now)?;
+        let result = self.attempt_result(state, effect, kind, number, subject, now)?;
         self.complete_attempt(state, kind, number, result, now)?;
         Ok(true)
     }
 
     fn prepare_attempt(
-        &self,
+        &mut self,
         state: &mut NotificationObligationV1,
         kind: NotificationDeliveryKindV1,
         now: u64,
-    ) -> Result<Option<u64>> {
+    ) -> Result<Option<(u64, NotificationObligationV1)>> {
         let Some(reference) = state.delivery_route(kind) else {
             return Ok(None);
         };
@@ -40,14 +40,18 @@ impl NotificationRouter {
             .iter()
             .find(|attempt| attempt.kind == kind && attempt.result.is_none())
         {
-            return Ok(Some(pending.number));
+            return Ok(Some((
+                pending.number,
+                self.finding_version(state.key, pending.context_revision)?,
+            )));
         }
+        let subject = self.clone_subject(state)?;
         self.append_attempt(state, kind, &route.policy, now)
-            .map(Some)
+            .map(|number| Some((number, subject)))
     }
 
     fn retry_ready(
-        &self,
+        &mut self,
         state: &mut NotificationObligationV1,
         kind: NotificationDeliveryKindV1,
         policy: &NotificationPolicyV1,
@@ -68,7 +72,7 @@ impl NotificationRouter {
     }
 
     fn append_attempt(
-        &self,
+        &mut self,
         state: &mut NotificationObligationV1,
         kind: NotificationDeliveryKindV1,
         policy: &NotificationPolicyV1,
@@ -108,11 +112,12 @@ impl NotificationRouter {
     }
 
     fn attempt_result(
-        &self,
+        &mut self,
         state: &NotificationObligationV1,
         effect: &mut Effect<'_>,
         kind: NotificationDeliveryKindV1,
         number: u64,
+        subject: NotificationObligationV1,
         now: u64,
     ) -> Result<NotificationSinkResultV1> {
         let pending = state
@@ -127,7 +132,6 @@ impl NotificationRouter {
                 .build()
             })?;
         NotificationErrorCodeV1::Invalid.require(now >= pending.started_utc_ns, "delivery time")?;
-        let subject = self.finding_version(state.key, pending.context_revision)?;
         let route = self.captured_route(&subject, kind)?;
         if let Some(reason) = self.delivery_failure(state, &route, now) {
             return Ok(NotificationSinkResultV1::Failed { reason });
@@ -149,7 +153,7 @@ impl NotificationRouter {
     }
 
     fn complete_attempt(
-        &self,
+        &mut self,
         state: &mut NotificationObligationV1,
         kind: NotificationDeliveryKindV1,
         number: u64,

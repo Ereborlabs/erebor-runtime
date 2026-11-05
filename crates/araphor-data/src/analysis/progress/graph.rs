@@ -12,7 +12,7 @@ use crate::analysis::graph::{GraphCommit, GraphManifest, GraphRequestMeta};
 use crate::analysis::graph_rows::{CanonicalGraph, GraphRows, GraphWrite};
 use crate::analysis::PackageResultRefV1;
 use crate::{
-    AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisReadControl, GraphFactV1, ManagedCommit,
+    AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisReadControl, GraphFactV1,
     ManagedDestination, ManagedGraphOperation, ManagedReceipt, PackageErrorCodeV1 as Code, Result,
 };
 
@@ -20,6 +20,7 @@ use crate::{
 use crate::GraphSnapshotV1;
 
 struct GraphResultWrite {
+    evidence_count: Option<usize>,
     receipt: AnalysisResultReceiptV1,
     reference: PackageResultRefV1,
     relations: Vec<&'static str>,
@@ -123,145 +124,79 @@ impl AnalysisStore {
 
     pub fn commit_managed_graph(
         &self,
-        managed: &ManagedCommit<'_>,
+        prepared: crate::PreparedManagedCommit<'_>,
         packet: Option<GraphCommit>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<(ManagedReceipt, Option<AnalysisResultReceiptV1>)> {
+        let managed = prepared.input();
         let spec = &managed.attempt.instance().spec;
         let ManagedDestination::Graph {
             source,
-            calls,
-            operation,
+            operation: ManagedGraphOperation::Evaluate,
             ..
         } = &spec.destination
         else {
-            return Err(Code::Invalid.error("managed Graph destination"));
+            return Err(Code::Invalid.error("managed source publication destination"));
         };
-        let Some(packet) = packet else {
-            if !managed.returns.is_empty()
-                || managed
-                    .selected
-                    .batches
-                    .iter()
-                    .any(|batch| batch.num_rows() != 0)
-            {
-                return Err(Code::Invalid.error("managed Graph empty result"));
-            }
-            let (receipt, pins) = self.commit_managed_projection(
-                managed,
-                |_, _, _, _, _| Ok((Vec::new(), None, Default::default())),
-                check,
-            )?;
-            erebor_telemetry::debug!(stage="graph_commit",instance_id=%spec.id,
-                cut_revision=managed.attempt.captured_revision(),publication_revision=receipt.commit_revision,
-                coverage_revision=0u64,
-                graph_revision=0u64,prior_graph_result_id="",graph_result_id="",
-                staged_support_rows=0u64,inserted_rows=0u64,closed_rows=0u64,pin_rows=pins,
-                metadata_inserted_rows=0u64,metadata_closed_rows=0u64,
-                detector_inserted_rows=0u64,detector_closed_rows=0u64,
-                "Graph commit completed");
-            return Ok((receipt, None));
-        };
-        if packet.request.scope.identity != *source
-            || packet.request.created_utc_ns != managed.attempt.request().time_utc_ns
-            || calls
-                .iter()
-                .copied()
-                .ne(managed.returns.iter().map(|returned| returned.call))
-            || packet.expire != (*operation == ManagedGraphOperation::Expire)
-        {
-            return Err(Code::Invalid.error("managed Graph capture"));
+        let selection = managed
+            .attempt
+            .source_frame()
+            .map(|frame| frame.input_selection())
+            .transpose()?
+            .flatten();
+        if packet.is_some() != selection.is_some() {
+            return Err(Code::Incomplete.error("managed source selection receipt"));
         }
-        self.check_graph_commit(&packet.request, &packet.metadata, packet.advance)?;
-        if packet.expire && (packet.advance || !packet.request.witnesses.is_empty()) {
-            return Err(Code::Invalid.error("managed Graph expiry"));
-        }
-        let mut graph_receipt = None;
-        let mut graph_work = (0, 0, 0);
-        let mut graph_pins = 0;
-        let mut metadata_rows = (0, 0);
+        let mut source_receipt = None;
+        let mut source_work = (0u64, 0u64);
+        let mut graph_work = (0u64, 0u64, 0u64);
+        let mut coverage = 0u64;
+        let mut previous = String::new();
         let (receipt,pins) = self.commit_managed_projection(
-            managed,
-            |transaction, revision, publication, witnesses, verified| {
-                let producers: Vec<_> = publication
-                    .results
-                    .iter()
-                    .map(|(call, result)| (*call, result.clone()))
-                    .collect();
-                let previous = packet
-                    .metadata
-                    .previous_result_id
-                    .as_deref()
-                    .map(|id| {
-                        transaction
-                            .query_row(
-                                "SELECT commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ? AND processor_id = ?",
-                                params![source.tenant_id.as_slice(), id, crate::GRAPH_PROCESSOR],
-                                |row| row.get::<_, u64>(0),
-                            )
-                            .optional()
-                            .context(AnalysisDatabaseSnafu {
-                                operation: "read previous Graph result",
-                            })?
-                            .map(|commit_revision| PackageResultRefV1 {
-                                result_id: id.to_owned(),
-                                commit_revision,
-                            })
-                            .ok_or_else(|| Code::Missing.error("previous Graph result"))
-                    })
-                    .transpose()?;
-                let graph_write = if packet.expire {
-                    GraphWrite::Expiry(previous.as_ref().ok_or_else(|| {
-                        Code::Invalid.error("managed Graph expiry base")
-                    })?)
-                } else {
-                    GraphWrite::Managed {
-                        commit: managed,
-                        producers: &producers,
-                        removed: &packet.removed,
-                        record_proofs: &packet.record_proofs,
-                    }
+            prepared,
+            |transaction, revision, publication, _, _, work, prepared_source| {
+                graph_work = work;
+                let Some(mut prepared_source) = prepared_source else {
+                    return Ok((Vec::new(),None,Default::default(),None));
                 };
-                let notice = if managed.attempt.follows_graph() {
-                    managed.attempt.captured_revision()
-                } else {
-                    revision
-                };
-                let write = self.graph_result_rows(
-                    transaction,
-                    &packet.request,
-                    &packet.metadata,
-                    &packet.contexts,
-                    &packet.proofs,
-                    &packet.sources,
-                    packet.advance,
-                    managed.attempt.follows_graph(),
-                    revision,
-                    notice,
-                    graph_write,
-                    Some(witnesses),
-                    Some(managed.attempt.contexts()),
-                    Some(verified),
-                )?;
-                graph_work=write.work;
-                graph_pins=write.pin_rows;
-                metadata_rows=write.metadata_rows;
-                graph_receipt = Some(write.receipt);
-                Ok((write.relations, Some(write.reference), write.root_cursors))
+                let roots=std::mem::take(&mut prepared_source.roots);
+                coverage=prepared_source.coverage;
+                let (published, metadata) = super::super::managed::SourcePublication::publish(
+                    transaction, managed, publication, revision, prepared_source)?;
+                let selection=selection.as_ref().ok_or_else(|| Code::Incomplete.error("managed source selection receipt"))?;
+                source_work = metadata;
+                previous = selection.base.as_ref().map_or_else(String::new,|base| base.result_id.clone());
+                let advanced = transaction.execute(
+                    "INSERT INTO processor_versions
+                     SELECT processor_id,method_version,tenant_id,stream_key,class,
+                        greatest(consumed_cursor,?),resume_floor,?,?,start_cursor,
+                        greatest(required_floor,?),retired,retirement_id,retirement_reason,
+                        retirement_cursor,retirement_revision,?,?
+                     FROM processor_progress WHERE processor_id=? AND method_version=? AND tenant_id=? AND stream_key=?",
+                    params![published.last,coverage,managed.attempt.captured_revision(),published.last,
+                        published.reference.result_id,revision,crate::GRAPH_PROCESSOR,
+                        crate::GRAPH_SCHEMA_VERSION,source.tenant_id.as_slice(),source.key()],
+                ).context(AnalysisDatabaseSnafu { operation:"advance native source publication" })?;
+                if advanced != 1 { return Err(Code::Conflict.error("native source processor head")); }
+                source_receipt = Some(AnalysisResultReceiptV1 { commit_revision:revision,consumed_cursor:published.last });
+                Ok((vec!["managed_source_publications","managed_source_members","managed_source_gaps","processor_versions"],
+                    Some(published.reference),roots,selection.prefix.clone()))
             },
             check,
         )?;
+        let inserted = u128::from(graph_work.1) + u128::from(source_work.0);
+        let closed = u128::from(graph_work.2) + u128::from(source_work.1);
         erebor_telemetry::debug!(stage="graph_commit",instance_id=%spec.id,
             cut_revision=managed.attempt.captured_revision(),publication_revision=receipt.commit_revision,
-            coverage_revision=packet.request.coverage_revision,
+            coverage_revision=coverage,
             graph_revision=receipt.graph.as_ref().map_or(0,|graph|graph.commit_revision),
-            prior_graph_result_id=%packet.metadata.previous_result_id.as_deref().unwrap_or(""),
+            prior_graph_result_id=%previous,
             graph_result_id=%receipt.graph.as_ref().map_or("",|graph|graph.result_id.as_str()),
-            staged_support_rows=graph_work.0,inserted_rows=graph_work.1,closed_rows=graph_work.2,
-            metadata_inserted_rows=metadata_rows.0,metadata_closed_rows=metadata_rows.1,
-            detector_inserted_rows=graph_work.1-metadata_rows.0,detector_closed_rows=graph_work.2-metadata_rows.1,
-            pin_rows=pins.saturating_add(graph_pins),"Graph commit completed");
-        Ok((receipt, graph_receipt))
+            staged_support_rows=graph_work.0,inserted_rows=inserted,closed_rows=closed,
+            metadata_inserted_rows=source_work.0,metadata_closed_rows=source_work.1,
+            detector_inserted_rows=graph_work.1,detector_closed_rows=graph_work.2,
+            pin_rows=pins,"Graph commit completed");
+        Ok((receipt, source_receipt))
     }
 
     pub(super) fn check_graph_commit(
@@ -335,6 +270,7 @@ impl AnalysisStore {
         validated_contexts: Option<&[AnalysisContextRefV1]>,
         verified: Option<&mut VerifiedPackages>,
     ) -> Result<GraphResultWrite> {
+        let started = std::time::Instant::now();
         let mut own_verified = VerifiedPackages::default();
         let verified = verified.unwrap_or(&mut own_verified);
         if !input.scope.valid()
@@ -427,7 +363,16 @@ impl AnalysisStore {
         expected_keys.extend(global_proofs.iter().map(|proof| &proof.key));
         expected_keys.extend(record_proofs.iter().map(|(_, proof)| &proof.key));
         let mut context_write = None;
-        let inserted = self.context_rows(transaction, contexts, false, None, &mut context_write)?;
+        let context_started = std::time::Instant::now();
+        let inserted = self.context_rows(
+            transaction,
+            contexts,
+            false,
+            None,
+            &mut context_write,
+            verified,
+        )?;
+        let context_written = std::time::Instant::now();
         let verified_contexts = inserted
             .iter()
             .map(|reference| (reference.key.clone(), reference.commit_revision))
@@ -530,6 +475,7 @@ impl AnalysisStore {
                 return AnalysisConflictSnafu.fail();
             }
             return Ok(GraphResultWrite {
+                evidence_count: None,
                 receipt: AnalysisResultReceiptV1 {
                     commit_revision: previous_revision,
                     consumed_cursor: input.consumed_cursor,
@@ -682,6 +628,7 @@ impl AnalysisStore {
                         Some(revision),
                     )?;
                     return Ok(GraphResultWrite {
+                        evidence_count: None,
                         receipt: AnalysisResultReceiptV1 {
                             commit_revision: prior_revision,
                             consumed_cursor: input.consumed_cursor,
@@ -701,6 +648,7 @@ impl AnalysisStore {
                 }
             }
         }
+        let stage_started = std::time::Instant::now();
         let mut staged = match &graph_write {
             GraphWrite::Managed { .. } => Some(GraphRows::stage_managed(
                 self,
@@ -712,6 +660,7 @@ impl AnalysisStore {
             )?),
             GraphWrite::Direct(_) | GraphWrite::Expiry(_) => None,
         };
+        let staged_at = std::time::Instant::now();
         let resolved = staged
             .as_ref()
             .map(|changes| {
@@ -757,6 +706,10 @@ impl AnalysisStore {
                         relations.push("result_notices");
                     }
                     return Ok(GraphResultWrite {
+                        evidence_count: changes
+                            .previous
+                            .as_ref()
+                            .map(|header| header.evidence_count),
                         receipt: AnalysisResultReceiptV1 {
                             commit_revision: prior.commit_revision,
                             consumed_cursor: input.consumed_cursor,
@@ -810,10 +763,20 @@ impl AnalysisStore {
             .as_mut()
             .map(|changes| std::mem::take(&mut changes.root_cursors))
             .unwrap_or_default();
-        let (body, work, metadata_rows) = match staged {
-            Some(changes) => GraphRows::publish(transaction, &reference, metadata, changes)?,
-            None => GraphRows::commit(transaction, &reference, metadata, graph_write)?,
+        let publish_started = std::time::Instant::now();
+        let (body, work, metadata_rows, evidence_count) = match staged {
+            Some(changes) => {
+                let (body, work, rows, count) =
+                    GraphRows::publish(transaction, &reference, metadata, changes)?;
+                (body, work, rows, Some(count))
+            }
+            None => {
+                let (body, work, rows) =
+                    GraphRows::commit(transaction, &reference, metadata, graph_write)?;
+                (body, work, rows, None)
+            }
         };
+        let published = std::time::Instant::now();
         if let Some(producers) = managed_producers.as_deref() {
             Self::insert_managed_edges(transaction, tenant, &input.result_id, producers)?;
         }
@@ -825,6 +788,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "store Graph result header",
             })?;
+        let references_started = std::time::Instant::now();
         let pin_rows = Self::insert_references(
             transaction,
             &input.result_id,
@@ -832,6 +796,7 @@ impl AnalysisStore {
             &witness_segments,
             &references,
         )?;
+        let referenced = std::time::Instant::now();
         if advance {
             transaction
                 .execute(
@@ -883,7 +848,24 @@ impl AnalysisStore {
         if !input.witnesses.is_empty() {
             relations.push("evidence_refs");
         }
+        erebor_telemetry::debug!(
+            stage = "graph_rows_timing",
+            publication_revision = revision,
+            validate_s = context_started.duration_since(started).as_secs_f64(),
+            contexts_s = context_written
+                .duration_since(context_started)
+                .as_secs_f64(),
+            prepare_s = stage_started.duration_since(context_written).as_secs_f64(),
+            stage_s = staged_at.duration_since(stage_started).as_secs_f64(),
+            result_s = publish_started.duration_since(staged_at).as_secs_f64(),
+            publish_s = published.duration_since(publish_started).as_secs_f64(),
+            edges_s = references_started.duration_since(published).as_secs_f64(),
+            references_s = referenced.duration_since(references_started).as_secs_f64(),
+            completion_s = referenced.elapsed().as_secs_f64(),
+            "Graph publication row work completed"
+        );
         Ok(GraphResultWrite {
+            evidence_count,
             receipt: AnalysisResultReceiptV1 {
                 commit_revision: revision,
                 consumed_cursor: input.consumed_cursor,

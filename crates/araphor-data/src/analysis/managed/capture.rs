@@ -187,7 +187,15 @@ impl AnalysisStore {
             };
             states.insert(*call, reference);
         }
+        let graph = request
+            .execution
+            .as_ref()
+            .and_then(|owner| owner.graph_input(request, &output.meta));
+        if let Some(proof) = &graph {
+            output.charge(proof.metadata_bytes())?;
+        }
         Ok(ManagedCapture {
+            graph,
             execution: request.execution.clone(),
             contract: Capture {
                 tenant: instance.spec.tenant,

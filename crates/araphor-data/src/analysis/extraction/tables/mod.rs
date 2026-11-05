@@ -39,7 +39,6 @@ pub(super) struct Capture<'a> {
     latest: BTreeMap<([u8; 16], String), (u64, usize)>,
     trace_recipes: BTreeMap<[u8; 16], TraceRecipeV1>,
     mutable_discovery: bool,
-    graph_expiry: bool,
     received_min: Option<u64>,
     next_change: Option<u64>,
     graph_manifests: std::collections::BTreeSet<String>,
@@ -58,7 +57,6 @@ impl<'a> Capture<'a> {
             latest: BTreeMap::new(),
             trace_recipes: BTreeMap::new(),
             mutable_discovery: false,
-            graph_expiry: false,
             received_min: None,
             next_change: None,
             graph_manifests: Default::default(),
@@ -92,40 +90,10 @@ impl<'a> Capture<'a> {
         self.read.projected("graph_manifest").is_some() && !self.graph_manifests.contains(result_id)
     }
 
-    pub(super) fn graph_expiry(&mut self, captured: &crate::ManagedCapture) -> Result<()> {
-        let instance = captured.instance();
-        let crate::ManagedDestination::Graph {
-            source,
-            calls,
-            operation: crate::ManagedGraphOperation::Expire,
-            ..
-        } = &instance.spec.destination
-        else {
-            return Ok(());
-        };
-        if !calls.is_empty()
-            || !instance.spec.manifest.calls.is_empty()
-            || self.scope.tenant_id != source.tenant_id
-            || self.scope.sources.as_slice() != std::slice::from_ref(source)
-            || !self.read.projects_field("graph_manifest", "metadata")
-            || !self.read.projects_field("graph_manifest", "context_refs")
-            || !self.read.requests.contains_key("graph_state")
-            || self
-                .read
-                .requests
-                .keys()
-                .any(|name| !matches!(name.as_str(), "graph_manifest" | "graph_state"))
-        {
-            return Err(crate::PackageErrorCodeV1::Invalid.error("historical Graph expiry capture"));
-        }
-        self.graph_expiry = true;
-        Ok(())
-    }
-
     fn table(
         &mut self,
         name: &str,
-        names: &'static [&'static str],
+        names: &[&str],
         budget: &mut ReadBudget<'_>,
     ) -> Result<&mut Table> {
         if !self.tables.contains_key(name) {
@@ -156,7 +124,12 @@ impl<'a> Capture<'a> {
             .tables
             .get_mut(name)
             .ok_or_else(|| invalid("the native table builder is absent"))?;
-        if !std::ptr::eq(table.names, names) && table.names != names {
+        if !table
+            .names
+            .iter()
+            .map(String::as_str)
+            .eq(names.iter().copied())
+        {
             return Err(invalid("the native table field mapping changed"));
         }
         Ok(table)

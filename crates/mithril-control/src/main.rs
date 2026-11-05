@@ -42,7 +42,6 @@ async fn run() -> mithril_control::Result<()> {
         data_error,
         instances,
         discovery,
-        graph,
         discovery_error,
     } = config.into_parts()?;
     info!(
@@ -67,7 +66,6 @@ async fn run() -> mithril_control::Result<()> {
             let host = owner.serve(analysis_stop.clone(), u64::MAX);
             let sources = async move {
                 let discovery_stop = analysis_stop.clone();
-                let graph_stop = analysis_stop.clone();
                 let discovery = async move {
                     if let Some(owner) = discovery {
                         if let Err(error) = owner.run(discovery_stop).await {
@@ -75,14 +73,7 @@ async fn run() -> mithril_control::Result<()> {
                         }
                     }
                 };
-                let graph = async move {
-                    if let Some(owner) = graph {
-                        if let Err(error) = owner.run(graph_stop).await {
-                            warn!("graph source subscriptions stopped with an error", error = %error);
-                        }
-                    }
-                };
-                tokio::join!(discovery, graph);
+                discovery.await;
                 let mut stop = analysis_stop;
                 while !*stop.borrow_and_update() {
                     if stop.changed().await.is_err() {

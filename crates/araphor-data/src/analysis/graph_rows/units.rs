@@ -2,6 +2,9 @@ use super::basis::CallBasis;
 use super::*;
 use crate::{AnalysisContractSnafu, GraphValidate as _};
 
+pub(super) type ContextValues =
+    BTreeMap<crate::AnalysisContextKeyV1, (crate::GraphFactV1, ContextSensitivityV1, u64, u64)>;
+
 pub(super) struct UnitEffects {
     pub touched: BTreeSet<(u8, Vec<u8>)>,
     pub state: GraphPackageStateV1,
@@ -10,7 +13,7 @@ pub(super) struct UnitEffects {
 }
 
 struct UnitBatch {
-    units: BTreeMap<crate::DiscoveryRecordIdV1, Unit>,
+    units: BTreeMap<crate::DiscoveryRecordIdV1, FrozenUnit>,
     before: BTreeSet<crate::DiscoveryRecordIdV1>,
     records: Vec<Observation>,
     contexts: BTreeMap<crate::AnalysisContextKeyV1, u64>,
@@ -23,10 +26,21 @@ struct UnitBatch {
     default: GraphPackageStateV1,
 }
 
+struct FrozenUnit {
+    unit: Unit,
+    support: Vec<araphor_analysis_builtins::graph::UnitSupport>,
+}
+
+impl std::ops::Deref for FrozenUnit {
+    type Target = Unit;
+    fn deref(&self) -> &Unit {
+        &self.unit
+    }
+}
+
 impl UnitBatch {
     fn new(
-        writer: &Connection,
-        root: &std::path::Path,
+        canonical: &ContextValues,
         metadata: &GraphManifest,
         returned: &crate::ManagedReturn<'_>,
         pin: &crate::ManagedCall,
@@ -72,6 +86,39 @@ impl UnitBatch {
         let records = Observation::decode(input("records")?).context(AnalysisContractSnafu)?;
         let facts = Fact::decode(input("facts")?).context(AnalysisContractSnafu)?;
         let basis = CallBasis::new(evaluation)?;
+        let mut contributions =
+            Contribution::decode(dataset("contributions")?).context(AnalysisContractSnafu)?;
+        let subjects =
+            SubjectChange::decode(dataset("subjects")?).context(AnalysisContractSnafu)?;
+        let edges =
+            RelationshipChange::decode(dataset("relationships")?).context(AnalysisContractSnafu)?;
+        let changes = FindingChange::decode(dataset("findings")?).context(AnalysisContractSnafu)?;
+        let owners = Contribution::validate(
+            units.values(),
+            &records,
+            &facts,
+            &contributions,
+            [subjects.len(), edges.len(), changes.len()],
+        )
+        .context(AnalysisContractSnafu)?;
+        let mut units = units
+            .into_iter()
+            .map(|(id, unit)| {
+                (
+                    id,
+                    FrozenUnit {
+                        unit,
+                        support: Vec::new(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for contribution in &mut contributions {
+            let unit = units
+                .get_mut(&contribution.record)
+                .ok_or_else(|| GraphRows::invalid("graph contribution root"))?;
+            unit.support = std::mem::take(&mut contribution.support);
+        }
         let mut expected = BTreeMap::new();
         let mut expected_facts = BTreeMap::new();
         let window = metadata
@@ -121,9 +168,11 @@ impl UnitBatch {
                 }
             }
         }
-        if records.len() != expected.len()
+        if expected.keys().any(|id| !basis.records.contains_key(id))
             || records.iter().any(|record| {
-                expected.get(&record.id) != Some(&record.proof_quality)
+                expected
+                    .get(&record.id)
+                    .is_some_and(|proof| proof != &record.proof_quality)
                     || metadata
                         .input_positions
                         .binary_search_by(|(id, _)| id.cmp(&record.id))
@@ -135,34 +184,19 @@ impl UnitBatch {
                                     != record.position.ordinal
                         })
             })
-            || facts.len() != expected_facts.len()
-            || facts.iter().any(|fact| {
-                records
-                    .get(fact.record as usize)
-                    .is_none_or(|record| expected_facts.get(&fact.key) != Some(&record.id))
+            || expected_facts.iter().any(|(key, id)| {
+                basis
+                    .facts
+                    .get(key)
+                    .is_none_or(|(_, fact)| &fact.record != id)
             })
         {
             return Err(GraphRows::invalid("graph unit lookup union"));
         }
-        let contexts = Self::contexts(writer, root, metadata, &facts, &records)?;
+        let contexts = Self::contexts(canonical, metadata, &facts, &records)?;
         if units.values().any(|unit| unit.restricted != restricted) {
             return Err(GraphRows::invalid("graph unit sensitivity"));
         }
-        let contributions =
-            Contribution::decode(dataset("contributions")?).context(AnalysisContractSnafu)?;
-        let subjects =
-            SubjectChange::decode(dataset("subjects")?).context(AnalysisContractSnafu)?;
-        let edges =
-            RelationshipChange::decode(dataset("relationships")?).context(AnalysisContractSnafu)?;
-        let changes = FindingChange::decode(dataset("findings")?).context(AnalysisContractSnafu)?;
-        let owners = Contribution::validate(
-            units.values(),
-            &records,
-            &facts,
-            &contributions,
-            [subjects.len(), edges.len(), changes.len()],
-        )
-        .context(AnalysisContractSnafu)?;
         let states =
             GraphPackageStateV1::decode(dataset("state")?).context(AnalysisContractSnafu)?;
         let [default] = states.as_slice() else {
@@ -185,7 +219,7 @@ impl UnitBatch {
 
     fn anchor(&self, owner: usize, anchor: &Anchor) -> Result<()> {
         let unit = &self.units[&self.contributions[owner].record];
-        self.basis.local_for(unit, anchor).map(|_| ())
+        self.basis.local_for(&unit.support, anchor).map(|_| ())
     }
 
     fn evidence(&self, owner: usize, records: &[crate::DiscoveryRecordIdV1]) -> Result<()> {
@@ -201,125 +235,110 @@ impl UnitBatch {
 
     fn dependencies(
         &self,
-        writer: &Connection,
         records: &BTreeMap<crate::DiscoveryRecordIdV1, u64>,
-    ) -> Result<BTreeMap<crate::DiscoveryRecordIdV1, Vec<araphor_graph::Member>>> {
-        writer.execute_batch("CREATE TEMP TABLE graph_dependency_records(evidence_id UBIGINT,member_key BLOB,commit_revision UBIGINT,ordinal UINTEGER)")
-            .context(AnalysisDatabaseSnafu { operation: "stage graph unit dependencies" })?;
-        let result = (|| {
-            {
-                let mut appender =
-                    writer
-                        .appender("graph_dependency_records")
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "open graph record dependencies",
-                        })?;
-                for record in &self.records {
-                    appender
-                        .append_row(params![
-                            records[&record.id],
-                            GraphRows::member_key(&record.id)?,
-                            record.position.commit_revision,
-                            record.position.ordinal
-                        ])
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "append graph record dependency",
-                        })?;
-                }
-                appender.flush().context(AnalysisDatabaseSnafu {
-                    operation: "flush graph record dependencies",
-                })?;
-            }
-            writer.execute_batch("INSERT INTO graph_position_values SELECT nextval('graph_position_values_seq'),stage.evidence_id,stage.commit_revision,stage.ordinal FROM graph_dependency_records stage WHERE NOT EXISTS(SELECT 1 FROM graph_position_values saved WHERE saved.evidence_id=stage.evidence_id AND saved.commit_revision=stage.commit_revision AND saved.ordinal=stage.ordinal)")
-                .context(AnalysisDatabaseSnafu { operation: "intern graph dependency values" })?;
-            let mut statement = writer.prepare("SELECT stage.evidence_id,stage.member_key,saved.value_ref FROM graph_dependency_records stage JOIN graph_position_values saved USING(evidence_id,commit_revision,ordinal)")
-                .context(AnalysisDatabaseSnafu { operation: "prepare graph record dependencies" })?;
-            let members = statement
-                .query_map([], |row| {
-                    let record = row.get::<_, u64>(0)?;
-                    Ok((
-                        record,
-                        araphor_graph::Member {
-                            kind: MemberKind::UnitRecord as u8,
-                            key: row.get(1)?,
-                            value: row.get(2)?,
+        positions: &BTreeMap<u64, u64>,
+    ) -> Result<BTreeMap<crate::DiscoveryRecordIdV1, Vec<crate::analysis::graph_rows::store::Member>>>
+    {
+        self.units
+            .values()
+            .map(|unit| {
+                let mut dependencies = Vec::new();
+                for support in &unit.support {
+                    let record = *records
+                        .get(&support.record)
+                        .ok_or_else(|| GraphRows::invalid("graph record dependency count"))?;
+                    dependencies.push(crate::analysis::graph_rows::store::Member {
+                        kind: MemberKind::UnitRecord as u8,
+                        key: GraphRows::member_key(&support.record)?,
+                        value: *positions
+                            .get(&record)
+                            .ok_or_else(|| GraphRows::invalid("graph record dependency count"))?,
+                        record: Some(record),
+                        fact: None,
+                        reason: None,
+                        ordinal: 0,
+                    });
+                    for key in &support.facts {
+                        dependencies.push(crate::analysis::graph_rows::store::Member {
+                            kind: MemberKind::UnitFact as u8,
+                            key: super::super::context::version_key(key)?,
+                            value: *self.contexts.get(key).ok_or_else(|| {
+                                GraphRows::invalid("graph unit context reference")
+                            })?,
                             record: Some(record),
                             fact: None,
                             reason: None,
                             ordinal: 0,
-                        },
-                    ))
-                })
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read graph record dependencies",
-                })?
-                .collect::<duckdb::Result<BTreeMap<_, _>>>()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "decode graph record dependencies",
-                })?;
-            drop(statement);
-            if members.len() != self.records.len() {
-                return Err(GraphRows::invalid("graph record dependency count"));
-            }
-            self.units
-                .values()
-                .map(|unit| {
-                    let mut dependencies = Vec::new();
-                    for support in &unit.support {
-                        dependencies.push(members[&records[&support.record]].clone());
-                        for key in &support.facts {
-                            dependencies.push(araphor_graph::Member {
-                                kind: MemberKind::UnitFact as u8,
-                                key: super::super::context::version_key(key)?,
-                                value: self.contexts[key],
-                                record: Some(records[&support.record]),
-                                fact: None,
-                                reason: None,
-                                ordinal: 0,
-                            });
-                        }
+                        });
                     }
-                    Ok((unit.record.clone(), dependencies))
-                })
-                .collect()
-        })();
-        let cleanup = writer
-            .execute_batch("DROP TABLE graph_dependency_records")
-            .context(AnalysisDatabaseSnafu {
-                operation: "release graph unit dependencies",
-            });
-        let result = result?;
-        cleanup?;
-        Ok(result)
+                }
+                Ok((unit.record.clone(), dependencies))
+            })
+            .collect()
     }
 
     fn contexts(
-        writer: &Connection,
-        root: &std::path::Path,
+        canonical: &ContextValues,
         metadata: &GraphManifest,
         facts: &[Fact],
         records: &[Observation],
     ) -> Result<BTreeMap<crate::AnalysisContextKeyV1, u64>> {
+        let wanted = facts
+            .iter()
+            .map(|fact| (&fact.key, fact))
+            .collect::<BTreeMap<_, _>>();
+        if wanted.len() != facts.len()
+            || canonical.len() != metadata.input_manifest.context.len()
+            || metadata
+                .input_manifest
+                .context
+                .iter()
+                .any(|key| !canonical.contains_key(key))
+            || wanted
+                .keys()
+                .any(|key| metadata.input_manifest.context.binary_search(key).is_err())
+        {
+            return Err(GraphRows::invalid("graph unit context keys"));
+        }
+        let mut seen = BTreeMap::new();
+        for (&key, fact) in &wanted {
+            let (value, sensitivity, committed, _) = canonical
+                .get(key)
+                .ok_or_else(|| GraphRows::invalid("graph unit context reference"))?;
+            let record = records
+                .get(fact.record as usize)
+                .ok_or_else(|| GraphRows::invalid("graph unit fact record"))?;
+            if seen.insert(key.clone(), *committed).is_some()
+                || value.record_id != record.id
+                || value.value != fact.value
+                || *sensitivity != fact.sensitivity
+                || !metadata.facts.contains(value)
+            {
+                return Err(GraphRows::invalid("graph unit fact value"));
+            }
+        }
+        Ok(seen)
+    }
+}
+
+impl GraphRows {
+    pub(super) fn canonical_contexts(
+        writer: &Connection,
+        root: &std::path::Path,
+        metadata: &GraphManifest,
+    ) -> Result<ContextValues> {
         if metadata.input_manifest.context.is_empty() {
-            if !facts.is_empty() {
-                return Err(GraphRows::invalid("graph unit context keys"));
+            if !metadata.facts.is_empty() {
+                return Err(Self::invalid("graph metadata context count"));
             }
             return Ok(BTreeMap::new());
         }
-        writer.execute_batch("CREATE TEMP TABLE graph_unit_contexts(tenant_id BLOB,owner_id VARCHAR,entity_key BLOB,lifetime_key BLOB,owner_revision UBIGINT,wanted BOOLEAN)")
+        if metadata.input_manifest.context.len() != metadata.facts.len() {
+            return Err(Self::invalid("graph metadata context count"));
+        }
+        writer.execute_batch("CREATE TEMP TABLE graph_unit_contexts(list_ordinal UBIGINT,tenant_id BLOB,owner_id VARCHAR,entity_key BLOB,lifetime_key BLOB,owner_revision UBIGINT,version_key BLOB)")
             .context(AnalysisDatabaseSnafu {operation:"stage graph unit contexts"})?;
         let result = (|| {
-            let wanted = facts
-                .iter()
-                .map(|fact| (&fact.key, fact))
-                .collect::<BTreeMap<_, _>>();
-            if wanted.len() != facts.len()
-                || wanted
-                    .keys()
-                    .any(|key| metadata.input_manifest.context.binary_search(key).is_err())
-            {
-                return Err(GraphRows::invalid("graph unit context keys"));
-            }
             {
                 let mut appender =
                     writer
@@ -327,15 +346,16 @@ impl UnitBatch {
                         .context(AnalysisDatabaseSnafu {
                             operation: "open graph unit contexts",
                         })?;
-                for key in &metadata.input_manifest.context {
+                for (ordinal, key) in metadata.input_manifest.context.iter().enumerate() {
                     appender
                         .append_row(params![
+                            ordinal as u64,
                             key.tenant_id.as_slice(),
                             key.owner_id,
                             key.entity_key,
                             key.lifetime_key,
                             key.owner_revision,
-                            wanted.contains_key(key)
+                            super::super::context::version_key(key)?
                         ])
                         .context(AnalysisDatabaseSnafu {
                             operation: "append graph unit context",
@@ -345,12 +365,13 @@ impl UnitBatch {
                     operation: "flush graph unit contexts",
                 })?;
             }
-            let missing:bool=writer.query_row("SELECT EXISTS(SELECT 1 FROM graph_unit_contexts wanted LEFT JOIN context_versions context USING(tenant_id,owner_id,entity_key,lifetime_key,owner_revision) WHERE context.commit_revision IS NULL)",[],|row|row.get(0)).context(AnalysisDatabaseSnafu {operation:"check graph unit context references"})?;
-            if missing {
-                return Err(GraphRows::invalid("graph unit context reference"));
-            }
-            let mut statement=writer.prepare("SELECT context.tenant_id,context.owner_id,context.entity_key,context.lifetime_key,context.owner_revision,context.valid_from_utc_ns,context.valid_until_utc_ns,context.sensitivity,context.body,context.commit_revision FROM graph_unit_contexts wanted LEFT JOIN context_versions context USING(tenant_id,owner_id,entity_key,lifetime_key,owner_revision) WHERE wanted.wanted")
-                .context(AnalysisDatabaseSnafu {operation:"prepare graph unit context values"})?;
+            let mut statement=writer.prepare(
+                "SELECT context.tenant_id,context.owner_id,context.entity_key,context.lifetime_key,
+                    context.owner_revision,context.valid_from_utc_ns,context.valid_until_utc_ns,
+                    context.sensitivity,context.body,context.commit_revision,wanted.list_ordinal
+                 FROM graph_unit_contexts wanted LEFT JOIN context_versions context
+                    USING(tenant_id,owner_id,entity_key,lifetime_key,owner_revision,version_key)"
+            ).context(AnalysisDatabaseSnafu {operation:"prepare graph unit context values"})?;
             let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
                 operation: "read graph unit context values",
             })?;
@@ -358,80 +379,156 @@ impl UnitBatch {
             while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
                 operation: "advance graph unit context values",
             })? {
+                let committed = Self::column::<Option<u64>>(row, 9)?
+                    .ok_or_else(|| Self::invalid("graph unit context reference"))?;
                 let key = crate::AnalysisContextKeyV1 {
-                    tenant_id: GraphRows::column::<Vec<u8>>(row, 0)?
+                    tenant_id: Self::column::<Vec<u8>>(row, 0)?
                         .try_into()
-                        .map_err(|_| GraphRows::invalid("graph unit context tenant"))?,
-                    owner_id: GraphRows::column(row, 1)?,
-                    entity_key: GraphRows::column(row, 2)?,
-                    lifetime_key: GraphRows::column(row, 3)?,
-                    owner_revision: GraphRows::column(row, 4)?,
+                        .map_err(|_| Self::invalid("graph unit context tenant"))?,
+                    owner_id: Self::column(row, 1)?,
+                    entity_key: Self::column(row, 2)?,
+                    lifetime_key: Self::column(row, 3)?,
+                    owner_revision: Self::column(row, 4)?,
                 };
                 let (context, committed) = super::super::AnalysisStore::decode_context_row(
                     root,
                     key.clone(),
                     (
-                        GraphRows::column(row, 5)?,
-                        GraphRows::column(row, 6)?,
-                        GraphRows::column(row, 7)?,
-                        GraphRows::column(row, 8)?,
-                        GraphRows::column(row, 9)?,
+                        Self::column(row, 5)?,
+                        Self::column(row, 6)?,
+                        Self::column(row, 7)?,
+                        Self::column(row, 8)?,
+                        committed,
                     ),
                 )?;
                 let value = crate::GraphFactV1::try_from(&context)?;
-                let fact = wanted
-                    .get(&key)
-                    .ok_or_else(|| GraphRows::invalid("graph unit context value"))?;
-                let record = records
-                    .get(fact.record as usize)
-                    .ok_or_else(|| GraphRows::invalid("graph unit fact record"))?;
-                if seen.insert(key, committed).is_some()
-                    || value.record_id != record.id
-                    || value.value != fact.value
-                    || context.sensitivity != fact.sensitivity
-                    || !metadata.facts.contains(&value)
+                let ordinal: usize = Self::column(row, 10)?;
+                if metadata.input_manifest.context.get(ordinal) != Some(&key)
+                    || metadata.facts.get(ordinal) != Some(&value)
+                    || seen
+                        .insert(key, (value, context.sensitivity, committed))
+                        .is_some()
                 {
-                    return Err(GraphRows::invalid("graph unit fact value"));
+                    return Err(Self::invalid("graph metadata canonical fact"));
                 }
             }
-            if seen.len() != wanted.len() {
-                return Err(GraphRows::invalid("graph unit context count"));
+            drop(rows);
+            drop(statement);
+            if seen.len() != metadata.input_manifest.context.len() {
+                return Err(Self::invalid("graph unit context count"));
             }
-            Ok(seen)
+            let bodies = seen
+                .values()
+                .map(|(fact, _, _)| Self::encode_value(fact))
+                .collect::<Result<Vec<_>>>()?;
+            let ids = Self::intern_values(
+                writer,
+                metadata.scope.identity.tenant_id,
+                MemberKind::Fact,
+                bodies,
+            )?;
+            Ok(seen
+                .into_iter()
+                .zip(ids)
+                .map(|((key, (fact, sensitivity, committed)), id)| {
+                    (key, (fact, sensitivity, committed, id))
+                })
+                .collect())
         })();
         let cleanup = writer
             .execute_batch("DROP TABLE graph_unit_contexts")
             .context(AnalysisDatabaseSnafu {
                 operation: "release graph unit contexts",
             });
-        let result = result?;
+        let values = result?;
         cleanup?;
-        Ok(result)
+        Ok(values)
     }
-}
 
-impl GraphRows {
     #[expect(
         clippy::too_many_arguments,
         reason = "The unit write keeps its producer cut and checked metadata sensitivity."
     )]
     pub(super) fn apply_units(
         writer: &Connection,
-        root: &std::path::Path,
+        revision: u64,
+        metadata: &GraphManifest,
+        calls: &[(u64, &crate::ManagedReturn<'_>, &crate::ManagedCall)],
+        restricted: bool,
+        records: &mut BTreeMap<crate::DiscoveryRecordIdV1, u64>,
+        positions: &BTreeMap<u64, u64>,
+        canonical: &ContextValues,
+    ) -> Result<BTreeMap<u64, UnitEffects>> {
+        let mut batches = BTreeMap::new();
+        let mut effects = BTreeMap::new();
+        for &(scope, returned, pin) in calls {
+            let (effect, reset, replacements) = Self::stage_units(
+                writer, scope, revision, metadata, returned, pin, restricted, records, positions,
+                canonical,
+            )?;
+            if batches.insert(scope, (reset, replacements)).is_some()
+                || effects.insert(scope, effect).is_some()
+            {
+                return Err(Self::invalid("graph duplicate producer scope"));
+            }
+        }
+        let staged = std::time::Instant::now();
+        let mut work =
+            crate::analysis::graph_rows::store::Contributions::apply(writer, revision, &batches)?;
+        let applied = std::time::Instant::now();
+        for (&scope, effect) in &mut effects {
+            let rows = work
+                .remove(&scope)
+                .ok_or_else(|| Self::invalid("graph producer work"))?;
+            effect.work.0 = effect.work.0.saturating_add(rows.0);
+            effect.work.1 = rows.1;
+            effect.work.2 = rows.2;
+            effect.state = crate::analysis::graph_rows::store::StateRows::finish(
+                writer,
+                scope,
+                revision,
+                &effect.state,
+            )?;
+        }
+        erebor_telemetry::debug!(
+            stage = "graph_grouped_timing",
+            publication_revision = revision,
+            scopes = calls.len(),
+            apply_s = applied.duration_since(staged).as_secs_f64(),
+            finish_s = applied.elapsed().as_secs_f64(),
+            "Graph grouped membership work completed"
+        );
+        Ok(effects)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The unit write keeps its producer cut and checked metadata sensitivity."
+    )]
+    fn stage_units(
+        writer: &Connection,
         scope: u64,
         revision: u64,
         metadata: &GraphManifest,
         returned: &crate::ManagedReturn<'_>,
         pin: &crate::ManagedCall,
         restricted: bool,
-    ) -> Result<UnitEffects> {
+        records: &mut BTreeMap<crate::DiscoveryRecordIdV1, u64>,
+        positions: &BTreeMap<u64, u64>,
+        canonical: &ContextValues,
+    ) -> Result<(
+        UnitEffects,
+        bool,
+        Vec<crate::analysis::graph_rows::store::Replacement>,
+    )> {
+        let started = std::time::Instant::now();
         let reset = sdk::ChangeInputs {
             reset: "reset".into(),
             ports: Vec::new(),
         }
         .is_reset(returned.evaluation)
         .context(AnalysisContractSnafu)?;
-        let batch = UnitBatch::new(writer, root, metadata, returned, pin, reset, restricted)?;
+        let batch = UnitBatch::new(canonical, metadata, returned, pin, reset, restricted)?;
         let mut reasons = BTreeMap::new();
         for reason in &returned.output.reasons {
             if reason.output.dataset != "findings"
@@ -469,7 +566,7 @@ impl GraphRows {
                 return Err(Self::invalid("graph edge value"));
             }
         }
-        let positions = batch
+        let record_indices = batch
             .basis
             .records
             .iter()
@@ -486,7 +583,7 @@ impl GraphRows {
             let reason = FindingReasonV1::from_output(
                 &row.package_id,
                 &row.local(record, context),
-                &positions,
+                &record_indices,
                 reasons
                     .get(&(index as u64))
                     .ok_or_else(|| Self::invalid("graph finding reason"))?,
@@ -519,7 +616,18 @@ impl GraphRows {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let records = Self::intern_records(writer, &metadata.scope.identity, &record_keys)?;
+        let missing = record_keys
+            .iter()
+            .filter(|key| !records.contains_key(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            records.extend(Self::intern_records(
+                writer,
+                &metadata.scope.identity,
+                &missing,
+            )?);
+        }
         let keys = batch
             .subjects
             .iter()
@@ -532,7 +640,9 @@ impl GraphRows {
             )
             .chain(findings.iter().map(|row| row.subject_id.clone()))
             .collect::<Vec<_>>();
+        let checked = std::time::Instant::now();
         let subjects = Self::intern_subjects(writer, &keys)?;
+        let subjects_at = std::time::Instant::now();
         let mut unique_edges = BTreeMap::new();
         let mut edge_rows = Vec::with_capacity(batch.edges.len());
         for edge in &batch.edges {
@@ -556,7 +666,8 @@ impl GraphRows {
             .into_iter()
             .map(|(_, value)| value)
             .collect::<Vec<_>>();
-        let edges = Self::intern_edges(writer, &subjects, &records, &edge_values)?;
+        let edges = Self::intern_edges(writer, &subjects, records, &edge_values)?;
+        let edges_at = std::time::Instant::now();
         let mut unique_findings = BTreeMap::new();
         for finding in &findings {
             if unique_findings
@@ -567,7 +678,8 @@ impl GraphRows {
             }
         }
         let finding_values = unique_findings.into_values().collect::<Vec<_>>();
-        let finding_ids = Self::intern_findings(writer, &subjects, &records, &finding_values)?;
+        let finding_ids = Self::intern_findings(writer, &subjects, records, &finding_values)?;
+        let findings_at = std::time::Instant::now();
         let state_rows = batch
             .contributions
             .iter()
@@ -591,43 +703,33 @@ impl GraphRows {
                 Ok((row, state, anchor))
             })
             .collect::<Result<Vec<_>>>()?;
-        let bodies = state_rows
-            .iter()
-            .filter_map(|(_, _, anchor)| *anchor)
-            .map(|anchor| {
-                Self::encode_value(&crate::GraphFactV1 {
-                    record_id: anchor.record.clone(),
-                    value: anchor.value.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let mut facts = Self::intern_values(
-            writer,
-            metadata.scope.identity.tenant_id,
-            MemberKind::Fact,
-            bodies,
-        )?
-        .into_iter();
         let states = state_rows
             .into_iter()
             .map(|(row, state, anchor)| {
                 let anchor = anchor
                     .map(|anchor| -> Result<_> {
-                        let fact = facts
-                            .next()
+                        let fact = canonical
+                            .get(&anchor.key)
+                            .filter(|(value, sensitivity, _, _)| {
+                                value.record_id == anchor.record
+                                    && value.value == anchor.value
+                                    && *sensitivity == anchor.sensitivity
+                            })
+                            .map(|(_, _, _, reference)| *reference)
                             .ok_or_else(|| Self::invalid("graph unit state fact reference"))?;
                         Ok((anchor, fact))
                     })
                     .transpose()?;
-                Ok(araphor_graph::StateValue {
+                Ok(crate::analysis::graph_rows::store::StateValue {
                     unit: records[&row.record],
                     state: state.clone(),
                     anchor,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let state_ids = araphor_graph::StateRows::intern(writer, &states)?;
-        let mut dependencies = batch.dependencies(writer, &records)?;
+        let state_ids = crate::analysis::graph_rows::store::StateRows::intern(writer, &states)?;
+        let states_at = std::time::Instant::now();
+        let mut dependencies = batch.dependencies(records, positions)?;
         let mut members = batch
             .contributions
             .iter()
@@ -638,7 +740,7 @@ impl GraphRows {
             })
             .collect::<Result<Vec<_>>>()?;
         for (index, row) in batch.subjects.iter().enumerate() {
-            members[batch.owners[0][index]].push(araphor_graph::Member {
+            members[batch.owners[0][index]].push(crate::analysis::graph_rows::store::Member {
                 kind: 2,
                 key: Self::member_key(&row.key)?,
                 value: subjects[&row.key],
@@ -654,7 +756,7 @@ impl GraphRows {
             });
         }
         for (index, row) in batch.edges.iter().enumerate() {
-            members[batch.owners[1][index]].push(araphor_graph::Member {
+            members[batch.owners[1][index]].push(crate::analysis::graph_rows::store::Member {
                 kind: 3,
                 key: Self::member_key(&row.key)?,
                 value: edges[edge_rows[index]],
@@ -670,7 +772,7 @@ impl GraphRows {
             });
         }
         for (index, row) in batch.changes.iter().enumerate() {
-            members[batch.owners[2][index]].push(araphor_graph::Member {
+            members[batch.owners[2][index]].push(crate::analysis::graph_rows::store::Member {
                 kind: 4,
                 key: Self::member_key(&row.finding_id)?,
                 value: finding_ids[&row.finding_id],
@@ -688,7 +790,7 @@ impl GraphRows {
         let mut state_index = 0;
         for (index, row) in batch.contributions.iter().enumerate() {
             if row.state.is_some() {
-                members[index].push(araphor_graph::Member {
+                members[index].push(crate::analysis::graph_rows::store::Member {
                     kind: 8,
                     key: Self::member_key(&row.record)?,
                     value: state_ids[state_index],
@@ -709,7 +811,7 @@ impl GraphRows {
             .map(|record| {
                 (
                     records[record],
-                    araphor_graph::Replacement {
+                    crate::analysis::graph_rows::store::Replacement {
                         unit: Some(records[record]),
                         members: Vec::new(),
                     },
@@ -720,7 +822,7 @@ impl GraphRows {
             let unit = records[&row.record];
             replacements.insert(
                 unit,
-                araphor_graph::Replacement {
+                crate::analysis::graph_rows::store::Replacement {
                     unit: Some(unit),
                     members,
                 },
@@ -794,16 +896,12 @@ impl GraphRows {
                 return Err(Self::invalid("graph member identity collision"));
             }
         }
-        let mut work =
-            araphor_graph::Contributions::apply(writer, scope, revision, &replacements, reset)?;
-        work.0 = work.0.saturating_add(
-            (record_keys.len()
-                + batch.records.len()
-                + metadata.input_manifest.context.len()
-                + replacements.len()
-                + subjects.len()) as u64,
+        let work = (
+            (missing.len() + replacements.len() + subjects.len()) as u64,
+            0,
+            0,
         );
-        let state = araphor_graph::StateRows::finish(writer, scope, revision, &batch.default)?;
+        let state = batch.default;
         let root_cursors = batch
             .units
             .keys()
@@ -815,12 +913,29 @@ impl GraphRows {
                 }))
             })
             .unwrap_or_default();
-        Ok(UnitEffects {
-            touched,
-            state,
-            work,
-            root_cursors,
-        })
+        erebor_telemetry::debug!(
+            stage = "graph_unit_stage_timing",
+            scope_id = scope,
+            publication_revision = revision,
+            unit_count = batch.contributions.len(),
+            check_s = checked.duration_since(started).as_secs_f64(),
+            subjects_s = subjects_at.duration_since(checked).as_secs_f64(),
+            edges_s = edges_at.duration_since(subjects_at).as_secs_f64(),
+            findings_s = findings_at.duration_since(edges_at).as_secs_f64(),
+            states_s = states_at.duration_since(findings_at).as_secs_f64(),
+            rest_s = states_at.elapsed().as_secs_f64(),
+            "Graph unit staging work completed"
+        );
+        Ok((
+            UnitEffects {
+                touched,
+                state,
+                work,
+                root_cursors,
+            },
+            reset,
+            replacements,
+        ))
     }
 }
 

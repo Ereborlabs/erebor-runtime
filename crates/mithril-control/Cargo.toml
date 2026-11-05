@@ -13,6 +13,7 @@ test-fixtures = ["araphor-data/test-fixtures", "araphor-query/test-fixtures", "a
 araphor-discovery-definition = { path = "../araphor-discovery-definition" }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
+araphor-graph = { path = "../araphor-graph", features = ["store"] }
 araphor-data = { path = "../araphor-data" }
 araphor-query = { path = "../araphor-query" }
 araphor-analysis = { path = "../araphor-analysis" }
@@ -59,6 +60,8 @@ uuid.workspace = true
 zerocopy.workspace = true
 
 [build-dependencies]
+araphor-discovery-definition = { path = "../araphor-discovery-definition" }
+serde_json.workspace = true
 tonic-build.workspace = true
 
 [dev-dependencies]

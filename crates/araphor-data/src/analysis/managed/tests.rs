@@ -48,12 +48,25 @@ fn call_context(result: &crate::InstanceResultV1) -> TestResult<&crate::ResultCo
     Ok(context)
 }
 
+struct TestBudget;
+
+impl ManagedBudget for TestBudget {
+    fn limit(&self)->usize { usize::MAX }
+    fn check(&self)->crate::Result<()> { Ok(()) }
+    fn reserve(&self,_bytes:usize)->crate::Result<Box<dyn std::any::Any+Send+Sync>> { Ok(Box::new(())) }
+}
+
 struct Fixture {
     instance: ManagedInstance,
     model: sdk::Model,
 }
 
 impl Fixture {
+    fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+        let prepared=store.prepare_managed(input)?;
+        store.commit_managed(prepared,check)
+    }
+
     fn receipt(
         store: &AnalysisStore,
         tenant: [u8; 16],
@@ -391,6 +404,8 @@ impl Fixture {
             .zip(outputs)
             .enumerate()
             .map(|(index, (evaluation, output))| ManagedReturn {
+                graph: None,
+                retained: None,
                 changes: None,
                 call: 10 + index as u64,
                 evaluation,
@@ -401,8 +416,10 @@ impl Fixture {
             name: "selected".into(),
             batches: outputs[0].datasets[0].batches.clone(),
         };
-        Ok(store.commit_managed(
+        Ok(Fixture::publish(&store,
             &ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
                 completed: true,
                 attempt,
                 now_utc_ns: 10,
@@ -816,12 +833,16 @@ fn managed_failure_is_atomic() -> TestResult {
     outputs[1].evidence[0].input.row = 0;
     let returns = [
         ManagedReturn {
+            graph: None,
+            retained: None,
             changes: None,
             call: 10,
             evaluation: &evaluations[0],
             output: &outputs[0],
         },
         ManagedReturn {
+            graph: None,
+            retained: None,
             changes: None,
             call: 11,
             evaluation: &evaluations[1],
@@ -833,6 +854,8 @@ fn managed_failure_is_atomic() -> TestResult {
         batches: outputs[0].datasets[0].batches.clone(),
     };
     let commit = ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
         completed: true,
         now_utc_ns: 10,
         attempt: &attempt,
@@ -842,7 +865,7 @@ fn managed_failure_is_atomic() -> TestResult {
     };
     let mut checked = 0;
     assert!(matches!(
-        store.commit_managed(&commit, || {
+        Fixture::publish(&store,&commit, || {
             checked += 1;
             crate::AnalysisReadDeniedSnafu.fail()
         }),
@@ -850,14 +873,13 @@ fn managed_failure_is_atomic() -> TestResult {
     ));
     assert_eq!(checked, 1);
     assert_eq!(store.meta()?, before);
-    let receipt = store.commit_managed(&commit, || {
+    let receipt = Fixture::publish(&store,&commit, || {
         checked += 1;
         Ok(())
     })?;
     assert_eq!(checked, 2);
     let after = store.meta()?;
-    assert!(store
-        .commit_managed(&commit, || {
+    assert!(Fixture::publish(&store,&commit, || {
             checked += 1;
             crate::AnalysisReadDeniedSnafu.fail()
         })
@@ -865,7 +887,7 @@ fn managed_failure_is_atomic() -> TestResult {
     assert_eq!(checked, 2);
     assert_eq!(store.meta()?, after);
     assert!(matches!(
-        store.commit_managed(&commit, || Ok(())),
+        Fixture::publish(&store,&commit, || Ok(())),
         Err(crate::Error::AnalysisConflict { .. })
     ));
     assert_eq!(
@@ -1145,6 +1167,8 @@ fn managed_sql_checks_authority() -> TestResult {
         batches: vec![Fixture::batch(&schema, 1)?],
     };
     let commit = ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
         completed: true,
         now_utc_ns: 10,
         attempt: &attempt,
@@ -1153,14 +1177,13 @@ fn managed_sql_checks_authority() -> TestResult {
         selected_schema: &schema,
     };
     let before = store.meta()?;
-    assert!(store
-        .commit_managed(&commit, || {
+    assert!(Fixture::publish(&store,&commit, || {
             checked += 1;
             crate::AnalysisReadDeniedSnafu.fail()
         })
         .is_err());
     assert_eq!(store.meta()?, before);
-    let receipt = store.commit_managed(&commit, || {
+    let receipt = Fixture::publish(&store,&commit, || {
         checked += 1;
         Ok(())
     })?;
@@ -1700,8 +1723,10 @@ fn managed_native_selected_roundtrip() -> TestResult {
             .state;
         let input = request(&format!("native-{index}"));
         let attempt = store.register_managed_attempt(&capture, &input, || Ok(()))?;
-        let receipt = store.commit_managed(
+        let receipt = Fixture::publish(&store,
             &ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
                 completed: true,
                 now_utc_ns: 10,
                 attempt: &attempt,
@@ -1914,12 +1939,16 @@ fn managed_witness_lifetime_check() -> TestResult {
     let outputs = [fixture.output(2)?, fixture.output(3)?];
     let returns = [
         ManagedReturn {
+            graph: None,
+            retained: None,
             changes: None,
             call: 10,
             evaluation: &evaluations[0],
             output: &outputs[0],
         },
         ManagedReturn {
+            graph: None,
+            retained: None,
             changes: None,
             call: 11,
             evaluation: &evaluations[1],
@@ -1931,6 +1960,8 @@ fn managed_witness_lifetime_check() -> TestResult {
         batches: outputs[0].datasets[0].batches.clone(),
     };
     let mut commit = ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
         completed: true,
         attempt: &attempt,
         now_utc_ns: 21,
@@ -1940,7 +1971,7 @@ fn managed_witness_lifetime_check() -> TestResult {
     };
     let before = store.meta()?;
     assert!(matches!(
-        store.commit_managed(&commit, || Ok(())),
+        Fixture::publish(&store,&commit, || Ok(())),
         Err(crate::Error::Package {
             code: crate::PackageErrorCodeV1::Incomplete,
             field: "managed witness lifetime",
@@ -1950,7 +1981,7 @@ fn managed_witness_lifetime_check() -> TestResult {
     assert_eq!(store.meta()?, before);
     commit.now_utc_ns = 20;
     assert!(matches!(
-        store.commit_managed(&commit, || Ok(())),
+        Fixture::publish(&store,&commit, || Ok(())),
         Err(crate::Error::Package {
             code: crate::PackageErrorCodeV1::Incomplete,
             field: "managed witness lifetime",
@@ -1959,8 +1990,7 @@ fn managed_witness_lifetime_check() -> TestResult {
     ));
     assert_eq!(store.meta()?, before);
     commit.now_utc_ns = 19;
-    assert!(store
-        .commit_managed(&commit, || crate::AnalysisReadDeniedSnafu.fail())
+    assert!(Fixture::publish(&store,&commit, || crate::AnalysisReadDeniedSnafu.fail())
         .is_err());
     assert_eq!(store.meta()?, before);
     let count: u64 = store.read_snapshot(|reader| {
@@ -1971,7 +2001,7 @@ fn managed_witness_lifetime_check() -> TestResult {
             })
     })?;
     assert_eq!(count, 0);
-    let receipt = store.commit_managed(&commit, || Ok(()))?;
+    let receipt = Fixture::publish(&store,&commit, || Ok(()))?;
     let count: u64 = store.read_snapshot(|reader| {
         reader
             .query_row("SELECT count(*) FROM evidence_refs", [], |row| row.get(0))

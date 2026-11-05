@@ -55,3 +55,6 @@ impl Drop for NotificationRouter {
         self.store.release_notification_owner();
     }
 }
+
+mod cycle;
+use cycle::NotificationCycle;

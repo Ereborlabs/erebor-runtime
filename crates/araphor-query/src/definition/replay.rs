@@ -26,6 +26,112 @@ impl PreparedDefinition {
     }
 }
 
+pub(super) struct BeforeReplay {
+    session: Session,
+    plans: BTreeMap<usize, Arc<dyn datafusion::physical_plan::ExecutionPlan>>,
+    historical: Arc<crate::sources::SourceSnapshot>,
+    permit: Arc<crate::execution::Permit>,
+    _memory: MemoryReservation,
+}
+
+impl BeforeReplay {
+    pub(super) async fn input(
+        &self,
+        execution: &physical::PackageExec,
+        slot: usize,
+        prior: &araphor_data::ManagedPrior,
+        current: &crate::sources::SourceSnapshot,
+    ) -> Result<sdk::Input> {
+        use crate::sources::SourceOrigin;
+
+        let session = &self.session;
+        session.control().check()?;
+        let invalid = || PackageErrorCodeV1::Invalid.error("historical change input");
+        let call = execution.logical_call();
+        let changes = call.changes.as_ref().ok_or_else(invalid)?;
+        let pair = changes
+            .ports
+            .iter()
+            .find(|pair| pair.before == slot)
+            .ok_or_else(invalid)?;
+        let port = call
+            .model()
+            .ok_or_else(invalid)?
+            .inputs
+            .get(slot)
+            .ok_or_else(invalid)?;
+        let revision = prior.context.inputs.get(pair.after).ok_or_else(invalid)?;
+        let coverage = prior
+            .context
+            .input_coverage
+            .get(pair.after)
+            .ok_or_else(invalid)?;
+        let physical = self.plans.get(&slot).ok_or_else(invalid)?;
+        let calls = session.calls.as_ref().ok_or_else(invalid)?;
+        let historical = self.historical.fork_before().context(SqlSnafu)?;
+        let result = async {
+            let physical = historical
+                .bind_before_keys(Arc::clone(physical), Some(calls))
+                .context(SqlSnafu)?;
+            for origin in Planner::sources(call.admitted.get(slot).ok_or_else(invalid)?)? {
+                if let SourceOrigin::Port(port) = origin {
+                    if changes.lookups.bindings.iter().any(|(id, _)| *id == port) {
+                        current.copy_port(port, &historical).context(SqlSnafu)?;
+                    }
+                }
+            }
+            let mut state = session.state()?;
+            state
+                .config_mut()
+                .set_extension(Arc::clone(session.control()));
+            state.config_mut().set_extension(Arc::clone(&self.permit));
+            state.config_mut().set_extension(Arc::clone(calls));
+            state.config_mut().set_extension(Arc::clone(&historical));
+            let mut replay = session.at(session.selection().clone(), historical.time_utc_ns());
+            replay.reference = None;
+            state.config_mut().set_extension(Arc::new(replay));
+            session.initialize_context(state.config_mut());
+            let memory = session.memory().reserve_input(0).context(SqlSnafu)?;
+            let batches = physical::PackageExec::collect_plan(
+                &physical,
+                &port.port.schema,
+                calls,
+                &state.task_ctx(),
+                &memory,
+                true,
+            )
+            .await
+            .context(SqlSnafu)?;
+            session
+                .check_read(&historical.snapshot().context(SqlSnafu)?)
+                .await?;
+            Ok(sdk::Input {
+                data: sdk::Dataset {
+                    name: port.port.name.clone(),
+                    batches,
+                },
+                revision: revision.clone(),
+                coverage: coverage.clone(),
+            })
+        }
+        .await;
+        historical.report_work();
+        result
+    }
+
+    pub(super) async fn finish(self, failed: bool) -> Result<()> {
+        if failed {
+            let _cancelled = self.session.control().cancel();
+        }
+        if let Some(calls) = &self.session.calls {
+            calls.finish().await;
+        }
+        self.historical.report_work();
+        self.session.control().check()?;
+        Ok(())
+    }
+}
+
 impl Session {
     async fn replay_owner(
         &self,
@@ -155,180 +261,158 @@ impl Session {
         .boxed()
     }
 
-    pub(crate) fn replay_before<'a>(
-        &'a self,
-        call: &'a PackageCall,
-        slot: usize,
-        prior: &'a araphor_data::ManagedPrior,
-        context: &'a Arc<datafusion::execution::TaskContext>,
-    ) -> BoxFuture<'a, Result<sdk::Input>> {
-        async move {
-            use crate::sources::{SourceOrigin, SourceSnapshot};
+    pub(super) async fn before_replay(
+        &self,
+        execution: &physical::PackageExec,
+        prior: &araphor_data::ManagedPrior,
+        context: &Arc<datafusion::execution::TaskContext>,
+    ) -> Result<BeforeReplay> {
+        use crate::sources::SourceSnapshot;
 
-            self.control().check()?;
-            let invalid = || PackageErrorCodeV1::Invalid.error("historical change input");
-            let changes = call.changes.as_ref().ok_or_else(invalid)?;
-            let pair = changes
-                .ports
-                .iter()
-                .find(|pair| pair.before == slot)
-                .ok_or_else(invalid)?;
-            let model = call.model().ok_or_else(invalid)?;
-            let port = model.inputs.get(slot).ok_or_else(invalid)?;
-            let revision = prior.context.inputs.get(pair.after).ok_or_else(invalid)?;
-            let coverage = prior
-                .context
-                .input_coverage
-                .get(pair.after)
-                .ok_or_else(invalid)?;
-            let source = context
-                .session_config()
-                .get_extension::<SourceSnapshot>()
-                .ok_or_else(invalid)?;
-            let snapshot = source.snapshot().context(SqlSnafu)?;
-            let instance = snapshot.managed().ok_or_else(invalid)?.instance().clone();
-            let id = call.id();
-            let now = snapshot.time_utc_ns();
-            let reference = self
-                .replay_owner(
-                    &instance,
-                    id,
-                    &PackageResultRefV1 {
-                        result_id: prior.result.clone(),
-                        commit_revision: prior.revision,
-                    },
-                    now,
-                )
-                .await?;
-            if reference.instance().spec.definition != instance.spec.definition
-                || reference.instance().spec.manifest.calls.get(&id)
-                    != instance.spec.manifest.calls.get(&id)
-            {
-                return Err(PackageErrorCodeV1::Conflict
-                    .error("historical change reference")
-                    .into());
-            }
-            let definition = self.replay_definition(&reference).await?;
-            let plan = call.admitted.get(slot).ok_or_else(invalid)?;
-            let request = reference.request();
-            let mut session = self.at(
-                reference
-                    .instance()
-                    .spec
-                    .destination
-                    .selection(&reference.instance().grant.selection)?,
-                request.time_utc_ns,
-            );
-            session.control = Arc::new(self.control().operation()?);
-            session.reference = Some(reference.clone());
-            session.definition = Some(Arc::new(definition));
-            session.calls = Some(session.call_context(Invocation {
-                id: request.id.clone(),
-                seed: request.seed,
-                time_utc_ns: Some(i64::try_from(request.time_utc_ns).map_err(|_| invalid())?),
-                ..Default::default()
-            }));
-            let calls = Arc::clone(session.calls.as_ref().ok_or_else(invalid)?);
-            let mut observed = None;
-            let result = async {
-                let permit = session.evaluation_permit()?;
-                let mut state = session.state()?;
-                state
-                    .config_mut()
-                    .set_extension(Arc::clone(session.control()));
-                state.config_mut().set_extension(Arc::clone(&permit));
-                state.config_mut().set_extension(Arc::clone(&calls));
-                let physical = session.physical(plan, &state).await?;
-                session.seed_before(&physical, id).await?;
-                let mut requests = session
-                    .definition
-                    .as_ref()
-                    .ok_or_else(invalid)?
-                    .sources()
-                    .clone();
-                let bounds = SourceSnapshot::requests(
-                    &mut requests,
-                    std::slice::from_ref(&physical),
-                    None,
-                    Some(&calls),
-                )
-                .context(SqlSnafu)?;
-                requests.retain(|_, columns| columns.is_some());
-                let limits = session.engine().limits();
-                let historical = SourceSnapshot::new(
-                    Arc::clone(session.engine().store()),
-                    session.selection().clone(),
-                    araphor_data::AnalysisExtractLimits {
-                        scan_bytes: limits.scan_bytes,
-                        input_bytes: limits.input_bytes,
-                        keys: limits.extract_keys,
-                        ..Default::default()
-                    },
-                    session.control().within(session.control().remaining()?)?,
-                    limits.extract_timeout,
-                    request.time_utc_ns,
-                    Arc::clone(session.memory()),
-                    None,
-                );
-                observed = Some(Arc::clone(&historical));
-                let old = Arc::clone(&historical);
-                let current = Arc::clone(&source);
-                let saved = reference.clone();
-                Engine::blocking(Arc::clone(session.control()), session.token()?, move || {
-                    old.capture_before(&saved, &current, &requests, bounds, id)
-                        .context(SqlSnafu)
-                })
-                .await?;
-                let physical = historical
-                    .bind_before_keys(physical, Some(&calls))
-                    .context(SqlSnafu)?;
-                for origin in Planner::sources(plan)? {
-                    if let SourceOrigin::Port(port) = origin {
-                        if changes.lookups.bindings.iter().any(|(id, _)| *id == port) {
-                            source.copy_port(port, &historical).context(SqlSnafu)?;
-                        }
-                    }
-                }
-                state.config_mut().set_extension(Arc::clone(&historical));
-                let mut replay = session.at(session.selection().clone(), request.time_utc_ns);
-                replay.reference = None;
-                state.config_mut().set_extension(Arc::new(replay));
-                session.initialize_context(state.config_mut());
-                let memory = session.memory().reserve_input(0).context(SqlSnafu)?;
-                let batches = physical::PackageExec::collect_plan(
-                    &physical,
-                    &port.port.schema,
-                    &calls,
-                    &state.task_ctx(),
-                    &memory,
-                    true,
-                )
-                .await
-                .context(SqlSnafu)?;
-                session
-                    .check_read(&historical.snapshot().context(SqlSnafu)?)
-                    .await?;
-                Ok(sdk::Input {
-                    data: sdk::Dataset {
-                        name: port.port.name.clone(),
-                        batches,
-                    },
-                    revision: revision.clone(),
-                    coverage: coverage.clone(),
-                })
-            }
-            .await;
-            if result.is_err() {
-                let _cancelled = session.control().cancel();
-            }
-            calls.finish().await;
-            if let Some(source) = observed {
-                source.report_work();
-            }
-            self.control().check()?;
-            result
+        self.control().check()?;
+        let invalid = || PackageErrorCodeV1::Invalid.error("historical change input");
+        let call = execution.logical_call();
+        let changes = call.changes.as_ref().ok_or_else(invalid)?;
+        let source = context
+            .session_config()
+            .get_extension::<SourceSnapshot>()
+            .ok_or_else(invalid)?;
+        let snapshot = source.snapshot().context(SqlSnafu)?;
+        let instance = snapshot.managed().ok_or_else(invalid)?.instance();
+        let id = call.id();
+        let reference = Arc::new(
+            self.replay_owner(
+                instance,
+                id,
+                &PackageResultRefV1 {
+                    result_id: prior.result.clone(),
+                    commit_revision: prior.revision,
+                },
+                snapshot.time_utc_ns(),
+            )
+            .await?,
+        );
+        if reference.instance().spec.definition != instance.spec.definition
+            || reference.instance().spec.manifest.calls.get(&id)
+                != instance.spec.manifest.calls.get(&id)
+        {
+            return Err(PackageErrorCodeV1::Conflict
+                .error("historical change reference")
+                .into());
         }
-        .boxed()
+        let definition = self.replay_definition(&reference).await?;
+        let request = reference.request();
+        let mut session = self.at(
+            reference
+                .instance()
+                .spec
+                .destination
+                .selection(&reference.instance().grant.selection)?,
+            request.time_utc_ns,
+        );
+        session.control = Arc::new(self.control().operation()?);
+        session.reference = Some(Arc::clone(&reference));
+        session.definition = Some(Arc::new(definition));
+        session.calls = Some(session.call_context(Invocation {
+            id: request.id.clone(),
+            seed: request.seed,
+            time_utc_ns: Some(i64::try_from(request.time_utc_ns).map_err(|_| invalid())?),
+            ..Default::default()
+        }));
+        let calls = Arc::clone(session.calls.as_ref().ok_or_else(invalid)?);
+        let prepared = async {
+            let permit = session.evaluation_permit()?;
+            let mut state = session.state()?;
+            state
+                .config_mut()
+                .set_extension(Arc::clone(session.control()));
+            state.config_mut().set_extension(Arc::clone(&permit));
+            state.config_mut().set_extension(Arc::clone(&calls));
+            let memory = session
+                .memory()
+                .reserve_input(
+                    changes
+                        .ports
+                        .len()
+                        .saturating_mul(
+                            size_of::<(usize, Arc<dyn datafusion::physical_plan::ExecutionPlan>)>()
+                                + 6 * size_of::<usize>(),
+                        )
+                        .saturating_add(size_of::<BeforeReplay>()),
+                )
+                .context(SqlSnafu)?;
+            let mut plans = BTreeMap::new();
+            for pair in &changes.ports {
+                let plan = call.admitted.get(pair.before).ok_or_else(invalid)?;
+                let prepared = execution.before_plan(pair.before).context(SqlSnafu)?;
+                erebor_telemetry::debug!(
+                    stage = "before_plan",
+                    call_id = id,
+                    source_revision = prior.revision,
+                    reused = prepared.is_some(),
+                    "Historical package input plan selected"
+                );
+                let physical = match prepared {
+                    Some(physical) => physical,
+                    None => session.physical(plan, &state).await?,
+                };
+                session.seed_before(&physical, id).await?;
+                if plans.insert(pair.before, physical).is_some() {
+                    return Err(invalid().into());
+                }
+            }
+            let mut requests = session
+                .definition
+                .as_ref()
+                .ok_or_else(invalid)?
+                .sources()
+                .clone();
+            let physical = plans.values().cloned().collect::<Vec<_>>();
+            let bounds = SourceSnapshot::requests(&mut requests, &physical, None, Some(&calls))
+                .context(SqlSnafu)?;
+            requests.retain(|_, columns| columns.is_some());
+            let limits = session.engine().limits();
+            let historical = SourceSnapshot::new(
+                Arc::clone(session.engine().store()),
+                session.selection().clone(),
+                araphor_data::AnalysisExtractLimits {
+                    scan_bytes: limits.scan_bytes,
+                    input_bytes: limits.input_bytes,
+                    keys: limits.extract_keys,
+                    ..Default::default()
+                },
+                session.control().within(session.control().remaining()?)?,
+                limits.extract_timeout,
+                request.time_utc_ns,
+                Arc::clone(session.memory()),
+                None,
+            );
+            let old = Arc::clone(&historical);
+            let current = Arc::clone(&source);
+            let saved = Arc::clone(&reference);
+            Engine::blocking(Arc::clone(session.control()), session.token()?, move || {
+                old.capture_before(&saved, &current, &requests, bounds, id)
+                    .context(SqlSnafu)
+            })
+            .await?;
+            Ok((plans, historical, permit, memory))
+        }
+        .await;
+        match prepared {
+            Ok((plans, historical, permit, memory)) => Ok(BeforeReplay {
+                session,
+                plans,
+                historical,
+                permit,
+                _memory: memory,
+            }),
+            Err(error) => {
+                let _cancelled = session.control().cancel();
+                calls.finish().await;
+                self.control().check()?;
+                Err(error)
+            }
+        }
     }
 
     pub(crate) fn hydrate_source<'a>(
@@ -723,7 +807,7 @@ impl Session {
             reference.request().time_utc_ns,
         );
         session.control = Arc::new(self.control().operation()?);
-        session.reference = Some(reference.clone());
+        session.reference = Some(Arc::new(reference.clone()));
         session.managed = None;
         session.source_index = None;
         let replay = PreparedDefinition {

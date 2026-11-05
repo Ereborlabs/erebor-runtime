@@ -1,42 +1,7 @@
 use super::*;
 use crate::{AnalysisContextRefV1, ManagedDestination};
 
-pub(in crate::analysis) struct ProducerChanges {
-    cuts: Vec<(String, u64, u64)>,
-    previous: Option<GraphHeader>,
-    metadata_scope: u64,
-    metadata_base: Option<String>,
-    metadata_members: Vec<araphor_graph::Replacement>,
-    metadata_reset: bool,
-    metadata_changed: bool,
-    metadata_removed: BTreeSet<(u8, Vec<u8>, u64)>,
-    restricted: u64,
-    captured: u64,
-    full_check: bool,
-    touched: BTreeSet<(u8, Vec<u8>)>,
-    states: BTreeMap<(String, u64), GraphPackageStateV1>,
-    pub(in crate::analysis) work: (u64, u64, u64),
-    pub(in crate::analysis) root_cursors: BTreeMap<u64, (u64, u64)>,
-}
-
-impl ProducerChanges {
-    pub(in crate::analysis) fn resolve_metadata(&self, metadata: &mut GraphManifest) -> Result<()> {
-        for ((id, version), state) in &self.states {
-            let mut matches = metadata
-                .packages
-                .iter_mut()
-                .filter(|package| &package.package_id == id && package.package_version == *version);
-            let package = matches
-                .next()
-                .ok_or_else(|| GraphRows::invalid("graph unit package metadata"))?;
-            if matches.next().is_some() {
-                return Err(GraphRows::invalid("graph unit package metadata"));
-            }
-            package.state = state.clone();
-        }
-        Ok(())
-    }
-}
+pub(in crate::analysis) use crate::analysis::graph_rows::store::ProducerChanges;
 
 impl GraphRows {
     pub(in crate::analysis) fn reset_proofs(
@@ -195,10 +160,95 @@ impl GraphRows {
         Ok(proofs)
     }
 
+    fn metadata_prior(
+        writer: &Connection,
+        scope: u64,
+        replacements: &[crate::analysis::graph_rows::store::Replacement],
+    ) -> Result<BTreeMap<u64, BTreeSet<(u8, Vec<u8>, u64)>>> {
+        let units = replacements
+            .iter()
+            .filter_map(|replacement| replacement.unit)
+            .collect::<BTreeSet<_>>();
+        if units.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        writer
+            .execute_batch("CREATE TEMP TABLE graph_metadata_units(unit_ref UBIGINT PRIMARY KEY)")
+            .context(AnalysisDatabaseSnafu {
+                operation: "stage touched Graph metadata units",
+            })?;
+        let result = (|| -> Result<BTreeMap<u64, BTreeSet<(u8, Vec<u8>, u64)>>> {
+            {
+                let mut appender =
+                    writer
+                        .appender("graph_metadata_units")
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "open touched Graph metadata units",
+                        })?;
+                for unit in units {
+                    appender
+                        .append_row(params![unit])
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "append touched Graph metadata unit",
+                        })?;
+                }
+                appender.flush().context(AnalysisDatabaseSnafu {
+                    operation: "flush touched Graph metadata units",
+                })?;
+            }
+            let mut statement = writer
+                .prepare(
+                    "SELECT m.unit_ref,m.member_kind,m.member_key,m.value_ref,
+                    m.anchor_record_id,m.anchor_fact,m.reason_code,m.ordinal
+                 FROM graph_metadata_units u JOIN graph_producer_members m USING(unit_ref)
+                 WHERE m.scope_id=? AND m.valid_to IS NULL",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare touched Graph metadata",
+                })?;
+            let mut rows = statement
+                .query(params![scope])
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read touched Graph metadata",
+                })?;
+            let mut previous = BTreeMap::<u64, BTreeSet<_>>::new();
+            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                operation: "advance touched Graph metadata",
+            })? {
+                let unit: u64 = Self::column(row, 0)?;
+                let kind: u8 = Self::column(row, 1)?;
+                let key: Vec<u8> = Self::column(row, 2)?;
+                if !matches!(kind, 0 | 1 | 7 | 10)
+                    || Self::column::<Option<u64>>(row, 4)?
+                        != if kind == 10 { Some(unit) } else { None }
+                    || Self::column::<Option<Vec<u8>>>(row, 5)?.is_some()
+                    || Self::column::<Option<String>>(row, 6)?.is_some()
+                    || Self::column::<u32>(row, 7)? != 0
+                    || !previous.entry(unit).or_default().insert((
+                        kind,
+                        key,
+                        Self::column::<u64>(row, 3)?,
+                    ))
+                {
+                    return Err(Self::invalid("graph metadata member"));
+                }
+            }
+            Ok(previous)
+        })();
+        let cleanup = writer
+            .execute_batch("DROP TABLE graph_metadata_units")
+            .context(AnalysisDatabaseSnafu {
+                operation: "release touched Graph metadata units",
+            });
+        let previous = result?;
+        cleanup?;
+        Ok(previous)
+    }
+
     fn metadata_diff(
         writer: &Connection,
         scope: u64,
-        replacements: &[araphor_graph::Replacement],
+        replacements: &[crate::analysis::graph_rows::store::Replacement],
         reset: bool,
         prior: u64,
     ) -> Result<(bool, u64, BTreeSet<(u8, Vec<u8>, u64)>)> {
@@ -206,10 +256,12 @@ impl GraphRows {
         let mut before = BTreeSet::new();
         let mut after = BTreeSet::new();
         let mut removed_members = BTreeSet::new();
-        let mut statement=writer.prepare(
-            "SELECT member_kind,member_key,value_ref,anchor_record_id,anchor_fact,reason_code,ordinal
-             FROM graph_producer_members WHERE scope_id=? AND unit_ref=? AND valid_to IS NULL"
-        ).context(AnalysisDatabaseSnafu { operation:"prepare touched Graph metadata" })?;
+        let previous = if reset {
+            BTreeMap::new()
+        } else {
+            Self::metadata_prior(writer, scope, replacements)?
+        };
+        let empty = BTreeSet::new();
         for replacement in replacements {
             let desired = replacement
                 .members
@@ -227,7 +279,7 @@ impl GraphRows {
             if reset {
                 continue;
             }
-            if replacement.unit.is_none() {
+            let Some(unit) = replacement.unit else {
                 for (kind, key, value) in desired {
                     if kind != 10 {
                         return Err(Self::invalid("graph global proof kind"));
@@ -244,38 +296,19 @@ impl GraphRows {
                     changed |= old.is_none();
                 }
                 continue;
-            }
-            let mut rows = statement.query(params![scope, replacement.unit]).context(
-                AnalysisDatabaseSnafu {
-                    operation: "read touched Graph metadata",
-                },
-            )?;
-            let mut old = BTreeSet::new();
-            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                operation: "advance touched Graph metadata",
-            })? {
-                let kind: u8 = Self::column(row, 0)?;
-                let key: Vec<u8> = Self::column(row, 1)?;
-                if !matches!(kind, 0 | 1 | 7 | 10)
-                    || Self::column::<Option<u64>>(row, 3)?
-                        != if kind == 10 { replacement.unit } else { None }
-                    || Self::column::<Option<Vec<u8>>>(row, 4)?.is_some()
-                    || Self::column::<Option<String>>(row, 5)?.is_some()
-                    || Self::column::<u32>(row, 6)? != 0
-                    || !old.insert((kind, key.clone(), Self::column::<u64>(row, 2)?))
-                {
-                    return Err(Self::invalid("graph metadata member"));
-                }
-                if kind == 7 {
-                    before.insert(key);
-                }
-            }
+            };
+            let old = previous.get(&unit).unwrap_or(&empty);
+            before.extend(
+                old.iter()
+                    .filter(|(kind, _, _)| *kind == 7)
+                    .map(|(_, key, _)| key.clone()),
+            );
             removed_members.extend(
                 old.difference(&desired)
                     .filter(|(kind, _, _)| matches!(*kind, 0 | 7))
                     .cloned(),
             );
-            changed |= old != desired;
+            changed |= old != &desired;
         }
         let mut restricted = writer
             .prepare("SELECT sensitivity FROM context_versions WHERE version_key=?")
@@ -313,6 +346,7 @@ impl GraphRows {
         proofs: &[AnalysisContextRefV1],
         verified: &mut super::super::context::VerifiedPackages,
     ) -> Result<ProducerChanges> {
+        let started = std::time::Instant::now();
         let GraphWrite::Managed {
             commit,
             producers,
@@ -430,8 +464,9 @@ impl GraphRows {
             .is_none_or(|(_, count, _)| count.is_none())
             || commit.attempt.request().rebuild
             || commit.attempt.switches_version();
-        let (mut metadata_members, staged) =
-            Self::metadata_members(writer, metadata, Some(removed))?;
+        let canonical = Self::canonical_contexts(writer, &store.root, metadata)?;
+        let (mut metadata_members, staged, mut records, positions) =
+            Self::metadata_members(writer, metadata, Some((removed, &canonical)))?;
         let mut work = (staged, 0u64, 0u64);
         let mut root_cursors = BTreeMap::new();
         let by_record = metadata_members
@@ -467,24 +502,26 @@ impl GraphRows {
                 .iter()
                 .any(|member| member.kind == 10 && member.key == key)
             {
-                replacement.members.push(araphor_graph::Member {
-                    kind: 10,
-                    key,
-                    value: proof.commit_revision,
-                    record: replacement.unit,
-                    fact: None,
-                    reason: None,
-                    ordinal: 0,
-                });
+                replacement
+                    .members
+                    .push(crate::analysis::graph_rows::store::Member {
+                        kind: 10,
+                        key,
+                        value: proof.commit_revision,
+                        record: replacement.unit,
+                        fact: None,
+                        reason: None,
+                        ordinal: 0,
+                    });
             }
         }
         if !proofs.is_empty() {
-            metadata_members.push(araphor_graph::Replacement {
+            metadata_members.push(crate::analysis::graph_rows::store::Replacement {
                 unit: None,
                 members: proofs
                     .iter()
                     .map(|proof| {
-                        Ok(araphor_graph::Member {
+                        Ok(crate::analysis::graph_rows::store::Member {
                             kind: 10,
                             key: super::super::context::version_key(&proof.key)?,
                             value: proof.commit_revision,
@@ -510,7 +547,9 @@ impl GraphRows {
         let mut cuts = Vec::new();
         let mut touched = BTreeSet::new();
         let mut states = BTreeMap::new();
+        let mut unit_calls = Vec::new();
         let mut full_check = metadata_reset;
+        let metadata_at = std::time::Instant::now();
         for (call, reference) in producers {
             if !calls.contains(call) {
                 return Err(Self::invalid("graph managed call"));
@@ -525,9 +564,9 @@ impl GraphRows {
                 .iter()
                 .find(|model| model.name == spec.manifest.calls[call].export)
                 .ok_or_else(|| Self::invalid("graph producer export"))?;
-            let unit_contract = Detector::supports_units(model);
+            let unit_contract = araphor_analysis_builtins::graph::Detector::supports_units(model);
             if !unit_contract {
-                continue;
+                return Err(Self::invalid("graph producer contract"));
             }
             let returned = commit
                 .returns
@@ -570,17 +609,21 @@ impl GraphRows {
                         Some(super::history::ProducerPin {
                             instance: &spec.id,
                             call: *call,
-                            declaration: &spec.manifest.calls[call],
                         }),
                         reference.commit_revision,
                     )?
                 };
-                Self::version(
+                crate::analysis::graph_rows::store::Relations::producer_version(
                     writer,
                     &reference.result_id,
                     scope,
                     reference.commit_revision,
                     storage_prior.map(|prior| prior.result_id.as_str()),
+                    Some(crate::analysis::graph_rows::store::VersionPin {
+                        package: &spec.manifest.calls[call].package.package_id,
+                        revision: &spec.manifest.calls[call].package.revision,
+                        image: &spec.manifest.calls[call].image.digest,
+                    }),
                 )?;
                 writer
                     .execute(
@@ -590,37 +633,7 @@ impl GraphRows {
                     .context(AnalysisDatabaseSnafu {
                         operation: "store Graph call captured cut",
                     })?;
-                let effects = Self::apply_units(
-                    writer,
-                    &store.root,
-                    scope,
-                    reference.commit_revision,
-                    metadata,
-                    returned,
-                    &spec.manifest.calls[call],
-                    restricted != 0,
-                )?;
-                root_cursors.insert(*call, effects.root_cursors);
-                touched.extend(effects.touched);
-                work.0 = work.0.saturating_add(effects.work.0);
-                work.1 = work.1.saturating_add(effects.work.1);
-                work.2 = work.2.saturating_add(effects.work.2);
-                let package = metadata
-                    .packages
-                    .iter()
-                    .find(|package| {
-                        package.package_id == spec.manifest.calls[call].package.package_id
-                    })
-                    .ok_or_else(|| Self::invalid("graph unit package metadata"))?;
-                if states
-                    .insert(
-                        (package.package_id.clone(), package.package_version),
-                        effects.state.clone(),
-                    )
-                    .is_some_and(|prior| prior != effects.state)
-                {
-                    return Err(Self::invalid("graph unit package state conflict"));
-                }
+                unit_calls.push((scope, returned, &spec.manifest.calls[call], *call));
                 full_check |= reset || storage_prior.is_none();
                 cuts.push((
                     reference.result_id.clone(),
@@ -630,6 +643,46 @@ impl GraphRows {
                 continue;
             }
         }
+        let versions_at = std::time::Instant::now();
+        let inputs = unit_calls
+            .iter()
+            .map(|(scope, returned, pin, _)| (*scope, *returned, *pin))
+            .collect::<Vec<_>>();
+        let mut effects = Self::apply_units(
+            writer,
+            revision,
+            metadata,
+            &inputs,
+            restricted != 0,
+            &mut records,
+            &positions,
+            &canonical,
+        )?;
+        for (scope, _, pin, call) in unit_calls {
+            let effect = effects
+                .remove(&scope)
+                .ok_or_else(|| Self::invalid("graph producer work"))?;
+            root_cursors.insert(call, effect.root_cursors);
+            touched.extend(effect.touched);
+            work.0 = work.0.saturating_add(effect.work.0);
+            work.1 = work.1.saturating_add(effect.work.1);
+            work.2 = work.2.saturating_add(effect.work.2);
+            let package = metadata
+                .packages
+                .iter()
+                .find(|package| package.package_id == pin.package.package_id)
+                .ok_or_else(|| Self::invalid("graph unit package metadata"))?;
+            if states
+                .insert(
+                    (package.package_id.clone(), package.package_version),
+                    effect.state.clone(),
+                )
+                .is_some_and(|prior| prior != effect.state)
+            {
+                return Err(Self::invalid("graph unit package state conflict"));
+            }
+        }
+        let applied = std::time::Instant::now();
         if cuts.is_empty() {
             return Err(Self::invalid("graph producer is absent"));
         }
@@ -646,7 +699,19 @@ impl GraphRows {
                 })?;
             full_check |= scopes != cuts.iter().map(|(_, scope, _)| *scope).collect();
         }
+        let completed = std::time::Instant::now();
+        erebor_telemetry::debug!(
+            stage = "graph_stage_timing", instance_id = %spec.id,
+            cut_revision = captured, publication_revision = revision,
+            metadata_s = metadata_at.duration_since(started).as_secs_f64(),
+            versions_s = versions_at.duration_since(metadata_at).as_secs_f64(),
+            units_s = applied.duration_since(versions_at).as_secs_f64(),
+            completion_s = completed.duration_since(applied).as_secs_f64(),
+            elapsed_s = completed.duration_since(started).as_secs_f64(),
+            "Graph contribution stage completed"
+        );
         Ok(ProducerChanges {
+            diff: None,
             cuts,
             previous,
             metadata_scope,
@@ -671,59 +736,9 @@ impl GraphRows {
         metadata: &GraphManifest,
         changes: &mut ProducerChanges,
     ) -> Result<bool> {
-        let Some(previous) = changes.previous.as_ref() else {
-            return Ok(false);
-        };
-        if metadata.previous_result_id.as_deref() != Some(&prior.result_id) {
-            return Err(Self::invalid("graph unchanged base"));
-        }
-        let previous = &previous.snapshot;
-        if changes.metadata_changed
-            || metadata.schema_version != previous.schema_version
-            || metadata.scope != previous.scope
-            || metadata.first_cursor != previous.first_cursor
-            || metadata.last_cursor != previous.last_cursor
-            || metadata.input_manifest.coverage != previous.input_manifest.coverage
-            || metadata.missing_ranges != previous.missing_ranges
-            || metadata.packages != previous.packages
-            || metadata.witness_deadline_utc_ns != previous.witness_deadline_utc_ns
-        {
-            return Ok(false);
-        }
-        changes.work.0 = changes
-            .work
-            .0
-            .saturating_add(Self::stage_cuts(writer, changes)?);
-        changes.work.0 = changes
-            .work
-            .0
-            .saturating_add(Self::stage_keys(writer, changes)?);
-        let changed:bool=writer.query_row(
-            "WITH old_cuts AS (
-                SELECT v.scope_id,v.commit_revision,v.result_id FROM graph_result_producers b
-                JOIN graph_producer_versions v ON v.result_id=b.producer_result_id
-                JOIN graph_producer_scopes s USING(scope_id)
-                WHERE b.result_id=? AND s.producer_kind=0
-             ), touched AS (
-                SELECT member_kind,member_key FROM graph_stage_touched
-             ), before AS (
-                SELECT DISTINCT m.member_kind,m.member_key,m.value_ref FROM graph_producer_members m
-                JOIN old_cuts old USING(scope_id) LEFT JOIN touched t ON t.member_kind=m.member_kind AND t.member_key=m.member_key
-                WHERE m.member_kind IN (2,3,4,6) AND (? OR t.member_key IS NOT NULL) AND m.valid_from<=old.commit_revision AND (m.valid_to IS NULL OR m.valid_to>old.commit_revision)
-             ), after AS (
-                SELECT DISTINCT m.member_kind,m.member_key,m.value_ref FROM graph_producer_members m
-                JOIN graph_stage_cuts c USING(scope_id) LEFT JOIN touched t ON t.member_kind=m.member_kind AND t.member_key=m.member_key
-                WHERE m.member_kind IN (2,3,4,6) AND (? OR t.member_key IS NOT NULL) AND m.valid_from<=c.commit_revision AND (m.valid_to IS NULL OR m.valid_to>c.commit_revision)
-             ) SELECT EXISTS((SELECT * FROM before EXCEPT SELECT * FROM after)
-                UNION ALL (SELECT * FROM after EXCEPT SELECT * FROM before))",
-            params![prior.result_id,changes.full_check,changes.full_check],|row|row.get(0),
-        ).context(AnalysisDatabaseSnafu {operation:"compare affected Graph values"})?;
-        writer
-            .execute_batch("DROP TABLE graph_stage_cuts; DROP TABLE graph_stage_touched")
-            .context(AnalysisDatabaseSnafu {
-                operation: "release Graph producer stage",
-            })?;
-        Ok(!changed)
+        crate::analysis::graph_rows::store::Relations::new(writer)
+            .unchanged(&prior.result_id, metadata, changes)
+            .map_err(Into::into)
     }
 
     pub(in crate::analysis) fn publish(
@@ -731,123 +746,9 @@ impl GraphRows {
         result: &PackageResultRefV1,
         metadata: &GraphManifest,
         changes: ProducerChanges,
-    ) -> Result<(Vec<u8>, (u64, u64, u64), (u64, u64))> {
-        for (kind, key, _) in &changes.metadata_removed {
-            for (_, scope, cut) in &changes.cuts {
-                let retained:bool=writer.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM graph_producer_members WHERE scope_id=? AND member_kind=?
-                     AND member_key=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>?))",
-                    params![scope,if *kind==0 {9}else{10},key,cut,cut],|row|row.get(0),
-                ).context(AnalysisDatabaseSnafu { operation:"check removed Graph support" })?;
-                if retained {
-                    return Err(Self::invalid("graph removed shared support"));
-                }
-            }
-        }
-        let metadata_id = format!("{}:metadata", result.result_id);
-        Self::version(
-            writer,
-            &metadata_id,
-            changes.metadata_scope,
-            result.commit_revision,
-            changes.metadata_base.as_deref(),
-        )?;
-        let mut work = changes.work;
-        let metadata_work = araphor_graph::Contributions::apply(
-            writer,
-            changes.metadata_scope,
-            result.commit_revision,
-            &changes.metadata_members,
-            changes.metadata_reset,
-        )?;
-        work.0 = work.0.saturating_add(metadata_work.0);
-        work.1 = work.1.saturating_add(metadata_work.1);
-        work.2 = work.2.saturating_add(metadata_work.2);
-        writer
-            .execute(
-                "UPDATE graph_producer_versions SET restricted_count=?,captured_revision=? WHERE result_id=?",
-                params![changes.restricted,changes.captured, metadata_id],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "store Graph metadata sensitivity",
-            })?;
-        let inputs:(usize,usize,usize)=writer.query_row(
-            "SELECT evidence_count,position_count,fact_count FROM graph_producer_versions WHERE result_id=?",
-            params![metadata_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
-        ).context(AnalysisDatabaseSnafu { operation:"read Graph metadata counts" })?;
-        writer
-            .execute(
-                "INSERT INTO graph_versions VALUES(?,?,?,true,false)",
-                params![result.result_id, result.commit_revision, metadata_id],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "insert public Graph version",
-            })?;
-        Self::bind_result(writer, &result.result_id, &metadata_id)?;
-        for (producer, _, _) in &changes.cuts {
-            Self::bind_result(writer, &result.result_id, producer)?;
-        }
-        work.0 = work.0.saturating_add(Self::stage_keys(writer, &changes)?);
-        let (subjects, edges, findings) = Self::result_counts(
-            writer,
-            &result.result_id,
-            metadata.previous_result_id.as_deref(),
-            result.commit_revision,
-            changes.full_check,
-        )?;
-        writer
-            .execute_batch("DROP TABLE graph_stage_touched")
-            .context(AnalysisDatabaseSnafu {
-                operation: "release Graph touched keys",
-            })?;
-        let mut compact = metadata.clone();
-        compact.input_manifest.context.clear();
-        let body = GraphHeader::encode(
-            &compact,
-            (subjects as usize, edges as usize, findings as usize, 0),
-            inputs,
-        )?;
-        Ok((body, work, (metadata_work.1, metadata_work.2)))
-    }
-
-    fn stage_keys(writer: &Connection, changes: &ProducerChanges) -> Result<u64> {
-        writer.execute_batch("CREATE TEMP TABLE graph_stage_touched(member_kind UTINYINT,member_key BLOB,PRIMARY KEY(member_kind,member_key))").context(AnalysisDatabaseSnafu {operation:"create Graph touched keys"})?;
-        let mut appender =
-            writer
-                .appender("graph_stage_touched")
-                .context(AnalysisDatabaseSnafu {
-                    operation: "open Graph touched keys",
-                })?;
-        for (kind, key) in &changes.touched {
-            appender
-                .append_row(params![kind, key])
-                .context(AnalysisDatabaseSnafu {
-                    operation: "append Graph touched key",
-                })?;
-        }
-        appender.flush().context(AnalysisDatabaseSnafu {
-            operation: "flush Graph touched keys",
-        })?;
-        Ok(changes.touched.len() as u64)
-    }
-
-    fn stage_cuts(writer: &Connection, changes: &ProducerChanges) -> Result<u64> {
-        writer.execute_batch("CREATE TEMP TABLE graph_stage_cuts(result_id VARCHAR,scope_id UBIGINT,commit_revision UBIGINT)").context(AnalysisDatabaseSnafu {operation:"create Graph producer stage"})?;
-        let mut appender = writer
-            .appender("graph_stage_cuts")
-            .context(AnalysisDatabaseSnafu {
-                operation: "open Graph producer stage",
-            })?;
-        for (result, scope, revision) in &changes.cuts {
-            appender
-                .append_row(params![result, scope, revision])
-                .context(AnalysisDatabaseSnafu {
-                    operation: "append Graph producer stage",
-                })?;
-        }
-        appender.flush().context(AnalysisDatabaseSnafu {
-            operation: "flush Graph producer stage",
-        })?;
-        Ok(changes.cuts.len() as u64)
+    ) -> Result<(Vec<u8>, (u64, u64, u64), (u64, u64), usize)> {
+        crate::analysis::graph_rows::store::Relations::new(writer)
+            .apply(&result.result_id, result.commit_revision, metadata, changes)
+            .map_err(Into::into)
     }
 }

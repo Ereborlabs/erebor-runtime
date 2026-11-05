@@ -83,6 +83,25 @@ impl DefinitionAdmission {
 }
 
 impl PreparedDefinition {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn before_inputs(&self) -> Result<BTreeSet<(u64, usize)>> {
+        let mut inputs = BTreeSet::new();
+        if let Some((_, physical)) = &self.physical {
+            crate::sources::PortExec::apply(physical, &mut |node| {
+                if let Some(call) = node.downcast_ref::<physical::PackageExec>() {
+                    inputs.extend(
+                        call.before_inputs()
+                            .iter()
+                            .map(|slot| (call.call_id(), *slot)),
+                    );
+                }
+                Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+            })
+            .context(SqlSnafu)?;
+        }
+        Ok(inputs)
+    }
+
     pub fn plan(&self) -> &LogicalPlan {
         &self.plan
     }
@@ -195,6 +214,18 @@ impl CapturedExecution {
 
     pub fn snapshot(&self) -> &crate::sources::ArrowSnapshot {
         &self.captured.snapshot
+    }
+
+    pub(crate) fn bind_attempt(&self, attempt: Arc<araphor_data::ManagedAttempt>) -> Result<()> {
+        self.captured
+            .context
+            .session_config()
+            .get_extension::<crate::sources::SourceSnapshot>()
+            .ok_or_else(|| {
+                araphor_data::PackageErrorCodeV1::Incomplete.error("managed source snapshot")
+            })?
+            .bind_attempt(attempt)
+            .context(SqlSnafu)
     }
 
     pub async fn blocking<T: Send + 'static>(

@@ -130,6 +130,10 @@ impl AnalysisStore {
                 WHERE commit_revision <= {revision};
              CREATE TEMP VIEW graph_versions AS SELECT * FROM {base}.graph_versions
                 WHERE commit_revision <= {revision};
+             CREATE TEMP VIEW managed_source_publications AS SELECT * FROM {base}.managed_source_publications
+                WHERE revision <= {revision};
+             CREATE TEMP VIEW managed_graph_publications AS SELECT * FROM {base}.managed_graph_publications
+                WHERE revision <= {revision};
              CREATE TEMP VIEW trace_receipts AS
                 SELECT stream_key, identity_json, tenant_id, last_sequence, output_bytes,
                     terminal, retained_floor, commit_revision FROM {base}.trace_versions

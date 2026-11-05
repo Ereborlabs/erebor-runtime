@@ -4,6 +4,9 @@ use snafu::ResultExt as _;
 use super::AnalysisStore;
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, Result};
 
+mod batch;
+pub(in crate::analysis) use batch::PreparedFact;
+mod facts;
 mod pages;
 mod provenance;
 mod reads;
@@ -12,6 +15,7 @@ mod tests;
 mod write;
 
 pub(super) use provenance::VerifiedPackages;
+pub(in crate::analysis) use facts::FactRecord;
 
 type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 

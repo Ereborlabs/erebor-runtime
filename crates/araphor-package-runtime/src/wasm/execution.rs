@@ -5,6 +5,7 @@ use std::sync::mpsc;
 
 use araphor_analysis_sdk as sdk;
 use snafu::{IntoError as _, ResultExt as _};
+use wasmtime::component::{Resource, ResourceTable};
 use wasmtime::{Engine, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
 
 use crate::{AnalysisReadControl, Result, WasmLimits};
@@ -39,6 +40,8 @@ pub(super) struct GuestEntry {
 }
 
 pub(super) struct GuestState {
+    table: ResourceTable,
+    transfer: Option<sdk::Transfer>,
     limits: StoreLimits,
     control: AnalysisReadControl,
     host_calls: usize,
@@ -47,6 +50,8 @@ pub(super) struct GuestState {
     #[cfg(any(test, feature = "test-fixtures"))]
     entered: Option<GuestEntry>,
 }
+
+pub struct HostTransaction(pub(crate) Arc<dyn sdk::InvocationService + Send + Sync>);
 
 impl GuestState {
     fn new(control: AnalysisReadControl, quota: &WasmLimits) -> Self {
@@ -62,6 +67,8 @@ impl GuestState {
             limits = limits.memory_size(bytes);
         }
         Self {
+            table: ResourceTable::new(),
+            transfer: None,
             limits: limits.build(),
             control,
             host_calls: 0,
@@ -74,6 +81,145 @@ impl GuestState {
 }
 
 impl types::Host for GuestState {}
+
+impl bindings::araphor::analysis::graph::Host for GuestState {}
+
+impl bindings::araphor::analysis::graph::HostTransaction for GuestState {
+    fn read(
+        &mut self,
+        resource: Resource<HostTransaction>,
+        name: String,
+        arguments: types::Dataset,
+    ) -> wasmtime::Result<std::result::Result<types::Input, types::EvaluationError>> {
+        self.check_host()?;
+        self.transfer.take();
+        let host = &self.table.get(&resource)?.0;
+        let result = (|| {
+            let arguments = sdk::wire::Dataset::from(arguments);
+            let schema = host.argument_schema(&name)?;
+            let transfer = host.reserve_transfer()?;
+            let lifted = arguments
+                .arrow_ipc
+                .capacity()
+                .checked_add(arguments.name.capacity())
+                .and_then(|bytes| bytes.checked_add(name.capacity()))
+                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<sdk::wire::Dataset>()))
+                .ok_or_else(|| {
+                    sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted arguments")
+                })?;
+            let available = transfer
+                .bytes
+                .map(|bytes| {
+                    bytes.checked_sub(lifted).ok_or_else(|| {
+                        sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted arguments")
+                    })
+                })
+                .transpose()?;
+            let arguments = sdk::wire::Dataset::decode_ipc_bounded(
+                &arguments.name,
+                &arguments.arrow_ipc,
+                Some(&schema),
+                available,
+            )?;
+            let input = host.read(&name, &arguments)?;
+            let schema = input
+                .data
+                .batches
+                .first()
+                .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "Graph read schema"))?
+                .schema();
+            let scratch = input.data.batches.iter().try_fold(0usize, |bytes, batch| {
+                Ok::<_, sdk::Error>(bytes.max(sdk::wire::Dataset::encoding_scratch(batch)?))
+            })?;
+            let retained = arguments
+                .allocated_bytes()
+                .checked_add(scratch)
+                .and_then(|bytes| bytes.checked_add(input.allocated_bytes()))
+                .and_then(|bytes| bytes.checked_add(lifted))
+                .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Limit, "Graph transfer"))?;
+            let remaining = transfer.bytes.map(|bytes| bytes.saturating_sub(retained));
+            let result = sdk::wire::Input {
+                data: sdk::wire::Dataset::encode_bounded(&input.data, &schema, remaining)?,
+                revision: input.revision,
+                coverage: input.coverage,
+            }
+            .into();
+            Ok::<_, sdk::Error>((result, transfer))
+        })();
+        self.control.check().map_err(wasmtime::Error::new)?;
+        Ok(match result {
+            Ok((result, transfer)) => {
+                self.transfer = Some(transfer);
+                Ok(result)
+            }
+            Err(error) => Err(sdk::wire::EvaluationError::from(error).into()),
+        })
+    }
+
+    fn stage(
+        &mut self,
+        resource: Resource<HostTransaction>,
+        commands: types::Dataset,
+    ) -> wasmtime::Result<std::result::Result<(), types::EvaluationError>> {
+        self.check_host()?;
+        self.transfer.take();
+        let host = &self.table.get(&resource)?.0;
+        let result = (|| {
+            let commands = sdk::wire::Dataset::from(commands);
+            let schema = host.command_schema(&commands.name)?;
+            let transfer = host.reserve_transfer()?;
+            let lifted = commands
+                .arrow_ipc
+                .capacity()
+                .checked_add(commands.name.capacity())
+                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<sdk::wire::Dataset>()))
+                .ok_or_else(|| {
+                    sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted commands")
+                })?;
+            let available = transfer
+                .bytes
+                .map(|bytes| {
+                    bytes.checked_sub(lifted).ok_or_else(|| {
+                        sdk::Error::contract(sdk::ErrorCode::Limit, "Graph lifted commands")
+                    })
+                })
+                .transpose()?;
+            let commands = sdk::wire::Dataset::decode_ipc_bounded(
+                &commands.name,
+                &commands.arrow_ipc,
+                Some(&schema),
+                available,
+            )?;
+            host.stage(&commands)
+        })();
+        self.control.check().map_err(wasmtime::Error::new)?;
+        Ok(result.map_err(|error| sdk::wire::EvaluationError::from(error).into()))
+    }
+
+    fn drop(&mut self, resource: Resource<HostTransaction>) -> wasmtime::Result<()> {
+        self.table.delete(resource)?;
+        Ok(())
+    }
+}
+
+impl GuestState {
+    fn charge_host(&mut self) -> wasmtime::Result<()> {
+        if self
+            .host_limit
+            .is_some_and(|maximum| self.host_calls >= maximum)
+        {
+            self.limited = true;
+            return Err(wasmtime::Error::msg("analysis host call limit"));
+        }
+        self.host_calls = self.host_calls.saturating_add(1);
+        Ok(())
+    }
+
+    fn check_host(&mut self) -> wasmtime::Result<()> {
+        self.charge_host()?;
+        self.control.check().map_err(wasmtime::Error::new)
+    }
+}
 
 impl ResourceLimiter for GuestState {
     fn memory_growing(
@@ -121,14 +267,7 @@ impl bindings::araphor::analysis::host::Host for GuestState {
                 }?;
             }
         }
-        if self
-            .host_limit
-            .is_some_and(|maximum| self.host_calls >= maximum)
-        {
-            self.limited = true;
-            return Err(wasmtime::Error::msg("analysis host call limit"));
-        }
-        self.host_calls = self.host_calls.saturating_add(1);
+        self.charge_host()?;
         Ok(self.control.check().is_err())
     }
 }
@@ -188,7 +327,7 @@ impl super::WasmExecution {
         input: types::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<types::Output> {
-        self.invoke_reserved(prepared, input, control, None, None)
+        self.invoke_reserved(prepared, input, control, None, None, None)
     }
 
     pub(super) fn invoke_reserved(
@@ -198,6 +337,7 @@ impl super::WasmExecution {
         control: &AnalysisReadControl,
         copy_bytes: Option<usize>,
         admission: Option<EvaluationPermit>,
+        host: Option<Arc<dyn sdk::InvocationService + Send + Sync>>,
     ) -> Result<types::Output> {
         control.check()?;
         let _permit = match (admission, &self.evaluations) {
@@ -218,6 +358,14 @@ impl super::WasmExecution {
         };
         let watched = control.within(None)?;
         let mut store = Store::new(&self.engine, GuestState::new(control, &self.limits));
+        let graph = host
+            .map(|host| store.data_mut().table.push(HostTransaction(host)))
+            .transpose()
+            .map_err(wasmtime::Error::new)
+            .context(crate::PackageWasmSnafu {
+                code: Code::Incomplete,
+                operation: "Graph transaction resource",
+            })?;
         #[cfg(any(test, feature = "test-fixtures"))]
         {
             store.data_mut().entered = self
@@ -254,9 +402,13 @@ impl super::WasmExecution {
             .component()
             .instantiate(&mut store)
             .and_then(|instance| {
-                instance
-                    .araphor_analysis_analysis()
-                    .call_evaluate(&mut store, &input)
+                instance.araphor_analysis_analysis().call_evaluate(
+                    &mut store,
+                    &input,
+                    graph
+                        .as_ref()
+                        .map(|resource| Resource::new_borrow(resource.rep())),
+                )
             });
         let result = result.map_err(|source| {
             let code = if store.data().limited

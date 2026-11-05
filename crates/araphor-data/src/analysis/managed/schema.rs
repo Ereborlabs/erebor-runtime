@@ -8,6 +8,100 @@ use crate::{AnalysisDatabaseSnafu, Result};
 
 impl AnalysisStore {
     pub(in crate::analysis) const MANAGED_SCHEMA: &'static str = "
+        CREATE SEQUENCE managed_graphs_seq;
+        CREATE SEQUENCE managed_graph_writers_seq;
+        CREATE SEQUENCE managed_graph_relations_seq;
+        CREATE SEQUENCE managed_graph_layers_seq;
+        CREATE TABLE managed_graphs (
+            graph_id UBIGINT PRIMARY KEY, tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL,
+            UNIQUE(tenant_id,instance_id)
+        );
+        CREATE TABLE managed_graph_writers (
+            writer_id UBIGINT PRIMARY KEY, graph_id UBIGINT NOT NULL, call_id UBIGINT NOT NULL,
+            UNIQUE(graph_id,call_id)
+        );
+        CREATE TABLE managed_graph_relations (
+            relation_id UBIGINT PRIMARY KEY, graph_id UBIGINT NOT NULL,
+            relation_name VARCHAR NOT NULL, contract BLOB NOT NULL,
+            UNIQUE(graph_id,relation_name)
+        );
+        CREATE TABLE managed_graph_results (
+            writer_id UBIGINT NOT NULL, layer_id UBIGINT NOT NULL UNIQUE,
+            revision UBIGINT NOT NULL, result_id VARCHAR NOT NULL UNIQUE,
+            restricted BOOLEAN NOT NULL,
+            PRIMARY KEY(writer_id,revision)
+        );
+        CREATE TABLE managed_graph_reads (
+            result_id VARCHAR NOT NULL, writer_id UBIGINT NOT NULL,
+            revision UBIGINT NOT NULL, producer_id VARCHAR NOT NULL,
+            PRIMARY KEY(result_id,writer_id,revision)
+        );
+        CREATE TABLE managed_graph_row_reads (
+            result_id VARCHAR NOT NULL, relation_id UBIGINT NOT NULL, writer_id UBIGINT NOT NULL,
+            owner_key BLOB NOT NULL, entity_key BLOB NOT NULL, revision UBIGINT NOT NULL,
+            PRIMARY KEY(result_id,relation_id,writer_id,owner_key,entity_key,revision)
+        );
+        CREATE TABLE managed_graph_publications (
+            result_id VARCHAR PRIMARY KEY, graph_id UBIGINT NOT NULL,
+            revision UBIGINT NOT NULL, previous_result_id VARCHAR,
+            UNIQUE(graph_id,revision)
+        );
+        CREATE TABLE managed_graph_publication_layers (
+            result_id VARCHAR NOT NULL, writer_id UBIGINT NOT NULL, layer_id UBIGINT NOT NULL,
+            PRIMARY KEY(result_id,writer_id)
+        );
+        CREATE TABLE managed_graph_finding_values (
+            relation_id UBIGINT NOT NULL, properties_ref UBIGINT NOT NULL,
+            canonical_relation_id UBIGINT NOT NULL, canonical_properties_ref UBIGINT NOT NULL,
+            PRIMARY KEY(relation_id,properties_ref)
+        );
+        CREATE TABLE managed_source_reads (
+            result_id VARCHAR NOT NULL, producer_id VARCHAR NOT NULL, revision UBIGINT NOT NULL,
+            PRIMARY KEY(result_id,producer_id)
+        );
+        CREATE TABLE managed_source_proofs (
+            result_id VARCHAR NOT NULL, record_key BLOB NOT NULL,
+            version_key BLOB NOT NULL, revision UBIGINT NOT NULL,
+            stream_key BLOB NOT NULL, cpu_id UINTEGER NOT NULL, source_cursor UBIGINT NOT NULL,
+            PRIMARY KEY(result_id,record_key,version_key)
+        );
+        CREATE TABLE managed_context_imports (
+            result_id VARCHAR NOT NULL, version_key BLOB NOT NULL, revision UBIGINT NOT NULL,
+            PRIMARY KEY(result_id,version_key)
+        );
+        CREATE TABLE managed_source_publications (
+            result_id VARCHAR PRIMARY KEY, tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL,
+            stream_key BLOB NOT NULL, revision UBIGINT NOT NULL,
+            attempt_id VARCHAR NOT NULL, generation UBIGINT NOT NULL,
+            previous_result_id VARCHAR, captured_revision UBIGINT NOT NULL, captured_ordinal UINTEGER NOT NULL,
+            first_cursor UBIGINT NOT NULL, last_cursor UBIGINT NOT NULL,
+            witness_deadline UBIGINT NOT NULL, coverage_revision UBIGINT NOT NULL,
+            context_notice UBIGINT NOT NULL, record_count UBIGINT NOT NULL, restricted_count UBIGINT NOT NULL,
+            subject_count UBIGINT NOT NULL, relationship_count UBIGINT NOT NULL, finding_count UBIGINT NOT NULL,
+            expired BOOLEAN NOT NULL,
+            UNIQUE(tenant_id,instance_id,stream_key,revision)
+        );
+        CREATE TABLE managed_source_coverage (
+            result_id VARCHAR NOT NULL, ordinal UBIGINT NOT NULL, cpu_id UINTEGER NOT NULL, report_revision UBIGINT NOT NULL,
+            interval_id BLOB NOT NULL, interval_revision UBIGINT NOT NULL, state UTINYINT NOT NULL,
+            PRIMARY KEY(result_id,ordinal)
+        );
+        CREATE TABLE managed_source_reasons (
+            result_id VARCHAR NOT NULL, ordinal UBIGINT NOT NULL, reason VARCHAR NOT NULL,
+            PRIMARY KEY(result_id,ordinal,reason)
+        );
+        CREATE TABLE managed_source_members (
+            tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL, stream_key BLOB NOT NULL,
+            record_key BLOB NOT NULL, cpu_id UINTEGER NOT NULL, source_cursor UBIGINT NOT NULL,
+            position_revision UBIGINT NOT NULL, position_ordinal UINTEGER NOT NULL,
+            origin_result_id VARCHAR NOT NULL, restricted UBIGINT NOT NULL,
+            valid_from UBIGINT NOT NULL, valid_to UBIGINT,
+            PRIMARY KEY(tenant_id,instance_id,stream_key,record_key,valid_from)
+        );
+        CREATE TABLE managed_source_gaps (
+            result_id VARCHAR NOT NULL, first_cursor UBIGINT NOT NULL, last_cursor UBIGINT NOT NULL,
+            PRIMARY KEY(result_id,first_cursor,last_cursor)
+        );
         CREATE TABLE managed_versions (
             tenant_id BLOB NOT NULL, instance_id VARCHAR NOT NULL,
             generation UBIGINT NOT NULL, spec BLOB NOT NULL, scope BLOB NOT NULL,
@@ -38,10 +132,21 @@ impl AnalysisStore {
         );";
 
     pub(in crate::analysis) fn validate_managed(reader: &Connection, root: &Path) -> Result<()> {
+        Self::validate_graph_calls(reader)?;
+        let orphan: bool = reader.query_row(
+            "SELECT EXISTS(SELECT 1 FROM managed_source_proofs pin
+             LEFT JOIN analysis_results result USING(result_id)
+             WHERE result.result_id IS NULL OR result.processor_id NOT IN ('managed-package-v1','managed-definition-v1'))",
+            [], |row| row.get(0),
+        ).context(AnalysisDatabaseSnafu { operation: "check source record proof owners" })?;
+        if orphan {
+            return Self::reject_path(root, "the source record proof owner is absent");
+        }
         let meta = Self::read_meta_from(reader, &root.join("analysis.duckdb"))?;
         let mut progress = std::collections::BTreeMap::new();
         let mut heads = std::collections::BTreeMap::new();
         let mut failures = std::collections::BTreeMap::new();
+        let mut graph_admissions = std::collections::BTreeMap::new();
         let head: u64 = reader
             .query_row("SELECT commit_revision FROM store_meta", [], |row| {
                 row.get(0)
@@ -79,6 +184,23 @@ impl AnalysisStore {
             let spec = Self::managed_version_from(reader, tenant, &id, generation)?;
             Self::check_managed_images(reader, &spec)?;
             Self::managed_scope_from(reader, tenant, &id, generation)?;
+            for call in spec.manifest.calls.values() {
+                let package = Self::managed_contract(reader, tenant, call)?;
+                let model = package
+                    .exports
+                    .iter()
+                    .find(|model| model.name == call.export)
+                    .ok_or_else(|| {
+                        crate::PackageErrorCodeV1::Missing.error("managed version export")
+                    })?;
+                if model.graph.is_some() {
+                    graph_admissions
+                        .entry((tenant, id.clone()))
+                        .and_modify(|cut: &mut u64| *cut = (*cut).min(generation))
+                        .or_insert(generation);
+                    break;
+                }
+            }
         }
         let mut statement = reader
             .prepare("SELECT tenant_id, instance_id FROM managed_instances")
@@ -179,6 +301,13 @@ impl AnalysisStore {
                 WHERE i.instance_id IS NULL
             UNION ALL SELECT 1 FROM managed_attempts a LEFT JOIN managed_instances i USING (tenant_id, instance_id)
                 WHERE i.instance_id IS NULL
+            UNION ALL SELECT 1 FROM managed_source_reads e LEFT JOIN analysis_results r ON e.result_id=r.result_id
+                LEFT JOIN analysis_results d ON e.producer_id=d.result_id
+                WHERE r.result_id IS NULL OR d.result_id IS NULL OR r.tenant_id<>d.tenant_id OR e.revision<>d.commit_revision OR e.revision>=r.commit_revision
+            UNION ALL SELECT 1 FROM managed_context_imports i LEFT JOIN analysis_results r USING(result_id)
+                LEFT JOIN context_versions c USING(version_key)
+                LEFT JOIN graph_fact_records f USING(version_key)
+                WHERE r.result_id IS NULL OR c.version_key IS NULL OR f.version_key IS NULL OR c.tenant_id<>r.tenant_id OR c.commit_revision<>i.revision OR i.revision>r.commit_revision
             UNION ALL SELECT 1 FROM managed_edges e LEFT JOIN analysis_results r ON e.result_id = r.result_id AND e.tenant_id = r.tenant_id
                 LEFT JOIN analysis_results d ON e.dependency_id = d.result_id AND e.tenant_id = d.tenant_id
                 WHERE r.result_id IS NULL OR d.result_id IS NULL OR e.commit_revision <> d.commit_revision
@@ -399,65 +528,6 @@ impl AnalysisStore {
                 {
                     return Self::reject_path(root, "the managed receipt is invalid");
                 }
-                if let (
-                    crate::ManagedDestination::Graph {
-                        operation: crate::ManagedGraphOperation::Evaluate,
-                        calls,
-                        ..
-                    },
-                    Some(graph),
-                ) = (&program.destination, &receipt.graph)
-                {
-                    if graph.commit_revision == receipt.commit_revision {
-                        let mut expected = Vec::new();
-                        for call in calls {
-                            let pin = program.manifest.calls.get(call).ok_or_else(|| {
-                                crate::PackageErrorCodeV1::Missing.error("managed Graph call pin")
-                            })?;
-                            let descriptor = Self::managed_contract(reader, tenant, pin)?;
-                            let model = descriptor
-                                .exports
-                                .iter()
-                                .find(|model| model.name == pin.export)
-                                .ok_or_else(|| {
-                                    crate::PackageErrorCodeV1::Missing.error("managed Graph export")
-                                })?;
-                            if araphor_analysis_builtins::graph::Detector::supports_units(model) {
-                                let result = receipt.results.get(call).ok_or_else(|| {
-                                    crate::PackageErrorCodeV1::Missing
-                                        .error("managed Graph producer")
-                                })?;
-                                expected.push((*call, result.result_id.clone()));
-                            }
-                        }
-                        let mut statement = reader
-                            .prepare(
-                                "SELECT s.call_id, v.result_id
-                             FROM graph_result_producers p
-                             JOIN graph_producer_versions v ON v.result_id = p.producer_result_id
-                             JOIN graph_producer_scopes s USING (scope_id)
-                             WHERE p.result_id = ? AND s.producer_kind = 0
-                             ORDER BY s.call_id, v.result_id",
-                            )
-                            .context(AnalysisDatabaseSnafu {
-                                operation: "prepare Graph producer recovery",
-                            })?;
-                        let actual = statement
-                            .query_map(params![graph.result_id], |row| {
-                                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
-                            })
-                            .context(AnalysisDatabaseSnafu {
-                                operation: "read Graph producer recovery",
-                            })?
-                            .collect::<duckdb::Result<Vec<_>>>()
-                            .context(AnalysisDatabaseSnafu {
-                                operation: "decode Graph producer recovery",
-                            })?;
-                        if actual != expected {
-                            return Self::reject_path(root, "the published Graph producers differ");
-                        }
-                    }
-                }
                 let (step, revision) =
                     Self::managed_step_header(reader, tenant, &receipt.selected.result_id)?;
                 if receipt.selected.commit_revision != receipt.commit_revision
@@ -474,6 +544,48 @@ impl AnalysisStore {
                     &step,
                     revision,
                 )?;
+                if graph_admissions
+                    .get(&(tenant, instance.clone()))
+                    .is_some_and(|cut| revision > *cut)
+                {
+                    let (published, required): (bool, bool) = reader
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM managed_graph_publications publication
+                         JOIN managed_graphs graph USING(graph_id)
+                         WHERE publication.result_id=? AND publication.revision=?
+                             AND graph.tenant_id=? AND graph.instance_id=?),
+                         EXISTS(SELECT 1 FROM managed_graph_results result
+                             JOIN graph_writers writer USING(writer_id)
+                             JOIN managed_graphs graph USING(graph_id)
+                             WHERE graph.tenant_id=? AND graph.instance_id=? AND result.revision=?)
+                         OR EXISTS(SELECT 1 FROM managed_source_publications source
+                             WHERE source.result_id=? AND source.tenant_id=?
+                                 AND source.instance_id=? AND source.revision=?)",
+                            params![
+                                receipt.selected.result_id,
+                                revision,
+                                tenant.as_slice(),
+                                instance,
+                                tenant.as_slice(),
+                                instance,
+                                revision,
+                                receipt.selected.result_id,
+                                tenant.as_slice(),
+                                instance,
+                                revision
+                            ],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "check selected Graph publication",
+                        })?;
+                    if required && !published {
+                        return Self::reject_path(
+                            root,
+                            "the selected Graph publication is missing",
+                        );
+                    }
+                }
             }
         }
         if progress
@@ -511,7 +623,7 @@ impl AnalysisStore {
                 if saved != revision {
                     return Self::reject_path(root, "the managed result revision differs");
                 }
-                let (descriptor, attempt, evaluated) =
+                let (descriptor, _attempt, evaluated) =
                     Self::validate_managed_header(reader, tenant, &id, &record, saved)?;
                 let declaration = &evaluated.manifest.calls[&record.call];
                 let model = descriptor
@@ -532,78 +644,6 @@ impl AnalysisStore {
                 model
                     .validate_checkpoint(checkpoint.as_ref(), true)
                     .context(crate::AnalysisContractSnafu)?;
-                let unit = matches!(&evaluated.destination, super::ManagedDestination::Graph {calls,..} if calls.contains(&record.call))
-                    && araphor_analysis_builtins::graph::Detector::supports_units(model);
-                let base: Option<Option<String>> = reader
-                    .query_row(
-                        "SELECT base_result_id FROM graph_producer_versions WHERE result_id = ?",
-                        params![id],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "validate Graph call result binding",
-                    })?;
-                if unit {
-                    base.ok_or_else(|| {
-                        crate::PackageErrorCodeV1::Missing.error("Graph call native version")
-                    })?;
-                    let scope = crate::analysis::graph_rows::GraphRows::call_scope(
-                        reader,
-                        &evaluated,
-                        record.call,
-                        &crate::analysis::PackageResultRefV1 {
-                            result_id: id.clone(),
-                            commit_revision: revision,
-                        },
-                    )?;
-                    crate::analysis::graph_rows::GraphRows::validate_call_members(
-                        reader,
-                        root,
-                        scope,
-                        revision,
-                        attempt.capture.revision,
-                    )?;
-                    let selected = araphor_graph::StateRows::current(reader, scope, revision)?;
-                    let mut published = reader.prepare("SELECT result_id FROM graph_result_producers WHERE producer_result_id=?")
-                        .context(AnalysisDatabaseSnafu { operation: "prepare Graph package state recovery" })?;
-                    let graphs = published
-                        .query_map(params![id], |row| row.get::<_, String>(0))
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "read Graph package state recovery",
-                        })?
-                        .collect::<duckdb::Result<Vec<_>>>()
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "decode Graph package state recovery",
-                        })?;
-                    for graph in graphs {
-                        let header = crate::analysis::graph_rows::GraphRows::read_metadata_control(
-                            reader, tenant, &graph, None,
-                        )?
-                        .ok_or_else(|| {
-                            crate::PackageErrorCodeV1::Missing.error("Graph package state header")
-                        })?;
-                        if header.expired {
-                            continue;
-                        }
-                        let package = header
-                            .snapshot
-                            .packages
-                            .iter()
-                            .find(|package| package.package_id == declaration.package.package_id)
-                            .ok_or_else(|| {
-                                crate::PackageErrorCodeV1::Missing.error("Graph package state pin")
-                            })?;
-                        if package.state != selected {
-                            return Self::reject_path(
-                                root,
-                                "the published Graph package state differs",
-                            );
-                        }
-                    }
-                } else if base.is_some() {
-                    return Self::reject_path(root, "a generic call has a native Graph version");
-                }
             } else {
                 let (step, saved) = Self::managed_step_header(reader, tenant, &id)?;
                 if saved != revision {

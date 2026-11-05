@@ -179,7 +179,7 @@ impl NativeAdmission {
         }
         let root = Self::parse(artifact)?;
         let accessor = root.exports().map_err(|_| crate::Error::from(Code::Invalid.error("native exports")))?
-            .any(|entry| entry.is_ok_and(|entry| matches!(entry.name(), NameOrOrdinal::Name(name) if name == b"araphor_analysis_get_api_v1")));
+            .any(|entry| entry.is_ok_and(|entry| matches!(entry.name(), NameOrOrdinal::Name(name) if name == b"araphor_analysis_get_api_v2")));
         if !accessor {
             return Err(crate::Error::from(
                 Code::Invalid.error("native ABI accessor"),

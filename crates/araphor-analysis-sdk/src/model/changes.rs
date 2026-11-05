@@ -15,6 +15,8 @@ pub struct ChangeInput {
     pub affected: String,
     pub before: String,
     pub after: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -95,6 +97,10 @@ impl ChangeInputs {
                 || !names.insert(&port.after)
                 || input(&port.before)?.port.schema != input(&port.after)?.port.schema
                 || matches!(&input(&port.after)?.source, InputSource::Lookup(_))
+                || port
+                    .current
+                    .as_ref()
+                    .is_some_and(|sql| sql.trim().is_empty())
             {
                 return Err(Self::invalid("change input pair"));
             }
@@ -172,6 +178,7 @@ mod tests {
                 affected: "affected".into(),
                 before: "before".into(),
                 after: "after".into(),
+                current: None,
             }],
         };
         let mut model = Model::new(

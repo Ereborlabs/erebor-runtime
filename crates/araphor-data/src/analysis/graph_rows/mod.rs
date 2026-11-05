@@ -4,7 +4,7 @@ use std::io::Cursor;
 use araphor_analysis_builtins::graph::*;
 use araphor_analysis_sdk as sdk;
 use duckdb::{params, Connection, OptionalExt as _, Row};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use snafu::ResultExt as _;
 
 use super::{AnalysisReadControl, GraphManifest, ManagedCommit, PackageResultRefV1};
@@ -19,6 +19,7 @@ mod read;
 mod registry;
 mod schema;
 mod stage;
+pub(crate) mod store;
 #[cfg(test)]
 pub(in crate::analysis) mod tests;
 mod units;

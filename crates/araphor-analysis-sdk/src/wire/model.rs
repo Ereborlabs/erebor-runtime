@@ -58,9 +58,16 @@ pub struct EvaluationError {
 
 impl From<Error> for EvaluationError {
     fn from(error: Error) -> Self {
+        Self::from(&error)
+    }
+}
+
+impl From<&Error> for EvaluationError {
+    fn from(error: &Error) -> Self {
         let code = error.code();
         let field = match error {
-            Error::Contract { field, .. } => field,
+            Error::Backend { .. } => "Graph host".into(),
+            Error::Contract { field, .. } => field.clone(),
             Error::Batch { .. } => "arrow batch".into(),
             Error::Encoding { .. } => "encoding".into(),
             Error::Io { .. } => "io".into(),

@@ -537,6 +537,13 @@ impl AnalysisStore {
         self.reader_wait(Some(control), self.reserve_reader()?)
     }
 
+    pub(super) fn frozen_reader(
+        &self,
+        control: &AnalysisReadControl,
+    ) -> Result<AnalysisConnection<'_>> {
+        self.snapshot_reader(Some(control), self.reserve_reader()?)
+    }
+
     pub(crate) fn reserve_reader(&self) -> Result<ReadPermit> {
         if self.storage.reader_admissions == Some(0) {
             return crate::StorageCapacitySnafu {
@@ -589,6 +596,14 @@ impl AnalysisStore {
         if self.raw_pending.load(Ordering::Acquire) {
             drop(self.writer_wait(control, true)?);
         }
+        self.snapshot_reader(control, permit)
+    }
+
+    fn snapshot_reader(
+        &self,
+        control: Option<&AnalysisReadControl>,
+        permit: ReadPermit,
+    ) -> Result<AnalysisConnection<'_>> {
         let snapshot = match control {
             Some(control) => self.maintenance.read_until(control)?,
             None => self

@@ -26,6 +26,7 @@ type IndexedNotificationGraph = (Vec<u8>, u64, u64, u64, Option<bool>, u64);
 mod changes;
 mod discovery;
 mod graph;
+mod notifications;
 mod package;
 mod selection;
 mod source;
@@ -659,6 +660,7 @@ pub struct AnalysisSourceSnapshotV1 {
     /// Missing source cursors above the ACK through the last durable cursor.
     pub pending: Vec<AnalysisGapV1>,
     pub coverage_report: Option<Vec<u8>>,
+    pub typed_report: Option<std::sync::Arc<crate::CoverageReport>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -1429,20 +1431,68 @@ impl AnalysisStore {
             profiles.dedup();
         }
         if selection.graphs.is_all() && requested.is_none() {
+            let mut query = snapshot.prepare(
+                "SELECT publication.result_id FROM managed_graph_publications publication
+                 JOIN managed_graphs graph USING(graph_id) WHERE graph.tenant_id=?
+                    AND (? IS NULL OR publication.revision<=?)
+                    AND NOT EXISTS(SELECT 1 FROM managed_source_publications source WHERE source.result_id=publication.result_id)
+                 QUALIFY row_number() OVER(PARTITION BY publication.graph_id
+                    ORDER BY publication.revision DESC,publication.result_id DESC)=1
+                 ORDER BY publication.revision,publication.result_id LIMIT ?",
+            ).context(AnalysisDatabaseSnafu { operation: "prepare Definition Graph keys" })?;
+            let rows = query
+                .query_map(
+                    params![
+                        selection.tenant_id.as_slice(),
+                        cut,
+                        cut,
+                        limits.key_rows(resolved.key_count())
+                    ],
+                    |row| row.get::<_, String>(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read Definition Graph keys",
+                })?;
+            for row in rows {
+                control.check()?;
+                let id = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode Definition Graph key",
+                })?;
+                if id.is_empty() {
+                    return self.reject("the Definition Graph key is invalid");
+                }
+                if limits.keys.is_some_and(|keys| resolved.key_count() >= keys) {
+                    return Err(error());
+                }
+                let graphs = resolved
+                    .graphs
+                    .exact_mut()
+                    .ok_or_else(|| self.state_error("the resolved graph selection is not exact"))?;
+                let added = AnalysisExtractionV1::grow(graphs, bytes, limit)?;
+                bytes = bytes
+                    .checked_add(added)
+                    .and_then(|bytes| bytes.checked_add(id.capacity()))
+                    .filter(|bytes| *bytes <= limit)
+                    .ok_or_else(error)?;
+                graphs.push(id);
+            }
             let mut statement = snapshot.prepare(
-                "SELECT result_id FROM analysis_results
-                 WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND stream_key = ?
-                 QUALIFY ROW_NUMBER() OVER (PARTITION BY first_cursor ORDER BY commit_revision DESC) = 1
-                 ORDER BY commit_revision, result_id LIMIT ?",
-            ).context(AnalysisDatabaseSnafu { operation: "prepare graph result keys" })?;
+                "WITH publications AS (
+                    SELECT tenant_id,stream_key,first_cursor,commit_revision,result_id FROM analysis_results
+                    WHERE processor_id=? AND method_version=? AND stream_key IS NOT NULL
+                    UNION ALL SELECT tenant_id,stream_key,first_cursor,revision,result_id FROM managed_source_publications
+                 ) SELECT result_id FROM publications WHERE tenant_id=? AND stream_key=?
+                 QUALIFY row_number() OVER(PARTITION BY first_cursor ORDER BY commit_revision DESC,result_id DESC)=1
+                 ORDER BY commit_revision,result_id LIMIT ?",
+            ).context(AnalysisDatabaseSnafu { operation:"prepare graph result keys" })?;
             for source in resolved.sources.as_slice() {
                 control.check()?;
                 let rows = statement
                     .query_map(
                         params![
-                            selection.tenant_id.as_slice(),
                             crate::GRAPH_PROCESSOR,
                             crate::GRAPH_SCHEMA_VERSION,
+                            selection.tenant_id.as_slice(),
                             source.key().as_slice(),
                             limits.key_rows(resolved.key_count())
                         ],
@@ -1550,6 +1600,49 @@ impl AnalysisStore {
         tables::Capture::schemas()
     }
 
+    pub fn subscription_metadata(
+        &self,
+        scope: &AnalysisSelectionV1,
+        demands: &AnalysisTableRequests,
+        now: u64,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<(AnalysisSelectionV1, AnalysisPositionPageV1)> {
+        control.check()?;
+        if demands
+            .iter()
+            .any(|(name, columns)| columns.is_some() || !Self::table_schemas().contains_key(name))
+        {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("subscription metadata scope"));
+        }
+        let bytes = scope.metadata_bytes(demands);
+        if bytes > limits.input_bytes {
+            return AnalysisInputTooLargeSnafu {
+                resource: "subscription metadata scope",
+            }
+            .fail();
+        }
+        let selection = scope.metadata_projection(demands);
+        let read = AnalysisTableRead {
+            requests: demands,
+            event_ranges: None,
+            mode: AnalysisReadModeV1::Metadata,
+            now,
+        };
+        let (page, _) = self.read_tables_inner(
+            &selection,
+            scope,
+            None,
+            None,
+            read,
+            limits,
+            control,
+            None,
+            Some(bytes),
+        )?;
+        Ok((selection, page))
+    }
+
     pub fn read_tables(
         &self,
         selection: &AnalysisSelectionV1,
@@ -1557,20 +1650,34 @@ impl AnalysisStore {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
     ) -> Result<AnalysisPositionPageV1> {
-        self.read_tables_inner(selection, None, None, read, limits, control, None)
-            .map(|(page, _)| page)
+        self.read_tables_inner(
+            selection, selection, None, None, read, limits, control, None, None,
+        )
+        .map(|(page, _)| page)
     }
 
     pub fn read_tables_filtered(
         &self,
         selection: &AnalysisSelectionV1,
+        scope: &AnalysisSelectionV1,
         read: AnalysisTableRead<'_>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
         context_owners: Option<&BTreeSet<String>>,
     ) -> Result<AnalysisPositionPageV1> {
-        self.read_tables_inner(selection, None, None, read, limits, control, context_owners)
-            .map(|(page, _)| page)
+        read.check_scope(selection, scope)?;
+        self.read_tables_inner(
+            selection,
+            scope,
+            None,
+            None,
+            read,
+            limits,
+            control,
+            context_owners,
+            None,
+        )
+        .map(|(page, _)| page)
     }
 
     pub fn read_managed_tables_filtered(
@@ -1592,23 +1699,23 @@ impl AnalysisStore {
         {
             return Err(crate::PackageErrorCodeV1::Invalid.error("managed capture scope"));
         }
-        read.check_scope(
-            selection,
-            &managed
-                .instance
-                .spec
-                .destination
-                .selection(&managed.instance.grant.selection)?,
-        )?;
+        let scope = managed
+            .instance
+            .spec
+            .destination
+            .selection(&managed.instance.grant.selection)?;
+        read.check_scope(selection, &scope)?;
         read.check_managed_changes(selection)?;
         let (page, state) = self.read_tables_inner(
             selection,
+            &scope,
             Some(managed),
             None,
             read,
             limits,
             control,
             context_owners,
+            None,
         )?;
         let state = state.ok_or_else(|| self.state_error("the managed capture is absent"))?;
         Ok(super::ManagedPage { page, state })
@@ -1626,22 +1733,22 @@ impl AnalysisStore {
         if selection.tenant_id != reference.instance().spec.tenant {
             return Err(crate::PackageErrorCodeV1::Denied.error("managed reference tenant"));
         }
-        read.check_scope(
-            selection,
-            &reference
-                .instance()
-                .spec
-                .destination
-                .selection(&reference.instance().grant.selection)?,
-        )?;
+        let scope = reference
+            .instance()
+            .spec
+            .destination
+            .selection(&reference.instance().grant.selection)?;
+        read.check_scope(selection, &scope)?;
         let (page, state) = self.read_tables_inner(
             selection,
+            &scope,
             None,
             Some(reference),
             read,
             limits,
             control,
             context_owners,
+            None,
         )?;
         Ok(super::ManagedPage {
             page,
@@ -1656,14 +1763,33 @@ impl AnalysisStore {
     fn read_tables_inner(
         &self,
         selection: &AnalysisSelectionV1,
+        scope: &AnalysisSelectionV1,
         managed: Option<&super::ManagedRead>,
         reference: Option<&super::ManagedAttempt>,
         read: AnalysisTableRead<'_>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
         context_owners: Option<&BTreeSet<String>>,
+        envelope: Option<usize>,
     ) -> Result<(AnalysisPositionPageV1, Option<super::ManagedCapture>)> {
         control.check()?;
+        if envelope.is_some()
+            && (managed.is_some()
+                || reference.is_some()
+                || !matches!(read.mode, AnalysisReadModeV1::Metadata)
+                || read.event_ranges.is_some()
+                || read.requests.values().any(Option::is_some)
+                || selection.targets
+                || selection.targets_only
+                || !selection.contexts.is_empty()
+                || !selection.profiles.is_empty()
+                || !selection.graphs.is_empty()
+                || selection.graph_traversal.is_some()
+                || !selection.obligations.is_empty()
+                || !selection.results.is_empty())
+        {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("subscription metadata demand"));
+        }
         let mode = match read.mode {
             AnalysisReadModeV1::Complete
                 if managed.is_none_or(|request| request.source.is_none()) && !read.reads_raw() =>
@@ -1787,13 +1913,11 @@ impl AnalysisStore {
             };
             output.charge(size_of::<AnalysisExtractionV1>())?;
             output.charge(key_bytes)?;
+            output.charge(envelope.unwrap_or(0))?;
             let mut managed = match reference {
                 Some(reference) => Some(Self::restore_managed(snapshot, reference, &mut output, control, &read, requested, context_owners, &physical)?),
                 None => managed.map(|request| self.capture_managed(snapshot, request, &read, requested, &mut output, control, context_owners)).transpose()?,
             };
-            if let Some(managed) = &managed {
-                capture.graph_expiry(managed)?;
-            }
             if read.reads_raw()
                 && matches!(mode, AnalysisReadModeV1::Page(_) | AnalysisReadModeV1::Changes(_))
             {
@@ -1841,6 +1965,7 @@ impl AnalysisStore {
                     recovery,
                     pending,
                     coverage_report,
+                    typed_report: None,
                 });
             }
             let mut trace_info = Vec::new();
@@ -1924,6 +2049,10 @@ impl AnalysisStore {
                     capture.trace(&state, &intent, index as u32, &receipt, &mut output.sink(control))?;
                 }
             }
+            if envelope.is_some() {
+                return Ok((capture.finish(output, end, true, control)?, None));
+            }
+            let mut owners = super::managed::OwnerRead::new(snapshot, selection.tenant_id, control);
             let removals = if let AnalysisReadModeV1::Changes(after) = mode {
                 self.raw_removals(snapshot, selection, &trace_info, after, control, &mut output)?
             } else {
@@ -2074,9 +2203,9 @@ impl AnalysisStore {
                 )?;
                 if managed.is_some() && read.projected("context_versions").is_some() {
                     self.extract_provenance(snapshot, selection.tenant_id, &mut output,
-                        &capture, control)?;
+                        &capture, control, &mut owners)?;
                 }
-                self.extract_graph_tables(snapshot, selection, &read, &mut output, &mut capture, control)?;
+                self.extract_graph_tables(snapshot, selection, scope, &read, &mut output, &mut capture, control, &mut owners)?;
                 control.check()?;
                 let mut page = capture.finish(output, end, true, control)?;
                 if let Some(state) = &mut managed {
@@ -2133,33 +2262,26 @@ impl AnalysisStore {
                 capture.profile(id, &body, revision, selection.sources.as_slice(),
                     discovery_enabled, &mut output.sink(control))?;
             }
-            self.extract_graph_tables(snapshot, selection, &read, &mut output, &mut capture, control)?;
+            self.extract_graph_tables(snapshot, selection, scope, &read, &mut output, &mut capture, control, &mut owners)?;
             let mut routes = BTreeMap::new();
             let mut graphs = Vec::<(String, u64, super::graph_rows::GraphHeader)>::new();
-            for key in selection.obligations.as_slice() {
+            let states = notifications::NotificationState::read(self, snapshot, selection, &mut output, control)?;
+            let current = read.projects_field("notifications", "current_finding_result_id")
+                || read.projects_field("notifications", "same_graph_revision");
+            let native = notifications::NativeNotifications::read(
+                snapshot, selection, scope, &states, &capture, current, &mut output, control, &mut owners)?;
+            for notifications::NotificationState { key, revision, obligation } in states {
                 control.check()?;
-                let (context, revision) = Self::read_context_from(snapshot, &self.root, key)?
-                    .ok_or_else(|| self.state_error("the selected notification state is absent"))?;
-                output.scan(context.body.len())?;
-                output.charge(context.body.capacity().saturating_mul(2))?;
-                let obligation = crate::NotificationObligationV1::try_from(&context)?;
+                let scalar = obligation.finding.as_ref().filter(|reference|
+                    selection.binding_ids.is_empty() && !capture.needs_manifest(&reference.result_id))
+                    .map(|reference| native.resolve(self, reference, selection, current)).transpose()?.flatten();
+                if scalar.as_ref().is_some_and(|scalar| !scalar.allowed) { continue; }
                 let mut parent = None;
                 let point_finding;
                 let mut finding_value_id = None;
-                let finding = if let Some(reference) = &obligation.finding {
+                let finding = if scalar.is_some() { None } else if let Some(reference) = &obligation.finding {
                     if selection.binding_ids.is_empty() && !capture.needs_manifest(&reference.result_id) {
-                        let indexed: Option<IndexedNotificationGraph> = snapshot
-                            .query_row(
-                                "SELECT r.stream_key,r.method_version,r.first_cursor,r.commit_revision,v.expired,octet_length(r.body)
-                                 FROM analysis_results r LEFT JOIN graph_versions v USING(result_id)
-                                 WHERE r.tenant_id=? AND r.processor_id=? AND r.method_version=? AND r.result_id=?
-                                   AND r.stream_key IS NOT NULL",
-                                params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR,
-                                    crate::GRAPH_SCHEMA_VERSION, reference.result_id],
-                                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
-                            )
-                            .optional()
-                            .context(AnalysisDatabaseSnafu { operation: "read notification Graph result" })?;
+                        let indexed = Self::notification_graph_index(snapshot,selection.tenant_id,&reference.result_id)?;
                         if let Some((source_key, method, first, graph_revision, expired, length)) = indexed {
                             let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
                             let length=usize::try_from(length).unwrap_or(usize::MAX);
@@ -2194,15 +2316,8 @@ impl AnalysisStore {
                     let index = match graphs.binary_search_by(|(id, _, _)| id.cmp(&reference.result_id)) {
                         Ok(index) => Some(index),
                         Err(index) => {
-                            let metadata: Option<(Vec<u8>, u64)> = snapshot.query_row(
-                                "SELECT stream_key, commit_revision FROM analysis_results
-                                 WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?
-                                    AND stream_key IS NOT NULL",
-                                params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR,
-                                    crate::GRAPH_SCHEMA_VERSION, reference.result_id], |row| Ok((row.get(0)?, row.get(1)?)),
-                            ).optional().context(AnalysisDatabaseSnafu {
-                                operation: "read notification graph source",
-                            })?;
+                            let metadata = Self::notification_graph_index(snapshot,selection.tenant_id,&reference.result_id)?
+                                .map(|(source,_,_,revision,_,_)| (source,revision));
                             if let Some((source_key, graph_revision)) = metadata {
                                 let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
                                 let header = self.graph_input(snapshot, selection,
@@ -2242,16 +2357,30 @@ impl AnalysisStore {
                 }
                 let mut current_result=None;
                 let mut same_revision=false;
-                if (read.projects_field("notifications","current_finding_result_id")
+                if let Some(scalar) = &scalar {
+                    let reference = obligation.finding.as_ref()
+                        .ok_or_else(|| self.state_error("the scalar notification reference is absent"))?;
+                    output.reference_result(&reference.result_id, scalar.revision, AnalysisReferenceOriginV1::Notification)?;
+                    finding_value_id = scalar.value;
+                    if scalar.value.is_some() {
+                        capture.record_finding(&reference.result_id, &reference.finding_id, &mut output.sink(control))?;
+                    }
+                    if let Some((id, revision)) = scalar.current {
+                        output.charge(id.len())?;
+                        output.reference_result(id, revision, AnalysisReferenceOriginV1::Graph)?;
+                        capture.record_finding(id, &reference.finding_id, &mut output.sink(control))?;
+                        same_revision = reference.result_id == id;
+                        current_result = Some(id.to_owned());
+                    }
+                }
+                if scalar.is_none() && (read.projects_field("notifications","current_finding_result_id")
                     || read.projects_field("notifications","same_graph_revision")) && finding.is_some()
                 {
                     if let Some(reference)=&obligation.finding {
                         let heads=self.current_finding_keys(snapshot,selection.tenant_id,None,Some(&reference.finding_id),1)?;
                         if let Some((id,_))=heads.first() {
-                            let (source_key,length):(Vec<u8>,u64)=snapshot.query_row(
-                                "SELECT stream_key,octet_length(body) FROM analysis_results WHERE tenant_id=? AND result_id=? AND processor_id=?",
-                                params![selection.tenant_id.as_slice(),id,crate::GRAPH_PROCESSOR],|row|Ok((row.get(0)?,row.get(1)?)))
-                                .context(AnalysisDatabaseSnafu {operation:"bound current notification Graph"})?;
+                            let (source_key,_,_,current_revision,_,length) = Self::notification_graph_index(snapshot,selection.tenant_id,id)?
+                                .ok_or_else(|| self.state_error("the current notification Graph index is absent"))?;
                             if selection.sources.as_slice().iter().any(|source|source.key()==source_key) {
                             let length=usize::try_from(length).unwrap_or(usize::MAX);
                             output.scan(length)?;
@@ -2269,18 +2398,15 @@ impl AnalysisStore {
                                 if selection.binding_ids.is_empty() || (!value.effects.is_empty() && value.effects.iter().all(|effect|
                                     effect.binding_id.is_some_and(|binding|selection.binding_ids.contains(&binding))))
                                 {
-                                    let length:u64=snapshot.query_row("SELECT octet_length(body) FROM analysis_results WHERE tenant_id=? AND result_id=? AND processor_id=?",
-                                        params![selection.tenant_id.as_slice(),reference.result_id,crate::GRAPH_PROCESSOR],|row|row.get(0))
-                                        .context(AnalysisDatabaseSnafu {operation:"bound prior notification Graph"})?;
+                                    let (_,_,_,_,_,length) = Self::notification_graph_index(snapshot,selection.tenant_id,&reference.result_id)?
+                                        .ok_or_else(|| self.state_error("the prior notification Graph index is absent"))?;
                                     let length=usize::try_from(length).unwrap_or(usize::MAX);
                                     output.scan(length)?;
                                     output.charge(length.saturating_mul(2))?;
                                     let previous=super::graph_rows::GraphRows::read_summary(snapshot,selection.tenant_id,&reference.result_id,Some(control))?
                                         .ok_or_else(||self.state_error("the prior notification Graph is absent"))?;
                                     same_revision=super::graph_rows::GraphRows::same_revision(snapshot,&reference.result_id,&previous,id,&current,Some(control))?;
-                                    let revision:u64=snapshot.query_row("SELECT commit_revision FROM graph_versions WHERE result_id=?",params![id],|row|row.get(0))
-                                        .context(AnalysisDatabaseSnafu {operation:"read notification comparison Graph revision"})?;
-                                    output.reference_result(id,revision,AnalysisReferenceOriginV1::Graph)?;
+                                    output.reference_result(id,current_revision,AnalysisReferenceOriginV1::Graph)?;
                                     capture.record_finding(id,&value.finding_id,&mut output.sink(control))?;
                                     current_result=Some(id.clone());
                                 }
@@ -2303,7 +2429,7 @@ impl AnalysisStore {
                             output.reference_result(id, *graph_revision, AnalysisReferenceOriginV1::Graph)?;
                         }
                 }
-                output.reference_context(&context.key, revision, AnalysisReferenceOriginV1::Notification)?;
+                output.reference_context(&key, revision, AnalysisReferenceOriginV1::Notification)?;
                 let mut retry_utc_ns = None;
                 for kind in [crate::NotificationDeliveryKindV1::Finding,
                     crate::NotificationDeliveryKindV1::FailureEscalation,
@@ -2336,7 +2462,8 @@ impl AnalysisStore {
                         retry_utc_ns = Some(retry_utc_ns.map_or(deadline, |old: u64| old.min(deadline)));
                     }
                 }
-                capture.notification(&obligation, finding, finding_value_id, current_result.as_deref(),same_revision,revision, retry_utc_ns,
+                let available = scalar.as_ref().map_or(finding.is_some(), |scalar| scalar.value.is_some());
+                capture.notification(&obligation, available, finding_value_id, current_result.as_deref(),same_revision,revision, retry_utc_ns,
                     &mut output.sink(control))?;
             }
             for id in &selection.results {
@@ -2366,7 +2493,7 @@ impl AnalysisStore {
             }
             if !selection.results.is_empty() || managed.is_some() {
                 self.extract_provenance(snapshot, selection.tenant_id, &mut output,
-                    &capture, control)?;
+                    &capture, control, &mut owners)?;
             }
             control.check()?;
             let mut page = capture.finish(output, after.unwrap_or(StorePositionV1 {
@@ -2853,8 +2980,10 @@ mod tests {
             AnalysisStore::table_schemas()["context_versions"].index_of("owner_id")?
         ]);
         let requests = AnalysisTableRequests::from([("context_versions".into(), Some(columns))]);
+        let scope = AnalysisSelectionV1::tenant(tenant);
         let page = store.read_tables_filtered(
-            &AnalysisSelectionV1::tenant(tenant),
+            &scope.project(&requests)?,
+            &scope,
             AnalysisTableRead {
                 requests: &requests,
                 event_ranges: None,
@@ -4899,5 +5028,60 @@ mod tests {
             0
         );
         Ok(())
+    }
+}
+
+impl AnalysisStore {
+    fn notification_graph_index(
+        snapshot: &Connection,
+        tenant: [u8; 16],
+        result: &str,
+    ) -> Result<Option<IndexedNotificationGraph>> {
+        let native = snapshot
+            .query_row(
+                &format!(
+                    "SELECT stream_key,{}::UBIGINT,first_cursor,revision,expired,0::UBIGINT
+             FROM ({}) publication WHERE tenant_id=? AND result_id=?",
+                    crate::GRAPH_SCHEMA_VERSION,
+                    Self::SOURCE_OWNER
+                ),
+                params![tenant.as_slice(), result],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read native notification Graph index",
+            })?;
+        if native.is_some() {
+            return Ok(native);
+        }
+        let present: bool = snapshot
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM managed_source_publications WHERE result_id=?)",
+                params![result],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "check native notification Graph owner",
+            })?;
+        if present {
+            return Err(crate::PackageErrorCodeV1::Denied.error("native notification Graph owner"));
+        }
+        snapshot.query_row(
+            "SELECT r.stream_key,r.method_version,r.first_cursor,r.commit_revision,v.expired,octet_length(r.body)
+             FROM analysis_results r LEFT JOIN graph_versions v USING(result_id)
+             WHERE r.tenant_id=? AND r.processor_id=? AND r.method_version=? AND r.result_id=? AND r.stream_key IS NOT NULL",
+            params![tenant.as_slice(),crate::GRAPH_PROCESSOR,crate::GRAPH_SCHEMA_VERSION,result],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).optional().context(AnalysisDatabaseSnafu { operation:"read notification Graph index" })
     }
 }

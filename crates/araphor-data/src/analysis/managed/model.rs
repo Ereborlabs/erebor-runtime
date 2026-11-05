@@ -37,6 +37,21 @@ pub struct ManagedManifest {
 }
 
 impl ManagedManifest {
+    pub(super) fn input_calls(&self, call: u64) -> Result<BTreeSet<u64>> {
+        let mut calls = BTreeSet::new();
+        let mut pending = vec![call];
+        while let Some(call) = pending.pop() {
+            if calls.insert(call) {
+                let declaration = self
+                    .calls
+                    .get(&call)
+                    .ok_or_else(|| Code::Invalid.error("managed input call"))?;
+                pending.extend(&declaration.dependencies);
+            }
+        }
+        Ok(calls)
+    }
+
     pub fn order(&self) -> Result<Vec<u64>> {
         if self.format != 1 || self.planner.is_empty() || self.definition == 0 {
             return Err(Code::Invalid.error("managed manifest format"));
@@ -255,13 +270,9 @@ impl ManagedSpec {
                         .any(|call| !self.manifest.calls.contains_key(call))
                     || match operation {
                         ManagedGraphOperation::Evaluate => {
-                            calls.is_empty() || events_sql.is_empty() || control_sql.is_empty()
+                            events_sql.is_empty() || control_sql.is_empty()
                         }
-                        ManagedGraphOperation::Expire => {
-                            !calls.is_empty()
-                                || !self.manifest.calls.is_empty()
-                                || !control_sql.is_empty()
-                        }
+                        ManagedGraphOperation::Expire => true,
                     }
                 {
                     return Err(Code::Invalid.error("managed graph destination"));
@@ -517,6 +528,7 @@ impl Capture {
 
 #[derive(Clone, Debug)]
 pub struct ManagedCapture {
+    pub(super) graph: Option<std::sync::Arc<super::execution::RetainedGraphProof>>,
     pub(super) execution: Option<std::sync::Arc<ManagedExecution>>,
     pub(super) instance: ManagedInstance,
     pub(super) contract: Capture,
@@ -526,6 +538,60 @@ pub struct ManagedCapture {
 }
 
 impl ManagedCapture {
+    pub(super) fn request_capture(&self, request: &ManagedRequest) -> Result<Capture> {
+        if request.rebuild != self.rebuild() || request.time_utc_ns != self.contract.time_utc_ns {
+            return Err(Code::Invalid.error("managed rebuild capture"));
+        }
+        let mut contract = self.contract.clone();
+        for witness in &mut contract.witnesses {
+            if witness.expires_utc_ns == 0 {
+                witness.expires_utc_ns = request.witness_expiry;
+            }
+        }
+        contract.witnesses.sort_unstable_by(|left, right| {
+            left.identity
+                .cmp(&right.identity)
+                .then(left.cursor.cmp(&right.cursor))
+                .then(left.expires_utc_ns.cmp(&right.expires_utc_ns))
+        });
+        contract
+            .witnesses
+            .dedup_by(|left, right| left.identity == right.identity && left.cursor == right.cursor);
+        Ok(contract)
+    }
+
+    pub fn check_current(&self, reference: &ManagedAttempt) -> Result<()> {
+        let same_source = match (&self.source, &reference.5) {
+            (None, None) => true,
+            (Some(left), Some(right)) => std::sync::Arc::ptr_eq(left, right),
+            _ => false,
+        };
+        let same_execution = match (&self.execution, &reference.4) {
+            (None, None) => true,
+            (Some(left), Some(right)) => std::sync::Arc::ptr_eq(left, right),
+            _ => false,
+        };
+        if self.request_capture(reference.request())? != reference.0.capture
+            || self.instance != reference.1
+            || reference.receipt().is_some()
+            || reference.terminal().is_some()
+            || !same_source
+            || !same_execution
+        {
+            return Err(Code::Conflict.error("managed current capture"));
+        }
+        Ok(())
+    }
+
+    pub fn graph_input(
+        &self,
+        base: &PackageResultRefV1,
+    ) -> Option<&std::sync::Arc<crate::analysis::graph_rows::store::InputProof>> {
+        self.graph
+            .as_ref()?
+            .input(base, self.source.as_ref()?.read())
+    }
+
     pub(in crate::analysis) fn check_reference(&self, reference: &ManagedAttempt) -> Result<()> {
         if self.contract != reference.0.capture
             || self.instance.spec != reference.1.spec
@@ -750,6 +816,10 @@ pub struct ManagedAttempt(
 );
 
 impl ManagedAttempt {
+    pub(in crate::analysis) fn source_frame(&self) -> Option<&std::sync::Arc<ManagedSourceFrame>> {
+        self.5.as_ref()
+    }
+
     pub fn source_meta(&self) -> crate::AnalysisStoreMetaV1 {
         self.0.capture.source_meta()
     }
@@ -795,6 +865,7 @@ impl From<&ManagedAttempt> for ManagedCapture {
     fn from(reference: &ManagedAttempt) -> Self {
         Self {
             execution: None,
+            graph: None,
             instance: reference.1.clone(),
             contract: reference.0.capture.clone(),
             prior: reference.3.clone(),
@@ -809,9 +880,13 @@ pub struct ManagedReturn<'a> {
     pub evaluation: &'a sdk::Evaluation,
     pub output: &'a sdk::Output,
     pub changes: Option<&'a ManagedChanges>,
+    pub graph: Option<&'a std::sync::Arc<super::ManagedGraphJournal>>,
+    pub retained: Option<&'a PackageResultRefV1>,
 }
 
 pub struct ManagedCommit<'a> {
+    pub control: &'a crate::AnalysisReadControl,
+    pub budget: &'a dyn super::ManagedBudget,
     pub attempt: &'a ManagedAttempt,
     /// The native publication has no remaining work for this captured input.
     pub completed: bool,
@@ -831,6 +906,66 @@ pub(super) struct Record {
     pub dependencies: Vec<PackageResultRefV1>,
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
+    #[serde(default)]
+    pub derived: Vec<AnalysisContextRefV1>,
+    #[serde(default)]
+    pub origins: Vec<PackageResultRefV1>,
+    #[serde(default)]
+    pub proofs: Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_proof: Option<GraphProof>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct GraphProof {
+    pub coverage: Vec<crate::GraphCoverageKeyV1>,
+    pub sources: Vec<GraphProofSource>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct GraphProofSource {
+    pub source: crate::EvidenceIntakeIdentityV1,
+    pub cpu: u32,
+    pub report: u64,
+    pub missing: Vec<(u64, u64)>,
+}
+
+impl GraphProof {
+    pub(super) fn allocation_bytes(&self) -> Option<usize> {
+        let sources = self.sources.iter().try_fold(
+            self.sources
+                .capacity()
+                .checked_mul(std::mem::size_of::<GraphProofSource>())?,
+            |bytes, source| {
+                bytes
+                    .checked_add(source.source.node_id.capacity())?
+                    .checked_add(
+                        source
+                            .missing
+                            .capacity()
+                            .checked_mul(std::mem::size_of::<(u64, u64)>())?,
+                    )
+            },
+        )?;
+        self.coverage.iter().try_fold(
+            self.coverage
+                .capacity()
+                .checked_mul(std::mem::size_of::<crate::GraphCoverageKeyV1>())?
+                .checked_add(sources)?,
+            |bytes, key| {
+                key.gap_reasons.iter().try_fold(
+                    bytes
+                        .checked_add(key.source.node_id.capacity())?
+                        .checked_add(
+                            key.gap_reasons
+                                .capacity()
+                                .checked_mul(std::mem::size_of::<String>())?,
+                        )?,
+                    |bytes, reason| bytes.checked_add(reason.capacity()),
+                )
+            },
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -846,4 +981,26 @@ pub(super) struct Step {
     pub dependencies: Vec<PackageResultRefV1>,
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
+    #[serde(default)]
+    pub derived: Vec<AnalysisContextRefV1>,
+    #[serde(default)]
+    pub origins: Vec<PackageResultRefV1>,
+    #[serde(default)]
+    pub proofs: Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+    #[serde(default)]
+    pub source: Option<SourceStep>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct SourceStep {
+    pub expired: bool,
+    pub coverage: Vec<crate::GraphCoverageKeyV1>,
+    pub first: u64,
+    pub last: u64,
+    pub deadline: u64,
+    pub base: Option<PackageResultRefV1>,
+    pub records: Vec<(crate::DiscoveryRecordIdV1, crate::StorePositionV1)>,
+    pub derived: Vec<AnalysisContextRefV1>,
+    pub origins: Vec<PackageResultRefV1>,
+    pub proofs: Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
 }

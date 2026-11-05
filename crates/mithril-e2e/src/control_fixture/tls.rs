@@ -9,6 +9,7 @@ use sha2::{Digest as _, Sha256};
 
 pub(crate) struct Certificates {
     ca: Certificate,
+    ca_key: KeyPair,
     server: Certificate,
     server_key: KeyPair,
     node: Certificate,
@@ -49,11 +50,31 @@ impl Certificates {
         let node = node_params.signed_by(&node_key, &ca, &ca_key)?;
         Ok(Self {
             ca,
+            ca_key,
             server,
             server_key,
             node,
             node_key,
         })
+    }
+
+    pub(crate) fn peer(
+        &self,
+        directory: &Path,
+        node: &str,
+    ) -> Result<(CertificateFiles, String), Box<dyn std::error::Error>> {
+        fs::create_dir(directory)?;
+        let mut parameters = CertificateParams::new(vec![format!("{node}.local")])?;
+        parameters.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        let key = KeyPair::generate()?;
+        let certificate = parameters.signed_by(&key, &self.ca, &self.ca_key)?;
+        let files = self.write(directory)?;
+        fs::write(&files.node_certificate, certificate.pem())?;
+        fs::write(&files.node_key, key.serialize_pem())?;
+        Ok((
+            files,
+            format!("{:x}", Sha256::digest(certificate.der().as_ref())),
+        ))
     }
 
     pub(crate) fn node_digest(&self) -> String {

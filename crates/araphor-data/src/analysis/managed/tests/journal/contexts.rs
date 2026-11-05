@@ -237,6 +237,7 @@ fn context_changes_apply_scope() -> TestResult {
         ["alpha", "beta"]
     );
     let ordinary = store.read_tables_filtered(
+        &journal.selection.project(&journal.requests)?,
         &journal.selection,
         AnalysisTableRead {
             requests: &journal.requests,

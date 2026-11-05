@@ -22,13 +22,14 @@ fn input(
             .map(|record| record.id.clone())
             .collect::<Vec<_>>(),
     )?;
-    evaluation.inputs[6].data = Detector::window_data(
+    evaluation.inputs[6].data = Unit::window_data(
         &records
             .first()
             .map_or_else(|| identity(0).stream, |record| record.id.stream.clone())
             .key(),
         records.first().map_or(1, |record| record.id.durable_cursor),
         u64::MAX,
+        false,
     )?;
     Ok(evaluation)
 }

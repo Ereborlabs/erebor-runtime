@@ -19,6 +19,7 @@ mod trust;
 
 pub use administrative_exec::*;
 pub use administrative_http::*;
+pub use service::causal::{CausalCollector, CausalRole, CollectedAction};
 pub use araphor_data::DiscoveryDigestV1;
 pub use araphor_observability::{
     TraceAcceptedV1, TraceAccessV1, TraceAcknowledgementV1, TraceBatchV1, TraceCleanupV1,

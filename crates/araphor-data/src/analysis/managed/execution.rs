@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use araphor_analysis_sdk as sdk;
 
+use super::super::context::VerifiedPackages;
 use super::model::*;
 use crate::{AnalysisStore, AnalysisStoreMetaV1, ResultContext};
 
@@ -16,6 +17,35 @@ pub(super) struct Committed {
     meta: AnalysisStoreMetaV1,
     instance: ManagedInstance,
     calls: BTreeMap<u64, Arc<ManagedPrior>>,
+    packages: VerifiedPackages,
+    graph: Option<Arc<RetainedGraphProof>>,
+}
+
+#[derive(Debug)]
+pub(super) struct RetainedGraphProof {
+    graph: crate::analysis::PackageResultRefV1,
+    source: super::ManagedSourceRef,
+    input: Arc<crate::analysis::graph_rows::store::InputProof>,
+}
+
+impl RetainedGraphProof {
+    pub(super) fn input(
+        &self,
+        graph: &crate::analysis::PackageResultRefV1,
+        source: &super::ManagedSourceRead,
+    ) -> Option<&Arc<crate::analysis::graph_rows::store::InputProof>> {
+        (self.graph == *graph
+            && matches!(source,
+            super::ManagedSourceRead::Changes(parent) if parent == &self.source))
+        .then_some(&self.input)
+    }
+
+    pub(super) fn metadata_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.graph.result_id.capacity()
+            + self.source.result.result_id.capacity()
+            + self.input.metadata_bytes()
+    }
 }
 
 impl ManagedExecution {
@@ -43,8 +73,50 @@ impl ManagedExecution {
             .unwrap_or_default()
     }
 
+    pub(super) fn graph_input(
+        &self,
+        request: &ManagedRead,
+        meta: &AnalysisStoreMetaV1,
+    ) -> Option<Arc<RetainedGraphProof>> {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .filter(|state| {
+                !request.rebuild
+                    && request.expected.is_none()
+                    && state.instance == request.instance
+                    && state.meta.store_uuid == meta.store_uuid
+                    && state.meta.schema_version == meta.schema_version
+                    && state.meta.recovery_epoch == meta.recovery_epoch
+                    && state.meta.commit_revision <= meta.commit_revision
+            })
+            .and_then(|state| state.graph.clone())
+    }
+
     pub(super) fn promote(&self, state: Committed) {
         *self.state.lock().unwrap_or_else(|error| error.into_inner()) = Some(state);
+    }
+
+    pub(super) fn packages(
+        &self,
+        instance: &ManagedInstance,
+        capture: &Capture,
+    ) -> VerifiedPackages {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .as_ref()
+            .filter(|state| {
+                !capture.rebuild
+                    && capture.generation == capture.expected_generation
+                    && state.instance == *instance
+                    && state.meta.store_uuid == capture.store
+                    && state.meta.schema_version == capture.schema
+                    && state.meta.recovery_epoch == capture.recovery
+                    && state.meta.commit_revision <= capture.revision
+            })
+            .map(|state| state.packages.seed())
+            .unwrap_or_default()
     }
 
     pub fn metadata_bytes(&self) -> usize {
@@ -60,6 +132,13 @@ impl ManagedExecution {
                         .values()
                         .map(|prior| prior.metadata_bytes())
                         .sum::<usize>(),
+                )
+                .saturating_add(state.packages.metadata_bytes())
+                .saturating_add(
+                    state
+                        .graph
+                        .as_ref()
+                        .map_or(0, |proof| proof.metadata_bytes()),
                 )
         })
     }
@@ -152,6 +231,8 @@ impl AnalysisStore {
     pub(super) fn retain_managed(
         input: &ManagedCommit<'_>,
         receipt: &ManagedReceipt,
+        packages: VerifiedPackages,
+        input_proof: Option<Arc<crate::analysis::graph_rows::store::InputProof>>,
     ) -> Option<(Arc<ManagedExecution>, Committed)> {
         let owner = input.attempt.4.as_ref()?;
         let mut calls = input.attempt.3.clone();
@@ -197,9 +278,44 @@ impl AnalysisStore {
                 }),
             );
         }
+        let active = instance
+            .spec
+            .manifest
+            .calls
+            .values()
+            .map(|call| &call.image.image)
+            .collect();
+        let packages = packages.retain(instance.spec.tenant, &active);
         let mut instance = instance.clone();
         instance.progress = receipt.commit_revision;
         let capture = &input.attempt.0.capture;
+        let graph = match &receipt.graph {
+            Some(graph) => input_proof.map(|proof| {
+                Arc::new(RetainedGraphProof {
+                    graph: graph.clone(),
+                    source: super::ManagedSourceRef {
+                        result: receipt.selected.clone(),
+                        position: crate::StorePositionV1 {
+                            commit_revision: input.attempt.captured_revision(),
+                            ordinal: u32::MAX,
+                        },
+                    },
+                    input: proof,
+                })
+            }),
+            None => owner
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .filter(|state| {
+                    state.instance == *input.attempt.instance()
+                        && state.meta.store_uuid == capture.store
+                        && state.meta.schema_version == capture.schema
+                        && state.meta.recovery_epoch == capture.recovery
+                })
+                .and_then(|state| state.graph.clone()),
+        };
         let state = Committed {
             meta: AnalysisStoreMetaV1 {
                 store_uuid: capture.store,
@@ -209,6 +325,8 @@ impl AnalysisStore {
             },
             instance,
             calls,
+            packages,
+            graph,
         };
         Some((Arc::clone(owner), state))
     }

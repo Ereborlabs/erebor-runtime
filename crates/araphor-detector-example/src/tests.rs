@@ -131,6 +131,7 @@ fn threshold_retains_evidence_and_state() -> TestResult {
             &records[0].id.stream.key(),
             records[0].id.durable_cursor,
             u64::MAX,
+            false,
         )?,
     ];
     let mut evaluation = sdk::Evaluation {

@@ -261,9 +261,19 @@ impl AnalysisStore {
         root: &PackageRefV1,
         control: &AnalysisReadControl,
     ) -> Result<Vec<crate::PackageArtifactV1>> {
+        Self::package_closure_from(reader, tenant, root, control).map(|(_, artifacts)| artifacts)
+    }
+
+    pub(in crate::analysis) fn package_closure_from(
+        reader: &Connection,
+        tenant: [u8; 16],
+        root: &PackageRefV1,
+        control: &AnalysisReadControl,
+    ) -> Result<(Vec<super::PackageRevisionV1>, Vec<crate::PackageArtifactV1>)> {
         let mut pending = vec![root.clone()];
         let mut seen = BTreeSet::new();
         let mut artifacts = Vec::new();
+        let mut rows = Vec::new();
         while let Some(reference) = pending.pop() {
             control.check()?;
             if !seen.insert(reference.clone()) {
@@ -277,18 +287,17 @@ impl AnalysisStore {
                     .decode_artifact()
                     .map_err(crate::Error::stored_artifact)?,
             );
-            pending.extend(
-                retained
-                    .dependencies
-                    .into_iter()
-                    .map(|dependency| PackageRefV1 {
-                        package_id: dependency.package_id,
-                        revision: dependency.revision,
-                    }),
-            );
+            pending.extend(retained.dependencies.iter().map(|dependency| PackageRefV1 {
+                package_id: dependency.package_id.clone(),
+                revision: dependency.revision.clone(),
+            }));
+            rows.push(retained);
         }
         artifacts.sort_by_key(crate::PackageArtifactV1::reference);
+        rows.sort_by(|left, right| {
+            (&left.package_id, &left.revision).cmp(&(&right.package_id, &right.revision))
+        });
         control.check()?;
-        Ok(artifacts)
+        Ok((rows, artifacts))
     }
 }

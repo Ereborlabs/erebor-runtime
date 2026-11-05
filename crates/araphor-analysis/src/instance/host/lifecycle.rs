@@ -230,24 +230,15 @@ impl InstanceHost {
                 .map_err(Into::into)
         })
         .await?;
-        let (session, prepared, destination, graph) = if matches!(
+        if matches!(
             &current.spec.destination,
             araphor_data::ManagedDestination::Graph { .. }
         ) {
-            crate::GraphPublication::prepare_managed(
-                Arc::clone(&self.query),
-                Arc::clone(&self.authority),
-                self.graph_facts.clone(),
-                &grant,
-                (
-                    current.spec.definition.clone(),
-                    Some(current.spec.manifest.definition),
-                ),
-                current.spec.destination.clone(),
-                control,
-            )
-            .await?
-        } else {
+            return Err(Code::Unsupported
+                .error("retired source Graph instance")
+                .into());
+        }
+        let (session, prepared, destination, graph) = {
             if current.spec.destination == araphor_data::ManagedDestination::Notification
                 && self.notifications.is_none()
             {
@@ -265,7 +256,8 @@ impl InstanceHost {
                 .prepare_resolved(
                     &current.spec.definition,
                     Some(current.spec.manifest.definition),
-                 None,)
+                    None,
+                )
                 .await?;
             if prepared.resolved() != &current.spec.definition {
                 return Err(Code::Conflict

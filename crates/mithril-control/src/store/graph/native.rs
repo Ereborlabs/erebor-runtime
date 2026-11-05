@@ -150,12 +150,12 @@ impl GraphContext {
                 if raw.is_empty() {
                     return Ok(ColumnarValue::Array(new_empty_array(&output)));
                 }
+                if raw.null_count() != 0 {
+                    return df::common::exec_err!("canonical candidate context is null");
+                }
                 let batch = sdk::RecordBatch::from(raw.clone());
                 let mut keys = Vec::with_capacity(raw.len());
                 for row in 0..raw.len() {
-                    if raw.is_null(row) {
-                        return df::common::exec_err!("canonical candidate context is null");
-                    }
                     keys.push(Self::candidate_key(&Self::context_row(&batch, row)?.0)?);
                 }
                 let columns = (0..fields.len())
@@ -203,6 +203,9 @@ impl GraphContext {
                     .as_any()
                     .downcast_ref::<StructArray>()
                     .ok_or_else(|| DataFusionError::Execution("canonical event struct".into()))?;
+                if events.null_count() != 0 {
+                    return df::common::exec_err!("canonical resolver input is null");
+                }
                 let events_batch = sdk::RecordBatch::from(events.clone());
                 let candidates = args[2]
                     .as_any()
@@ -232,10 +235,12 @@ impl GraphContext {
                             .ok_or_else(|| {
                                 DataFusionError::Execution("canonical candidate pair".into())
                             })?;
+                    if values.null_count() != 0 {
+                        return df::common::exec_err!("canonical candidate pair is null");
+                    }
                     let values = sdk::RecordBatch::from(values.clone());
                     let contexts = Self::column::<StructArray>(&values, "context")?;
                     let keys = Self::column::<StructArray>(&values, "key_struct")?;
-                    let candidate_batch = sdk::RecordBatch::from(contexts.clone());
                     let mut canonical = BTreeMap::<
                         AnalysisContextKeyV1,
                         (AnalysisContextVersionV1, AnalysisContextRefV1),
@@ -269,7 +274,8 @@ impl GraphContext {
                         if contexts.is_null(index) || keys.is_null(index) {
                             return df::common::exec_err!("canonical candidate padding differs");
                         }
-                        let candidate = Self::context_row(&candidate_batch, index)?;
+                        let candidate_batch = sdk::RecordBatch::from(contexts.slice(index, 1));
+                        let candidate = Self::context_row(&candidate_batch, 0)?;
                         let expected = Self::candidate_key(&candidate.0)?;
                         if expected.len() != keys.num_columns() {
                             return df::common::exec_err!("canonical candidate key shape differs");
@@ -292,10 +298,10 @@ impl GraphContext {
                                     "canonical acknowledgement struct".into(),
                                 )
                             })?;
-                    let batch = sdk::RecordBatch::from(values.clone());
                     for index in 0..values.len() {
                         if !values.is_null(index) {
-                            add(Self::context_row(&batch, index)?)?;
+                            let batch = sdk::RecordBatch::from(values.slice(index, 1));
+                            add(Self::context_row(&batch, 0)?)?;
                         }
                     }
                     let (versions, mut proofs): (Vec<_>, Vec<_>) = canonical.into_values().unzip();
@@ -353,7 +359,7 @@ impl GraphContext {
         contexts: &LogicalPlan,
     ) -> araphor_query::Result<(LogicalPlan, LogicalPlan)> {
         let mut session = session.clone();
-        Self::view(&mut session, "__control_events", events.clone())?;
+        Self::view(&mut session, "__graph_input_events", events.clone())?;
         Self::view(&mut session, "__control_contexts", contexts.clone())?;
         let raw_sql = "SELECT named_struct('tenant_id', tenant_id, 'owner_id', owner_id,
             'entity_key', entity_key, 'lifetime_key', lifetime_key, 'owner_revision', owner_revision,
@@ -372,9 +378,9 @@ impl GraphContext {
             .and_then(LogicalPlanBuilder::build)
             .map_err(|source| araphor_query::Error::Sql { source })?;
         let acknowledgements = Self::query(&session, "SELECT raw_context FROM __control_raw_contexts WHERE raw_context.owner_id = 'mithril-control/activation-ack'".into()).await?;
-        Self::view(&mut session, "__control_candidates", candidates.clone())?;
-        Self::view(&mut session, "__control_acks", acknowledgements.clone())?;
-        let grouped = Self::query(&session, include_str!("native/resolved.sql").into()).await?;
+        Self::view(&mut session, "__graph_input_candidates", candidates.clone())?;
+        Self::view(&mut session, "__graph_input_acks", acknowledgements.clone())?;
+        let grouped = Self::query(&session, araphor_data::ResolvedInput::SQL.into()).await?;
         let resolve = Self::resolve_function(
             grouped.schema().field(0).data_type().clone(),
             grouped.schema().field(1).data_type().clone(),

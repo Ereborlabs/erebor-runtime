@@ -1,14 +1,15 @@
 use super::*;
 use crate::GraphValidate as _;
 
-pub(super) use araphor_graph::RelationshipValue as EdgeValue;
+pub(super) use crate::analysis::graph_rows::store::RelationshipValue as EdgeValue;
 
 impl GraphRows {
     pub(super) fn intern_subjects(
         writer: &Connection,
         subjects: &[GraphSubjectKeyV1],
     ) -> Result<BTreeMap<GraphSubjectKeyV1, u64>> {
-        araphor_graph::SubjectRows::intern(writer, subjects).map_err(Into::into)
+        crate::analysis::graph_rows::store::SubjectRows::intern(writer, subjects)
+            .map_err(Into::into)
     }
 
     pub(super) fn intern_edges(
@@ -17,8 +18,10 @@ impl GraphRows {
         records: &BTreeMap<crate::DiscoveryRecordIdV1, u64>,
         edges: &[EdgeValue],
     ) -> Result<Vec<u64>> {
-        araphor_graph::RelationshipRows::intern(writer, subjects, records, edges)
-            .map_err(Into::into)
+        crate::analysis::graph_rows::store::RelationshipRows::intern(
+            writer, subjects, records, edges,
+        )
+        .map_err(Into::into)
     }
 
     pub(super) fn intern_findings(
@@ -31,7 +34,7 @@ impl GraphRows {
             .iter()
             .map(|finding| {
                 finding.validate()?;
-                Ok(araphor_graph::FindingRefs {
+                Ok(crate::analysis::graph_rows::store::FindingRefs {
                     finding,
                     subject: *subjects
                         .get(&finding.subject_id)
@@ -49,7 +52,8 @@ impl GraphRows {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        araphor_graph::FindingRows::intern(writer, &references).map_err(Into::into)
+        crate::analysis::graph_rows::store::FindingRows::intern(writer, &references)
+            .map_err(Into::into)
     }
 
     pub(super) fn intern_branches(

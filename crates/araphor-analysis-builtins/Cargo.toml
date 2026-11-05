@@ -6,7 +6,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+araphor-analysis-types = { path = "../araphor-analysis-types" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
+araphor-graph = { path = "../araphor-graph" }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 schemars.workspace = true
 rmp-serde.workspace = true

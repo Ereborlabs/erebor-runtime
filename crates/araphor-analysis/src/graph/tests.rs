@@ -95,13 +95,14 @@ impl Graph<'_> {
                     .collect::<Vec<_>>(),
             )
             .context(AnalysisContractSnafu)?,
-            algorithm::Detector::window_data(
+            algorithm::Unit::window_data(
                 &self.input.source.key(),
                 self.input
                     .records
                     .first()
                     .map_or(1, |record| record.id.durable_cursor),
                 u64::MAX,
+                false,
             )
             .context(AnalysisContractSnafu)?,
         ];

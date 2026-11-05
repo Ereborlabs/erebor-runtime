@@ -458,6 +458,15 @@ impl Packages {
                     .map_err(|source| DataFusionError::External(Box::new(source)))
                     .context(SqlSnafu)?;
             }
+            let id = self
+                .calls
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .map_err(|_| {
+                    InvalidSnafu {
+                        field: "package call identity",
+                    }
+                    .build()
+                })?;
             let PlannedInputs {
                 plans: inputs,
                 origins,
@@ -472,6 +481,7 @@ impl Packages {
                     &empty_inputs
                 },
                 &exports,
+                id,
             )?;
             let input_scope = Arc::new(Inputs::from_plans(model, &inputs, origins)?);
             let params = self.parameters(
@@ -501,15 +511,6 @@ impl Packages {
                 sql
             });
             let changes = self.changes(model, lookups, resets, &mut children)?;
-            let id = self
-                .calls
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-                .map_err(|_| {
-                    InvalidSnafu {
-                        field: "package call identity",
-                    }
-                    .build()
-                })?;
             let artifact_index = content
                 .artifacts
                 .iter()
@@ -605,10 +606,11 @@ impl Packages {
         model: &sdk::Model,
         supplied: &InputPlans,
         exports: &Exports,
+        call: u64,
     ) -> Result<PlannedInputs> {
         let mut complete = self.complete_inputs(provider, model, supplied, exports)?;
         if model.change_inputs.is_some() {
-            return self.change_plans(provider, model, complete);
+            return self.change_plans(provider, model, complete, call);
         }
         let (plans, origins) = model
             .inputs
@@ -674,9 +676,9 @@ impl Packages {
                         if let Some(source) = self.sources.get(&input.port.name) {
                             let mut source_tables = tables.clone();
                             source_tables.insert(input.port.name.clone(), Arc::clone(source));
-                            self.plan(provider, &source_tables, sql)
+                            self.plan(provider, &source_tables, None, sql)
                         } else {
-                            self.plan(provider, &tables, sql)
+                            self.plan(provider, &tables, None, sql)
                         }
                     }
                     sdk::InputSource::Table(sdk::TableRef::Named(name)) => {
@@ -1030,7 +1032,7 @@ impl Packages {
             plans.push(checkpoint[&port.name].clone());
         }
         if let Some(sql) = &program.evidence {
-            let plan = self.plan(provider, &tables, sql)?;
+            let plan = self.plan(provider, &tables, None, sql)?;
             Self::schema(
                 &plan,
                 &sdk::Schema::new(vec![
@@ -1075,7 +1077,7 @@ impl Packages {
                     )
                     .collect::<Vec<_>>(),
             );
-            let plan = self.plan(provider, &tables, &reason.sql)?;
+            let plan = self.plan(provider, &tables, None, &reason.sql)?;
             Self::schema(&plan, &schema)?;
             plans.push(plan);
             bindings
@@ -1128,7 +1130,7 @@ impl Packages {
                 }
                 .build()
             })?;
-            let plan = self.plan(provider, tables, sql)?;
+            let plan = self.plan(provider, tables, None, sql)?;
             Self::schema(&plan, &port.schema)?;
             plans.insert(port.name.clone(), plan);
         }
@@ -1139,6 +1141,7 @@ impl Packages {
         &self,
         provider: &dyn ContextProvider,
         tables: &BTreeMap<String, Arc<dyn TableProvider>>,
+        images: Option<&BTreeMap<String, LogicalPlan>>,
         sql: &str,
     ) -> Result<LogicalPlan> {
         let statement = self.limits.parser.parse(sql)?;
@@ -1149,7 +1152,11 @@ impl Packages {
             }
             .fail();
         }
-        let scope = Scope { provider, tables };
+        let scope = Scope {
+            provider,
+            tables,
+            images,
+        };
         let plan =
             crate::parser::Parser::stack(|| SqlToRel::new(&scope).statement_to_plan(statement))
                 .and_then(PackageCall::expose_programs)
@@ -1178,7 +1185,15 @@ impl Packages {
         sdk::Dataset::normalize_batch(
             sdk::RecordBatch::new_empty(Arc::clone(plan.schema().inner())),
             Arc::new(schema.clone()),
-        )?;
+        )
+        .inspect_err(|error| {
+            erebor_telemetry::tracing::warn!(
+                actual = ?plan.schema().as_arrow(),
+                expected = ?schema,
+                error = %error,
+                "Package plan does not match its declared schema"
+            );
+        })?;
         Ok(())
     }
 }

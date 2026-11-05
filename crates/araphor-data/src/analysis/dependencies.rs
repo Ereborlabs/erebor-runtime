@@ -259,8 +259,12 @@ impl AnalysisStore {
                     let mut heads = snapshot.prepare(
                         "SELECT r.commit_revision FROM processor_progress p
                          JOIN analysis_results r ON r.tenant_id = p.tenant_id
-                            AND r.processor_id = p.processor_id AND r.method_version = p.method_version
-                            AND r.stream_key = p.stream_key AND r.result_id = p.result_id
+                            AND r.result_id = p.result_id
+                            AND ((r.processor_id=p.processor_id AND r.method_version=p.method_version AND r.stream_key=p.stream_key)
+                                OR (r.processor_id='managed-definition-v1' AND EXISTS(
+                                    SELECT 1 FROM managed_source_publications publication WHERE publication.result_id=r.result_id
+                                        AND publication.tenant_id=p.tenant_id AND publication.stream_key=p.stream_key
+                                        AND publication.revision=r.commit_revision)))
                          WHERE p.processor_id = ? AND p.method_version = ?
                             AND p.tenant_id = ? AND p.stream_key = ? AND p.class = 'required'
                             AND NOT p.retired AND p.result_id <> '' AND r.commit_revision <= ?",
@@ -412,7 +416,13 @@ impl AnalysisStore {
                     CASE WHEN ? THEN COALESCE((SELECT MAX(n.commit_revision)
                         FROM result_notices n WHERE n.tenant_id = r.tenant_id
                             AND n.result_id = r.result_id AND n.commit_revision <= ?), 0) ELSE 0 END))
-                 FROM analysis_results r WHERE r.tenant_id = ? AND r.processor_id = ?
+                 FROM analysis_results r WHERE r.tenant_id = ? AND (r.processor_id = ?
+                    OR (r.processor_id='managed-definition-v1' AND (EXISTS(
+                        SELECT 1 FROM managed_source_publications publication WHERE publication.result_id=r.result_id
+                            AND publication.tenant_id=r.tenant_id AND publication.revision=r.commit_revision)
+                        OR EXISTS(SELECT 1 FROM managed_graph_publications publication JOIN managed_graphs owner USING(graph_id)
+                            WHERE publication.result_id=r.result_id AND owner.tenant_id=r.tenant_id
+                                AND publication.revision=r.commit_revision))))
                     AND r.result_id = ? AND r.commit_revision <= ?",
             ).context(AnalysisDatabaseSnafu { operation: "prepare graph dependencies" })?;
             for id in selection.graphs.as_slice() {

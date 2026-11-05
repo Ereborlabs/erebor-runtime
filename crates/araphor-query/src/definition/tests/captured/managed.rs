@@ -46,7 +46,7 @@ impl ManagedPublication for Sink {
         _: &Invocation,
         frontier: &ManagedFrontier,
         control: &AnalysisReadControl,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<Option<Arc<araphor_data::ManagedAttempt>>> {
         assert!(snapshot
             .managed()
             .is_some_and(|captured| captured.time_utc_ns() > 0));
@@ -85,7 +85,7 @@ impl ManagedPublication for Sink {
         }
         self.state.admissions.fetch_add(1, Ordering::SeqCst);
         self.state.admitted.store(true, Ordering::SeqCst);
-        Ok(())
+        Ok(None)
     }
 }
 

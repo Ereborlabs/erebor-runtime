@@ -136,6 +136,7 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("retire.after");
         self.revision.send_replace(revision);
+        if scope.processor_id==crate::GRAPH_PROCESSOR { self.activations.send_replace(revision); }
         Ok(revision)
     }
 

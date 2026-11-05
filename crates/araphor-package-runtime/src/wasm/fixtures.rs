@@ -11,7 +11,7 @@ use super::{Code, WasmExecution};
 #[derive(Debug, snafu::Snafu)]
 #[snafu(display("component fixture cache charges: {charges:?}"))]
 struct FixtureBudgetError {
-    charges: [usize; 5],
+    charges: [usize; 4],
 }
 
 impl WasmExecution {
@@ -54,7 +54,7 @@ impl WasmExecution {
                 ..WasmLimits::default()
             })?;
             let sources = Self::fixture_sources();
-            let mut charges = [0; 5];
+            let mut charges = [0; 4];
             for (index, (_, source)) in sources.iter().enumerate() {
                 prepared.admit(
                     source,
@@ -102,20 +102,16 @@ impl WasmExecution {
         })
     }
 
-    fn fixture_sources() -> [(&'static str, &'static [u8]); 5] {
+    fn fixture_sources() -> [(&'static str, &'static [u8]); 4] {
         [
             (
                 "discovery",
                 araphor_analysis_builtins::components::DISCOVERY,
             ),
-            ("process", araphor_analysis_builtins::components::PROCESS),
+            ("causal", araphor_analysis_builtins::components::CAUSAL),
             (
                 "credentials",
                 araphor_analysis_builtins::components::CREDENTIALS,
-            ),
-            (
-                "kubernetes",
-                araphor_analysis_builtins::components::KUBERNETES,
             ),
             ("runtime", araphor_analysis_builtins::components::RUNTIME),
         ]

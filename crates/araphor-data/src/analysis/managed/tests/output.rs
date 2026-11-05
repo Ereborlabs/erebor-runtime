@@ -240,6 +240,8 @@ fn selected_uses_saved_schema() -> TestResult {
         batches: vec![Fixture::batch(&schema, 5)?],
     };
     let commit = ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
         completed: true,
         attempt: &attempt,
         now_utc_ns: 10,
@@ -248,15 +250,17 @@ fn selected_uses_saved_schema() -> TestResult {
         selected_schema: &current.spec.manifest.selected_schema,
     };
     assert!(matches!(
-        store.commit_managed(&commit, || Ok(())),
+        Fixture::publish(&store,&commit, || Ok(())),
         Err(crate::Error::Package {
             code: crate::PackageErrorCodeV1::Invalid,
             field: "managed selected schema",
             ..
         })
     ));
-    let changed = store.commit_managed(
+    let changed = Fixture::publish(&store,
         &ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
             selected_schema: &schema,
             ..commit
         },

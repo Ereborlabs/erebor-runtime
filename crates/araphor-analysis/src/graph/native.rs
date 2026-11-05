@@ -24,17 +24,22 @@ use crate::{Graph, Result};
 
 mod capture;
 mod commit;
+mod entered;
 mod facts;
 mod managed;
 mod node;
-mod program;
 mod records;
+mod roots;
 pub(crate) use commit::GraphConversion;
 
 #[cfg(test)]
 mod tests;
 
 pub trait GraphFacts: Send + Sync {
+    fn local_observations(&self) -> bool {
+        false
+    }
+
     fn plans<'a>(
         &'a self,
         session: &'a Session,
@@ -56,13 +61,14 @@ pub struct GraphPublication {
     grant: PackageGrantV1,
     prepared: PreparedDefinition,
     calls: BTreeMap<u64, PackageCall>,
-    packages: BTreeMap<u64, AnalysisContextRefV1>,
+    graph_calls: BTreeSet<u64>,
     projection: Arc<Projection>,
 }
 
 struct Projection {
     tenant: [u8; 16],
     facts: Arc<dyn GraphFacts>,
+    append_stable: bool,
 }
 
 struct GraphRun {
@@ -73,9 +79,13 @@ struct GraphRun {
 struct Capture {
     source: Weak<SourceSnapshot>,
     metadata: GraphManifest,
+    parent: Option<PackageResultRefV1>,
     base: Option<PackageResultRefV1>,
+    base_last: Option<u64>,
+    expired: bool,
     base_count: Option<u64>,
     restricted: Option<u64>,
+    append: Option<bool>,
     progress: Option<(u64, u64, u64, u64)>,
     records: BTreeMap<DiscoveryRecordIdV1, (DiscoveryRecordV1, StorePositionV1)>,
     facts: BTreeMap<AnalysisContextKeyV1, (AnalysisContextVersionV1, Option<AnalysisContextRefV1>)>,
@@ -228,6 +238,8 @@ impl GraphPublication {
         definition: Definition,
         facts: Arc<dyn GraphFacts>,
     ) -> Result<Self> {
+        let append_stable = Self::append_selection(&events)
+            .map_err(|source| araphor_query::Error::Sql { source })?;
         Self::prepare_on(
             session,
             authority,
@@ -236,7 +248,7 @@ impl GraphPublication {
             control,
             DefinitionRef::Fresh(&definition),
             facts,
-            None,
+            append_stable,
         )
         .await
     }
@@ -249,7 +261,7 @@ impl GraphPublication {
         control: LogicalPlan,
         definition: DefinitionRef<'_>,
         facts: Arc<dyn GraphFacts>,
-        input_gate: Option<LogicalPlan>,
+        append_stable: bool,
     ) -> Result<Self> {
         session.register_table(
             "graph_control",
@@ -288,7 +300,16 @@ impl GraphPublication {
         })
         .await?;
         let query = Arc::clone(session.engine());
+        let identities = datafusion::logical_expr::LogicalPlanBuilder::from(events.clone())
+            .project([Self::record_expr().alias("record")])
+            .and_then(datafusion::logical_expr::LogicalPlanBuilder::build)
+            .map_err(|source| araphor_query::Error::Sql { source })?;
+        let identities = araphor_query::sources::SourceImage::After
+            .plan_rows(&identities)
+            .map_err(|source| araphor_query::Error::Sql { source })?;
         let events = Self::event_driver(&session, events).await?;
+        let entered = entered::EnteredPort::plan(&session, control.clone(), append_stable).await?;
+        session.register_table("__graph_entered", Arc::new(ViewTable::new(entered, None)))?;
         let contexts = query
             .prepare("SELECT * FROM context_versions", Vec::new())
             .await?
@@ -309,34 +330,104 @@ impl GraphPublication {
         let (resolved, changed) = facts.plans(&session, &events, &contexts).await?;
         Self::check_driver(&events, &resolved, &changed)?;
         let resolved = Self::coverage_driver(&session, resolved).await?;
+        let resolved = araphor_query::sources::SourceImage::After
+            .plan_rows(&resolved)
+            .map_err(|source| araphor_query::Error::Sql { source })?;
+        session.register_table(
+            "__graph_current_ids",
+            Arc::new(ViewTable::new(identities, None)),
+        )?;
+        let resolved = araphor_query::sources::SourcePort::native(
+            &session,
+            "__graph_resolved".into(),
+            resolved,
+            vec![(0, 0)],
+        )
+        .await?
+        .plan()?;
         session.register_table(
             "__graph_resolved",
             Arc::new(ViewTable::new(resolved.clone(), None)),
         )?;
+        session.register_table(
+            "__graph_native_changes",
+            Arc::new(ViewTable::new(changed, None)),
+        )?;
+        let changed = Self::native_plan(
+            &session,
+            "SELECT record FROM __graph_native_changes UNION SELECT record FROM __graph_entered",
+        )
+        .await?;
         session.register_table("__graph_changed", Arc::new(ViewTable::new(changed, None)))?;
+        let prefix = node::MetadataPort::Prefix
+            .plan(&session, control.clone())
+            .await?;
+        session.register_table("__graph_prefix", Arc::new(ViewTable::new(prefix, None)))?;
+        let prefix = Self::native_plan(&session, &format!("
+            WITH coverage AS (
+                SELECT c.* FROM coverage c JOIN graph_control control
+                    ON c.tenant_id = control.tenant_id AND c.node_id = control.node_id
+                    AND c.node_boot_id = control.node_boot_id AND c.label_epoch = control.label_epoch
+                    AND c.source_id = control.source_id AND c.source_epoch = control.source_epoch
+            ), events AS (SELECT * FROM __graph_prefix), prefix AS (
+                SELECT COALESCE(bool_and(available AND state IN ('HEALTHY','CLOSED')), false) AS complete
+                FROM ({}) qualified
+            ), status AS (
+                SELECT COUNT(*) FILTER (WHERE kind IN ('pending','recovery','expired')) = 0 AS complete
+                FROM coverage
+            )
+            SELECT prefix.complete AND status.complete AS complete
+            FROM prefix CROSS JOIN status", araphor_analysis_builtins::discovery::sql::COVERAGE_ROWS_SQL)).await?;
+        session.register_table(
+            "__graph_prefix_check",
+            Arc::new(ViewTable::new(prefix, None)),
+        )?;
+        let fallback = Self::native_plan(
+            &session,
+            "SELECT control.tenant_id, control.node_id, control.node_boot_id,
+                control.label_epoch, control.source_id, control.source_epoch
+             FROM graph_control control CROSS JOIN graph_capture capture
+             CROSS JOIN __graph_prefix_check prefix
+             WHERE NOT capture.resume_window OR NOT prefix.complete
+                OR control.restricted_count IS NULL",
+        )
+        .await?;
+        let fallback = araphor_query::sources::SourcePort::native(
+            &session,
+            "__graph_status_fallback".into(),
+            fallback,
+            Vec::new(),
+        )
+        .await?
+        .plan()?;
+        session.register_table(
+            "__graph_status_fallback",
+            Arc::new(ViewTable::new(fallback, None)),
+        )?;
         let keys = Self::native_plan(
             &session,
             "
             SELECT record FROM __graph_changed
             UNION
-            SELECT current.record FROM graph_control control
-            CROSS JOIN graph_capture capture JOIN __graph_resolved current
+            SELECT current.record FROM __graph_status_fallback control
+            JOIN __graph_current_ids current
                 ON current.record['stream']['tenant_id'] = control.tenant_id
                 AND current.record['stream']['node_id'] = control.node_id
                 AND current.record['stream']['node_boot_id'] = control.node_boot_id
                 AND current.record['stream']['label_epoch'] = control.label_epoch
                 AND current.record['stream']['source_id'] = control.source_id
-                AND current.record['stream']['source_epoch'] = control.source_epoch
-            WHERE NOT capture.resume_window OR control.restricted_count IS NULL",
+                AND current.record['stream']['source_epoch'] = control.source_epoch",
         )
         .await?;
         session.register_table("__graph_status_keys", Arc::new(ViewTable::new(keys, None)))?;
         let status = Self::native_plan(&session, "
-            SELECT control.*, capture.resume_window, keys.record, current.event, current.resolved,
+            SELECT control.*, capture.resume_window, prefix.complete AS prefix_complete,
+                keys.record, current.event, current.resolved,
                 current.coverage_revision AS record_coverage_revision,
                 current.interval_revision, current.coverage_interval_id,
                 current.coverage_state, current.coverage_reasons
-            FROM graph_control control CROSS JOIN graph_capture capture LEFT JOIN __graph_status_keys keys ON TRUE
+            FROM graph_control control CROSS JOIN graph_capture capture CROSS JOIN __graph_prefix_check prefix
+            LEFT JOIN __graph_status_keys keys ON TRUE
             LEFT JOIN __graph_resolved current ON current.record = keys.record").await?;
         let status = node::MetadataPort::Status.plan(&session, status).await?;
         session.register_table(
@@ -344,22 +435,40 @@ impl GraphPublication {
             Arc::new(ViewTable::new(status.clone(), None)),
         )?;
         let header = status;
+        let fallback = Self::native_plan(
+            &session,
+            "SELECT control.tenant_id, control.node_id, control.node_boot_id,
+                control.label_epoch, control.source_id, control.source_epoch
+             FROM graph_control control CROSS JOIN graph_capture capture
+             CROSS JOIN graph_status status WHERE NOT status.append_only",
+        )
+        .await?;
+        let fallback = araphor_query::sources::SourcePort::native(
+            &session,
+            "__graph_dirty_fallback".into(),
+            fallback,
+            Vec::new(),
+        )
+        .await?
+        .plan()?;
+        session.register_table(
+            "__graph_dirty_fallback",
+            Arc::new(ViewTable::new(fallback, None)),
+        )?;
         let dirty = Self::native_plan(
             &session,
             "
             WITH keys AS (
                 SELECT record FROM __graph_changed
                 UNION
-                SELECT current.record FROM graph_control control CROSS JOIN graph_capture capture
-                CROSS JOIN graph_status status JOIN __graph_resolved current
+                SELECT current.record FROM __graph_dirty_fallback control
+                JOIN __graph_current_ids current
                     ON current.record['stream']['tenant_id'] = control.tenant_id
                     AND current.record['stream']['node_id'] = control.node_id
                     AND current.record['stream']['node_boot_id'] = control.node_boot_id
                     AND current.record['stream']['label_epoch'] = control.label_epoch
                     AND current.record['stream']['source_id'] = control.source_id
                     AND current.record['stream']['source_epoch'] = control.source_epoch
-                WHERE status.zero_crossing OR NOT capture.resume_window
-                    OR control.restricted_count IS NULL
             ) SELECT keys.record, current.event, current.resolved,
                 current.coverage_revision AS record_coverage_revision,
                 current.interval_revision, current.coverage_interval_id,
@@ -370,6 +479,7 @@ impl GraphPublication {
         let projection = Arc::new(Projection {
             tenant: grant.selection.tenant_id,
             facts,
+            append_stable,
         });
         for (index, (alias, port, driver)) in Projection::source_ports()
             .into_iter()
@@ -377,7 +487,7 @@ impl GraphPublication {
             .chain(std::iter::once((
                 "graph_dirty",
                 araphor_analysis_builtins::graph::Unit::affected_port(),
-                dirty,
+                dirty.clone(),
             )))
             .enumerate()
         {
@@ -406,6 +516,25 @@ impl GraphPublication {
             }
             session.register_table(alias, table)?;
         }
+        let driver = Self::native_plan(
+            &session,
+            "SELECT selected.id AS record FROM graph_window lifecycle
+             CROSS JOIN graph_records selected WHERE NOT lifecycle.expired",
+        )
+        .await?;
+        let roots = araphor_query::sources::SourcePort::new(
+            &session,
+            "__graph_roots".into(),
+            Arc::new(araphor_analysis_builtins::graph::Unit::port().schema),
+            driver,
+            header.clone(),
+            Arc::new(roots::RootPort {
+                owner: Arc::clone(&projection),
+            }),
+        )
+        .await?
+        .plan()?;
+        session.register_table("__graph_roots", Arc::new(ViewTable::new(roots, None)))?;
         let settings = Self::native_plan(&session, &format!(
             "SELECT CAST({} AS BIGINT UNSIGNED) AS window_ns, status.restricted FROM graph_status status",
             araphor_data::GRAPH_WINDOW_NS,
@@ -414,6 +543,31 @@ impl GraphPublication {
             Arc::new(ViewTable::new(settings, None));
         session.register_table("manifest", Arc::clone(&settings))?;
         session.register_table("graph_settings", settings)?;
+        session.register_table(
+            "__graph_selection_rows",
+            Arc::new(ViewTable::new(dirty, None)),
+        )?;
+        let selection = Self::native_plan(
+            &session,
+            "SELECT dirty.*, status.append_only FROM graph_status status
+             LEFT JOIN __graph_selection_rows dirty ON TRUE",
+        )
+        .await?;
+        let input_gate = Some(
+            araphor_query::sources::SourcePort::new(
+                &session,
+                "__source_selection".into(),
+                Arc::new(sdk::Schema::empty()),
+                control,
+                selection,
+                Arc::new(node::Port {
+                    owner: Arc::clone(&projection),
+                    index: 3,
+                }),
+            )
+            .await?
+            .plan()?,
+        );
         let prepared = match definition {
             DefinitionRef::Fresh(definition) => {
                 session.prepare_definition(definition, input_gate).await?
@@ -442,60 +596,20 @@ impl GraphPublication {
             Ok(false)
         })
         .map_err(|source| araphor_query::Error::Sql { source })?;
-        let mut supported = BTreeSet::new();
-        if calls.values().any(|call| {
-            call.has_input_overrides()
-                && call
-                    .descriptor()
+        let graph_calls = calls
+            .values()
+            .filter(|call| {
+                call.descriptor()
                     .exports
                     .iter()
-                    .any(|model| model.name == call.export() && Detector::supports_units(model))
-        }) {
-            return Err(Code::Invalid.error("Graph unit input override").into());
-        }
-        for call in calls.values().filter(|call| {
-            call.descriptor()
-                .exports
-                .iter()
-                .any(|model| model.name == call.export() && Graph::supports(model))
-        }) {
-            if !supported.insert(call.package().package_id.as_str()) {
-                return Err(Code::Invalid.error("multiple graph detector calls").into());
-            }
-        }
-        if araphor_data::FindingV1::PACKAGES
-            .iter()
-            .any(|id| !supported.contains(id))
-        {
-            return Err(Code::Invalid.error("required graph detector call").into());
-        }
-        let values = calls
-            .iter()
-            .map(|(&id, call)| {
-                let image = prepared
-                    .images()
-                    .find(|image| {
-                        image.bundle().root == call.image().image
-                            && image.digest() == call.image().digest
-                    })
-                    .ok_or_else(|| Code::Denied.error("graph image attribution"))?;
-                Ok((
-                    id,
-                    AnalysisContextVersionV1::from_package(
-                        image,
-                        grant.selection.tenant_id,
-                        call.package(),
-                        call.export(),
-                        call.output(),
-                    )?,
-                ))
+                    .any(|model| model.name == call.export() && model.graph.is_some())
             })
-            .collect::<araphor_data::Result<BTreeMap<_, _>>>()?;
+            .map(PackageCall::id)
+            .collect();
         let checked = Arc::clone(&authority);
         let stage = Arc::clone(session.control());
         let granted = grant.clone();
-        let store = Arc::clone(session.engine().store());
-        let (mut prepared, packages) =
+        let mut prepared =
             araphor_query::execution::Engine::blocking(Arc::clone(&stage), (), move || {
                 let images = prepared.images().collect::<Vec<_>>();
                 let mut grants = vec![(&granted, PackageActionV1::Run, None)];
@@ -504,30 +618,11 @@ impl GraphPublication {
                         .iter()
                         .map(|image| (&granted, PackageActionV1::Run, Some(*image))),
                 );
-                let contexts = values.values().cloned().collect::<Vec<_>>();
-                let mut references = None;
                 checked.commit_many(&grants, &mut || {
-                    references = Some(store.intern_contexts_guarded(&contexts, || {
-                        granted.remaining()?;
-                        stage.check()
-                    })?);
-                    Ok(())
+                    granted.remaining()?;
+                    stage.check()
                 })?;
-                let references =
-                    references.ok_or_else(|| Code::Incomplete.error("graph package references"))?;
-                if references.len() != values.len()
-                    || references
-                        .iter()
-                        .zip(values.values())
-                        .any(|(reference, value)| reference.key != value.key)
-                {
-                    return Err(Code::Conflict.error("graph package references").into());
-                }
-                let packages = values
-                    .into_keys()
-                    .zip(references)
-                    .collect::<BTreeMap<_, _>>();
-                Ok((prepared, packages))
+                Ok(prepared)
             })
             .await?;
         let weak = Arc::downgrade(&projection);
@@ -545,7 +640,7 @@ impl GraphPublication {
             grant,
             prepared,
             calls,
-            packages,
+            graph_calls,
             projection,
         })
     }

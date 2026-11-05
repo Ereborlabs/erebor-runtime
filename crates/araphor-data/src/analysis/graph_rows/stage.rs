@@ -90,7 +90,7 @@ impl GraphStage<'_> {
                 .and_then(|anchor| anchor.fact.as_ref())
                 .map(GraphRows::encode_value)
                 .transpose()?;
-            members.push(araphor_graph::Member {
+            members.push(crate::analysis::graph_rows::store::Member {
                 kind: member.kind as u8,
                 key: member.key,
                 value: member.value,
@@ -100,16 +100,22 @@ impl GraphStage<'_> {
                 ordinal: member.ordinal,
             });
         }
-        let mut work = araphor_graph::Contributions::apply(
+        let mut work = crate::analysis::graph_rows::store::Contributions::apply(
             self.writer,
-            self.scope,
             self.revision,
-            &[araphor_graph::Replacement {
-                unit: None,
-                members,
-            }],
-            false,
-        )?;
+            &BTreeMap::from([(
+                self.scope,
+                (
+                    false,
+                    vec![crate::analysis::graph_rows::store::Replacement {
+                        unit: None,
+                        members,
+                    }],
+                ),
+            )]),
+        )?
+        .remove(&self.scope)
+        .ok_or_else(|| GraphRows::invalid("graph producer work"))?;
         work.0 = work.0.saturating_add(staged);
         Ok(work)
     }

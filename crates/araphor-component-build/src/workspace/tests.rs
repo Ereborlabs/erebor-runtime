@@ -21,13 +21,11 @@ fn workspace_command_isolated() {
         "--target-dir",
         "/guest-target",
         "--package",
+        "araphor-causal-component",
+        "--package",
         "araphor-discovery-component",
         "--package",
-        "araphor-process-component",
-        "--package",
         "araphor-credentials-component",
-        "--package",
-        "araphor-kubernetes-component",
         "--package",
         "araphor-detector-example",
         "--package",
@@ -72,9 +70,8 @@ fn workspace_inputs_complete() {
     assert!(inputs.contains(&root.join("Cargo.lock")));
     for directory in [
         "crates/araphor-analysis-builtins/components/discovery",
-        "crates/araphor-analysis-builtins/components/process",
         "crates/araphor-analysis-builtins/components/credentials",
-        "crates/araphor-analysis-builtins/components/kubernetes",
+        "crates/araphor-analysis-builtins/components/causal",
         "crates/araphor-detector-example",
         "crates/araphor-analysis-sdk/tests/component",
     ] {

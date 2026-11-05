@@ -30,7 +30,11 @@ impl Dataset {
     }
 
     pub fn encode(data: &crate::Dataset, schema: &Schema) -> Result<Self> {
-        let mut bytes = Vec::new();
+        Self::encode_bounded(data, schema, None)
+    }
+
+    pub fn encode_bounded(data: &crate::Dataset, schema: &Schema, copy_bytes: Option<usize>) -> Result<Self> {
+        let mut bytes = super::BoundedBuffer::new(copy_bytes.map_or(u64::MAX, |bytes| bytes as u64));
         let mut writer = StreamWriter::try_new(&mut bytes, schema)?;
         for batch in &data.batches {
             if batch.schema().as_ref() != schema {
@@ -42,7 +46,7 @@ impl Dataset {
         drop(writer);
         Ok(Self {
             name: data.name.clone(),
-            arrow_ipc: bytes,
+            arrow_ipc: bytes.finish(),
         })
     }
 
@@ -58,7 +62,7 @@ impl Dataset {
         Self::decode_ipc_bounded(name, ipc, schema, None)
     }
 
-    pub(super) fn decode_ipc_bounded(
+    pub fn decode_ipc_bounded(
         name: &str,
         ipc: &[u8],
         schema: Option<&Schema>,

@@ -1,6 +1,4 @@
 use super::*;
-use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 impl Computation {
     pub(super) fn finding(
@@ -55,8 +53,11 @@ impl Computation {
     }
 }
 
-impl FindingV1 {
-    pub fn resolve(
+pub trait FindingResolve {
+    fn resolve(package: &str, reason: FindingReasonV1, details: ReasonDetails, records: &[Observation], facts: &[Fact]) -> sdk::Result<Self> where Self: Sized;
+}
+impl FindingResolve for FindingV1 {
+    fn resolve(
         package: &str,
         reason: FindingReasonV1,
         details: ReasonDetails,
@@ -205,15 +206,4 @@ impl FindingV1 {
         })
     }
 
-    pub fn identity(
-        package: &str,
-        record: &crate::discovery::DiscoveryRecordIdV1,
-        subject: &GraphSubjectKeyV1,
-    ) -> sdk::Result<String> {
-        let mut digest = Sha256::new();
-        (package, record, subject)
-            .serialize(&mut rmp_serde::Serializer::new(&mut digest))
-            .map_err(|_| Computation::invalid("graph finding identity"))?;
-        Ok(format!("{:x}", digest.finalize()))
-    }
 }

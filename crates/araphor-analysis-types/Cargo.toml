@@ -1,0 +1,24 @@
+[package]
+name = "araphor-analysis-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
+erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
+erebor-runtime-error = { path = "../erebor-runtime-error" }
+rmp-serde.workspace = true
+schemars.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_bytes = "=0.11.19"
+serde-value = "=0.7.0"
+serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-59"] }
+uuid = { version = "1.18", default-features = false }
+snafu.workspace = true
+
+[lints]
+workspace = true

@@ -15,7 +15,9 @@ impl AnalysisStore {
         output: &mut AnalysisExtractionV1,
         capture: &super::tables::Capture<'_>,
         control: &AnalysisReadControl,
+        owners: &mut crate::analysis::managed::OwnerRead<'_>,
     ) -> Result<()> {
+        owners.check_reader(reader, tenant)?;
         let count = output
             .references
             .iter()
@@ -38,6 +40,67 @@ impl AnalysisStore {
                 reference.result_id.capacity()
                     + origins.capacity() * std::mem::size_of::<AnalysisReferenceOriginV1>(),
             )?;
+            let native: bool = reader
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM managed_graph_publications WHERE result_id=?)
+                    OR EXISTS(SELECT 1 FROM managed_source_publications WHERE result_id=?)",
+                    params![reference.result_id, reference.result_id],
+                    |row| row.get(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "classify native captured publication",
+                })?;
+            if self.package_source_revision(reader, tenant, &reference.result_id)?
+                != reference.commit_revision
+            {
+                return self.reject("the captured result revision changed");
+            }
+            if native
+                && !capture.graph_provenance()
+                && origins.as_slice() == [AnalysisReferenceOriginV1::Graph]
+            {
+                continue;
+            }
+            if let Some(findings) = native
+                .then(|| capture.finding_basis(&reference.result_id))
+                .flatten()
+                .filter(|_| {
+                    origins.iter().all(|origin| {
+                        matches!(
+                            origin,
+                            AnalysisReferenceOriginV1::Graph
+                                | AnalysisReferenceOriginV1::Notification
+                        )
+                    })
+                })
+            {
+                let (witnesses, contexts, _) = Self::finding_basis_on(
+                    reader,
+                    tenant,
+                    &reference.result_id,
+                    findings,
+                    control,
+                    &mut |scan, input| {
+                        output.scan(scan)?;
+                        output.charge(input)
+                    },
+                    false,
+                    owners,
+                )?;
+                for witness in witnesses {
+                    output.inherit_witness(witness)?;
+                }
+                for reference in contexts {
+                    for origin in &origins {
+                        output.reference_context(
+                            &reference.key,
+                            reference.commit_revision,
+                            *origin,
+                        )?;
+                    }
+                }
+                continue;
+            }
             let length: u64 = reader
                 .query_row(
                     "SELECT octet_length(x.request_meta)

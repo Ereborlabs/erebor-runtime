@@ -344,6 +344,8 @@ fn call_references_commit_atomically() -> TestResult {
         .zip(&outputs)
         .enumerate()
         .map(|(index, (evaluation, output))| ManagedReturn {
+            graph: None,
+            retained: None,
             changes: None,
             call: 10 + index as u64,
             evaluation,
@@ -356,9 +358,10 @@ fn call_references_commit_atomically() -> TestResult {
     };
     let before = store.meta()?;
     let mut checked = false;
-    assert!(store
-        .commit_managed(
+    assert!(Fixture::publish(&store,
             &ManagedCommit {
+            control: &crate::AnalysisReadControl::default(),
+            budget: &crate::analysis::managed::tests::TestBudget,
                 completed: true,
                 attempt: &attempt,
                 now_utc_ns: 10,

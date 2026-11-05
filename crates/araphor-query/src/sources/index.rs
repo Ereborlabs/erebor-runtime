@@ -17,6 +17,8 @@ use datafusion::physical_expr::PhysicalExpr;
 
 use super::SourceSnapshot;
 
+mod keys;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SourceImage {
     Before,
@@ -81,6 +83,12 @@ struct SourceBlock {
     born: u64,
     keys: Arc<BTreeMap<usize, Arc<Rows>>>,
     _memory: Arc<MemoryReservation>,
+    _scope: Arc<MemoryReservation>,
+}
+
+struct SelectionLease {
+    _metadata: MemoryReservation,
+    _block: Arc<MemoryReservation>,
     _scope: Arc<MemoryReservation>,
 }
 
@@ -363,7 +371,13 @@ impl SourceIndex {
                     .saturating_mul(count)
                     .saturating_add(size_of::<(u64, BTreeSet<RowAddress>)>());
                 let bytes = size_of::<SourceBlock>()
-                    .saturating_add(batch.num_rows().saturating_mul(entries));
+                    .saturating_add(batch.num_rows().saturating_mul(entries))
+                    .checked_add(
+                        frame
+                            .block_bytes(&data.name, slot)
+                            .ok_or_else(SourceIndex::limit)?,
+                    )
+                    .ok_or_else(SourceIndex::limit)?;
                 let memory = self.memory.reserve_input(bytes)?;
                 view._staging
                     .try_grow(batch.num_rows().saturating_mul(entries))?;
@@ -1085,10 +1099,18 @@ impl SourceView {
                     batch
                 };
                 result.batches.push(batch);
+                let lease = Arc::new(SelectionLease {
+                    _metadata: metadata.split(retained),
+                    _block: Arc::clone(&block._memory),
+                    _scope: Arc::clone(&block._scope),
+                });
+                charged = charged
+                    .checked_sub(retained)
+                    .ok_or_else(SourceIndex::limit)?;
                 result.origins.push(
                     block
                         .handles
-                        .select(&rows)
+                        .select(&rows, lease)
                         .map_err(SourceSnapshot::data_error)?,
                 );
                 drop(selection);

@@ -18,12 +18,16 @@ impl NotificationRouter {
     ) -> Result<usize> {
         let _guard = self.lock()?;
         NotificationErrorCodeV1::Invalid.require(now > 0, "delivery time")?;
-        let mut state = self.state(key)?;
-        self.deliver_state(&mut state, effect, now)
+        self.with_cycle(key.tenant_id, &[], &[key], |cycle| {
+            let mut state = cycle.state(key)?;
+            cycle.deliver_state(&mut state, effect, now)
+        })
     }
+}
 
+impl NotificationCycle<'_, '_> {
     pub(super) fn deliver_state(
-        &self,
+        &mut self,
         state: &mut NotificationObligationV1,
         effect: &mut Effect<'_>,
         now: u64,

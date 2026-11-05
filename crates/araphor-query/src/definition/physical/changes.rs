@@ -43,10 +43,12 @@ impl PackageExec {
             }
             Ok(())
         };
+        let graph_inputs = self.graph_inputs()?;
         let mut inputs = (0..model.inputs.len()).map(|_| None).collect::<Vec<_>>();
         for &slot in &call.lookups.order {
             let port = &model.inputs[slot];
-            if contract.generated(&port.port.name)
+            if graph_inputs.contains(&slot)
+                || contract.generated(&port.port.name)
                 || call.ports.iter().any(|pair| pair.after == slot)
                 || matches!(&port.source, sdk::InputSource::Lookup(_))
             {
@@ -86,141 +88,167 @@ impl PackageExec {
             evaluation.checkpoint = None;
             evaluation.previous_outputs.clear();
         }
-        for &slot in &call.lookups.order {
-            if inputs[slot].is_some() {
-                continue;
-            }
-            if let Some(pair) = call
-                .ports
-                .iter()
-                .find(|pair| pair.before == slot || pair.after == slot || pair.affected == slot)
-            {
-                if reset {
-                    let after = self
-                        .read_input(
-                            (pair.after, pair.reset),
-                            &model.inputs[pair.after],
-                            owner,
-                            context,
-                            memory,
-                            &source,
-                        )
-                        .await?;
-                    bind(pair.after, &after)?;
-                    let mut before = after.clone();
-                    before
-                        .data
-                        .name
-                        .clone_from(&model.inputs[pair.before].port.name);
-                    before.data.batches = vec![sdk::RecordBatch::new_empty(Arc::new(
-                        model.inputs[pair.before].port.schema.clone(),
-                    ))];
-                    bind(pair.before, &before)?;
-                    let keys = self
-                        .collect(
-                            pair.reset_keys,
-                            &model.inputs[pair.affected].port.schema,
-                            owner,
-                            context,
-                            memory,
-                            true,
-                        )
-                        .await?;
-                    let mut affected = after.clone();
-                    affected
-                        .data
-                        .name
-                        .clone_from(&model.inputs[pair.affected].port.name);
-                    affected.data.batches = keys;
-                    bind(pair.affected, &affected)?;
-                    inputs[pair.before] = Some(before);
-                    inputs[pair.after] = Some(after);
-                    inputs[pair.affected] = Some(affected);
-                    continue;
+        let mut replay = None;
+        let result = async {
+            for graph_phase in [false, true] {
+                if graph_phase && !graph_inputs.is_empty() {
+                    self.check_graph_inputs(&graph_inputs, owner)?;
+                    owner.bind_graph(self, &source, context).await?;
                 }
-                if pair.before == slot || (pair.after == slot && pair.difference.is_some()) {
-                    let prior = prior.ok_or_else(|| internal("change base is absent"))?;
-                    let session = context
-                        .session_config()
-                        .get_extension::<crate::execution::Session>()
-                        .ok_or_else(|| internal("change replay session is absent"))?;
-                    let mut before = session
-                        .replay_before(&self.call, pair.before, prior, context)
-                        .await
-                        .map_err(external)?;
-                    if let Some(difference) = &pair.difference {
-                        let mut after = self
-                            .read_input(
-                                (pair.after, pair.after),
-                                &model.inputs[pair.after],
-                                owner,
-                                context,
-                                memory,
-                                &source,
-                            )
-                            .await?;
-                        let schema = Arc::new(model.inputs[pair.after].port.schema.clone());
-                        source.bind_port(
-                            difference.base,
-                            Arc::clone(&schema),
-                            before.data.batches.clone(),
-                            None,
-                        )?;
-                        source.bind_port(
-                            difference.target,
-                            schema,
-                            after.data.batches.clone(),
-                            None,
-                        )?;
-                        before.data.batches = self
-                            .collect(
-                                difference.removed,
-                                &model.inputs[pair.before].port.schema,
-                                owner,
-                                context,
-                                memory,
-                                true,
-                            )
-                            .await?;
-                        after.data.batches = self
-                            .collect(
-                                difference.inserted,
-                                &model.inputs[pair.after].port.schema,
-                                owner,
-                                context,
-                                memory,
-                                true,
-                            )
-                            .await?;
-                        bind(pair.after, &after)?;
-                        inputs[pair.after] = Some(after);
+                for &slot in &call.lookups.order {
+                    if graph_inputs.contains(&slot) != graph_phase || inputs[slot].is_some() {
+                        continue;
                     }
-                    bind(pair.before, &before)?;
-                    inputs[pair.before] = Some(before);
-                    continue;
+                    if let Some(pair) = call.ports.iter().find(|pair| {
+                        pair.before == slot || pair.after == slot || pair.affected == slot
+                    }) {
+                        if reset {
+                            let after = self
+                                .read_input(
+                                    (pair.after, pair.reset),
+                                    &model.inputs[pair.after],
+                                    owner,
+                                    context,
+                                    memory,
+                                    &source,
+                                )
+                                .await?;
+                            bind(pair.after, &after)?;
+                            let mut before = after.clone();
+                            before
+                                .data
+                                .name
+                                .clone_from(&model.inputs[pair.before].port.name);
+                            before.data.batches = vec![sdk::RecordBatch::new_empty(Arc::new(
+                                model.inputs[pair.before].port.schema.clone(),
+                            ))];
+                            bind(pair.before, &before)?;
+                            let keys = self
+                                .collect(
+                                    pair.reset_keys,
+                                    &model.inputs[pair.affected].port.schema,
+                                    owner,
+                                    context,
+                                    memory,
+                                    true,
+                                )
+                                .await?;
+                            let mut affected = after.clone();
+                            affected
+                                .data
+                                .name
+                                .clone_from(&model.inputs[pair.affected].port.name);
+                            affected.data.batches = keys;
+                            bind(pair.affected, &affected)?;
+                            inputs[pair.before] = Some(before);
+                            inputs[pair.after] = Some(after);
+                            inputs[pair.affected] = Some(affected);
+                            continue;
+                        }
+                        if pair.before == slot || (pair.after == slot && pair.difference.is_some())
+                        {
+                            let prior = prior.ok_or_else(|| internal("change base is absent"))?;
+                            if replay.is_none() {
+                                let session = context
+                                    .session_config()
+                                    .get_extension::<crate::execution::Session>()
+                                    .ok_or_else(|| internal("change replay session is absent"))?;
+                                replay = Some(
+                                    session
+                                        .before_replay(self, prior, context)
+                                        .await
+                                        .map_err(external)?,
+                                );
+                            }
+                            let mut before = replay
+                                .as_ref()
+                                .ok_or_else(|| internal("change replay owner is absent"))?
+                                .input(self, pair.before, prior, &source)
+                                .await
+                                .map_err(external)?;
+                            if let Some(difference) = &pair.difference {
+                                let mut after = self
+                                    .read_input(
+                                        (pair.after, pair.after),
+                                        &model.inputs[pair.after],
+                                        owner,
+                                        context,
+                                        memory,
+                                        &source,
+                                    )
+                                    .await?;
+                                let schema = Arc::new(model.inputs[pair.after].port.schema.clone());
+                                source.bind_port(
+                                    difference.base,
+                                    Arc::clone(&schema),
+                                    before.data.batches.clone(),
+                                    None,
+                                )?;
+                                source.bind_port(
+                                    difference.target,
+                                    schema,
+                                    after.data.batches.clone(),
+                                    None,
+                                )?;
+                                before.data.batches = self
+                                    .collect(
+                                        difference.removed,
+                                        &model.inputs[pair.before].port.schema,
+                                        owner,
+                                        context,
+                                        memory,
+                                        true,
+                                    )
+                                    .await?;
+                                after.data.batches = self
+                                    .collect(
+                                        difference.inserted,
+                                        &model.inputs[pair.after].port.schema,
+                                        owner,
+                                        context,
+                                        memory,
+                                        true,
+                                    )
+                                    .await?;
+                                bind(pair.after, &after)?;
+                                inputs[pair.after] = Some(after);
+                            }
+                            bind(pair.before, &before)?;
+                            inputs[pair.before] = Some(before);
+                            continue;
+                        }
+                    }
+                    let port = &model.inputs[slot];
+                    let mut input = self
+                        .read_input((slot, slot), port, owner, context, memory, &source)
+                        .await?;
+                    if port.port.name == contract.reset {
+                        input.data = contract.reset_input(reset).map_err(external)?;
+                    }
+                    bind(slot, &input)?;
+                    inputs[slot] = Some(input);
                 }
             }
-            let port = &model.inputs[slot];
-            let mut input = self
-                .read_input((slot, slot), port, owner, context, memory, &source)
-                .await?;
-            if port.port.name == contract.reset {
-                input.data = contract.reset_input(reset).map_err(external)?;
-            }
-            bind(slot, &input)?;
-            inputs[slot] = Some(input);
+            evaluation.inputs = inputs
+                .into_iter()
+                .map(|input| input.ok_or_else(|| internal("the change input was not executed")))
+                .collect::<Result<_>>()?;
+            Ok(Some(araphor_data::ManagedChanges {
+                base: prior.filter(|_| !reset).map(|prior| {
+                    araphor_data::analysis::PackageResultRefV1 {
+                        result_id: prior.result.clone(),
+                        commit_revision: prior.revision,
+                    }
+                }),
+            }))
         }
-        evaluation.inputs = inputs
-            .into_iter()
-            .map(|input| input.ok_or_else(|| internal("the change input was not executed")))
-            .collect::<Result<_>>()?;
-        Ok(Some(araphor_data::ManagedChanges {
-            base: prior.filter(|_| !reset).map(|prior| {
-                araphor_data::analysis::PackageResultRefV1 {
-                    result_id: prior.result.clone(),
-                    commit_revision: prior.revision,
-                }
-            }),
-        }))
+        .await;
+        if let Some(replay) = replay {
+            let finished = replay.finish(result.is_err()).await.map_err(external);
+            if result.is_ok() {
+                finished?;
+            }
+        }
+        result
     }
 }

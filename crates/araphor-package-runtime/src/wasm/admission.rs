@@ -11,6 +11,7 @@ use super::Code;
 const HOST: &str = "araphor:analysis/host@1.0.0";
 const ANALYSIS: &str = "araphor:analysis/analysis@1.0.0";
 const TYPES: &str = "araphor:analysis/types@1.0.0";
+const GRAPH: &str = "araphor:analysis/graph@1.0.0";
 
 #[derive(Default)]
 pub(super) struct CompileBudget {
@@ -213,7 +214,7 @@ impl CompileBudget {
     ) -> Result<()> {
         let interface = component.component_type();
         for (name, item) in interface.imports(engine) {
-            if !matches!(name, HOST | TYPES)
+            if !matches!(name, HOST | TYPES | GRAPH)
                 || item.implements.is_some()
                 || item.external_id.is_some()
             {
@@ -265,9 +266,11 @@ impl CompileBudget {
         };
         for (field, item) in instance.exports(engine) {
             match item.ty {
+                ComponentItem::Resource(_) if matches!(name, GRAPH | ANALYSIS) && field == "transaction" => {}
                 ComponentItem::Type(_) if name != HOST => {}
                 ComponentItem::ComponentFunc(_)
                     if (name == HOST && field == "cancelled")
+                        || (name == GRAPH && matches!(field, "[method]transaction.read" | "[method]transaction.stage"))
                         || (name == ANALYSIS && field == "evaluate") => {}
                 _ => return Err(Code::Unsupported.error("component interface member").into()),
             }

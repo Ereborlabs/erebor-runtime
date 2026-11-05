@@ -35,6 +35,7 @@ fn change_base_requires_reference() -> TestResult {
             affected: "affected".into(),
             before: "before".into(),
             after: "source".into(),
+            current: None,
         }],
     });
     record.changes = Some(super::super::model::RecordChanges { base: None });

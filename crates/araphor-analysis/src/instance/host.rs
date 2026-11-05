@@ -310,47 +310,6 @@ impl InstanceHost {
         .await
     }
 
-    pub(crate) async fn admit_graph(
-        &self,
-        id: String,
-        source: araphor_data::EvidenceIntakeIdentityV1,
-        program: &crate::GraphProgram,
-        revision: u64,
-        control: &AnalysisReadControl,
-    ) -> Result<Arc<Instance>> {
-        let facts = self
-            .graph_facts
-            .as_ref()
-            .ok_or_else(|| Code::Incomplete.error("managed graph facts"))?;
-        self.check_query(program.publication().session().engine())?;
-        if !program.publication().uses_facts(facts) {
-            return Err(Code::Conflict.error("managed graph facts owner").into());
-        }
-        program
-            .admit(Arc::clone(&self.authority), id, source, revision, control)
-            .await
-    }
-
-    pub(crate) async fn admit_graph_expiry(
-        &self,
-        grant: araphor_data::PackageGrantV1,
-        id: String,
-        source: araphor_data::EvidenceIntakeIdentityV1,
-        revision: u64,
-        control: &AnalysisReadControl,
-    ) -> Result<Arc<Instance>> {
-        crate::GraphPublication::admit_expiry(
-            Arc::clone(&self.query),
-            Arc::clone(&self.authority),
-            grant,
-            id,
-            source,
-            revision,
-            control,
-        )
-        .await
-    }
-
     /// Drop cancels the host. The task retains its lease until all workers join.
     pub fn serve(
         self: Arc<Self>,

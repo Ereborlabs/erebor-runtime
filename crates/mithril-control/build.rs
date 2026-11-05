@@ -37,5 +37,34 @@ fn main() -> Result<(), io::Error> {
     }
     builder
         .file_descriptor_set_path(descriptor_path)
-        .compile_protos(&[proto], &[PathBuf::from("proto"), shared])
+        .compile_protos(&[proto], &[PathBuf::from("proto"), shared])?;
+    let directory = PathBuf::from("../../packages/default-definitions");
+    println!("cargo:rerun-if-changed={}", directory.display());
+    let mut files = std::fs::read_dir(&directory)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    files.retain(|path| {
+        path.extension()
+            .is_some_and(|extension| extension == "yaml" || extension == "yml")
+    });
+    files.sort();
+    let mut definitions = std::collections::BTreeMap::new();
+    for path in files {
+        let definition =
+            araphor_discovery_definition::Definition::read(&path).map_err(io::Error::other)?;
+        if definitions
+            .insert(definition.name.clone(), definition)
+            .is_some()
+        {
+            return Err(io::Error::other("default Definition names must be unique"));
+        }
+    }
+    let output = PathBuf::from(
+        std::env::var_os("OUT_DIR").ok_or_else(|| io::Error::other("Cargo did not set OUT_DIR"))?,
+    );
+    std::fs::write(
+        output.join("default-definitions.json"),
+        serde_json::to_vec(&definitions.into_values().collect::<Vec<_>>())
+            .map_err(io::Error::other)?,
+    )
 }

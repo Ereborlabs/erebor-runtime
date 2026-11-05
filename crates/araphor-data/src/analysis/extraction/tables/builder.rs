@@ -10,7 +10,7 @@ pub(super) struct Table {
     pub(super) schema: Arc<sdk::Schema>,
     pub(super) batches: Vec<RecordBatch>,
     pub(super) total_rows: usize,
-    pub(super) names: &'static [&'static str],
+    pub(super) names: Vec<String>,
     pub(super) mapping: Vec<Option<usize>>,
     builders: Vec<Box<dyn ArrayBuilder>>,
     variable: Vec<usize>,
@@ -23,7 +23,7 @@ pub(super) struct Table {
 impl Table {
     pub(super) fn new(
         schema: Arc<sdk::Schema>,
-        names: &'static [&'static str],
+        names: &[&str],
         budget: &mut ReadBudget<'_>,
     ) -> Result<Self> {
         let columns = schema.fields().len();
@@ -34,9 +34,10 @@ impl Table {
         budget.charge(
             names
                 .len()
-                .checked_mul(size_of::<Option<usize>>())
+                .checked_mul(size_of::<Option<usize>>() + size_of::<String>())
                 .ok_or_else(overflow)?,
         )?;
+        budget.charge(names.iter().map(|name| name.len()).sum())?;
         let mut mapping = vec![None; names.len()];
         for (index, field) in schema.fields().iter().enumerate() {
             let slot = names
@@ -47,7 +48,7 @@ impl Table {
         }
         Ok(Self {
             schema,
-            names,
+            names: names.iter().map(|name| (*name).to_owned()).collect(),
             mapping,
             batches: Vec::new(),
             total_rows: 0,
@@ -190,14 +191,21 @@ impl Table {
         batch: RecordBatch,
         budget: &mut ReadBudget<'_>,
     ) -> Result<bool> {
-        if batch.schema() != self.schema || batch.num_rows() != 1 {
+        if batch.schema() != self.schema {
             return Err(invalid("the native row differs from its table schema"));
         }
+        if batch.num_rows() == 0 {
+            return Ok(true);
+        }
+        self.finish(budget)?;
         let bytes = batch.get_array_memory_size();
         if !budget.admit(bytes.max(1))? {
             return Ok(false);
         }
-        let rows = self.total_rows.checked_add(1).ok_or_else(overflow)?;
+        let rows = self
+            .total_rows
+            .checked_add(batch.num_rows())
+            .ok_or_else(overflow)?;
         budget.charge(
             bytes
                 .checked_add(size_of::<RecordBatch>())

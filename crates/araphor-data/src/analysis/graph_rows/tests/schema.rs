@@ -5,8 +5,9 @@ fn standalone_graph_rejects_managed_producer_binding() -> TestResult {
     let fixture = CommitFixture::new()?;
     let source = &fixture.snapshot.scope.identity;
     let writer = Connection::open_in_memory()?;
+    writer.execute_batch(crate::AnalysisStore::CONTEXT_SCHEMA)?;
     writer.execute_batch(&GraphRows::schema())?;
-    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT)")?;
+    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT); CREATE TABLE context_refs(ref_id VARCHAR,tenant_id BLOB,owner_id VARCHAR,entity_key BLOB,lifetime_key BLOB,owner_revision UBIGINT,commit_revision UBIGINT)")?;
     writer.execute(
         "INSERT INTO source_receipts VALUES(?,?,?)",
         params![
@@ -26,7 +27,12 @@ fn standalone_graph_rejects_managed_producer_binding() -> TestResult {
     writer.execute("INSERT INTO analysis_results VALUES('call',?,'managed-package-v1',?,1),('standalone',?,'graph-findings',?,2)",params![source.tenant_id.as_slice(),source.key(),source.tenant_id.as_slice(),source.key()])?;
     writer.execute("INSERT INTO graph_producer_scopes VALUES(1,?,1,0,'instance',1,'package','revision','image',1,1),(2,?,1,2,NULL,NULL,NULL,NULL,NULL,1,2),(3,?,1,1,NULL,NULL,NULL,NULL,NULL,1,2)",params![source.tenant_id.as_slice(),source.tenant_id.as_slice(),source.tenant_id.as_slice()])?;
     writer.execute("INSERT INTO graph_producer_versions(result_id,scope_id,commit_revision,base_result_id,subject_count,edge_count,finding_count,state_count,selected_state_ref) VALUES('call',1,1,NULL,0,0,0,0,NULL),('standalone:metadata',2,2,NULL,0,0,0,0,NULL),('standalone:publication',3,2,NULL,0,0,0,0,NULL)",[])?;
-    araphor_graph::StateRows::finish(&writer, 1, 1, &GraphPackageStateV1::Waiting)?;
+    crate::analysis::graph_rows::store::StateRows::finish(
+        &writer,
+        1,
+        1,
+        &GraphPackageStateV1::Waiting,
+    )?;
     writer.execute(
         "INSERT INTO graph_versions VALUES('standalone',2,'standalone:metadata',false,false)",
         [],
@@ -258,8 +264,9 @@ fn unit_history_keeps_shared_values_and_rejects_conflicts() -> TestResult {
     let fixture = CommitFixture::new()?;
     let source = &fixture.snapshot.scope.identity;
     let mut writer = Connection::open_in_memory()?;
+    writer.execute_batch(crate::AnalysisStore::CONTEXT_SCHEMA)?;
     writer.execute_batch(&GraphRows::schema())?;
-    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT)")?;
+    writer.execute_batch("CREATE TABLE analysis_results(result_id VARCHAR PRIMARY KEY,tenant_id BLOB,processor_id VARCHAR,stream_key BLOB,commit_revision UBIGINT); CREATE TABLE source_receipts(stream_key BLOB,tenant_id BLOB,cpu_id UINTEGER); CREATE TABLE managed_edges(tenant_id BLOB,result_id VARCHAR,dependency_id VARCHAR,commit_revision UBIGINT); CREATE TABLE context_refs(ref_id VARCHAR,tenant_id BLOB,owner_id VARCHAR,entity_key BLOB,lifetime_key BLOB,owner_revision UBIGINT,commit_revision UBIGINT)")?;
     let record = fixture.snapshot.input_manifest.evidence[0].clone();
     writer.execute(
         "INSERT INTO source_receipts VALUES(?,?,?)",
@@ -277,10 +284,10 @@ fn unit_history_keeps_shared_values_and_rejects_conflicts() -> TestResult {
     let second = records[&other];
     let keys = &fixture.snapshot.graph.subjects[..2];
     let subjects = GraphRows::intern_subjects(&writer, keys)?;
-    let member = |unit| -> Result<araphor_graph::Replacement> {
-        Ok(araphor_graph::Replacement {
+    let member = |unit| -> Result<crate::analysis::graph_rows::store::Replacement> {
+        Ok(crate::analysis::graph_rows::store::Replacement {
             unit: Some(unit),
-            members: vec![araphor_graph::Member {
+            members: vec![crate::analysis::graph_rows::store::Member {
                 kind: MemberKind::Subject as u8,
                 key: GraphRows::member_key(&keys[0])?,
                 value: subjects[&keys[0]],
@@ -291,7 +298,7 @@ fn unit_history_keeps_shared_values_and_rejects_conflicts() -> TestResult {
             }],
         })
     };
-    let empty = |unit| araphor_graph::Replacement {
+    let empty = |unit| crate::analysis::graph_rows::store::Replacement {
         unit: Some(unit),
         members: Vec::new(),
     };
@@ -312,8 +319,18 @@ fn unit_history_keeps_shared_values_and_rejects_conflicts() -> TestResult {
             "INSERT INTO analysis_results VALUES(?,?,'managed-package-v1',?,?)",
             params![result, source.tenant_id.as_slice(), source.key(), revision],
         )?;
-        araphor_graph::Contributions::apply(&writer, 1, revision, &replacements, false)?;
-        araphor_graph::StateRows::finish(&writer, 1, revision, &GraphPackageStateV1::Waiting)?;
+        crate::analysis::graph_rows::store::Contributions::apply(
+            &writer,
+            revision,
+            &std::collections::BTreeMap::from([(1, (false, (&replacements).to_vec()))]),
+        )
+        .map(|mut work| work.remove(&(1)).expect("native scope work"))?;
+        crate::analysis::graph_rows::store::StateRows::finish(
+            &writer,
+            1,
+            revision,
+            &GraphPackageStateV1::Waiting,
+        )?;
         assert_eq!(
             writer.query_row(
                 "SELECT subject_count FROM graph_producer_versions WHERE result_id=?",

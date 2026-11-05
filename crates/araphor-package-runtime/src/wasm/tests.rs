@@ -79,14 +79,10 @@ fn sdk_components_pass_admission() -> TestResult {
             "discovery",
             araphor_analysis_builtins::components::DISCOVERY,
         ),
-        ("process", araphor_analysis_builtins::components::PROCESS),
+        ("causal", araphor_analysis_builtins::components::CAUSAL),
         (
             "credentials",
             araphor_analysis_builtins::components::CREDENTIALS,
-        ),
-        (
-            "kubernetes",
-            araphor_analysis_builtins::components::KUBERNETES,
         ),
         (
             "detector-example",

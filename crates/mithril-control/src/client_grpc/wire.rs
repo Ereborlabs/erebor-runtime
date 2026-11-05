@@ -1061,6 +1061,7 @@ mod tests {
             recovery: vec![gap],
             pending: vec![gap],
             coverage_report: None,
+            typed_report: None,
         };
         let wire = Wire::coverage(&coverage);
         assert_eq!(

@@ -23,12 +23,10 @@ use snafu::ResultExt as _;
 mod authority;
 mod builder;
 mod changes;
-mod feed;
 mod input;
 mod native;
 
 pub use builder::Graph;
-pub use feed::{GraphOwner, GraphProgram};
 pub(crate) use native::GraphConversion;
 pub use native::{GraphFacts, GraphPublication};
 

@@ -95,13 +95,14 @@ impl UnitFixture {
                     .map(|unit| unit.record.clone())
                     .collect::<Vec<_>>(),
             )?,
-            Detector::window_data(
+            Unit::window_data(
                 &records
                     .first()
                     .map_or_else(|| identity(0).stream, |record| record.id.stream.clone())
                     .key(),
                 records.first().map_or(1, |record| record.id.durable_cursor),
                 u64::MAX,
+                false,
             )?,
         ];
         detector.evaluate(&sdk::Evaluation {
@@ -161,6 +162,7 @@ fn unit_ports_keep_native_values() -> TestResult {
     assert_eq!(Unit::decode(&Unit::encode(&units)?)?, units);
     assert_eq!(Unit::decode(&Unit::encode_removals(&units)?)?, units);
     let values = vec![Contribution {
+        support: Vec::new(),
         record: records[0].id.clone(),
         subjects: vec![0, 1],
         relationships: vec![2],

@@ -1,3 +1,4 @@
+use araphor_analysis_builtins::graph::{FindingReasonExt};
 use super::*;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -22,7 +23,7 @@ fn reason_codes_are_reversible() -> TestResult {
         for reason in REASONS {
             let code = reason.analysis_code(id)?;
             assert_eq!(
-                araphor_graph::FindingRows::reason_label(&reason)?,
+                crate::analysis::graph_rows::store::FindingRows::reason_label(&reason)?,
                 reason.label()?
             );
             assert_eq!(FindingReasonV1::from_analysis_code(id, &code)?, reason);

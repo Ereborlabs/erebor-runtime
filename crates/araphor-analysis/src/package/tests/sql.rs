@@ -335,9 +335,7 @@ async fn native_cte_scope_and_admission() -> Result<()> {
         .context
         .table_provider("discovery.observed_effects")
         .await?;
-    assert!(provider
-        .as_any()
-        .is::<datafusion::datasource::view::ViewTable>());
+    assert!(provider.is::<datafusion::datasource::view::ViewTable>());
     let ordinary = fixture
         .context
         .sql("SELECT COUNT(*) FROM events")
@@ -386,9 +384,7 @@ async fn catalog_views_use_providers() -> Result<()> {
     for name in ["observed_effects", "coverage_ranges", "context_bindings"] {
         let name = format!("discovery.{name}");
         let provider = context.table_provider(name.as_str()).await?;
-        assert!(provider
-            .as_any()
-            .is::<datafusion::datasource::view::ViewTable>());
+        assert!(provider.is::<datafusion::datasource::view::ViewTable>());
         assert!(context
             .sql(&format!("SELECT * FROM {name}"))
             .await?

@@ -1,15 +1,122 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use duckdb::Connection;
 
 use super::*;
-use crate::{PackageImplementationV1, PackageRefV1};
+use crate::{PackageBundle, PackageImplementationV1, PackageRefV1};
 
 type RevisionKey = ([u8; 16], PackageRefV1);
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(in crate::analysis) struct VerifiedPackages {
     revisions: BTreeSet<RevisionKey>,
+    roots: BTreeMap<RevisionKey, Arc<PackageProof>>,
+    used: BTreeSet<RevisionKey>,
+}
+
+#[derive(Debug)]
+struct PackageProof {
+    rows: Vec<crate::analysis::PackageRevisionV1>,
+    bundle: PackageBundle,
+}
+
+impl VerifiedPackages {
+    pub(in crate::analysis) fn recheck(&mut self, reader: &Connection) -> Result<bool> {
+        self.revisions.clear();
+        let mut current = true;
+        for ((tenant, _), proof) in &self.roots {
+            for row in &proof.rows {
+                if AnalysisStore::package_from(reader, *tenant, &row.package_id, &row.revision)?
+                    .as_ref()
+                    != Some(row)
+                {
+                    current = false;
+                    break;
+                }
+            }
+        }
+        if current {
+            for ((tenant, _), proof) in &self.roots {
+                self.revisions.extend(proof.rows.iter().map(|row| {
+                    (
+                        *tenant,
+                        PackageRefV1 {
+                            package_id: row.package_id.clone(),
+                            revision: row.revision.clone(),
+                        },
+                    )
+                }));
+            }
+        }
+        Ok(current)
+    }
+
+    pub(in crate::analysis) fn seed(&self) -> Self {
+        Self {
+            roots: self.roots.clone(),
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::analysis) fn retain(
+        mut self,
+        tenant: [u8; 16],
+        active: &BTreeSet<&PackageRefV1>,
+    ) -> Self {
+        self.roots.retain(|key, _| {
+            self.used.contains(key) || (key.0 == tenant && active.contains(&key.1))
+        });
+        self.revisions.clear();
+        self.used.clear();
+        self
+    }
+
+    #[cfg(test)]
+    pub(in crate::analysis) fn shares_roots(&self, other: &Self) -> bool {
+        self.roots.len() == other.roots.len()
+            && self.roots.iter().all(|(key, proof)| {
+                other
+                    .roots
+                    .get(key)
+                    .is_some_and(|current| Arc::ptr_eq(proof, current))
+            })
+    }
+
+    pub(in crate::analysis) fn metadata_bytes(&self) -> usize {
+        self.roots.iter().fold(0usize, |bytes, ((_, key), proof)| {
+            bytes
+                .saturating_add(std::mem::size_of::<(RevisionKey, Arc<PackageProof>)>())
+                .saturating_add(key.package_id.capacity())
+                .saturating_add(key.revision.capacity())
+                .saturating_add(std::mem::size_of::<PackageProof>())
+                .saturating_add(
+                    proof
+                        .rows
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<crate::analysis::PackageRevisionV1>()),
+                )
+                .saturating_add(proof.bundle.allocated_bytes().unwrap_or(usize::MAX))
+                .saturating_add(proof.rows.iter().fold(0usize, |bytes, row| {
+                    bytes
+                        .saturating_add(row.package_id.capacity())
+                        .saturating_add(row.revision.capacity())
+                        .saturating_add(row.descriptor.capacity())
+                        .saturating_add(row.artifact.capacity())
+                        .saturating_add(row.dependencies.capacity().saturating_mul(
+                            std::mem::size_of::<crate::analysis::PackageRevisionRefV1>(),
+                        ))
+                        .saturating_add(row.dependencies.iter().fold(
+                            0usize,
+                            |bytes, dependency| {
+                                bytes
+                                    .saturating_add(dependency.package_id.capacity())
+                                    .saturating_add(dependency.revision.capacity())
+                            },
+                        ))
+                }))
+        })
+    }
 }
 
 impl AnalysisStore {
@@ -42,16 +149,64 @@ impl AnalysisStore {
         reader: &Connection,
         context: &AnalysisContextVersionV1,
     ) -> Result<()> {
+        Self::context_packages(reader, context, &mut VerifiedPackages::default())
+    }
+
+    pub(super) fn context_packages(
+        reader: &Connection,
+        context: &AnalysisContextVersionV1,
+        verified: &mut VerifiedPackages,
+    ) -> Result<()> {
         let Some(reference) = context.package_provenance()? else {
             return Ok(());
         };
-        let artifacts = Self::package_artifacts_from(
+        let key = (context.key.tenant_id, reference.root.clone());
+        if let Some(proof) = verified.roots.get(&key) {
+            let mut current = true;
+            for row in &proof.rows {
+                if Self::package_from(reader, key.0, &row.package_id, &row.revision)?.as_ref()
+                    != Some(row)
+                {
+                    current = false;
+                    break;
+                }
+            }
+            if current {
+                reference.check_bundle(&proof.bundle)?;
+                verified.revisions.extend(proof.rows.iter().map(|row| {
+                    (
+                        key.0,
+                        PackageRefV1 {
+                            package_id: row.package_id.clone(),
+                            revision: row.revision.clone(),
+                        },
+                    )
+                }));
+                verified.used.insert(key);
+                return Ok(());
+            }
+        }
+        let (rows, artifacts) = Self::package_closure_from(
             reader,
-            context.key.tenant_id,
+            key.0,
             &reference.root,
             &crate::AnalysisReadControl::default(),
         )?;
-        reference.validate(artifacts)
+        let bundle = reference.validate(artifacts)?;
+        verified.revisions.extend(rows.iter().map(|row| {
+            (
+                key.0,
+                PackageRefV1 {
+                    package_id: row.package_id.clone(),
+                    revision: row.revision.clone(),
+                },
+            )
+        }));
+        verified
+            .roots
+            .insert(key.clone(), Arc::new(PackageProof { rows, bundle }));
+        verified.used.insert(key);
+        Ok(())
     }
 
     pub(super) fn validate_stored_context_packages(
@@ -67,28 +222,7 @@ impl AnalysisStore {
         context: &AnalysisContextVersionV1,
         verified: &mut VerifiedPackages,
     ) -> Result<()> {
-        let Some(reference) = context
-            .package_provenance()
-            .map_err(crate::Error::stored_artifact)?
-        else {
-            return Ok(());
-        };
-        let artifacts = Self::package_artifacts_from(
-            reader,
-            context.key.tenant_id,
-            &reference.root,
-            &crate::AnalysisReadControl::default(),
-        )
-        .map_err(crate::Error::stored_artifact)?;
-        let revisions = artifacts
-            .iter()
-            .map(|artifact| (context.key.tenant_id, artifact.reference()))
-            .collect::<Vec<_>>();
-        reference
-            .validate(artifacts)
-            .map_err(crate::Error::stored_artifact)?;
-        verified.revisions.extend(revisions);
-        Ok(())
+        Self::context_packages(reader, context, verified).map_err(crate::Error::stored_artifact)
     }
 }
 
@@ -157,6 +291,66 @@ mod tests {
                 .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut verified)?
                 .ok_or("verified package context")?;
             assert!(verified.revisions.contains(&([1; 16], package.clone())));
+            let retained_proof = verified.retain([1; 16], &BTreeSet::new());
+            let active = BTreeSet::from([&package]);
+            let idle = retained_proof.seed().retain([1; 16], &active);
+            assert!(retained_proof.shares_roots(&idle));
+            assert!(idle.revisions.is_empty());
+            assert!(idle.used.is_empty());
+            assert!(idle.seed().retain([2; 16], &active).roots.is_empty());
+            let mut next = idle.seed();
+            assert!(next.revisions.is_empty());
+            store
+                .read_context_verified_from(writer.get_mut()?, &root, &context.key, &mut next)?
+                .ok_or("warm package context")?;
+            let key = ([1; 16], package.clone());
+            assert!(Arc::ptr_eq(&retained_proof.roots[&key], &next.roots[&key]));
+            assert!(idle
+                .seed()
+                .retain([1; 16], &BTreeSet::new())
+                .roots
+                .is_empty());
+            let original = AnalysisStore::package_from(
+                writer.get_mut()?,
+                [1; 16],
+                &package.package_id,
+                &package.revision,
+            )?
+            .ok_or("current package row")?;
+            for (field, changed, restored) in [
+                (
+                    "descriptor",
+                    duckdb::types::Value::Blob(b"changed".to_vec()),
+                    duckdb::types::Value::Blob(original.descriptor.clone()),
+                ),
+                (
+                    "dependencies",
+                    duckdb::types::Value::Text(serde_json::to_string(&vec![
+                        crate::analysis::PackageRevisionRefV1 {
+                            package_id: "missing".into(),
+                            revision: "r1".into(),
+                        },
+                    ])?),
+                    duckdb::types::Value::Text(serde_json::to_string(&original.dependencies)?),
+                ),
+            ] {
+                writer.get_mut()?.execute(
+                    &format!("UPDATE package_revisions SET {field} = ? WHERE tenant_id = ? AND package_id = ? AND revision = ?"),
+                    params![changed, [1u8; 16].as_slice(), package.package_id, package.revision],
+                )?;
+                assert!(store
+                    .read_context_verified_from(
+                        writer.get_mut()?,
+                        &root,
+                        &context.key,
+                        &mut retained_proof.seed()
+                    )
+                    .is_err());
+                writer.get_mut()?.execute(
+                    &format!("UPDATE package_revisions SET {field} = ? WHERE tenant_id = ? AND package_id = ? AND revision = ?"),
+                    params![restored, [1u8; 16].as_slice(), package.package_id, package.revision],
+                )?;
+            }
             let mut ambiguous = retained;
             ambiguous
                 .implementations
@@ -165,6 +359,14 @@ mod tests {
                 "UPDATE package_revisions SET artifact = ? WHERE tenant_id = ? AND package_id = ? AND revision = ?",
                 params![ambiguous.encode()?, [1u8; 16].as_slice(), package.package_id, package.revision],
             )?;
+            assert!(store
+                .read_context_verified_from(
+                    writer.get_mut()?,
+                    &root,
+                    &context.key,
+                    &mut retained_proof.seed()
+                )
+                .is_err());
             assert!(store
                 .verify_package_revision(
                     writer.get_mut()?,

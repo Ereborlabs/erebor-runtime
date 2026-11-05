@@ -80,9 +80,8 @@ impl Fixture {
             .unwrap_or_default();
         let host = parts.instances.ok_or("configured Instance Host absent")?;
         let mut fixture = Self::from_control(parts.control, auth, client)?;
-        let stopped = fixture.stop.subscribe();
-        let stopping = stopped.clone();
-        let mut tasks = vec![tokio::spawn(
+        let stopping = fixture.stop.subscribe();
+        let tasks = vec![tokio::spawn(
             async move {
                 host.serve(stopping, u64::MAX)
                     .await
@@ -91,13 +90,6 @@ impl Fixture {
             .in_current_span()
             .with_current_subscriber(),
         )];
-        if let Some(graph) = parts.graph {
-            tasks.push(tokio::spawn(
-                async move { graph.run(stopped).await.map_err(std::io::Error::other) }
-                    .in_current_span()
-                    .with_current_subscriber(),
-            ));
-        }
         fixture.tasks = tasks;
         Ok(fixture)
     }

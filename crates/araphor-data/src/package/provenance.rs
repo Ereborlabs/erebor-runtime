@@ -25,16 +25,23 @@ impl NativePackageContext {
             .context(PackageContextEncodeSnafu)
     }
 
-    pub(crate) fn validate(self, artifacts: Vec<PackageArtifactV1>) -> Result<()> {
+    pub(crate) fn validate(&self, artifacts: Vec<PackageArtifactV1>) -> Result<PackageBundle> {
         let bundle = PackageBundleV1 {
             schema_version: 1,
-            root: self.root,
+            root: self.root.clone(),
             artifacts,
         };
-        if bundle.checked_layout(&self.digest)?.is_none() {
+        let bundle = PackageBundle::checked(bundle, &self.digest)?
+            .ok_or_else(|| Code::Invalid.error("native package bundle digest"))?;
+        self.check_bundle(&bundle)?;
+        Ok(bundle)
+    }
+
+    pub(crate) fn check_bundle(&self, bundle: &PackageBundle) -> Result<()> {
+        if bundle.bundle().root != self.root || bundle.digest() != self.digest {
             return Err(Code::Invalid.error("native package bundle digest"));
         }
-        Self::check_output(&bundle, &self.package, &self.export, &self.output)
+        Self::check_output(bundle.bundle(), &self.package, &self.export, &self.output)
     }
 
     fn check_output(

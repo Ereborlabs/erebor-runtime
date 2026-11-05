@@ -3,6 +3,7 @@ use snafu::ResultExt as _;
 use super::super::graph_rows::{GraphHeader, GraphRows};
 use super::*;
 
+mod native;
 #[cfg(test)]
 mod tests;
 mod traversal;
@@ -78,6 +79,36 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
     ) -> Result<Vec<crate::AnalysisContextRefV1>> {
         control.check()?;
+        if Self::native_graph_result(snapshot, result_id)? {
+            let (count,bytes): (u64,u64) = snapshot.query_row(
+                "SELECT count(*),coalesce(sum(octet_length(encode(owner_id))+octet_length(entity_key)
+                    +octet_length(lifetime_key)),0)::UBIGINT FROM context_refs WHERE tenant_id=? AND ref_id=?",
+                params![tenant.as_slice(),result_id],|row| Ok((row.get(0)?,row.get(1)?)),
+            ).context(AnalysisDatabaseSnafu { operation:"bound native graph context references" })?;
+            let bytes = usize::try_from(bytes)
+                .ok()
+                .and_then(|bytes| bytes.checked_mul(2))
+                .and_then(|bytes| {
+                    bytes.checked_add(
+                        usize::try_from(count)
+                            .ok()?
+                            .checked_mul(2 * std::mem::size_of::<crate::AnalysisContextRefV1>())?,
+                    )
+                })
+                .ok_or_else(|| {
+                    crate::PackageErrorCodeV1::Limit.error("native graph context references")
+                })?;
+            output.charge(bytes)?;
+            let contexts = snapshot.prepare(
+                "SELECT owner_id,entity_key,lifetime_key,owner_revision,commit_revision FROM context_refs
+                 WHERE tenant_id=? AND ref_id=? ORDER BY owner_id,entity_key,lifetime_key,owner_revision",
+            ).and_then(|mut query| query.query_map(params![tenant.as_slice(),result_id],|row| Ok(crate::AnalysisContextRefV1 {
+                key: AnalysisContextKeyV1 { tenant_id:tenant,owner_id:row.get(0)?,entity_key:row.get(1)?,
+                    lifetime_key:row.get(2)?,owner_revision:row.get(3)? },commit_revision:row.get(4)?,
+            }))?.collect::<duckdb::Result<Vec<_>>>())
+                .context(AnalysisDatabaseSnafu { operation:"read native graph context references" })?;
+            return Ok(contexts);
+        }
         let (metadata, revision): (Vec<u8>, u64) = snapshot
             .query_row(
                 "SELECT request_meta,commit_revision FROM analysis_results
@@ -347,11 +378,14 @@ impl AnalysisStore {
         &self,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
+        scope: &AnalysisSelectionV1,
         read: &AnalysisTableRead<'_>,
         output: &mut AnalysisExtractionV1,
         capture: &mut tables::Capture<'_>,
         control: &AnalysisReadControl,
+        owners: &mut crate::analysis::managed::OwnerRead<'_>,
     ) -> Result<()> {
+        owners.check_reader(snapshot, selection.tenant_id)?;
         if let Some(request) = &selection.graph_traversal {
             self.traverse_graphs(
                 snapshot,
@@ -376,6 +410,52 @@ impl AnalysisStore {
             .filter(|_| selection.graph_traversal.is_none())
         {
             control.check()?;
+            let source: bool = snapshot
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM managed_source_publications WHERE result_id=?)",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "classify Graph publication scope",
+                })?;
+            if !source {
+                if let Some(owner) =
+                    owners.publication(snapshot, selection.tenant_id, id, &mut |scan, bytes| {
+                        output.scan(scan)?;
+                        output.charge(bytes)
+                    })?
+                {
+                    self.extract_definition_graph(
+                        snapshot,
+                        scope,
+                        id,
+                        owner.revision(),
+                        owner.grant(),
+                        read,
+                        output,
+                        capture,
+                        control,
+                        owners,
+                    )?;
+                    continue;
+                }
+            }
+            if let Some(header) = Self::native_source_header_bound(
+                snapshot,
+                selection.tenant_id,
+                id,
+                &mut |scan, bytes| {
+                    output.scan(scan)?;
+                    output.charge(bytes)
+                },
+            )? {
+                if self.extract_native_graph(
+                    snapshot, selection, id, &header, read, output, capture, control,
+                )? {
+                    continue;
+                }
+            }
             let (key, revision): (Vec<u8>, u64) = snapshot
                 .query_row(
                     "SELECT stream_key, commit_revision FROM analysis_results

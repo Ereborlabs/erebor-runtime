@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use arrow_buffer::{Buffer, MemoryPool as ArrowPool, MemoryReservation as ArrowReservation};
@@ -528,6 +528,80 @@ impl Memory {
         result?;
         buffer.claim(&Claim(allocation));
         Ok(())
+    }
+}
+
+struct ManagedBudget<C> {
+    memory: Arc<Memory>,
+    control: C,
+    limit: usize,
+    used: Arc<AtomicUsize>,
+}
+
+struct ManagedLease {
+    _memory: MemoryReservation,
+    used: Arc<AtomicUsize>,
+    bytes: usize,
+}
+
+impl Drop for ManagedLease {
+    fn drop(&mut self) {
+        self.used.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+impl<C> araphor_data::ManagedBudget for ManagedBudget<C>
+where
+    C: std::ops::Deref<Target = araphor_data::AnalysisReadControl> + Send + Sync,
+{
+    fn limit(&self) -> usize {
+        self.limit
+    }
+
+    fn reserve(&self, bytes: usize) -> araphor_data::Result<Box<dyn std::any::Any + Send + Sync>> {
+        self.control.check()?;
+        self.used
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(bytes).filter(|used| *used <= self.limit)
+            })
+            .map_err(|_| {
+                araphor_data::PackageErrorCodeV1::Limit.error("managed preparation memory")
+            })?;
+        match self.memory.reserve_input(bytes) {
+            Ok(memory) => Ok(Box::new(ManagedLease {
+                _memory: memory,
+                used: Arc::clone(&self.used),
+                bytes,
+            })),
+            Err(source) => {
+                self.used.fetch_sub(bytes, Ordering::AcqRel);
+                Err(araphor_data::Error::from(araphor_graph::Error::backend(
+                    crate::Error::Sql { source },
+                )))
+            }
+        }
+    }
+
+    fn check(&self) -> araphor_data::Result<()> {
+        self.control.check()
+    }
+}
+
+impl Memory {
+    pub fn managed_budget<'a, C>(
+        self: &Arc<Self>,
+        control: C,
+        limit: usize,
+    ) -> Arc<dyn araphor_data::ManagedBudget + 'a>
+    where
+        C: std::ops::Deref<Target = araphor_data::AnalysisReadControl> + Send + Sync + 'a,
+    {
+        Arc::new(ManagedBudget {
+            memory: Arc::clone(self),
+            control,
+            limit,
+            used: Arc::default(),
+        })
     }
 }
 

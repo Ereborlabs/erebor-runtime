@@ -1,7 +1,7 @@
 use super::*;
-use crate::{DiscoveryRecordIdV1, GraphEdgeV1, GraphValidate as _, StorePositionV1};
+use crate::{AnalysisStore, DiscoveryRecordIdV1, GraphEdgeV1, GraphValidate as _, StorePositionV1};
+use araphor_analysis_builtins::graph::BranchExt;
 
-type GraphIndexRow = (Vec<u8>, Vec<u8>, u64, u64, u64, u64);
 type GraphInputs = (
     Vec<DiscoveryRecordIdV1>,
     Vec<(DiscoveryRecordIdV1, StorePositionV1)>,
@@ -19,6 +19,9 @@ impl GraphRows {
         let tenant = prior.snapshot.scope.identity.tenant_id;
         if current.snapshot.scope.identity.tenant_id != tenant {
             return Err(Self::invalid("graph revision tenant"));
+        }
+        if AnalysisStore::native_graph_result(reader,before)? || AnalysisStore::native_graph_result(reader,after)? {
+            return Ok(before==after);
         }
         prior.snapshot.input_manifest.validate(tenant)?;
         current.snapshot.input_manifest.validate(tenant)?;
@@ -215,6 +218,7 @@ impl GraphRows {
         source: &crate::EvidenceIntakeIdentityV1,
         charge: &mut impl FnMut(usize, usize) -> Result<()>,
     ) -> Result<()> {
+        if AnalysisStore::bound_native_findings(reader,result,id,charge)? { return Ok(()); }
         let role = MemberKind::Finding as u8;
         let filter = if id.is_some() {
             "AND m.member_key=?"
@@ -347,7 +351,7 @@ impl GraphRows {
         }
         let mut statement=reader.prepare(&format!(
             "SELECT DISTINCT v.scope_id,v.commit_revision,m.unit_ref,v.result_id,f.finding_id,m.member_key,
-                s.tenant_id,src.stream_key,s.producer_kind,s.first_cursor,f.package_id=s.package_id
+                s.tenant_id,src.stream_key,s.producer_kind,s.first_cursor,f.package_id=v.package_id
              FROM graph_result_producers b JOIN graph_producer_versions v ON v.result_id=b.producer_result_id
              JOIN graph_producer_scopes s ON s.scope_id=v.scope_id
              JOIN graph_sources src ON src.source_ref=s.source_ref
@@ -881,408 +885,160 @@ impl GraphRows {
         ))
     }
 
-    pub(in crate::analysis) fn frozen_facts(
+    pub(in crate::analysis) fn frozen_records(
         reader: &Connection,
-        root: &std::path::Path,
         capture: &crate::ManagedCapture,
         result: &PackageResultRefV1,
-        records: &BTreeSet<DiscoveryRecordIdV1>,
         control: &AnalysisReadControl,
         charge: &mut impl FnMut(usize, usize) -> Result<()>,
-    ) -> Result<(
-        (GraphManifest, Option<u64>),
-        Vec<(crate::AnalysisContextVersionV1, crate::AnalysisContextRefV1)>,
-        Vec<(DiscoveryRecordIdV1, crate::AnalysisContextRefV1)>,
-    )> {
-        let tenant = capture.instance().spec.tenant;
-        let length: Option<u64> = reader
-            .query_row(
-                "SELECT octet_length(body) FROM analysis_results WHERE tenant_id=? AND result_id=?
-                AND commit_revision=? AND processor_id=?",
-                params![
-                    tenant.as_slice(),
-                    result.result_id,
-                    result.commit_revision,
-                    crate::GRAPH_PROCESSOR
-                ],
-                |row| row.get(0),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "bound frozen Graph header",
-            })?;
-        let length = usize::try_from(length.ok_or_else(|| Self::invalid("frozen Graph result"))?)
-            .unwrap_or(usize::MAX);
-        charge(length, length.saturating_mul(2))?;
-        let header = Self::read_summary(reader, tenant, &result.result_id, Some(control))?
+    ) -> Result<Vec<DiscoveryRecordIdV1>> {
+        let graph = crate::analysis::graph_rows::store::Relations::new(reader);
+        let snapshot = graph
+            .read_snapshot(capture.instance().spec.tenant, &result.result_id, charge)?
             .ok_or_else(|| Self::invalid("frozen Graph result"))?;
         let crate::ManagedDestination::Graph { source, .. } = &capture.instance().spec.destination
         else {
             return Err(Self::invalid("frozen Graph destination"));
         };
-        if &header.snapshot.scope.identity != source {
+        if snapshot.header.snapshot.scope.identity != *source
+            || snapshot.head.commit_revision != result.commit_revision
+        {
             return Err(Self::invalid("frozen Graph source"));
         }
-        let (scope,cut,stored,restricted): (u64,u64,Vec<u8>,Option<u64>) = reader.query_row(
-            "SELECT v.scope_id,v.commit_revision,s.stream_key,v.restricted_count FROM graph_versions g
-             JOIN graph_producer_versions v ON v.result_id=g.metadata_result_id
-             JOIN graph_producer_scopes p USING(scope_id) JOIN graph_sources s USING(source_ref)
-             WHERE g.result_id=? AND g.commit_revision=? AND p.producer_kind=2 AND p.tenant_id=?",
-            params![result.result_id,result.commit_revision,tenant.as_slice()],
-            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "read frozen Graph metadata cut" })?;
-        if cut != result.commit_revision || stored != source.key() {
-            return Err(Self::invalid("frozen Graph metadata cut"));
+        let bytes = snapshot
+            .header
+            .evidence_count
+            .saturating_add(snapshot.header.position_count)
+            .saturating_mul(
+                std::mem::size_of::<(DiscoveryRecordIdV1, StorePositionV1)>()
+                    + source.node_id.capacity()
+                    + 6 * std::mem::size_of::<usize>(),
+            );
+        charge(bytes, bytes)?;
+        let (records, _) =
+            graph.inputs(&result.result_id, &snapshot.header, &mut || control.check())?;
+        Ok(records)
+    }
+
+    pub(in crate::analysis) fn frozen_facts(
+        reader: &Connection,
+        root: &std::path::Path,
+        capture: &crate::ManagedCapture,
+        result: &PackageResultRefV1,
+        records: Option<&BTreeSet<DiscoveryRecordIdV1>>,
+        control: &AnalysisReadControl,
+        charge: &mut impl FnMut(usize, usize) -> Result<()>,
+    ) -> Result<(
+        crate::analysis::graph::GraphSourceSummary,
+        Vec<(crate::AnalysisContextVersionV1, crate::AnalysisContextRefV1)>,
+        Vec<(DiscoveryRecordIdV1, crate::AnalysisContextRefV1)>,
+    )> {
+        let started = std::time::Instant::now();
+        let tenant = capture.instance().spec.tenant;
+        let graph = crate::analysis::graph_rows::store::Relations::new(reader);
+        let snapshot = graph
+            .read_snapshot(tenant, &result.result_id, charge)?
+            .ok_or_else(|| Self::invalid("frozen Graph result"))?;
+        let crate::ManagedDestination::Graph { source, .. } = &capture.instance().spec.destination
+        else {
+            return Err(Self::invalid("frozen Graph destination"));
+        };
+        if &snapshot.header.snapshot.scope.identity != source
+            || snapshot.head.commit_revision != result.commit_revision
+        {
+            return Err(Self::invalid("frozen Graph source"));
         }
-        let mut summary = GraphManifest::from_snapshot(&header.snapshot);
-        summary.input_manifest.evidence.clear();
-        summary.input_manifest.context.clear();
-        summary.input_positions.clear();
-        summary.facts.clear();
-        if records.is_empty() {
-            return Ok(((summary, restricted), Vec::new(), Vec::new()));
-        }
-        let mut units = Vec::new();
-        if restricted.is_some() {
-            charge(
-                0,
-                records
-                    .len()
-                    .saturating_mul(std::mem::size_of::<(&DiscoveryRecordIdV1, u64)>()),
-            )?;
-            units.try_reserve_exact(records.len()).map_err(|_| {
-                crate::AnalysisInputTooLargeSnafu {
-                    resource: "frozen Graph units",
-                }
-                .build()
-            })?;
-            let mut statement=reader.prepare(
-                "WITH candidates AS MATERIALIZED (SELECT * FROM graph_producer_members WHERE member_key=?)
-                 SELECT m.unit_ref,m.value_ref,e.cpu_id,e.durable_cursor,s.stream_key,s.tenant_id,r.cpu_id,
-                    m.anchor_record_id,m.anchor_fact,m.reason_code,m.ordinal
-                 FROM candidates m LEFT JOIN graph_evidence e ON e.evidence_id=m.value_ref
-                 LEFT JOIN graph_sources s USING(source_ref)
-                 LEFT JOIN source_receipts r ON r.stream_key=s.stream_key AND r.tenant_id=s.tenant_id
-                 WHERE m.scope_id=? AND m.member_kind=0 AND m.valid_from<=?
-                    AND (m.valid_to IS NULL OR m.valid_to>?)"
-            ).context(AnalysisDatabaseSnafu {operation:"prepare frozen Graph record units"})?;
-            for record in records {
-                control.check()?;
-                let mut rows = statement
-                    .query(params![Self::member_key(record)?, scope, cut, cut])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "read frozen Graph record unit",
-                    })?;
-                let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                    operation: "advance frozen Graph record unit",
-                })?
-                else {
-                    continue;
-                };
-                let unit: u64 = Self::column(row, 0)?;
-                if unit == 0
-                    || unit != Self::column::<u64>(row, 1)?
-                    || record.cpu_id != Self::column::<u32>(row, 2)?
-                    || record.durable_cursor != Self::column::<u64>(row, 3)?
-                    || source.key() != Self::column::<Vec<u8>>(row, 4)?
-                    || tenant != Self::column::<Vec<u8>>(row, 5)?.as_slice()
-                    || Some(record.cpu_id) != Self::column::<Option<u32>>(row, 6)?
-                    || Self::column::<Option<u64>>(row, 7)?.is_some()
-                    || Self::column::<Option<Vec<u8>>>(row, 8)?.is_some()
-                    || Self::column::<Option<String>>(row, 9)?.is_some()
-                    || Self::column::<u32>(row, 10)? != 0
-                {
-                    return Err(Self::invalid("frozen Graph record unit"));
-                }
-                if rows
-                    .next()
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "check unique frozen Graph record unit",
-                    })?
-                    .is_some()
-                {
-                    return Err(Self::invalid("frozen Graph duplicate record unit"));
-                }
-                units.push((record, unit));
-            }
-        }
-        let mut selected = BTreeMap::new();
-        let mut direct = None;
-        if restricted.is_none() {
-            let length: u64 = reader.query_row(
-                "SELECT COALESCE(SUM(octet_length(f.body)),0) FROM graph_selected_members m
-                 JOIN graph_fact_values f ON f.fact_id=m.value_ref WHERE m.result_id=? AND m.member_kind=7",
-                params![result.result_id], |row| row.get(0),
-            ).context(AnalysisDatabaseSnafu { operation: "bound initial frozen Graph facts" })?;
-            let length = usize::try_from(length).unwrap_or(usize::MAX);
-            charge(
-                length,
-                length
-                    .saturating_mul(2)
-                    .saturating_add(
-                        header
-                            .evidence_count
-                            .saturating_mul(std::mem::size_of::<DiscoveryRecordIdV1>()),
-                    )
-                    .saturating_add(
-                        header.position_count.saturating_mul(std::mem::size_of::<(
-                            DiscoveryRecordIdV1,
-                            StorePositionV1,
-                        )>()),
-                    )
-                    .saturating_add(
-                        header
-                            .fact_count
-                            .saturating_mul(std::mem::size_of::<crate::GraphFactV1>()),
-                    ),
-            )?;
-            let full =
-                Self::read_metadata_control(reader, tenant, &result.result_id, Some(control))?
-                    .ok_or_else(|| Self::invalid("frozen Graph result"))?;
-            for key in full.snapshot.input_manifest.context {
-                if selected.insert(key, None).is_some() {
-                    return Err(Self::invalid("frozen Graph duplicate key"));
-                }
-            }
-            direct = Some(full.snapshot.graph.facts);
-        } else {
-            let mut statement = reader
-                .prepare(
-                    "WITH candidates AS MATERIALIZED (SELECT * FROM graph_producer_members WHERE unit_ref=?)
-                     SELECT m.member_key,f.tenant_id,octet_length(f.body),f.body,
-                    c.owner_id,c.entity_key,c.lifetime_key,c.owner_revision
-                 FROM candidates m JOIN graph_fact_values f ON f.fact_id=m.value_ref
-                 LEFT JOIN context_versions c ON c.version_key=m.member_key
-                 WHERE m.scope_id=? AND m.member_kind=7
-                    AND m.valid_from<=? AND (m.valid_to IS NULL OR m.valid_to>?)",
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare frozen Graph point facts",
-                })?;
-            for (record, unit) in &units {
-                control.check()?;
-                let mut rows = statement.query(params![unit, scope, cut, cut]).context(
-                    AnalysisDatabaseSnafu {
-                        operation: "read frozen Graph point facts",
-                    },
-                )?;
-                while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                    operation: "advance frozen Graph point facts",
-                })? {
-                    control.check()?;
-                    let length: u64 = Self::column(row, 2)?;
-                    let length = usize::try_from(length).unwrap_or(usize::MAX);
-                    charge(length, length.saturating_mul(2))?;
-                    let key = crate::AnalysisContextKeyV1 {
-                        tenant_id: tenant,
-                        owner_id: Self::column(row, 4)?,
-                        entity_key: Self::column(row, 5)?,
-                        lifetime_key: Self::column(row, 6)?,
-                        owner_revision: Self::column(row, 7)?,
-                    };
-                    let body: Vec<u8> = Self::column(row, 3)?;
-                    let fact: crate::GraphFactV1 = Self::decode_value(&body)?;
-                    fact.validate()?;
-                    if Self::column::<Vec<u8>>(row, 0)? != super::super::context::version_key(&key)?
-                        || Self::column::<Vec<u8>>(row, 1)? != tenant
-                        || &fact.record_id != *record
-                        || selected.insert(key, Some(fact)).is_some()
-                    {
-                        return Err(Self::invalid("frozen Graph native fact"));
-                    }
-                }
-            }
-        }
-        let mut contexts = Vec::new();
-        charge(
-            0,
-            selected.len().saturating_mul(std::mem::size_of::<(
-                crate::AnalysisContextVersionV1,
-                crate::AnalysisContextRefV1,
-            )>()),
-        )?;
-        contexts.try_reserve_exact(selected.len()).map_err(|_| {
-            crate::AnalysisInputTooLargeSnafu {
-                resource: "frozen Graph output",
-            }
-            .build()
-        })?;
-        for (key, expected) in selected {
-            control.check()?;
-            if !capture.instance().grant.selection.contexts.is_all()
-                && !capture
-                    .instance()
-                    .grant
-                    .selection
-                    .contexts
-                    .as_slice()
-                    .contains(&key)
-            {
+        let permit = |key: &crate::AnalysisContextKeyV1| -> Result<()> {
+            let selection = &capture.instance().grant.selection.contexts;
+            if !selection.is_all() && !selection.as_slice().contains(key) {
                 return Err(crate::PackageErrorCodeV1::Denied.error("frozen Graph context scope"));
             }
-            let length: u64 = reader
-                .query_row(
-                    "SELECT octet_length(body) FROM context_versions WHERE version_key=?",
-                    params![super::super::context::version_key(&key)?],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "bound frozen Graph context",
-                })?;
-            let length = usize::try_from(length).unwrap_or(usize::MAX);
-            charge(
-                length,
-                length.saturating_mul(2).saturating_add(
-                    key.owner_id.capacity()
-                        + key.entity_key.capacity()
-                        + key.lifetime_key.capacity(),
-                ),
-            )?;
-            let (context, revision) =
-                super::super::AnalysisStore::read_context_from(reader, root, &key)?
-                    .ok_or_else(|| Self::invalid("frozen Graph context"))?;
-            if revision > result.commit_revision {
-                return Err(Self::invalid("frozen Graph context cut"));
-            }
-            let fact = match crate::GraphFactV1::try_from(&context) {
-                Ok(fact) => fact,
-                Err(_) if direct.is_some() => continue,
-                Err(error) => return Err(error),
-            };
-            charge(
-                0,
-                context
-                    .body
-                    .capacity()
-                    .saturating_add(context.key.owner_id.capacity())
-                    .saturating_add(context.key.entity_key.capacity())
-                    .saturating_add(context.key.lifetime_key.capacity()),
-            )?;
-            if expected.as_ref().is_some_and(|expected| expected != &fact)
-                || direct.as_ref().is_some_and(|facts| !facts.contains(&fact))
-            {
-                return Err(Self::invalid("frozen Graph context value"));
-            }
-            if records.contains(&fact.record_id) {
-                contexts.push((
-                    context,
-                    crate::AnalysisContextRefV1 {
-                        key,
-                        commit_revision: revision,
-                    },
-                ));
-            }
-        }
-        let mut proofs = Vec::new();
+            Ok(())
+        };
         let mut cuts = BTreeMap::new();
-        if restricted.is_some() {
-            let mut statement=reader.prepare(
-                "WITH candidates AS MATERIALIZED (SELECT * FROM graph_producer_members WHERE unit_ref=?)
-                 SELECT c.tenant_id,c.owner_id,c.entity_key,c.lifetime_key,c.owner_revision,
-                    c.commit_revision,m.valid_from,m.anchor_record_id,m.unit_ref,g.result_id,r.ref_id
-                 FROM candidates m LEFT JOIN context_versions c ON c.version_key=m.member_key AND c.commit_revision=m.value_ref
-                 LEFT JOIN graph_producer_versions opened ON opened.scope_id=m.scope_id AND opened.commit_revision=m.valid_from
-                 LEFT JOIN graph_versions g ON g.metadata_result_id=opened.result_id
-                 LEFT JOIN context_refs r ON r.ref_id=g.result_id AND r.tenant_id=c.tenant_id
-                    AND r.owner_id=c.owner_id AND r.entity_key=c.entity_key
-                    AND r.lifetime_key=c.lifetime_key AND r.owner_revision=c.owner_revision
-                 WHERE m.scope_id=? AND m.member_kind=10
-                    AND m.valid_from<=? AND (m.valid_to IS NULL OR m.valid_to>?)"
-            ).context(AnalysisDatabaseSnafu { operation:"prepare frozen Graph proof refs" })?;
-            for (record, unit) in &units {
-                let mut rows = statement.query(params![unit, scope, cut, cut]).context(
-                    AnalysisDatabaseSnafu {
-                        operation: "read frozen Graph proof refs",
-                    },
+        let selected = std::time::Instant::now();
+        let output = graph.frozen(
+            snapshot,
+            records,
+            &mut || control.check(),
+            charge,
+            &mut super::super::context::version_key,
+            &mut |context: crate::analysis::graph_rows::store::FrozenContext| {
+                permit(&context.key)?;
+                let (context, revision) = super::super::AnalysisStore::decode_context_row(
+                    root,
+                    context.key,
+                    (
+                        context.from,
+                        context.until,
+                        context.sensitivity,
+                        context.body,
+                        context.revision,
+                    ),
                 )?;
-                while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                    operation: "advance frozen Graph proof refs",
-                })? {
-                    control.check()?;
-                    let opening: u64 = Self::column(row, 6)?;
-                    let owner: String = Self::column(row, 9)?;
-                    let captured = match cuts.get(&(owner.clone(), opening)) {
-                        Some(cut) => *cut,
-                        None => {
-                            let cut = super::super::AnalysisStore::graph_capture_cut(
-                                reader,
-                                tenant,
-                                &PackageResultRefV1 {
-                                    result_id: owner.clone(),
-                                    commit_revision: opening,
-                                },
-                                None,
-                                None,
-                            )?;
-                            cuts.insert((owner, opening), cut);
-                            cut
-                        }
-                    };
-                    let key = crate::AnalysisContextKeyV1 {
-                        tenant_id: Self::column::<Vec<u8>>(row, 0)?
-                            .try_into()
-                            .map_err(|_| Self::invalid("frozen Graph proof tenant"))?,
-                        owner_id: Self::column(row, 1)?,
-                        entity_key: Self::column(row, 2)?,
-                        lifetime_key: Self::column(row, 3)?,
-                        owner_revision: Self::column(row, 4)?,
-                    };
-                    let revision: u64 = Self::column(row, 5)?;
-                    if !capture.instance().grant.selection.contexts.is_all()
-                        && !capture
-                            .instance()
-                            .grant
-                            .selection
-                            .contexts
-                            .as_slice()
-                            .contains(&key)
-                    {
-                        return Err(
-                            crate::PackageErrorCodeV1::Denied.error("frozen Graph proof scope")
-                        );
-                    }
-                    if key.tenant_id != tenant
-                        || !key.valid()
-                        || revision == 0
-                        || revision > captured
-                        || Self::column::<Option<u64>>(row, 7)? != Some(Self::column(row, 8)?)
-                        || Self::column::<Option<String>>(row, 10)?.is_none()
-                    {
-                        return Err(Self::invalid("frozen Graph proof ref"));
-                    }
-                    let bytes =
-                        std::mem::size_of::<(DiscoveryRecordIdV1, crate::AnalysisContextRefV1)>()
-                            .saturating_add(record.allocated_bytes())
-                            .saturating_add(
-                                key.owner_id.capacity()
-                                    + key.entity_key.capacity()
-                                    + key.lifetime_key.capacity(),
-                            );
-                    charge(bytes, bytes)?;
-                    proofs.try_reserve_exact(1).map_err(|_| {
-                        crate::AnalysisInputTooLargeSnafu {
-                            resource: "frozen Graph proof refs",
-                        }
-                        .build()
-                    })?;
-                    proofs.push((
-                        (*record).clone(),
-                        crate::AnalysisContextRefV1 {
-                            key,
-                            commit_revision: revision,
-                        },
-                    ));
+                super::super::AnalysisStore::validate_context_packages(reader, &context)
+                    .map_err(crate::Error::stored_artifact)?;
+                let reference = crate::AnalysisContextRefV1 {
+                    key: context.key.clone(),
+                    commit_revision: revision,
+                };
+                Ok((context, reference))
+            },
+            &mut |proof: &crate::analysis::graph_rows::store::FrozenProof| {
+                permit(&proof.key)?;
+                let owner = &proof.opening;
+                let key = (owner.result_id.clone(), owner.commit_revision);
+                if let Some(cut) = cuts.get(&key) {
+                    return Ok(*cut);
                 }
-            }
-        }
-        proofs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.key.cmp(&right.1.key)));
-        if proofs
-            .windows(2)
-            .any(|pair| pair[0].0 == pair[1].0 && pair[0].1.key == pair[1].1.key)
-        {
-            return Err(Self::invalid("frozen Graph duplicate proof"));
-        }
-        Ok(((summary, restricted), contexts, proofs))
+                let cut = super::super::AnalysisStore::graph_capture_cut(
+                    reader,
+                    tenant,
+                    &PackageResultRefV1 {
+                        result_id: owner.result_id.clone(),
+                        commit_revision: owner.commit_revision,
+                    },
+                    None,
+                    None,
+                )?;
+                cuts.insert(key, cut);
+                Ok(cut)
+            },
+        );
+        let finished = std::time::Instant::now();
+        erebor_telemetry::debug!(
+            stage = "graph_relations_timing",
+            cut_revision = capture.revision(),
+            graph_revision = result.commit_revision,
+            keys = records.map_or(0, BTreeSet::len),
+            snapshot_s = selected.duration_since(started).as_secs_f64(),
+            relations_s = finished.duration_since(selected).as_secs_f64(),
+            elapsed_s = finished.duration_since(started).as_secs_f64(),
+            success = output.is_ok(),
+            "Frozen Graph relation timing completed"
+        );
+        let output = output?;
+        Ok((
+            crate::analysis::graph::GraphSourceSummary {
+                manifest: output.summary,
+                restricted_count: output.restricted,
+                expired: output.expired,
+            },
+            output.contexts,
+            output
+                .proofs
+                .into_iter()
+                .map(|proof| {
+                    (
+                        proof.record,
+                        crate::AnalysisContextRefV1 {
+                            key: proof.key,
+                            commit_revision: proof.revision,
+                        },
+                    )
+                })
+                .collect(),
+        ))
     }
 
     pub(super) fn member_ids(
@@ -1343,44 +1099,13 @@ impl GraphRows {
         control: Option<&AnalysisReadControl>,
     ) -> Result<Option<GraphHeader>> {
         Self::check(control)?;
-        let indexed: Option<GraphIndexRow> = reader.query_row("SELECT body,stream_key,method_version,first_cursor,facts_revision,coverage_revision FROM analysis_result_state WHERE result_id=? AND tenant_id=? AND processor_id=?",params![result,tenant.as_slice(),crate::GRAPH_PROCESSOR],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional().context(AnalysisDatabaseSnafu {operation:"read Graph result header"})?;
-        let Some((body, stream, method, first, context, coverage)) = indexed else {
-            return Ok(None);
-        };
-        let mut header = GraphHeader::decode(&body)?;
-        header.check_index(tenant, &stream, method, first)?;
-        header.notice = (context, coverage);
-        let (expired,derive,evidence,positions,facts,restricted):(bool,bool,u64,u64,u64,Option<u64>) = reader
-            .query_row(
-                "SELECT g.expired,g.derive_branches,v.evidence_count,v.position_count,v.fact_count,v.restricted_count
-                 FROM graph_versions g JOIN graph_producer_versions v ON v.result_id=g.metadata_result_id WHERE g.result_id=?",
-                params![result],
-                |row| Ok((row.get(0)?, row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read Graph expiry state",
-            })?;
-        if (
-            header.evidence_count as u64,
-            header.position_count as u64,
-            header.fact_count as u64,
-        ) != (evidence, positions, facts)
-        {
-            return Err(Self::invalid("graph metadata summary counts"));
+        if let Some(header) = AnalysisStore::native_source_header(reader, tenant, result)? {
+            return Ok(Some(header));
         }
-        header.expired = expired;
-        header.derive_branches = derive;
-        header.restricted_count = restricted;
-        if header.expired
-            && header
-                .snapshot
-                .packages
-                .iter()
-                .any(|package| package.state != GraphPackageStateV1::CoverageInsufficient)
-        {
-            return Err(Self::invalid("graph expired package state"));
-        }
-        Ok(Some(header))
+        let selected =
+            crate::analysis::graph_rows::store::Relations::new(reader).snapshot(tenant, result)?;
+        Self::check(control)?;
+        Ok(selected.map(|selected| selected.header))
     }
 
     fn header_mode(
@@ -1390,127 +1115,20 @@ impl GraphRows {
         control: Option<&AnalysisReadControl>,
         complete: bool,
     ) -> Result<Option<GraphHeader>> {
+        if let Some(header) = AnalysisStore::native_source_header(reader, tenant, result)? {
+            Self::check(control)?;
+            return Ok(Some(header));
+        }
         let Some(mut header) = Self::read_summary(reader, tenant, result, control)? else {
             return Ok(None);
         };
-        if complete {
-            let counts:(u64,u64,u64)=reader.query_row("SELECT count(DISTINCT s.subject_id),count(DISTINCT e.edge_id),count(DISTINCT f.value_id) FROM graph_selected_members m LEFT JOIN graph_subject_values s ON m.member_kind=2 AND s.subject_id=m.value_ref LEFT JOIN graph_edge_values e ON m.member_kind=3 AND e.edge_id=m.value_ref LEFT JOIN graph_finding_values f ON m.member_kind=4 AND f.value_id=m.value_ref WHERE m.result_id=?",params![result],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).context(AnalysisDatabaseSnafu {operation:"check Graph header counts"})?;
-            header.check_shape(counts.0, counts.1, counts.2)?;
-        }
-        let (evidence, positions) = Self::inputs(reader, result, &header, control)?;
-        header.snapshot.input_manifest.evidence = evidence;
-        header.snapshot.input_positions = positions;
-        let mut facts = Vec::new();
-        let mut keyed = BTreeMap::new();
-        let mut statement=reader.prepare("SELECT v.body,v.tenant_id,m.ordinal,m.member_key,c.tenant_id,c.owner_id,c.entity_key,c.lifetime_key,c.owner_revision,c.body,c.commit_revision FROM graph_selected_members m LEFT JOIN graph_fact_values v ON v.fact_id=m.value_ref LEFT JOIN context_versions c ON c.version_key=m.member_key WHERE m.result_id=? AND m.member_kind=7 ORDER BY m.ordinal").context(AnalysisDatabaseSnafu {operation:"prepare Graph facts"})?;
-        let mut rows = statement
-            .query(params![result])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read Graph facts",
-            })?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance Graph facts",
-        })? {
-            Self::check(control)?;
-            let body: Vec<u8> = Self::column(row, 0)?;
-            let stored: Vec<u8> = Self::column(row, 1)?;
-            if stored != tenant {
-                return Err(Self::invalid("graph fact value"));
-            }
-            let ordinal: u32 = Self::column(row, 2)?;
-            let key: Vec<u8> = Self::column(row, 3)?;
-            if !header.derive_branches
-                && (ordinal as usize != facts.len()
-                    || key != Self::encode_value(&(ordinal as usize))?)
-            {
-                return Err(Self::invalid("graph fact ordinal"));
-            }
-            let fact: crate::GraphFactV1 = Self::decode_value(&body)?;
-            fact.validate()?;
-            if fact.record_id.stream != header.snapshot.scope.identity
-                || header
-                    .snapshot
-                    .input_manifest
-                    .evidence
-                    .binary_search(&fact.record_id)
-                    .is_err()
-            {
-                return Err(Self::invalid("graph fact input"));
-            }
-            if header.derive_branches {
-                let context = crate::AnalysisContextKeyV1 {
-                    tenant_id: Self::column::<Vec<u8>>(row, 4)?
-                        .try_into()
-                        .map_err(|_| Self::invalid("graph fact context tenant"))?,
-                    owner_id: Self::column(row, 5)?,
-                    entity_key: Self::column(row, 6)?,
-                    lifetime_key: Self::column(row, 7)?,
-                    owner_revision: Self::column(row, 8)?,
-                };
-                let canonical =
-                    crate::GraphFactV1::decode_context(&Self::column::<Vec<u8>>(row, 9)?)
-                        .map_err(|_| Self::invalid("graph fact context value"))?;
-                let revision: u64 = Self::column(row, 10)?;
-                if ordinal != 0
-                    || super::super::context::version_key(&context)? != key
-                    || canonical != fact
-                    || !context.valid()
-                    || context.tenant_id != tenant
-                    || revision == 0
-                    || keyed.insert(context, fact).is_some()
-                {
-                    return Err(Self::invalid("graph fact context identity"));
-                }
-            } else {
-                facts.push(fact);
-            }
-        }
-        if header.derive_branches {
-            header.snapshot.input_manifest.context = keyed.keys().cloned().collect();
-            facts = keyed.into_values().collect();
-        }
-        if facts.len() != header.fact_count {
-            return Err(Self::invalid("graph fact count"));
-        }
-        header.snapshot.graph.facts = facts;
-        drop(rows);
-        drop(statement);
-        if complete && !header.derive_branches {
-            let mut branches = Vec::new();
-            let mut statement=reader.prepare("SELECT v.body,v.tenant_id,m.ordinal,m.member_key FROM graph_selected_members m LEFT JOIN graph_branch_values v ON v.branch_id=m.value_ref WHERE m.result_id=? AND m.member_kind=6 ORDER BY m.ordinal,m.member_key").context(AnalysisDatabaseSnafu {operation:"prepare Graph branches"})?;
-            let mut rows = statement
-                .query(params![result])
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read Graph branches",
-                })?;
-            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                operation: "advance Graph branches",
-            })? {
-                Self::check(control)?;
-                let body: Vec<u8> = Self::column(row, 0)?;
-                let stored: Vec<u8> = Self::column(row, 1)?;
-                if stored != tenant {
-                    return Err(Self::invalid("graph branch value"));
-                }
-                {
-                    let ordinal: u32 = Self::column(row, 2)?;
-                    let key: Vec<u8> = Self::column(row, 3)?;
-                    if ordinal as usize != branches.len()
-                        || key != Self::encode_value(&(ordinal as usize))?
-                    {
-                        return Err(Self::invalid("graph branch ordinal"));
-                    }
-                }
-                branches.push(Self::decode_value(&body)?);
-            }
-            if branches.len() != header.branch_count {
-                return Err(Self::invalid("graph branch count"));
-            }
-            header.snapshot.graph.branches = branches;
-            header.branches_loaded = true;
-        }
-        header.complete = complete;
-        header.snapshot.validate()?;
+        crate::analysis::graph_rows::store::Relations::new(reader).metadata(
+            result,
+            &mut header,
+            complete,
+            &mut || Self::check(control),
+            &mut super::super::context::version_key,
+        )?;
         Ok(Some(header))
     }
 
@@ -1550,99 +1168,11 @@ impl GraphRows {
         header: &GraphHeader,
         control: Option<&AnalysisReadControl>,
     ) -> Result<GraphInputs> {
-        let source = &header.snapshot.scope.identity;
-        let mut evidence = Vec::new();
-        let mut statement=reader.prepare("SELECT e.cpu_id,e.durable_cursor,s.stream_key,s.tenant_id,r.stream_key,r.cpu_id,m.member_key FROM graph_selected_members m LEFT JOIN graph_evidence e ON e.evidence_id=m.value_ref LEFT JOIN graph_sources s USING(source_ref) LEFT JOIN source_receipts r ON r.stream_key=s.stream_key AND r.tenant_id=s.tenant_id WHERE m.result_id=? AND m.member_kind=0 ORDER BY e.cpu_id,e.durable_cursor").context(AnalysisDatabaseSnafu {operation:"prepare Graph input identities"})?;
-        let mut rows = statement
-            .query(params![result])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read Graph input identities",
-            })?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance Graph input identities",
-        })? {
-            Self::check(control)?;
-            let key: Option<Vec<u8>> = Self::column(row, 2)?;
-            let tenant: Option<Vec<u8>> = Self::column(row, 3)?;
-            let retained: Option<Vec<u8>> = Self::column(row, 4)?;
-            let cpu: u32 = Self::column(row, 0)?;
-            if key.as_deref() != Some(source.key().as_slice())
-                || tenant.as_deref() != Some(source.tenant_id.as_slice())
-                || retained.is_none()
-                || Self::column::<Option<u32>>(row, 5)? != Some(cpu)
-            {
-                return Err(Self::invalid("graph evidence source"));
-            }
-            let record = DiscoveryRecordIdV1 {
-                stream: source.clone(),
-                cpu_id: cpu,
-                durable_cursor: Self::column(row, 1)?,
-            };
-            if Self::column::<Vec<u8>>(row, 6)? != Self::member_key(&record)? {
-                return Err(Self::invalid("graph evidence member identity"));
-            }
-            evidence.push(record);
-        }
-        drop(rows);
-        drop(statement);
-        let mut positions = Vec::new();
-        let mut statement=reader.prepare("SELECT m.ordinal,p.commit_revision,p.ordinal,e.cpu_id,e.durable_cursor,s.stream_key,s.tenant_id,r.stream_key,r.cpu_id,m.member_key FROM graph_selected_members m LEFT JOIN graph_position_values p ON p.value_ref=m.value_ref LEFT JOIN graph_evidence e USING(evidence_id) LEFT JOIN graph_sources s USING(source_ref) LEFT JOIN source_receipts r ON r.stream_key=s.stream_key AND r.tenant_id=s.tenant_id WHERE m.result_id=? AND m.member_kind=1 ORDER BY m.ordinal").context(AnalysisDatabaseSnafu {operation:"prepare Graph input positions"})?;
-        let mut rows = statement
-            .query(params![result])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read Graph input positions",
-            })?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance Graph input positions",
-        })? {
-            Self::check(control)?;
-            if !header.derive_branches && Self::column::<u32>(row, 0)? as usize != positions.len() {
-                return Err(Self::invalid("graph position ordinal"));
-            }
-            let key: Option<Vec<u8>> = Self::column(row, 5)?;
-            let tenant: Option<Vec<u8>> = Self::column(row, 6)?;
-            let retained: Option<Vec<u8>> = Self::column(row, 7)?;
-            let cpu: u32 = Self::column(row, 3)?;
-            if key.as_deref() != Some(source.key().as_slice())
-                || tenant.as_deref() != Some(source.tenant_id.as_slice())
-                || retained.is_none()
-                || Self::column::<Option<u32>>(row, 8)? != Some(cpu)
-            {
-                return Err(Self::invalid("graph evidence source"));
-            }
-            let record = DiscoveryRecordIdV1 {
-                stream: source.clone(),
-                cpu_id: cpu,
-                durable_cursor: Self::column(row, 4)?,
-            };
-            let expected = if header.derive_branches {
-                Self::member_key(&record)?
-            } else {
-                Self::encode_value(&positions.len())?
-            };
-            if Self::column::<Vec<u8>>(row, 9)? != expected
-                || (header.derive_branches && Self::column::<u32>(row, 0)? != 0)
-            {
-                return Err(Self::invalid("graph position member identity"));
-            }
-            positions.push((
-                record,
-                StorePositionV1 {
-                    commit_revision: Self::column(row, 1)?,
-                    ordinal: Self::column(row, 2)?,
-                },
-            ));
-        }
-        if header.derive_branches {
-            positions.sort_by(|left, right| left.0.cmp(&right.0));
-        }
-        if evidence.len() != header.evidence_count
-            || positions.len() != header.position_count
-            || evidence.windows(2).any(|pair| pair[0] >= pair[1])
-        {
-            return Err(Self::invalid("graph input row counts"));
-        }
-        Ok((evidence, positions))
+        crate::analysis::graph_rows::store::Relations::new(reader).inputs(
+            result,
+            header,
+            &mut || Self::check(control),
+        )
     }
 
     pub(super) fn load_inputs(
@@ -1747,7 +1277,7 @@ impl GraphRows {
         let mut statement = reader
             .prepare(&format!(
                 "SELECT {} FROM graph_subjects WHERE result_id=? ORDER BY ordinal",
-                araphor_graph::SubjectRows::COLUMNS
+                crate::analysis::graph_rows::store::SubjectRows::COLUMNS
             ))
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare Graph subjects",
@@ -1782,7 +1312,7 @@ impl GraphRows {
         let mut statement = reader
             .prepare(&format!(
                 "SELECT {} FROM graph_relationships WHERE result_id=? ORDER BY ordinal",
-                araphor_graph::RelationshipRows::COLUMNS
+                crate::analysis::graph_rows::store::RelationshipRows::COLUMNS
             ))
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare Graph relationships",
@@ -1809,7 +1339,7 @@ impl GraphRows {
     }
 
     pub(super) fn decode_edge(row: &Row<'_>) -> Result<GraphEdgeV1> {
-        araphor_graph::RelationshipRows::decode(row).map_err(Into::into)
+        crate::analysis::graph_rows::store::RelationshipRows::decode(row).map_err(Into::into)
     }
 
     pub(in crate::analysis) fn read_findings(
@@ -1898,7 +1428,7 @@ impl GraphRows {
         revision.evidence = evidence.values().cloned().collect();
         revision.evidence.sort_unstable();
         revision.validate(source.tenant_id)?;
-        let columns = araphor_graph::FindingRows::COLUMNS;
+        let columns = crate::analysis::graph_rows::store::FindingRows::COLUMNS;
         let value_id = if include_ids { ",value_id" } else { "" };
         let mut statement = reader
             .prepare(&format!(
@@ -1921,8 +1451,8 @@ impl GraphRows {
             if Self::column::<u32>(row, 0)? as usize != findings.len() {
                 return Err(Self::invalid("graph finding ordinal"));
             }
-            let (subject, refs) = araphor_graph::FindingRows::references(row)?;
-            let finding = araphor_graph::FindingRows::decode(
+            let (subject, refs) = crate::analysis::graph_rows::store::FindingRows::references(row)?;
+            let finding = crate::analysis::graph_rows::store::FindingRows::decode(
                 row,
                 subjects
                     .get(&subject)
@@ -1982,6 +1512,16 @@ impl GraphRows {
         control: Option<&AnalysisReadControl>,
     ) -> Result<BTreeMap<String, (u64, FindingV1)>> {
         Self::check(control)?;
+        if AnalysisStore::native_graph_result(reader,result)? {
+            let mut values = BTreeMap::new();
+            for id in ids.iter().collect::<BTreeSet<_>>() {
+                Self::check(control)?;
+                if let Some((value,member)) = AnalysisStore::native_finding(reader,header.snapshot.scope.identity.tenant_id,result,id)? {
+                    values.insert(id.clone(),(value,member.value));
+                }
+            }
+            return Ok(values);
+        }
         let wanted = ids.iter().collect::<BTreeSet<_>>();
         if wanted.is_empty() {
             return Ok(BTreeMap::new());
@@ -2067,7 +1607,7 @@ impl GraphRows {
         revision.evidence = evidence.values().cloned().collect();
         revision.evidence.sort_unstable();
         revision.validate(source.tenant_id)?;
-        let columns = araphor_graph::FindingRows::COLUMNS
+        let columns = crate::analysis::graph_rows::store::FindingRows::COLUMNS
             .split(',')
             .enumerate()
             .map(|(index, column)| {
@@ -2090,8 +1630,8 @@ impl GraphRows {
             operation: "advance requested Graph findings",
         })? {
             Self::check(control)?;
-            let (subject, refs) = araphor_graph::FindingRows::references(row)?;
-            let finding = araphor_graph::FindingRows::decode(
+            let (subject, refs) = crate::analysis::graph_rows::store::FindingRows::references(row)?;
+            let finding = crate::analysis::graph_rows::store::FindingRows::decode(
                 row,
                 subjects
                     .get(&subject)
@@ -2140,6 +1680,11 @@ impl GraphRows {
         header: &GraphHeader,
         control: Option<&AnalysisReadControl>,
     ) -> Result<Option<(u64, FindingV1)>> {
+        Self::check(control)?;
+        if AnalysisStore::native_graph_result(reader,result)? {
+            return AnalysisStore::native_finding(reader,header.snapshot.scope.identity.tenant_id,result,finding)
+                .map(|value| value.map(|(id,member)| (id,member.value)));
+        }
         Ok(Self::read_finding_keys_with_ids(
             reader,
             result,

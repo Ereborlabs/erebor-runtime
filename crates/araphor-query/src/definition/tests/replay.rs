@@ -50,24 +50,32 @@ async fn replay_uses_journal_cut() -> TestResult {
         .calls
         .iter()
         .map(|(id, call)| araphor_data::ManagedReturn {
+            graph: None,
+            retained: None,
             call: *id,
             evaluation: call.evaluation(),
             output: call.output(),
             changes: call.changes(),
         })
         .collect::<Vec<_>>();
+    let budget = fixture.engine.memory().managed_budget(&control, CAPACITY);
     let receipt = fixture.engine.store().commit_managed(
-        &araphor_data::ManagedCommit {
-            attempt: &attempt,
-            completed: true,
-            now_utc_ns: 1,
-            returns: &returns,
-            selected: &sdk::Dataset {
-                name: "selected".into(),
-                batches: original.batches.clone(),
-            },
-            selected_schema: prepared.plan.schema().as_arrow(),
-        },
+        fixture
+            .engine
+            .store()
+            .prepare_managed(&araphor_data::ManagedCommit {
+                control: &control,
+                budget: budget.as_ref(),
+                attempt: &attempt,
+                completed: true,
+                now_utc_ns: 1,
+                returns: &returns,
+                selected: &sdk::Dataset {
+                    name: "selected".into(),
+                    batches: original.batches.clone(),
+                },
+                selected_schema: prepared.plan.schema().as_arrow(),
+            })?,
         || Ok(()),
     )?;
     let (&id, call) = original.calls.first_key_value().ok_or("original call")?;

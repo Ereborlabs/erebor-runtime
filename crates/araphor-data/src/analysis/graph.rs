@@ -3,9 +3,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::*;
-use crate::{
-    GraphSnapshotV1, GraphValidate as _, PackageErrorCodeV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
-};
+use crate::{GraphSnapshotV1, PackageErrorCodeV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION};
 
 mod findings;
 mod interest;
@@ -13,24 +11,16 @@ pub(super) mod traversal;
 mod windows;
 pub use interest::GraphLease;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphManifest {
-    pub schema_version: u32,
-    pub scope: ProcessorScopeV1,
-    pub first_cursor: u64,
-    pub last_cursor: u64,
-    pub input_manifest: crate::GraphRevisionV1,
-    pub facts: Vec<crate::GraphFactV1>,
-    pub packages: Vec<crate::GraphPackageCheckpointV1>,
-    pub missing_ranges: Vec<(u64, u64)>,
-    pub input_positions: Vec<(crate::DiscoveryRecordIdV1, crate::StorePositionV1)>,
-    pub previous_result_id: Option<String>,
-    pub context_notice_revision: u64,
-    pub witness_deadline_utc_ns: u64,
+pub use araphor_analysis_types::GraphManifest;
+
+pub struct GraphSourceSummary {
+    pub manifest: GraphManifest,
+    pub restricted_count: Option<u64>,
+    pub expired: bool,
 }
 
 pub struct GraphCommit {
+    pub input_proof: Option<std::sync::Arc<crate::analysis::graph_rows::store::InputProof>>,
     pub request: AnalysisResultCommitV1,
     pub metadata: GraphManifest,
     pub contexts: Vec<AnalysisContextVersionV1>,
@@ -77,98 +67,6 @@ impl GraphRequestMeta {
             .fail();
         }
         Ok(value)
-    }
-}
-
-impl GraphManifest {
-    pub fn encode(&self) -> Result<Vec<u8>> {
-        let mut bytes = Vec::new();
-        self.serialize(&mut rmp_serde::Serializer::new(&mut bytes).with_struct_map())
-            .map_err(|_| {
-                crate::GraphInvalidSnafu {
-                    field: "graph metadata encoding",
-                }
-                .build()
-            })?;
-        Ok(bytes)
-    }
-
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
-        let value = Self::deserialize(&mut decoder).map_err(|_| {
-            crate::GraphInvalidSnafu {
-                field: "graph metadata encoding",
-            }
-            .build()
-        })?;
-        if decoder.position() != bytes.len() as u64 {
-            return crate::GraphInvalidSnafu {
-                field: "graph metadata trailing bytes",
-            }
-            .fail();
-        }
-        value.validate()?;
-        Ok(value)
-    }
-
-    pub fn from_snapshot(graph: &GraphSnapshotV1) -> Self {
-        Self {
-            schema_version: graph.schema_version,
-            scope: graph.scope.clone(),
-            first_cursor: graph.first_cursor,
-            last_cursor: graph.last_cursor,
-            input_manifest: graph.input_manifest.clone(),
-            facts: graph.graph.facts.clone(),
-            packages: graph.packages.clone(),
-            missing_ranges: graph.missing_ranges.clone(),
-            input_positions: graph.input_positions.clone(),
-            previous_result_id: graph.previous_result_id.clone(),
-            context_notice_revision: graph.context_notice_revision,
-            witness_deadline_utc_ns: graph.witness_deadline_utc_ns,
-        }
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        self.snapshot().validate()?;
-        for fact in &self.facts {
-            fact.validate()?;
-            if fact.record_id.stream != self.scope.identity
-                || self
-                    .input_manifest
-                    .evidence
-                    .binary_search(&fact.record_id)
-                    .is_err()
-            {
-                return Err(crate::GraphInvalidSnafu {
-                    field: "graph fact evidence",
-                }
-                .build());
-            }
-        }
-        Ok(())
-    }
-
-    pub(in crate::analysis) fn snapshot(&self) -> GraphSnapshotV1 {
-        GraphSnapshotV1 {
-            schema_version: self.schema_version,
-            scope: self.scope.clone(),
-            first_cursor: self.first_cursor,
-            last_cursor: self.last_cursor,
-            input_manifest: self.input_manifest.clone(),
-            graph: crate::GraphVersionV1 {
-                subjects: Vec::new(),
-                edges: Vec::new(),
-                branches: Vec::new(),
-                facts: self.facts.clone(),
-            },
-            findings: Vec::new(),
-            packages: self.packages.clone(),
-            missing_ranges: self.missing_ranges.clone(),
-            input_positions: self.input_positions.clone(),
-            previous_result_id: self.previous_result_id.clone(),
-            context_notice_revision: self.context_notice_revision,
-            witness_deadline_utc_ns: self.witness_deadline_utc_ns,
-        }
     }
 }
 
@@ -244,10 +142,178 @@ impl AnalysisStore {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
     ) -> Result<(
-        (GraphManifest, Option<u64>),
+        GraphSourceSummary,
         Vec<(AnalysisContextVersionV1, AnalysisContextRefV1)>,
         Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
     )> {
+        self.graph_frozen_input(
+            capture,
+            reference,
+            result,
+            Some(records),
+            limits,
+            control,
+            |rows, _| Ok(rows),
+        )
+    }
+
+    pub fn graph_support_facts(
+        &self,
+        capture: &ManagedCapture,
+        reference: Option<&ManagedAttempt>,
+        result: &PackageResultRefV1,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<(
+        GraphSourceSummary,
+        Vec<(AnalysisContextVersionV1, AnalysisContextRefV1)>,
+        Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+    )> {
+        self.graph_frozen_input(
+            capture,
+            reference,
+            result,
+            None,
+            limits,
+            control,
+            |rows, _| Ok(rows),
+        )
+    }
+
+    pub fn graph_frozen_source(
+        &self,
+        capture: &ManagedCapture,
+        reference: Option<&ManagedAttempt>,
+        result: &PackageResultRefV1,
+        records: &std::collections::BTreeSet<crate::DiscoveryRecordIdV1>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<(
+        GraphSourceSummary,
+        std::sync::Arc<crate::ManagedSourceHistory>,
+    )> {
+        let frame = capture
+            .source()
+            .ok_or_else(|| PackageErrorCodeV1::Invalid.error("historical source frame"))?;
+        self.graph_frozen_input(
+            capture,
+            reference,
+            result,
+            Some(records),
+            limits,
+            control,
+            |(summary, contexts, proofs), charge| {
+                frame
+                    .seal_history(result.clone(), contexts, proofs, charge)
+                    .map(|history| (summary, history))
+            },
+        )
+    }
+
+    fn graph_frozen_input<T>(
+        &self,
+        capture: &ManagedCapture,
+        reference: Option<&ManagedAttempt>,
+        result: &PackageResultRefV1,
+        records: Option<&std::collections::BTreeSet<crate::DiscoveryRecordIdV1>>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        map: impl FnOnce(
+            (
+                GraphSourceSummary,
+                Vec<(AnalysisContextVersionV1, AnalysisContextRefV1)>,
+                Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+            ),
+            &mut dyn FnMut(usize, usize) -> Result<()>,
+        ) -> Result<T>,
+    ) -> Result<T> {
+        let ManagedDestination::Graph { source, .. } = &capture.instance().spec.destination else {
+            return Err(PackageErrorCodeV1::Invalid.error("frozen Graph destination"));
+        };
+        if records.is_some_and(|records| {
+            records
+                .iter()
+                .any(|record| &record.stream != source || record.durable_cursor == 0)
+        }) {
+            return Err(PackageErrorCodeV1::Denied.error("frozen Graph source"));
+        }
+        if limits
+            .keys
+            .is_some_and(|limit| records.is_some_and(|records| records.len() > limit))
+        {
+            return crate::AnalysisInputTooLargeSnafu {
+                resource: "frozen Graph keys",
+            }
+            .fail();
+        }
+        self.with_graph_reader(
+            capture,
+            reference,
+            result,
+            limits,
+            control,
+            |reader, charge| {
+                for record in records.into_iter().flatten() {
+                    charge(
+                        0,
+                        std::mem::size_of_val(record) + record.stream.node_id.len(),
+                    )?;
+                }
+                let rows = if let Some(rows) = self.native_source_facts(reader,capture,result,records,control,charge)? {
+                    rows
+                } else { super::graph_rows::GraphRows::frozen_facts(
+                    reader,
+                    &self.root,
+                    capture,
+                    result,
+                    records,
+                    control,
+                    &mut |scan, bytes| charge(scan, bytes),
+                )? };
+                map(rows, charge)
+            },
+        )
+    }
+
+    pub fn graph_record_keys(
+        &self,
+        capture: &ManagedCapture,
+        reference: Option<&ManagedAttempt>,
+        result: &PackageResultRefV1,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<Vec<crate::DiscoveryRecordIdV1>> {
+        self.with_graph_reader(
+            capture,
+            reference,
+            result,
+            limits,
+            control,
+            |reader, charge| {
+                if let Some(records) = self.native_source_records(reader,capture,result,control,charge)? {
+                    return Ok(records);
+                }
+                super::graph_rows::GraphRows::frozen_records(
+                    reader,
+                    capture,
+                    result,
+                    control,
+                    &mut |scan, bytes| charge(scan, bytes),
+                )
+            },
+        )
+    }
+
+    fn with_graph_reader<T>(
+        &self,
+        capture: &ManagedCapture,
+        reference: Option<&ManagedAttempt>,
+        result: &PackageResultRefV1,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        read: impl FnOnce(&Connection, &mut dyn FnMut(usize, usize) -> Result<()>) -> Result<T>,
+    ) -> Result<T> {
+        let started = std::time::Instant::now();
         let ManagedDestination::Graph { source, .. } = &capture.instance().spec.destination else {
             return Err(PackageErrorCodeV1::Invalid.error("frozen Graph destination"));
         };
@@ -259,49 +325,53 @@ impl AnalysisStore {
                     .and_then(|receipt| receipt.graph.as_ref())
                     != Some(result))
             || !capture.instance().grant.selection.includes_source(source)
-            || records
-                .iter()
-                .any(|record| &record.stream != source || record.durable_cursor == 0)
         {
             return Err(PackageErrorCodeV1::Denied.error("frozen Graph source"));
         }
         if let Some(reference) = reference {
             capture.check_reference(reference)?;
         }
-        if limits.keys.is_some_and(|keys| records.len() > keys) {
-            return crate::AnalysisInputTooLargeSnafu {
-                resource: "frozen Graph keys",
-            }
-            .fail();
-        }
-        let mut reader = self.reader_until(control)?;
-        control.run(&mut reader, |reader| {
-            let actual = Self::read_meta_from(reader, &self.root)?;
-            let captured = capture.source_meta();
-            if actual.store_uuid != captured.store_uuid
-                || actual.schema_version != captured.schema_version
-                || captured.recovery_epoch == 0
-                || captured.recovery_epoch > actual.recovery_epoch
-                || captured.commit_revision > actual.commit_revision
-            {
-                return Err(PackageErrorCodeV1::Conflict.error("frozen Graph store"));
-            }
-            if let Some(reference) =
-                reference.filter(|_| result.commit_revision > capture.revision())
-            {
-                if Self::graph_capture_cut(
-                    reader,
-                    capture.instance().spec.tenant,
-                    result,
-                    Some(reference),
-                    None,
-                )? != capture.revision()
+        // The committed Graph reference does not need projection of later journal records.
+        let requesting = std::time::Instant::now();
+        let mut reader = self.frozen_reader(control)?;
+        let acquired = std::time::Instant::now();
+        let mut guard_s = 0.0;
+        let mut graph_rows_s = 0.0;
+        let owner_check = reference.is_some() && result.commit_revision > capture.revision();
+        let output = control.run(&mut reader, |reader| {
+            let guarding = std::time::Instant::now();
+            let guarded = (|| -> Result<()> {
+                let actual = Self::read_meta_from(reader, &self.root)?;
+                let captured = capture.source_meta();
+                if actual.store_uuid != captured.store_uuid
+                    || actual.schema_version != captured.schema_version
+                    || captured.recovery_epoch == 0
+                    || captured.recovery_epoch > actual.recovery_epoch
+                    || captured.commit_revision > actual.commit_revision
                 {
-                    return Err(
-                        PackageErrorCodeV1::Conflict.error("frozen Graph publication source")
-                    );
+                    return Err(PackageErrorCodeV1::Conflict.error("frozen Graph store"));
                 }
-            }
+                if let Some(reference) =
+                    reference.filter(|_| result.commit_revision > capture.revision())
+                {
+                    if Self::graph_capture_cut(
+                        reader,
+                        capture.instance().spec.tenant,
+                        result,
+                        Some(reference),
+                        None,
+                    )? != capture.revision()
+                    {
+                        return Err(
+                            PackageErrorCodeV1::Conflict.error("frozen Graph publication source")
+                        );
+                    }
+                }
+                Ok(())
+            })();
+            guard_s = guarding.elapsed().as_secs_f64();
+            guarded?;
+            let projecting = std::time::Instant::now();
             let mut input = 0usize;
             let mut scanned = 0usize;
             let mut charge = |scan: usize, bytes: usize| {
@@ -325,22 +395,29 @@ impl AnalysisStore {
                     })?;
                 Ok(())
             };
-            for record in records {
-                charge(
-                    0,
-                    std::mem::size_of_val(record) + record.stream.node_id.len(),
-                )?;
-            }
-            super::graph_rows::GraphRows::frozen_facts(
-                reader,
-                &self.root,
-                capture,
-                result,
-                records,
-                control,
-                &mut charge,
-            )
-        })
+            let output = read(reader, &mut charge);
+            graph_rows_s = projecting.elapsed().as_secs_f64();
+            output
+        });
+        let ran = std::time::Instant::now();
+        drop(reader);
+        let released = std::time::Instant::now();
+        erebor_telemetry::debug!(
+            stage = "graph_frozen_timing",
+            cut_revision = capture.revision(),
+            graph_revision = result.commit_revision,
+            owner_check,
+            preflight_s = requesting.duration_since(started).as_secs_f64(),
+            reader_s = acquired.duration_since(requesting).as_secs_f64(),
+            guard_s,
+            graph_rows_s,
+            control_run_s = ran.duration_since(acquired).as_secs_f64(),
+            release_s = released.duration_since(ran).as_secs_f64(),
+            elapsed_s = released.duration_since(started).as_secs_f64(),
+            success = output.is_ok(),
+            "Frozen Graph read timing completed"
+        );
+        output
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]

@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::EvidenceIntakeIdentityV1;
+pub use araphor_analysis_types::source::{DiscoveryRecordIdV1, DiscoveryCoverageStateV1, DiscoveryCoverageV1, DiscoveryFileObjectV1, DiscoveryEffectKeyV1, ProcessorScopeV1, StorePositionV1};
 
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
@@ -14,40 +15,11 @@ pub enum DiscoveryProofKindV1 {
     ConfigurationScan,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryRecordIdV1 {
-    pub stream: EvidenceIntakeIdentityV1,
-    pub cpu_id: u32,
-    pub durable_cursor: u64,
-}
 
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DiscoveryCoverageStateV1 {
-    Healthy,
-    Gapped,
-    Unknown,
-    Closed,
-}
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryCoverageV1 {
-    pub stream: EvidenceIntakeIdentityV1,
-    pub cpu_id: u32,
-    pub first_cursor: u64,
-    pub last_cursor: u64,
-    pub expected_records: u64,
-    pub coverage_revision: u64,
-    #[serde(with = "serde_bytes")]
-    #[schemars(with = "Vec<u8>")]
-    pub coverage_interval_id: [u8; 16],
-    pub state: DiscoveryCoverageStateV1,
-    pub gap_reasons: Vec<String>,
-}
+
+
+
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -149,45 +121,9 @@ pub enum DiscoveryPhysicalResultV1 {
     Unknown,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryFileObjectV1 {
-    pub profile_generation_ref_id: u64,
-    pub mount_id_unique: u64,
-    pub inode: u64,
-    pub inode_generation: u64,
-    pub mount_namespace_inode: u32,
-    pub filesystem_device: u32,
-}
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryEffectKeyV1 {
-    pub task_cookie: u64,
-    pub target_task_cookie: Option<u64>,
-    #[serde(with = "serde_bytes")]
-    #[schemars(with = "Vec<u8>")]
-    pub process_lineage_id: Vec<u8>,
-    #[serde(with = "serde_bytes")]
-    #[schemars(with = "Vec<u8>")]
-    pub authority_domain_id: Vec<u8>,
-    #[serde(with = "serde_bytes")]
-    #[schemars(with = "Vec<u8>")]
-    pub execution_set_id: Vec<u8>,
-    #[serde(with = "serde_bytes")]
-    #[schemars(with = "Vec<u8>")]
-    pub exact_object_id: Vec<u8>,
-    pub destination_id: u64,
-    pub policy_rule_id: u64,
-    pub reason: u32,
-    pub decision: u32,
-    pub effect_family: u32,
-    pub operation: u32,
-    pub operation_argument: Option<u32>,
-    pub configured_errno: i32,
-    pub kernel_result: i32,
-    pub exact_file_object: Option<DiscoveryFileObjectV1>,
-}
+
+
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

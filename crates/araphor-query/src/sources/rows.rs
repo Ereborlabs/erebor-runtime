@@ -16,7 +16,10 @@ use datafusion::execution::memory_pool::MemoryReservation;
 use super::{ReadMode, ScanBounds, SourceOrigin, SourceSnapshot};
 
 mod before;
+mod metadata;
 mod package;
+
+pub(crate) use metadata::MetadataRead;
 
 #[cfg(test)]
 mod tests;
@@ -28,6 +31,14 @@ pub(crate) struct CapturedRequests {
 }
 
 impl CapturedRequests {
+    fn metadata_bytes(tables: &AnalysisTableRequests) -> Option<usize> {
+        tables.keys().try_fold(size_of::<Self>(), |bytes, name| {
+            bytes
+                .checked_add(size_of::<(String, Option<BTreeSet<usize>>)>())?
+                .checked_add(name.capacity())
+        })
+    }
+
     pub(crate) fn tables(&self) -> &AnalysisTableRequests {
         &self.tables
     }
@@ -140,8 +151,10 @@ type Table = (
 pub(crate) struct Captured {
     pub(crate) receipt: Arc<ArrowSnapshot>,
     pub(crate) removals: BTreeMap<AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
-    _memory: MemoryReservation,
+    pub(super) _memory: MemoryReservation,
     tables: BTreeMap<SourceOrigin, Table>,
+    ports: BTreeMap<super::port::PortKey, Vec<package::PortBinding>>,
+    pub(super) lineage: BTreeMap<usize, Arc<super::lineage::PortLineage>>,
 }
 
 impl Captured {
@@ -264,6 +277,20 @@ impl Captured {
 }
 
 impl SourceSnapshot {
+    fn input_error(error: araphor_data::Error, constrained: bool) -> DataFusionError {
+        if constrained
+            && matches!(error, araphor_data::Error::AnalysisInputTooLarge { resource, .. }
+                if resource != "scanned segment bytes" && resource != "projected row bytes")
+        {
+            DataFusionError::External(Box::new(crate::Error::Capacity {
+                resource: "shared input",
+                source: Self::data_error(error),
+            }))
+        } else {
+            Self::data_error(error)
+        }
+    }
+
     pub(crate) fn discard_prior(&self, call: u64) -> Result<()> {
         let mut captured = self
             .captured
@@ -320,6 +347,57 @@ impl SourceSnapshot {
         lease: impl Send + 'static,
         operation: impl FnOnce(&Arc<Self>, &AnalysisReadControl) -> crate::Result<T> + Send + 'static,
     ) -> Result<T> {
+        let entered = std::time::Instant::now();
+        let name = std::any::type_name_of_val(&operation);
+        let (source, control, worker) = self.read_context(context)?;
+        let cut = self
+            .snapshot()
+            .ok()
+            .map(|snapshot| snapshot.page.extraction.meta.commit_revision);
+        let stage = Arc::clone(&control);
+        let queued = std::time::Instant::now();
+        let (output, started, finished) =
+            crate::execution::Engine::blocking(control, (lease, worker), move || {
+                let started = std::time::Instant::now();
+                let output = operation(&source, &stage);
+                let finished = std::time::Instant::now();
+                Ok((output, started, finished))
+            })
+            .await
+            .map_err(|source| DataFusionError::External(Box::new(source)))?;
+        let returned = std::time::Instant::now();
+        if let Some(cut) = cut {
+            erebor_telemetry::debug!(
+                stage = "source_blocking_timing",
+                operation = name,
+                cut_revision = cut,
+                preflight_s = queued.duration_since(entered).as_secs_f64(),
+                queue_s = started.duration_since(queued).as_secs_f64(),
+                work_s = finished.duration_since(started).as_secs_f64(),
+                return_s = returned.duration_since(finished).as_secs_f64(),
+                elapsed_s = returned.duration_since(entered).as_secs_f64(),
+                success = output.is_ok(),
+                "Native source worker timing completed"
+            );
+        }
+        output.map_err(|source| DataFusionError::External(Box::new(source)))
+    }
+
+    pub fn inline<T>(
+        self: &Arc<Self>,
+        context: &datafusion::execution::TaskContext,
+        operation: impl FnOnce(&Arc<Self>, &AnalysisReadControl) -> crate::Result<T>,
+    ) -> Result<T> {
+        let (source, control, _lease) = self.read_context(context)?;
+        let result = operation(&source, &control);
+        control.check().map_err(Self::data_error)?;
+        result.map_err(|source| DataFusionError::External(Box::new(source)))
+    }
+
+    pub(in crate::sources) fn read_context(
+        self: &Arc<Self>,
+        context: &datafusion::execution::TaskContext,
+    ) -> Result<(Arc<Self>, Arc<AnalysisReadControl>, impl Send + 'static)> {
         let config = context.session_config();
         let source = config
             .get_extension::<Self>()
@@ -341,12 +419,7 @@ impl SourceSnapshot {
         control.check().map_err(Self::data_error)?;
         let control = Arc::new(control.operation().map_err(Self::data_error)?);
         let worker = calls.token()?;
-        let stage = Arc::clone(&control);
-        crate::execution::Engine::blocking(control, (permit, lease, worker), move || {
-            operation(&source, &stage)
-        })
-        .await
-        .map_err(|source| DataFusionError::External(Box::new(source)))
+        Ok((source, control, (permit, worker)))
     }
 
     pub fn time_utc_ns(&self) -> u64 {
@@ -436,7 +509,7 @@ impl SourceSnapshot {
         let capture = snapshot.managed().ok_or_else(|| {
             DataFusionError::Execution("the managed source capture is absent".into())
         })?;
-        read(&self.store, capture, self.reference.get()).map_err(Self::data_error)
+        read(&self.store, capture, self.reference.get().map(Arc::as_ref)).map_err(Self::data_error)
     }
 
     pub fn bind_port(
@@ -486,13 +559,15 @@ impl SourceSnapshot {
         if let Some((previous, _, rows, binding)) = captured.tables.get(&origin) {
             if previous == &schema
                 && rows == &batches
-                && input
-                    .zip(binding.as_deref())
-                    .is_some_and(|(input, binding)| {
+                && match (input, binding.as_deref()) {
+                    (Some(input), Some(binding)) => {
                         input.data.name == binding.data.name
                             && input.revision == binding.revision
                             && input.coverage == binding.coverage
-                    })
+                    }
+                    (None, None) => true,
+                    _ => false,
+                }
             {
                 return Ok(());
             }
@@ -595,19 +670,7 @@ impl SourceSnapshot {
             limits.input_bytes = reservation.size();
         }
         let constrained = prepaid && limits.input_bytes < self.limits.input_bytes;
-        let data_error = |error| {
-            if constrained
-                && matches!(error, araphor_data::Error::AnalysisInputTooLarge { resource, .. }
-                if resource != "scanned segment bytes" && resource != "projected row bytes")
-            {
-                DataFusionError::External(Box::new(crate::Error::Capacity {
-                    resource: "shared input",
-                    source: Self::data_error(error),
-                }))
-            } else {
-                Self::data_error(error)
-            }
-        };
+        let data_error = |error| Self::input_error(error, constrained);
         let read = AnalysisTableRead {
             requests: requested,
             event_ranges: if header_requests.is_some() {
@@ -647,7 +710,14 @@ impl SourceSnapshot {
                 }
                 None => (
                     self.store
-                        .read_tables_filtered(selected, read, limits, control, context_owners)
+                        .read_tables_filtered(
+                            selected,
+                            &self.selection,
+                            read,
+                            limits,
+                            control,
+                            context_owners,
+                        )
                         .map_err(data_error)?,
                     None,
                 ),
@@ -846,6 +916,8 @@ impl SourceSnapshot {
             removals,
             _memory: table_memory,
             tables,
+            ports: BTreeMap::new(),
+            lineage: BTreeMap::new(),
         })
     }
 }

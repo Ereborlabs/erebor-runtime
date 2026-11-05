@@ -13,6 +13,30 @@ use datafusion::logical_expr::{
 use super::{GraphPublication, Projection};
 
 impl GraphPublication {
+    pub(super) fn record_expr() -> Expr {
+        let stream = named_struct().call(
+            [
+                "tenant_id",
+                "node_id",
+                "node_boot_id",
+                "label_epoch",
+                "source_id",
+                "source_epoch",
+            ]
+            .into_iter()
+            .flat_map(|name| [lit(name), col(name)])
+            .collect(),
+        );
+        named_struct().call(vec![
+            lit("stream"),
+            stream,
+            lit("cpu_id"),
+            col("cpu_id"),
+            lit("durable_cursor"),
+            col("source_cursor"),
+        ])
+    }
+
     pub(super) async fn coverage_driver(
         session: &Session,
         resolved: LogicalPlan,
@@ -130,30 +154,9 @@ impl GraphPublication {
             if names.len() != plan.schema().fields().len() {
                 return Err(Projection::invalid("Graph event column identity"));
             }
-            let stream = named_struct().call(
-                [
-                    "tenant_id",
-                    "node_id",
-                    "node_boot_id",
-                    "label_epoch",
-                    "source_id",
-                    "source_epoch",
-                ]
-                .into_iter()
-                .flat_map(|name| [lit(name), col(name)])
-                .collect(),
-            );
-            let record = named_struct().call(vec![
-                lit("stream"),
-                stream,
-                lit("cpu_id"),
-                col("cpu_id"),
-                lit("durable_cursor"),
-                col("source_cursor"),
-            ]);
             LogicalPlanBuilder::from(plan)
                 .project([
-                    record.alias("record"),
+                    Self::record_expr().alias("record"),
                     named_struct().call(fields).alias("event"),
                 ])?
                 .build()
@@ -264,5 +267,77 @@ impl GraphPublication {
             .project([Expr::Column("record".into()), value])
             .and_then(LogicalPlanBuilder::build)
             .map_err(|source| araphor_query::Error::Sql { source }.into())
+    }
+}
+
+impl GraphPublication {
+    pub(super) fn append_selection(plan: &LogicalPlan) -> datafusion::common::Result<bool> {
+        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+        if !araphor_query::planner::Planner::reads_only(plan, "events")
+            .map_err(Projection::external)?
+        {
+            return Ok(false);
+        }
+        let mut stable = true;
+        plan.apply(|node| {
+            let allowed = match node {
+                LogicalPlan::TableScan(scan) => scan.fetch.is_none(),
+                LogicalPlan::Filter(_) | LogicalPlan::SubqueryAlias(_) => true,
+                LogicalPlan::Sort(sort) => sort.fetch.is_none(),
+                LogicalPlan::Projection(projection) => [
+                    "tenant_id",
+                    "node_id",
+                    "node_boot_id",
+                    "label_epoch",
+                    "source_id",
+                    "source_epoch",
+                    "cpu_id",
+                    "source_cursor",
+                    "commit_revision",
+                    "ordinal",
+                ]
+                .into_iter()
+                .all(|name| {
+                    projection
+                        .schema
+                        .fields()
+                        .iter()
+                        .position(|field| field.name() == name)
+                        .is_some_and(|slot| {
+                            let expr = &projection.expr[slot];
+                            let expr = if let Expr::Alias(alias) = expr {
+                                alias.expr.as_ref()
+                            } else {
+                                expr
+                            };
+                            matches!(expr, Expr::Column(column) if column.name == name)
+                        })
+                }),
+                _ => false,
+            };
+            stable &= allowed;
+            for expr in node.expressions() {
+                expr.apply(|expr| {
+                    stable &= match expr {
+                        Expr::ScalarFunction(function) => {
+                            function.func.signature().volatility == Volatility::Immutable
+                        }
+                        Expr::AggregateFunction(_)
+                        | Expr::WindowFunction(_)
+                        | Expr::ScalarSubquery(_)
+                        | Expr::InSubquery(_)
+                        | Expr::Exists(_) => false,
+                        _ => true,
+                    };
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+            }
+            Ok(if stable {
+                TreeNodeRecursion::Continue
+            } else {
+                TreeNodeRecursion::Stop
+            })
+        })?;
+        Ok(stable)
     }
 }

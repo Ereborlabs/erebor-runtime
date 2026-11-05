@@ -54,11 +54,11 @@ pub use extraction::{
     AnalysisReferenceOriginV1, AnalysisReferenceV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1,
     AnalysisTableRead, AnalysisTableRequests, Selection,
 };
-pub use graph::{GraphCommit, GraphLease, GraphManifest};
+pub use graph::{GraphCommit, GraphLease, GraphManifest, GraphSourceSummary};
 pub use graph_rows::CanonicalGraph;
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub use managed::*;
-pub use notification::NotificationLookup;
+pub use notification::{NotificationLookup, PreparedNotificationBatch};
 pub use packages::*;
 pub use progress::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisProcessorResultV1, AnalysisResultCommitV1,
@@ -79,7 +79,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermi
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-pub const ANALYSIS_SCHEMA_VERSION: i64 = 34;
+pub const ANALYSIS_SCHEMA_VERSION: i64 = 41;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -108,6 +108,7 @@ pub struct AnalysisStore {
     readers: connection::ReaderPool,
     write_monitor: Arc<read::ReadMonitor>,
     writer: WaitMutex<Option<Connection>>,
+    graph_engine: araphor_graph::GraphStore,
     raw: WaitMutex<raw::RawJournal>,
     raw_dirty: AtomicBool,
     raw_pending: AtomicBool,
@@ -139,13 +140,7 @@ pub struct AnalysisStoreMetaV1 {
     pub commit_revision: u64,
 }
 
-#[derive(
-    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
-)]
-pub struct StorePositionV1 {
-    pub commit_revision: u64,
-    pub ordinal: u32,
-}
+pub use araphor_analysis_builtins::discovery::StorePositionV1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisRecordV1 {
@@ -223,7 +218,11 @@ impl AnalysisStore {
                     PRIMARY KEY (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS context_version_key_idx
-                    ON context_versions(version_key);";
+                    ON context_versions(version_key);
+                CREATE TABLE IF NOT EXISTS graph_fact_records (
+                    version_key BLOB PRIMARY KEY,record_key BLOB NOT NULL,stream_key BLOB NOT NULL,source_cursor UBIGINT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS graph_fact_record_idx ON graph_fact_records(record_key,version_key);";
 
     pub fn register_discovery_owner(&self) {
         self.discovery_owners.fetch_add(1, Ordering::AcqRel);
@@ -501,6 +500,11 @@ impl AnalysisStore {
                     operation: "create native graph rows",
                 })?;
             transaction
+                .execute_batch(araphor_graph::GraphStore::SCHEMA)
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create Graph engine schema",
+                })?;
+            transaction
                 .execute_batch(Self::PACKAGE_SCHEMA)
                 .context(AnalysisDatabaseSnafu {
                     operation: "create package state",
@@ -551,6 +555,7 @@ impl AnalysisStore {
         let (activations, _) = watch::channel(meta.commit_revision);
         let (capacity, _) = watch::channel(());
         let readers = connection::ReaderPool::new(&writer)?;
+        let graph_engine = araphor_graph::GraphStore::install(&writer)?;
         Ok(Self {
             root,
             store_uuid: meta.store_uuid,
@@ -559,6 +564,7 @@ impl AnalysisStore {
             managed_owner: AtomicBool::new(false),
             _lease: lease,
             writer: WaitMutex::new(Some(writer)),
+            graph_engine,
             raw: WaitMutex::new(raw),
             raw_dirty: AtomicBool::new(false),
             raw_pending: AtomicBool::new(false),

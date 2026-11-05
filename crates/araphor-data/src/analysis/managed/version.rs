@@ -47,6 +47,7 @@ impl AnalysisStore {
         }
         Self::check_managed_pending(&transaction, spec.tenant, &spec.id, expected.generation)?;
         Self::check_managed_images(&transaction, spec)?;
+        self.admit_graph(&transaction, spec)?;
         let saved: Option<u64> = transaction.query_row(
             "SELECT generation FROM managed_versions WHERE tenant_id = ? AND instance_id = ? AND spec = ? AND scope = ? ORDER BY generation DESC LIMIT 1",
             params![spec.tenant.as_slice(), spec.id, bytes,

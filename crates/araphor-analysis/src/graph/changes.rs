@@ -1,3 +1,4 @@
+use araphor_analysis_builtins::graph::{CheckpointExt, FindingReasonExt};
 use super::*;
 
 pub(super) struct Changes {
@@ -49,7 +50,7 @@ impl Graph<'_> {
                 .build()
             })?;
         Self::require(
-            algorithm::Detector::supports_units(model),
+            araphor_analysis_builtins::graph::Detector::supports_units(model),
             "graph unit contract",
         )?;
         let state = Changes::dataset(&output.datasets, "state")?;

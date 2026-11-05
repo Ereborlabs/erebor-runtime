@@ -206,11 +206,7 @@ async fn sum_error_keeps_frontier() {
         .session(AnalysisSelectionV1::tenant([1; 16]), &fixture.control, 0)
         .unwrap();
     let mut kernel = Kernel::new(
-        fixture
-            .plan
-            .as_any()
-            .downcast_ref::<AggregateExec>()
-            .unwrap(),
+        fixture.plan.downcast_ref::<AggregateExec>().unwrap(),
         Arc::clone(&fixture.source),
         Arc::clone(&fixture.context),
         Arc::new(session),

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,7 +16,7 @@ use datafusion::execution::{SessionState, TaskContext};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion::optimizer::OptimizerRule;
-use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion::physical_expr::{EquivalenceProperties, OrderingRequirements, PhysicalExpr};
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -35,6 +35,7 @@ use crate::memory::Memory;
 use crate::sources::SourceSnapshot;
 
 mod changes;
+pub(crate) mod graph;
 mod guest;
 mod sql;
 #[cfg(test)]
@@ -69,6 +70,7 @@ pub struct CallResult {
     origin: Origin,
     retained: Option<araphor_data::analysis::PackageResultRefV1>,
     changes: Option<araphor_data::ManagedChanges>,
+    graph: Option<Arc<araphor_data::ManagedGraphJournal>>,
     _input: Arc<MemoryReservation>,
     _output: Arc<MemoryReservation>,
     _metadata: Option<MemoryReservation>,
@@ -264,6 +266,10 @@ impl CallResult {
     pub fn changes(&self) -> Option<&araphor_data::ManagedChanges> {
         self.changes.as_ref()
     }
+
+    pub fn graph(&self) -> Option<&Arc<araphor_data::ManagedGraphJournal>> {
+        self.graph.as_ref()
+    }
 }
 
 impl fmt::Debug for CallResult {
@@ -293,6 +299,7 @@ pub(crate) struct CallContext {
     now: u64,
     workers: TaskTracker,
     calls: Mutex<BTreeMap<u64, CallState>>,
+    graphs: Mutex<BTreeMap<u64, Arc<graph::GraphService>>>,
     publication: AtomicU64,
     pub(crate) completion: Vec<crate::follow::WindowRange>,
     windows: Vec<crate::follow::WindowRange>,
@@ -417,6 +424,7 @@ impl CallContext {
             origin,
             retained: Some(reference.clone()),
             changes: result.changes.clone(),
+            graph: None,
             _input: Arc::clone(&result._input),
             _output: Arc::clone(&result._output),
             _metadata: Some(metadata),
@@ -445,6 +453,7 @@ impl CallContext {
             now,
             workers: TaskTracker::new(),
             calls: Mutex::default(),
+            graphs: Mutex::default(),
             publication: AtomicU64::new(0),
             completion: Vec::new(),
             windows: Vec::new(),
@@ -725,8 +734,10 @@ impl CallContext {
 pub(crate) struct PackageExec {
     prepared: Option<Prepared>,
     children: Vec<Arc<dyn ExecutionPlan>>,
+    ordering: Vec<Option<OrderingRequirements>>,
     properties: Arc<PlanProperties>,
     call: PackageCall,
+    before: BTreeSet<usize>,
 }
 
 impl fmt::Debug for PackageExec {
@@ -740,6 +751,59 @@ impl fmt::Debug for PackageExec {
 }
 
 impl PackageExec {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub(crate) fn before_inputs(&self) -> &BTreeSet<usize> {
+        &self.before
+    }
+
+    pub(super) fn before_plan(&self, slot: usize) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        self.before
+            .contains(&slot)
+            .then(|| {
+                datafusion::physical_plan::execution_plan::reset_plan_states(Arc::clone(
+                    &self.children[slot],
+                ))
+            })
+            .transpose()
+    }
+
+    pub(crate) fn before_reusable(
+        admitted: &LogicalPlan,
+        logical: &LogicalPlan,
+        physical: &Arc<dyn ExecutionPlan>,
+        state: &SessionState,
+    ) -> Result<bool> {
+        let config = &state.config_options().optimizer;
+        if config.enable_dynamic_filter_pushdown
+            || config.enable_join_dynamic_filter_pushdown
+            || config.enable_topk_dynamic_filter_pushdown
+            || config.enable_aggregate_dynamic_filter_pushdown
+            || physical.schema().as_ref() != logical.schema().as_arrow()
+            || crate::follow::Windows::programs(std::slice::from_ref(logical))
+                .map_err(external)?
+                .runtime()
+        {
+            return Ok(false);
+        }
+        for plan in [admitted, logical] {
+            if PackageCall::contains(plan)?
+                || crate::follow::Window::clocks(plan).map_err(external)? != 0
+                || !crate::stream::physical::SubscribeExec::reusable(plan, &mut BTreeSet::new())?
+                || crate::planner::SourceDemand::collect(plan, false)?
+                    .iter()
+                    .any(|origin| matches!(origin, crate::sources::SourceOrigin::Local(_)))
+            {
+                return Ok(false);
+            }
+        }
+        let mut scalar = false;
+        crate::sources::PortExec::apply(physical, &mut |node| {
+            scalar |= node.is::<datafusion::physical_plan::scalar_subquery::ScalarSubqueryExec>();
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(!scalar)
+    }
+
     pub(crate) fn logical_call(&self) -> &PackageCall {
         &self.call
     }
@@ -789,6 +853,23 @@ impl PackageExec {
         if children.len() != call.children.len() || logical.len() != children.len() {
             return Err(internal("package physical inputs changed"));
         }
+        let mut before = BTreeSet::new();
+        for pair in call.changes.iter().flat_map(|changes| &changes.ports) {
+            let slot = pair.before;
+            let admitted = call
+                .admitted
+                .get(slot)
+                .ok_or_else(|| internal("admitted Before input is absent"))?;
+            let input = logical
+                .get(slot)
+                .ok_or_else(|| internal("logical Before input is absent"))?;
+            let child = children
+                .get(slot)
+                .ok_or_else(|| internal("physical Before input is absent"))?;
+            if Self::before_reusable(admitted, input, child, state)? {
+                before.insert(slot);
+            }
+        }
         let prepared = match (
             state.config().get_extension::<Runtime>(),
             state.config().get_extension::<AnalysisReadControl>(),
@@ -831,6 +912,16 @@ impl PackageExec {
         ));
         Ok(Self {
             call: call.clone(),
+            ordering: children
+                .iter()
+                .map(|child| {
+                    child
+                        .properties()
+                        .output_ordering()
+                        .cloned()
+                        .map(OrderingRequirements::from)
+                })
+                .collect(),
             children: children
                 .iter()
                 .map(|child| {
@@ -840,6 +931,7 @@ impl PackageExec {
                 .collect::<Result<_>>()?,
             prepared: prepared.0,
             properties,
+            before,
         })
     }
 
@@ -1011,16 +1103,17 @@ impl PackageExec {
             ),
         )?;
         let started = Instant::now();
+        owner.bind_graph(self, &source, &context).await?;
         let (_admission, output, output_memory) = if self.call.sql.is_some() {
             let output_memory = Arc::new(owner.memory.reserve_output(0)?);
+            let output = self
+                .sql(&evaluation, &owner, &context, &source, &output_memory)
+                .await?;
             let checked = self
                 .call
                 .descriptor()
                 .check_evaluation(&evaluation)
                 .map_err(external)?;
-            let output = self
-                .sql(&evaluation, &owner, &context, &source, &output_memory)
-                .await?;
             checked.validate_output(&output).map_err(external)?;
             (None, output, output_memory)
         } else {
@@ -1035,6 +1128,11 @@ impl PackageExec {
             owner.memory.retain_output(batch, &output_memory)?;
         }
         output_memory.try_resize(output.metadata_bytes())?;
+        let graph = match owner.bind_graph(self, &source, &context).await? {
+            Some(host) => Some(host.freeze(&source, &context).await?),
+            None => None,
+        };
+
         let rows = |name: &str| {
             evaluation
                 .inputs
@@ -1074,6 +1172,7 @@ impl PackageExec {
             origin: Origin::new(&self.call),
             retained: None,
             changes,
+            graph,
             _input: input,
             _output: output_memory,
             _metadata: None,
@@ -1151,7 +1250,15 @@ impl PackageExec {
             .children
             .get(slot)
             .ok_or_else(|| internal("package physical child is absent"))?;
-        Self::collect_plan(plan, schema, owner, context, memory, input).await
+        let batches = Self::collect_plan(plan, schema, owner, context, memory, input).await?;
+        if input {
+            let source = context
+                .session_config()
+                .get_extension::<SourceSnapshot>()
+                .ok_or_else(|| internal("package source snapshot is absent"))?;
+            source.attribute_input(self.call.id, plan, owner)?;
+        }
+        Ok(batches)
     }
 
     pub(crate) async fn collect_plan(
@@ -1261,6 +1368,9 @@ impl ExecutionPlan for PackageExec {
     }
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         InputDistributionRequirements::new(vec![Distribution::SinglePartition; self.children.len()])
+    }
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        self.ordering.clone()
     }
     fn apply_expressions(
         &self,

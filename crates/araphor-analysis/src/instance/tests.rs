@@ -53,7 +53,7 @@ impl Instance {
         }
 
         fn cross(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
-            if plan.as_any().is::<CrossJoinExec>() {
+            if plan.is::<CrossJoinExec>() {
                 return Some(Arc::clone(plan));
             }
             plan.children().iter().find_map(|child| cross(child))
@@ -90,10 +90,9 @@ impl Instance {
             .query_planner()
             .create_physical_plan(&optimized, &state)
             .await?;
-        assert!(physical.as_any().is::<DataSinkExec>());
+        assert!(physical.is::<DataSinkExec>());
         let joined = cross(&physical).ok_or("native Graph input CrossJoin")?;
         let joined = joined
-            .as_any()
             .downcast_ref::<CrossJoinExec>()
             .ok_or("native Graph input CrossJoin type")?;
         assert_eq!(packages(joined.left()), 0);

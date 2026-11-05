@@ -34,6 +34,11 @@ use tokio::sync::OnceCell;
 
 use super::{SourceData, SourceImage, SourceOrigin, SourceProvider, SourceSnapshot};
 
+mod metrics;
+
+#[cfg(test)]
+mod tests;
+
 impl SourceImage {
     pub fn plan(self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         self.image_plan(plan, false, &mut BTreeMap::new())
@@ -113,15 +118,53 @@ impl SourceImage {
     }
 }
 
+pub struct PortRead {
+    pub input: sdk::Input,
+    pub memory: MemoryReservation,
+    pub derived: Option<Arc<araphor_data::ManagedDerivedSource>>,
+}
+
+impl From<(sdk::Input, MemoryReservation)> for PortRead {
+    fn from((input, memory): (sdk::Input, MemoryReservation)) -> Self {
+        Self {
+            input,
+            memory,
+            derived: None,
+        }
+    }
+}
+
 pub trait PortSource: fmt::Debug + Send + Sync {
     fn reusable(&self) -> bool {
         false
     }
 
+    /// Return true only if the complete driver result and its effects apply to all consumers of the same snapshot and source image.
+    fn snapshot_bound(&self) -> bool {
+        false
+    }
+
+    /// Use the current port for its After image.
+    fn after_is_current(&self) -> bool {
+        false
+    }
+
     fn key_columns(&self) -> &[(usize, usize)];
+
+    fn image_keys(&self, _image: SourceImage) -> &[(usize, usize)] {
+        self.key_columns()
+    }
+
+    fn driver(&self, _image: SourceImage, _driver: &LogicalPlan) -> Result<Option<LogicalPlan>> {
+        Ok(None)
+    }
 
     fn header(&self, _image: SourceImage, _header: &LogicalPlan) -> Result<Option<LogicalPlan>> {
         Ok(None)
+    }
+
+    fn header_required(&self, _driver: &[sdk::RecordBatch]) -> Result<bool> {
+        Ok(true)
     }
 
     fn read<'a>(
@@ -131,7 +174,70 @@ pub trait PortSource: fmt::Debug + Send + Sync {
         header: Vec<sdk::RecordBatch>,
         source: Arc<SourceSnapshot>,
         context: Arc<TaskContext>,
-    ) -> BoxFuture<'a, Result<(sdk::Input, MemoryReservation)>>;
+    ) -> BoxFuture<'a, Result<PortRead>>;
+}
+
+pub(super) type PortKey = (usize, Option<SourceImage>, Option<i64>);
+
+#[derive(Clone, Debug)]
+pub(crate) struct PortDemand {
+    pub(super) slot: usize,
+    pub(super) expressions: Arc<[Arc<dyn PhysicalExpr>]>,
+}
+
+#[derive(Debug)]
+pub(super) struct PortScope {
+    format: super::keys::KeyFormat,
+    expressions: Arc<[Arc<dyn PhysicalExpr>]>,
+    values: Arc<BTreeSet<Vec<u8>>>,
+}
+
+impl PortDemand {
+    pub(super) async fn resolve(
+        &self,
+        source: &SourceSnapshot,
+        control: &araphor_data::AnalysisReadControl,
+    ) -> Result<PortScope> {
+        let slot = source.key_slot(self.slot)?;
+        let values = control
+            .query_async(slot.values())
+            .await
+            .map_err(SourceSnapshot::data_error)?;
+        Ok(PortScope {
+            format: slot.format()?,
+            expressions: Arc::clone(&self.expressions),
+            values,
+        })
+    }
+}
+
+impl PortScope {
+    pub(super) fn same(
+        &self,
+        other: &Self,
+        control: &araphor_data::AnalysisReadControl,
+    ) -> Result<bool> {
+        control.check().map_err(SourceSnapshot::data_error)?;
+        if !self.format.same(&other.format)
+            || self.expressions.len() != other.expressions.len()
+            || self.values.len() != other.values.len()
+        {
+            return Ok(false);
+        }
+        for (left, right) in self.expressions.iter().zip(other.expressions.iter()) {
+            control.check().map_err(SourceSnapshot::data_error)?;
+            if left.as_ref() != right.as_ref() {
+                return Ok(false);
+            }
+        }
+        for (left, right) in self.values.iter().zip(other.values.iter()) {
+            control.check().map_err(SourceSnapshot::data_error)?;
+            if left != right {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }
 
 #[derive(Clone)]
@@ -143,7 +249,8 @@ pub struct SourcePort {
     state: SessionState,
     prepared: Arc<OnceCell<[Arc<dyn ExecutionPlan>; 2]>>,
     runtime: [bool; 2],
-    source: Arc<dyn PortSource>,
+    source: Option<Arc<dyn PortSource>>,
+    keys: Vec<(usize, usize)>,
     image: Option<SourceImage>,
     clock: Option<i64>,
     origins: BTreeSet<SourceOrigin>,
@@ -151,6 +258,7 @@ pub struct SourcePort {
     clocks: usize,
     calls: bool,
     reusable: bool,
+    shareable: bool,
 }
 
 impl SourcePort {
@@ -160,6 +268,10 @@ impl SourcePort {
 
     pub(crate) fn inputs(&self) -> &[LogicalPlan; 2] {
         &self.inputs
+    }
+
+    pub(crate) fn is_native(&self) -> bool {
+        self.source.is_none()
     }
 
     pub(crate) fn origins(&self) -> &BTreeSet<SourceOrigin> {
@@ -180,7 +292,7 @@ impl SourcePort {
 
     fn check_keys(&self, driver: &LogicalPlan) -> Result<()> {
         let mut outputs = BTreeSet::new();
-        for &(output, input) in self.source.key_columns() {
+        for &(output, input) in &self.keys {
             let valid = self
                 .schema
                 .fields()
@@ -208,7 +320,7 @@ impl SourcePort {
         self.origins.clear();
         self.clocks = 0;
         self.calls = false;
-        self.reusable = self.source.reusable();
+        self.reusable = self.source.as_ref().is_none_or(|source| source.reusable());
         for (index, input) in self.inputs.iter().enumerate() {
             self.runtime[index] |=
                 crate::follow::Windows::programs(std::slice::from_ref(input))?.runtime();
@@ -247,6 +359,31 @@ impl SourcePort {
         header: LogicalPlan,
         source: Arc<dyn PortSource>,
     ) -> crate::Result<Self> {
+        let keys = source.key_columns().to_vec();
+        Self::build(session, role, schema, [driver, header], keys, Some(source)).await
+    }
+
+    pub async fn native(
+        session: &crate::execution::Session,
+        role: String,
+        driver: LogicalPlan,
+        keys: Vec<(usize, usize)>,
+    ) -> crate::Result<Self> {
+        let schema = Arc::new(driver.schema().as_arrow().clone());
+        let header = LogicalPlanBuilder::empty(true)
+            .build()
+            .context(crate::SqlSnafu)?;
+        Self::build(session, role, schema, [driver, header], keys, None).await
+    }
+
+    async fn build(
+        session: &crate::execution::Session,
+        role: String,
+        schema: SchemaRef,
+        [driver, header]: [LogicalPlan; 2],
+        keys: Vec<(usize, usize)>,
+        source: Option<Arc<dyn PortSource>>,
+    ) -> crate::Result<Self> {
         let inputs = [
             Self::prepare(driver).context(crate::SqlSnafu)?,
             Self::prepare(header).context(crate::SqlSnafu)?,
@@ -266,6 +403,7 @@ impl SourcePort {
             prepared: Arc::new(OnceCell::new()),
             runtime: [true; 2],
             source,
+            keys,
             image: None,
             clock: None,
             origins: BTreeSet::new(),
@@ -273,6 +411,7 @@ impl SourcePort {
             clocks: 0,
             calls: false,
             reusable: false,
+            shareable: true,
         };
         node.properties()?;
         crate::execution::Engine::blocking(
@@ -431,20 +570,51 @@ impl SourcePort {
         image: SourceImage,
         sources: &mut BTreeMap<usize, (Arc<dyn TableProvider>, Arc<SourcePort>)>,
     ) -> Result<Self> {
+        if image == SourceImage::After
+            && self.image.is_none()
+            && self
+                .source
+                .as_ref()
+                .is_some_and(|source| source.after_is_current())
+        {
+            return Ok(self.clone());
+        }
         let mut source = self.clone();
+        source.shareable &= self.image.is_none();
         source.prepared = Arc::new(OnceCell::new());
-        let header = match self.source.header(image, &self.inputs[1])? {
+        let header = match self
+            .source
+            .as_ref()
+            .map(|source| source.header(image, &self.inputs[1]))
+            .transpose()?
+            .flatten()
+        {
             Some(header) => {
                 source.runtime[1] = true;
                 Self::prepare(header)?
             }
-            None => self.inputs[1].clone(),
+            None => image.image_plan(&self.inputs[1], false, sources)?,
         };
         source.inputs = [
-            image.image_plan(&self.inputs[0], false, sources)?,
-            image.image_plan(&header, false, sources)?,
+            match self
+                .source
+                .as_ref()
+                .map(|source| source.driver(image, &self.inputs[0]))
+                .transpose()?
+                .flatten()
+            {
+                Some(driver) => {
+                    source.runtime[0] = true;
+                    Self::prepare(driver)?
+                }
+                None => image.image_plan(&self.inputs[0], false, sources)?,
+            },
+            header,
         ];
         source.image = Some(image);
+        if let Some(reader) = &source.source {
+            source.keys = reader.image_keys(image).to_vec();
+        }
         source
             .properties()
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -529,8 +699,16 @@ impl TableProvider for SourcePort {
             schema: Arc::clone(&self.schema),
             inputs,
             reader,
-            source: Arc::clone(&self.source),
-            keys: self.source.key_columns().to_vec(),
+            source: self.source.clone(),
+            keys: self.keys.clone(),
+            binding: (retained
+                && self.shareable
+                && self
+                    .source
+                    .as_ref()
+                    .is_none_or(|source| source.snapshot_bound()))
+            .then_some((self.slot, self.image, self.clock)),
+            demand: None,
             image: self.image,
             properties,
         });
@@ -573,8 +751,10 @@ pub(crate) struct PortExec {
     schema: SchemaRef,
     inputs: [Arc<dyn ExecutionPlan>; 2],
     reader: Arc<dyn ExecutionPlan>,
-    source: Arc<dyn PortSource>,
+    source: Option<Arc<dyn PortSource>>,
     keys: Vec<(usize, usize)>,
+    binding: Option<PortKey>,
+    demand: Option<PortDemand>,
     image: Option<SourceImage>,
     properties: Arc<PlanProperties>,
 }
@@ -619,6 +799,12 @@ impl PortExec {
                     ..port.clone()
                 }) as Arc<dyn ExecutionPlan>);
             }
+            if node
+                .downcast_ref::<crate::definition::physical::graph::GraphExec>()
+                .is_some()
+            {
+                return node.reset_state();
+            }
             if let Some(source) = SourceData::from_plan(node.as_ref()) {
                 if source.key.is_some() {
                     return datafusion::common::internal_err!(
@@ -640,6 +826,167 @@ impl PortExec {
             }
             node.reset_state()
         })
+    }
+
+    async fn bind(
+        &self,
+        source: &Arc<SourceSnapshot>,
+        context: &Arc<TaskContext>,
+        owner: &crate::definition::CallContext,
+    ) -> Result<()> {
+        let native = self
+            .source
+            .is_none()
+            .then(|| source.read_context(context))
+            .transpose()?;
+        let memory = source.memory.reserve_input(0)?;
+        let started = std::time::Instant::now();
+        let driver = crate::definition::physical::PackageExec::collect_plan(
+            &self.inputs[0],
+            self.inputs[0].schema().as_ref(),
+            owner,
+            context,
+            &memory,
+            true,
+        )
+        .await?;
+        let driven = std::time::Instant::now();
+        if erebor_telemetry::tracing::enabled!(erebor_telemetry::tracing::Level::DEBUG) {
+            let mut event_reads = 0usize;
+            let mut keyed_events = 0usize;
+            let mut projected_joins = 0usize;
+            Self::apply(&self.inputs[0], &mut |plan| {
+                if plan
+                    .downcast_ref::<datafusion::physical_plan::joins::HashJoinExec>()
+                    .is_some_and(|join| join.contains_projection())
+                {
+                    projected_joins += 1;
+                }
+                if let Some(raw) = SourceData::from_plan(plan.as_ref()) {
+                    if raw.origin.durable() == Some("events") {
+                        event_reads += 1;
+                        keyed_events +=
+                            usize::from(raw.image == Some(SourceImage::After) && raw.key.is_some());
+                    }
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            if let Ok(snapshot) = source.snapshot() {
+                let cut = snapshot.page.extraction.meta.commit_revision;
+                erebor_telemetry::debug!(stage="source_lookup_shape",role=%self.role,
+                    family_id=self.family,read_id=self.read,image=?self.image,cut_revision=cut,
+                    event_reads,keyed_after_events=keyed_events,projected_hash_joins=projected_joins,
+                    driver_rows=driver.iter().map(sdk::RecordBatch::num_rows).sum::<usize>(),
+                    "Native qualifier lookup shape completed");
+            }
+        }
+        let header_required = self
+            .source
+            .as_ref()
+            .map(|source| source.header_required(&driver))
+            .transpose()?
+            .unwrap_or(true);
+        let metrics = (header_required
+            && self.role == "graph_status"
+            && erebor_telemetry::tracing::enabled!(erebor_telemetry::tracing::Level::DEBUG))
+        .then(|| metrics::PortMetrics::capture(&self.inputs[1], source))
+        .transpose()?;
+        let requested = std::time::Instant::now();
+        let header = if header_required {
+            crate::definition::physical::PackageExec::collect_plan(
+                &self.inputs[1],
+                self.inputs[1].schema().as_ref(),
+                owner,
+                context,
+                &memory,
+                true,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
+        let headed = std::time::Instant::now();
+        if let Some(metrics) = metrics {
+            metrics.report(self, source)?;
+        }
+        let callback = std::time::Instant::now();
+        let (data, input, _metadata, derived) = if let Some(reader) = &self.source {
+            let PortRead {
+                input,
+                memory,
+                derived,
+            } = reader
+                .read(
+                    self.image,
+                    driver,
+                    header,
+                    Arc::clone(source),
+                    Arc::clone(context),
+                )
+                .await?;
+            (input.data.clone(), Some(input), Some(memory), derived)
+        } else {
+            (
+                sdk::Dataset {
+                    name: self.role.clone(),
+                    batches: driver,
+                },
+                None,
+                None,
+                None,
+            )
+        };
+        let converted = std::time::Instant::now();
+        if input
+            .as_ref()
+            .map_or_else(|| data.allocated_bytes(), sdk::Input::allocated_bytes)
+            > source.limits.input_bytes
+        {
+            return Err(datafusion::common::DataFusionError::External(Box::new(
+                sdk::Error::contract(sdk::ErrorCode::Limit, "source input bytes"),
+            )));
+        }
+        if data.name != self.role
+            || data
+                .batches
+                .iter()
+                .any(|batch| batch.schema() != self.schema)
+        {
+            return datafusion::common::exec_err!("source output differs");
+        }
+        source.bind_port(
+            self.read,
+            Arc::clone(&self.schema),
+            data.batches,
+            input.as_ref(),
+        )?;
+        source.bind_lineage(
+            self.read,
+            &self.inputs[..if header_required { 2 } else { 1 }],
+            owner,
+            derived,
+        )?;
+        if let Some((_, control, _lease)) = &native {
+            control
+                .check()
+                .map_err(|source| DataFusionError::External(Box::new(source)))?;
+        }
+        let bound = std::time::Instant::now();
+        if let Ok(snapshot) = source.snapshot() {
+            erebor_telemetry::debug!(
+                stage = "port_timing", role = %self.role, family_id = self.family,
+                read_id = self.read, image = ?self.image,
+                cut_revision = snapshot.page.extraction.meta.commit_revision,
+                driver_s = driven.duration_since(started).as_secs_f64(),
+                header_s = headed.duration_since(requested).as_secs_f64(),
+                callback_s = converted.duration_since(callback).as_secs_f64(),
+                metrics_s = (requested.duration_since(driven) + callback.duration_since(headed)).as_secs_f64(),
+                binding_s = bound.duration_since(converted).as_secs_f64(),
+                elapsed_s = bound.duration_since(started).as_secs_f64(),
+                "Source port execution timing completed"
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn apply(
@@ -714,6 +1061,43 @@ impl PortExec {
             ..self.clone()
         }))
     }
+
+    pub(super) fn bind_driver(
+        &self,
+        driver: Arc<dyn ExecutionPlan>,
+        demand: PortDemand,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Self {
+            demand: Some(demand),
+            ..self.clone()
+        }
+        .replace_inputs([driver, Arc::clone(&self.inputs[1])])
+    }
+
+    pub(crate) fn is_bound(&self) -> bool {
+        self.demand.is_some()
+    }
+
+    pub(crate) fn shared_slot(&self) -> Option<usize> {
+        self.binding
+            .and(self.demand.as_ref().map(|demand| demand.slot))
+    }
+
+    pub(crate) fn disable_sharing(&self) -> Arc<dyn ExecutionPlan> {
+        Arc::new(Self {
+            binding: None,
+            ..self.clone()
+        })
+    }
+
+    pub(crate) fn trace_lookup(&self, slot: usize, bound: bool) {
+        if !self.keys.is_empty() {
+            erebor_telemetry::debug!(stage="source_lookup_bind",role=%self.role,
+                family_id=self.family,read_id=self.read,key_slot=slot,bound,
+                driver=self.inputs[0].name(),"Native port key binding completed");
+        }
+    }
+
     pub(crate) fn key_columns(&self) -> &[(usize, usize)] {
         &self.keys
     }
@@ -817,72 +1201,23 @@ impl ExecutionPlan for PortExec {
                         "source call scope is absent".into(),
                     )
                 })?;
-            let memory = source.memory.reserve_input(0)?;
-            let started = std::time::Instant::now();
-            let driver = crate::definition::physical::PackageExec::collect_plan(
-                &node.inputs[0],
-                node.inputs[0].schema().as_ref(),
-                &owner,
-                &context,
-                &memory,
-                true,
-            )
-            .await?;
-            let driven = std::time::Instant::now();
-            let header = crate::definition::physical::PackageExec::collect_plan(
-                &node.inputs[1],
-                node.inputs[1].schema().as_ref(),
-                &owner,
-                &context,
-                &memory,
-                true,
-            )
-            .await?;
-            let headed = std::time::Instant::now();
-            let (input, _metadata) = node
-                .source
-                .read(
-                    node.image,
-                    driver,
-                    header,
-                    Arc::clone(&source),
-                    Arc::clone(&context),
-                )
-                .await?;
-            let converted = std::time::Instant::now();
-            if input.allocated_bytes() > source.limits.input_bytes {
-                return Err(datafusion::common::DataFusionError::External(Box::new(
-                    sdk::Error::contract(sdk::ErrorCode::Limit, "source input bytes"),
-                )));
-            }
-            if input.data.name != node.role
-                || input
-                    .data
-                    .batches
-                    .iter()
-                    .any(|batch| batch.schema() != node.schema)
-            {
-                return datafusion::common::exec_err!("source output differs");
-            }
-            source.bind_port(
-                node.read,
-                Arc::clone(&node.schema),
-                input.data.batches.clone(),
-                Some(&input),
-            )?;
-            let bound = std::time::Instant::now();
-            if let Ok(snapshot) = source.snapshot() {
-                erebor_telemetry::debug!(
-                    stage = "port_timing", role = %node.role, family_id = node.family,
-                    read_id = node.read, image = ?node.image,
-                    cut_revision = snapshot.page.extraction.meta.commit_revision,
-                    driver_s = driven.duration_since(started).as_secs_f64(),
-                    header_s = headed.duration_since(driven).as_secs_f64(),
-                    callback_s = converted.duration_since(headed).as_secs_f64(),
-                    binding_s = bound.duration_since(converted).as_secs_f64(),
-                    elapsed_s = bound.duration_since(started).as_secs_f64(),
-                    "Source port execution timing completed"
-                );
+            let input = node.clone();
+            let captured = Arc::clone(&source);
+            let task = Arc::clone(&context);
+            let bind = async move { input.bind(&captured, &task, &owner).await };
+            if let Some(key) = node.binding {
+                source
+                    .bind_shared(
+                        key,
+                        node.demand.as_ref(),
+                        node.read,
+                        Arc::clone(&node.schema),
+                        &context,
+                        bind,
+                    )
+                    .await?;
+            } else {
+                bind.await?;
             }
             node.reader.execute(partition, context)
         })

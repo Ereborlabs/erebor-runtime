@@ -9,6 +9,33 @@ use crate::{
 };
 
 impl crate::CoverageInterval {
+    pub fn record_state(
+        interval: Option<&Self>,
+        temporal: i32,
+        sequence: Option<u64>,
+    ) -> crate::DiscoveryCoverageStateV1 {
+        use crate::DiscoveryCoverageStateV1 as State;
+        match interval {
+            Some(interval) if interval.has_gap() => State::Gapped,
+            Some(interval)
+                if temporal == 1
+                    && interval.is_complete()
+                    && sequence.is_some_and(|sequence| {
+                        interval.last_sequence.is_some_and(|last| {
+                            (interval.first_sequence..=last).contains(&sequence)
+                        })
+                    }) =>
+            {
+                if interval.state == "CLOSED" {
+                    State::Closed
+                } else {
+                    State::Healthy
+                }
+            }
+            _ => State::Unknown,
+        }
+    }
+
     pub fn has_gap(&self) -> bool {
         self.state == "GAPPED"
             || !self.gap_reasons.is_empty()

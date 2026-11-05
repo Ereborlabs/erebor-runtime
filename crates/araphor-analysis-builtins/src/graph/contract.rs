@@ -89,17 +89,13 @@ impl ReasonDetails {
 impl Detector {
     pub const fn id(self) -> &'static str {
         match self {
-            Self::Process => "HF-PROC-001",
             Self::Credentials => "HF-DW-001",
-            Self::Kubernetes => "HF-XNODE-001",
         }
     }
 
     pub fn from_id(id: &str) -> sdk::Result<Self> {
         match id {
-            "HF-PROC-001" => Ok(Self::Process),
             "HF-DW-001" => Ok(Self::Credentials),
-            "HF-XNODE-001" => Ok(Self::Kubernetes),
             _ => Err(sdk::Error::contract(
                 sdk::ErrorCode::Incompatible,
                 "graph package",
@@ -109,22 +105,12 @@ impl Detector {
 
     pub(super) fn reasons(self) -> &'static [&'static str] {
         match self {
-            Self::Process => &[
-                "UNEXPECTED_EFFECT",
-                "AUDITED_ROLE_DEVIATION",
-                "LINEAGE_COVERAGE_GAP",
-                "CONTRADICTION",
-                "OUTSIDE_AUTHORITY",
-                "IN_MEMORY_ONLY",
-                "PAYLOAD_UNOBSERVABLE",
-            ],
             Self::Credentials => &[
                 "CREDENTIAL_PIVOT",
                 "CONTEXTUAL_CREDENTIAL_PIVOT",
                 "MISSING_AUTHORITY_PROOF",
                 "CONTRADICTION",
             ],
-            Self::Kubernetes => &["KUBERNETES_PROOF_MISSING"],
         }
     }
 }
