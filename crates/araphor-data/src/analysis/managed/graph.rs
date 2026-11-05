@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use duckdb::{params, OptionalExt as _, Transaction};
+use duckdb::{OptionalExt as _, Transaction, params};
 use snafu::ResultExt as _;
 
 use super::codec::ManagedCodec;
@@ -210,29 +210,49 @@ impl AnalysisStore {
         call: u64,
         model: &sdk::Model,
         control: &AnalysisReadControl,
-    ) -> Result<ManagedGraphCall> {
+    ) -> Result<(ManagedGraphCall, sdk::Package)> {
         self.check_managed_claim(&attempt)?;
         if attempt.receipt().is_some() || attempt.terminal().is_some() {
             return Err(Code::Conflict.error("Graph attempt completed"));
         }
-        self.check_managed_capture(connection, &attempt.0.capture, attempt.request().time_utc_ns,
-            (&attempt.0.capture.witnesses,&attempt.0.capture.contexts), Default::default())?;
-        let declaration = attempt.1.spec.manifest.calls.get(&call)
+        self.check_managed_capture(
+            connection,
+            &attempt.0.capture,
+            attempt.request().time_utc_ns,
+            (&attempt.0.capture.witnesses, &attempt.0.capture.contexts),
+            Default::default(),
+        )?;
+        let declaration = attempt
+            .1
+            .spec
+            .manifest
+            .calls
+            .get(&call)
             .ok_or_else(|| Code::Denied.error("Graph actual call"))?;
         let package = Self::managed_contract(connection, attempt.1.spec.tenant, declaration)?;
-        let canonical = package.exports.iter().find(|export| export.name == declaration.export)
+        let canonical = package
+            .exports
+            .iter()
+            .find(|export| export.name == declaration.export)
             .ok_or_else(|| Code::Invalid.error("Graph actual export"))?;
         if canonical.name != model.name || canonical.graph != model.graph {
             return Err(Code::Denied.error("Graph actual relation contract"));
         }
-        let spec = model.graph.clone().ok_or_else(|| Code::Denied.error("Graph invocation capability"))?;
-        let (graph,writer): (u64,u64) = connection.query_row(
-            "SELECT graph.graph_id,writer.writer_id FROM managed_graphs graph
+        let spec = model
+            .graph
+            .clone()
+            .ok_or_else(|| Code::Denied.error("Graph invocation capability"))?;
+        let (graph, writer): (u64, u64) = connection
+            .query_row(
+                "SELECT graph.graph_id,writer.writer_id FROM managed_graphs graph
              JOIN managed_graph_writers writer USING(graph_id)
              WHERE graph.tenant_id=? AND graph.instance_id=? AND writer.call_id=?",
-            params![attempt.1.spec.tenant.as_slice(),attempt.1.spec.id,call],
-            |row| Ok((row.get(0)?,row.get(1)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "bind managed Graph writer" })?;
+                params![attempt.1.spec.tenant.as_slice(), attempt.1.spec.id, call],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "bind managed Graph writer",
+            })?;
         let head = connection.query_row(
             "SELECT layer_id FROM graph_layers WHERE writer_id=? AND revision<=? ORDER BY revision DESC LIMIT 1",
             params![writer,attempt.captured_revision()], |row| row.get(0),
@@ -243,10 +263,24 @@ impl AnalysisStore {
                 "SELECT relation_id,contract FROM managed_graph_relations WHERE graph_id=? AND relation_name=?",
                 params![graph,relation.name], |row| Ok((row.get(0)?,row.get(1)?)),
             ).context(AnalysisDatabaseSnafu { operation: "bind managed Graph relation" })?;
-            let canonical: sdk::GraphRelation = ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
-            if canonical != *relation { return Err(Code::Denied.error("Graph admitted relation contract")); }
+            let canonical: sdk::GraphRelation =
+                ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
+            if canonical != *relation {
+                return Err(Code::Denied.error("Graph admitted relation contract"));
+            }
             relations.insert(relation.name.clone(), id);
         }
-        Ok(ManagedGraphCall { attempt,call,graph,writer,head,spec,relations })
+        Ok((
+            ManagedGraphCall {
+                attempt,
+                call,
+                graph,
+                writer,
+                head,
+                spec,
+                relations,
+            },
+            package,
+        ))
     }
 }

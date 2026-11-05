@@ -12,8 +12,6 @@ pub(super) struct Basis {
 
 impl Basis {
     pub(super) fn read(
-        engine: &araphor_graph::GraphStore,
-        connection: &Connection,
         journal: &ManagedGraphJournal,
         scratch: &mut DomainScratch<'_>,
     ) -> Result<Self> {
@@ -33,11 +31,6 @@ impl Basis {
                 return Err(Code::Denied.error("domain Graph read origin"));
             }
         }
-        let heads = araphor_graph::GraphStore::writer_heads(
-            connection,
-            journal.call.graph,
-            journal.call.attempt.captured_revision(),
-        )?;
         let mut basis = Self::default();
         for declaration in &journal.call.spec.relations {
             let subjects = DomainRelations::subjects(declaration);
@@ -65,7 +58,7 @@ impl Basis {
                 .iter()
                 .map(|(_, _, key, _)| key.to_vec())
                 .collect::<Vec<_>>();
-            for row in engine.members(relation, &heads, Some(&keys), || {
+            for row in journal.prepared.view.members(relation, Some(&keys), || {
                 scratch.charge(0).map_err(araphor_graph::Error::backend)
             })? {
                 if !wanted.contains(&(
@@ -92,8 +85,10 @@ impl Basis {
                 };
                 let data = sdk::Dataset {
                     name: port.name,
-                    batches: vec![sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
-                        .context(crate::AnalysisContractSnafu)?],
+                    batches: vec![
+                        sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
+                            .context(crate::AnalysisContractSnafu)?,
+                    ],
                 };
                 let identity = (relation, row.owner_key.to_vec(), row.key.to_vec());
                 if subjects {

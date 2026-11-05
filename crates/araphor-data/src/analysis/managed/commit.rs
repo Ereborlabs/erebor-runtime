@@ -334,8 +334,14 @@ impl AnalysisStore {
             (&evidence.witnesses, &evidence.contexts),
             std::mem::take(&mut prepared.verified),
         )?;
-        if let Some(graph) = &prepared.graph {
-            graph.check(transaction)?;
+        if let Some(graph) = &mut prepared.graph {
+            graph.check(
+                self,
+                transaction,
+                input,
+                &prepared.derived,
+                &mut prepared.memory,
+            )?;
         }
         if let Some(source) = &prepared.source {
             super::SourcePublication::check_parent(transaction, input, source)?;

@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use arrow_array::{Array, BinaryArray, RecordBatch, StructArray, UInt64Array};
 use arrow_schema::Schema;
-use duckdb::{params, Connection};
+use duckdb::{Connection, params};
 use snafu::ResultExt as _;
 
 use crate::error::{ConflictSnafu, DatabaseSnafu, InvalidSnafu};
@@ -57,6 +57,7 @@ struct Version {
 pub(crate) struct Members {
     rows: BTreeMap<Identity, Version>,
     keys: BTreeMap<(u64, Arc<[u8]>), BTreeSet<Identity>>,
+    owners: BTreeMap<(u64, Arc<[u8]>), BTreeSet<Identity>>,
     outgoing: BTreeMap<(u64, Arc<[u8]>), BTreeSet<Identity>>,
     incoming: BTreeMap<(u64, Arc<[u8]>), BTreeSet<Identity>>,
 }
@@ -71,9 +72,12 @@ pub struct PendingLayer {
 
 impl PendingLayer {
     pub fn visit_changes(&self, mut visit: impl FnMut(&Member) -> Result<()>) -> Result<()> {
-        let index = self.index.read().map_err(|_| ConflictSnafu {
-            resource: "Graph member index",
-        }.build())?;
+        let index = self.index.read().map_err(|_| {
+            ConflictSnafu {
+                resource: "Graph member index",
+            }
+            .build()
+        })?;
         for identity in self.added.iter().chain(&self.closed) {
             if let Some(row) = index.rows.get(identity) {
                 visit(&row.member)?;
@@ -112,6 +116,10 @@ impl Drop for PendingLayer {
 impl Members {
     fn insert(&mut self, member: Member, closed: Option<u64>) {
         let id = member.identity();
+        self.owners
+            .entry((member.writer, Arc::clone(&member.owner_key)))
+            .or_default()
+            .insert(id.clone());
         self.keys
             .entry((member.relation, Arc::clone(&member.key)))
             .or_default()
@@ -138,6 +146,7 @@ impl Members {
     fn remove(&mut self, id: &Identity) {
         if let Some(row) = self.rows.remove(id) {
             let member = row.member;
+            Self::remove_posting(&mut self.owners, member.writer, &member.owner_key, id);
             Self::remove_posting(&mut self.keys, member.relation, &member.key, id);
             if let Some([from, to, _]) = &member.endpoints {
                 Self::remove_posting(&mut self.outgoing, member.relation, from, id);
@@ -228,6 +237,47 @@ impl GraphStore {
             }
         }
         Ok(selected)
+    }
+
+    pub(crate) fn visit_writer(
+        &self,
+        writer: u64,
+        owner: Option<&[u8]>,
+        heads: &BTreeMap<u64, u64>,
+        mut check: impl FnMut() -> Result<()>,
+        mut visit: impl FnMut(&Arc<Member>) -> Result<()>,
+    ) -> Result<()> {
+        let index = self.committed.read().map_err(|_| {
+            ConflictSnafu {
+                resource: "Graph layer index",
+            }
+            .build()
+        })?;
+        if let Some(owner) = owner {
+            if let Some(ids) = index.owners.get(&(writer, Arc::from(owner))) {
+                for id in ids {
+                    check()?;
+                    if let Some(row) = index
+                        .rows
+                        .get(id)
+                        .filter(|row| Members::visible(row, heads))
+                    {
+                        visit(&row.member)?;
+                    }
+                }
+            }
+            return Ok(());
+        }
+        for (id, row) in index.rows.range((writer, 0, 0, Arc::from([]), 0)..) {
+            check()?;
+            if id.0 != writer {
+                break;
+            }
+            if Members::visible(row, heads) {
+                visit(&row.member)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn visit_members(

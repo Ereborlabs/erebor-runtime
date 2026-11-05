@@ -11,19 +11,84 @@ pub struct PreparedLayers {
     pub(super) parents: BTreeMap<u64, Option<u64>>,
     pub(super) base: BaseRows,
     pub(super) rows: Vec<PreparedRows>,
+    declarations: BTreeMap<(u64, u64), Endpoints>,
+    shapes: BTreeMap<u64, Relation>,
+    cuts: BTreeMap<u64, u64>,
     _leases: Vec<Lease>,
 }
 
 impl PreparedLayers {
-    pub fn check_parents(&self, connection: &Connection) -> Result<()> {
+    pub(super) fn check_current(&self, graph: &PendingGraph<'_>) -> Result<()> {
+        if self.parents.len() != graph.heads.len() {
+            return InvalidSnafu {
+                field: "Graph prepared writers",
+            }
+            .fail();
+        }
         for (writer, parent) in &self.parents {
-            let current:Option<u64>=connection.query_row(
-                "SELECT layer_id FROM graph_layers WHERE writer_id=? ORDER BY revision DESC LIMIT 1",
-                params![writer],|row| row.get(0),
-            ).optional().context(DatabaseSnafu { operation:"check prepared Graph parent" })?;
-            if &current != parent {
+            let layer = graph.heads.get(writer).ok_or_else(|| {
+                InvalidSnafu {
+                    field: "Graph prepared writer",
+                }
+                .build()
+            })?;
+            let stored: (Option<u64>, Option<u64>) = graph
+                .connection
+                .query_row(
+                    "SELECT layer.parent_id,parent.revision FROM graph_layers layer
+                 LEFT JOIN graph_layers parent ON parent.writer_id=layer.writer_id
+                    AND parent.layer_id=layer.parent_id
+                 WHERE layer.writer_id=? AND layer.layer_id=? AND layer.revision=?",
+                    params![writer, layer, graph.revision],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .context(DatabaseSnafu {
+                    operation: "check prepared Graph parent",
+                })?;
+            if stored.0 != *parent
+                || stored.0.is_some() != stored.1.is_some()
+                || stored
+                    .1
+                    .is_some_and(|revision| revision > self.cuts[writer])
+            {
                 return ConflictSnafu {
                     resource: "prepared Graph parent",
+                }
+                .fail();
+            }
+        }
+        let connection = graph.connection;
+        let validator = StoredDeclarations { connection };
+        for ((writer, relation), endpoints) in &self.declarations {
+            if validator.check_relation(*writer, *relation, &self.shapes[relation])? != *endpoints {
+                return ConflictSnafu {
+                    resource: "Graph prepared declaration",
+                }
+                .fail();
+            }
+        }
+        for (relation, shape) in &self.shapes {
+            let mut statement = connection
+                .prepare(&format!(
+                    "SELECT properties FROM graph_properties_{relation} WHERE false"
+                ))
+                .context(DatabaseSnafu {
+                    operation: "prepare Graph stored shape",
+                })?;
+            let schema = statement
+                .query_arrow([])
+                .context(DatabaseSnafu {
+                    operation: "read Graph stored shape",
+                })?
+                .get_schema();
+            if schema.fields().len() != 1
+                || !GraphStore::storage_compatible(
+                    schema.field(0).data_type(),
+                    &DataType::Struct(shape.properties.fields().clone()),
+                )
+            {
+                return InvalidSnafu {
+                    field: "Graph stored shape",
                 }
                 .fail();
             }
@@ -33,8 +98,12 @@ impl PreparedLayers {
 }
 
 pub(super) struct Preparation<'a> {
-    connection: &'a Connection,
+    views: &'a BTreeMap<u64, &'a crate::GraphReadView>,
     parents: &'a BTreeMap<u64, Option<u64>>,
+}
+
+struct StoredDeclarations<'a> {
+    connection: &'a Connection,
 }
 
 pub(super) struct PreparedRows {
@@ -50,7 +119,7 @@ pub(super) struct PreparedRows {
 
 impl GraphStore {
     pub fn prepare_layers(
-        connection: &Connection,
+        views: &BTreeMap<u64, &crate::GraphReadView>,
         cuts: &[WriterCut],
         journals: &[&Journal],
         relations: &BTreeMap<u64, Relation>,
@@ -67,26 +136,51 @@ impl GraphStore {
                 .fail();
             }
             scratch.charge(cut.writer, 12 * std::mem::size_of::<(u64, Option<u64>)>())?;
-            let latest: Option<(u64,u64)>=connection.query_row(
-                "SELECT layer_id,revision FROM graph_layers WHERE writer_id=? ORDER BY revision DESC LIMIT 1",
-                params![cut.writer],|row| Ok((row.get(0)?,row.get(1)?)),
-            ).optional().context(DatabaseSnafu { operation: "check Graph preparation parent" })?;
-            if latest.as_ref().map(|(layer, _)| *layer) != cut.parent
-                || latest.is_some_and(|(_, revision)| revision > cut.revision)
-            {
-                return ConflictSnafu {
-                    resource: "Graph preparation parent",
+            let view = views.get(&cut.writer).ok_or_else(|| {
+                InvalidSnafu {
+                    field: "Graph prepared view",
+                }
+                .build()
+            })?;
+            if view.revision != cut.revision || !view.writers.contains(&cut.writer) {
+                return InvalidSnafu {
+                    field: "Graph prepared cut",
                 }
                 .fail();
             }
             parents.insert(cut.writer, cut.parent);
         }
         let validator = Preparation {
-            connection,
+            views,
             parents: &parents,
         };
         let declarations = validator.check_journals(journals, relations, &mut scratch)?;
-        let base = BaseRows::load(connection, cuts, journals, &mut scratch)?;
+        let mut shapes = BTreeMap::new();
+        for ((writer, relation), _) in &declarations {
+            if !shapes.contains_key(relation) {
+                let shape = &relations[relation];
+                let bytes = shape
+                    .properties
+                    .fields()
+                    .size()
+                    .saturating_add(
+                        shape
+                            .properties
+                            .metadata()
+                            .iter()
+                            .map(|(key, value)| {
+                                key.capacity()
+                                    .saturating_add(value.capacity())
+                                    .saturating_add(4 * size_of::<(String, String)>())
+                            })
+                            .sum::<usize>(),
+                    )
+                    .saturating_add(12 * size_of::<(u64, Relation)>());
+                scratch.charge(*writer, bytes)?;
+                shapes.insert(*relation, shape.clone());
+            }
+        }
+        let base = BaseRows::load(cuts, journals, views, &mut scratch)?;
         base.check(journals, &scratch)?;
         let mut rows = Vec::new();
         for journal in journals {
@@ -195,6 +289,9 @@ impl GraphStore {
             parents,
             base,
             rows,
+            declarations,
+            shapes,
+            cuts: cuts.iter().map(|cut| (cut.writer, cut.revision)).collect(),
             _leases: scratch.into_leases(),
         })
     }
@@ -252,7 +349,6 @@ impl Preparation<'_> {
     ) -> Result<BTreeMap<(u64, u64), Endpoints>> {
         let mut writers = BTreeSet::new();
         let mut declarations = BTreeMap::new();
-        let mut checked = BTreeSet::new();
         for journal in journals {
             scratch.check(journal.writer())?;
             scratch.charge(
@@ -304,33 +400,6 @@ impl Preparation<'_> {
                     )?;
                     entry.insert(self.check_relation(journal.writer(), relation, shape)?);
                 }
-                if checked.insert(relation) {
-                    let mut statement = self
-                        .connection
-                        .prepare(&format!(
-                            "SELECT properties FROM graph_properties_{relation} WHERE false"
-                        ))
-                        .context(DatabaseSnafu {
-                            operation: "prepare Graph stored shape",
-                        })?;
-                    let schema = statement
-                        .query_arrow([])
-                        .context(DatabaseSnafu {
-                            operation: "read Graph stored shape",
-                        })?
-                        .get_schema();
-                    if schema.fields().len() != 1
-                        || !GraphStore::storage_compatible(
-                            schema.field(0).data_type(),
-                            &DataType::Struct(shape.properties.fields().clone()),
-                        )
-                    {
-                        return InvalidSnafu {
-                            field: "Graph stored shape",
-                        }
-                        .fail();
-                    }
-                }
             }
         }
         if writers.len() != self.parents.len() {
@@ -342,6 +411,42 @@ impl Preparation<'_> {
         Ok(declarations)
     }
 
+    fn check_relation(&self, writer: u64, relation: u64, shape: &Relation) -> Result<Endpoints> {
+        let view = self.views.get(&writer).ok_or_else(|| {
+            InvalidSnafu {
+                field: "Graph journal writer",
+            }
+            .build()
+        })?;
+        if !view.writers.contains(&writer) {
+            return InvalidSnafu {
+                field: "Graph journal namespace",
+            }
+            .fail();
+        }
+        match view.relations.get(&relation) {
+            Some((0, None, None)) if shape.kind == EntityKind::Node => Ok(None),
+            Some((1, Some(from @ 1..), Some(to @ 1..))) if shape.kind == EntityKind::Edge => {
+                if [from, to]
+                    .into_iter()
+                    .any(|relation| !matches!(view.relations.get(relation), Some((0, None, None))))
+                {
+                    return InvalidSnafu {
+                        field: "Graph journal endpoint declaration",
+                    }
+                    .fail();
+                }
+                Ok(Some((*from, *to, view.graph)))
+            }
+            _ => InvalidSnafu {
+                field: "Graph journal namespace",
+            }
+            .fail(),
+        }
+    }
+}
+
+impl StoredDeclarations<'_> {
     fn check_relation(&self, writer: u64, relation: u64, shape: &Relation) -> Result<Endpoints> {
         let declared: Option<(u8, Option<u64>, Option<u64>, u64)> = self
             .connection

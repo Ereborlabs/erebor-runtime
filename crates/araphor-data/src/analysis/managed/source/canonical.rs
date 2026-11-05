@@ -1,4 +1,4 @@
-use sdk::arrow_array::{BinaryArray, UInt32Array};
+use sdk::arrow_array::{Array, BinaryArray, StringArray, UInt32Array, UInt64Array};
 
 use super::*;
 use crate::AnalysisContextRefV1;
@@ -92,6 +92,88 @@ impl ManagedSourceFrame {
         Ok(contexts.into_values().collect())
     }
 
+    pub(in crate::analysis::managed) fn canonical_contexts(
+        &self,
+        calls: &BTreeSet<u64>,
+        root: &std::path::Path,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<
+        BTreeMap<
+            crate::AnalysisContextKeyV1,
+            (crate::AnalysisContextVersionV1, AnalysisContextRefV1),
+        >,
+    > {
+        let selected = self
+            .selected
+            .lock()
+            .map_err(|_| Code::Conflict.error("canonical source lock"))?;
+        let mut result = BTreeMap::<
+            crate::AnalysisContextKeyV1,
+            (crate::AnalysisContextVersionV1, AnalysisContextRefV1),
+        >::new();
+        for cells in calls
+            .iter()
+            .filter_map(|call| selected.calls.get(call))
+            .flat_map(|call| &call.cells)
+        {
+            if cells.table.as_ref() != "context_versions" {
+                continue;
+            }
+            for index in &cells.indices {
+                charge(0)?;
+                let SourceRow::Context(reference) = &cells.rows[*index] else {
+                    return Err(Code::Invalid.error("canonical context handle"));
+                };
+                let body = SourceRow::array::<BinaryArray>(&cells.batch, "body")?.value(*index);
+                let nullable = |name| -> Result<Option<u64>> {
+                    let array = cells
+                        .batch
+                        .column_by_name(name)
+                        .and_then(|array| array.as_any().downcast_ref::<UInt64Array>())
+                        .ok_or_else(|| Code::Invalid.error("canonical context validity"))?;
+                    Ok((!array.is_null(*index)).then(|| array.value(*index)))
+                };
+                let from = nullable("valid_from_utc_ns")?;
+                let until = nullable("valid_until_utc_ns")?;
+                let sensitivity =
+                    SourceRow::array::<StringArray>(&cells.batch, "sensitivity")?.value(*index);
+                let revision =
+                    SourceRow::array::<UInt64Array>(&cells.batch, "commit_revision")?.value(*index);
+                if revision != reference.commit_revision {
+                    return Err(Code::Conflict.error("canonical context revisions"));
+                }
+                if let Some((prior, prior_ref)) = result.get(&reference.key) {
+                    let prior_sensitivity: &str = prior.sensitivity.into();
+                    if prior_ref != reference
+                        || prior.body != body
+                        || prior.valid_from_utc_ns != from
+                        || prior.valid_until_utc_ns != until
+                        || prior_sensitivity != sensitivity
+                    {
+                        return Err(Code::Conflict.error("canonical context cells"));
+                    }
+                    continue;
+                }
+                charge(
+                    body.len()
+                        .saturating_mul(8)
+                        .saturating_add(reference.key.allocated_bytes().saturating_mul(4))
+                        .saturating_add(
+                            12 * size_of::<(crate::AnalysisContextVersionV1, AnalysisContextRefV1)>(
+                            ),
+                        ),
+                )?;
+                let (value, _) = AnalysisStore::decode_context_row(
+                    root,
+                    reference.key.clone(),
+                    (from, until, sensitivity.to_owned(), body.to_vec(), revision),
+                )?;
+                result.insert(reference.key.clone(), (value, reference.clone()));
+            }
+        }
+        Ok(result)
+    }
+
     pub(in crate::analysis::managed) fn canonical_events(
         &self,
         requested: &BTreeSet<crate::DiscoveryRecordIdV1>,
@@ -103,7 +185,10 @@ impl ManagedSourceFrame {
             .selected
             .lock()
             .map_err(|_| Code::Conflict.error("canonical source lock"))?;
-        let mut result = BTreeMap::<crate::DiscoveryRecordIdV1, (crate::DiscoveryRecordV1, StorePositionV1)>::new();
+        let mut result = BTreeMap::<
+            crate::DiscoveryRecordIdV1,
+            (crate::DiscoveryRecordV1, StorePositionV1),
+        >::new();
         let keys = requested
             .iter()
             .map(|id| (&id.stream, id.durable_cursor))
@@ -143,10 +228,19 @@ impl ManagedSourceFrame {
                     }
                     continue;
                 }
-                charge(bytes.len().checked_mul(8)
-                    .and_then(|bytes| bytes.checked_add(8 * std::mem::size_of::<crate::DiscoveryRecordV1>()
-                        + 4 * std::mem::size_of::<araphor_analysis_types::Observation>()))
-                    .ok_or_else(|| Code::Limit.error("canonical Graph event memory"))?)?;
+                charge(
+                    bytes
+                        .len()
+                        .checked_mul(8)
+                        .and_then(|bytes| {
+                            bytes.checked_add(
+                                8 * std::mem::size_of::<crate::DiscoveryRecordV1>()
+                                    + 4 * std::mem::size_of::<araphor_analysis_types::Observation>(
+                                    ),
+                            )
+                        })
+                        .ok_or_else(|| Code::Limit.error("canonical Graph event memory"))?,
+                )?;
                 let record = crate::DiscoveryRecordV1::try_from((id.clone(), bytes))?;
                 if let Some((prior, cut)) = result.insert(id, (record.clone(), *position)) {
                     if prior != record || cut != *position {
@@ -162,21 +256,33 @@ impl ManagedSourceFrame {
     }
 
     pub(in crate::analysis::managed) fn charge_contexts(
-        &self, calls: &BTreeSet<u64>, charge: &mut dyn FnMut(usize) -> Result<()>,
+        &self,
+        calls: &BTreeSet<u64>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<()> {
-        let selected = self.selected.lock().map_err(|_| Code::Conflict.error("canonical source lock"))?;
-        for cells in calls.iter().filter_map(|call| selected.calls.get(call)).flat_map(|call| &call.cells) {
+        let selected = self
+            .selected
+            .lock()
+            .map_err(|_| Code::Conflict.error("canonical source lock"))?;
+        for cells in calls
+            .iter()
+            .filter_map(|call| selected.calls.get(call))
+            .flat_map(|call| &call.cells)
+        {
             for index in &cells.indices {
                 charge(0)?;
                 if let SourceRow::Context(reference) = &cells.rows[*index] {
-                    charge(reference.key.allocated_bytes()
-                        .checked_add(4 * std::mem::size_of::<AnalysisContextRefV1>())
-                        .and_then(|bytes| bytes.checked_mul(4))
-                        .ok_or_else(|| Code::Limit.error("canonical Graph context memory"))?)?;
+                    charge(
+                        reference
+                            .key
+                            .allocated_bytes()
+                            .checked_add(4 * std::mem::size_of::<AnalysisContextRefV1>())
+                            .and_then(|bytes| bytes.checked_mul(4))
+                            .ok_or_else(|| Code::Limit.error("canonical Graph context memory"))?,
+                    )?;
                 }
             }
         }
         Ok(())
     }
-
 }

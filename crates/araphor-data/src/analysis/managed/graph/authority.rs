@@ -19,9 +19,16 @@ pub(super) struct GraphAuthority {
     authority: Vec<u8>,
     heads: BTreeSet<u64>,
     origins: BTreeMap<ReadOrigin, OriginAuthority>,
-    pub(super) view: araphor_graph::GraphReadView,
+    pub(super) prepared: GraphPreparation,
     leases: Vec<Arc<dyn Any + Send + Sync>>,
     _memory: Box<dyn Any + Send + Sync>,
+}
+
+pub(super) struct GraphPreparation {
+    pub(super) view: araphor_graph::GraphReadView,
+    pub(super) package: araphor_analysis_sdk::Package,
+    pub(super) contexts: Vec<(crate::AnalysisContextVersionV1, crate::AnalysisContextRefV1)>,
+    _leases: Vec<Arc<dyn Any + Send + Sync>>,
 }
 
 struct OriginAuthority {
@@ -32,6 +39,7 @@ struct OriginAuthority {
 impl GraphAuthority {
     pub(super) fn bind(
         call: &ManagedGraphCall,
+        package: araphor_analysis_sdk::Package,
         store: &AnalysisStore,
         reader: &Connection,
         control: &AnalysisReadControl,
@@ -106,7 +114,39 @@ impl GraphAuthority {
         }
         let _scratch = budget.reserve(call.relations.len().saturating_mul(size_of::<u64>()))?;
         let relations = call.relations.values().copied().collect::<Vec<_>>();
-        let mut leases = Vec::new();
+        let mut leases: Vec<Arc<dyn Any + Send + Sync>> =
+            vec![Arc::from(budget.reserve(package.allocated_bytes())?)];
+        let mut contexts = Vec::new();
+        if call.attempt.5.is_none() {
+            let mut verified = Default::default();
+            for reference in &capture.contexts {
+                let bytes: usize = reader.query_row(
+                    "SELECT octet_length(body) FROM context_versions WHERE version_key=? AND commit_revision=?",
+                    params![crate::analysis::context::version_key(&reference.key)?, reference.commit_revision],
+                    |row| row.get(0),
+                ).context(AnalysisDatabaseSnafu { operation: "bound captured Graph context" })?;
+                leases.push(Arc::from(
+                    budget.reserve(
+                        bytes
+                            .saturating_mul(8)
+                            .saturating_add(reference.key.allocated_bytes().saturating_mul(4))
+                            .saturating_add(
+                                12 * size_of::<(
+                                    crate::AnalysisContextVersionV1,
+                                    crate::AnalysisContextRefV1,
+                                )>(),
+                            ),
+                    )?,
+                ));
+                let (value, revision) = store
+                    .read_context_verified_from(reader, &store.root, &reference.key, &mut verified)?
+                    .ok_or_else(|| Code::Missing.error("captured Graph context"))?;
+                if revision != reference.commit_revision {
+                    return Err(Code::Conflict.error("captured Graph context revision"));
+                }
+                contexts.push((value, reference.clone()));
+            }
+        }
         let view = store.graph_engine.read_view(
             reader,
             call.graph,
@@ -127,8 +167,13 @@ impl GraphAuthority {
             authority,
             heads,
             origins: BTreeMap::new(),
-            leases,
-            view,
+            leases: Vec::new(),
+            prepared: GraphPreparation {
+                view,
+                package,
+                contexts,
+                _leases: leases,
+            },
             _memory: memory,
         })
     }
@@ -279,6 +324,10 @@ impl GraphAuthority {
             "Graph invocation authority validation completed"
         );
         Ok(())
+    }
+
+    pub(super) fn into_preparation(self) -> GraphPreparation {
+        self.prepared
     }
 
     pub(super) fn check_snapshot(

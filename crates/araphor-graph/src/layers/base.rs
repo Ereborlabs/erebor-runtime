@@ -1,14 +1,15 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-use duckdb::{params, Connection};
+use duckdb::params;
 use snafu::ResultExt as _;
 
-use super::scratch::Scratch;
 use super::WriterCut;
+use super::scratch::Scratch;
 use crate::error::{DatabaseSnafu, InvalidSnafu};
-use crate::{Journal, PendingGraph, Result};
+use crate::{GraphReadView, Journal, Member, PendingGraph, Result};
 
-type Identity = (u64, u64, Vec<u8>, Vec<u8>);
+type Identity = (u64, u64, Arc<[u8]>, Arc<[u8]>);
 type Entry = (Identity, (u64, u64));
 
 pub(super) struct BaseRows {
@@ -17,241 +18,146 @@ pub(super) struct BaseRows {
 
 impl BaseRows {
     pub(super) fn closures(&self) -> Vec<(u64, u64, u64, Vec<u8>, u64)> {
-        self.rows.iter().map(|((writer,relation,_,key),(owner,revision))|
-            (*writer,*owner,*relation,key.clone(),*revision)).collect()
+        self.rows
+            .iter()
+            .map(|((writer, relation, _, key), (owner, revision))| {
+                (*writer, *owner, *relation, key.to_vec(), *revision)
+            })
+            .collect()
     }
-    const BASE: &'static str = "FROM graph_members m JOIN graph_delta_heads h USING(writer_id)
-        LEFT JOIN graph_writer_owners o
-        ON o.writer_id=m.writer_id AND o.owner_ref=m.owner_ref
-        WHERE m.valid_from<=h.cut_revision AND (m.valid_to IS NULL OR m.valid_to>h.cut_revision)
-        AND (EXISTS(
-            SELECT 1 FROM graph_delta_keys k WHERE k.writer_id=m.writer_id
-                AND k.relation_id=m.relation_id AND k.owner_key=o.owner_key AND k.entity_key=m.entity_key)
-            OR EXISTS(SELECT 1 FROM graph_delta_clear c WHERE c.writer_id=m.writer_id
-                AND (c.owner_key IS NULL OR c.owner_key=o.owner_key)))";
 
     pub(super) fn load(
-        connection: &Connection,
         cuts: &[WriterCut],
         journals: &[&Journal],
+        views: &BTreeMap<u64, &GraphReadView>,
         scratch: &mut Scratch<'_>,
     ) -> Result<Self> {
-        connection.execute_batch(
-            "CREATE TEMP TABLE graph_delta_heads(writer_id UBIGINT PRIMARY KEY,cut_revision UBIGINT);
-             CREATE TEMP TABLE graph_delta_keys (writer_id UBIGINT,relation_id UBIGINT,owner_key BLOB,entity_key BLOB);
-             CREATE TEMP TABLE graph_delta_clear (writer_id UBIGINT,owner_key BLOB)"
-        ).context(DatabaseSnafu { operation: "create Graph base requests" })?;
-        let result = Self::read(connection, cuts, journals, scratch);
-        let cleanup = connection
-            .execute_batch("DROP TABLE graph_delta_keys; DROP TABLE graph_delta_clear; DROP TABLE graph_delta_heads")
-            .context(DatabaseSnafu {
-                operation: "release Graph base requests",
-            });
-        let result = result?;
-        cleanup?;
-        Ok(result)
-    }
-
-    fn read(
-        connection: &Connection,
-        cuts: &[WriterCut],
-        journals: &[&Journal],
-        scratch: &mut Scratch<'_>,
-    ) -> Result<Self> {
-        {
-            let mut heads = connection
-                .appender("graph_delta_heads")
-                .context(DatabaseSnafu {
-                    operation: "open Graph base cuts",
-                })?;
-            for cut in cuts {
-                scratch.check(cut.writer)?;
-                heads
-                    .append_row(params![cut.writer, cut.revision])
-                    .context(DatabaseSnafu {
-                        operation: "append Graph base cut",
-                    })?;
-            }
-            heads.flush().context(DatabaseSnafu {
-                operation: "flush Graph base cuts",
-            })?;
-        }
-        {
-            let mut keys = connection
-                .appender("graph_delta_keys")
-                .context(DatabaseSnafu {
-                    operation: "open Graph base keys",
-                })?;
-            for journal in journals {
-                for (relation, owner, key, _) in journal.touched_keys() {
-                    scratch.check(journal.writer())?;
-                    keys.append_row(params![journal.writer(), relation, owner, key])
-                        .context(DatabaseSnafu {
-                            operation: "append Graph base key",
-                        })?;
-                }
-            }
-            keys.flush().context(DatabaseSnafu {
-                operation: "flush Graph base keys",
-            })?;
-        }
-        {
-            let mut clears = connection
-                .appender("graph_delta_clear")
-                .context(DatabaseSnafu {
-                    operation: "open Graph base clears",
-                })?;
-            for journal in journals {
-                for owner in journal.clear_owners() {
-                    scratch.check(journal.writer())?;
-                    clears
-                        .append_row(params![journal.writer(), owner])
-                        .context(DatabaseSnafu {
-                            operation: "append Graph base clear",
-                        })?;
-                }
-            }
-            clears.flush().context(DatabaseSnafu {
-                operation: "flush Graph base clears",
-            })?;
-        }
-        let mut bounds = BTreeMap::<u64, (usize, usize)>::new();
-        let mut count = 0usize;
-        {
-            let mut statement = connection.prepare(&format!(
-                "SELECT m.writer_id,count(*),CAST(coalesce(sum(octet_length(o.owner_key)+octet_length(m.entity_key)),0) AS UBIGINT)
-                 {} GROUP BY m.writer_id", Self::BASE
-            )).context(DatabaseSnafu { operation: "prepare Graph base bounds" })?;
-            let mut rows = statement.query([]).context(DatabaseSnafu {
-                operation: "read Graph base bounds",
-            })?;
-            while let Some(row) = rows.next().context(DatabaseSnafu {
-                operation: "advance Graph base bounds",
-            })? {
-                let (writer, rows, bytes): (u64, usize, usize) =
-                    (|| -> duckdb::Result<_> { Ok((row.get(0)?, row.get(1)?, row.get(2)?)) })()
-                        .context(DatabaseSnafu {
-                            operation: "decode Graph base bounds",
-                        })?;
-                let allocation = rows
-                    .checked_mul(std::mem::size_of::<Entry>() + 4 * std::mem::size_of::<usize>())
-                    .and_then(|size| size.checked_add(bytes))
-                    .and_then(|size| {
-                        size.checked_add(12 * std::mem::size_of::<(u64, (usize, usize))>())
-                    })
-                    .ok_or_else(|| {
-                        InvalidSnafu {
-                            field: "Graph base memory",
-                        }
-                        .build()
-                    })?;
-                scratch.charge(writer, allocation)?;
-                count = count.checked_add(rows).ok_or_else(|| {
-                    InvalidSnafu {
-                        field: "Graph base row count",
-                    }
-                    .build()
-                })?;
-                if bounds.insert(writer, (rows, bytes)).is_some() {
-                    return InvalidSnafu {
-                        field: "Graph base writer bounds",
-                    }
-                    .fail();
-                }
-            }
-        }
-        let mut base = Vec::new();
-        base.try_reserve_exact(count).map_err(|_| {
-            InvalidSnafu {
-                field: "Graph base allocation",
-            }
-            .build()
-        })?;
-        let mut statement = connection
-            .prepare(&format!(
-            "SELECT m.writer_id,m.relation_id,o.owner_key,m.entity_key,m.owner_ref,m.valid_from,
-                octet_length(o.owner_key),octet_length(m.entity_key) {}", Self::BASE
-        ))
-            .context(DatabaseSnafu {
-                operation: "prepare touched Graph base",
-            })?;
-        let mut rows = statement.query([]).context(DatabaseSnafu {
-            operation: "read touched Graph base",
-        })?;
-        while let Some(row) = rows.next().context(DatabaseSnafu {
-            operation: "advance touched Graph base",
-        })? {
-            let (writer, owner_bytes, key_bytes): (u64, usize, usize) =
-                (|| -> duckdb::Result<_> { Ok((row.get(0)?, row.get(6)?, row.get(7)?)) })()
-                    .context(DatabaseSnafu {
-                        operation: "read touched Graph size",
-                    })?;
-            scratch.check(writer)?;
-            let remaining = bounds.get_mut(&writer).ok_or_else(|| {
-                InvalidSnafu {
-                    field: "Graph base writer bounds",
-                }
-                .build()
-            })?;
-            remaining.0 = remaining.0.checked_sub(1).ok_or_else(|| {
-                InvalidSnafu {
-                    field: "Graph base row bounds",
-                }
-                .build()
-            })?;
-            remaining.1 = owner_bytes
-                .checked_add(key_bytes)
-                .and_then(|size| remaining.1.checked_sub(size))
+        let scratch = std::cell::RefCell::new(scratch);
+        let mut rows = BTreeMap::new();
+        for journal in journals {
+            let writer = journal.writer();
+            let cut = cuts
+                .iter()
+                .find(|cut| cut.writer == writer)
                 .ok_or_else(|| {
                     InvalidSnafu {
-                        field: "Graph base byte bounds",
+                        field: "Graph base cut",
                     }
                     .build()
                 })?;
-            let identity: Identity =
-                (|| -> duckdb::Result<_> { Ok((writer, row.get(1)?, row.get(2)?, row.get(3)?)) })()
-                    .context(DatabaseSnafu {
-                        operation: "decode touched Graph identity",
-                    })?;
-            let (owner, revision): (u64, u64) =
-                (|| -> duckdb::Result<_> { Ok((row.get(4)?, row.get(5)?)) })().context(
-                    DatabaseSnafu {
-                        operation: "decode touched Graph base",
+            let view = views.get(&writer).ok_or_else(|| {
+                InvalidSnafu {
+                    field: "Graph base view",
+                }
+                .build()
+            })?;
+            let count = journal.touched_keys().count();
+            scratch.borrow_mut().charge(
+                writer,
+                count.saturating_mul(12 * size_of::<(u64, &[u8], &[u8])>()),
+            )?;
+            let mut wanted = BTreeMap::<u64, BTreeMap<&[u8], BTreeSet<&[u8]>>>::new();
+            for (relation, owner, key, _) in journal.touched_keys() {
+                scratch.borrow().check(writer)?;
+                wanted
+                    .entry(relation)
+                    .or_default()
+                    .entry(key)
+                    .or_default()
+                    .insert(owner);
+            }
+            for (relation, wanted) in wanted {
+                scratch.borrow_mut().charge(
+                    writer,
+                    wanted
+                        .keys()
+                        .map(|key| key.len().saturating_add(size_of::<Vec<u8>>()))
+                        .sum(),
+                )?;
+                let keys = wanted.keys().map(|key| key.to_vec()).collect::<Vec<_>>();
+                view.visit_members(
+                    relation,
+                    Some(&keys),
+                    || scratch.borrow().check(writer),
+                    |member| {
+                        if member.writer == writer
+                            && wanted
+                                .get(member.key.as_ref())
+                                .is_some_and(|owners| owners.contains(member.owner_key.as_ref()))
+                        {
+                            Self::insert(
+                                &mut rows,
+                                member,
+                                cut.revision,
+                                &mut scratch.borrow_mut(),
+                            )?;
+                        }
+                        Ok(())
                     },
                 )?;
-            if writer == 0
-                || identity.1 == 0
-                || owner == 0
-                || revision == 0
-                || cuts
-                    .iter()
-                    .find(|cut| cut.writer == writer)
-                    .is_none_or(|cut| revision > cut.revision)
-            {
-                return InvalidSnafu {
-                    field: "Graph open base identity",
-                }
-                .fail();
             }
-            base.push((identity, (owner, revision)));
+            let count = journal.clear_owners().count();
+            if count != 0 {
+                scratch.borrow_mut().charge(
+                    writer,
+                    count.saturating_mul(12 * size_of::<Option<&[u8]>>()),
+                )?;
+                let mut clear = journal.clear_owners().collect::<BTreeSet<_>>();
+                if clear.contains(&None) {
+                    clear = BTreeSet::from([None]);
+                }
+                for owner in clear {
+                    view.visit_writer(
+                        writer,
+                        owner,
+                        || scratch.borrow().check(writer),
+                        |member| {
+                            Self::insert(&mut rows, member, cut.revision, &mut scratch.borrow_mut())
+                        },
+                    )?;
+                }
+            }
         }
-        if base.len() != count || bounds.values().any(|remaining| *remaining != (0, 0)) {
+        Ok(Self {
+            rows: rows.into_iter().collect(),
+        })
+    }
+
+    fn insert(
+        rows: &mut BTreeMap<Identity, (u64, u64)>,
+        member: &Member,
+        revision: u64,
+        scratch: &mut Scratch<'_>,
+    ) -> Result<()> {
+        if member.writer == 0
+            || member.relation == 0
+            || member.owner == 0
+            || member.revision == 0
+            || member.revision > revision
+        {
             return InvalidSnafu {
-                field: "Graph base bounds",
+                field: "Graph open base identity",
             }
             .fail();
         }
-        base.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-        for pair in base.windows(2) {
-            scratch.check(pair[0].0 .0)?;
-            if pair[0].0 == pair[1].0 {
+        let identity = (
+            member.writer,
+            member.relation,
+            Arc::clone(&member.owner_key),
+            Arc::clone(&member.key),
+        );
+        if let Some(prior) = rows.get(&identity) {
+            if *prior != (member.owner, member.revision) {
                 return InvalidSnafu {
                     field: "Graph duplicate open identity",
                 }
                 .fail();
             }
+            return Ok(());
         }
-        Ok(Self { rows: base })
+        scratch.charge(member.writer, 12 * std::mem::size_of::<Entry>())?;
+        rows.insert(identity, (member.owner, member.revision));
+        Ok(())
     }
 
     pub(super) fn check(&self, journals: &[&Journal], scratch: &Scratch<'_>) -> Result<()> {
@@ -259,23 +165,13 @@ impl BaseRows {
             for (relation, owner, key, expected) in journal.touched_keys() {
                 scratch.check(journal.writer())?;
                 if let Some(expected) = expected {
-                    let present = self
-                        .rows
-                        .binary_search_by(|entry| {
-                            (
-                                entry.0 .0,
-                                entry.0 .1,
-                                entry.0 .2.as_slice(),
-                                entry.0 .3.as_slice(),
-                            )
-                                .cmp(&(
-                                    journal.writer(),
-                                    relation,
-                                    owner,
-                                    key,
-                                ))
-                        })
-                        .is_ok();
+                    let present =
+                        self.rows
+                            .binary_search_by(|entry| {
+                                (entry.0.0, entry.0.1, entry.0.2.as_ref(), entry.0.3.as_ref())
+                                    .cmp(&(journal.writer(), relation, owner, key))
+                            })
+                            .is_ok();
                     if present != expected {
                         return InvalidSnafu {
                             field: "Graph journal base state",
@@ -329,7 +225,7 @@ impl BaseRows {
                     })?;
             for ((writer, relation, _, key), (owner, revision)) in self.rows {
                 scratch.check(writer)?;
-                rows.append_row(params![writer, owner, relation, key, revision])
+                rows.append_row(params![writer, owner, relation, key.as_ref(), revision])
                     .context(DatabaseSnafu {
                         operation: "append Graph base close",
                     })?;

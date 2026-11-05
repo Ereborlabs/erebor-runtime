@@ -1,6 +1,107 @@
 # Native execution performance handoff
 
+## Captured Graph preparation replacement, 2026-11-05
+
+Data now prepares frozen Graph journals from their charged invocation bindings.
+The binding keeps the actual admitted package, native heads, declarations,
+and fallback context values through Data commit. Freeze closes callbacks and
+drops mutable authority scratch. This supersedes release of the view at freeze
+in the preceding qualified source.
+
+Native member coordinates supply touched and cleared base rows and exact read
+aliases. Touched keys are grouped across owners. Sparse clears use owner
+postings. Clear-all includes a writer's old relations, including relations
+absent from its current declaration. Query retains canonical context body,
+sensitivity, and nullable validity before the package projection. Equal
+context cells are compared before allocation. Data merges exact raw, derived,
+and historical references for each call's ancestry. Custom contexts still
+set the disclosure floor.
+
+Only the consumed Work ledger identifies historical origins. A failed SDK
+read does not create a consumed origin. Data checks the original grants,
+producer, witness pins, and actual origins in its final writer. Fact index
+eligibility and coordinates are checked there before one domain validation.
+An unindexed context is omitted as before. The generic Graph application
+checks the parent, parent revision against the captured cut, declarations,
+and Arrow storage shape once. Source, lifecycle, state, retention, and effect
+checks keep their existing owners. Packages cannot commit the transaction.
+
+The old prewriter Graph base and domain context temporary tables are removed.
+Generic Graph keeps membership and adjacency without package or finding rules.
+No storage engine, archive, mutable Data cache, or DataFusion operator is added.
+Existing durable Graph writes and the edge consistency query remain.
+
+The final focused build passes in 282.721607 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass.
+
+| Pair | First executable | Baseline test, seconds | Captured preparation test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 27.50 | 27.71 | -0.2129 |
+| 2 | Captured preparation | 29.50 | 28.85 | +0.6447 |
+| 3 | Baseline | 29.32 | 28.62 | +0.6981 |
+| 4 | Captured preparation | 29.54 | 28.80 | +0.7458 |
+| 5 | Baseline | 29.65 | 29.09 | +0.5591 |
+
+Whole-process time is lower in four pairs. Its paired median saving is
+0.644699 seconds, or 2.18 percent. The range is -0.77 to 2.52 percent.
+The first pair is slower. This is not a uniform whole-test improvement.
+
+| Notification | Baseline creation median, seconds | Captured preparation creation median, seconds | Paired median saving, seconds |
+| --- | ---: | ---: | ---: |
+| Initial | 2.202145 | 2.073341 | 0.137117 |
+| First warm | 2.733755 | 2.619736 | 0.114020 |
+| Second warm | 3.011460 | 2.979604 | 0.031856 |
+
+Initial and first warm creation are lower in every pair. Initial paired
+savings range from 0.070880 to 0.165904 seconds. First warm savings range
+from 0.031951 to 0.339435 seconds. Second warm results are mixed: one pair
+is 0.098617 seconds slower, one is only 0.004786 seconds lower, and the
+largest saving is 0.411863 seconds. A separate second warm creation gain is
+not established. Warm means a later incident in the same running service,
+after 16,384 background records. Package compilation is complete before the
+first input and is outside every creation interval. The boundary starts at
+trusted Control input, not physical Node arrival, and ends at first durable
+state creation before delivery.
+
+All 25 matched complete managed commits are lower. The final warm commit
+is lower in every pair. Its paired savings are 0.102137, 0.137819, 0.161696, 0.205361, and 0.180326 seconds.
+The paired median saving is 0.161696 seconds, or 13.51 percent. Complete
+commit medians are 1.196774 and 1.042885 seconds. Prewriter Graph preparation
+medians are 0.334576 and 0.013704 seconds, while transaction work medians
+increase from 0.672199 to 0.839080 seconds. Origin, domain, and declaration
+checks moved into the writer. The preparation reduction is not counted as
+a separate total saving. Durable COMMIT medians remain about 0.057 seconds.
+Publication to second warm creation has medians of 0.786105 and 0.815520
+seconds. That path has no measured gain from this replacement.
+
+Every run retains 18 collector inputs, three first durable notifications,
+16,402 public journal records, five managed publications, twelve Graph append
+batches, ten fresh freeze authority checks, and three source-change restart
+mentions. Every pair matches all apply and append tuples, all five publication
+cut/revision and projection result identities, and all three creation cut/result
+pairs. Bulk retains 64 pages, 16,384 rows, 60 reused pages, 262,144 physical
+frame rows, and 53,401,792 body bytes. Baseline capture counts are 25, 26, 25,
+26, and 26. Candidate counts are 24, 25, 24, 26, and 25.
+
+Result: **Done** for captured preparation and this bounded comparison.
+Creation below 100 milliseconds and the 100-fold target remain **Not done**.
+The exact incident test is the only runtime qualification. Context aliases,
+custom or unindexed contexts, generic direct callers, concurrent revocation,
+restore, rollback, and finite budgets have source review only. Full CI and
+other tests were not run. Assertions, workload, and timeouts are unchanged.
+No source edit, build, debugger, or other test runs during the comparison.
+
+Proof: `/tmp/araphor-build-captured-preparation-20261105-c.log` and
+`/tmp/araphor-captured-preparation-pairs-20261105/{settings,results,summary,audit}.json`,
+with ten run logs. Baseline source: `4ad5899e3`. The retained executables are
+`target/araphor-notice-comparison-20261105/invocation-view` and
+`captured-preparation`. The completed older `native-metadata` executable was
+removed for space. Its logs and recorded evidence remain.
+
 ## Invocation Graph view result, 2026-11-05
+
+This section records the preceding qualified source. The captured preparation
+result above changes view lifetime and the placement of final writer checks.
 
 The package invocation now binds its actual call, authority, native Graph
 writer heads, and relation declarations in one existing Data snapshot. The

@@ -8,12 +8,12 @@ use std::sync::Arc;
 
 use arrow_array::{Array, BinaryArray, RecordBatch, StructArray, UInt64Array};
 use arrow_schema::DataType;
-use duckdb::{params, Connection, OptionalExt as _};
+use duckdb::{Connection, OptionalExt as _, params};
 use snafu::ResultExt as _;
 
 use crate::error::{ConflictSnafu, DatabaseSnafu, InvalidSnafu};
 use crate::{
-    transaction::Commands, EntityKind, GraphStore, Journal, PendingGraph, Relation, Result, Staged,
+    EntityKind, GraphStore, Journal, PendingGraph, Relation, Result, Staged, transaction::Commands,
 };
 
 use base::BaseRows;
@@ -33,30 +33,7 @@ impl PendingGraph<'_> {
     ) -> Result<(BTreeMap<u64, (u64, u64)>, crate::PendingLayer)> {
         let started = std::time::Instant::now();
         self.check_heads()?;
-        if prepared.parents.len() != self.heads.len() {
-            return InvalidSnafu {
-                field: "Graph prepared writers",
-            }
-            .fail();
-        }
-        for (writer, parent) in &prepared.parents {
-            let Some(layer) = self.heads.get(writer) else {
-                return InvalidSnafu {
-                    field: "Graph prepared writer",
-                }
-                .fail();
-            };
-            let stored: Option<u64> = self.connection.query_row(
-                "SELECT parent_id FROM graph_layers WHERE writer_id=? AND layer_id=? AND revision=?",
-                params![writer,layer,self.revision],|row| row.get(0),
-            ).context(DatabaseSnafu { operation: "check prepared Graph parent" })?;
-            if stored != *parent {
-                return ConflictSnafu {
-                    resource: "prepared writer parent",
-                }
-                .fail();
-            }
-        }
+        prepared.check_current(&self)?;
         let heads_at = std::time::Instant::now();
         let mut scratch = Scratch::new(&reserve);
         let closed = prepared.base.closures();

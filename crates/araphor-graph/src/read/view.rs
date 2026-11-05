@@ -1,7 +1,10 @@
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct GraphReadView {
+    pub(crate) graph: u64,
+    pub(crate) revision: u64,
+    pub(crate) writers: BTreeSet<u64>,
     pub(crate) store: GraphStore,
     pub(crate) heads: BTreeMap<u64, u64>,
     pub(crate) relations: BTreeMap<u64, (u8, Option<u64>, Option<u64>)>,
@@ -29,17 +32,18 @@ impl GraphStore {
                 .saturating_add(relations.len().saturating_mul(512)),
         )?;
         let mut heads = BTreeMap::new();
+        let mut writers = BTreeSet::new();
         let mut query = connection
             .prepare_cached(
                 "SELECT writer.writer_id,max(layer.revision) FROM graph_writers writer
-             JOIN graph_layers layer USING(writer_id) WHERE writer.graph_id=? AND layer.revision<=?
-             GROUP BY writer.writer_id",
+             LEFT JOIN graph_layers layer ON layer.writer_id=writer.writer_id AND layer.revision<=?
+             WHERE writer.graph_id=? GROUP BY writer.writer_id",
             )
             .context(DatabaseSnafu {
                 operation: "prepare Graph view heads",
             })?;
         let mut rows = query
-            .query(params![graph, revision])
+            .query(params![revision, graph])
             .context(DatabaseSnafu {
                 operation: "read Graph view heads",
             })?;
@@ -48,11 +52,16 @@ impl GraphStore {
         })? {
             check()?;
             reserve(12 * std::mem::size_of::<(u64, u64)>())?;
-            let (writer, head) = (|| -> duckdb::Result<_> { Ok((row.get(0)?, row.get(1)?)) })()
-                .context(DatabaseSnafu {
-                    operation: "decode Graph view head",
-                })?;
-            heads.insert(writer, head);
+            let (writer, head) = (|| -> duckdb::Result<_> {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, Option<u64>>(1)?))
+            })()
+            .context(DatabaseSnafu {
+                operation: "decode Graph view head",
+            })?;
+            writers.insert(writer);
+            if let Some(head) = head {
+                heads.insert(writer, head);
+            }
         }
         drop(rows);
         drop(query);
@@ -90,6 +99,9 @@ impl GraphStore {
             }
         }
         Ok(GraphReadView {
+            graph,
+            revision,
+            writers,
             store: GraphStore {
                 shape: Arc::clone(&self.shape),
                 committed: Arc::clone(&self.committed),
@@ -97,5 +109,38 @@ impl GraphStore {
             heads,
             relations: declared,
         })
+    }
+}
+
+impl GraphReadView {
+    pub fn members(
+        &self,
+        relation: u64,
+        keys: Option<&[Vec<u8>]>,
+        check: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<Arc<crate::Member>>> {
+        self.store.members(relation, &self.heads, keys, check)
+    }
+
+    pub(crate) fn visit_members(
+        &self,
+        relation: u64,
+        keys: Option<&[Vec<u8>]>,
+        check: impl FnMut() -> Result<()>,
+        visit: impl FnMut(&Arc<crate::Member>) -> Result<()>,
+    ) -> Result<()> {
+        self.store
+            .visit_members(relation, &self.heads, keys, check, visit)
+    }
+
+    pub(crate) fn visit_writer(
+        &self,
+        writer: u64,
+        owner: Option<&[u8]>,
+        check: impl FnMut() -> Result<()>,
+        visit: impl FnMut(&Arc<crate::Member>) -> Result<()>,
+    ) -> Result<()> {
+        self.store
+            .visit_writer(writer, owner, &self.heads, check, visit)
     }
 }

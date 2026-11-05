@@ -85,7 +85,7 @@ impl ManagedGraphTransaction {
             authority.check_snapshot(&self.call, store, control)?;
             let mut batches = Vec::new();
             let mut origins = BTreeMap::new();
-            authority.view.read(
+            authority.prepared.view.read(
                 relation,
                 &shape,
                 read,

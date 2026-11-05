@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use araphor_analysis_types::{values as algorithm, DomainRelations, FindingMember};
+use araphor_analysis_types::{DomainRelations, FindingMember, values as algorithm};
 use araphor_graph::Staged;
-use duckdb::{params, Connection};
+use duckdb::Connection;
 use sdk::arrow_array::{Array, BinaryArray, StructArray, UInt8Array};
 use snafu::ResultExt as _;
 
@@ -16,6 +16,8 @@ use crate::{
 };
 
 mod basis;
+mod contexts;
+pub(super) use contexts::ContextInputs;
 
 #[derive(Default)]
 struct DomainCommands {
@@ -217,14 +219,12 @@ impl DomainScratch<'_> {
 
 impl DomainCommands {
     fn read(
-        engine: &araphor_graph::GraphStore,
-        connection: &Connection,
         journal: &ManagedGraphJournal,
         package: &sdk::Package,
         model: &sdk::Model,
         scratch: &mut DomainScratch<'_>,
     ) -> Result<Self> {
-        let basis = basis::Basis::read(engine, connection, journal, scratch)?;
+        let basis = basis::Basis::read(journal, scratch)?;
         let mut commands = Self::default();
         for staged in journal.work.journal.batches() {
             scratch.charge(0)?;
@@ -297,11 +297,13 @@ impl DomainCommands {
                     } else {
                         FindingMember::port().name
                     },
-                    batches: vec![sdk::RecordBatch::try_new(
-                        Arc::new(declaration.properties.clone()),
-                        values.columns().to_vec(),
-                    )
-                    .context(crate::PackageArrowSnafu)?],
+                    batches: vec![
+                        sdk::RecordBatch::try_new(
+                            Arc::new(declaration.properties.clone()),
+                            values.columns().to_vec(),
+                        )
+                        .context(crate::PackageArrowSnafu)?,
+                    ],
                 };
                 if subjects {
                     let decoded = algorithm::SubjectChange::decode(&data)
@@ -537,11 +539,45 @@ impl DomainCommands {
     }
 }
 
+pub(super) struct DomainPreparation {
+    commands: DomainCommands,
+    contexts: ContextInputs,
+    bytes: usize,
+    leases: Vec<Box<dyn std::any::Any + Send + Sync>>,
+}
+
 impl AnalysisStore {
+    pub(super) fn prepare_domain_journal(
+        &self,
+        journal: &ManagedGraphJournal,
+        package: &sdk::Package,
+        model: &sdk::Model,
+        contexts: ContextInputs,
+        memory: &mut super::super::budget::PreparedMemory<'_>,
+    ) -> Result<Option<DomainPreparation>> {
+        let mut scratch = DomainScratch {
+            budget: journal.budget.as_ref(),
+            memory,
+            bytes: 0,
+            leases: Vec::new(),
+        };
+        let commands = DomainCommands::read(journal, package, model, &mut scratch)?;
+        if commands.records.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(DomainPreparation {
+            commands,
+            contexts,
+            bytes: scratch.bytes,
+            leases: scratch.leases,
+        }))
+    }
+
     pub(super) fn check_domain_journal(
         &self,
         connection: &Connection,
         journal: &ManagedGraphJournal,
+        prepared: DomainPreparation,
         package: &sdk::Package,
         model: &sdk::Model,
         derived: &super::super::source::import::PreparedDerived,
@@ -551,13 +587,11 @@ impl AnalysisStore {
         let mut scratch = DomainScratch {
             budget: journal.budget.as_ref(),
             memory,
-            bytes: 0,
-            leases: Vec::new(),
+            bytes: prepared.bytes,
+            leases: prepared.leases,
         };
-        let commands = DomainCommands::read(&self.graph_engine, connection, journal, package, model, &mut scratch)?;
-        if commands.records.is_empty() {
-            return Ok(None);
-        }
+        let commands = prepared.commands;
+        let contexts = prepared.contexts;
         let frame = journal
             .call
             .attempt
@@ -569,10 +603,6 @@ impl AnalysisStore {
             scratch.charge(bytes)
         })?;
         frame.charge_contexts(&calls, &mut |bytes| scratch.charge(bytes))?;
-        let contexts = Self::join_contexts(
-            &frame.call_contexts(&calls)?,
-            &derived.contexts(journal.call.call),
-        )?;
         let handles = frame.call_derived(&calls)?;
         let known = handles
             .iter()
@@ -580,16 +610,11 @@ impl AnalysisStore {
             .map(|context| &context.key)
             .collect::<BTreeSet<_>>();
         let saved = contexts
-            .into_iter()
-            .filter(|reference| !known.contains(&reference.key))
+            .values
+            .values()
+            .filter(|(value, _)| !known.contains(&value.key))
             .collect::<Vec<_>>();
-        let mut facts = self.domain_facts(
-            connection,
-            &commands.records,
-            &saved,
-            &BTreeSet::new(),
-            &mut scratch,
-        )?;
+        let mut facts = self.domain_facts(connection, &commands.records, &saved, &mut scratch)?;
         let mut keys = BTreeSet::new();
         for value in derived.values(journal.call.call) {
             scratch.charge(0)?;
@@ -692,156 +717,107 @@ impl AnalysisStore {
         &self,
         connection: &Connection,
         records: &BTreeSet<DiscoveryRecordIdV1>,
-        contexts: &[AnalysisContextRefV1],
-        known: &BTreeSet<&crate::AnalysisContextKeyV1>,
+        contexts: &[&(crate::AnalysisContextVersionV1, AnalysisContextRefV1)],
         scratch: &mut DomainScratch<'_>,
     ) -> Result<Vec<(crate::AnalysisContextVersionV1, GraphFactV1)>> {
-        connection.execute_batch(
-            "CREATE TEMP TABLE graph_domain_records(record_key BLOB PRIMARY KEY);
-             CREATE TEMP TABLE graph_domain_contexts(version_key BLOB PRIMARY KEY,revision UBIGINT,known_fact BOOLEAN);"
-        ).context(AnalysisDatabaseSnafu { operation: "create canonical Graph evidence keys" })?;
-        let result = (|| {
-            {
-                let mut appender =
-                    connection
-                        .appender("graph_domain_records")
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "open canonical Graph record keys",
-                        })?;
-                for id in records {
-                    scratch.charge(0)?;
-                    appender
-                        .append_row(params![
-                            DomainRelations::key(id).context(crate::AnalysisContractSnafu)?
-                        ])
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "append canonical Graph record key",
-                        })?;
-                }
-                appender.flush().context(AnalysisDatabaseSnafu {
-                    operation: "flush canonical Graph record keys",
-                })?;
-                let mut appender = connection.appender("graph_domain_contexts").context(
-                    AnalysisDatabaseSnafu {
-                        operation: "open canonical Graph context keys",
-                    },
-                )?;
-                for reference in contexts {
-                    scratch.charge(0)?;
-                    appender
-                        .append_row(params![
-                            crate::analysis::context::version_key(&reference.key)?,
-                            reference.commit_revision,
-                            known.contains(&reference.key)
-                        ])
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "append canonical Graph context key",
-                        })?;
-                }
-                appender.flush().context(AnalysisDatabaseSnafu {
-                    operation: "flush canonical Graph context keys",
-                })?;
-            }
-            let invalid: bool = connection
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM graph_domain_contexts allowed
-                 LEFT JOIN context_versions c USING(version_key)
-                 LEFT JOIN graph_fact_records fact USING(version_key)
-                 WHERE c.version_key IS NULL OR c.commit_revision<>allowed.revision
-                    OR (allowed.known_fact AND fact.version_key IS NULL))",
-                    [],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "check canonical Graph context authority",
-                })?;
-            if invalid {
+        if contexts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut wanted = std::collections::BTreeMap::new();
+        for value in contexts {
+            scratch.charge(
+                value
+                    .1
+                    .key
+                    .allocated_bytes()
+                    .saturating_mul(8)
+                    .saturating_add(12 * size_of::<(Vec<u8>, usize)>()),
+            )?;
+            wanted.insert(crate::analysis::context::version_key(&value.1.key)?, *value);
+        }
+        let mut record_keys = BTreeSet::new();
+        for record in records {
+            scratch.charge(
+                record
+                    .allocated_bytes()
+                    .saturating_mul(8)
+                    .saturating_add(12 * size_of::<Vec<u8>>()),
+            )?;
+            record_keys.insert(DomainRelations::key(record).context(crate::AnalysisContractSnafu)?);
+        }
+        let placeholders = std::iter::repeat_n("?", wanted.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut query = connection.prepare(&format!(
+            "SELECT context.version_key,context.commit_revision,fact.record_key,fact.stream_key,fact.source_cursor,
+                coalesce(octet_length(fact.record_key),0)+coalesce(octet_length(fact.stream_key),0)
+             FROM context_versions context LEFT JOIN graph_fact_records fact USING(version_key)
+             WHERE context.version_key IN ({placeholders})"
+        )).context(AnalysisDatabaseSnafu { operation: "prepare canonical Graph fact eligibility" })?;
+        let mut rows = query
+            .query(duckdb::params_from_iter(wanted.keys()))
+            .context(AnalysisDatabaseSnafu {
+                operation: "read canonical Graph fact eligibility",
+            })?;
+        let mut seen = BTreeSet::new();
+        let mut facts = Vec::new();
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "advance canonical Graph fact eligibility",
+        })? {
+            let bytes: usize = row.get(5).context(AnalysisDatabaseSnafu {
+                operation: "bound canonical Graph fact identity",
+            })?;
+            scratch.charge(
+                bytes
+                    .saturating_mul(4)
+                    .saturating_add(12 * size_of::<Vec<u8>>()),
+            )?;
+            let (key, revision, record, stream, cursor) = (|| -> duckdb::Result<_> {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                    row.get::<_, Option<u64>>(4)?,
+                ))
+            })()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode canonical Graph fact eligibility",
+            })?;
+            let (value, reference) = wanted[&key];
+            if revision != reference.commit_revision || !seen.insert(key) {
                 return Err(Code::Denied.error("canonical Graph context authority"));
             }
-            let mut query = connection.prepare(
-                "SELECT c.tenant_id,c.owner_id,c.entity_key,c.lifetime_key,c.owner_revision,
-                    c.valid_from_utc_ns,c.valid_until_utc_ns,c.sensitivity,c.body,c.commit_revision,
-                    fact.record_key,fact.stream_key,fact.source_cursor,octet_length(c.body)
-                 FROM graph_domain_records wanted JOIN graph_fact_records fact USING(record_key)
-                 JOIN graph_domain_contexts allowed USING(version_key)
-                 JOIN context_versions c ON c.version_key=allowed.version_key AND c.commit_revision=allowed.revision
-                 ORDER BY c.tenant_id,c.owner_id,c.entity_key,c.lifetime_key,c.owner_revision"
-            ).context(AnalysisDatabaseSnafu { operation: "prepare canonical Graph facts" })?;
-            let mut rows = query.query([]).context(AnalysisDatabaseSnafu {
-                operation: "read canonical Graph facts",
-            })?;
-            let mut result = Vec::new();
-            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                operation: "advance canonical Graph facts",
-            })? {
-                let body: usize = row.get(13).context(AnalysisDatabaseSnafu {
-                    operation: "read canonical Graph fact size",
-                })?;
-                scratch.charge(
-                    body.checked_mul(8)
-                        .and_then(|bytes| bytes.checked_add(4 * std::mem::size_of::<GraphFactV1>()))
-                        .ok_or_else(|| Code::Limit.error("canonical Graph fact memory"))?,
-                )?;
-                let (tenant, owner, entity, lifetime, revision, stored) =
-                    (|| -> duckdb::Result<_> {
-                        Ok((
-                            row.get::<_, Vec<u8>>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Vec<u8>>(2)?,
-                            row.get::<_, Vec<u8>>(3)?,
-                            row.get::<_, u64>(4)?,
-                            (
-                                row.get(5)?,
-                                row.get(6)?,
-                                row.get(7)?,
-                                row.get(8)?,
-                                row.get(9)?,
-                            ),
-                        ))
-                    })()
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "decode canonical Graph fact",
-                    })?;
-                let key = crate::AnalysisContextKeyV1 {
-                    tenant_id: tenant
-                        .try_into()
-                        .map_err(|_| Code::Invalid.error("canonical Graph fact tenant"))?,
-                    owner_id: owner,
-                    entity_key: entity,
-                    lifetime_key: lifetime,
-                    owner_revision: revision,
-                };
-                let (context, _) = Self::decode_context_row(&self.root, key, stored)?;
-                let fact = GraphFactV1::try_from(&context)?;
-                let actual = Self::fact_record(&context)?
-                    .ok_or_else(|| Code::Invalid.error("canonical Graph fact classification"))?;
-                let indexed = (|| -> duckdb::Result<_> {
-                    Ok((
-                        row.get::<_, Vec<u8>>(10)?,
-                        row.get::<_, Vec<u8>>(11)?,
-                        row.get::<_, u64>(12)?,
-                    ))
-                })()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read canonical Graph fact identity",
-                })?;
-                if (actual.record, actual.stream, actual.cursor) != indexed
-                    || !records.contains(&fact.record_id)
-                {
-                    return Err(Code::Invalid.error("canonical Graph fact identity"));
-                }
-                result.push((context, fact));
+            let Some(record) = record else {
+                continue;
+            };
+            if !record_keys.contains(&record) {
+                continue;
             }
-            Ok(result)
-        })();
-        let cleanup = connection
-            .execute_batch("DROP TABLE graph_domain_records; DROP TABLE graph_domain_contexts;")
-            .context(AnalysisDatabaseSnafu {
-                operation: "drop canonical Graph evidence keys",
-            });
-        match (result, cleanup) {
-            (Ok(values), Ok(())) => Ok(values),
-            (Err(error), _) | (_, Err(error)) => Err(error),
+            let (Some(stream), Some(cursor)) = (stream, cursor) else {
+                return Err(Code::Invalid.error("canonical Graph fact identity"));
+            };
+            scratch.charge(
+                value
+                    .body
+                    .len()
+                    .saturating_mul(8)
+                    .saturating_add(4 * size_of::<GraphFactV1>()),
+            )?;
+            let fact = GraphFactV1::try_from(value)?;
+            let actual = Self::fact_record(value)?
+                .ok_or_else(|| Code::Invalid.error("canonical Graph fact classification"))?;
+            if (actual.record, actual.stream, actual.cursor) != (record, stream, cursor)
+                || !records.contains(&fact.record_id)
+            {
+                return Err(Code::Invalid.error("canonical Graph fact identity"));
+            }
+            facts.push((value.clone(), fact));
         }
+        if seen.len() != wanted.len() {
+            return Err(Code::Denied.error("canonical Graph context authority"));
+        }
+        facts.sort_unstable_by(|left, right| left.0.key.cmp(&right.0.key));
+        Ok(facts)
     }
 }

@@ -1,11 +1,11 @@
-use duckdb::{params, Connection};
+use duckdb::{Connection, params};
 use snafu::ResultExt as _;
 
 use super::budget::PreparedMemory;
 use super::commit::Packet;
 use super::graph::PreparedGraph;
 use super::model::{Attempt, ManagedCommit, Step};
-use super::source::{import::PreparedDerived, publication::PreparedSource, SourceEvidence};
+use super::source::{SourceEvidence, import::PreparedDerived, publication::PreparedSource};
 use crate::analysis::context::VerifiedPackages;
 use crate::{AnalysisStore, PackageErrorCodeV1 as Code, Result};
 
@@ -92,7 +92,7 @@ impl AnalysisStore {
             let source=input.attempt.5.as_ref().map(|frame| frame.input_selection()).transpose()?.flatten()
                 .as_ref().map(|selection| super::SourcePublication::prepare(connection,input,selection,&mut memory)).transpose()?;
             let source_at=std::time::Instant::now();
-            let graph=self.prepare_graph_journals(connection,input,&evidence,&derived,&mut memory)?;
+            let graph=self.prepare_graph_journals(&contracts,input,&evidence,&derived,&mut memory)?;
             memory.check()?;
             let prepared=std::time::Instant::now();
             erebor_telemetry::debug!(stage="managed_prepare_timing",instance_id=%input.attempt.1.spec.id,

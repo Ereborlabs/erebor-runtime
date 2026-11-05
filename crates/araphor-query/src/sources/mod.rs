@@ -17,11 +17,11 @@ use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::{
-    utils::conjunction, Expr, Operator, TableProviderFilterPushDown, TableType,
+    Expr, Operator, TableProviderFilterPushDown, TableType, utils::conjunction,
 };
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{
-    analyze, AnalysisContext, EquivalenceProperties, ExprBoundaries, PhysicalExpr,
+    AnalysisContext, EquivalenceProperties, ExprBoundaries, PhysicalExpr, analyze,
 };
 use datafusion::physical_plan::coop::cooperative;
 use datafusion::physical_plan::execution_plan::SchedulingType;
@@ -437,6 +437,16 @@ impl SourceSnapshot {
                 }
                 if name == "events" && bounds.canonical_events {
                     columns.insert(schema.index_of("framed_record")?);
+                }
+                if name == "context_versions" && bounds.canonical_events {
+                    for name in [
+                        "body",
+                        "sensitivity",
+                        "valid_from_utc_ns",
+                        "valid_until_utc_ns",
+                    ] {
+                        columns.insert(schema.index_of(name)?);
+                    }
                 }
             }
         }

@@ -1,9 +1,59 @@
 # Araphor retained execution state review
 
+## Captured Graph preparation, 2026-11-05
+
+The final focused build passes in 282.721607 seconds. All ten unchanged
+exact tests pass in five alternating pairs. This section describes that
+qualified source.
+
+[Freeze](../../crates/araphor-data/src/analysis/managed/graph/transaction.rs)
+closes callbacks and moves the private preparation binding into the journal.
+[The binding](../../crates/araphor-data/src/analysis/managed/graph/authority.rs)
+keeps the admitted package, captured native view, fallback context values,
+and their reservations through Data commit. Mutable callback scratch ends
+at freeze. This supersedes the preceding view release at freeze.
+
+[Graph preparation](../../crates/araphor-data/src/analysis/managed/graph/commit.rs)
+uses only consumed origin references. [Native base selection](../../crates/araphor-graph/src/layers/base.rs)
+groups touched keys and uses owner postings for sparse clears. Clear-all
+visits the writer's old relations, including undeclared old relations.
+[Domain read aliases](../../crates/araphor-data/src/analysis/managed/graph/domain/basis.rs)
+use the same captured heads and exact consumed member coordinates.
+
+[Canonical context cells](../../crates/araphor-data/src/analysis/managed/source/canonical.rs)
+retain nullable validity and compare duplicate cells before allocation.
+[Context inputs](../../crates/araphor-data/src/analysis/managed/graph/domain/contexts.rs)
+merge exact raw, derived, and historical references for the call's ancestry.
+Custom contexts still affect disclosure. [The final writer](../../crates/araphor-data/src/analysis/managed/graph/domain.rs)
+checks existing fact index eligibility and coordinates before domain validation.
+A context without a fact index row is omitted as before. Data installs the
+Graph proof only after validation. Actual origin, witness, grant, lifecycle,
+source, state, and retention checks remain at Data's transaction boundary.
+
+[Generic layer application](../../crates/araphor-graph/src/layers.rs) checks
+the actual parent, its revision against the captured cut, stored declarations,
+and Arrow storage shape once. It retains the existing durable writes and edge
+consistency query. Generic Graph contains no package or finding rules.
+The old prewriter Graph base and domain context temporary tables are removed.
+No storage engine or DataFusion operator is replaced. The unchanged exact
+incident test remains the only runtime qualification.
+
+The complete final warm managed commit is lower in every pair, with a paired
+median saving of 0.161696 seconds, or 13.51 percent. Initial and first warm
+creation are lower in every pair. Their paired median savings are 0.137117
+and 0.114020 seconds. Second warm creation remains about three seconds and
+has mixed results. No separate gain is established for that interval. Whole
+process time is lower in four pairs, with a paired median saving of 2.18
+percent. Nested preparation savings are not added to the complete commit.
+Actual work and all publication identities match. Context edge cases, direct
+generic callers, restore, rollback, and finite budgets have source review
+only. Creation below 100 milliseconds and the 100-fold target remain
+**Not done**. See the [captured preparation evidence](../plans/araphor-execution-handoff.md#captured-graph-preparation-replacement-2026-11-05).
+
 ## Invocation Graph view, 2026-11-05
 
-This section covers the native Graph view replacement and its exact-test
-comparison. The final focused build and all ten alternating runs pass.
+This section records the preceding native Graph view replacement and its
+exact-test comparison. The route below describes that qualified source. The final focused build and all ten alternating runs pass.
 
 [GraphService::bind](../../crates/araphor-query/src/definition/physical/graph.rs) starts the package's Graph invocation.
   -> [ManagedGraphTransaction::new](../../crates/araphor-data/src/analysis/managed/graph/transaction.rs) opens one Data snapshot for the actual call and retained authority.

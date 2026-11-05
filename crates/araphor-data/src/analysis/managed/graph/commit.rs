@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use araphor_analysis_sdk as sdk;
 use araphor_graph::{GraphStore, LayerRequest, PreparedLayers, WriterCut};
 use duckdb::{Connection, Transaction, params};
 use snafu::ResultExt as _;
@@ -18,6 +19,7 @@ pub(in crate::analysis::managed) struct PreparedGraph {
     staged: u64,
     origins: Vec<OriginProof>,
     proofs: BTreeMap<u64, super::super::model::GraphProof>,
+    domains: BTreeMap<u64, super::domain::DomainPreparation>,
 }
 
 struct OriginProof {
@@ -37,8 +39,27 @@ impl PreparedGraph {
         self.proofs.remove(&call)
     }
 
-    pub(in crate::analysis::managed) fn check(&self, connection: &Connection) -> Result<()> {
-        self.layers.check_parents(connection)?;
+    pub(in crate::analysis::managed) fn check(
+        &mut self,
+        store: &AnalysisStore,
+        connection: &Connection,
+        input: &ManagedCommit<'_>,
+        derived: &super::super::source::import::PreparedDerived,
+        memory: &mut super::super::budget::PreparedMemory<'_>,
+    ) -> Result<()> {
+        let mut owners = super::super::OwnerRead::new(
+            store,
+            connection,
+            input.attempt.1.spec.tenant,
+            input.control,
+        );
+        for journal in &self.journals {
+            for (origin, reference) in &journal.work.origins {
+                if journal.call.origin(connection, *origin, &mut owners)? != *reference {
+                    return Err(Code::Denied.error("Graph historical read authority"));
+                }
+            }
+        }
         for journal in &self.journals {
             let spec = &journal.call.attempt.1.spec;
             let valid:bool=connection.query_row(
@@ -70,6 +91,29 @@ impl PreparedGraph {
                 return Err(Code::Denied.error("Graph historical read authority"));
             }
         }
+        for journal in &self.journals {
+            if let Some(domain) = self.domains.remove(&journal.call.call) {
+                let package = &journal.prepared.package;
+                let declaration = &journal.call.attempt.1.spec.manifest.calls[&journal.call.call];
+                let model = package
+                    .exports
+                    .iter()
+                    .find(|model| model.name == declaration.export)
+                    .ok_or_else(|| Code::Invalid.error("domain Graph export"))?;
+                if let Some(proof) = store.check_domain_journal(
+                    connection,
+                    journal,
+                    domain,
+                    package,
+                    model,
+                    derived,
+                    self.floors[&journal.call.call],
+                    memory,
+                )? {
+                    self.proofs.insert(journal.call.call, proof);
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -77,7 +121,7 @@ impl PreparedGraph {
 impl AnalysisStore {
     pub(in crate::analysis::managed) fn prepare_graph_journals(
         &self,
-        connection: &Connection,
+        contracts: &[crate::analysis::PackageRevisionV1],
         input: &ManagedCommit<'_>,
         evidence: &super::super::source::SourceEvidence,
         derived: &super::super::source::import::PreparedDerived,
@@ -85,10 +129,35 @@ impl AnalysisStore {
     ) -> Result<Option<PreparedGraph>> {
         let started = std::time::Instant::now();
         let mut journals = BTreeMap::<u64, &Arc<ManagedGraphJournal>>::new();
+        let mut descriptors = BTreeMap::new();
         for returned in input.returns {
             let declaration = &input.attempt.1.spec.manifest.calls[&returned.call];
-            let package =
-                Self::managed_contract(connection, input.attempt.1.spec.tenant, declaration)?;
+            if !descriptors.contains_key(&declaration.package) {
+                let contract = contracts
+                    .iter()
+                    .find(|contract| {
+                        contract.tenant_id == input.attempt.1.spec.tenant
+                            && contract.package_id == declaration.package.package_id
+                            && contract.revision == declaration.package.revision
+                    })
+                    .ok_or_else(|| Code::Missing.error("managed prepared package"))?;
+                memory.charge(
+                    contract
+                        .descriptor
+                        .len()
+                        .saturating_mul(12)
+                        .saturating_add(12 * size_of::<sdk::Package>()),
+                )?;
+                let package: sdk::Package = serde_json::from_slice(&contract.descriptor)
+                    .context(crate::PackageEncodingSnafu)?;
+                if package.id != declaration.package.package_id
+                    || package.revision != declaration.package.revision
+                {
+                    return Err(Code::Invalid.error("managed SDK descriptor pin"));
+                }
+                descriptors.insert(&declaration.package, package);
+            }
+            let package = &descriptors[&declaration.package];
             let model = package
                 .exports
                 .iter()
@@ -104,7 +173,9 @@ impl AnalysisStore {
             }
             match (&model.graph, returned.graph) {
                 (None, None) => continue,
-                (Some(spec), Some(journal)) if *spec == journal.call.spec => {
+                (Some(spec), Some(journal))
+                    if *spec == journal.call.spec && *package == journal.prepared.package =>
+                {
                     if !std::ptr::eq(input.attempt, journal.call.attempt.as_ref())
                         || journal.call.call != returned.call
                         || journal.work.journal.writer() != journal.call.writer
@@ -126,13 +197,8 @@ impl AnalysisStore {
         let mut ordered = Vec::new();
         let mut floors = BTreeMap::new();
         let mut origins = Vec::new();
-        let mut proofs = BTreeMap::new();
-        let mut owners = super::super::OwnerRead::new(
-            self,
-            connection,
-            input.attempt.1.spec.tenant,
-            input.control,
-        );
+        let proofs = BTreeMap::new();
+        let mut domains = BTreeMap::new();
         for call in input.attempt.1.spec.manifest.order()? {
             let Some(journal) = journals.get(&call) else {
                 continue;
@@ -184,7 +250,14 @@ impl AnalysisStore {
             let origin_at = std::time::Instant::now();
             work[0] += origin_at.duration_since(linked_at);
             for (origin, reference) in &journal.work.origins {
-                if journal.call.origin(connection, *origin, &mut owners)? != *reference {
+                let actual = self
+                    .managed_results
+                    .graph_origin(input.attempt.1.spec.tenant, origin.writer, origin.revision)?
+                    .ok_or_else(|| Code::Missing.error("Graph result origin"))?;
+                if actual.graph != journal.call.graph
+                    || actual.result != reference.result_id
+                    || actual.revision != reference.commit_revision
+                {
                     return Err(Code::Denied.error("Graph historical read authority"));
                 }
             }
@@ -208,18 +281,9 @@ impl AnalysisStore {
             }
             let disclosure_at = std::time::Instant::now();
             work[0] += disclosure_at.duration_since(reads_at);
-            let contexts = journal
-                .call
-                .attempt
-                .5
-                .as_ref()
-                .map(|source| source.call_contexts(&journal.call.input_calls()))
-                .transpose()?;
-            let contexts = Self::join_contexts(
-                contexts.as_deref().unwrap_or(&evidence.contexts),
-                &derived.contexts(call),
-            )?;
-            let mut floor = Self::graph_restricted(connection, &contexts)?;
+            let contexts =
+                super::domain::ContextInputs::capture(self, journal, evidence, derived, memory)?;
+            let mut floor = contexts.restricted();
             floor |= derived
                 .values(call)
                 .any(|value| value.sensitivity == crate::ContextSensitivityV1::HostRestricted);
@@ -232,11 +296,12 @@ impl AnalysisStore {
                         .and_then(|bytes| bytes.checked_add(8 * std::mem::size_of::<OriginProof>()))
                         .ok_or_else(|| Code::Limit.error("Graph origin proof memory"))?,
                 )?;
-                let (restricted,writer_call):(bool,u64)=connection.query_row(
-                    "SELECT result.restricted,writer.call_id FROM managed_graph_results result
-                     JOIN managed_graph_writers writer USING(writer_id) WHERE result.writer_id=? AND result.revision=?",
-                    params![origin.writer,origin.revision],|row| Ok((row.get(0)?,row.get(1)?)),
-                ).context(AnalysisDatabaseSnafu { operation:"read Graph origin disclosure" })?;
+                let actual = self
+                    .managed_results
+                    .graph_origin(input.attempt.1.spec.tenant, origin.writer, origin.revision)?
+                    .ok_or_else(|| Code::Missing.error("Graph result origin"))?;
+                let restricted = actual.restricted;
+                let writer_call = actual.call;
                 floor |= restricted;
                 origins.push(OriginProof {
                     writer: origin.writer,
@@ -256,8 +321,7 @@ impl AnalysisStore {
             let contract_at = std::time::Instant::now();
             work[1] += contract_at.duration_since(disclosure_at);
             let declaration = &input.attempt.1.spec.manifest.calls[&call];
-            let package =
-                Self::managed_contract(connection, input.attempt.1.spec.tenant, declaration)?;
+            let package = &journal.prepared.package;
             let model = package
                 .exports
                 .iter()
@@ -265,10 +329,10 @@ impl AnalysisStore {
                 .ok_or_else(|| Code::Invalid.error("domain Graph export"))?;
             let domain_at = std::time::Instant::now();
             work[2] += domain_at.duration_since(contract_at);
-            if let Some(proof) = self.check_domain_journal(
-                connection, journal, &package, model, derived, floor, memory,
-            )? {
-                proofs.insert(call, proof);
+            if let Some(domain) =
+                self.prepare_domain_journal(journal, package, model, contexts, memory)?
+            {
+                domains.insert(call, domain);
             }
             let relations_at = std::time::Instant::now();
             work[3] += relations_at.duration_since(domain_at);
@@ -298,8 +362,12 @@ impl AnalysisStore {
             })?;
         let layers_at = std::time::Instant::now();
         work[4] += layers_at.duration_since(staged_at);
+        let views = journals
+            .values()
+            .map(|journal| (journal.call.writer, &journal.prepared.view))
+            .collect::<BTreeMap<_, _>>();
         let layers = GraphStore::prepare_layers(
-            connection,
+            &views,
             &cuts,
             &ordered,
             &relations,
@@ -363,6 +431,7 @@ impl AnalysisStore {
             staged,
             origins,
             proofs,
+            domains,
         }))
     }
 
@@ -388,6 +457,7 @@ impl AnalysisStore {
             staged,
             origins: _,
             proofs: _,
+            domains: _,
         }) = prepared
         else {
             return Ok((Vec::new(), (0, 0, 0), None, Vec::new()));
@@ -579,57 +649,5 @@ impl AnalysisStore {
             Some(layer),
             origins,
         ))
-    }
-
-    fn graph_restricted(
-        connection: &Connection,
-        contexts: &[crate::AnalysisContextRefV1],
-    ) -> Result<bool> {
-        if contexts.is_empty() {
-            return Ok(false);
-        }
-        connection.execute_batch("CREATE TEMP TABLE managed_graph_contexts (version_key BLOB PRIMARY KEY,revision UBIGINT)")
-            .context(AnalysisDatabaseSnafu { operation: "create Graph disclosure keys" })?;
-        let result = (|| {
-            {
-                let mut appender = connection.appender("managed_graph_contexts").context(
-                    AnalysisDatabaseSnafu {
-                        operation: "open Graph disclosure keys",
-                    },
-                )?;
-                for reference in contexts {
-                    appender
-                        .append_row(params![
-                            crate::analysis::context::version_key(&reference.key)?,
-                            reference.commit_revision
-                        ])
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "append Graph disclosure key",
-                        })?;
-                }
-                appender.flush().context(AnalysisDatabaseSnafu {
-                    operation: "flush Graph disclosure keys",
-                })?;
-            }
-            let sensitivity: &str = crate::ContextSensitivityV1::HostRestricted.into();
-            let (valid,restricted): (bool,bool) = connection.query_row(
-                "SELECT bool_and(c.version_key IS NOT NULL AND c.commit_revision=input.revision),
-                    COALESCE(bool_or(c.sensitivity=?),false)
-                 FROM managed_graph_contexts input LEFT JOIN context_versions c USING(version_key)",
-                params![sensitivity], |row| Ok((row.get(0)?,row.get(1)?)),
-            ).context(AnalysisDatabaseSnafu { operation: "read canonical Graph disclosure" })?;
-            if !valid {
-                return Err(Code::Denied.error("Graph disclosure context"));
-            }
-            Ok(restricted)
-        })();
-        let cleanup = connection
-            .execute_batch("DROP TABLE managed_graph_contexts")
-            .context(AnalysisDatabaseSnafu {
-                operation: "release Graph disclosure keys",
-            });
-        let floor = result?;
-        cleanup?;
-        Ok(floor)
     }
 }

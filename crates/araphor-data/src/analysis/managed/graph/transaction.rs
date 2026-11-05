@@ -44,6 +44,7 @@ pub struct ManagedGraphJournal {
     pub(super) predecessors: Vec<Arc<ManagedGraphJournal>>,
     pub(super) work: Work,
     pub(super) budget: Arc<dyn ManagedBudget>,
+    pub(super) prepared: super::authority::GraphPreparation,
 }
 
 pub(super) struct Callback<'a> {
@@ -74,8 +75,10 @@ impl ManagedGraphTransaction {
     ) -> Result<Arc<Self>> {
         let mut reader = store.reader_until(control)?;
         let (call, authority) = control.run(&mut reader, |reader| {
-            let call = store.graph_call_from(reader, attempt, call_id, model, control)?;
-            let authority = GraphAuthority::bind(&call, store, reader, control, budget.as_ref())?;
+            let (call, package) =
+                store.graph_call_from(reader, attempt, call_id, model, control)?;
+            let authority =
+                GraphAuthority::bind(&call, package, store, reader, control, budget.as_ref())?;
             Ok((call, authority))
         })?;
         drop(reader);
@@ -223,6 +226,7 @@ impl ManagedGraphTransaction {
                     .engine();
                 let present =
                     authority
+                        .prepared
                         .view
                         .presence(self.call.writer, relation, &batch, || {
                             control.check().map_err(araphor_graph::Error::backend)
@@ -254,15 +258,19 @@ impl ManagedGraphTransaction {
             .take()
             .ok_or_else(|| Code::Denied.error("Graph callback active"))?;
         state.open = false;
-        self.authority
+        let prepared = self
+            .authority
             .lock()
             .map_err(|_| Code::Incomplete.error("Graph authority lock"))?
-            .take();
+            .take()
+            .ok_or_else(|| Code::Incomplete.error("Graph invocation authority"))?
+            .into_preparation();
         Ok(Arc::new(ManagedGraphJournal {
             call: self.call.clone(),
             predecessors: self.predecessors.clone(),
             work,
             budget: Arc::clone(&self.budget),
+            prepared,
         }))
     }
 }
