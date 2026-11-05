@@ -5857,6 +5857,13 @@ scope is 4478. Its invocation is
 
 ### 6. Select the durable storage engine
 
+The [2026-11-05 storage investigation](../research/araphor-durable-storage-investigation.md)
+compares redb with Fjall and a custom transaction log against current source.
+The source review is **Done**. Engine selection and measured performance are
+**Not done**. The recommendation is to define the exact Data snapshot and
+atomic change transaction, then investigate redb first and Fjall as the
+log-structured alternative. This record changes no production storage.
+
 Changing the engine alone leaves thousands of requests in place. First
 define the replacement snapshot and atomic change transaction. Then compare
 the same change transaction with durable settings on the candidate engines.

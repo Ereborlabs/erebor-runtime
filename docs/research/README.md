@@ -1,5 +1,9 @@
 # Recovered Research
 
+- [Araphor durable storage investigation](araphor-durable-storage-investigation.md)
+  compares redb, Fjall, and a custom transaction log against current Data
+  snapshots, atomic commits, raw journals, Graph ownership, and measured costs.
+  Engine selection and performance qualification remain not done.
 - [Compliance wedge research](compliance/README.md)
 - [Interview findings](interviews/)
 - [Generated research](generated/) — kept separate because these are
