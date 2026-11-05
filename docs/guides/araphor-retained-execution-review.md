@@ -1,5 +1,35 @@
 # Araphor retained execution state review
 
+## Recorded Follow cut, 2026-11-05
+
+Recorded-cut validation replaces broad relation freshness at Follow admission
+and Graph freeze. The focused build and all ten exact incident runs pass.
+The replacement has a measured performance regression. It is an architecture
+correction; performance acceptance remains **Not done**.
+
+[Managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs)
+validates the captured authority and prior call heads.
+  -> [Graph authority](../../crates/araphor-data/src/analysis/managed/graph/authority.rs) retains live authority, context, trace, and Graph checks.
+  -> [Managed dependency validation](../../crates/araphor-data/src/analysis/managed/read.rs) checks exact result rows through the recorded cut.
+  -> Data commits the captured step. The registered CDC feed retains later input for the next step.
+
+The `managed_current` wrapper keeps its existing finite and public status
+semantics. Recorded validation uses immutable result owners and omits latest
+call, instance, and relation requirements. It keeps exact revision existence,
+native source proofs, trace access, context versions, lifetime, and deadlines.
+Capture source revisions remain populated. The exact incident is the only
+runtime qualification. It has no managed dependencies; recursive dependency
+behavior has source review only.
+
+Recorded-cut execution has zero source-change failures. It completes eight
+valid Graph publications instead of five. Both later notification creation
+intervals are higher in every pair. Their medians are 3.041402 and 3.300817
+seconds. Whole-process time increases by a paired median of 9.19 percent.
+The input workload and final behavior assertions stay unchanged. Intermediate
+cuts and work differ. The next replacement must reduce captured-step cost
+while preserving pending input. See the
+[verification record](../plans/araphor-execution-handoff.md#follow-transactions-use-the-recorded-input-cut-2026-11-05).
+
 ## CDC source progress, 2026-11-05
 
 Matching Data input positions replace the store-wide Query wake and its
@@ -64,8 +94,9 @@ acknowledges its captured input cut. Append execution acknowledges its actual
 scanned or output-limited position. A package's own publication cannot consume
 an intervening input commit.
 
-Data still applies a broad relation-freshness gate to ordinary Follow
-admission and Graph freeze. Its recorded-cut replacement is **Not done**.
+At `9c12af2db`, Data still applies broad relation freshness to ordinary Follow
+admission and Graph freeze. The later recorded-cut replacement above removes
+that gate.
 The final CDC runs have five or six source-change failures. These retries
 are part of the measured work. Notification captures fall from 24–25 to
 15. All fifteen creation intervals are lower. Their medians are 1.734645,

@@ -664,9 +664,7 @@ impl AnalysisStore {
             }
         }
         let control = AnalysisReadControl::default();
-        if !capture.follows_graph(&spec)
-            && !Self::package_sources_current(reader, &capture.sources, &control)?
-        {
+        if !capture.follow && !Self::package_sources_current(reader, &capture.sources, &control)? {
             return if Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, &control)
                 .is_ok()
             {
@@ -685,13 +683,13 @@ impl AnalysisStore {
             }
         }
         for reference in &capture.dependencies {
-            if !self.managed_current(
+            if !self.managed_valid(
                 reader,
                 &spec,
-                &reference.result_id,
-                reference.commit_revision,
+                (&reference.result_id, reference.commit_revision),
                 now,
                 &control,
+                capture.follow.then_some(capture.revision),
             )? {
                 return crate::AnalysisConflictSnafu.fail();
             }

@@ -1,13 +1,114 @@
 # Araphor reactive execution in milliseconds
 
+## Follow transactions use the recorded input cut, 2026-11-05
+
+Status: **Done** for recorded-cut Follow validation. Performance acceptance is
+**Not done**. The CDC source wake replacement is committed as `9c12af2db`.
+The implementer and reviewer agree that new input must remain pending after
+the captured cut. The old broad freshness gate is removed from Follow.
+
+Before this replacement, Data compared broad relation revisions at Follow
+admission and Graph freeze. The earlier CDC qualification has five or six
+source-change failures per run at that gate. New input after a captured cut is valid pending work.
+It must not reject a step that processes the recorded cut.
+
+The replacement removes that comparison for every actual Follow capture.
+Finite calls and public current-result inspection retain their existing
+freshness behavior. Dependency validation uses exact retained result rows at
+or before the captured cut. Immutable call and step metadata identify their
+actual owners. The Follow path does not require those results to remain the
+latest call or instance head. Existing trace, context, lifetime, and deadline
+checks remain. Capture source revisions remain available to public status.
+
+Store identity, recovery epoch, grant, generation, lifecycle, running state,
+completion, prior call heads, retained evidence, and Graph parent checks stay
+at their current transaction boundaries. No storage engine, package algorithm,
+native DataFusion operator, workload, assertion, or timeout is changed.
+
+The focused build passes in 255.976878 seconds. The first unchanged exact
+incident run passes in 27.45 harness seconds, or 27.500446 process seconds.
+Five alternating pairs then compare the same case with the retained CDC
+baseline. All ten runs pass. No workload, assertion, or timeout changes.
+
+| Pair | First executable | CDC baseline test, seconds | Recorded-cut test, seconds | Added process time, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | CDC baseline | 24.09 | 27.02 | 2.925217 |
+| 2 | Recorded cut | 25.76 | 27.99 | 2.218849 |
+| 3 | CDC baseline | 25.72 | 28.10 | 2.373831 |
+| 4 | Recorded cut | 26.06 | 28.47 | 2.398325 |
+| 5 | CDC baseline | 26.44 | 28.55 | 2.105613 |
+
+Whole-process time is higher in every pair. The paired median increase is
+2.373831 seconds, or 9.19 percent. The range is 7.95 to 12.12 percent.
+This is an architecture correction with a measured performance regression.
+It is not a performance improvement.
+
+| Notification | CDC baseline creation median, seconds | Recorded-cut creation median, seconds | Paired median change, seconds |
+| --- | ---: | ---: | ---: |
+| Initial | 1.701912 | 1.659962 | 0.047685 lower |
+| First later incident | 2.204233 | 3.041402 | 0.837169 higher |
+| Second later incident | 2.382748 | 3.300817 | 0.941875 higher |
+
+Initial creation is lower in every pair. Both later intervals are higher in
+every pair. Creation starts at trusted Control collector receipt and ends at
+the first durable notification save. The captured metadata cut can include
+a revision after the last real input. Measurement uses the actual collector
+receipt at or before that cut and checks its revision against each unchanged
+incident latency marker. It does not treat a metadata commit as an input.
+
+Each run retains 18 collector inputs, 16,402 raw records, three notifications,
+64 bulk pages, 60 retained bulk pages, 16,384 logical bulk rows, and 262,144
+physical bulk rows. The recorded-cut runs have zero source-change failures;
+the baseline has five or six. The replacement completes eight valid Graph
+publications instead of five. It has sixteen successful Graph authority
+checks instead of ten, fifteen appends instead of twelve, and twenty-one
+notification captures instead of fifteen. The extra intermediate cuts and
+publication IDs differ. Identical intermediate work is not claimed.
+
+Final result-producing managed commit medians are 0.741247, 0.875360, and
+0.960515 seconds. Graph publication to notification creation medians are
+0.334079, 0.486592, and 0.559939 seconds. These costs remain too high. The
+next performance work must reduce captured-step processing and commit cost.
+It must not restore rejection of a valid recorded cut or hide pending input.
+
+The final later commit has these stage medians: 0.118467 seconds of private
+preparation, 0.786845 seconds of transaction work, and 0.051528 seconds in the
+final durable `COMMIT`. Inside transaction work, publication-row preparation
+uses 0.266034 seconds and Graph journals use 0.366222 seconds. Native Graph
+layer application uses 0.277772 seconds inside the journal interval. These
+nested costs must not be added to their parent intervals. The engine's final
+commit call is not the largest measured stage. An engine change alone does
+not remove the retained request work. Detailed samples are in
+`/tmp/araphor-recorded-follow-pairs-20261105/final-warm-breakdown.json`.
+
+The source-only production wake audit finds no other Query source route.
+Both `Wake::Source` paths require a matching input position after the consumed
+position. Lifecycle, authority, retention, context repair, clock, and capacity
+watches keep their actual owners. They do not become Query input positions.
+The exact incident is the only runtime qualification. Recursive managed
+dependencies, restore, cancellation, revocation, and other source selections
+have source review only. No full CI or additional runtime case is claimed.
+
+Proof: `/tmp/araphor-build-recorded-follow-20261105-a.log`,
+`/tmp/araphor-recorded-follow-first-20261105.{log,timing.json}`,
+`/tmp/araphor-recorded-follow-pairs-20261105/{settings,results,summary,audit}.json`,
+ten pair logs and reports, and
+`/tmp/araphor-subscription-wake-audit-20261105.json`.
+Retained executables:
+`target/araphor-notice-comparison-20261105/{cdc-inputs,recorded-follow}`.
+The older captured-preparation executable was removed to release build space.
+Its logs and independent audit remain available. Creation below 100
+milliseconds and the 100-fold target remain **Not done**.
+
 ## CDC replacement verification, 2026-11-05
 
 Status: **Done** for the Query source wake replacement. Matching Data input
 positions replace the global Query input watch and Query dependency gates.
 The source covers initial execution, resume, live execution, windows, and
-failure recovery. The separate Data Follow freshness gate remains
-**Not done**. Notification creation below 100 milliseconds and the
-100-fold target remain **Not done**.
+failure recovery. This record qualifies `9c12af2db`. The later recorded-cut
+replacement above removes the separate Data Follow freshness gate.
+Notification creation below 100 milliseconds and the 100-fold target remain
+**Not done**.
 
 Data registers the native provider interests before its first input capture.
 It reads matching existing positions once. The bootstrap retains one charged
@@ -111,7 +212,7 @@ The earlier rejected scoped-read executable was removed to release space.
 ## Source journal wake replacement, 2026-11-05
 
 Status: **Done** for Query source wakes in the verification record above.
-The separate Data Follow freshness gate is **Not done**. The user requires
+The later recorded-cut record above replaces the separate Data Follow gate. The user requires
 a wake only when the subscription's watched input advances after its
 consumed journal position. The implementer
 and reviewer agree that the current store-wide revision wake is the wrong

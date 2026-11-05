@@ -774,7 +774,24 @@ impl AnalysisStore {
         now: u64,
         control: &AnalysisReadControl,
     ) -> Result<bool> {
-        let mut statement = reader.prepare("WITH RECURSIVE needed(result_id, revision) AS (
+        self.managed_valid(reader, spec, (id, revision), now, control, None)
+    }
+
+    pub(super) fn managed_valid(
+        &self,
+        reader: &Connection,
+        spec: &ManagedSpec,
+        (id, revision): (&str, u64),
+        now: u64,
+        control: &AnalysisReadControl,
+        cut: Option<u64>,
+    ) -> Result<bool> {
+        let (head, latest) = if cut.is_some() {
+            ("NULL::VARCHAR", "")
+        } else {
+            ("c.instance_id", "LEFT JOIN managed_calls c ON c.result_id = r.result_id AND c.tenant_id = r.tenant_id AND c.state_revision = r.commit_revision")
+        };
+        let mut statement = reader.prepare(&format!("WITH RECURSIVE needed(result_id, revision) AS (
             SELECT ?::VARCHAR, ?::UBIGINT UNION
             SELECT e.dependency_id, e.commit_revision FROM managed_edges e
                 JOIN needed n ON n.result_id = e.result_id
@@ -784,11 +801,11 @@ impl AnalysisStore {
                     IN ('managed-package-v1', 'managed-definition-v1')
                     AND NOT EXISTS(SELECT 1 FROM managed_source_publications source
                         WHERE source.result_id=e.result_id))
-            SELECT n.result_id, n.revision, r.processor_id, c.instance_id,
+            SELECT n.result_id, n.revision, r.processor_id, {head},
                 source.result_id IS NOT NULL FROM needed n
             LEFT JOIN analysis_results r ON n.result_id = r.result_id AND r.tenant_id = ? AND r.commit_revision = n.revision
-            LEFT JOIN managed_calls c ON c.result_id = r.result_id AND c.tenant_id = r.tenant_id AND c.state_revision = r.commit_revision
-            LEFT JOIN managed_source_publications source ON source.result_id=n.result_id")
+            {latest}
+            LEFT JOIN managed_source_publications source ON source.result_id=n.result_id"))
             .context(AnalysisDatabaseSnafu { operation: "prepare managed freshness" })?;
         let rows = statement
             .query_map(
@@ -813,6 +830,9 @@ impl AnalysisStore {
         let mut current = true;
         for (id, revision, processor, instance, native) in rows {
             control.check()?;
+            if cut.is_some_and(|cut| revision > cut) {
+                return Ok(false);
+            }
             let Some(processor) = processor else {
                 return Ok(false);
             };
@@ -831,14 +851,19 @@ impl AnalysisStore {
                 continue;
             }
             let (attempt, witnesses, contexts) = if processor == "managed-package-v1" {
-                if instance.as_deref() != Some(spec.id.as_str()) {
+                if cut.is_none() && instance.as_deref() != Some(spec.id.as_str()) {
                     return Ok(false);
                 }
                 let metadata: Vec<u8> = reader.query_row("SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![spec.tenant.as_slice(), id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "read managed freshness metadata" })?;
                 let record: Record =
                     ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
+                let owner = if cut.is_some() {
+                    &record.instance
+                } else {
+                    &spec.id
+                };
                 let attempt =
-                    Self::managed_attempt_from(reader, spec.tenant, &spec.id, &record.attempt)?
+                    Self::managed_attempt_from(reader, spec.tenant, owner, &record.attempt)?
                         .ok_or_else(|| Code::Missing.error("managed result attempt"))?;
                 (
                     attempt,
@@ -849,14 +874,21 @@ impl AnalysisStore {
                 let metadata: Vec<u8> = reader.query_row("SELECT request_meta FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![spec.tenant.as_slice(), id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "read managed selected freshness" })?;
                 let step: Step =
                     ManagedCodec::decode(&metadata).context(crate::ManagedDecodingSnafu)?;
-                let current = Self::managed_instance_from(reader, spec.tenant, &step.instance)?;
-                if step.instance != spec.id
-                    || current.is_none_or(|instance| instance.progress != revision)
-                {
-                    return Ok(false);
+                if cut.is_none() {
+                    let current = Self::managed_instance_from(reader, spec.tenant, &step.instance)?;
+                    if step.instance != spec.id
+                        || current.is_none_or(|instance| instance.progress != revision)
+                    {
+                        return Ok(false);
+                    }
                 }
+                let owner = if cut.is_some() {
+                    &step.instance
+                } else {
+                    &spec.id
+                };
                 let attempt =
-                    Self::managed_attempt_from(reader, spec.tenant, &spec.id, &step.attempt)?
+                    Self::managed_attempt_from(reader, spec.tenant, owner, &step.attempt)?
                         .ok_or_else(|| Code::Missing.error("managed selected attempt"))?;
                 (
                     attempt,
@@ -864,7 +896,9 @@ impl AnalysisStore {
                     Self::join_contexts(&step.contexts, &step.derived)?,
                 )
             } else {
-                if self.package_source_revision(reader, spec.tenant, &id)? != revision {
+                if cut.is_none()
+                    && self.package_source_revision(reader, spec.tenant, &id)? != revision
+                {
                     return Ok(false);
                 }
                 continue;
@@ -879,7 +913,7 @@ impl AnalysisStore {
                 return Ok(false);
             }
             let capture = attempt.capture;
-            if !Self::package_sources_current(reader, &capture.sources, control)? {
+            if cut.is_none() && !Self::package_sources_current(reader, &capture.sources, control)? {
                 return Ok(false);
             }
             Self::check_trace_reads_from(reader, spec.tenant, &capture.traces, control)?;

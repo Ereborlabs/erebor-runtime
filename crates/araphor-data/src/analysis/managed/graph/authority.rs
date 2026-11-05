@@ -257,7 +257,7 @@ impl GraphAuthority {
             }
         }
         let heads_at = std::time::Instant::now();
-        if !capture.follows_graph(&call.attempt.1.spec)
+        if !capture.follow
             && !AnalysisStore::package_sources_current(reader, &capture.sources, control)?
         {
             return if AnalysisStore::check_trace_reads_from(
@@ -286,13 +286,13 @@ impl GraphAuthority {
         }
         let contexts_at = std::time::Instant::now();
         for reference in &capture.dependencies {
-            if !store.managed_current(
+            if !store.managed_valid(
                 reader,
                 &call.attempt.1.spec,
-                &reference.result_id,
-                reference.commit_revision,
+                (&reference.result_id, reference.commit_revision),
                 call.attempt.request().time_utc_ns,
                 control,
+                capture.follow.then_some(capture.revision),
             )? {
                 return crate::AnalysisConflictSnafu.fail();
             }
