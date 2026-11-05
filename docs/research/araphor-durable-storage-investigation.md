@@ -6,6 +6,17 @@ Investigation: **Done**. Engine selection, implementation, and measured gain:
 [storage option in the active plan](../plans/araphor-reactive-execution-latency.md#6-select-the-durable-storage-engine).
 It does not approve or implement a storage migration.
 
+## User selection after this investigation
+
+The user selects log-based storage with native Graph semantics based on
+TerminusDB and DataFusion above it. The
+[selected design](../plans/araphor-log-graph-storage.md) uses Fjall as the
+physical implementation target and Araphor Graph for layer and index
+semantics. The earlier redb-first recommendation below is superseded.
+Production replacement and performance qualification remain **Not done**.
+
+## Earlier recommendation
+
 Investigate **redb first**, with **Fjall** as the log-structured alternative.
 Replace SQL storage requests with direct typed access in one Data transaction.
 Keep native DataFusion execution, generic Araphor Graph, and the existing raw

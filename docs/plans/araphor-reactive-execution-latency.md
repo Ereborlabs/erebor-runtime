@@ -5857,12 +5857,20 @@ scope is 4478. Its invocation is
 
 ### 6. Select the durable storage engine
 
+The user now selects log-based storage with Graph semantics based on
+TerminusDB and native DataFusion above it. The
+[selected implementation design](araphor-log-graph-storage.md) uses Fjall for
+the physical log-backed transaction and Araphor Graph for native layers,
+dictionaries, adjacency, and typed properties. Data remains the only commit
+owner. This supersedes the earlier redb-first recommendation. Architecture
+direction is **Done**. Production replacement and measured gain are **Not done**.
+
 The [2026-11-05 storage investigation](../research/araphor-durable-storage-investigation.md)
 compares redb with Fjall and a custom transaction log against current source.
 The source review is **Done**. Engine selection and measured performance are
-**Not done**. The recommendation is to define the exact Data snapshot and
-atomic change transaction, then investigate redb first and Fjall as the
-log-structured alternative. This record changes no production storage.
+**Not done** in that earlier record. It recommended redb first and Fjall as
+the log-structured alternative before the user's selection above. The
+earlier investigation changes no production storage.
 
 Changing the engine alone leaves thousands of requests in place. First
 define the replacement snapshot and atomic change transaction. Then compare
