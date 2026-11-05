@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc, TryLockError,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use araphor_package::{ModelRef, PackageBundle, PackageImplementationV1};
@@ -11,8 +11,8 @@ use tokio::sync::watch;
 use crate::{AnalysisReadControl, Result, WasmLimits};
 
 use super::{
-    admission::CompileBudget, bindings::AnalysisPackagePre, execution::GuestState, CapacityRelease,
-    Code, PreparedComponent,
+    CapacityRelease, Code, PreparedComponent, admission::CompileBudget,
+    bindings::AnalysisPackagePre, execution::GuestState,
 };
 
 #[derive(Default)]
@@ -227,10 +227,11 @@ impl super::WasmExecution {
     #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn cached_model(
         &self,
-        image: &str,
+        bundle: &PackageBundle,
         model: &ModelRef,
     ) -> Result<Option<PreparedComponent>> {
-        self.cached_code(&[], Some((image, model)))
+        let (bytes, key) = Self::model_code(bundle, model)?;
+        self.cached_code(bytes, Some((bundle.digest(), &key)))
     }
 
     fn cached_code(
@@ -255,14 +256,26 @@ impl super::WasmExecution {
         model: &ModelRef,
         control: &AnalysisReadControl,
     ) -> Result<PreparedComponent> {
+        let (bytes, key) = Self::model_code(bundle, model)?;
+        self.compile(bytes, Some((bundle.digest(), &key)), control)
+    }
+
+    fn model_code<'a>(bundle: &'a PackageBundle, model: &ModelRef) -> Result<(&'a [u8], ModelRef)> {
         let artifact = bundle.bundle().artifact(&model.package)?;
         let PackageImplementationV1::Wasm {
-            artifact: bytes, ..
+            artifact: bytes,
+            exports,
         } = artifact.implementation(&model.export)?
         else {
             return Err(Code::Invalid.error("component implementation").into());
         };
-        self.compile(bytes, Some((bundle.digest(), model)), control)
+        Ok((
+            bytes,
+            ModelRef {
+                package: model.package.clone(),
+                export: exports.first().unwrap_or(&model.export).clone(),
+            },
+        ))
     }
 
     pub(super) fn compiled(
@@ -296,14 +309,17 @@ impl super::WasmExecution {
         if let Some(prepared) = self.cached_code(bytes, image)? {
             return Ok(prepared);
         }
+        let started = std::time::Instant::now();
         CompileBudget::check(bytes, control, &self.limits)?;
         let reservation;
+        let compiling = std::time::Instant::now();
         let component = wasmtime::component::Component::new(&self.engine, bytes).context(
             crate::PackageWasmSnafu {
                 code: Code::Invalid,
                 operation: "component compilation",
             },
         )?;
+        let compile_s = compiling.elapsed().as_secs_f64();
         control.check()?;
         let range = component.image_range();
         let image_bytes = (range.end as usize).saturating_sub(range.start as usize);
@@ -344,11 +360,20 @@ impl super::WasmExecution {
             operation: "analysis component exports",
         })?;
         control.check()?;
-        Ok(self
+        let prepared = self
             .cache
             .lock()
             .map_err(|_| Code::Incomplete.error("component cache lock"))?
-            .insert(key, prepared, reservation))
+            .insert(key, prepared, reservation);
+        erebor_telemetry::debug!(
+            stage = "component_compile_timing",
+            export = image.map_or("", |(_, model)| model.export.as_str()),
+            bytes = bytes.len(),
+            compile_s,
+            elapsed_s = started.elapsed().as_secs_f64(),
+            "Package component preparation completed"
+        );
+        Ok(prepared)
     }
 }
 
@@ -375,8 +400,8 @@ mod tests {
     }
 
     #[test]
-    fn cache_enforces_each_bound(
-    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn cache_enforces_each_bound()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let runtime = super::super::WasmExecution::new(crate::WasmLimits::default())?;
         let prepared = runtime.compiled(
             araphor_analysis_builtins::components::RUNTIME,
@@ -419,17 +444,19 @@ mod tests {
             );
             assert!(cache.get(&(32 + index).to_le_bytes(), None).is_some());
             if index >= capacity {
-                assert!(cache
-                    .get(&(32 + index - capacity).to_le_bytes(), None)
-                    .is_none());
+                assert!(
+                    cache
+                        .get(&(32 + index - capacity).to_le_bytes(), None)
+                        .is_none()
+                );
             }
         }
         Ok(())
     }
 
     #[test]
-    fn pinned_code_retains_charge(
-    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn pinned_code_retains_charge()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let runtime = super::super::WasmExecution::new(crate::WasmLimits::default())?;
         let prepared = runtime.compiled(
             araphor_analysis_builtins::components::RUNTIME,

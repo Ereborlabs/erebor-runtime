@@ -1,5 +1,26 @@
 # Araphor retained execution state review
 
+## Compiled component reuse, 2026-11-05
+
+Read [code selection and compilation](../../crates/araphor-package-runtime/src/wasm/cache.rs)
+first, then [runtime preparation and evaluation](../../crates/araphor-package-runtime/src/lib.rs).
+`model_code` selects the actual requested implementation before it derives a
+cache-only representative export. The existing code cache retains bundle and
+package identity. Prepared calls and evaluations retain the actual export.
+Resource checks, memory charges, compiler admission, eviction, and raw-byte
+compilation remain at the same owner. The test-only inspection API uses the
+same admitted bundle and selector. No new cache or archive is added.
+
+Five alternating pairs of the unchanged exact incident test pass. Both variants
+perform equal Graph publication and bulk work. Cold compilation falls from two
+components to one in every pair. Cold preparation medians fall from 4.515685
+to 2.264546 seconds. The paired whole-process median is 2.614963 seconds,
+or 7.86 percent, lower. Initial, warm, and bulk differences are mixed. No
+separate arrival or bulk gain is claimed. The enclosing planning timer includes
+component preparation. The nested times are not added. Millisecond latency and
+the 100-fold target remain **Not done**. Other cache cases and inspection tests
+have source review only. See the [component reuse evidence](../plans/araphor-execution-handoff.md#compiled-component-reuse-result-2026-11-05).
+
 ## Native finding publication, 2026-11-05
 
 Read [publication](../../crates/araphor-data/src/analysis/managed/graph/publication.rs)

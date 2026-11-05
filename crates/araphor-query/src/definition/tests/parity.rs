@@ -169,11 +169,10 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
         .await?;
     let retained = fixture.engine.memory().input_reserved();
     let image = definition.images().next().ok_or("admitted image")?;
-    let image_digest = image.digest().to_owned();
     let package = image.bundle().root.clone();
     assert!(!fixture
         .engine
-        .guest_cached(&image_digest, &package, "evaluate")?);
+        .guest_cached(image, &package, "evaluate")?);
     for id in ["cold", "cached"] {
         let error = session
             .execute_definition(
@@ -194,7 +193,7 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
         );
         assert!(fixture
             .engine
-            .guest_cached(&image_digest, &package, "evaluate")?);
+            .guest_cached(image, &package, "evaluate")?);
         control.check()?;
         drop(fixture.engine.reserve_evaluation([1; 16])?);
         assert_eq!(fixture.engine.memory().input_reserved(), retained);
@@ -269,9 +268,8 @@ async fn views_prepare_hidden_guests() -> TestResult {
         )
         .await?;
     let image = definition.images().next().ok_or("admitted image")?;
-    let image_digest = image.digest().to_owned();
     let package = image.bundle().root.clone();
-    let mut plan = definition.plan;
+    let mut plan = definition.plan.clone();
     for name in ["inner_guest", "outer_guest"] {
         plan = LogicalPlan::TableScan(TableScan::try_new(
             name,
@@ -285,7 +283,7 @@ async fn views_prepare_hidden_guests() -> TestResult {
     assert!(PackageCall::contains(&plan)?);
     assert!(!fixture
         .engine
-        .guest_cached(&image_digest, &package, "evaluate")?);
+        .guest_cached(image, &package, "evaluate")?);
     let mut state = session.state()?;
     state
         .config_mut()
@@ -293,7 +291,7 @@ async fn views_prepare_hidden_guests() -> TestResult {
     let physical = session.physical(&plan, &state).await?;
     assert!(fixture
         .engine
-        .guest_cached(&image_digest, &package, "evaluate")?);
+        .guest_cached(image, &package, "evaluate")?);
     drop(physical);
     drop(state);
     control.check()?;

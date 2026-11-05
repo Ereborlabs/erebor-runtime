@@ -1,5 +1,84 @@
 # Araphor reactive execution in milliseconds
 
+## Compiled component reuse result, 2026-11-05
+
+The existing Wasm code cache now identifies one admitted implementation across
+its exports. `model_code` first selects the requested export's implementation.
+It uses that implementation's first declared export only for the cache key.
+The bundle digest and package identity remain in the key. Distinct Wasm
+implementations cannot share this export in an admitted package. Raw-byte
+cache behavior, compiler admission, resource checks, charging, and eviction
+keep their existing owners. There is no new cache or serialized code archive.
+
+Prepared calls and evaluations retain their actual export. Package admission,
+Graph access, transaction staging, and Data commit keep their existing owners.
+The test-only cache inspection API now takes the admitted bundle and uses the
+same selector. Its callers retain the same assertions. The exact incident test
+and its workload, limits, and timeouts are unchanged.
+
+The diagnostic exact test passes in 33.39 seconds. It compiles the same
+4,882,989-byte component twice. Cold preparation takes 2.230095 seconds for
+`index` and 2.435177 seconds for `detect`. `Component::new` accounts for
+2.104438 and 2.305019 seconds. The enclosing physical-planning timer includes
+this preparation. It does not measure DataFusion planning alone.
+
+The final focused build passes in 208.008811 seconds. A preceding exact run
+passes in 29.61 seconds and records one compilation. That single test time is
+not a speed comparison. Five alternating pairs then run the unchanged exact
+incident test. All ten runs pass.
+
+| Pair | First executable | Baseline test, seconds | Shared component test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 33.22 | 30.61 | +2.6150 |
+| 2 | Shared component | 33.41 | 30.49 | +2.9199 |
+| 3 | Baseline | 33.72 | 31.31 | +2.4177 |
+| 4 | Shared component | 34.00 | 31.16 | +2.8525 |
+| 5 | Baseline | 34.20 | 31.59 | +2.6075 |
+
+All five whole-process comparisons are lower. The paired median saving is
+2.614963 seconds, or 7.86 percent. The paired reduction ranges from 7.16 to
+8.73 percent. Every baseline compiles `index` and `detect`; every candidate
+compiles one shared component. Summed cold preparation has medians of
+4.515685 and 2.264546 seconds. Its paired median reduction is 49.87 percent.
+The enclosing physical-planning totals have medians of 5.399321 and
+3.164047 seconds. These nested costs are not added to the whole-test saving.
+The statistical units are five paired run totals. Initial, warm, and bulk
+differences are mixed. No separate notification or bulk gain is claimed.
+
+Every run retains 16,402 public records, five managed publications, three
+source-change restart mentions, 61 authority checks, and twelve Graph append
+batches. Graph apply work, projection result IDs, and publication cut/revision
+pairs are equal in every pair. Bulk work stays at 64 pages, 16,384 rows,
+60 retained pages, 262,144 physical frame rows, and 53,401,792 body bytes.
+No source edit, build, debugger, or other test runs during the comparison.
+
+Result: **Done** for shared component compilation and this comparison.
+Millisecond notification latency and the 100-fold target remain **Not done**.
+Full CI and other test cases were not run. Finite cache pressure, distinct
+implementation selection, and the migrated inspection tests have source review
+only under this qualification.
+
+The capture probes also separate coordinator admission, snapshot metadata,
+selection, source setup, trace setup, raw work, and the remaining work. Source
+setup includes the extraction envelope, replay floor, managed capture, source
+receipts, gaps, raw state, and coverage. It is not a pure receipt query timer.
+The next capture investigation must separate those owners before replacement.
+Unexecuted probe stages remain zero. Initial preflight work remains in the
+complete elapsed time only. Overlapping capture spans are not added as a
+whole-test saving. No storage engine change is selected.
+
+Proof: `/tmp/araphor-build-component-reuse-20261105-a.log`,
+`/tmp/araphor-live-component-reuse-20261105-a.log`, and
+`/tmp/araphor-component-reuse-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs. Baseline: `907cedb4a` plus the reviewed capture and component
+timing probes and the standard telemetry dependency. Its patch is
+`/tmp/araphor-capture-phases-baseline-20261105.patch`. Retained executables are
+`target/araphor-notice-comparison-20261105/capture-phases` and
+`component-reuse`. Earlier executables were removed for space; logs remain.
+The diagnostic build passes in 251.793178 seconds. Its first build failed
+because the runtime crate did not declare the telemetry dependency. The final
+source uses the repository telemetry owner.
+
 ## Native finding publication result, 2026-11-05
 
 Data now uses one read-scoped Arrow property dictionary for finding

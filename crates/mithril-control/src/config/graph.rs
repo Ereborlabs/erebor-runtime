@@ -185,8 +185,17 @@ async fn graph_sources_use_host() -> TestResult {
         .0
         .images;
     assert_eq!(images.len(), 3);
-    for image in &images {
-        assert!(!query.guest_cached(&image.digest, &image.image, "detect")?);
+    let images = images
+        .into_iter()
+        .map(|image| -> TestResult<_> {
+            let bundle = data
+                .retained_package_image(source.tenant_id, &image, &AnalysisReadControl::default())?
+                .ok_or("retained Graph package image")?;
+            Ok((image, bundle))
+        })
+        .collect::<TestResult<Vec<_>>>()?;
+    for (image, bundle) in &images {
+        assert!(!query.guest_cached(bundle, &image.image, "detect")?);
     }
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let serving = tokio::spawn(Arc::clone(&host).serve(stopped.clone(), u64::MAX));
@@ -225,8 +234,8 @@ async fn graph_sources_use_host() -> TestResult {
                     source.source_id
                 )
             })??;
-            for image in &images {
-                assert!(query.guest_cached(&image.digest, &image.image, "detect")?);
+            for (image, bundle) in &images {
+                assert!(query.guest_cached(bundle, &image.image, "detect")?);
             }
             let graph = data
                 .graph_snapshot(&source)?

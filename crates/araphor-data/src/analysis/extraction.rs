@@ -1853,7 +1853,11 @@ impl AnalysisStore {
                 ) || name.starts_with("catalog_key_")
             })
         });
+        let admission = std::time::Instant::now();
         let (coordinator, mut reader) = self.coordinated_reader(control)?;
+        let mut phases = [std::time::Duration::ZERO; 7];
+        phases[0] = admission.elapsed();
+        let mut checkpoint = std::time::Instant::now();
         let explicit_traces = !selection.traces.is_all() && !selection.traces.as_slice().is_empty();
         let unscoped_notifications = selection.sources.is_all()
             && selection.nodes.is_empty()
@@ -1869,6 +1873,8 @@ impl AnalysisStore {
             };
             // The revision fixes raw selection. The lease prevents segment deletion.
             drop(coordinator);
+            phases[1] = checkpoint.elapsed();
+            checkpoint = std::time::Instant::now();
             #[cfg(test)]
             control.test_snapshot()?;
             let requested = selection;
@@ -1885,6 +1891,8 @@ impl AnalysisStore {
             let (selection, key_bytes) =
                 self.resolve_selection_filtered(snapshot, raw_scope.as_ref().unwrap_or(selection), control, limits, context_owners, reference.map(|reference| reference.captured_revision()))?;
             let selection = selection.as_ref();
+            phases[2] = checkpoint.elapsed();
+            checkpoint = std::time::Instant::now();
             let mut capture = tables::Capture::new(&read, selection);
             let end = StorePositionV1 {
                 commit_revision: meta.commit_revision,
@@ -1974,6 +1982,8 @@ impl AnalysisStore {
                     typed_report: None,
                 });
             }
+            phases[3] = checkpoint.elapsed();
+            checkpoint = std::time::Instant::now();
             let mut trace_info = Vec::new();
             for identity in selection.traces.as_slice() {
                 control.check()?;
@@ -2055,6 +2065,8 @@ impl AnalysisStore {
                     capture.trace(&state, &intent, index as u32, &receipt, &mut output.sink(control))?;
                 }
             }
+            phases[4] = checkpoint.elapsed();
+            checkpoint = std::time::Instant::now();
             if envelope.is_some() {
                 return Ok((capture.finish(output, end, true, control)?, None));
             }
@@ -2074,6 +2086,8 @@ impl AnalysisStore {
                 },
                 &mut output, &mut capture, &mut removals, control, &mut journal_work,
             )?;
+            phases[5] = checkpoint.elapsed();
+            checkpoint = std::time::Instant::now();
             if let AnalysisReadModeV1::Changes(after) = mode {
                 for removal in removals {
                     output.remove_raw(&mut capture, &removal, control)?;
@@ -2396,7 +2410,16 @@ impl AnalysisStore {
         if reference.is_some() {
             reader.get()?.flush_prepared_statement_cache();
         }
+        phases[6] = checkpoint.elapsed();
         if let Ok((page, managed)) = &result {
+            erebor_telemetry::debug!(
+                stage="capture_phase_timing", metadata=envelope.is_some(), mode=?mode,
+                requests=?read.requests.keys(),
+                coordinator_s=phases[0].as_secs_f64(), meta_s=phases[1].as_secs_f64(),
+                selection_s=phases[2].as_secs_f64(), sources_s=phases[3].as_secs_f64(),
+                traces_s=phases[4].as_secs_f64(), raw_s=phases[5].as_secs_f64(),
+                rest_s=phases[6].as_secs_f64(), elapsed_s=started.elapsed().as_secs_f64(),
+                "Source capture phase timing completed");
             erebor_telemetry::debug!(stage="capture",operation="complete",
                 instance_id=%managed.as_ref().map_or("",|capture|capture.instance().spec.id.as_str()),
                 cut_revision=page.extraction.meta.commit_revision,source_name="journal",

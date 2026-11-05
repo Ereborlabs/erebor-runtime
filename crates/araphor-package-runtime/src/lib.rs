@@ -88,7 +88,12 @@ impl Runtime {
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub fn guest_cached(&self, image: &str, package: &PackageRefV1, export: &str) -> Result<bool> {
+    pub fn guest_cached(
+        &self,
+        image: &PackageBundle,
+        package: &PackageRefV1,
+        export: &str,
+    ) -> Result<bool> {
         Ok(self
             .wasm()?
             .cached_model(

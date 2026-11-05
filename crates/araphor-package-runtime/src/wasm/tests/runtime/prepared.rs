@@ -13,7 +13,7 @@ async fn preparation_precedes_guest_timeout() -> TestResult {
     let wasm = runtime.wasm()?;
     let package = package();
     let image = bundle(&package)?;
-    assert!(!runtime.guest_cached(image.digest(), &image.bundle().root, "evaluate")?);
+    assert!(!runtime.guest_cached(&image, &image.bundle().root, "evaluate")?);
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let workers = crate::TaskTracker::new();
     let result = runtime
@@ -34,7 +34,7 @@ async fn preparation_precedes_guest_timeout() -> TestResult {
         ),
         "{result:?}"
     );
-    assert!(runtime.guest_cached(image.digest(), &image.bundle().root, "evaluate")?);
+    assert!(runtime.guest_cached(&image, &image.bundle().root, "evaluate")?);
     assert_eq!(
         wasm.evaluations
             .as_ref()

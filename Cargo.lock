@@ -427,6 +427,7 @@ dependencies = [
  "araphor-data",
  "araphor-package",
  "erebor-runtime-error",
+ "erebor-telemetry",
  "futures-util",
  "libloading",
  "object 0.40.0",

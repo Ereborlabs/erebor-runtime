@@ -246,7 +246,7 @@ impl Engine {
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn guest_cached(
         &self,
-        image: &str,
+        image: &araphor_package::PackageBundle,
         package: &araphor_package::PackageRefV1,
         export: &str,
     ) -> Result<bool> {
