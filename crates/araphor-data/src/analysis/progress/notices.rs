@@ -170,6 +170,8 @@ impl AnalysisStore {
         if let Some(revision) = changed {
             self.commit_metadata(transaction, "commit analysis notice")?;
             self.revision.send_replace(revision);
+            let change = super::super::inputs::InputChange::Notice { scope, result: result_id };
+            self.inputs.metadata(revision, change);
         }
         Ok(())
     }

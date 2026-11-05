@@ -11,10 +11,14 @@ impl GraphLease {
             .graph_owner
             .lock()
             .map_err(|_| self.0.state_error("the Graph interest lock is poisoned"))?;
-        owner
+        let owner = owner
             .as_mut()
-            .ok_or_else(|| self.0.state_error("the Graph interest owner is absent"))?
-            .retain(|value| value != selection);
+            .ok_or_else(|| self.0.state_error("the Graph interest owner is absent"))?;
+        let enabled = !owner.is_empty();
+        owner.retain(|value| value != selection);
+        if enabled && owner.is_empty() {
+            self.0.controls.send_replace(());
+        }
         Ok(())
     }
 }
@@ -26,11 +30,14 @@ impl Drop for GraphLease {
             .writer
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        self.0
+        let removed = self.0
             .graph_owner
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take();
+        if removed.is_some_and(|owner| !owner.is_empty()) {
+            self.0.controls.send_replace(());
+        }
     }
 }
 
@@ -99,6 +106,7 @@ impl AnalysisStore {
             return crate::AnalysisConflictSnafu.fail();
         }
         *owner = Some(selections);
+        self.controls.send_replace(());
         Ok(GraphLease(Arc::clone(self)))
     }
 
@@ -192,6 +200,9 @@ impl AnalysisStore {
         check()?;
         self.commit_metadata(transaction, "commit Graph registration")?;
         self.revision.send_replace(revision);
+        self.inputs.metadata(revision, super::super::inputs::InputChange::Processor(&ProcessorScopeV1 {
+            identity: source.clone(), processor_id: GRAPH_PROCESSOR.into(), method_version: u64::from(GRAPH_SCHEMA_VERSION),
+        }));
         self.activations.send_replace(revision);
         Ok(())
     }

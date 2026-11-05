@@ -126,9 +126,12 @@ impl<'a> EvidenceRetentionOwner<'a> {
         if result.is_ok() {
             if !self.store.retention_healthy.swap(true, Ordering::AcqRel) {
                 self.store.revision.send_modify(|_| {});
+                self.store.controls.send_replace(());
             }
         } else {
-            self.store.retention_healthy.store(false, Ordering::Release);
+            if self.store.retention_healthy.swap(false, Ordering::AcqRel) {
+                self.store.controls.send_replace(());
+            }
         }
         result
     }
@@ -363,6 +366,14 @@ impl<'a> EvidenceRetentionOwner<'a> {
                 self.store.crash_at("retention.after");
                 let cleanup =
                     AnalysisStore::remove_segments(writer, &self.store.root, &raw, &selected);
+                for entry in raw.entries.values().filter(|entry| selected.contains(&entry.reference.id)) {
+                    for span in &entry.commit.spans {
+                        self.store.inputs.metadata(revision, super::inputs::InputChange::Removal {
+                            identity: &entry.identity,
+                            range: Some((span.first, span.last, Some(entry.commit.intake))),
+                        });
+                    }
+                }
                 raw.forget_segments(selected)?;
                 cleanup?;
                 raw.refresh_budget(writer, self.store.retention)?;

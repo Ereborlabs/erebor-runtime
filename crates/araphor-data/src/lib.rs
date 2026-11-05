@@ -60,7 +60,7 @@ pub use analysis::{
     StorageUsageV1, StorePositionV1, TraceBindingV1, TraceIntentPageV1, TraceIntentV1,
     TraceOutputPageV1, TraceOutputReceiptV1, TraceStateV1, ValidatedCoverageV1,
     ValidatedEvidenceBatchV1, WitnessUsageV1, ANALYSIS_DUCKDB_BINDING_VERSION,
-    ANALYSIS_SQLPARSER_VERSION, EVIDENCE_SEGMENT_BYTES,
+    ANALYSIS_SQLPARSER_VERSION, EVIDENCE_SEGMENT_BYTES, InputSubscription,
 };
 
 pub const EVIDENCE_BATCH_RECORDS: usize = 4_096;

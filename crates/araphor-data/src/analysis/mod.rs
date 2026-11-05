@@ -27,6 +27,7 @@ mod extraction;
 mod graph;
 pub(crate) mod graph_rows;
 mod health;
+mod inputs;
 mod managed;
 mod notification;
 mod packages;
@@ -57,6 +58,7 @@ pub use extraction::{
 pub use graph::{GraphCommit, GraphLease, GraphManifest, GraphSourceSummary};
 pub use graph_rows::CanonicalGraph;
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
+pub use inputs::InputSubscription;
 pub use managed::*;
 pub use notification::{NotificationLookup, PreparedNotificationBatch};
 pub use packages::*;
@@ -120,7 +122,9 @@ pub struct AnalysisStore {
     pub(crate) graph_owner: Mutex<Option<Vec<AnalysisSelectionV1>>>,
     managed_owner: AtomicBool,
     maintenance: RwLock<()>,
+    inputs: inputs::InputChanges,
     revision: watch::Sender<u64>,
+    controls: watch::Sender<()>,
     activations: watch::Sender<u64>,
     capacity: watch::Sender<()>,
     retention_healthy: AtomicBool,
@@ -226,11 +230,15 @@ impl AnalysisStore {
                 CREATE INDEX IF NOT EXISTS graph_fact_record_idx ON graph_fact_records(record_key,version_key);";
 
     pub fn register_discovery_owner(&self) {
-        self.discovery_owners.fetch_add(1, Ordering::AcqRel);
+        if self.discovery_owners.fetch_add(1, Ordering::AcqRel) == 0 {
+            self.controls.send_replace(());
+        }
     }
 
     pub fn release_discovery_owner(&self) {
-        self.discovery_owners.fetch_sub(1, Ordering::AcqRel);
+        if self.discovery_owners.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.controls.send_replace(());
+        }
     }
 
     pub fn enable_notification_owner(&self) -> Result<()> {
@@ -239,11 +247,15 @@ impl AnalysisStore {
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok(),
             "router owner",
-        )
+        )?;
+        self.controls.send_replace(());
+        Ok(())
     }
 
     pub fn release_notification_owner(&self) {
-        self.notification_owner.store(false, Ordering::Release);
+        if self.notification_owner.swap(false, Ordering::AcqRel) {
+            self.controls.send_replace(());
+        }
     }
 
     pub fn package_lifecycle(&self) -> Arc<Mutex<()>> {
@@ -555,6 +567,7 @@ impl AnalysisStore {
         let (revision, _) = watch::channel(meta.commit_revision);
         let (activations, _) = watch::channel(meta.commit_revision);
         let (capacity, _) = watch::channel(());
+        let (controls, _) = watch::channel(());
         let readers = connection::ReaderPool::new(&writer)?;
         let graph_engine = araphor_graph::GraphStore::install(&writer)?;
         let managed_results = managed::CommittedOwners::restore(&writer)?;
@@ -579,10 +592,12 @@ impl AnalysisStore {
             package_lifecycle: Arc::new(Mutex::new(())),
             discovery_owners: AtomicUsize::new(0),
             maintenance: RwLock::new(()),
+            inputs: inputs::InputChanges::default(),
             revision,
             activations,
             capacity,
             retention_healthy: AtomicBool::new(true),
+            controls,
             write_ready: AtomicBool::new(true),
             #[cfg(any(test, feature = "test-fixtures"))]
             commit_hook: Mutex::new(None),
@@ -648,6 +663,10 @@ impl AnalysisStore {
 
     pub fn subscribe_revision(&self) -> watch::Receiver<u64> {
         self.revision.subscribe()
+    }
+
+    pub fn subscribe_control(&self) -> watch::Receiver<()> {
+        self.controls.subscribe()
     }
 
     pub fn subscribe_activations(&self) -> watch::Receiver<u64> {
@@ -886,6 +905,9 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("coverage.after");
         self.revision.send_replace(revision);
+        self.inputs.metadata(revision, inputs::InputChange::Raw {
+            identity: &AnalysisStreamIdentityV1::Evidence(identity.clone()), range: None,
+        });
         Ok(input.revision)
     }
 

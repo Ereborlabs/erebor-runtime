@@ -17,11 +17,11 @@ use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::{
-    Expr, Operator, TableProviderFilterPushDown, TableType, utils::conjunction,
+    utils::conjunction, Expr, Operator, TableProviderFilterPushDown, TableType,
 };
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{
-    AnalysisContext, EquivalenceProperties, ExprBoundaries, PhysicalExpr, analyze,
+    analyze, AnalysisContext, EquivalenceProperties, ExprBoundaries, PhysicalExpr,
 };
 use datafusion::physical_plan::coop::cooperative;
 use datafusion::physical_plan::execution_plan::SchedulingType;
@@ -58,7 +58,7 @@ mod work;
 
 pub(crate) use journal::Changes;
 pub use rows::ArrowSnapshot;
-pub(crate) use rows::{Captured, CapturedRequests, MetadataRead};
+pub(crate) use rows::{Captured, MetadataRead};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum SourceOrigin {
@@ -107,6 +107,7 @@ pub(crate) struct ScanBounds {
     pub(crate) ports: BTreeSet<usize>,
     pub(crate) qualified: BTreeMap<usize, BTreeSet<usize>>,
     pub(crate) context_owners: Option<BTreeSet<String>>,
+    pub(crate) input_owners: Option<BTreeSet<String>>,
     pub(crate) context_images: BTreeSet<Option<SourceImage>>,
 }
 
@@ -133,6 +134,7 @@ struct SourceScan<'a> {
     window: Option<crate::follow::Window>,
     moving: bool,
     context_seen: bool,
+    input_seen: bool,
     calls: Option<&'a crate::definition::CallContext>,
     skipped: bool,
 }
@@ -232,6 +234,22 @@ impl<'n> TreeNodeVisitor<'n> for SourceScan<'_> {
                     .get_or_insert_with(BTreeSet::new)
                     .extend(source.indices.iter().copied());
                 SourceSnapshot::extend_bounds(&mut self.bounds.fields, &source.bounds)?;
+                if matches!(name, "context" | "context_versions") {
+                    let owners = (name == "context_versions")
+                        .then(|| source.context_owners.clone())
+                        .flatten();
+                    self.bounds.input_owners = if self.input_seen {
+                        match (&self.bounds.input_owners, owners) {
+                            (Some(previous), Some(next)) => {
+                                Some(previous.union(&next).cloned().collect())
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        owners
+                    };
+                    self.input_seen = true;
+                }
                 if matches!(
                     name,
                     "context_versions"
@@ -364,6 +382,7 @@ impl SourceSnapshot {
             window: run.and_then(|run| run.window.clone()),
             moving: run.is_some_and(|run| run.follow || run.managed.is_some()),
             context_seen: false,
+            input_seen: false,
             calls,
             skipped: false,
         };

@@ -90,6 +90,29 @@ impl GraphOrigin {
 }
 
 impl CommittedOwners {
+    pub(in crate::analysis) fn publication_matches(
+        &self,
+        tenant: [u8; 16],
+        result: &str,
+        matches: impl Fn(&[crate::AnalysisWitnessV1]) -> bool,
+    ) -> bool {
+        let owners = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(publication) = owners.publications.get(&(tenant, result.to_owned())) else {
+            return false;
+        };
+        let mut has_witnesses = false;
+        for (&writer, &revision) in &publication.heads {
+            let Some(origin) = owners.origins.get(&(writer, revision)) else { continue; };
+            let Some(producer) = owners.producers.get(&(tenant, origin.result.clone())) else { continue; };
+            let witnesses = &producer.record.witnesses;
+            has_witnesses |= !witnesses.is_empty();
+            if !witnesses.is_empty() && matches(witnesses) {
+                return true;
+            }
+        }
+        !has_witnesses && matches(&[])
+    }
+
     pub(in crate::analysis) fn graph_publication(
         &self,
         reader: &Connection,

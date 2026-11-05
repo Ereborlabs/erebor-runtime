@@ -143,6 +143,7 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("context.after");
         self.revision.send_replace(revision);
+        self.inputs.contexts(revision, &references);
         Ok(references)
     }
 

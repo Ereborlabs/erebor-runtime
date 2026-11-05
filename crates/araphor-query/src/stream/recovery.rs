@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use araphor_data::{AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests, ManagedRead};
+use araphor_data::AnalysisReadControl;
 use datafusion::common::DataFusionError;
 use snafu::Snafu;
 
@@ -12,21 +12,17 @@ use crate::{Error, Failure, Result};
 /// Wait for a source change after a failed managed capture has joined.
 pub struct SourceRecovery {
     run: Arc<Run>,
-    selection: AnalysisSelectionV1,
-    managed: Option<ManagedRead>,
-    requests: AnalysisTableRequests,
-    revision: u64,
-    now: u64,
     progress: Option<Progress>,
     source_index: Option<Arc<crate::sources::SourceIndex>>,
     invalidated: bool,
+    captured: Option<araphor_data::StorePositionV1>,
 }
 
 impl std::fmt::Debug for SourceRecovery {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SourceRecovery")
-            .field("revision", &self.revision)
+            .field("position", &self.progress.as_ref().map(Progress::observed))
             .finish_non_exhaustive()
     }
 }
@@ -39,23 +35,21 @@ struct CaptureFailure {
 }
 
 impl SourceRecovery {
-    pub(crate) fn new(
-        run: Arc<Run>,
-        session: &Session,
-        now: u64,
-        requests: AnalysisTableRequests,
-    ) -> Self {
+    pub(crate) fn new(run: Arc<Run>) -> Self {
         Self {
-            revision: *session.engine().store().subscribe_revision().borrow(),
             run,
-            selection: session.selection().clone(),
-            managed: session.managed.clone(),
-            requests,
-            now,
             progress: None,
             source_index: None,
             invalidated: false,
+            captured: None,
         }
+    }
+
+    pub(crate) fn captured(&mut self, revision: u64) {
+        self.captured = Some(araphor_data::StorePositionV1 {
+            commit_revision: revision,
+            ordinal: u32::MAX,
+        });
     }
 
     pub(crate) fn invalidated(mut self) -> Self {
@@ -132,6 +126,7 @@ impl SourceRecovery {
                 .is_some_and(|(original, prepared)| Arc::ptr_eq(&original, &prepared))
         {
             session.source_index = self.source_index.take();
+            session.input_changes = self.progress.as_ref().and_then(Progress::subscription);
         }
         session
     }
@@ -147,35 +142,24 @@ impl SourceRecovery {
             }
             .build()
         })?;
-        let mut session = self.run.session.engine().session_on(
-            self.selection.clone(),
-            control,
-            self.now,
-            Arc::clone(self.run.session.memory()),
-        )?;
-        session.managed = self.managed.clone();
-        let selection = self.selection.project(&self.requests)?;
-        let (meta, revision) = self
-            .run
-            .dependencies(&session, selection.clone(), None, None)
-            .await?;
-        if revision > self.revision {
+        let failed = self.captured.unwrap_or_else(|| progress.observed());
+        if progress.source_position() > failed {
+            self.progress = Some(progress);
             return Ok(self);
         }
-        progress.checked(meta.commit_revision);
         loop {
-            match control.query_async(progress.next(control, None)).await? {
-                Wake::Clock if progress.expired(progress.now()?) => return Ok(self),
+            match control
+                .query_async(progress.next_after(control, failed, None))
+                .await?
+            {
+                Wake::Clock if progress.expired(progress.now()?) => {
+                    self.progress = Some(progress);
+                    return Ok(self);
+                }
                 Wake::Clock => {}
-                Wake::Source => {
-                    let (meta, revision) = self
-                        .run
-                        .dependencies(&session, selection.clone(), None, None)
-                        .await?;
-                    if revision > self.revision {
-                        return Ok(self);
-                    }
-                    progress.checked(meta.commit_revision);
+                Wake::Source | Wake::Control => {
+                    self.progress = Some(progress);
+                    return Ok(self);
                 }
             }
         }

@@ -899,14 +899,18 @@ fn captured_requests_keep_charge() -> TestResult {
         ("context_versions".into(), Some(BTreeSet::from([column]))),
         ("events".into(), None),
     ]);
+    let owners = BTreeSet::from(["retained-owner".to_owned()]);
     let receipt = source.capture(
         &tables,
-        super::ScanBounds::default(),
+        super::ScanBounds {
+            context_owners: Some(owners.clone()),
+            ..Default::default()
+        },
         super::ReadMode::Snapshot,
     )?;
     let previous = Arc::downgrade(&receipt);
     let requests = Arc::clone(receipt.requests());
-    assert_eq!(requests.tables(), &tables);
+    assert_eq!(requests.context_owners(), Some(&owners));
     let held = memory.input_reserved();
     let shared = Arc::clone(&requests);
     assert_eq!(memory.input_reserved(), held);
@@ -918,7 +922,7 @@ fn captured_requests_keep_charge() -> TestResult {
     assert_eq!(retained, requests._memory.size());
     drop(requests);
     assert_eq!(memory.input_reserved(), retained);
-    assert_eq!(shared.tables(), &tables);
+    assert_eq!(shared.context_owners(), Some(&owners));
     drop(shared);
     assert_eq!(memory.input_reserved(), 0);
     drop(memory.reserve_input(capacity)?);

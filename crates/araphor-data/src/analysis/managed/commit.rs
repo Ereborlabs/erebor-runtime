@@ -194,6 +194,7 @@ impl AnalysisStore {
             graph_layer,
             owners,
         ) = self.managed_commit_rows(&transaction, &mut prepared, revision, project)?;
+        let graph_changed = owners.has_graph();
         let owners = self.managed_results.seal(owners)?;
         let retained = Self::retain_managed(input, &receipt, verified, input_proof);
         let source_proof = input.attempt.5.as_ref().map(|frame| {
@@ -219,7 +220,7 @@ impl AnalysisStore {
         check()?;
         #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("managed.before");
-        let prepared = std::time::Instant::now();
+        let prepared_at = std::time::Instant::now();
         self.commit_metadata(transaction, "commit complete managed step")?;
         if let Some(layer) = graph_layer {
             layer.commit();
@@ -235,6 +236,40 @@ impl AnalysisStore {
         #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("managed.after");
         self.revision.send_replace(revision);
+        for reference in prepared.derived.saved.values().filter(|reference| reference.commit_revision == revision) {
+            self.inputs.metadata(revision, super::super::inputs::InputChange::Context(&reference.key));
+        }
+        if graph_changed {
+            self.inputs.metadata(revision, super::super::inputs::InputChange::Publication {
+                tenant, result: &receipt.selected.result_id, owners: &self.managed_results,
+            });
+        }
+        if let Some(graph) = &receipt.graph {
+            let source = match &input.attempt.instance().spec.destination {
+                ManagedDestination::Graph { source, .. } => Some(source),
+                _ => None,
+            };
+            self.inputs.metadata(revision, super::super::inputs::InputChange::Graph {
+                tenant, result: &graph.result_id, source, witnesses: &prepared.evidence.witnesses,
+            });
+        }
+        match &input.attempt.instance().spec.destination {
+            ManagedDestination::Graph { source, .. } => self.inputs.metadata(revision,
+                super::super::inputs::InputChange::Processor(&crate::ProcessorScopeV1 {
+                    identity: source.clone(), processor_id: crate::GRAPH_PROCESSOR.into(),
+                    method_version: u64::from(crate::GRAPH_SCHEMA_VERSION),
+                })),
+            ManagedDestination::DiscoveryProfile { source, call, .. } => {
+                if let Some(result) = receipt.results.get(call) {
+                    self.inputs.metadata(revision, super::super::inputs::InputChange::Profile {
+                        scope: &crate::ProcessorScopeV1 { identity: source.clone(), processor_id: "discovery".into(),
+                            method_version: u64::from(crate::DISCOVERY_SCHEMA_VERSION) },
+                        result: &result.result_id,
+                    });
+                }
+            }
+            _ => {}
+        }
         if input.attempt.switches_version() {
             self.activations.send_replace(revision);
         }
@@ -245,8 +280,8 @@ impl AnalysisStore {
             freeze_s = frozen.duration_since(started).as_secs_f64(),
             prepare_exit_s = requested.duration_since(frozen).as_secs_f64(),
             writer_acquire_s = acquired.duration_since(requested).as_secs_f64(),
-            transaction_work_s = prepared.duration_since(acquired).as_secs_f64(),
-            commit_s = committed.duration_since(prepared).as_secs_f64(),
+            transaction_work_s = prepared_at.duration_since(acquired).as_secs_f64(),
+            commit_s = committed.duration_since(prepared_at).as_secs_f64(),
             postcommit_s = published.duration_since(committed).as_secs_f64(),
             elapsed_s = published.duration_since(started).as_secs_f64(),
             "Managed commit timing completed"

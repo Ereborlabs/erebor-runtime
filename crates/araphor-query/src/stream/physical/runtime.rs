@@ -12,7 +12,7 @@ use super::{kernel::Kernel, Compiled, Mode, SubscribeExec};
 use crate::definition::CapturedExecution;
 use crate::execution::{PendingRead, PhysicalStream, Read, Session};
 use crate::follow::Operation;
-use crate::sources::{ArrowSnapshot, CapturedRequests, Changes, SourceData};
+use crate::sources::{ArrowSnapshot, Changes, SourceData};
 use crate::stream::progress::{Progress, Wake};
 use crate::stream::{Event, Output, Run, StreamError};
 use crate::{Result, SqlSnafu};
@@ -26,7 +26,6 @@ pub(super) struct Runtime {
     maintained: Option<Maintained>,
     progress: Progress,
     snapshot: Option<Arc<ArrowSnapshot>>,
-    requests: Option<Arc<CapturedRequests>>,
     cut: Option<WindowCut>,
     advance_window: bool,
     revision: u64,
@@ -135,7 +134,6 @@ impl Runtime {
             maintained,
             progress,
             snapshot: None,
-            requests: None,
             cut: None,
             advance_window: false,
             evaluated: 0,
@@ -188,6 +186,67 @@ impl Runtime {
         if self.ended {
             return Ok(None);
         }
+        self.progress.bind(&self.input).await?;
+        let mut resumed_clock = false;
+        if self.snapshot.is_none() {
+            let now = self.progress.now()?;
+            if let Some(cursor) = self.run.resume.as_ref().filter(|_| {
+                self.run.follow
+                    && !self.run.resume_pending
+                    && self
+                        .initial
+                        .as_ref()
+                        .and_then(|(_, _, session)| session.managed.as_ref())
+                        .is_none_or(|managed| !managed.rebuild)
+                    && self.run.resume_expiry.is_none_or(|expiry| expiry > now)
+            }) {
+                if let Some(meta) = self.progress.meta() {
+                    cursor.check_store(meta)?;
+                }
+                if self.progress.source_position() <= cursor.position() {
+                    let cursor = cursor.clone();
+                    self.progress
+                        .captured(cursor.position(), self.run.resume_expiry);
+                    self.evaluated = cursor.evaluated();
+                    if let Some((permit, _, session)) = self.initial.take() {
+                        if let Some(calls) = &session.calls {
+                            calls.finish().await;
+                        }
+                        drop(session);
+                        drop(permit);
+                    }
+                    match self
+                        .run
+                        .session
+                        .control()
+                        .query_async(self.progress.next(self.run.session.control(), None))
+                        .await?
+                    {
+                        Wake::Source => {}
+                        Wake::Control => return self.metadata_update(false).await.map(Some),
+                        Wake::Clock => {
+                            let now = self.progress.now()?;
+                            if self.progress.expired(now)
+                                || cursor.windows.iter().any(|window| {
+                                    window.active
+                                        && i128::from(window.end_utc_ns) <= i128::from(now)
+                                        && !cursor
+                                            .completed_windows
+                                            .iter()
+                                            .any(|closed| closed.same_interval(window))
+                                })
+                            {
+                                resumed_clock = true;
+                            } else {
+                                let mut event = self.metadata_update(false).await?;
+                                event.clock_changed = true;
+                                return Ok(Some(event));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if self.advance_window {
             self.advance_window = false;
             if let Some(event) = self.complete_window().await? {
@@ -197,7 +256,7 @@ impl Runtime {
             return self.evaluate(true, Vec::new()).await;
         }
         if self.snapshot.is_none() {
-            if let Some(event) = self.evaluate(false, Vec::new()).await? {
+            if let Some(event) = self.evaluate(resumed_clock, Vec::new()).await? {
                 return Ok(Some(event));
             }
         }
@@ -220,11 +279,9 @@ impl Runtime {
                     if let Some(event) = self.complete_window().await? {
                         return Ok(Some(event));
                     }
-                    if self.changed().await? {
-                        return self.evaluate(false, Vec::new()).await;
-                    }
-                    return self.metadata_update(false).await.map(Some);
+                    return self.evaluate(false, Vec::new()).await;
                 }
+                Wake::Control => return self.metadata_update(false).await.map(Some),
                 Wake::Clock => {
                     if let Some(event) = self.complete_window().await? {
                         return Ok(Some(event));
@@ -233,23 +290,6 @@ impl Runtime {
                 }
             }
         }
-    }
-
-    async fn changed(&mut self) -> Result<bool> {
-        self.progress.observe();
-        let selection = self
-            .snapshot
-            .as_ref()
-            .ok_or_else(Self::state_error)?
-            .selection
-            .clone();
-        let (meta, revision) = self
-            .run
-            .dependencies(&self.run.session, selection, None, self.requests.as_ref())
-            .await?;
-        self.check_store(&meta)?;
-        self.progress.checked(meta.commit_revision);
-        Ok(revision > self.captured)
     }
 
     async fn evaluate(
@@ -287,20 +327,18 @@ impl Runtime {
                 (permit, self.progress.begin()?, None)
             }
         };
-        let selection = self.run.selection(now)?;
-        if self.snapshot.is_none() && self.run.resume.is_some() && self.run.managed.is_none() {
-            let (meta, _) = self
-                .run
-                .dependencies(&self.run.session, selection.clone(), Some(&permit), None)
-                .await?;
-            self.check_store(&meta)?;
-        }
         let reuse = initial.is_some();
         let mut session = match initial {
             Some(session) => session,
             None => {
                 self.run
-                    .session(now, &permit, completion, windows, None)
+                    .session(
+                        now,
+                        &permit,
+                        completion,
+                        windows,
+                        self.run.resume.as_ref().filter(|_| self.snapshot.is_none()),
+                    )
                     .await?
             }
         };
@@ -326,7 +364,6 @@ impl Runtime {
                     )
                     .await?;
                 self.check_store(&snapshot.page.extraction.meta)?;
-                self.requests = Some(Arc::clone(snapshot.requests()));
                 self.snapshot = Some(Arc::clone(&snapshot));
                 Output::page(
                     &session,
@@ -347,7 +384,6 @@ impl Runtime {
                         &output.snapshot.page.extraction.meta,
                     )?;
                 }
-                self.requests = Some(Arc::clone(output.snapshot.requests()));
                 self.snapshot = Some(Arc::clone(&output.snapshot));
                 let batches = output.batches.take().ok_or_else(Self::state_error)?;
                 output._control.check()?;
@@ -414,56 +450,13 @@ impl Runtime {
                     Arc::clone(self.run.session.control()),
                     pending,
                 );
-                let position = if self.run.managed.is_some() {
-                    StorePositionV1 {
-                        commit_revision: captured.snapshot().page.extraction.meta.commit_revision,
-                        ordinal: u32::MAX,
-                    }
-                } else {
-                    StorePositionV1 {
-                        commit_revision: 0,
-                        ordinal: 0,
-                    }
+                let position = StorePositionV1 {
+                    commit_revision: captured.snapshot().page.extraction.meta.commit_revision,
+                    ordinal: u32::MAX,
                 };
                 if let Some((_, publication)) = &self.run.managed {
                     let snapshot = captured.snapshot();
                     self.check_store(&snapshot.page.extraction.meta)?;
-                    let managed = snapshot.managed().ok_or_else(Self::state_error)?;
-                    if let Some(cursor) =
-                        self.run.resume.as_ref().filter(|_| self.snapshot.is_none())
-                    {
-                        if !managed.rebuild()
-                            && !self.run.resume_pending
-                            && managed.source_revision() <= self.run.resume_revision()
-                            && self.run.resume_expiry.is_none_or(|expiry| expiry > now)
-                        {
-                            let cursor = cursor.clone();
-                            let (captured, mut pending) = captured.into_parts();
-                            self.requests = Some(Arc::clone(captured.snapshot.requests()));
-                            self.snapshot = Some(Arc::clone(&captured.snapshot));
-                            if captured.snapshot.windows.iter().any(|window| window.active) {
-                                self.cut = Some(WindowCut {
-                                    snapshot: Arc::clone(&captured.snapshot),
-                                    _calls: Arc::clone(&calls),
-                                    closed: calls
-                                        .completed_windows(&captured.snapshot)
-                                        .context(SqlSnafu)?,
-                                });
-                            }
-                            self.revision = cursor.read_revision();
-                            self.captured = self.run.resume_revision();
-                            self.position = Some(cursor.position());
-                            self.evaluated = cursor.evaluated();
-                            self.exhausted = true;
-                            self.progress.captured(
-                                captured.snapshot.page.extraction.meta.commit_revision,
-                                self.run.resume_expiry,
-                            );
-                            drop(captured);
-                            pending.active = false;
-                            return Ok(None);
-                        }
-                    }
                     let mut cursor = crate::follow::Cursor::new(
                         &snapshot.page.extraction.meta,
                         self.run.operation,
@@ -530,7 +523,6 @@ impl Runtime {
                     reservation,
                 } = captured.start()?;
                 self.check_store(&snapshot.page.extraction.meta)?;
-                self.requests = Some(Arc::clone(snapshot.requests()));
                 self.snapshot = Some(Arc::clone(&snapshot));
                 let output = Output {
                     snapshot,
@@ -580,16 +572,15 @@ impl Runtime {
         };
         self.check_store(&output.snapshot.page.extraction.meta)?;
         let captured = output.snapshot.page.extraction.meta.commit_revision;
+        self.progress.completed(
+            &output.snapshot.page.extraction.meta,
+            calls.published_revision(),
+        );
         self.revision = captured.max(calls.published_revision());
-        self.captured = if self.run.managed.is_some() {
-            captured
-        } else {
-            self.revision
-        };
+        self.captured = captured;
         self.position = Some(output.position);
         self.progress
-            .captured(self.captured, output.snapshot.next_change);
-        self.requests = Some(Arc::clone(output.snapshot.requests()));
+            .captured(output.position, output.snapshot.next_change);
         self.snapshot = Some(Arc::clone(&output.snapshot));
         self.evaluated = now;
         let completed = self.run.managed.is_none() || calls.published_revision() != 0;
@@ -661,22 +652,6 @@ impl Runtime {
             })
             .copied()
             .collect::<Vec<_>>();
-        let (meta, _) = self
-            .run
-            .dependencies(
-                &self.run.session,
-                cut.snapshot.selection.clone(),
-                None,
-                Some(cut.snapshot.requests()),
-            )
-            .await?;
-        self.check_store(&meta)?;
-        if meta.commit_revision < self.revision {
-            return crate::InvalidSnafu {
-                field: "cursor store",
-            }
-            .fail();
-        }
         self.evaluate(true, completed).await
     }
 
@@ -706,6 +681,7 @@ impl Runtime {
             .control()
             .query_async(self.run.session.check_read(&snapshot))
             .await?;
+        self.progress.completed(&snapshot.page.extraction.meta, 0);
         Ok(Event {
             calls: Default::default(),
             output: Output {

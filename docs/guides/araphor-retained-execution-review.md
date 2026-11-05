@@ -1,5 +1,85 @@
 # Araphor retained execution state review
 
+## CDC source progress, 2026-11-05
+
+Matching Data input positions replace the store-wide Query wake and its
+dependency recheck. Final build G passes. All ten unchanged exact incident
+tests pass in five alternating pairs. This section describes that source.
+
+### Intended end state
+
+A subscription wakes when a watched durable input advances after its consumed
+position. The saved native DataFusion plan processes that range. Data commits
+package changes and progress together. Notification creation must take less
+than 100 milliseconds. That latency target is **Not done**.
+
+### Implementation review flow
+
+[Progress::bind](../../crates/araphor-query/src/stream/progress.rs) Query obtains the full native provider input union.
+  -> [SourceScan](../../crates/araphor-query/src/sources/mod.rs) the saved plan supplies provider columns and direct context owner filters.
+  -> [AnalysisStore::subscribe_inputs](../../crates/araphor-data/src/analysis/inputs/mod.rs) Data charges and registers the original input interests before capture.
+  -> [InputInterest::head](../../crates/araphor-data/src/analysis/inputs/head.rs) Data reads the latest matching existing position at one snapshot cut.
+
+[Raw append](../../crates/araphor-data/src/analysis/raw.rs) A matching journal span commits.
+  -> [InputChanges::publish](../../crates/araphor-data/src/analysis/inputs/mod.rs) Data advances the matching subscription position.
+  -> [Progress::next_after](../../crates/araphor-query/src/stream/progress.rs) Query accepts a position after the consumed frontier.
+  -> [Runtime::evaluate](../../crates/araphor-query/src/stream/physical/runtime.rs) Query executes its native plan without a dependency recheck.
+  -> [Managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs) Data commits staged package changes and progress.
+  -> [Progress::completed](../../crates/araphor-query/src/stream/progress.rs) Query retains validated store metadata separately from consumed input.
+
+[Graph publication](../../crates/araphor-data/src/analysis/managed/commit.rs) Data promotes the committed Graph owners.
+  -> [CommittedOwners::publication_matches](../../crates/araphor-data/src/analysis/managed/reader/committed/graph.rs) actual pinned producer witnesses identify the publication inputs.
+  -> [InputInterest::matches](../../crates/araphor-data/src/analysis/inputs/interest.rs) Data advances matching Graph and notification subscriptions.
+
+[SourceRecovery](../../crates/araphor-query/src/stream/recovery.rs) A managed capture fails.
+  -> [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) the failed attempt retains the committed input position.
+  -> [SourceRecovery::changed](../../crates/araphor-query/src/stream/recovery.rs) recovery waits on the same registered feed after the failed capture cut.
+  -> [SourceRecovery::resume](../../crates/araphor-query/src/stream/recovery.rs) the same native plan and memory owner retain that feed and committed source index.
+
+### Ownership and limits
+
+Data owns matching publication, the registered interests, and the durable
+histories. The watch value can coalesce. It is not a delta archive. Dropping
+the last registration removes its interest and releases its memory lease.
+Bootstrap retains one charged metadata row at a time. It does not expand a
+wildcard selection into a retained source list.
+
+Graph publications use the same pinned producer union at bootstrap and live
+commit. This reads existing native owner handles and adds no SQL or body
+decoding to the live publication signal. Packages still choose their Graph
+changes. Generic Graph contains no subscription or package rules.
+
+Context owner filters, raw span overlap, and provider domains select commit
+signals. The complete physical walk keeps actual durable scans, including
+zero-column metadata scans. It removes unvisited logical declarations from
+CDC registration. Native DataFusion retains SQL expression and predicate execution.
+A retained removal preserves its intake and cursor range. A recovery gap
+preserves its known cursor range. Graph notices wake only a requested notice
+projection. Store controls do not advance source positions.
+
+A successful output advances the known metadata revision from actual
+validated reads and commits. That revision never decreases. It can validate
+a later resume cursor. It does not acknowledge an input. Snapshot execution
+acknowledges its captured input cut. Append execution acknowledges its actual
+scanned or output-limited position. A package's own publication cannot consume
+an intervening input commit.
+
+Data still applies a broad relation-freshness gate to ordinary Follow
+admission and Graph freeze. Its recorded-cut replacement is **Not done**.
+The final CDC runs have five or six source-change failures. These retries
+are part of the measured work. Notification captures fall from 24–25 to
+15. All fifteen creation intervals are lower. Their medians are 1.734645,
+2.189674, and 2.330424 seconds. Creation below 100 milliseconds and the
+100-fold target remain **Not done**.
+
+The unchanged exact incident test is the only runtime qualification. Existing
+Query unit fixtures were adapted to the new contract. Their runtime results
+are not claimed. Build E's unit-target compile is blocked by three unchanged
+guest/parity `evaluate_reserved` argument errors. No passing unit-target
+compile is claimed. Other selectors, finite pools, contended reader capacity,
+clock paths, restore, and revocation have source review only. See the
+[verification record](../plans/araphor-execution-handoff.md#cdc-replacement-verification-2026-11-05).
+
 ## Captured Graph preparation, 2026-11-05
 
 The final focused build passes in 282.721607 seconds. All ten unchanged

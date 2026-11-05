@@ -153,6 +153,7 @@ pub(in crate::analysis) struct ProgressWrite {
     pub(in crate::analysis) receipt: AnalysisResultReceiptV1,
     pub(in crate::analysis) relations: Vec<&'static str>,
     pub(in crate::analysis) commit: bool,
+    pub(in crate::analysis) contexts: Vec<AnalysisContextRefV1>,
 }
 
 #[derive(Default)]
@@ -420,6 +421,7 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("register.after");
         self.revision.send_replace(revision);
+        self.inputs.metadata(revision, super::inputs::InputChange::Processor(scope));
         Ok(revision)
     }
 
@@ -539,6 +541,7 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("resume.after");
         self.revision.send_replace(revision);
+        self.inputs.metadata(revision, super::inputs::InputChange::Processor(scope));
         Ok(Some(gap))
     }
 
@@ -684,6 +687,14 @@ impl AnalysisStore {
             #[cfg(any(test, feature = "test-fixtures"))]
             self.crash_at("result.after");
             self.revision.send_replace(write.receipt.commit_revision);
+            self.inputs.metadata(write.receipt.commit_revision,
+                super::inputs::InputChange::Processor(&input.scope));
+            if profile.is_some() {
+                self.inputs.metadata(write.receipt.commit_revision, super::inputs::InputChange::Profile {
+                    scope: &input.scope, result: &input.result_id,
+                });
+            }
+            self.inputs.contexts(write.receipt.commit_revision, &write.contexts);
         }
         Ok(write.receipt)
     }
@@ -777,7 +788,7 @@ impl AnalysisStore {
         )?;
         let mut references = std::borrow::Cow::Borrowed(input.context_refs.as_slice());
         if !inserted.is_empty() {
-            references.to_mut().extend(inserted);
+            references.to_mut().extend(inserted.iter().cloned());
             references
                 .to_mut()
                 .sort_by(|left, right| left.key.cmp(&right.key));
@@ -840,6 +851,7 @@ impl AnalysisStore {
                 && retained == input.body;
             if same {
                 return Ok(ProgressWrite {
+                    contexts: inserted,
                     receipt: AnalysisResultReceiptV1 {
                         commit_revision: revision,
                         consumed_cursor: input.consumed_cursor,
@@ -1064,6 +1076,7 @@ impl AnalysisStore {
             relations.push("context_refs");
         }
         Ok(ProgressWrite {
+            contexts: inserted,
             receipt: AnalysisResultReceiptV1 {
                 commit_revision: revision,
                 consumed_cursor: input.consumed_cursor,

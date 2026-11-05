@@ -855,6 +855,13 @@ impl AnalysisStore {
         self.write_ready.store(true, Ordering::Release);
         self.raw_pending.store(true, Ordering::Release);
         self.revision.send_replace(revision);
+        let entry = &raw.entries[&revision];
+        for span in &entry.commit.spans {
+            let ordinal = span.ordinal + (span.last - span.first) as u32;
+            self.inputs.publish(super::StorePositionV1 { commit_revision: revision, ordinal },
+                super::inputs::InputChange::Raw { identity: &identity,
+                    range: Some((span.first, span.last, entry.commit.intake)) });
+        }
         if created { self.activations.send_replace(revision); }
         Ok((
             raw.outcome(&identity, batch.last_cursor),

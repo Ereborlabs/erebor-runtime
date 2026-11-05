@@ -300,6 +300,9 @@ impl AnalysisStore {
         Self::record_revision(&transaction, revision, &["traces"])?;
         self.commit_metadata(transaction, "commit trace intent")?;
         self.revision.send_replace(revision);
+        self.inputs.metadata(revision, super::inputs::InputChange::Trace {
+            tenant: intent.tenant_id, request: intent.request_id, bindings: &intent.bindings,
+        });
         Ok(TraceStateV1 {
             tenant_id: intent.tenant_id,
             request_id: intent.request_id,
@@ -393,7 +396,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "begin trace state",
             })?;
-        let Some((stored, _)) =
+        let Some((stored, intent)) =
             Self::read_trace_intent(&transaction, &self.root, next.tenant_id, next.request_id)?
         else {
             return self.reject("the trace request is absent");
@@ -428,6 +431,12 @@ impl AnalysisStore {
         Self::record_revision(&transaction, revision, &["traces"])?;
         self.commit_metadata(transaction, "commit trace state")?;
         self.revision.send_replace(revision);
+        self.inputs.metadata(revision, super::inputs::InputChange::Trace {
+            tenant: next.tenant_id, request: next.request_id, bindings: &intent.bindings,
+        });
+        if next.read_revoked && !stored.read_revoked {
+            self.controls.send_replace(());
+        }
         Ok(TraceStateV1 {
             revision,
             ..next.clone()

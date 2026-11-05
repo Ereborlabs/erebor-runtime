@@ -20,6 +20,7 @@ use crate::{
 use crate::GraphSnapshotV1;
 
 struct GraphResultWrite {
+    contexts: Vec<AnalysisContextRefV1>,
     evidence_count: Option<usize>,
     receipt: AnalysisResultReceiptV1,
     reference: PackageResultRefV1,
@@ -112,6 +113,9 @@ impl AnalysisStore {
             self.commit_metadata(transaction, "commit unchanged Graph notice")?;
             if changed {
                 self.revision.send_replace(revision);
+                self.inputs.metadata(revision, super::super::inputs::InputChange::Notice {
+                    scope: &input.scope, result: &input.result_id,
+                });
             }
             return Ok(write.receipt);
         }
@@ -119,6 +123,14 @@ impl AnalysisStore {
         #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("result.after");
         self.revision.send_replace(revision);
+        self.inputs.metadata(revision, super::super::inputs::InputChange::Graph {
+            tenant: input.scope.identity.tenant_id, result: &input.result_id,
+            source: Some(&input.scope.identity), witnesses: &input.witnesses,
+        });
+        if write.relations.iter().any(|name| matches!(*name, "processor_progress" | "processor_versions")) {
+            self.inputs.metadata(revision, super::super::inputs::InputChange::Processor(&input.scope));
+        }
+        self.inputs.contexts(revision, &write.contexts);
         Ok(write.receipt)
     }
 
@@ -378,7 +390,7 @@ impl AnalysisStore {
             .map(|reference| (reference.key.clone(), reference.commit_revision))
             .collect::<BTreeMap<_, _>>();
         let mut references = input.context_refs.clone();
-        references.extend(inserted);
+        references.extend(inserted.iter().cloned());
         references.extend_from_slice(proofs);
         references.extend_from_slice(&global_proofs);
         references.extend(record_proofs.iter().map(|(_, proof)| proof.clone()));
@@ -475,6 +487,7 @@ impl AnalysisStore {
                 return AnalysisConflictSnafu.fail();
             }
             return Ok(GraphResultWrite {
+                contexts: inserted,
                 evidence_count: None,
                 receipt: AnalysisResultReceiptV1 {
                     commit_revision: previous_revision,
@@ -628,6 +641,7 @@ impl AnalysisStore {
                         Some(revision),
                     )?;
                     return Ok(GraphResultWrite {
+                contexts: inserted,
                         evidence_count: None,
                         receipt: AnalysisResultReceiptV1 {
                             commit_revision: prior_revision,
@@ -706,6 +720,7 @@ impl AnalysisStore {
                         relations.push("result_notices");
                     }
                     return Ok(GraphResultWrite {
+                contexts: inserted,
                         evidence_count: changes
                             .previous
                             .as_ref()
@@ -865,6 +880,7 @@ impl AnalysisStore {
             "Graph publication row work completed"
         );
         Ok(GraphResultWrite {
+            contexts: inserted,
             evidence_count,
             receipt: AnalysisResultReceiptV1 {
                 commit_revision: revision,

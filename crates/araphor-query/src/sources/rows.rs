@@ -25,7 +25,6 @@ pub(crate) use metadata::MetadataRead;
 mod tests;
 
 pub(crate) struct CapturedRequests {
-    tables: AnalysisTableRequests,
     context_owners: Option<BTreeSet<String>>,
     _memory: MemoryReservation,
 }
@@ -39,37 +38,18 @@ impl CapturedRequests {
         })
     }
 
-    pub(crate) fn tables(&self) -> &AnalysisTableRequests {
-        &self.tables
-    }
-
     pub(crate) fn context_owners(&self) -> Option<&BTreeSet<String>> {
         self.context_owners.as_ref()
     }
 
-    fn allocation_bytes(
-        tables: &AnalysisTableRequests,
-        context_owners: Option<&BTreeSet<String>>,
-    ) -> Option<usize> {
-        tables
-            .iter()
-            .try_fold(size_of::<Self>(), |bytes, (name, columns)| {
+    fn allocation_bytes(context_owners: Option<&BTreeSet<String>>) -> Option<usize> {
+        context_owners.map_or(Some(size_of::<Self>()), |owners| {
+            owners.iter().try_fold(size_of::<Self>(), |bytes, owner| {
                 bytes
-                    .checked_add(size_of::<(String, Option<BTreeSet<usize>>)>())?
-                    .checked_add(name.capacity())?
-                    .checked_add(columns.as_ref().map_or(Some(0), |columns| {
-                        columns.len().checked_mul(size_of::<usize>())
-                    })?)
+                    .checked_add(size_of::<String>())?
+                    .checked_add(owner.capacity())
             })
-            .and_then(|bytes| {
-                context_owners.map_or(Some(bytes), |owners| {
-                    owners.iter().try_fold(bytes, |bytes, owner| {
-                        bytes
-                            .checked_add(size_of::<String>())?
-                            .checked_add(owner.capacity())
-                    })
-                })
-            })
+        })
     }
 }
 
@@ -892,9 +872,8 @@ impl SourceSnapshot {
                 })
         });
         let retained = removed.saturating_add(source_bytes);
-        let request_bytes =
-            CapturedRequests::allocation_bytes(requests, bounds.context_owners.as_ref())
-                .ok_or_else(overflow)?;
+        let request_bytes = CapturedRequests::allocation_bytes(bounds.context_owners.as_ref())
+            .ok_or_else(overflow)?;
         let total = metadata
             .checked_add(retained)
             .and_then(|bytes| bytes.checked_add(request_bytes))
@@ -921,7 +900,6 @@ impl SourceSnapshot {
         let table_memory = reservation.split(retained);
         control.check().map_err(Self::data_error)?;
         let requests = Arc::new(CapturedRequests {
-            tables: requests.clone(),
             context_owners: bounds.context_owners.clone(),
             _memory: reservation.split(request_bytes),
         });

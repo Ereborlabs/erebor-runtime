@@ -238,66 +238,27 @@ impl SubscribeExec {
     }
 
     pub(crate) async fn open(run: Arc<Run>) -> Result<OutputStream> {
-        let mut progress =
-            Progress::new(run.session.engine().store(), Arc::clone(&run.clock), None);
-        let (permit, now, session) = loop {
-            let permit = Arc::new(if run.managed.is_some() && !run.follow {
-                run.session
-                    .engine()
-                    .reserve_evaluation(run.session.selection().tenant_id)?
-            } else {
-                run.session
-                    .control()
-                    .query_async(
-                        run.session
-                            .engine()
-                            .acquire_evaluation(run.session.selection().tenant_id),
-                    )
-                    .await?
-            });
-            let now = progress.begin()?;
-            let session = run
-                .session(now, &permit, Vec::new(), Vec::new(), run.resume.as_ref())
-                .await?;
-            if let Some(cursor) = run.resume.as_ref().filter(|_| {
-                !run.resume_pending
-                    && session
-                        .managed
-                        .as_ref()
-                        .is_some_and(|managed| !managed.rebuild)
-                    && run.resume_expiry.is_none_or(|expiry| expiry > now)
-            }) {
-                let sources = run
-                    .sources()
-                    .keys()
-                    .map(|name| (name.clone(), Some(Default::default())))
-                    .collect();
-                let selection = run.selection(now)?.project(&sources)?;
-                let (meta, revision) = run
-                    .dependencies(&session, selection, Some(&permit), None)
-                    .await?;
-                cursor.check_store(&meta)?;
-                if revision <= run.resume_revision() {
-                    let calls = session
-                        .calls
-                        .as_ref()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal("subscription call context is absent".into())
-                        })
-                        .context(SqlSnafu)?;
-                    calls.finish().await;
-                    drop(session);
-                    drop(permit);
-                    progress.captured(meta.commit_revision, run.resume_expiry);
+        let mut progress = Progress::new(Arc::clone(&run));
+
+        let permit = Arc::new(if run.managed.is_some() && !run.follow {
+            run.session
+                .engine()
+                .reserve_evaluation(run.session.selection().tenant_id)?
+        } else {
+            run.session
+                .control()
+                .query_async(
                     run.session
-                        .control()
-                        .query_async(progress.next(run.session.control(), None))
-                        .await?;
-                    continue;
-                }
-            }
-            break (permit, now, session);
-        };
+                        .engine()
+                        .acquire_evaluation(run.session.selection().tenant_id),
+                )
+                .await?
+        });
+        let now = progress.begin()?;
+        let session = run
+            .session(now, &permit, Vec::new(), Vec::new(), run.resume.as_ref())
+            .await?;
+
         let mut state = session.state()?;
         let reusable = run.follow
             && run.operation == crate::follow::Operation::Replace
@@ -389,10 +350,7 @@ impl SubscribeExec {
         run.session.control().check()?;
         let (initial, progress) = match initial {
             Some((permit, now, session, progress)) => (Some((permit, now, session)), progress),
-            None => (
-                None,
-                Progress::new(run.session.engine().store(), Arc::clone(&run.clock), None),
-            ),
+            None => (None, Progress::new(Arc::clone(&run))),
         };
         let state = runtime::Runtime::new(self, context, run, initial, progress, reusable)?;
         Ok(Box::pin(stream::try_unfold(state, runtime::Runtime::next)))

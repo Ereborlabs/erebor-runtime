@@ -52,7 +52,7 @@ impl MetadataRead {
         })
     }
 
-    pub(crate) fn capture(mut self) -> Result<Arc<ArrowSnapshot>> {
+    pub(crate) fn capture(self) -> Result<Arc<ArrowSnapshot>> {
         self.control.check().map_err(SourceSnapshot::data_error)?;
         let bounded =
             self.memory.input_capacity().is_some() || self.limits.input_bytes != usize::MAX;
@@ -115,10 +115,8 @@ impl MetadataRead {
             .filter(|bytes| *bytes <= limits.input_bytes)
             .ok_or_else(overflow)?;
         memory.try_resize(bytes)?;
-        let request_bytes =
-            CapturedRequests::allocation_bytes(&self.requests, None).ok_or_else(overflow)?;
+        let request_bytes = CapturedRequests::allocation_bytes(None).ok_or_else(overflow)?;
         let requests = Arc::new(CapturedRequests {
-            tables: std::mem::take(&mut self.requests),
             context_owners: None,
             _memory: self._scope.split(request_bytes),
         });

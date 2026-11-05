@@ -707,6 +707,7 @@ impl Engine {
             nested_permit: None,
             definition: None,
             source_index: None,
+            input_changes: None,
             append_read: None,
             workers: None,
             context_init: None,
@@ -873,6 +874,7 @@ pub struct Session {
     pub(crate) nested_permit: Option<Arc<Permit>>,
     pub(crate) definition: Option<Arc<crate::definition::PreparedDefinition>>,
     pub(crate) source_index: Option<Arc<crate::sources::SourceIndex>>,
+    pub(crate) input_changes: Option<araphor_data::InputSubscription>,
     pub(crate) append_read: Option<Arc<crate::sources::AppendRead>>,
     pub(crate) workers: Option<araphor_package_runtime::TaskTracker>,
     context_init: Option<Arc<ContextInit>>,
@@ -1049,6 +1051,7 @@ impl Session {
             nested_permit: self.nested_permit.clone(),
             definition: self.definition.clone(),
             source_index: None,
+            input_changes: None,
             append_read: None,
             workers: self.workers.clone(),
             context_init: self.context_init.clone(),
@@ -1928,7 +1931,7 @@ impl Session {
         let mut recovery = run
             .filter(|run| run.follow && run.managed.is_some())
             .map(|run| {
-                crate::stream::recovery::SourceRecovery::new(run, self, self.now, requests.clone())
+                crate::stream::recovery::SourceRecovery::new(run)
             });
         self.capture(
             Arc::clone(&snapshot),
@@ -1944,6 +1947,9 @@ impl Session {
         })?;
         hydration.hydrate_source(&snapshot, &physical).await?;
         let captured = snapshot.snapshot().context(SqlSnafu)?;
+        if let Some(recovery) = &mut recovery {
+            recovery.captured(captured.page.extraction.meta.commit_revision);
+        }
         Ok(CapturedPhysical {
             physical,
             context,

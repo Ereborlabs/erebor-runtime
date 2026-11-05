@@ -124,6 +124,10 @@ impl AnalysisStore {
             #[cfg(test)]
             self.crash_at("recovery.after");
             self.revision.send_replace(revision);
+            self.inputs.metadata(revision, super::inputs::InputChange::Removal {
+                identity: &super::AnalysisStreamIdentityV1::Evidence(identity.clone()),
+                range: Some((next, node_retained_floor, None)),
+            });
         }
         Ok(AnalysisRecoveryStatusV1::Partial {
             first_cursor: first,

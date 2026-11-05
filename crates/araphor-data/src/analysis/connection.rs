@@ -329,6 +329,7 @@ impl AnalysisStore {
         let recovered = *self.revision.borrow() != meta.commit_revision;
         self.write_ready.store(true, Ordering::Release);
         self.revision.send_replace(meta.commit_revision);
+        self.controls.send_replace(());
         if recovered {
             self.activations.send_replace(meta.commit_revision);
         }

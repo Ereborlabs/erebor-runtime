@@ -1,5 +1,258 @@
 # Araphor reactive execution in milliseconds
 
+## CDC replacement verification, 2026-11-05
+
+Status: **Done** for the Query source wake replacement. Matching Data input
+positions replace the global Query input watch and Query dependency gates.
+The source covers initial execution, resume, live execution, windows, and
+failure recovery. The separate Data Follow freshness gate remains
+**Not done**. Notification creation below 100 milliseconds and the
+100-fold target remain **Not done**.
+
+Data registers the native provider interests before its first input capture.
+It reads matching existing positions once. The bootstrap retains one charged
+row at a time. Existing journals, context versions, and native publications
+retain the changes. Commit publishers advance only matching interests.
+A source wake executes the saved native DataFusion plan directly.
+
+The native plan supplies the full input union, including cached package
+branches. The complete physical walk retains actual durable scans, including
+zero-column scans. Unvisited logical declarations are removed from the CDC
+interest. Original wildcard selectors retain future sources. Direct context
+owner filters keep their union. Fixed context projections keep their actual
+owners. Raw append signals contain actual new spans. Header updates, retained
+removals, recovery gaps, processor state, and Graph notices keep their distinct
+input domains. Native Graph publication matching uses actual pinned producer
+witnesses for both bootstrap and live signals.
+
+The consumed input position is separate from output publication revision and
+known store metadata. Resume retains full cursor validation. Recovery keeps
+the same registered feed with the same native plan and memory owner. A failed
+capture does not acknowledge its input. Store recovery, retention health,
+read revocation, and owner availability use a control signal. Clock deadlines
+and capacity waits keep their existing owners.
+
+Build A fails on a Query budget argument type. Build B fails on a window time
+type. Build C passes in 247.999644 seconds. Its exact incident run fails in
+106.709938 seconds after initial notification creation. A normal concurrent
+source change reaches recovery. The retained feed still has its original
+bootstrap metadata revision and rejects the later valid cursor. This is a
+production regression in the draft.
+
+The next draft retains a monotonic known metadata revision after successful
+reads and commits. It does not advance the consumed input position from an
+output commit. Build D passes in 248.311161 seconds. The unchanged exact test
+passes in 25.59 harness seconds, or 25.631293 process seconds. It processes
+18 collector inputs, 16,402 raw records, and three first durable notifications.
+Its creation intervals are 1.671828, 2.134830, and 2.328652 seconds. These are
+single-run values. No speedup or 100-millisecond result is established.
+There are six source-change failures in this run. Data still compares broad
+relation revisions during ordinary Follow admission and Graph freeze. The
+recorded-cut replacement for that separate gate is **Not done**.
+
+Build E attempts to compile Query unit fixtures without running them. It fails
+in 216.896448 seconds on three pre-existing `evaluate_reserved` argument errors:
+`definition/tests/guest.rs:388` and `definition/tests/parity.rs:441,467`.
+Those files and the called API are unchanged. No passing unit-target compile
+is claimed. The new CDC and lease fixtures report no compiler error.
+The focused incident build F passes in 207.722475 seconds. Final build G
+includes physical input filtering and passes in 210.257026 seconds.
+
+Five alternating pairs compare final build G with `c0076b6c1`. All ten exact
+incident runs pass. The workload, assertions, and timeouts are unchanged.
+
+| Pair | First executable | Baseline test, seconds | CDC test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 25.36 | 24.95 | 0.409297 |
+| 2 | CDC | 26.91 | 25.08 | 1.829074 |
+| 3 | Baseline | 27.30 | 25.97 | 1.336889 |
+| 4 | CDC | 27.34 | 25.61 | 1.709624 |
+| 5 | Baseline | 27.71 | 26.28 | 1.428676 |
+
+Whole-process time is lower in every pair. The paired median saving is
+1.428676 seconds, or 5.15 percent. The reduction range is 1.61 to 6.79 percent.
+
+| Notification | Baseline creation median, seconds | CDC creation median, seconds | Paired median saving, seconds |
+| --- | ---: | ---: | ---: |
+| Initial | 1.952665 | 1.734645 | 0.219407 |
+| First later incident | 2.504057 | 2.189674 | 0.338751 |
+| Second later incident | 2.727876 | 2.330424 | 0.403679 |
+
+All fifteen creation intervals are lower. Their paired median reductions are
+11.14, 13.38, and 14.85 percent. Creation starts at trusted Control collector
+receipt and ends at first durable notification creation. Graph publication
+to creation medians are 0.336396, 0.477375, and 0.539926 seconds. The complete
+creation intervals still exceed 100 milliseconds.
+
+Each run retains 18 collector inputs, 16,402 raw records, five Graph
+publications, twelve appends, ten successful Graph authority checks, and
+three notifications. Bulk processing retains 64 pages, 60 retained pages,
+16,384 logical rows, and 262,144 physical rows. Publication input cuts and
+result IDs match within each pair. Notification captures fall from 24–25 to
+15. Source-change failures rise from three to five or six. These are actual
+failures at the retained Data Follow freshness gate. They are included in
+the measured runtime. The next change must replace that gate with recorded
+input cut validity; it must preserve transaction authority and evidence.
+
+Existing Query fixtures now use real committed context versions and consumed
+input positions. The removed external context channel has no compatibility
+path. The exact incident test is the only runtime qualification. No additional
+runtime case or full CI run is claimed.
+
+Proof: `/tmp/araphor-build-cdc-inputs-20261105-{a,b,c,d,e,f,g}.log`,
+`/tmp/araphor-cdc-inputs-first-20261105.{log,timing.json}`,
+`/tmp/araphor-cdc-inputs-second-20261105.{log,timing.json}`, and
+`/tmp/araphor-cdc-inputs-pairs-20261105/{settings,results,summary,audit}.json`
+with ten run logs and detailed reports. Retained executables:
+`target/araphor-notice-comparison-20261105/{captured-preparation,cdc-inputs}`.
+The earlier rejected scoped-read executable was removed to release space.
+
+
+## Source journal wake replacement, 2026-11-05
+
+Status: **Done** for Query source wakes in the verification record above.
+The separate Data Follow freshness gate is **Not done**. The user requires
+a wake only when the subscription's watched input advances after its
+consumed journal position. The implementer
+and reviewer agree that the current store-wide revision wake is the wrong
+owner. The source read draft below is removed and is not committed.
+
+The required behavior is change data capture from the existing source log.
+
+A subscription has consumed the watched input through position 1000.
+  -> A matching input commits at position 1001.
+  -> Data wakes that subscription with committed progress.
+  -> The saved native DataFusion plan reads the required changes after 1000.
+  -> The package processes those inputs and stages its changes.
+  -> Data commits package changes and progress together.
+
+An unrelated input or metadata transaction commits.
+  -> Data does not wake that subscription.
+
+Execution or commit fails.
+  -> The subscription retains its previous committed input position.
+  -> Retry consumes the same required log range.
+
+Native plan and provider inputs identify the source interests. Registration
+must precede initial capture so a concurrent commit cannot be lost. Signals
+can coalesce; the existing durable input histories retain the changes. A
+replaceable watch value must not become the only copy of a delta. Declared
+window events and existing authority changes keep their current owners.
+There is no second dependency query after a source wake. This work adds no
+polling, hashing, input/output archive, or custom DataFusion operator.
+
+The baseline cause is concrete: Query Progress uses Data's store-wide revision
+watch and converts its notifications to source wakes. Runtime then calls
+Run.dependencies to discard unrelated revisions. This mechanism must be
+replaced at the commit-to-wake boundary. Moving its recheck into a shared
+read transaction does not satisfy the requested architecture.
+
+## Subscription read draft removed, 2026-11-05
+
+Status: **Removed**. The user rejects the store-wide wake and dependency
+recheck design. The measurements below qualify only the removed draft.
+They do not describe the current source or an accepted improvement.
+Creation below 100 milliseconds and the 100-fold target remain **Not done**.
+The following flow describes that removed draft.
+
+An existing subscription receives a source commit wake.
+  -> Query resets its retained native DataFusion plan.
+  -> Data opens one database read transaction and fixes its metadata revision.
+  -> Query checks revisions for the selection, requests, and context owner filter from the previous execution.
+  -> If those sources changed, Query obtains an available evaluation permit and captures the reset plan's current input in that transaction.
+  -> Data closes the reader before Query creates the execution session, binds the captured source, and executes the saved native plan.
+  -> If those sources did not change, Data supplies the existing metadata envelope with no rows. Query keeps the previous execution state and performs the existing current read check.
+
+An evaluation permit is unavailable for a changed input.
+  -> Data closes the reader and releases selection scratch before Query waits for capacity.
+  -> Query obtains the existing permit and checks a fresh database snapshot.
+  -> If that fresh check is unchanged, Query releases the permit and returns metadata.
+  -> A clock change during the wait retains the existing forced evaluation behavior.
+
+The gate keeps a charged selection only inside the read transaction. Table
+and metadata reads reuse it only for identical selectors, owner filters, and
+admission limits. A different branch selection uses the original resolver
+under its prepaid input reservation. It does not acquire another independent
+reservation after prepayment. Input limits retain their original checks.
+An unchanged result creates no execution session, evaluation permit, output
+reservation, or hydrated input. Its metadata envelope retains its existing
+input reservation. Cursor, evaluation frontier, and previous input remain
+unchanged. Only the checked metadata revision advances.
+
+This path covers ordinary live snapshot subscriptions with retained native
+plans. A native plan reset failure uses the existing replan path. Other plans,
+page reads, maintained aggregates, package calls, windows, historical reads,
+and retained source-index changes keep their current paths. Startup, resume,
+recovery, clock, store identity, and current read checks keep their owners.
+Packages still decide which Graph operations to perform. This change adds
+no subscription API, persistent cache, archive, storage engine, polling,
+hashing, or replacement DataFusion operator.
+
+The final focused build passes in 243.913607 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass.
+
+| Pair | First executable | Baseline test, seconds | Scoped read test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 24.48 | 25.24 | -0.753827 |
+| 2 | Scoped read | 26.23 | 25.54 | +0.694491 |
+| 3 | Baseline | 26.52 | 26.18 | +0.333723 |
+| 4 | Scoped read | 26.47 | 26.10 | +0.374818 |
+| 5 | Baseline | 26.95 | 26.30 | +0.654565 |
+
+Whole-process time is lower in four pairs. Its paired median saving is
+0.374818 seconds, or 1.41 percent. The range is -3.07 to 2.64 percent.
+The first pair is slower. No uniform whole-test improvement is claimed.
+
+| Notification | Baseline creation median, seconds | Scoped read creation median, seconds | Paired median saving, seconds |
+| --- | ---: | ---: | ---: |
+| Initial | 1.912839 | 1.862089 | 0.052261 |
+| First later incident | 2.452789 | 2.354785 | 0.083914 |
+| Second later incident | 2.731665 | 2.624294 | 0.107587 |
+
+Initial and first later creation are lower in four pairs. The first pair is
+0.019473 and 0.027257 seconds slower. Second later creation is lower in all
+five pairs, with savings from 0.012920 to 0.138786 seconds. The boundary
+starts at trusted Control input and ends at first durable notification state
+creation. It excludes delivery and does not measure physical Node arrival.
+The later incidents use the same running service after 16,384 background
+records. Package compilation finishes before the first input and is outside
+every creation interval.
+
+The targeted Graph publication to first durable creation interval is lower
+in all 15 matched measurements. Its baseline medians are 0.456683, 0.637360,
+and 0.731479 seconds. Candidate medians are 0.407633, 0.579760, and 0.668388
+seconds. Paired median savings are 0.047654, 0.056749, and 0.067057 seconds.
+The final later interval saves 0.028096 to 0.077757 seconds in each pair.
+These are complete interval measurements. Nested capture timers exclude the
+outer gate and are not complete-path measurements.
+The managed commit has mixed results and no gain is attributed to it.
+
+All runs retain 18 collector inputs, three first durable notifications,
+16,402 public journal records, five managed publications, twelve Graph append
+batches, ten freeze authority checks, and three source-change restart
+mentions. All pairs match Graph apply and append work, all five publication
+cut/revision and projection result identities, and all three creation
+cut/result pairs. Bulk retains 64 pages, 60 reused pages, 16,384 rows,
+262,144 physical frame rows, and 53,401,792 body bytes. Notification capture
+counts increase from 25, 25, 24, 26, and 24 to 29, 27, 28, 28, and 28.
+Total nested notification capture time also increases. The measured gain is
+the complete publication-to-creation interval, not a reduction in all work.
+The draft is removed because it preserves the wrong wake mechanism.
+
+The exact incident test is the only runtime qualification. Finite input
+pools, contended evaluation permits, clock changes during admission waits,
+and other read paths have source review only. Full CI and other tests were
+not run. Workload, assertions, and timeouts are unchanged. No source edit,
+build, debugger, or other test runs during the comparison.
+
+Proof: `/tmp/araphor-build-scoped-source-read-20261105-c.log` and
+`/tmp/araphor-scoped-source-read-pairs-20261105/{settings,results,summary,audit}.json`,
+with ten run logs. Baseline source: `c0076b6c1`. Retained executables:
+`target/araphor-notice-comparison-20261105/captured-preparation` and
+`scoped-source-read`. The removed source is saved only at
+`/tmp/araphor-scoped-source-read-20261105-rejected-source.json`.
+The production source remains at baseline `c0076b6c1`.
+
 ## Captured Graph preparation replacement, 2026-11-05
 
 Data now prepares frozen Graph journals from their charged invocation bindings.

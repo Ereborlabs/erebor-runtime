@@ -2,7 +2,10 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use araphor_data::AnalysisReadControl;
+use araphor_data::{
+    AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisReadControl, AnalysisStore,
+    ContextSensitivityV1, Selection,
+};
 use tokio::sync::watch;
 
 use super::{Fixture, Limits, TestClock};
@@ -10,13 +13,14 @@ use crate::follow::{Clock, Progress, Wake};
 
 struct ContextClock {
     inner: Arc<TestClock>,
-    notice: Mutex<Option<watch::Sender<u64>>>,
+    store: Arc<AnalysisStore>,
+    notice: Mutex<Option<AnalysisContextVersionV1>>,
 }
 
 impl Clock for ContextClock {
     fn now_ns(&self) -> crate::Result<u64> {
         if let Some(context) = self.notice.lock().unwrap().take() {
-            context.send_replace(1);
+            self.store.commit_context(&context).unwrap();
         }
         self.inner.now_ns()
     }
@@ -24,6 +28,55 @@ impl Clock for ContextClock {
     fn changes(&self) -> watch::Receiver<u64> {
         self.inner.changes()
     }
+}
+
+fn context(revision: u64) -> AnalysisContextVersionV1 {
+    AnalysisContextVersionV1 {
+        key: AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "progress-test".into(),
+            entity_key: b"input".to_vec(),
+            lifetime_key: b"test".to_vec(),
+            owner_revision: revision,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: ContextSensitivityV1::Tenant,
+        body: b"{}".to_vec(),
+    }
+}
+
+async fn progress(fixture: &Fixture, clock: Arc<dyn Clock>) -> Progress {
+    let (plan, sources) = fixture.plan("SELECT owner_id FROM context_versions", Vec::new());
+    let mut selection = fixture.selection();
+    selection.contexts = Selection::All;
+    let session = Arc::new(
+        fixture
+            .engine
+            .session(selection, &AnalysisReadControl::default(), 0)
+            .unwrap(),
+    );
+    let physical = session
+        .physical(&plan, &session.state().unwrap())
+        .await
+        .unwrap();
+    let run = Arc::new(crate::stream::Run {
+        session,
+        sources,
+        plan,
+        clock,
+        follow: true,
+        operation: crate::follow::Operation::Replace,
+        window: None,
+        resume: None,
+        binding: [0; 32],
+        resume_expiry: None,
+        resume_pending: false,
+        managed: None,
+    });
+    let mut progress = Progress::new(run);
+    progress.bind(&physical).await.unwrap();
+    progress
 }
 
 async fn wake(
@@ -41,16 +94,15 @@ async fn wake(
 async fn progress_context_wakes_idle() {
     let fixture = Fixture::new(Limits::default());
     let clock = TestClock::new(10);
-    let (context, receiver) = watch::channel(0);
-    let mut progress = Progress::new(&fixture.store, clock, Some(receiver));
+    let mut progress = progress(&fixture, clock).await;
     let control = AnalysisReadControl::default();
-    let revision = fixture.store.meta().unwrap().commit_revision;
+    let revision = progress.source_position();
     assert_eq!(progress.begin().unwrap(), 10);
     {
         let waiting = progress.next(&control, None);
         tokio::pin!(waiting);
         assert!(futures_util::poll!(waiting.as_mut()).is_pending());
-        context.send_replace(1);
+        fixture.store.commit_context(&context(1)).unwrap();
         assert!(matches!(
             tokio::time::timeout(Duration::from_secs(1), waiting)
                 .await
@@ -59,51 +111,53 @@ async fn progress_context_wakes_idle() {
             Wake::Source
         ));
     }
-    assert!(!progress.pending());
-    assert_eq!(fixture.store.meta().unwrap().commit_revision, revision);
+    progress.captured(progress.source_position(), None);
+    assert_eq!(progress.observed(), progress.source_position());
+    assert!(fixture.store.meta().unwrap().commit_revision > revision.commit_revision);
 }
 
 #[tokio::test]
 async fn progress_keeps_context_during_capture() {
     let fixture = Fixture::new(Limits::default());
-    let (context, receiver) = watch::channel(0);
     let clock = Arc::new(ContextClock {
         inner: TestClock::new(10),
-        notice: Mutex::new(Some(context.clone())),
+        store: Arc::clone(&fixture.store),
+        notice: Mutex::new(Some(context(1))),
     });
-    let mut progress = Progress::new(&fixture.store, clock, Some(receiver));
+    let mut progress = progress(&fixture, clock).await;
     let control = AnalysisReadControl::default();
-    let revision = fixture.store.meta().unwrap().commit_revision;
+    let revision = progress.source_position();
     assert_eq!(progress.begin().unwrap(), 10);
     progress.captured(revision, None);
-    assert!(progress.pending());
+    assert!(progress.source_position() > revision);
     assert!(matches!(
         wake(&mut progress, &control, None).await,
         Wake::Source
     ));
-    assert!(!progress.pending());
+    progress.captured(progress.source_position(), None);
+    assert_eq!(progress.observed(), progress.source_position());
 
     assert_eq!(progress.begin().unwrap(), 10);
-    context.send_replace(2);
+    fixture.store.commit_context(&context(2)).unwrap();
     progress.captured(revision, None);
-    assert!(progress.pending());
+    assert!(progress.source_position() > revision);
     assert!(matches!(
         wake(&mut progress, &control, None).await,
         Wake::Source
     ));
-    assert!(!progress.pending());
+    progress.captured(progress.source_position(), None);
+    assert_eq!(progress.observed(), progress.source_position());
 }
 
 #[tokio::test]
 async fn progress_preserves_concurrent_notices() {
     let fixture = Fixture::new(Limits::default());
     let clock = TestClock::new(10);
-    let (context, receiver) = watch::channel(0);
-    let mut progress = Progress::new(&fixture.store, clock.clone(), Some(receiver));
+    let mut progress = progress(&fixture, clock.clone()).await;
     let control = AnalysisReadControl::default();
     progress.begin().unwrap();
     fixture.commit(&fixture.source, 1, 1, 10);
-    context.send_replace(1);
+    fixture.store.commit_context(&context(1)).unwrap();
     clock.set(20);
 
     let first = wake(&mut progress, &control, None).await;
@@ -112,13 +166,14 @@ async fn progress_preserves_concurrent_notices() {
         (first, second),
         (Wake::Clock, Wake::Source) | (Wake::Source, Wake::Clock)
     ));
-    assert!(!progress.pending());
+    progress.captured(progress.source_position(), None);
+    assert_eq!(progress.observed(), progress.source_position());
     assert!(!progress.clock_pending());
     {
         let waiting = progress.next(&control, None);
         tokio::pin!(waiting);
         assert!(futures_util::poll!(waiting.as_mut()).is_pending());
-        context.send_replace(2);
+        fixture.store.commit_context(&context(2)).unwrap();
         assert!(matches!(
             tokio::time::timeout(Duration::from_secs(1), waiting)
                 .await
@@ -127,39 +182,15 @@ async fn progress_preserves_concurrent_notices() {
             Wake::Source
         ));
     }
-    assert!(!progress.pending());
+    progress.captured(progress.source_position(), None);
+    assert_eq!(progress.observed(), progress.source_position());
 }
 
 #[tokio::test]
-async fn progress_closed_context_is_explicit() {
-    let fixture = Fixture::new(Limits::default());
-    let (context, receiver) = watch::channel(0);
-    let mut progress = Progress::new(&fixture.store, TestClock::new(10), Some(receiver));
-    let control = AnalysisReadControl::default();
-    progress.begin().unwrap();
-    drop(context);
-    let error = tokio::time::timeout(Duration::from_secs(1), progress.next(&control, None))
-        .await
-        .unwrap()
-        .err()
-        .expect("closed context watch returned a wake");
-    assert!(matches!(
-        error,
-        crate::Error::Data {
-            source: araphor_data::Error::Package {
-                code: araphor_data::PackageErrorCodeV1::Incomplete,
-                field: "context progress",
-                ..
-            }
-        }
-    ));
-}
-
-#[tokio::test]
-async fn progress_without_context_waits_for_input() {
+async fn progress_idle_waits_for_input() {
     let fixture = Fixture::new(Limits::default());
     let clock = TestClock::new(10);
-    let mut progress = Progress::new(&fixture.store, clock.clone(), None);
+    let mut progress = progress(&fixture, clock.clone()).await;
     let control = AnalysisReadControl::default();
     progress.begin().unwrap();
     let waiting = progress.next(&control, None);
@@ -186,25 +217,25 @@ async fn progress_without_context_waits_for_input() {
 #[tokio::test]
 async fn progress_context_keeps_deadline_consumed() {
     let fixture = Fixture::new(Limits::default());
-    let (context, receiver) = watch::channel(0);
-    let mut progress = Progress::new(&fixture.store, TestClock::new(10), Some(receiver));
+    let mut progress = progress(&fixture, TestClock::new(10)).await;
     let control = AnalysisReadControl::default();
     progress.begin().unwrap();
-    progress.captured(fixture.store.meta().unwrap().commit_revision, Some(10));
+    progress.captured(progress.source_position(), Some(10));
     assert!(matches!(
         wake(&mut progress, &control, Some(10)).await,
         Wake::Clock
     ));
-    context.send_replace(1);
+    fixture.store.commit_context(&context(1)).unwrap();
     assert!(matches!(
         wake(&mut progress, &control, Some(10)).await,
         Wake::Source
     ));
     assert_eq!(progress.begin().unwrap(), 10);
-    let waiting = progress.next(&control, Some(10));
+    let after = progress.source_position();
+    let waiting = progress.next_after(&control, after, Some(10));
     tokio::pin!(waiting);
     assert!(futures_util::poll!(waiting.as_mut()).is_pending());
-    context.send_replace(2);
+    fixture.store.commit_context(&context(2)).unwrap();
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(1), waiting)
             .await
@@ -229,13 +260,10 @@ impl Clock for ClosedClock {
 #[tokio::test]
 async fn progress_clock_closure_fails() {
     let fixture = Fixture::new(Limits::default());
-    let mut progress = Progress::new(&fixture.store, Arc::new(ClosedClock), None);
+    let mut progress = progress(&fixture, Arc::new(ClosedClock)).await;
     let control = AnalysisReadControl::default();
     progress.begin().unwrap();
-    progress.captured(
-        fixture.store.meta().unwrap().commit_revision,
-        Some(10_000_000_000),
-    );
+    progress.captured(progress.source_position(), Some(10_000_000_000));
     let error = tokio::time::timeout(
         Duration::from_secs(1),
         progress.next(&control, Some(10_000_000_000)),

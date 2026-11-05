@@ -25,6 +25,10 @@ pub(in crate::analysis::managed) struct ResultOwners {
 }
 
 impl ResultOwners {
+    pub(in crate::analysis::managed) fn has_graph(&self) -> bool {
+        self.graph.publication.is_some()
+    }
+
     pub(in crate::analysis::managed) fn new(
         step: Step,
         attempt: Attempt,

@@ -1,17 +1,14 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use araphor_data::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStoreMetaV1,
-    AnalysisTableRequests, StorePositionV1,
-};
+use araphor_data::{AnalysisReadControl, AnalysisTableRequests, StorePositionV1};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::execution::memory_pool::MemoryReservation;
 use futures_core::Stream;
 use snafu::ResultExt as _;
 
 use crate::execution::{Permit, Session};
-use crate::sources::{ArrowSnapshot, CapturedRequests};
+use crate::sources::ArrowSnapshot;
 
 pub(crate) mod physical;
 pub(crate) mod progress;
@@ -39,13 +36,9 @@ pub(crate) struct Run {
 
 impl Run {
     pub(crate) fn resume_revision(&self) -> u64 {
-        self.resume.as_ref().map_or(0, |cursor| {
-            if self.managed.is_some() {
-                cursor.position().commit_revision
-            } else {
-                cursor.read_revision()
-            }
-        })
+        self.resume
+            .as_ref()
+            .map_or(0, |cursor| cursor.position().commit_revision)
     }
 
     pub(crate) fn sources(&self) -> &AnalysisTableRequests {
@@ -68,83 +61,6 @@ impl Run {
             return Ok(self.window.as_ref());
         }
         Ok(None)
-    }
-
-    pub(crate) async fn dependencies(
-        self: &Arc<Self>,
-        session: &Session,
-        selection: AnalysisSelectionV1,
-        permit: Option<&Arc<Permit>>,
-        requests: Option<&Arc<CapturedRequests>>,
-    ) -> crate::Result<(AnalysisStoreMetaV1, u64)> {
-        let requests = requests.cloned();
-        loop {
-            let stage = Arc::new(
-                session
-                    .control()
-                    .within(session.engine().limits().extract_timeout)?,
-            );
-            let worker = Arc::clone(&stage);
-            let store = Arc::clone(session.engine().store());
-            let selection = selection.clone();
-            let run = Arc::clone(self);
-            let requests = requests.clone();
-            let managed = session.managed.clone();
-            let limits = AnalysisExtractLimits {
-                scan_bytes: session.engine().limits().scan_bytes,
-                input_bytes: session.engine().limits().input_bytes,
-                keys: session.engine().limits().extract_keys,
-                ..Default::default()
-            };
-            let scope = (session.token()?, permit.cloned());
-            match crate::execution::Engine::blocking(stage, scope, move || {
-                let tables = requests
-                    .as_deref()
-                    .map_or_else(|| run.sources(), CapturedRequests::tables);
-                let context_owners = requests
-                    .as_deref()
-                    .and_then(CapturedRequests::context_owners);
-                match &managed {
-                    Some(managed) => store.managed_dependency_revision_filtered(
-                        &selection,
-                        tables,
-                        managed,
-                        limits,
-                        context_owners,
-                        &worker,
-                    ),
-                    None => store.dependency_revision_for_filtered(
-                        &selection,
-                        tables,
-                        context_owners,
-                        &worker,
-                    ),
-                }
-                .map_err(crate::Error::from)
-            })
-            .await
-            {
-                Err(crate::Error::Data {
-                    source:
-                        araphor_data::Error::AnalysisBusy {
-                            resource: "reader", ..
-                        },
-                }) => {
-                    session
-                        .control()
-                        .query_async(async {
-                            session
-                                .engine()
-                                .store()
-                                .wait_capacity()
-                                .await
-                                .map_err(crate::Error::from)
-                        })
-                        .await?;
-                }
-                result => return result,
-            }
-        }
     }
 
     pub(crate) async fn session(
