@@ -14,6 +14,7 @@ struct FindingOrigin {
 
 impl AnalysisStore {
     fn finding_read_parents(
+        engine: &araphor_graph::GraphStore,
         reader: &duckdb::Connection,
         tenant: [u8; 16],
         owner: &FindingOrigin,
@@ -21,129 +22,47 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
     ) -> Result<Vec<(FindingOrigin, BTreeSet<DiscoveryRecordIdV1>)>> {
-        use sdk::arrow_array::{Array as _, BinaryArray, StringArray, StructArray, UInt64Array};
-        let relation = owner.relation;
-        let mut query = reader.prepare(&format!(
-            "SELECT origin.producer_id,pin.revision,pin.writer_id,pin.owner_key,pin.entity_key,properties.properties
+        let mut query = reader.prepare_cached(
+            "SELECT origin.producer_id,pin.revision,pin.writer_id,pin.owner_key,pin.entity_key,
+                octet_length(encode(origin.producer_id))+octet_length(pin.owner_key)+octet_length(pin.entity_key)
              FROM managed_graph_row_reads pin JOIN managed_graph_reads origin ON origin.result_id=pin.result_id
                 AND origin.writer_id=pin.writer_id AND origin.revision=pin.revision
-             JOIN managed_graph_results consumer ON consumer.result_id=pin.result_id
-                AND consumer.writer_id=? AND consumer.revision=?
+             JOIN managed_graph_results consumer ON consumer.result_id=pin.result_id AND consumer.writer_id=? AND consumer.revision=?
              JOIN managed_graph_writers writer ON writer.writer_id=consumer.writer_id
              JOIN managed_graphs graph ON graph.graph_id=writer.graph_id AND graph.tenant_id=?
              JOIN graph_relations relation ON relation.graph_id=graph.graph_id AND relation.relation_id=pin.relation_id
-             JOIN graph_writer_owners scope ON scope.writer_id=pin.writer_id AND scope.owner_key=pin.owner_key
-             JOIN graph_members member ON member.writer_id=pin.writer_id AND member.owner_ref=scope.owner_ref
-                AND member.relation_id=pin.relation_id AND member.entity_key=pin.entity_key AND member.valid_from=pin.revision
              JOIN managed_graph_results producer ON producer.result_id=origin.producer_id
                 AND producer.writer_id=pin.writer_id AND producer.revision=pin.revision
-             JOIN graph_properties_{relation} properties ON properties.property_ref=member.properties_ref
              WHERE pin.result_id=? AND pin.relation_id=? AND pin.owner_key=? AND pin.entity_key=?
-             ORDER BY pin.revision,pin.writer_id"))
-            .context(AnalysisDatabaseSnafu { operation:"prepare native finding read parents" })?;
-        let batches = query
-            .query_arrow(params![
-                owner.writer,
-                owner.revision,
-                tenant.as_slice(),
-                owner.result,
-                owner.relation,
-                owner.owner,
-                owner.key
-            ])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read native finding read parents",
-            })?;
+             ORDER BY pin.revision,pin.writer_id"
+        ).context(AnalysisDatabaseSnafu { operation:"prepare native finding read parents" })?;
+        let mut input = query.query(params![owner.writer,owner.revision,tenant.as_slice(),owner.result,owner.relation,owner.owner,owner.key])
+            .context(AnalysisDatabaseSnafu { operation:"read native finding read parents" })?;
         let mut parents = Vec::new();
-        for batch in batches {
+        while let Some(row) = input.next().context(AnalysisDatabaseSnafu { operation:"advance native finding read parents" })? {
+            let bytes:usize = row.get(5).context(AnalysisDatabaseSnafu { operation:"bound native finding read parent" })?;
+            charge(bytes,bytes.checked_mul(4).and_then(|bytes| bytes.checked_add(12*std::mem::size_of::<FindingOrigin>())).ok_or_else(|| Code::Limit.error("native finding parent memory"))?)?;
+            let (id,revision,writer,scope,key):(String,u64,u64,Vec<u8>,Vec<u8>) = (|| -> duckdb::Result<_> { Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)) })()
+                .context(AnalysisDatabaseSnafu { operation:"decode native finding read parent" })?;
             control.check()?;
-            let bytes = batch
-                .get_array_memory_size()
-                .checked_mul(20)
-                .ok_or_else(|| Code::Limit.error("native finding parent memory"))?;
-            charge(bytes, bytes)?;
-            let ids = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| Code::Invalid.error("native finding parent result"))?;
-            let revisions = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| Code::Invalid.error("native finding parent revision"))?;
-            let writers = batch
-                .column(2)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| Code::Invalid.error("native finding parent writer"))?;
-            let owners = batch
-                .column(3)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| Code::Invalid.error("native finding parent owner"))?;
-            let keys = batch
-                .column(4)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| Code::Invalid.error("native finding parent key"))?;
-            let properties = batch
-                .column(5)
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .ok_or_else(|| Code::Invalid.error("native finding parent properties"))?;
-            if batch
-                .columns()
-                .iter()
-                .any(|column| column.null_count() != 0)
-            {
-                return Err(Code::Invalid.error("native finding parent null"));
-            }
-            let port = araphor_analysis_types::FindingMember::port();
-            let native = sdk::RecordBatch::try_new(
-                Arc::new(sdk::Schema::new(properties.fields().clone())),
-                properties.columns().to_vec(),
-            )
-            .context(crate::PackageArrowSnafu)?;
-            let data = sdk::Dataset {
-                name: port.name,
-                batches: vec![sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
-                    .context(crate::AnalysisContractSnafu)?],
-            };
-            for (row, member) in araphor_analysis_types::FindingMember::decode(&data)
-                .context(crate::AnalysisContractSnafu)?
-                .into_iter()
-                .enumerate()
-            {
-                if revisions.value(row) == 0
-                    || revisions.value(row) >= owner.revision
-                    || writers.value(row) == 0
-                    || member.value.tenant_id != tenant
-                    || araphor_analysis_types::DomainRelations::key(&member.value.finding_id)
-                        .context(crate::AnalysisContractSnafu)?
-                        .as_slice()
-                        != keys.value(row)
-                {
-                    return Err(Code::Denied.error("native finding parent authority"));
-                }
-                let mut records = member.value.evidence.into_iter().collect::<BTreeSet<_>>();
-                records.insert(member.anchor.record);
-                if let Some(fact) = member.anchor.fact {
-                    records.insert(fact.record);
-                }
-                records.retain(|record| wanted.contains(record));
-                if !records.is_empty() {
-                    parents.push((
-                        FindingOrigin {
-                            result: ids.value(row).into(),
-                            revision: revisions.value(row),
-                            relation,
-                            writer: writers.value(row),
-                            owner: owners.value(row).to_vec(),
-                            key: keys.value(row).to_vec(),
-                        },
-                        records,
-                    ));
+            let heads = BTreeMap::from([(writer,revision)]);
+            let rows = engine.members(owner.relation,&heads,Some(std::slice::from_ref(&key)),|| control.check().map_err(araphor_graph::Error::backend))?;
+            for row in rows.into_iter().filter(|row| row.writer==writer && row.revision==revision && row.owner_key.as_ref()==scope) {
+                let native = row.property_batch()?;
+                let bytes = native.get_array_memory_size().checked_mul(20).ok_or_else(|| Code::Limit.error("native finding parent memory"))?;
+                charge(bytes,bytes)?;
+                let port = araphor_analysis_types::FindingMember::port();
+                let data = sdk::Dataset { name:port.name,batches:vec![sdk::Dataset::normalize_batch(native,Arc::new(port.schema)).context(crate::AnalysisContractSnafu)?] };
+                for member in araphor_analysis_types::FindingMember::decode(&data).context(crate::AnalysisContractSnafu)? {
+                    if revision==0 || revision>=owner.revision || writer==0 || member.value.tenant_id!=tenant
+                        || araphor_analysis_types::DomainRelations::key(&member.value.finding_id).context(crate::AnalysisContractSnafu)?!=key {
+                        return Err(Code::Denied.error("native finding parent authority"));
+                    }
+                    let mut records = member.value.evidence.into_iter().collect::<BTreeSet<_>>();
+                    records.insert(member.anchor.record);
+                    if let Some(fact) = member.anchor.fact { records.insert(fact.record); }
+                    records.retain(|record| wanted.contains(record));
+                    if !records.is_empty() { parents.push((FindingOrigin { result:id.clone(),revision,relation:owner.relation,writer,owner:scope.clone(),key:key.clone() },records)); }
                 }
             }
         }
@@ -151,6 +70,7 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn native_finding_basis(
+        engine: &araphor_graph::GraphStore,
         reader: &duckdb::Connection,
         tenant: [u8; 16],
         result: &str,
@@ -162,10 +82,11 @@ impl AnalysisStore {
         Vec<AnalysisContextRefV1>,
         crate::GraphRevisionV1,
     )> {
-        Self::finding_basis(reader, tenant, result, findings, control, charge, true)
+        Self::finding_basis(engine, reader, tenant, result, findings, control, charge, true)
     }
 
     fn finding_basis(
+        engine: &araphor_graph::GraphStore,
         reader: &duckdb::Connection,
         tenant: [u8; 16],
         result: &str,
@@ -180,6 +101,7 @@ impl AnalysisStore {
     )> {
         let mut owners = super::super::OwnerRead::new(reader, tenant, control);
         Self::finding_basis_on(
+            engine,
             reader,
             tenant,
             result,
@@ -192,6 +114,7 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn finding_basis_on(
+        engine: &araphor_graph::GraphStore,
         reader: &duckdb::Connection,
         tenant: [u8; 16],
         result: &str,
@@ -206,124 +129,27 @@ impl AnalysisStore {
         crate::GraphRevisionV1,
     )> {
         validated.check_reader(reader, tenant)?;
-        let sql = validated
-            .finding_sql(reader, tenant, charge)?
-            .ok_or_else(|| Code::Missing.error("native finding relations"))?;
-        let mut owners = BTreeMap::<FindingOrigin, BTreeSet<DiscoveryRecordIdV1>>::new();
+        let mut owners = BTreeMap::<FindingOrigin,BTreeSet<DiscoveryRecordIdV1>>::new();
         for id in findings {
             control.check()?;
-            let mut query = reader.prepare(&format!("SELECT origin_result_id,origin_revision,properties,relation_id,writer_id,owner_key,entity_key FROM ({sql}) member
-                WHERE tenant_id=? AND result_id=? AND properties.value.finding_id=?"))
-                .context(AnalysisDatabaseSnafu { operation:"prepare native finding provenance owners" })?;
-            let batches = query
-                .query_arrow(params![tenant.as_slice(), result, id])
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read native finding provenance owners",
-                })?;
+            let key = araphor_analysis_types::DomainRelations::key(id).context(crate::AnalysisContractSnafu)?;
+            let rows = validated.finding_rows(engine,reader,tenant,result,Some(&[key]),charge)?;
             let mut present = false;
-            for batch in batches {
-                use sdk::arrow_array::{
-                    Array as _, BinaryArray, StringArray, StructArray, UInt64Array,
-                };
+            for row in rows {
                 control.check()?;
-                let bytes = batch.get_array_memory_size();
-                charge(
-                    bytes,
-                    bytes
-                        .checked_mul(12)
-                        .ok_or_else(|| Code::Limit.error("native finding provenance memory"))?,
-                )?;
-                let ids = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .ok_or_else(|| Code::Invalid.error("native finding origin identity"))?;
-                let revisions = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .ok_or_else(|| Code::Invalid.error("native finding origin revision"))?;
-                let properties = batch
-                    .column(2)
-                    .as_any()
-                    .downcast_ref::<StructArray>()
-                    .ok_or_else(|| Code::Invalid.error("native finding origin properties"))?;
-                if ids.null_count() != 0
-                    || revisions.null_count() != 0
-                    || properties.null_count() != 0
-                {
-                    return Err(Code::Invalid.error("native finding origin null"));
+                let member = row.decode(charge)?;
+                if member.value.tenant_id!=tenant || member.value.finding_id!=*id || row.origin_revision==0 || row.origin.is_empty() {
+                    return Err(Code::Denied.error("native finding origin authority"));
                 }
-                let native = sdk::RecordBatch::try_new(
-                    Arc::new(sdk::Schema::new(properties.fields().clone())),
-                    properties.columns().to_vec(),
-                )
-                .context(crate::PackageArrowSnafu)?;
-                let data = sdk::Dataset {
-                    name: araphor_analysis_types::FindingMember::port().name,
-                    batches: vec![sdk::Dataset::normalize_batch(
-                        native,
-                        Arc::new(araphor_analysis_types::FindingMember::port().schema),
-                    )
-                    .context(crate::AnalysisContractSnafu)?],
-                };
-                let relation = batch
-                    .column(3)
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .ok_or_else(|| Code::Invalid.error("native finding origin relation"))?;
-                let writer = batch
-                    .column(4)
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .ok_or_else(|| Code::Invalid.error("native finding origin writer"))?;
-                let owner = batch
-                    .column(5)
-                    .as_any()
-                    .downcast_ref::<BinaryArray>()
-                    .ok_or_else(|| Code::Invalid.error("native finding origin owner"))?;
-                let key = batch
-                    .column(6)
-                    .as_any()
-                    .downcast_ref::<BinaryArray>()
-                    .ok_or_else(|| Code::Invalid.error("native finding origin key"))?;
-                if relation.null_count() != 0
-                    || writer.null_count() != 0
-                    || owner.null_count() != 0
-                    || key.null_count() != 0
-                {
-                    return Err(Code::Invalid.error("native finding origin row null"));
-                }
-                let values = araphor_analysis_types::FindingMember::decode(&data)
-                    .context(crate::AnalysisContractSnafu)?;
-                for (row, member) in values.into_iter().enumerate() {
-                    if member.value.tenant_id != tenant
-                        || member.value.finding_id != *id
-                        || revisions.value(row) == 0
-                        || ids.value(row).is_empty()
-                    {
-                        return Err(Code::Denied.error("native finding origin authority"));
-                    }
-                    let origin = FindingOrigin {
-                        result: ids.value(row).into(),
-                        revision: revisions.value(row),
-                        relation: relation.value(row),
-                        writer: writer.value(row),
-                        owner: owner.value(row).to_vec(),
-                        key: key.value(row).to_vec(),
-                    };
-                    let records = owners.entry(origin).or_default();
-                    records.extend(member.value.evidence);
-                    records.insert(member.anchor.record);
-                    if let Some(fact) = member.anchor.fact {
-                        records.insert(fact.record);
-                    }
-                    present = true;
-                }
+                let origin = FindingOrigin { result:row.origin, revision:row.origin_revision, relation:row.member.relation,
+                    writer:row.member.writer, owner:row.member.owner_key.to_vec(),key:row.member.key.to_vec() };
+                let records = owners.entry(origin).or_default();
+                records.extend(member.value.evidence);
+                records.insert(member.anchor.record);
+                if let Some(fact) = member.anchor.fact { records.insert(fact.record); }
+                present=true;
             }
-            if !present {
-                return Err(Code::Missing.error("native finding provenance membership"));
-            }
+            if !present { return Err(Code::Missing.error("native finding provenance membership")); }
         }
         let evidence = owners
             .values()
@@ -409,7 +235,7 @@ impl AnalysisStore {
                     .cloned()
                     .collect::<BTreeSet<_>>();
                 for (parent, records) in
-                    Self::finding_read_parents(reader, tenant, &owner, &records, control, charge)?
+                    Self::finding_read_parents(engine, reader, tenant, &owner, &records, control, charge)?
                 {
                     for record in &records {
                         uncovered.remove(record);

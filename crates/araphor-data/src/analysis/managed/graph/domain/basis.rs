@@ -12,6 +12,7 @@ pub(super) struct Basis {
 
 impl Basis {
     pub(super) fn read(
+        engine: &araphor_graph::GraphStore,
         connection: &Connection,
         journal: &ManagedGraphJournal,
         scratch: &mut DomainScratch<'_>,
@@ -19,190 +20,112 @@ impl Basis {
         if journal.work.reads.is_empty() {
             return Ok(Self::default());
         }
-        connection
-            .execute_batch(
-                "CREATE TEMP TABLE graph_domain_reads(relation_id UBIGINT,writer_id UBIGINT,
-            owner_key BLOB,entity_key BLOB,revision UBIGINT)",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "create domain Graph read basis",
-            })?;
-        let result = (|| {
+        for row in &journal.work.reads {
+            scratch.charge(0)?;
+            if !journal
+                .work
+                .origins
+                .contains_key(&araphor_graph::ReadOrigin {
+                    writer: row.writer,
+                    revision: row.revision,
+                })
             {
-                let mut append =
-                    connection
-                        .appender("graph_domain_reads")
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "open domain Graph read basis",
-                        })?;
-                for row in &journal.work.reads {
-                    scratch.charge(0)?;
-                    if !journal
-                        .work
-                        .origins
-                        .contains_key(&araphor_graph::ReadOrigin {
-                            writer: row.writer,
-                            revision: row.revision,
-                        })
-                    {
-                        return Err(Code::Denied.error("domain Graph read origin"));
-                    }
-                    append
-                        .append_row(params![
-                            row.relation,
-                            row.writer,
-                            row.owner,
-                            row.key,
-                            row.revision
-                        ])
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "append domain Graph read basis",
-                        })?;
-                }
-                append.flush().context(AnalysisDatabaseSnafu {
-                    operation: "flush domain Graph read basis",
-                })?;
+                return Err(Code::Denied.error("domain Graph read origin"));
             }
-            let mut basis = Self::default();
-            for declaration in &journal.call.spec.relations {
-                let subjects = DomainRelations::subjects(declaration);
-                let edges = DomainRelations::relationships(declaration, &journal.call.spec);
-                let findings = DomainRelations::findings(declaration);
-                if !subjects && !edges && !findings {
+        }
+        let heads = araphor_graph::GraphStore::writer_heads(
+            connection,
+            journal.call.graph,
+            journal.call.attempt.captured_revision(),
+        )?;
+        let mut basis = Self::default();
+        for declaration in &journal.call.spec.relations {
+            let subjects = DomainRelations::subjects(declaration);
+            let edges = DomainRelations::relationships(declaration, &journal.call.spec);
+            let findings = DomainRelations::findings(declaration);
+            if !subjects && !edges && !findings {
+                continue;
+            }
+            let relation = journal.call.relations[&declaration.name];
+            let wanted = journal
+                .work
+                .reads
+                .iter()
+                .filter(|row| row.relation == relation)
+                .map(|row| {
+                    (
+                        row.writer,
+                        row.owner.as_slice(),
+                        row.key.as_slice(),
+                        row.revision,
+                    )
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            let keys = wanted
+                .iter()
+                .map(|(_, _, key, _)| key.to_vec())
+                .collect::<Vec<_>>();
+            for row in engine.members(relation, &heads, Some(&keys), || {
+                scratch.charge(0).map_err(araphor_graph::Error::backend)
+            })? {
+                if !wanted.contains(&(
+                    row.writer,
+                    row.owner_key.as_ref(),
+                    row.key.as_ref(),
+                    row.revision,
+                )) {
                     continue;
                 }
-                let relation = journal.call.relations[&declaration.name];
-                let mut query = connection.prepare(&format!(
-                    "SELECT wanted.owner_key,wanted.entity_key,properties.properties
-                     FROM graph_domain_reads wanted JOIN graph_members member ON member.relation_id=wanted.relation_id
-                        AND member.writer_id=wanted.writer_id AND member.entity_key=wanted.entity_key
-                        AND member.valid_from=wanted.revision AND member.valid_from<=?
-                        AND (member.valid_to IS NULL OR member.valid_to>?)
-                     JOIN graph_writer_owners owner ON owner.writer_id=member.writer_id AND owner.owner_ref=member.owner_ref
-                        AND owner.owner_key=wanted.owner_key
-                     JOIN graph_properties_{relation} properties ON properties.property_ref=member.properties_ref
-                     WHERE wanted.relation_id=?"))
-                    .context(AnalysisDatabaseSnafu { operation:"prepare domain Graph retained properties" })?;
-                let batches = query
-                    .query_arrow(params![
-                        journal.call.attempt.captured_revision(),
-                        journal.call.attempt.captured_revision(),
-                        relation
-                    ])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "read domain Graph retained properties",
-                    })?;
-                for batch in batches {
-                    scratch.charge(
-                        batch
-                            .get_array_memory_size()
-                            .checked_mul(16)
-                            .ok_or_else(|| Code::Limit.error("domain Graph retained memory"))?,
-                    )?;
-                    let owners = batch
-                        .column(0)
-                        .as_any()
-                        .downcast_ref::<BinaryArray>()
-                        .ok_or_else(|| Code::Invalid.error("domain Graph retained owner"))?;
-                    let keys = batch
-                        .column(1)
-                        .as_any()
-                        .downcast_ref::<BinaryArray>()
-                        .ok_or_else(|| Code::Invalid.error("domain Graph retained key"))?;
-                    let properties = batch
-                        .column(2)
-                        .as_any()
-                        .downcast_ref::<StructArray>()
-                        .ok_or_else(|| Code::Invalid.error("domain Graph retained properties"))?;
-                    if owners.null_count() != 0
-                        || keys.null_count() != 0
-                        || properties.null_count() != 0
+                let native = row.property_batch()?;
+                scratch.charge(
+                    native
+                        .get_array_memory_size()
+                        .checked_mul(16)
+                        .ok_or_else(|| Code::Limit.error("domain Graph retained memory"))?,
+                )?;
+                let port = if subjects {
+                    algorithm::SubjectChange::port()
+                } else if edges {
+                    algorithm::RelationshipChange::port()
+                } else {
+                    FindingMember::port()
+                };
+                let data = sdk::Dataset {
+                    name: port.name,
+                    batches: vec![sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
+                        .context(crate::AnalysisContractSnafu)?],
+                };
+                let identity = (relation, row.owner_key.to_vec(), row.key.to_vec());
+                if subjects {
+                    basis.subjects.entry(identity).or_default().extend(
+                        algorithm::SubjectChange::decode(&data)
+                            .context(crate::AnalysisContractSnafu)?,
+                    );
+                } else if edges {
+                    for value in algorithm::RelationshipChange::decode(&data)
+                        .context(crate::AnalysisContractSnafu)?
                     {
-                        return Err(Code::Invalid.error("domain Graph retained null"));
+                        let expired = value.retained_expiry();
+                        basis.edges.entry(identity.clone()).or_default().push(value);
+                        let key = DomainRelations::key(&expired.key)
+                            .context(crate::AnalysisContractSnafu)?;
+                        basis
+                            .edges
+                            .entry((relation, row.owner_key.to_vec(), key))
+                            .or_default()
+                            .push(expired);
                     }
-                    let native = sdk::RecordBatch::try_new(
-                        Arc::new(sdk::Schema::new(properties.fields().clone())),
-                        properties.columns().to_vec(),
-                    )
-                    .context(crate::PackageArrowSnafu)?;
-                    let port = if subjects {
-                        algorithm::SubjectChange::port()
-                    } else if edges {
-                        algorithm::RelationshipChange::port()
-                    } else {
-                        FindingMember::port()
-                    };
-                    let data = sdk::Dataset {
-                        name: port.name,
-                        batches: vec![sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
-                            .context(crate::AnalysisContractSnafu)?],
-                    };
-                    if subjects {
-                        for (row, value) in algorithm::SubjectChange::decode(&data)
-                            .context(crate::AnalysisContractSnafu)?
-                            .into_iter()
-                            .enumerate()
-                        {
-                            basis
-                                .subjects
-                                .entry((
-                                    relation,
-                                    owners.value(row).to_vec(),
-                                    keys.value(row).to_vec(),
-                                ))
-                                .or_default()
-                                .push(value);
-                        }
-                    } else if edges {
-                        for (row, value) in algorithm::RelationshipChange::decode(&data)
-                            .context(crate::AnalysisContractSnafu)?
-                            .into_iter()
-                            .enumerate()
-                        {
-                            let owner = owners.value(row).to_vec();
-                            let expired = value.retained_expiry();
-                            basis
-                                .edges
-                                .entry((relation, owner.clone(), keys.value(row).to_vec()))
-                                .or_default()
-                                .push(value);
-                            let key = DomainRelations::key(&expired.key)
-                                .context(crate::AnalysisContractSnafu)?;
-                            basis
-                                .edges
-                                .entry((relation, owner, key))
-                                .or_default()
-                                .push(expired);
-                        }
-                    } else {
-                        for (row, value) in FindingMember::decode(&data)
-                            .context(crate::AnalysisContractSnafu)?
-                            .into_iter()
-                            .enumerate()
-                        {
-                            let values = basis
-                                .findings
-                                .entry((
-                                    relation,
-                                    owners.value(row).to_vec(),
-                                    keys.value(row).to_vec(),
-                                ))
-                                .or_default();
-                            values.push(value.retained_expiry());
-                            values.push(value);
-                        }
+                } else {
+                    for value in
+                        FindingMember::decode(&data).context(crate::AnalysisContractSnafu)?
+                    {
+                        let values = basis.findings.entry(identity.clone()).or_default();
+                        values.push(value.retained_expiry());
+                        values.push(value);
                     }
                 }
             }
-            Ok(basis)
-        })();
-        let cleanup = connection
-            .execute_batch("DROP TABLE graph_domain_reads")
-            .context(AnalysisDatabaseSnafu {
-                operation: "release domain Graph read basis",
-            });
-        let basis = result?;
-        cleanup?;
+        }
         Ok(basis)
     }
 

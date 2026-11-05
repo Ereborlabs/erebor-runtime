@@ -23,6 +23,10 @@ pub use read::ReadOrigin;
 #[cfg(feature = "store")]
 mod store;
 #[cfg(feature = "store")]
+mod committed;
+#[cfg(feature = "store")]
+pub use committed::{Member, PendingLayer};
+#[cfg(feature = "store")]
 pub use store::{GraphStore, LayerRequest, PendingGraph};
 #[cfg(feature = "store")]
 pub use layers::{PreparedLayers, WriterCut};

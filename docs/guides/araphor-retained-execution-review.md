@@ -2,11 +2,14 @@
 
 ## Current package path, 2026-11-05
 
-This section covers the current working tree. The exact incident test passes
-with all 16,402 records in 72.96 seconds. The full result is 1.48 times faster
-than the first passing workload. The third notification is 1.91 times faster.
-The package input replacement reduces the matched bulk prepared reservation
-from 380,210,812 to 22,796,472 bytes. This value is charged retention, not RSS.
+This section covers the native Graph reader. Three alternating pairs of the
+exact incident test pass with all 16,402 records. Baseline test time is
+70.51–71.87 seconds. Native reader time is 47.44–47.68 seconds. The median
+paired process reduction is 33.64 percent. Median notification arrival takes
+3.992181 seconds initially and 6.717021 and 7.609041 seconds later.
+The earlier single-run speed factors are reference ratios only. The package
+input replacement's matched prepared reservation remains 22,796,472 bytes,
+compared with 380,210,812 bytes before it. This is charged retention, not RSS.
 Millisecond latency and the 100-fold target remain **Not done**.
 
 ### Intended end state
@@ -73,6 +76,49 @@ It removed three restarts but increased complete publications from five to
 eight. The unchanged incident test slowed from 72.96 to 89.78 seconds.
 That trial and its new tests were removed. The current source has no change
 from that experiment. Its proof remains in the planning record.
+
+### Native Graph read owner
+
+[GraphStore](../../crates/araphor-graph/src/committed.rs) retains shared Arrow
+property batches and row addresses. Key, outgoing, and incoming indexes select
+members. Writer heads from the Data read transaction determine historical
+visibility. [Graph reads](../../crates/araphor-graph/src/read.rs) use native Arrow
+take over selected rows from each shared batch. Presence uses the same index.
+The engine has no package IDs, finding IDs, subscriptions, or incident logic.
+
+Data applies prepared Graph rows
+  -> [layer application](../../crates/araphor-graph/src/layers.rs) records final coordinates and exact closes
+  -> Data seals the native index before database COMMIT
+  -> [managed commit](../../crates/araphor-data/src/analysis/managed/commit.rs) commits Graph, findings, and progress
+  -> Data disarms the pending-layer cleanup and publishes its revision signal
+
+Data rejects or rolls back the transaction
+  -> the pending-layer guard removes its additions and closure markers
+  -> Data releases the writer after that cleanup
+  -> later readers use the last committed writer heads
+
+[Installation](../../crates/araphor-graph/src/properties.rs) restores the native
+index once from validated durable Graph tables. The native owner retains only
+Graph arrays and indexes. Preparation scratch, package journals, invocations,
+and input/output batches retain their existing lifetimes. The durable engine
+and its write-side checks remain in use.
+
+[Finding reads](../../crates/araphor-data/src/analysis/managed/graph/projection/native.rs)
+combine those generic rows with Data's publication pins, actual producer
+references, disclosure fields, and canonical value IDs. The common iterator
+keeps every alias. Point and extraction readers use the existing representative
+order. Provenance follows every matching origin.
+[OwnerRead](../../crates/araphor-data/src/analysis/managed/reader/graph.rs) retains
+one catalog and authority owner for its read transaction.
+[Notification lookup](../../crates/araphor-data/src/analysis/extraction/notifications/native.rs)
+uses IDs from existing notification references. Package code chooses the IDs
+before Data commits them. No host code predicts a package's future findings.
+
+The final focused build passes in 258.773250 seconds. Six runs in three pairs pass with
+unchanged workload and assertions. Each run has five publications and 24
+notification captures. Full CI and the legacy Data library-test target were
+not run. Rollback injection and durable restoration have source review only.
+See the [paired evidence](../plans/araphor-execution-handoff.md#native-graph-reader-result-2026-11-05).
 
 ### Source reading route
 

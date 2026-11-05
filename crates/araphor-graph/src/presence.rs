@@ -1,5 +1,5 @@
 use arrow_array::{Array, BinaryArray, RecordBatch};
-use duckdb::{params, Connection};
+use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use crate::error::{DatabaseSnafu, InvalidSnafu};
@@ -7,11 +7,13 @@ use crate::{GraphStore, Result};
 
 impl GraphStore {
     pub fn presence(
+        &self,
         connection: &Connection,
         writer: u64,
         relation: u64,
         revision: u64,
         batch: &RecordBatch,
+        mut check: impl FnMut() -> Result<()>,
     ) -> Result<Vec<bool>> {
         let owners = batch
             .column_by_name("owner")
@@ -36,65 +38,33 @@ impl GraphStore {
             }
             .fail();
         }
-        connection.execute_batch("CREATE TEMP TABLE graph_presence_keys (ordinal UBIGINT PRIMARY KEY,owner_key BLOB,entity_key BLOB)")
-            .context(DatabaseSnafu { operation: "create Graph presence keys" })?;
-        let result = (|| {
-            {
-                let mut appender =
-                    connection
-                        .appender("graph_presence_keys")
-                        .context(DatabaseSnafu {
-                            operation: "open Graph presence keys",
-                        })?;
-                for row in 0..batch.num_rows() {
-                    appender
-                        .append_row(params![row as u64, owners.value(row), keys.value(row)])
-                        .context(DatabaseSnafu {
-                            operation: "append Graph presence key",
-                        })?;
-                }
-                appender.flush().context(DatabaseSnafu {
-                    operation: "flush Graph presence keys",
-                })?;
-            }
-            let mut statement = connection
-                .prepare_cached(
-                    "SELECT EXISTS(SELECT 1 FROM graph_members m JOIN graph_writer_owners o
-                    ON o.writer_id=m.writer_id AND o.owner_ref=m.owner_ref
-                    WHERE m.writer_id=? AND m.relation_id=? AND o.owner_key=input.owner_key
-                        AND m.entity_key=input.entity_key AND m.valid_from<=?
-                        AND (m.valid_to IS NULL OR m.valid_to>?))
-                 FROM graph_presence_keys input ORDER BY input.ordinal",
-                )
-                .context(DatabaseSnafu {
-                    operation: "prepare Graph presence",
-                })?;
-            let rows = statement
-                .query_map(params![writer, relation, revision, revision], |row| {
-                    row.get(0)
-                })
-                .context(DatabaseSnafu {
-                    operation: "read Graph presence",
-                })?
-                .collect::<duckdb::Result<Vec<bool>>>()
-                .context(DatabaseSnafu {
-                    operation: "decode Graph presence",
-                })?;
-            if rows.len() != batch.num_rows() {
-                return InvalidSnafu {
-                    field: "Graph presence count",
-                }
-                .fail();
-            }
-            Ok(rows)
-        })();
-        let cleanup = connection
-            .execute_batch("DROP TABLE graph_presence_keys")
+        let graph: Option<u64> = connection
+            .query_row(
+                "SELECT graph_id FROM graph_writers WHERE writer_id=?",
+                params![writer],
+                |row| row.get(0),
+            )
+            .optional()
             .context(DatabaseSnafu {
-                operation: "release Graph presence keys",
-            });
-        let rows = result?;
-        cleanup?;
-        Ok(rows)
+                operation: "read Graph presence writer",
+            })?;
+        let Some(graph) = graph else {
+            return Ok(vec![false; batch.num_rows()]);
+        };
+        let heads = Self::writer_heads(connection, graph, revision)?;
+        let wanted = keys
+            .iter()
+            .flatten()
+            .map(<[u8]>::to_vec)
+            .collect::<Vec<_>>();
+        let selected = self.members(relation, &heads, Some(&wanted), &mut check)?;
+        let present = selected
+            .iter()
+            .filter(|row| row.writer == writer)
+            .map(|row| (row.owner_key.as_ref(), row.key.as_ref()))
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok((0..batch.num_rows())
+            .map(|row| present.contains(&(owners.value(row), keys.value(row))))
+            .collect())
     }
 }

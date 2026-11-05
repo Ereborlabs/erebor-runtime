@@ -186,7 +186,7 @@ impl AnalysisStore {
                 operation: "begin managed publication",
             })?;
         let revision = self.package_next(&transaction)?;
-        let (receipt, projected, verified, (pin_rows, call_pins, root_cursors, input_proof)) =
+        let (receipt, projected, verified, (pin_rows, call_pins, root_cursors, input_proof), graph_layer) =
             self.managed_commit_rows(&transaction, &mut prepared, revision, project)?;
         let retained = Self::retain_managed(input, &receipt, verified, input_proof);
         let source_proof = input.attempt.5.as_ref().map(|frame| {
@@ -214,6 +214,7 @@ impl AnalysisStore {
         self.crash_at("managed.before");
         let prepared = std::time::Instant::now();
         self.commit_metadata(transaction, "commit complete managed step")?;
+        if let Some(layer) = graph_layer { layer.commit(); }
         let committed = std::time::Instant::now();
         if let Some((frame, proof)) = source_proof {
             frame.commit_proof(proof);
@@ -294,6 +295,7 @@ impl AnalysisStore {
             BTreeMap<u64, (u64, u64)>,
             Option<std::sync::Arc<crate::analysis::graph_rows::store::InputProof>>,
         ),
+        Option<araphor_graph::PendingLayer>,
     )> {
         let started = std::time::Instant::now();
         let input = prepared.input();
@@ -414,7 +416,7 @@ impl AnalysisStore {
         }
         imported.pin(transaction, &receipt, &prepared.derived)?;
         let inserted = std::time::Instant::now();
-        let (mut graph_relations, graph_work) = self.commit_graph_journals(
+        let (mut graph_relations, graph_work, graph_layer) = self.commit_graph_journals(
             transaction,
             input,
             &receipt,
@@ -511,6 +513,7 @@ impl AnalysisStore {
             projected,
             verified,
             (pins, call_pins, root_cursors, input_proof),
+            graph_layer,
         ))
     }
 

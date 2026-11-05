@@ -75,6 +75,7 @@ impl AnalysisStore {
                 })
             {
                 let (witnesses, contexts, _) = Self::finding_basis_on(
+                    &self.graph_engine,
                     reader,
                     tenant,
                     &reference.result_id,

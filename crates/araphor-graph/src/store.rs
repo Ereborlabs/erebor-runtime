@@ -10,6 +10,7 @@ use crate::{
 
 pub struct GraphStore {
     pub(crate) shape: std::sync::Arc<std::sync::Mutex<Option<arrow_schema::SchemaRef>>>,
+    pub(crate) committed: std::sync::Arc<std::sync::RwLock<crate::committed::Members>>,
 }
 
 pub struct LayerRequest {
@@ -19,6 +20,7 @@ pub struct LayerRequest {
 }
 
 pub struct PendingGraph<'a> {
+    pub(crate) store: &'a GraphStore,
     pub(crate) connection: &'a Transaction<'a>,
     pub(crate) heads: BTreeMap<u64, u64>,
     pub(crate) revision: u64,
@@ -161,6 +163,7 @@ impl GraphStore {
     }
 
     pub fn begin_layers<'a>(
+        &'a self,
         connection: &'a Transaction<'_>,
         revision: u64,
         requests: &[LayerRequest],
@@ -223,6 +226,7 @@ impl GraphStore {
                 })?;
         }
         Ok(PendingGraph {
+            store: self,
             connection,
             heads,
             revision,

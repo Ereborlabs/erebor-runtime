@@ -24,15 +24,17 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn definition_finding(
+        engine: &araphor_graph::GraphStore,
         reader: &Connection,
         tenant: [u8; 16],
         result: &str,
         finding: &str,
     ) -> Result<Option<(FindingV1, GraphRevisionV1)>> {
-        let Some((_, member)) = Self::native_finding(reader, tenant, result, finding)? else {
+        let Some((_, member)) = Self::native_finding(engine, reader, tenant, result, finding)? else {
             return Ok(None);
         };
         let (_, _, revision) = Self::native_finding_basis(
+            engine,
             reader,
             tenant,
             result,
@@ -74,9 +76,10 @@ impl AnalysisStore {
                 "current finding reference",
             )?;
             if let Some((value, member)) =
-                Self::native_finding(reader, tenant, &reference.result_id, &reference.finding_id)?
+                Self::native_finding(&self.graph_engine, reader, tenant, &reference.result_id, &reference.finding_id)?
             {
                 let changed = Self::native_finding_changed(
+                    &self.graph_engine,
                     reader,
                     tenant,
                     reference,
@@ -98,6 +101,7 @@ impl AnalysisStore {
             let header = GraphRows::read_summary(reader, tenant, &reference.result_id, None)?
                 .ok_or_else(|| self.state_error("the Graph header is absent"))?;
             let finding = GraphRows::read_finding(
+                    &self.graph_engine,
                 reader,
                 &reference.result_id,
                 &reference.finding_id,
@@ -112,12 +116,13 @@ impl AnalysisStore {
                 .build()
             })?;
             let changed =
-                Self::legacy_finding_changed(reader, tenant, reference, prior, &finding, &header)?;
+                Self::legacy_finding_changed(&self.graph_engine, reader, tenant, reference, prior, &finding, &header)?;
             Ok((finding, changed))
         })
     }
 
     pub(in crate::analysis) fn native_finding_changed(
+        engine: &araphor_graph::GraphStore,
         reader: &Connection,
         tenant: [u8; 16],
         reference: &NotificationFindingRefV1,
@@ -127,10 +132,11 @@ impl AnalysisStore {
     ) -> Result<bool> {
         let control = crate::AnalysisReadControl::default();
         let mut owners = crate::analysis::managed::OwnerRead::new(reader, tenant, &control);
-        owners.finding_changed(reader, tenant, reference, prior, value, charge)
+        owners.finding_changed(engine, reader, tenant, reference, prior, value, charge)
     }
 
     pub(in crate::analysis) fn legacy_finding_changed(
+        engine: &araphor_graph::GraphStore,
         reader: &Connection,
         tenant: [u8; 16],
         reference: &NotificationFindingRefV1,
@@ -144,6 +150,7 @@ impl AnalysisStore {
             Some(prior) => match GraphRows::read_summary(reader, tenant, &prior.result_id, None)? {
                 None => true,
                 Some(previous) => match GraphRows::read_finding(
+                    engine,
                     reader,
                     &prior.result_id,
                     &prior.finding_id,
@@ -167,67 +174,85 @@ impl AnalysisStore {
         })
     }
 
-    fn current_finding_sql(reader: &Connection) -> Result<String> {
-        let findings = Self::native_findings_sql(reader)?;
-        Ok(Self::finding_heads_sql(findings.as_deref()))
-    }
-
-    pub(in crate::analysis) fn finding_heads_sql(findings: Option<&str>) -> String {
-        let legacy = format!("SELECT head.tenant_id,head.result_id,head.commit_revision AS revision,keys.finding_id
-            FROM (SELECT tenant_id,result_id,commit_revision FROM analysis_results
-                WHERE processor_id='{GRAPH_PROCESSOR}' AND method_version={GRAPH_SCHEMA_VERSION} AND stream_key IS NOT NULL
+    pub(in crate::analysis) fn finding_heads_on(
+        engine: &araphor_graph::GraphStore,
+        reader: &Connection,
+        tenant: [u8;16],
+        wanted: Option<&[&str]>,
+        catalog: &crate::analysis::managed::graph::projection::DomainProjection,
+        charge: &mut dyn FnMut(usize,usize) -> Result<()>,
+    ) -> Result<BTreeMap<String,(String,u64)>> {
+        if wanted.is_some_and(|ids| ids.is_empty()) { return Ok(BTreeMap::new()); }
+        let mut parameters = vec![duckdb::types::Value::Blob(tenant.to_vec()),duckdb::types::Value::Text(GRAPH_PROCESSOR.into()),GRAPH_SCHEMA_VERSION.into()];
+        let mut predicate = String::new();
+        let keys = if let Some(ids) = wanted {
+            let bytes = ids.iter().try_fold(0usize,|sum,id| sum.checked_add(id.len().saturating_mul(12)+12*size_of::<duckdb::types::Value>()))
+                .ok_or_else(|| crate::PackageErrorCodeV1::Limit.error("finding head input memory"))?;
+            charge(0,bytes)?;
+            predicate = format!("WHERE keys.finding_id IN ({})",std::iter::repeat_n("?",ids.len()).collect::<Vec<_>>().join(","));
+            let mut keys = Vec::with_capacity(ids.len());
+            for id in ids {
+                parameters.push(duckdb::types::Value::Text((*id).into()));
+                keys.push(araphor_analysis_types::DomainRelations::key(id).context(crate::AnalysisContractSnafu)?);
+            }
+            Some(keys)
+        } else { None };
+        let mut heads = BTreeMap::new();
+        let mut query = reader.prepare(&format!(
+            "SELECT keys.finding_id,head.result_id,head.commit_revision,
+                octet_length(encode(keys.finding_id))+octet_length(encode(head.result_id))
+             FROM (SELECT tenant_id,result_id,commit_revision FROM analysis_results
+                WHERE tenant_id=? AND processor_id=? AND method_version=? AND stream_key IS NOT NULL
                 QUALIFY row_number() OVER(PARTITION BY tenant_id,stream_key,first_cursor
                     ORDER BY commit_revision DESC,result_id DESC)=1) head
-            JOIN graph_finding_keys keys USING(result_id)");
-        let union = if let Some(findings) = findings {
-            format!("{legacy} UNION ALL SELECT member.tenant_id,member.result_id,member.revision,
-                member.properties.value.finding_id AS finding_id FROM ({findings}) member
-                JOIN (
-                    SELECT result_id FROM managed_source_publications
-                    QUALIFY row_number() OVER(PARTITION BY tenant_id,instance_id,stream_key,first_cursor ORDER BY revision DESC)=1
-                    UNION ALL SELECT publication.result_id FROM managed_graph_publications publication
-                    WHERE NOT EXISTS(SELECT 1 FROM managed_source_publications source WHERE source.result_id=publication.result_id)
-                    QUALIFY row_number() OVER(PARTITION BY publication.graph_id ORDER BY publication.revision DESC)=1
-                ) head USING(result_id)")
-        } else {
-            legacy
-        };
-        format!("SELECT tenant_id,result_id,revision,finding_id FROM ({union}) candidate
-            QUALIFY row_number() OVER(PARTITION BY tenant_id,finding_id ORDER BY revision DESC,result_id DESC)=1")
+             JOIN graph_finding_keys keys USING(result_id) {predicate}"
+        )).context(AnalysisDatabaseSnafu { operation:"prepare legacy finding heads" })?;
+        let mut rows = query.query(duckdb::params_from_iter(parameters.iter())).context(AnalysisDatabaseSnafu { operation:"read legacy finding heads" })?;
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu { operation:"advance legacy finding heads" })? {
+            let bytes:usize = row.get(3).context(AnalysisDatabaseSnafu { operation:"bound legacy finding head" })?;
+            charge(0,bytes.saturating_mul(4)+12*size_of::<(String,(String,u64))>())?;
+            let (id,result,revision):(String,String,u64) = (|| -> duckdb::Result<_> { Ok((row.get(0)?,row.get(1)?,row.get(2)?)) })().context(AnalysisDatabaseSnafu { operation:"decode legacy finding head" })?;
+            let entry = heads.entry(id).or_insert((result.clone(),revision));
+            if (revision,&result) > (entry.1,&entry.0) { *entry = (result,revision); }
+        }
+        let mut query = reader.prepare_cached(
+            "SELECT publication.result_id,octet_length(encode(publication.result_id)) FROM managed_graph_publications publication
+             JOIN managed_graphs graph USING(graph_id) WHERE graph.tenant_id=? AND publication.result_id IN (
+                SELECT result_id FROM managed_source_publications
+                QUALIFY row_number() OVER(PARTITION BY tenant_id,instance_id,stream_key,first_cursor ORDER BY revision DESC)=1
+                UNION ALL SELECT current.result_id FROM managed_graph_publications current
+                WHERE NOT EXISTS(SELECT 1 FROM managed_source_publications source WHERE source.result_id=current.result_id)
+                QUALIFY row_number() OVER(PARTITION BY current.graph_id ORDER BY current.revision DESC)=1)"
+        ).context(AnalysisDatabaseSnafu { operation:"prepare native finding heads" })?;
+        let mut input = query.query(params![tenant.as_slice()]).context(AnalysisDatabaseSnafu { operation:"read native finding heads" })?;
+        while let Some(row) = input.next().context(AnalysisDatabaseSnafu { operation:"advance native finding heads" })? {
+            let bytes:usize = row.get(1).context(AnalysisDatabaseSnafu { operation:"bound native finding head" })?;
+            charge(0,bytes.saturating_mul(4)+12*size_of::<String>())?;
+            let result:String = row.get(0).context(AnalysisDatabaseSnafu { operation:"decode native finding head" })?;
+            for row in catalog.read_findings(engine,reader,tenant,&result,keys.as_deref(),charge)? {
+                let id = row.id()?;
+                charge(0,(id.len()+result.len()).saturating_mul(4)+12*size_of::<(String,(String,u64))>())?;
+                let id = id.to_owned();
+                let entry = heads.entry(id).or_insert((result.clone(),row.revision));
+                if (row.revision,&result) > (entry.1,&entry.0) { *entry = (result.clone(),row.revision); }
+            }
+        }
+        Ok(heads)
     }
 
     pub(in crate::analysis) fn current_finding_keys(
         &self,
         reader: &Connection,
-        tenant: [u8; 16],
+        tenant: [u8;16],
         after: Option<&str>,
         exact: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<(String, String)>> {
-        let current = Self::current_finding_sql(reader)?;
-        let mut statement = reader.prepare(&format!(
-            "SELECT result_id,finding_id FROM ({current}) current WHERE tenant_id=?
-             AND (? IS NULL OR finding_id>?) AND (? IS NULL OR finding_id=?) ORDER BY finding_id LIMIT ?"))
-            .context(AnalysisDatabaseSnafu { operation:"prepare current native finding keys" })?;
-        statement
-            .query_map(
-                params![
-                    tenant.as_slice(),
-                    after,
-                    after,
-                    exact,
-                    exact,
-                    limit.min(i64::MAX as usize) as i64
-                ],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read current native finding keys",
-            })?
-            .collect::<duckdb::Result<_>>()
-            .context(AnalysisDatabaseSnafu {
-                operation: "decode current native finding keys",
-            })
+    ) -> Result<Vec<(String,String)>> {
+        let catalog = crate::analysis::managed::graph::projection::DomainProjection::load_scope(reader,None,Some(tenant.as_slice()),&mut |_,_| Ok(()))?;
+        let wanted = exact.map(|id| vec![id]);
+        Ok(Self::finding_heads_on(&self.graph_engine,reader,tenant,wanted.as_deref(),&catalog,&mut |_,_| Ok(()))?
+            .into_iter().filter(|(id,_)| after.is_none_or(|after| id.as_str()>after) && exact.is_none_or(|exact| id==exact))
+            .take(limit).map(|(id,(result,_))| (result,id)).collect())
     }
 
     pub fn notification_finding_heads(
@@ -251,72 +276,33 @@ impl AnalysisStore {
             return Ok(BTreeMap::new());
         }
         self.read_snapshot(|reader| {
-            Self::notification_heads_from(reader, tenant, &wanted, &mut |_, _| Ok(()))
+            Self::notification_heads_from(&self.graph_engine, reader, tenant, &wanted, &mut |_, _| Ok(()))
         })
     }
 
     pub(in crate::analysis) fn notification_heads_from(
+        engine: &araphor_graph::GraphStore,
         reader: &Connection,
-        tenant: [u8; 16],
+        tenant: [u8;16],
         wanted: &[&String],
-        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-    ) -> Result<BTreeMap<String, String>> {
-        let findings = Self::notification_findings_sql(reader, tenant, charge)?;
-        Self::read_finding_heads(reader, tenant, wanted, findings.as_deref(), charge)
+        charge: &mut dyn FnMut(usize,usize) -> Result<()>,
+    ) -> Result<BTreeMap<String,String>> {
+        let catalog = crate::analysis::managed::graph::projection::DomainProjection::load_scope(reader,None,Some(tenant.as_slice()),charge)?;
+        Self::read_finding_heads(engine,reader,tenant,wanted,&catalog,charge)
     }
 
     pub(in crate::analysis) fn read_finding_heads(
+        engine: &araphor_graph::GraphStore,
         reader: &Connection,
-        tenant: [u8; 16],
+        tenant: [u8;16],
         wanted: &[&String],
-        findings: Option<&str>,
-        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-    ) -> Result<BTreeMap<String, String>> {
-        let current = Self::finding_heads_sql(findings);
-        charge(0, current.capacity())?;
-        let mut heads = BTreeMap::new();
-        for chunk in wanted.chunks(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS) {
-            let values = std::iter::repeat_n("(?)", chunk.len())
-                .collect::<Vec<_>>()
-                .join(",");
-            let mut parameters = chunk
-                .iter()
-                .map(|id| duckdb::types::Value::Text((*id).clone()))
-                .collect::<Vec<_>>();
-            parameters.push(duckdb::types::Value::Blob(tenant.to_vec()));
-            let mut statement = reader.prepare(&format!("WITH wanted(finding_id) AS (VALUES {values})
-                    SELECT current.finding_id,current.result_id,octet_length(encode(current.finding_id))+octet_length(encode(current.result_id)) FROM ({current}) current JOIN wanted USING(finding_id)
-                    WHERE current.tenant_id=?"))
-                    .context(AnalysisDatabaseSnafu { operation:"prepare native requested finding heads" })?;
-            let mut rows = statement
-                .query(duckdb::params_from_iter(parameters.iter()))
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read native requested finding heads",
-                })?;
-            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                operation: "advance native requested finding heads",
-            })? {
-                let bytes: usize = row.get(2).context(AnalysisDatabaseSnafu {
-                    operation: "bound requested finding head",
-                })?;
-                charge(
-                    bytes,
-                    bytes
-                        .saturating_mul(8)
-                        .saturating_add(8 * size_of::<(String, String)>()),
-                )?;
-                let (id, result): (String, String) =
-                    (|| -> duckdb::Result<_> { Ok((row.get(0)?, row.get(1)?)) })().context(
-                        AnalysisDatabaseSnafu {
-                            operation: "decode native requested finding head",
-                        },
-                    )?;
-                if heads.insert(id, result).is_some() {
-                    return Err(PackageErrorCodeV1::Invalid.error("duplicate current finding"));
-                }
-            }
-        }
-        Ok(heads)
+        catalog: &crate::analysis::managed::graph::projection::DomainProjection,
+        charge: &mut dyn FnMut(usize,usize) -> Result<()>,
+    ) -> Result<BTreeMap<String,String>> {
+        charge(0,wanted.len().saturating_mul(4*size_of::<&str>()))?;
+        let ids = wanted.iter().map(|id| id.as_str()).collect::<Vec<_>>();
+        Ok(Self::finding_heads_on(engine,reader,tenant,Some(&ids),catalog,charge)?
+            .into_iter().map(|(id,(result,_))| (id,result)).collect())
     }
 
     pub fn graph_findings(
@@ -347,7 +333,7 @@ impl AnalysisStore {
                 if Self::definition_graph(reader, tenant, &result)? {
                     let mut values = BTreeMap::new();
                     for id in ids {
-                        let (_, member) = Self::native_finding(reader, tenant, &result, &id)?
+                        let (_, member) = Self::native_finding(&self.graph_engine, reader, tenant, &result, &id)?
                             .ok_or_else(|| self.state_error("the Graph finding is absent"))?;
                         values.insert(id, member.value);
                     }
@@ -356,7 +342,7 @@ impl AnalysisStore {
                     let header = GraphRows::read_finding_header(reader, tenant, &result)?
                         .ok_or_else(|| self.state_error("the Graph header is absent"))?;
                     let values =
-                        GraphRows::read_finding_keys(reader, &result, &header, &ids, None)?;
+                        GraphRows::read_finding_keys(&self.graph_engine, reader, &result, &header, &ids, None)?;
                     selected.insert(result, values);
                 }
             }
@@ -385,12 +371,12 @@ impl AnalysisStore {
         )?;
         self.read_snapshot(|reader| {
             if Self::definition_graph(reader, tenant, result_id)? {
-                return Self::definition_finding(reader, tenant, result_id, finding_id);
+                return Self::definition_finding(&self.graph_engine, reader, tenant, result_id, finding_id);
             }
             let Some(header) = GraphRows::read_finding_header(reader, tenant, result_id)? else {
                 return Ok(None);
             };
-            GraphRows::read_finding(reader, result_id, finding_id, &header, None).and_then(
+            GraphRows::read_finding(&self.graph_engine, reader, result_id, finding_id, &header, None).and_then(
                 |finding| {
                     let revision = Self::native_source_revision(
                         reader,
@@ -436,12 +422,13 @@ impl AnalysisStore {
                     let mut findings = BTreeMap::new();
                     for id in ids {
                         if let Some((_, member)) =
-                            Self::native_finding(reader, tenant, result, &id)?
+                            Self::native_finding(&self.graph_engine, reader, tenant, result, &id)?
                         {
                             findings.insert(id, member.value);
                         }
                     }
                     let (_, _, revision) = Self::native_finding_basis(
+                        &self.graph_engine,
                         reader,
                         tenant,
                         result,
@@ -458,7 +445,7 @@ impl AnalysisStore {
                 let header = GraphRows::read_finding_header(reader, tenant, result)?
                     .ok_or_else(|| self.state_error("the Graph header is absent"))?;
                 let ids = ids.into_iter().map(str::to_owned).collect::<Vec<_>>();
-                let findings = GraphRows::read_finding_keys(reader, result, &header, &ids, None)?;
+                let findings = GraphRows::read_finding_keys(&self.graph_engine, reader, result, &header, &ids, None)?;
                 results.insert(
                     result.to_owned(),
                     (
@@ -499,8 +486,8 @@ impl AnalysisStore {
                     "current finding scope",
                 )?;
                 let current =
-                    Self::native_finding(reader, tenant, &result.0, &reference.finding_id)?;
-                let requested = Self::native_finding(
+                    Self::native_finding(&self.graph_engine, reader, tenant, &result.0, &reference.finding_id)?;
+                let requested = Self::native_finding(&self.graph_engine,
                     reader,
                     tenant,
                     &reference.result_id,
@@ -515,6 +502,7 @@ impl AnalysisStore {
                 };
                 Notice::Conflict.require(current == requested, "current finding reference")?;
                 return Self::definition_finding(
+                    &self.graph_engine,
                     reader,
                     tenant,
                     &reference.result_id,
@@ -533,7 +521,7 @@ impl AnalysisStore {
             let header = GraphRows::read_finding_header(reader, tenant, &result.0)?
                 .ok_or_else(|| self.state_error("the Graph header is absent"))?;
             let finding =
-                GraphRows::read_finding(reader, &result.0, &reference.finding_id, &header, None)?
+                GraphRows::read_finding(&self.graph_engine, reader, &result.0, &reference.finding_id, &header, None)?
                     .ok_or_else(|| {
                     crate::NotificationSnafu {
                         code: Notice::Denied,
@@ -558,19 +546,18 @@ impl AnalysisStore {
         self.check_graph_read(tenant, &[Some(finding_id)], "finding reference")?;
         revision.validate(tenant)?;
         self.read_snapshot(|reader| {
-            if let Some(native) = Self::native_findings_sql(reader)? {
-                let mut query = reader.prepare(&format!(
-                    "SELECT DISTINCT result_id FROM ({native}) member WHERE tenant_id=? AND properties.value.finding_id=?"
-                )).context(AnalysisDatabaseSnafu { operation: "prepare historical Definition findings" })?;
-                let ids = query.query_map(params![tenant.as_slice(), finding_id], |row| row.get::<_, String>(0))
-                    .context(AnalysisDatabaseSnafu { operation: "read historical Definition findings" })?
-                    .collect::<duckdb::Result<Vec<_>>>()
-                    .context(AnalysisDatabaseSnafu { operation: "decode historical Definition findings" })?;
-                for id in ids {
-                    if Self::definition_graph(reader, tenant, &id)? {
-                        if let Some((finding, basis)) = Self::definition_finding(reader, tenant, &id, finding_id)? {
-                            if &basis == revision { return Ok(Some(finding)); }
-                        }
+            let catalog = crate::analysis::managed::graph::projection::DomainProjection::load_scope(reader,None,Some(tenant.as_slice()),&mut |_,_| Ok(()))?;
+            let key = araphor_analysis_types::DomainRelations::key(&finding_id).context(crate::AnalysisContractSnafu)?;
+            let mut query = reader.prepare("SELECT publication.result_id FROM managed_graph_publications publication JOIN managed_graphs graph USING(graph_id) WHERE graph.tenant_id=? ORDER BY publication.result_id")
+                .context(AnalysisDatabaseSnafu { operation:"prepare historical Definition findings" })?;
+            let ids = query.query_map(params![tenant.as_slice()],|row| row.get::<_,String>(0))
+                .context(AnalysisDatabaseSnafu { operation:"read historical Definition findings" })?
+                .collect::<duckdb::Result<Vec<_>>>().context(AnalysisDatabaseSnafu { operation:"decode historical Definition findings" })?;
+            for id in ids {
+                if !catalog.read_findings(&self.graph_engine,reader,tenant,&id,Some(std::slice::from_ref(&key)),&mut |_,_| Ok(()))?.is_empty()
+                    && Self::definition_graph(reader,tenant,&id)? {
+                    if let Some((finding,basis)) = Self::definition_finding(&self.graph_engine,reader,tenant,&id,finding_id)? {
+                        if &basis == revision { return Ok(Some(finding)); }
                     }
                 }
             }
@@ -589,7 +576,7 @@ impl AnalysisStore {
                 let header = GraphRows::read_finding_header(reader, tenant, &id)?
                     .ok_or_else(|| self.state_error("the Graph header is absent"))?;
                 if &header.snapshot.input_manifest == revision {
-                    return GraphRows::read_finding(reader, &id, finding_id, &header, None);
+                    return GraphRows::read_finding(&self.graph_engine, reader, &id, finding_id, &header, None);
                 }
             }
             Ok(None)

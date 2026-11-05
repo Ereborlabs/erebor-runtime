@@ -16,6 +16,10 @@ pub(super) struct BaseRows {
 }
 
 impl BaseRows {
+    pub(super) fn closures(&self) -> Vec<(u64, u64, u64, Vec<u8>, u64)> {
+        self.rows.iter().map(|((writer,relation,_,key),(owner,revision))|
+            (*writer,*owner,*relation,key.clone(),*revision)).collect()
+    }
     const BASE: &'static str = "FROM graph_members m JOIN graph_delta_heads h USING(writer_id)
         LEFT JOIN graph_writer_owners o
         ON o.writer_id=m.writer_id AND o.owner_ref=m.owner_ref

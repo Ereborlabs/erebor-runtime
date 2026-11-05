@@ -217,13 +217,14 @@ impl DomainScratch<'_> {
 
 impl DomainCommands {
     fn read(
+        engine: &araphor_graph::GraphStore,
         connection: &Connection,
         journal: &ManagedGraphJournal,
         package: &sdk::Package,
         model: &sdk::Model,
         scratch: &mut DomainScratch<'_>,
     ) -> Result<Self> {
-        let basis = basis::Basis::read(connection, journal, scratch)?;
+        let basis = basis::Basis::read(engine, connection, journal, scratch)?;
         let mut commands = Self::default();
         for staged in journal.work.journal.batches() {
             scratch.charge(0)?;
@@ -553,7 +554,7 @@ impl AnalysisStore {
             bytes: 0,
             leases: Vec::new(),
         };
-        let commands = DomainCommands::read(connection, journal, package, model, &mut scratch)?;
+        let commands = DomainCommands::read(&self.graph_engine, connection, journal, package, model, &mut scratch)?;
         if commands.records.is_empty() {
             return Ok(None);
         }

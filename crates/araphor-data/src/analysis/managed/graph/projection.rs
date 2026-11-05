@@ -1,3 +1,6 @@
+mod native;
+pub(in crate::analysis) use native::FindingRow;
+
 use araphor_analysis_sdk as sdk;
 use araphor_analysis_types::{DomainRelations, FindingMember};
 use duckdb::{params, Connection, Transaction};
@@ -55,7 +58,7 @@ impl DomainProjection {
         Self::load_scope(connection, graph, None, &mut |_, _| Ok(()))
     }
 
-    fn load_scope(
+    pub(in crate::analysis) fn load_scope(
         connection: &Connection,
         graph: Option<u64>,
         tenant: Option<&[u8]>,
@@ -163,29 +166,6 @@ impl DomainProjection {
                 .collect::<Vec<_>>()
                 .join(" UNION ALL ")
         })
-    }
-
-    pub(in crate::analysis) fn findings(&self) -> Option<String> {
-        Self::values(&self.findings).map(|values| format!(
-            "SELECT publication.result_id,publication.revision,graph.graph_id,graph.tenant_id,
-                graph.instance_id,member.writer_id,member.owner_ref,member.relation_id,
-                owner.owner_key,member.entity_key,
-                member.properties_ref,properties.properties,origin.restricted,
-                origin.result_id AS origin_result_id,origin.revision AS origin_revision,
-                canonical.canonical_properties_ref AS finding_value_id
-             FROM managed_graph_publications publication JOIN managed_graphs graph USING(graph_id)
-             JOIN managed_graph_publication_layers pin USING(result_id)
-             JOIN graph_layers layer ON layer.layer_id=pin.layer_id AND layer.writer_id=pin.writer_id
-             JOIN graph_members member ON member.writer_id=pin.writer_id
-                AND member.valid_from<=layer.revision
-                AND (member.valid_to IS NULL OR member.valid_to>layer.revision)
-             JOIN graph_writer_owners owner ON owner.writer_id=member.writer_id AND owner.owner_ref=member.owner_ref
-             JOIN ({values}) properties ON properties.graph_id=graph.graph_id
-                AND properties.relation_id=member.relation_id AND properties.properties_ref=member.properties_ref
-             JOIN managed_graph_results origin ON origin.writer_id=member.writer_id AND origin.revision=member.valid_from
-             JOIN managed_graph_finding_values canonical ON canonical.relation_id=member.relation_id
-                AND canonical.properties_ref=member.properties_ref"
-        ))
     }
 
     fn members(&self) -> Option<String> {
@@ -378,61 +358,28 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn bound_native_findings(
+        engine: &araphor_graph::GraphStore,
         connection: &Connection,
         result: &str,
         exact: Option<&str>,
-        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
+        charge: &mut dyn FnMut(usize,usize) -> Result<()>,
     ) -> Result<bool> {
-        if !Self::native_graph_result(connection, result)? {
-            return Ok(false);
-        }
-        let Some(findings) = Self::native_findings_sql(connection)? else {
-            return Ok(true);
-        };
-        let mut query = connection
-            .prepare(&format!(
-                "SELECT properties FROM ({findings}) member WHERE result_id=?
-             AND (? IS NULL OR properties.value.finding_id=?)
-             QUALIFY row_number() OVER(PARTITION BY properties.value.finding_id
-                ORDER BY relation_id,properties_ref,writer_id,owner_ref)=1"
-            ))
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare native finding memory bound",
-            })?;
-        let batches =
-            query
-                .query_arrow(params![result, exact, exact])
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read native finding memory bound",
-                })?;
-        for batch in batches {
-            let bytes = batch.get_array_memory_size();
-            let input = bytes
-                .checked_mul(8)
-                .ok_or_else(|| Code::Limit.error("native finding memory"))?;
-            charge(bytes, input)?;
+        use duckdb::OptionalExt as _;
+        let tenant: Option<Vec<u8>> = connection.query_row(
+            "SELECT graph.tenant_id FROM managed_graph_publications publication JOIN managed_graphs graph USING(graph_id) WHERE publication.result_id=?",
+            params![result],|row| row.get(0)).optional().context(AnalysisDatabaseSnafu { operation:"read native finding bound owner" })?;
+        let Some(tenant) = tenant else { return Ok(false); };
+        let tenant:[u8;16] = tenant.try_into().map_err(|_| Code::Invalid.error("native finding tenant"))?;
+        let catalog = DomainProjection::load_scope(connection,None,Some(tenant.as_slice()),charge)?;
+        let keys = exact.map(|id| DomainRelations::key(&id)).transpose().context(crate::AnalysisContractSnafu)?.map(|key| vec![key]);
+        let mut seen = std::collections::BTreeSet::new();
+        for row in catalog.read_findings(engine,connection,tenant,result,keys.as_deref(),charge)? {
+            if seen.insert(row.id()?.to_owned()) {
+                let bytes = row.member.property_batch()?.get_array_memory_size();
+                charge(bytes,bytes.saturating_mul(8))?;
+            }
         }
         Ok(true)
-    }
-
-    pub(in crate::analysis) fn native_findings_sql(
-        connection: &Connection,
-    ) -> Result<Option<String>> {
-        Ok(DomainProjection::load(connection, None)?.findings())
-    }
-
-    pub(in crate::analysis) fn notification_findings_sql(
-        connection: &Connection,
-        tenant: [u8; 16],
-        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-    ) -> Result<Option<String>> {
-        let projection =
-            DomainProjection::load_scope(connection, None, Some(tenant.as_slice()), charge)?;
-        let sql = projection.findings();
-        if let Some(sql) = &sql {
-            charge(0, sql.capacity())?;
-        }
-        Ok(sql)
     }
 
     pub(in crate::analysis) fn native_domain_counts(
@@ -473,94 +420,33 @@ impl AnalysisStore {
     }
 
     pub(in crate::analysis) fn native_finding(
+        engine: &araphor_graph::GraphStore,
         connection: &Connection,
-        tenant: [u8; 16],
+        tenant: [u8;16],
         result: &str,
         id: &str,
-    ) -> Result<Option<(u64, FindingMember)>> {
-        Self::native_finding_on(connection, tenant, result, id, &mut |_, _| Ok(()))
+    ) -> Result<Option<(u64,FindingMember)>> {
+        Self::native_finding_on(engine,connection,tenant,result,id,&mut |_,_| Ok(()))
     }
+
     pub(in crate::analysis) fn native_finding_on(
+        engine: &araphor_graph::GraphStore,
         connection: &Connection,
-        tenant: [u8; 16],
+        tenant: [u8;16],
         result: &str,
         id: &str,
-        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-    ) -> Result<Option<(u64, FindingMember)>> {
-        let findings = Self::notification_findings_sql(connection, tenant, charge)?;
-        Self::native_finding_sql(connection, tenant, result, id, findings.as_deref(), charge)
-    }
-    pub(in crate::analysis) fn native_finding_sql(
-        connection: &Connection,
-        tenant: [u8; 16],
-        result: &str,
-        id: &str,
-        findings: Option<&str>,
-        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-    ) -> Result<Option<(u64, FindingMember)>> {
-        let Some(findings) = findings else {
-            return Ok(None);
-        };
-        let query = format!(
-            "SELECT finding_value_id,properties FROM ({findings}) finding
-             WHERE tenant_id=? AND result_id=? AND properties.value.finding_id=?
-             QUALIFY row_number() OVER(ORDER BY relation_id,properties_ref,writer_id,owner_ref)=1"
-        );
-        charge(0, query.capacity())?;
-        let mut statement = connection.prepare(&query).context(AnalysisDatabaseSnafu {
-            operation: "prepare native point finding",
-        })?;
-        let batches = statement
-            .query_arrow(params![tenant.as_slice(), result, id])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read native point finding",
-            })?;
-        let mut found = None;
-        for batch in batches {
-            let bytes = batch.get_array_memory_size();
-            charge(
-                bytes,
-                bytes
-                    .checked_mul(12)
-                    .ok_or_else(|| Code::Limit.error("native point finding memory"))?,
-            )?;
-            use sdk::arrow_array::{Array as _, StructArray, UInt64Array};
-            let ids = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| Code::Invalid.error("native finding value identity"))?;
-            if ids.iter().any(|id| !matches!(id, Some(1..))) {
-                return Err(Code::Invalid.error("native finding value identity"));
-            }
-            let properties = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .ok_or_else(|| Code::Invalid.error("native finding value properties"))?;
-            if properties.null_count() != 0 {
-                return Err(Code::Invalid.error("native finding value null"));
-            }
-            let native = sdk::RecordBatch::try_new(
-                std::sync::Arc::new(sdk::Schema::new(properties.fields().clone())),
-                properties.columns().to_vec(),
-            )
-            .context(crate::PackageArrowSnafu)?;
-            let data = sdk::Dataset {
-                name: FindingMember::port().name,
-                batches: vec![sdk::Dataset::normalize_batch(
-                    native,
-                    std::sync::Arc::new(FindingMember::port().schema),
-                )
-                .context(crate::AnalysisContractSnafu)?],
-            };
-            let values = FindingMember::decode(&data).context(crate::AnalysisContractSnafu)?;
-            for (index, value) in values.into_iter().enumerate() {
-                if found.replace((ids.value(index), value)).is_some() {
-                    return Err(Code::Invalid.error("duplicate native point finding"));
-                }
+        charge: &mut dyn FnMut(usize,usize) -> Result<()>,
+    ) -> Result<Option<(u64,FindingMember)>> {
+        let catalog = DomainProjection::load_scope(connection,None,Some(tenant.as_slice()),charge)?;
+        charge(0,id.len().saturating_add(16).saturating_mul(4))?;
+        let key = DomainRelations::key(&id).context(crate::AnalysisContractSnafu)?;
+        let rows = catalog.read_findings(engine,connection,tenant,result,Some(&[key]),charge)?;
+        match rows.first() {
+            None => Ok(None),
+            Some(row) => {
+                if row.value==0 { return Err(Code::Invalid.error("native finding value identity")); }
+                Ok(Some((row.value,row.decode(charge)?)))
             }
         }
-        Ok(found)
     }
 }

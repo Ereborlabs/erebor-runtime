@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::Arc;
 
 impl AnalysisStore {
     pub(super) fn extract_definition_graph(
@@ -15,166 +14,130 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         owners: &mut crate::analysis::managed::OwnerRead<'_>,
     ) -> Result<()> {
-        use sdk::arrow_array::{Array as _, BooleanArray, StringArray, StructArray, UInt64Array};
         owners.check_reader(reader, scope.tenant_id)?;
         if grant.permitted_by(scope).is_err() {
             return Ok(());
         }
         let mut origins = BTreeMap::new();
         if read.projected("findings").is_some() {
-            if let Some(findings) =
-                owners.finding_sql(reader, scope.tenant_id, &mut |scan, bytes| {
+            let rows = owners.finding_rows(
+                &self.graph_engine,
+                reader,
+                scope.tenant_id,
+                result,
+                None,
+                &mut |scan, bytes| {
+                    control.check()?;
                     output.scan(scan)?;
                     output.charge(bytes)
-                })?
-            {
-                let mut query = reader.prepare(&format!(
-                    "SELECT member.finding_value_id,member.properties,member.origin_result_id,
-                        member.origin_revision,member.restricted
-                     FROM ({findings}) member WHERE member.result_id=? AND member.tenant_id=?
-                     QUALIFY row_number() OVER(PARTITION BY member.properties.value.finding_id
-                        ORDER BY member.relation_id,member.properties_ref,member.writer_id,member.owner_ref)=1"
-                )).context(AnalysisDatabaseSnafu { operation: "prepare Definition findings" })?;
-                for batch in query
-                    .query_arrow(params![result, scope.tenant_id.as_slice()])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "read Definition findings",
-                    })?
-                {
-                    control.check()?;
-                    let bytes = batch.get_array_memory_size();
-                    output.scan(bytes)?;
-                    output.charge(bytes.checked_mul(12).ok_or_else(|| {
-                        self.state_error("the Definition finding size is invalid")
-                    })?)?;
-                    let ids = batch
-                        .column(0)
-                        .as_any()
-                        .downcast_ref::<UInt64Array>()
-                        .ok_or_else(|| {
-                            self.state_error("the Definition finding value is absent")
-                        })?;
-                    let properties = batch
-                        .column(1)
-                        .as_any()
-                        .downcast_ref::<StructArray>()
-                        .ok_or_else(|| self.state_error("the Definition finding is absent"))?;
-                    let producers = batch
-                        .column(2)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .ok_or_else(|| {
-                            self.state_error("the Definition finding origin is absent")
-                        })?;
-                    let revisions = batch
-                        .column(3)
-                        .as_any()
-                        .downcast_ref::<UInt64Array>()
-                        .ok_or_else(|| self.state_error("the Definition finding cut is absent"))?;
-                    let restricted = batch
-                        .column(4)
-                        .as_any()
-                        .downcast_ref::<BooleanArray>()
-                        .ok_or_else(|| {
-                            self.state_error("the Definition finding disclosure is absent")
-                        })?;
-                    if batch.columns().iter().any(|array| array.null_count() != 0) {
-                        return self.reject("the Definition finding has a null authority field");
+                },
+            )?;
+            let mut seen = std::collections::BTreeSet::new();
+            for row in rows {
+                control.check()?;
+                if !seen.insert(row.id()?.to_owned()) {
+                    continue;
+                }
+                let origin = (row.origin.clone(), row.origin_revision);
+                let allowed = match origins.get(&origin) {
+                    Some(allowed) => *allowed,
+                    None => {
+                        output.charge(
+                            origin.0.capacity() + 8 * std::mem::size_of::<(String, u64, bool)>(),
+                        )?;
+                        let allowed = owners
+                            .producer(&origin.0, origin.1, &mut |scan, bytes| {
+                                output.scan(scan)?;
+                                output.charge(bytes)
+                            })?
+                            .grant()
+                            .permitted_by(scope)
+                            .is_ok();
+                        origins.insert(origin, allowed);
+                        allowed
                     }
-                    let port = araphor_analysis_types::FindingMember::port();
-                    let native = sdk::RecordBatch::try_new(
-                        Arc::new(sdk::Schema::new(properties.fields().clone())),
-                        properties.columns().to_vec(),
-                    )
-                    .context(crate::PackageArrowSnafu)?;
-                    let data = sdk::Dataset {
-                        name: port.name,
-                        batches: vec![sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
-                            .context(crate::AnalysisContractSnafu)?],
-                    };
-                    for (row, member) in araphor_analysis_types::FindingMember::decode(&data)
-                        .context(crate::AnalysisContractSnafu)?
-                        .into_iter()
-                        .enumerate()
-                    {
-                        let origin = (producers.value(row).to_owned(), revisions.value(row));
-                        let allowed = match origins.get(&origin) {
-                            Some(allowed) => *allowed,
-                            None => {
-                                output.charge(
-                                    origin.0.capacity()
-                                        + 8 * std::mem::size_of::<(String, u64, bool)>(),
-                                )?;
-                                let allowed = owners
-                                    .producer(&origin.0, origin.1, &mut |scan, bytes| {
-                                        output.scan(scan)?;
-                                        output.charge(bytes)
-                                    })?
-                                    .grant()
-                                    .permitted_by(scope)
-                                    .is_ok();
-                                origins.insert(origin, allowed);
-                                allowed
-                            }
-                        };
-                        if !allowed {
-                            continue;
-                        }
-                        if !capture.definition_finding(
-                            result,
-                            revision,
-                            restricted.value(row),
-                            &member.value,
-                            ids.value(row),
-                            &mut output.sink(control),
-                        )? {
-                            return Ok(());
-                        }
-                    }
+                };
+                if !allowed {
+                    continue;
+                }
+                let member = row.decode(&mut |scan, bytes| {
+                    output.scan(scan)?;
+                    output.charge(bytes)
+                })?;
+                if !capture.native_finding(
+                    result,
+                    revision,
+                    row.restricted,
+                    None,
+                    &member.value,
+                    row.value,
+                    &mut output.sink(control),
+                )? {
+                    return Ok(());
                 }
             }
         }
         if read.projected("graph_manifest").is_none() {
             return Ok(());
         }
-        let mut query = reader.prepare(
-            "SELECT DISTINCT origin.result_id,origin.revision,octet_length(encode(origin.result_id))
-             FROM managed_graph_publication_layers pin
-             JOIN graph_layers layer USING(layer_id,writer_id)
-             JOIN graph_members member ON member.writer_id=pin.writer_id AND member.valid_from<=layer.revision
-                AND (member.valid_to IS NULL OR member.valid_to>layer.revision)
-             JOIN managed_graph_results origin ON origin.writer_id=member.writer_id AND origin.revision=member.valid_from
-             WHERE pin.result_id=?"
-        ).context(AnalysisDatabaseSnafu { operation: "prepare Definition Graph producers" })?;
-        let mut rows = query
-            .query(params![result])
+        let mut query = reader.prepare_cached(
+            "SELECT pin.writer_id,layer.revision,publication.previous_result_id,coalesce(origin.restricted,false)
+             FROM managed_graph_publications publication LEFT JOIN managed_graph_publication_layers pin USING(result_id)
+             LEFT JOIN graph_layers layer USING(layer_id,writer_id)
+             LEFT JOIN managed_graph_results origin USING(layer_id,writer_id)
+             WHERE publication.result_id=?"
+        ).context(AnalysisDatabaseSnafu { operation:"prepare Definition Graph view" })?;
+        let pins = query
+            .query_map(params![result], |row| {
+                Ok((
+                    row.get::<_, Option<u64>>(0)?,
+                    row.get::<_, Option<u64>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, bool>(3)?,
+                ))
+            })
             .context(AnalysisDatabaseSnafu {
-                operation: "read Definition Graph producers",
+                operation: "read Definition Graph view",
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode Definition Graph view",
             })?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance Definition Graph producers",
-        })? {
-            control.check()?;
-            let bytes: usize = row.get(2).context(AnalysisDatabaseSnafu {
-                operation: "bound Definition Graph producer",
-            })?;
-            output.charge(
-                bytes
-                    .checked_mul(4)
-                    .and_then(|bytes| bytes.checked_add(128))
-                    .ok_or_else(|| {
-                        self.state_error("the Definition Graph producer size is invalid")
-                    })?,
-            )?;
-            let origin: (String, u64) =
-                (|| -> duckdb::Result<_> { Ok((row.get(0)?, row.get(1)?)) })().context(
-                    AnalysisDatabaseSnafu {
-                        operation: "decode Definition Graph producer",
-                    },
-                )?;
+        let previous = pins
+            .first()
+            .and_then(|(_, _, previous, _)| previous.clone());
+        let restricted = pins.iter().any(|(_, _, _, restricted)| *restricted);
+        let heads = pins
+            .into_iter()
+            .filter_map(|(writer, revision, _, _)| writer.zip(revision))
+            .collect::<BTreeMap<_, _>>();
+        let members = self.graph_engine.view(&heads, || {
+            control.check().map_err(araphor_graph::Error::backend)
+        })?;
+        let mut nodes = std::collections::BTreeSet::new();
+        let mut edges = std::collections::BTreeSet::new();
+        let mut producers = std::collections::BTreeSet::new();
+        for member in members {
+            output.charge(member.key.len() + 12 * std::mem::size_of::<(u64, Vec<u8>)>())?;
+            match member.kind {
+                araphor_graph::EntityKind::Node => {
+                    nodes.insert((member.relation, member.key.to_vec()));
+                }
+                araphor_graph::EntityKind::Edge => {
+                    edges.insert((member.relation, member.key.to_vec()));
+                }
+            }
+            producers.insert((member.writer, member.revision));
+        }
+        for (writer, revision) in producers {
+            let origin:(String,u64) = reader.query_row(
+                "SELECT result_id,revision FROM managed_graph_results WHERE writer_id=? AND revision=?",
+                params![writer,revision],|row| Ok((row.get(0)?,row.get(1)?)))
+                .context(AnalysisDatabaseSnafu { operation:"read Definition Graph producer" })?;
             let allowed = match origins.get(&origin) {
                 Some(allowed) => *allowed,
                 None => {
+                    output.charge(origin.0.capacity() + 128)?;
                     let allowed = owners
                         .producer(&origin.0, origin.1, &mut |scan, bytes| {
                             output.scan(scan)?;
@@ -191,19 +154,7 @@ impl AnalysisStore {
                 return Ok(());
             }
         }
-        let (nodes,edges,previous,restricted): (u64,u64,Option<String>,bool) = reader.query_row(
-            "WITH members AS (
-                SELECT DISTINCT member.relation_id,member.entity_key,member.entity_kind
-                FROM managed_graph_publication_layers pin JOIN graph_layers layer USING(layer_id,writer_id)
-                JOIN graph_members member ON member.writer_id=pin.writer_id AND member.valid_from<=layer.revision
-                    AND (member.valid_to IS NULL OR member.valid_to>layer.revision) WHERE pin.result_id=?
-             ) SELECT (SELECT count(*) FROM members WHERE entity_kind=0),
-                (SELECT count(*) FROM members WHERE entity_kind=1),
-                (SELECT previous_result_id FROM managed_graph_publications WHERE result_id=?),
-                EXISTS(SELECT 1 FROM managed_graph_publication_layers pin JOIN managed_graph_results result USING(writer_id,layer_id)
-                    WHERE pin.result_id=? AND result.restricted)",
-            params![result,result,result],|row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "read Definition Graph summary" })?;
+        let (nodes, edges) = (nodes.len() as u64, edges.len() as u64);
         output.reference_result(result, revision, AnalysisReferenceOriginV1::Graph)?;
         capture.definition_manifest(
             scope.tenant_id,
@@ -215,25 +166,6 @@ impl AnalysisStore {
             &mut output.sink(control),
         )?;
         Ok(())
-    }
-
-    fn native_finding_field(name: &str) -> Option<String> {
-        let expression = match name {
-            "tenant_id" => "member.tenant_id",
-            "source_key" => "source.stream_key",
-            "graph_result_id" => "member.result_id",
-            "commit_revision" => "member.revision",
-            "graph_sensitivity" => "CASE WHEN member.restricted OR source.restricted_count>0 THEN 'host_restricted' ELSE 'tenant' END",
-            "finding_value_id" => "member.finding_value_id",
-            "state" => "CASE upper(member.properties.value.state) WHEN 'PROVISIONAL' THEN 'provisional' WHEN 'CONFIRMED' THEN 'confirmed' WHEN 'SUPERSEDED' THEN 'superseded' WHEN 'RETRACTED' THEN 'retracted' WHEN 'COVERAGE_INSUFFICIENT' THEN 'coverage_insufficient' END",
-            "severity" => "CASE upper(member.properties.value.severity) WHEN 'INFO' THEN 'info' WHEN 'WARNING' THEN 'warning' WHEN 'HIGH' THEN 'high' WHEN 'CRITICAL' THEN 'critical' END",
-            "sensitivity" => "CASE upper(member.properties.value.sensitivity) WHEN 'PUBLIC' THEN 'public' WHEN 'TENANT' THEN 'tenant' WHEN 'HOSTRESTRICTED' THEN 'host_restricted' END",
-            "finding_id" | "package_id" | "package_version" | "window_start_utc_ns" | "window_end_utc_ns" | "required_action" => {
-                return Some(format!("member.properties.value.{name} AS {name}"));
-            }
-            _ => return None,
-        };
-        Some(format!("{expression} AS {name}"))
     }
 
     pub(super) fn extract_native_graph(
@@ -263,14 +195,30 @@ impl AnalysisStore {
         {
             return Ok(false);
         }
-        let columns = read.projected("findings").map(|indices| {
-            let schema = Self::table_schemas().get("findings")?;
-            indices
-                .iter()
-                .map(|index| Self::native_finding_field(schema.field(*index).name()))
-                .collect::<Option<Vec<_>>>()
-        });
-        if columns.as_ref().is_some_and(Option::is_none) {
+        if read.projected("findings").is_some_and(|indices| {
+            let schemas = Self::table_schemas();
+            let schema = &schemas["findings"];
+            indices.iter().any(|index| {
+                !matches!(
+                    schema.field(*index).name().as_str(),
+                    "tenant_id"
+                        | "source_key"
+                        | "graph_result_id"
+                        | "commit_revision"
+                        | "graph_sensitivity"
+                        | "finding_value_id"
+                        | "state"
+                        | "severity"
+                        | "sensitivity"
+                        | "finding_id"
+                        | "package_id"
+                        | "package_version"
+                        | "window_start_utc_ns"
+                        | "window_end_utc_ns"
+                        | "required_action"
+                )
+            })
+        }) {
             return Ok(false);
         }
         let revision: u64 = snapshot.query_row(
@@ -281,38 +229,48 @@ impl AnalysisStore {
         if !selection.sources.as_slice().contains(source) {
             return Ok(true);
         }
-        if let Some(Some(mut columns)) = columns {
-            if let Some(findings) = Self::native_findings_sql(snapshot)? {
-                columns.push("member.tenant_id AS __native_tenant".into());
-                columns.push("member.properties.value.finding_id AS __native_id".into());
-                let query = format!(
-                    "SELECT {} FROM ({findings}) member
-                     JOIN managed_source_publications source ON source.result_id=member.result_id
-                        AND source.tenant_id=member.tenant_id AND source.revision=member.revision
-                     WHERE member.result_id=? AND member.tenant_id=?
-                     QUALIFY row_number() OVER(PARTITION BY member.properties.value.finding_id
-                        ORDER BY member.relation_id,member.properties_ref,member.writer_id,member.owner_ref)=1",
-                    columns.join(","),
-                );
-                let mut statement = snapshot.prepare(&query).context(AnalysisDatabaseSnafu {
-                    operation: "prepare native finding projection",
-                })?;
-                let batches = statement
-                    .query_arrow(params![result, selection.tenant_id.as_slice()])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "read native finding projection",
-                    })?;
-                for batch in batches {
+        if read.projected("findings").is_some() {
+            let catalog =
+                crate::analysis::managed::graph::projection::DomainProjection::load_scope(
+                    snapshot,
+                    None,
+                    Some(selection.tenant_id.as_slice()),
+                    &mut |scan, bytes| {
+                        output.scan(scan)?;
+                        output.charge(bytes)
+                    },
+                )?;
+            let mut seen = std::collections::BTreeSet::new();
+            for row in catalog.read_findings(
+                &self.graph_engine,
+                snapshot,
+                selection.tenant_id,
+                result,
+                None,
+                &mut |scan, bytes| {
                     control.check()?;
-                    output.scan(batch.get_array_memory_size())?;
-                    if !capture.native_findings(
-                        batch,
-                        result,
-                        revision,
-                        &mut output.sink(control),
-                    )? {
-                        return Ok(true);
-                    }
+                    output.scan(scan)?;
+                    output.charge(bytes)
+                },
+            )? {
+                if !seen.insert(row.id()?.to_owned()) {
+                    continue;
+                }
+                let member = row.decode(&mut |scan, bytes| {
+                    control.check()?;
+                    output.scan(scan)?;
+                    output.charge(bytes)
+                })?;
+                if !capture.native_finding(
+                    result,
+                    revision,
+                    header.restricted_count.is_some_and(|count| count > 0) || row.restricted,
+                    Some(&source.key()),
+                    &member.value,
+                    row.value,
+                    &mut output.sink(control),
+                )? {
+                    return Ok(true);
                 }
             }
         }

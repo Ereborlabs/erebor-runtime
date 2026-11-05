@@ -28,7 +28,7 @@ impl PendingGraph<'_> {
         self,
         prepared: PreparedLayers,
         reserve: impl Fn(u64, usize, usize) -> Result<Option<Box<dyn std::any::Any + Send + Sync>>>,
-    ) -> Result<BTreeMap<u64, (u64, u64)>> {
+    ) -> Result<(BTreeMap<u64, (u64, u64)>, crate::PendingLayer)> {
         self.check_heads()?;
         if prepared.parents.len() != self.heads.len() {
             return InvalidSnafu {
@@ -55,12 +55,15 @@ impl PendingGraph<'_> {
             }
         }
         let scratch = Scratch::new(&reserve);
+        let closed = prepared.base.closures();
         let mut counts = prepared.base.close(&self, &scratch)?;
+        let mut members = Vec::new();
         for rows in prepared.rows {
             scratch.check(rows.writer)?;
             let writer = rows.writer;
             let inserted = self.append_members(rows, &scratch)?;
-            counts.entry(writer).or_default().0 += inserted;
+            counts.entry(writer).or_default().0 += inserted.len() as u64;
+            members.extend(inserted);
         }
         for writer in prepared.parents.keys() {
             scratch.check(*writer)?;
@@ -69,20 +72,21 @@ impl PendingGraph<'_> {
         for writer in prepared.parents.keys() {
             scratch.check(*writer)?;
         }
-        Ok(counts)
+        let layer = self.store.seal(self.revision,members,closed)?;
+        Ok((counts,layer))
     }
 
-    fn append_members(&self, prepared: PreparedRows, scratch: &Scratch<'_>) -> Result<u64> {
+    fn append_members(&self, prepared: PreparedRows, scratch: &Scratch<'_>) -> Result<Vec<crate::Member>> {
         let writer = prepared.writer;
         let relation = prepared.relation;
         let shape = &prepared.shape;
         let owners = GraphStore::intern_owners(self.connection, writer, &prepared.owners)?;
         let entities = GraphStore::intern_entities(self.connection, relation, &prepared.keys)?;
         let properties =
-            GraphStore::append_properties(self.connection, relation, shape, prepared.properties)?;
+            GraphStore::append_properties(self.connection, relation, shape, prepared.properties.clone())?;
         let endpoints = prepared
             .endpoints
-            .zip(prepared.edge_keys)
+            .zip(prepared.edge_keys.as_ref())
             .map(
                 |((from, to, graph), (sources, targets, labels))| -> Result<_> {
                     Ok((
@@ -99,6 +103,8 @@ impl PendingGraph<'_> {
             .context(DatabaseSnafu {
                 operation: "open final Graph members",
             })?;
+        let properties_batch = Arc::new(prepared.properties.clone());
+        let mut members = Vec::with_capacity(prepared.keys.len());
         for row in 0..prepared.keys.len() {
             scratch.check(writer)?;
             let (from, to, label) = match &endpoints {
@@ -122,11 +128,19 @@ impl PendingGraph<'_> {
             .context(DatabaseSnafu {
                 operation: "append final Graph member",
             })?;
+            members.push(crate::Member {
+                writer, owner:owners[row], relation, kind:shape.kind,
+                owner_key:Arc::from(prepared.owners[row].as_slice()),
+                key:Arc::from(prepared.keys[row].as_slice()), property:properties[row], revision:self.revision,
+                endpoints:prepared.edge_keys.as_ref().map(|(from,to,label)|
+                    [Arc::from(from[row].as_slice()),Arc::from(to[row].as_slice()),Arc::from(label[row].as_slice())]),
+                properties:Arc::clone(&properties_batch), row,
+            });
         }
         rows.flush().context(DatabaseSnafu {
             operation: "flush final Graph members",
         })?;
-        Ok(prepared.keys.len() as u64)
+        Ok(members)
     }
 
     fn binary<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a BinaryArray> {

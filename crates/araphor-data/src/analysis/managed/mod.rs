@@ -4,7 +4,7 @@ mod changes;
 mod codec;
 mod commit;
 mod execution;
-mod graph;
+pub(in crate::analysis) mod graph;
 mod history;
 mod lifecycle;
 mod model;

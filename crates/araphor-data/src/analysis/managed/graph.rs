@@ -26,7 +26,7 @@ mod authority;
 mod commit;
 pub(in crate::analysis::managed) use commit::PreparedGraph;
 mod domain;
-mod projection;
+pub(in crate::analysis) mod projection;
 mod proof;
 mod provenance;
 mod publication;

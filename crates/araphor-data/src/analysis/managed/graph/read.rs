@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use araphor_graph::{GraphStore, Read, ReadOrigin};
+use araphor_graph::{ Read, ReadOrigin};
 use duckdb::{params, Connection};
 use sdk::arrow_array::{Array, BinaryArray, UInt64Array};
 use snafu::ResultExt as _;
@@ -85,7 +85,7 @@ impl ManagedGraphTransaction {
                 .check(&self.call, store, connection, control)?;
             let mut batches = Vec::new();
             let mut origins = BTreeMap::new();
-            GraphStore::read(
+            store.graph_engine.read(
                 connection,
                 self.call.graph,
                 relation,
@@ -93,6 +93,7 @@ impl ManagedGraphTransaction {
                 self.call.attempt.captured_revision(),
                 read,
                 arguments,
+                || control.check().map_err(araphor_graph::Error::backend),
                 |batch| {
                     let bytes = Self::read_bytes(batch).map_err(araphor_graph::Error::backend)?;
                     reserve(bytes)

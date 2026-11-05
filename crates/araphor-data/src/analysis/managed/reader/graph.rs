@@ -72,59 +72,80 @@ impl OwnerRead<'_> {
         Ok(Some(owner))
     }
 
-    pub(in crate::analysis) fn finding_sql(
+    pub(in crate::analysis) fn finding_catalog(
         &mut self,
         reader: &Connection,
         tenant: [u8; 16],
         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
-    ) -> Result<Option<Arc<String>>> {
+    ) -> Result<Arc<super::super::graph::projection::DomainProjection>> {
         self.check_reader(reader, tenant)?;
-        if let Some(sql) = &self.findings {
-            return Ok(sql.clone());
+        if let Some(catalog) = &self.findings {
+            return Ok(Arc::clone(catalog));
         }
-        self.charge(4 * size_of::<String>(), charge)?;
-        let sql = AnalysisStore::notification_findings_sql(reader, tenant, charge)?.map(Arc::new);
-        self.findings = Some(sql.clone());
-        Ok(sql)
+        let catalog = Arc::new(
+            super::super::graph::projection::DomainProjection::load_scope(
+                reader,
+                None,
+                Some(tenant.as_slice()),
+                charge,
+            )?,
+        );
+        self.findings = Some(Arc::clone(&catalog));
+        Ok(catalog)
     }
+
+    pub(in crate::analysis) fn finding_rows(
+        &mut self,
+        engine: &araphor_graph::GraphStore,
+        reader: &Connection,
+        tenant: [u8; 16],
+        result: &str,
+        keys: Option<&[Vec<u8>]>,
+        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
+    ) -> Result<Vec<super::super::graph::projection::FindingRow>> {
+        self.finding_catalog(reader, tenant, charge)?
+            .read_findings(engine, reader, tenant, result, keys, charge)
+    }
+
     pub(in crate::analysis) fn finding(
         &mut self,
+        engine: &araphor_graph::GraphStore,
         reader: &Connection,
         tenant: [u8; 16],
         result: &str,
         id: &str,
         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
     ) -> Result<Option<(u64, araphor_analysis_types::FindingMember)>> {
-        let sql = self.finding_sql(reader, tenant, charge)?;
-        AnalysisStore::native_finding_sql(
-            reader,
-            tenant,
-            result,
-            id,
-            sql.as_ref().map(|sql| sql.as_str()),
-            charge,
-        )
+        charge(0, id.len().saturating_add(16).saturating_mul(4))?;
+        let key = araphor_analysis_types::DomainRelations::key(&id)
+            .context(crate::AnalysisContractSnafu)?;
+        let rows = self.finding_rows(engine, reader, tenant, result, Some(&[key]), charge)?;
+        match rows.first() {
+            None => Ok(None),
+            Some(row) => {
+                if row.value == 0 {
+                    return Err(Code::Invalid.error("native finding value identity"));
+                }
+                Ok(Some((row.value, row.decode(charge)?)))
+            }
+        }
     }
 
     pub(in crate::analysis) fn finding_heads(
         &mut self,
+        engine: &araphor_graph::GraphStore,
         reader: &Connection,
         tenant: [u8; 16],
         wanted: &[&String],
         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
     ) -> Result<BTreeMap<String, String>> {
-        let sql = self.finding_sql(reader, tenant, charge)?;
-        AnalysisStore::read_finding_heads(
-            reader,
-            tenant,
-            wanted,
-            sql.as_ref().map(|sql| sql.as_str()),
-            charge,
-        )
+        let catalog = self.finding_catalog(reader, tenant, charge)?;
+        AnalysisStore::read_finding_heads(engine, reader, tenant, wanted, &catalog, charge)
     }
 
     pub(in crate::analysis) fn finding_changed(
         &mut self,
+        engine: &araphor_graph::GraphStore,
         reader: &Connection,
         tenant: [u8; 16],
         reference: &crate::NotificationFindingRefV1,
@@ -137,7 +158,14 @@ impl OwnerRead<'_> {
             None => true,
             Some(prior) if prior.result_id == reference.result_id => false,
             Some(prior) => self
-                .finding(reader, tenant, &prior.result_id, &prior.finding_id, charge)?
+                .finding(
+                    engine,
+                    reader,
+                    tenant,
+                    &prior.result_id,
+                    &prior.finding_id,
+                    charge,
+                )?
                 .is_none_or(|(previous, _)| previous != value),
         })
     }

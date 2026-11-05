@@ -133,11 +133,12 @@ macro_rules! graph_row {
 }
 
 impl Capture<'_> {
-    pub(in crate::analysis::extraction) fn definition_finding(
+    pub(in crate::analysis::extraction) fn native_finding(
         &mut self,
         result: &str,
         revision: u64,
         restricted: bool,
+        source: Option<&[u8]>,
         finding: &crate::FindingV1,
         value: u64,
         budget: &mut ReadBudget<'_>,
@@ -154,7 +155,7 @@ impl Capture<'_> {
             } else {
                 ContextSensitivityV1::Tenant
             },
-            None,
+            source,
             finding,
             Some(value),
             budget,
@@ -223,76 +224,6 @@ impl Capture<'_> {
             self.graph_manifests.insert(result.into());
         }
         Ok(admitted)
-    }
-
-    pub(in crate::analysis::extraction) fn native_findings(
-        &mut self,
-        batch: sdk::RecordBatch,
-        result: &str,
-        revision: u64,
-        budget: &mut ReadBudget<'_>,
-    ) -> Result<bool> {
-        use sdk::arrow_array::{Array as _, BinaryArray, StringArray};
-        let width = batch.num_columns().checked_sub(2).ok_or_else(overflow)?;
-        let tenants = batch
-            .column(width)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .ok_or_else(|| invalid("the native finding tenant is absent"))?;
-        let ids = batch
-            .column(width + 1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| invalid("the native finding identity is absent"))?;
-        if tenants.null_count() != 0 || ids.null_count() != 0 {
-            return Err(invalid("the native finding identity is null"));
-        }
-        let schemas = AnalysisStore::table_schemas();
-        let schema = schemas
-            .get("findings")
-            .ok_or_else(|| invalid("the native findings schema is absent"))?;
-        let names = schema
-            .fields()
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect::<Vec<_>>();
-        let start = self.table("findings", &names, budget)?.total_rows;
-        let projected = batch
-            .project(&(0..width).collect::<Vec<_>>())
-            .map_err(arrow_error)?;
-        let projected = sdk::Dataset::normalize_batch(
-            projected,
-            Arc::clone(&self.table("findings", &names, budget)?.schema),
-        )
-        .map_err(|source| crate::Error::AnalysisContract {
-            source,
-            location: snafu::location!(),
-        })?;
-        if !self
-            .table("findings", &names, budget)?
-            .append_native(projected, budget)?
-        {
-            return Ok(false);
-        }
-        for row in 0..batch.num_rows() {
-            budget.check()?;
-            let tenant = <[u8; 16]>::try_from(tenants.value(row))
-                .map_err(|_| invalid("the native finding tenant is invalid"))?;
-            let id = ids.value(row);
-            self.record_finding(result, id, budget)?;
-            let key = (tenant, id.to_owned());
-            if !self.latest.contains_key(&key) {
-                budget.charge(size_of::<([u8; 16], String)>() + id.len())?;
-            }
-            if self
-                .latest
-                .get(&key)
-                .is_none_or(|(prior, _)| *prior <= revision)
-            {
-                self.latest.insert(key, (revision, start + row));
-            }
-        }
-        Ok(true)
     }
 
     pub(in crate::analysis::extraction) fn finding_basis(

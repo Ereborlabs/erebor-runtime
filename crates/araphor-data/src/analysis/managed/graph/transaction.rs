@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use araphor_analysis_sdk as sdk;
-use araphor_graph::{GraphStore, Journal, ReadOrigin};
+use araphor_graph::{ Journal, ReadOrigin};
 
 use super::{authority::GraphAuthority, ManagedBudget, ManagedGraphCall};
 use crate::analysis::PackageResultRefV1;
@@ -216,12 +216,13 @@ impl ManagedGraphTransaction {
                 .relation(name)
                 .map_err(|_| Code::Denied.error("Graph stage relation"))?
                 .engine();
-            let present = GraphStore::presence(
+            let present = store.graph_engine.presence(
                 connection,
                 self.call.writer,
                 relation,
                 self.call.attempt.captured_revision(),
                 &batch,
+                || control.check().map_err(araphor_graph::Error::backend),
             )?;
             work.journal
                 .prepare(relation, &shape, batch, &present)

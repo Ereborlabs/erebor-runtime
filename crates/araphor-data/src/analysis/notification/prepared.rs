@@ -309,7 +309,7 @@ impl AnalysisStore {
                 && NotificationGrantV1::identifier(&reference.result_id, usize::MAX)).collect::<Vec<_>>();
             let ids = valid.iter().map(|reference| &reference.finding_id).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
             let mut owners = OwnerRead::with_budget(reader, tenant, control, budget)?;
-            let heads = owners.finding_heads(reader, tenant, &ids, &mut |_, bytes| batch.charge(bytes));
+            let heads = owners.finding_heads(&self.graph_engine, reader, tenant, &ids, &mut |_, bytes| batch.charge(bytes));
             if owners.memory_failed() {
                 return Err(heads.err().unwrap_or_else(|| crate::PackageErrorCodeV1::Limit.error("notification owner memory")));
             }
@@ -497,7 +497,7 @@ impl AnalysisStore {
                 continue;
             }
             let value = (|| {
-                let native = owners.finding(reader, tenant, result, id, &mut |_, bytes| {
+                let native = owners.finding(&self.graph_engine, reader, tenant, result, id, &mut |_, bytes| {
                     batch.charge(bytes)
                 })?;
                 let source: bool = reader.query_row(
@@ -522,6 +522,7 @@ impl AnalysisStore {
                     return Ok(None);
                 };
                 GraphRows::bound_findings(
+                    &self.graph_engine,
                     reader,
                     result,
                     Some(id),
@@ -529,7 +530,7 @@ impl AnalysisStore {
                     &mut |_, bytes| batch.charge(bytes),
                 )?;
                 Ok(
-                    GraphRows::read_finding(reader, result, id, &header, Some(control))?
+                    GraphRows::read_finding(&self.graph_engine, reader, result, id, &header, Some(control))?
                         .map(|finding| (finding, None, false)),
                 )
             })();
@@ -546,6 +547,7 @@ impl AnalysisStore {
             let basis = (|| {
                 let revision = if definition {
                     Self::finding_basis_on(
+                    &self.graph_engine,
                         reader,
                         tenant,
                         result,
@@ -621,6 +623,7 @@ impl AnalysisStore {
                 };
                 if let Some(canonical) = canonical {
                     owners.finding_changed(
+                        &self.graph_engine,
                         reader,
                         tenant,
                         &reference,
@@ -632,6 +635,7 @@ impl AnalysisStore {
                     let header = GraphRows::read_summary(reader, tenant, &current.0, None)?
                         .ok_or_else(|| self.state_error("the current Graph header is absent"))?;
                     Self::legacy_finding_changed(
+                        &self.graph_engine,
                         reader,
                         tenant,
                         &reference,

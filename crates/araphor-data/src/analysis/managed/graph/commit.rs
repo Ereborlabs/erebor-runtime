@@ -330,7 +330,7 @@ impl AnalysisStore {
         revision: u64,
         prepared: Option<PreparedGraph>,
         memory: &super::super::budget::PreparedMemory<'_>,
-    ) -> Result<(Vec<&'static str>, (u64, u64, u64))> {
+    ) -> Result<(Vec<&'static str>, (u64, u64, u64), Option<araphor_graph::PendingLayer>)> {
         let started = std::time::Instant::now();
         let Some(PreparedGraph {
             layers,
@@ -341,7 +341,7 @@ impl AnalysisStore {
             proofs: _,
         }) = prepared
         else {
-            return Ok((Vec::new(), (0, 0, 0)));
+            return Ok((Vec::new(), (0, 0, 0), None));
         };
         let mut requests = Vec::new();
         for journal in &journals {
@@ -399,7 +399,7 @@ impl AnalysisStore {
             });
         }
         let prepared = std::time::Instant::now();
-        let work = GraphStore::begin_layers(connection, revision, &requests)?.apply_prepared(
+        let (work, layer) = self.graph_engine.begin_layers(connection, revision, &requests)?.apply_prepared(
             layers,
             |writer, bytes, total| {
                 let journal = journals
@@ -478,6 +478,7 @@ impl AnalysisStore {
                 "managed_graph_row_reads",
             ],
             (staged, inserted, closed),
+            Some(layer),
         ))
     }
 

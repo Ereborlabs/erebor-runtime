@@ -18,6 +18,17 @@ use native::NativeRows;
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 use fixture::CommitFixture;
 
+fn raw_finding(
+    reader: &Connection,
+    result: &str,
+    finding: &str,
+    header: &GraphHeader,
+    control: Option<&AnalysisReadControl>,
+) -> Result<Option<FindingV1>> {
+    Ok(GraphRows::read_relational_keys(reader,result,header,&[finding.to_owned()],control)?
+        .remove(finding).map(|(_,finding)| finding))
+}
+
 #[test]
 fn graph_source_requires_native_identity() -> TestResult {
     let fixture = CommitFixture::new()?;
@@ -335,7 +346,7 @@ fn native_rows_integrity() -> TestResult {
             params![wrong_ref, unrelated],
         )?;
         assert_eq!(
-            GraphRows::read_finding(
+            raw_finding(
                 &transaction,
                 other,
                 &finding.finding_id,
@@ -358,7 +369,7 @@ fn native_rows_integrity() -> TestResult {
             "UPDATE graph_evidence SET source_ref = ? WHERE evidence_id = ?",
             params![wrong_ref, referenced],
         )?;
-        assert!(GraphRows::read_finding(
+        assert!(raw_finding(
             &transaction,
             other,
             &finding.finding_id,
@@ -374,7 +385,7 @@ fn native_rows_integrity() -> TestResult {
             "UPDATE graph_evidence SET source_ref = ? WHERE evidence_id = ?",
             params![wrong_ref + 1, referenced],
         )?;
-        assert!(GraphRows::read_finding(
+        assert!(raw_finding(
             &transaction,
             other,
             &finding.finding_id,
@@ -508,7 +519,7 @@ fn native_rows_integrity() -> TestResult {
     assert_eq!(retained, (1, 1, graph.graph.subjects.len() as u64));
     assert!(GraphRows::read_header(&writer, [9; 16], "version")?.is_none());
     assert_eq!(
-        GraphRows::read_finding(
+        raw_finding(
             &writer,
             "version",
             &graph.findings[0].finding_id,
@@ -927,6 +938,7 @@ fn native_row_read_cancel() -> TestResult {
         GraphRows::read_edges(writer, result, usize::MAX, Some(&control)).map(|_| ()),
         GraphRows::read_findings(writer, result, &header, Some(&control)).map(|_| ()),
         GraphRows::read_finding(
+            &fixture.store.graph_engine,
             writer,
             result,
             &fixture.snapshot.findings[0].finding_id,
@@ -969,6 +981,7 @@ fn native_finding_tenant() -> TestResult {
     )?;
     assert!(matches!(
         GraphRows::read_finding(
+            &fixture.store.graph_engine,
             &transaction,
             result,
             &fixture.snapshot.findings[0].finding_id,
@@ -1018,6 +1031,7 @@ fn duplicate_finding_membership_rejected() -> TestResult {
     let writer = fixture.store.writer_access()?;
     assert!(matches!(
         GraphRows::read_finding(
+            &fixture.store.graph_engine,
             writer.get()?,
             &fixture.request.result_id,
             finding,

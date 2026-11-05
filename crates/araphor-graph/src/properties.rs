@@ -72,7 +72,9 @@ impl GraphStore {
             .context(DatabaseSnafu {
                 operation: "install Graph property schema function",
             })?;
-        Ok(Self { shape })
+        let store = Self { shape, committed: Arc::default() };
+        store.restore(connection)?;
+        Ok(store)
     }
 
     pub fn create_relation(

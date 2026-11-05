@@ -1,5 +1,72 @@
 # Native execution performance handoff
 
+## Native Graph reader result, 2026-11-05
+
+The final focused build passes in 258.773250 seconds. Three alternating pairs
+run the unchanged exact incident test with the same debug profile and log
+filters. All six runs pass with all 16,402 records. Every run has five managed
+publications, 24 notification captures, and three source-change restart mentions.
+No source edit, build, debugger, or other test runs during the comparison.
+
+| Pair | First executable | Baseline test, seconds | Native reader test, seconds | Process time reduction |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 70.51 | 47.62 | 32.45 percent |
+| 2 | Native reader | 71.87 | 47.68 | 33.64 percent |
+| 3 | Baseline | 71.87 | 47.44 | 33.98 percent |
+
+The median paired speed factor is 1.507. This result supports a gain for this
+complete rewrite. It does not provide a confidence-interval or p99 claim.
+The median arrival measurements are:
+
+| Boundary | Baseline, seconds | Native reader, seconds |
+| --- | ---: | ---: |
+| Initial notification | 6.070693 | 3.992181 |
+| Background records to package publication | 7.812768 | 7.644887 |
+| Second notification | 8.983028 | 6.717021 |
+| Third notification | 9.847955 | 7.609041 |
+
+The background difference is small. It does not establish a separate gain for
+bulk intake. Complete test time includes point and history verification after
+notification arrival. Do not attribute its full reduction to delivery latency.
+The earlier 45.74-second run is diagnostic. It precedes the final cancellation
+correction and is excluded from the paired result.
+
+`araphor-graph` now owns shared native Arrow property batches, member row
+addresses, keyed adjacency indexes, and historical visibility intervals.
+Package reads and presence checks use those indexes. Data finding reads,
+notification scalars, extraction, provenance, and retained domain reads use
+the same members. The former wide finding reconstruction helper is removed.
+Data still owns publication pins, producers, grants, and canonical finding
+value identities. The Graph engine has no package or incident rules.
+
+Data seals native additions and closes before database COMMIT. Readers select
+them through database snapshot writer heads. Failure removes the tentative
+additions and closes before the writer is released. Successful Data COMMIT
+disarms that cleanup, then publishes the existing revision signal. Installation
+restores native rows once from the existing validated durable Graph tables.
+The native owner retains Graph state, not inputs, outputs, journals, attempts,
+or preparation scratch. Arrow take selects result rows. No new subscription,
+validation rule, limit, timeout, workload, or durable archive is added.
+
+The existing raw legacy point fixtures use their unchanged relational keyed
+reader. Real-store fixtures pass their store's Graph engine. This changes no
+assertion. The legacy Data library-test target and full workspace CI were not
+run. Rollback injection and durable restoration have source review only; this
+append test does not qualify those runtime cases.
+
+Result: **Done** for the native Graph reader and this paired comparison.
+Millisecond latency and the 100-fold target remain **Not done**. The next
+source review concerns repeated standalone finding owners during point and
+history verification. No further gain is measured or forecast here.
+
+Proof: `/tmp/araphor-build-native-layers-20261105-e.log` and
+`/tmp/araphor-native-layer-pairs-20261105/{settings,results,summary}.json`,
+with six run logs in that directory. The retained executables are
+`target/araphor-notice-comparison-20261105/baseline` and `native-layers`.
+The completed key-lookup trial executable was removed to free build space.
+Its earlier paired results remain in `/tmp/araphor-notice-pairs-20261105`.
+
+
 ## Paired notification lookup trial, 2026-11-05
 
 Five pairs ran the exact incident test. Each pair ran the baseline and the
@@ -42,7 +109,7 @@ The candidate has no performance commit. Millisecond latency and the 100-fold
 target remain **Not done**.
 
 Proof: `/tmp/araphor-notice-pairs-20261105/settings.json`, `results.json`,
-`summary.json`, and the ten run logs in that directory. The executables are
+`summary.json`, and the ten run logs in that directory. The executables used
 `target/araphor-notice-comparison-20261105/baseline` and `candidate`.
 
 

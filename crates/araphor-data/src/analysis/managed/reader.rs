@@ -70,7 +70,7 @@ pub(in crate::analysis) struct OwnerRead<'a> {
     attempts: BTreeMap<(String, String), String>,
     producers: BTreeMap<String, Arc<ProducerOwner>>,
     publications: BTreeMap<String, Option<Arc<PublicationOwner>>>,
-    findings: Option<Option<Arc<String>>>,
+    findings: Option<Arc<super::graph::projection::DomainProjection>>,
     memory: Option<super::PreparedMemory<'a>>,
     memory_failed: bool,
 }

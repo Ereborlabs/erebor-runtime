@@ -28,6 +28,7 @@ pub(in crate::analysis::extraction) struct Resolved<'a> {
 
 impl NativeNotifications {
     pub(in crate::analysis::extraction) fn read(
+        engine: &araphor_graph::GraphStore,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         scope: &AnalysisSelectionV1,
@@ -65,7 +66,7 @@ impl NativeNotifications {
                 operation: "create notification scalar requests",
             })?;
         let result = Self::capture(
-            snapshot, selection, scope, &wanted, current, output, control, owners,
+            engine, snapshot, selection, scope, &wanted, current, output, control, owners,
         );
         let cleanup = snapshot
             .execute_batch(
@@ -80,6 +81,7 @@ impl NativeNotifications {
     }
 
     fn capture(
+        engine: &araphor_graph::GraphStore,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         scope: &AnalysisSelectionV1,
@@ -109,42 +111,59 @@ impl NativeNotifications {
             })?;
         }
         let started = std::time::Instant::now();
-        let findings = owners.finding_sql(snapshot, selection.tenant_id, &mut |scan, bytes| {
-            control.check()?;
-            output.scan(scan)?;
-            output.charge(bytes)
-        })?;
+        let findings =
+            owners.finding_catalog(snapshot, selection.tenant_id, &mut |scan, bytes| {
+                control.check()?;
+                output.scan(scan)?;
+                output.charge(bytes)
+            })?;
         let catalog = std::time::Instant::now();
-        if current {
-            let heads = AnalysisStore::finding_heads_sql(findings.as_ref().map(|sql| sql.as_str()));
-            output.charge(heads.capacity())?;
-            snapshot
-                .execute(
-                    &format!(
-                        "CREATE TEMP TABLE native_notice_heads AS
-             SELECT current.finding_id,current.result_id,current.revision FROM ({heads}) current
-             JOIN (SELECT DISTINCT finding_id FROM native_notice_wanted) wanted USING(finding_id)
-             WHERE current.tenant_id=?"
-                    ),
-                    params![selection.tenant_id.as_slice()],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "bind scope notification heads",
-                })?;
-        } else {
-            snapshot.execute_batch("CREATE TEMP TABLE native_notice_heads(finding_id VARCHAR,result_id VARCHAR,revision UBIGINT)")
-                .context(AnalysisDatabaseSnafu { operation: "create empty notification scalar heads" })?;
-        }
+        output.charge(wanted.len().saturating_mul(4 * size_of::<&str>()))?;
+        let ids = wanted.iter().map(|(_, id)| *id).collect::<Vec<_>>();
         let mut result = Self::default();
-        result.read_heads(snapshot, output, control)?;
+        if current {
+            result.heads = AnalysisStore::finding_heads_on(
+                engine,
+                snapshot,
+                selection.tenant_id,
+                Some(&ids),
+                &findings,
+                &mut |scan, bytes| {
+                    control.check()?;
+                    output.scan(scan)?;
+                    output.charge(bytes)
+                },
+            )?;
+            result
+                .heads
+                .retain(|id, _| wanted.iter().any(|(_, wanted)| id == wanted));
+        }
+        snapshot.execute_batch("CREATE TEMP TABLE native_notice_heads(finding_id VARCHAR,result_id VARCHAR,revision UBIGINT)")
+            .context(AnalysisDatabaseSnafu { operation:"create notification scalar heads" })?;
+        {
+            let mut append =
+                snapshot
+                    .appender("native_notice_heads")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "open notification scalar heads",
+                    })?;
+            for (id, (owner, revision)) in &result.heads {
+                append
+                    .append_row(params![id, owner, revision])
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "append notification scalar head",
+                    })?;
+            }
+            append.flush().context(AnalysisDatabaseSnafu {
+                operation: "flush notification scalar heads",
+            })?;
+        }
         let heads = std::time::Instant::now();
         result.read_headers(snapshot, selection, scope, owners, output, control)?;
         let headers = std::time::Instant::now();
-        if let Some(findings) = findings {
-            result.read_members(
-                snapshot, selection, scope, &findings, owners, output, control,
-            )?;
-        }
+        result.read_members(
+            engine, snapshot, selection, scope, wanted, &findings, owners, output, control,
+        )?;
         control.check()?;
         erebor_telemetry::debug!(
             stage = "notification_capture_timing",
@@ -159,42 +178,6 @@ impl NativeNotifications {
             "Native notification scalar capture completed"
         );
         Ok(result)
-    }
-
-    fn read_heads(
-        &mut self,
-        snapshot: &Connection,
-        output: &mut AnalysisExtractionV1,
-        control: &AnalysisReadControl,
-    ) -> Result<()> {
-        let mut query = snapshot.prepare(
-            "SELECT finding_id,result_id,revision,octet_length(encode(finding_id))+octet_length(encode(result_id))
-             FROM native_notice_heads"
-        ).context(AnalysisDatabaseSnafu { operation: "prepare notification scalar heads" })?;
-        let mut rows = query.query([]).context(AnalysisDatabaseSnafu {
-            operation: "read notification scalar heads",
-        })?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance notification scalar heads",
-        })? {
-            Self::charge(
-                row.get(3).context(AnalysisDatabaseSnafu {
-                    operation: "bound notification scalar head",
-                })?,
-                12 * size_of::<(String, (String, u64))>(),
-                output,
-                control,
-            )?;
-            let (finding, result, revision): (String, String, u64) =
-                (|| -> duckdb::Result<_> { Ok((row.get(0)?, row.get(1)?, row.get(2)?)) })()
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "decode notification scalar head",
-                    })?;
-            if revision == 0 || self.heads.insert(finding, (result, revision)).is_some() {
-                return Err(Code::Invalid.error("notification current head identity"));
-            }
-        }
-        Ok(())
     }
 
     fn read_headers(
@@ -335,95 +318,108 @@ impl NativeNotifications {
 
     fn read_members(
         &mut self,
+        engine: &araphor_graph::GraphStore,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         scope: &AnalysisSelectionV1,
-        findings: &str,
+        wanted: &[(&str, &str)],
+        findings: &crate::analysis::managed::graph::projection::DomainProjection,
         owners: &mut crate::analysis::managed::OwnerRead<'_>,
         output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<()> {
-        let mut query = snapshot.prepare(&format!(
-            "WITH wanted AS (SELECT result_id,finding_id FROM native_notice_wanted
-                UNION SELECT result_id,finding_id FROM native_notice_heads)
-             SELECT member.result_id,member.properties.value.finding_id,member.finding_value_id,
-                octet_length(encode(member.result_id))+octet_length(encode(member.properties.value.finding_id))
-                    +octet_length(encode(member.origin_result_id)),
-                member.origin_result_id,member.origin_revision
-             FROM ({findings}) member JOIN wanted ON wanted.result_id=member.result_id
-                AND wanted.finding_id=member.properties.value.finding_id
-             WHERE member.tenant_id=?
-             QUALIFY row_number() OVER(PARTITION BY member.result_id,member.properties.value.finding_id
-                ORDER BY member.relation_id,member.properties_ref,member.writer_id,member.owner_ref)=1"
-        )).context(AnalysisDatabaseSnafu { operation: "prepare pinned notification finding scalars" })?;
-        let mut rows = query
-            .query(params![selection.tenant_id.as_slice()])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read pinned notification finding scalars",
-            })?;
-        let mut origins = BTreeMap::new();
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance pinned notification finding scalars",
-        })? {
-            Self::charge(
-                row.get(3).context(AnalysisDatabaseSnafu {
-                    operation: "bound pinned notification finding scalar",
-                })?,
-                12 * (size_of::<(String, BTreeMap<String, Member>)>()
-                    + size_of::<(String, Member)>()),
-                output,
-                control,
+        let mut requests = BTreeMap::<String, BTreeMap<String, Vec<u8>>>::new();
+        for (result, id) in wanted.iter().copied().chain(
+            self.heads
+                .iter()
+                .map(|(id, (result, _))| (result.as_str(), id.as_str())),
+        ) {
+            control.check()?;
+            output.charge(
+                result.len()
+                    + id.len()
+                    + id.len().saturating_add(16)
+                    + 12 * size_of::<(String, Vec<u8>)>(),
             )?;
-            let result: String = row.get(0).context(AnalysisDatabaseSnafu {
-                operation: "read notification member owner",
-            })?;
-            let finding: String = row.get(1).context(AnalysisDatabaseSnafu {
-                operation: "read notification member finding",
-            })?;
-            let mut allowed = self
-                .headers
-                .get(&result)
-                .is_some_and(|header| header.allowed);
-            if allowed
-                && self
+            let key = araphor_analysis_types::DomainRelations::key(&id)
+                .context(crate::AnalysisContractSnafu)?;
+            requests
+                .entry(result.into())
+                .or_default()
+                .insert(id.into(), key);
+        }
+        let mut origins = BTreeMap::new();
+        for (result, ids) in requests {
+            let keys = ids.into_values().collect::<Vec<_>>();
+            let rows = findings.read_findings(
+                engine,
+                snapshot,
+                selection.tenant_id,
+                &result,
+                Some(&keys),
+                &mut |scan, bytes| {
+                    control.check()?;
+                    output.scan(scan)?;
+                    output.charge(bytes)
+                },
+            )?;
+            let mut seen = std::collections::BTreeSet::new();
+            for row in rows {
+                let id = row.id()?;
+                if !seen.insert(id.to_owned()) {
+                    continue;
+                }
+                Self::charge(
+                    result.len() + id.len() + row.origin.len(),
+                    12 * (size_of::<(String, BTreeMap<String, Member>)>()
+                        + size_of::<(String, Member)>()),
+                    output,
+                    control,
+                )?;
+                let mut allowed = self
                     .headers
                     .get(&result)
-                    .is_some_and(|header| header.definition)
-            {
-                let origin: (String, u64) =
-                    (|| -> duckdb::Result<_> { Ok((row.get(4)?, row.get(5)?)) })().context(
-                        AnalysisDatabaseSnafu {
-                            operation: "read notification member producer",
-                        },
-                    )?;
-                allowed = match origins.get(&origin) {
-                    Some(allowed) => *allowed,
-                    None => {
-                        output
-                            .charge(origin.0.capacity() + 8 * size_of::<(String, u64, bool)>())?;
-                        let producer =
-                            owners.producer(&origin.0, origin.1, &mut |scan, bytes| {
-                                output.scan(scan)?;
-                                output.charge(bytes)
-                            })?;
-                        let allowed = producer.grant().permitted_by(scope).is_ok();
-                        origins.insert(origin, allowed);
-                        allowed
-                    }
-                };
-            }
-            let value: u64 = row.get(2).context(AnalysisDatabaseSnafu {
-                operation: "decode pinned notification finding scalar",
-            })?;
-            if value == 0
-                || self
-                    .members
-                    .entry(result)
-                    .or_default()
-                    .insert(finding, Member { value, allowed })
-                    .is_some()
-            {
-                return Err(Code::Invalid.error("notification finding scalar identity"));
+                    .is_some_and(|header| header.allowed);
+                if allowed
+                    && self
+                        .headers
+                        .get(&result)
+                        .is_some_and(|header| header.definition)
+                {
+                    let origin = (row.origin.clone(), row.origin_revision);
+                    allowed = match origins.get(&origin) {
+                        Some(allowed) => *allowed,
+                        None => {
+                            output.charge(
+                                origin.0.capacity() + 8 * size_of::<(String, u64, bool)>(),
+                            )?;
+                            let producer =
+                                owners.producer(&origin.0, origin.1, &mut |scan, bytes| {
+                                    output.scan(scan)?;
+                                    output.charge(bytes)
+                                })?;
+                            let allowed = producer.grant().permitted_by(scope).is_ok();
+                            origins.insert(origin, allowed);
+                            allowed
+                        }
+                    };
+                }
+                if row.value == 0
+                    || self
+                        .members
+                        .entry(result.clone())
+                        .or_default()
+                        .insert(
+                            id.into(),
+                            Member {
+                                value: row.value,
+                                allowed,
+                            },
+                        )
+                        .is_some()
+                {
+                    return Err(Code::Invalid.error("notification finding scalar identity"));
+                }
             }
         }
         Ok(())
