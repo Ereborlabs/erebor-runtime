@@ -2,7 +2,17 @@
 
 ## Current package path, 2026-11-05
 
-The later Graph preparation change also passes ten exact-test runs in five
+[Source freshness checks](../../crates/araphor-data/src/analysis/dependencies.rs)
+now read the requested relation versions in one query for each freshness check.
+They compare the same captured pairs in the same order, including missing and
+duplicate names. No validation state crosses snapshots. Five alternating pairs
+of the exact test pass. The final index call's source/trace validation median
+falls from 238.994 to 82.294 milliseconds. Warm notification arrivals are lower
+in each pair. Whole-test differences are mixed, with a 2.54 percent lower paired
+median; this is not a certain overall gain. The millisecond and 100-fold targets
+remain **Not done**. See the [source freshness evidence](../plans/araphor-execution-handoff.md#source-freshness-reader-result-2026-11-05).
+
+The Graph preparation change also passes ten exact-test runs in five
 alternating pairs. Every nonzero origin-validation loop is faster in its
 matched pair. The final warm median falls from 254.104 to 105.720 milliseconds;
 complete prewriter preparation falls from 574.387 to 432.947 milliseconds.

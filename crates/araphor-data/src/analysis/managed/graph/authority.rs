@@ -130,6 +130,7 @@ impl GraphAuthority {
         reader: &Connection,
         control: &AnalysisReadControl,
     ) -> Result<()> {
+        let started = std::time::Instant::now();
         self.check_call(call)?;
         control.check()?;
         store.check_managed_claim(&call.attempt)?;
@@ -179,6 +180,7 @@ impl GraphAuthority {
         {
             return crate::AnalysisConflictSnafu.fail();
         }
+        let live_at = std::time::Instant::now();
         for id in &self.heads {
             let (revision, result): (u64, Option<String>) = reader
                 .query_row(
@@ -199,6 +201,7 @@ impl GraphAuthority {
                 return crate::AnalysisConflictSnafu.fail();
             }
         }
+        let heads_at = std::time::Instant::now();
         if !capture.follows_graph(&call.attempt.1.spec)
             && !AnalysisStore::package_sources_current(reader, &capture.sources, control)?
         {
@@ -216,6 +219,7 @@ impl GraphAuthority {
             };
         }
         AnalysisStore::check_trace_reads_from(reader, capture.tenant, &capture.traces, control)?;
+        let sources_at = std::time::Instant::now();
         let mut packages = Default::default();
         for reference in &capture.contexts {
             if store
@@ -225,6 +229,7 @@ impl GraphAuthority {
                 return crate::AnalysisConflictSnafu.fail();
             }
         }
+        let contexts_at = std::time::Instant::now();
         for reference in &capture.dependencies {
             if !store.managed_current(
                 reader,
@@ -237,6 +242,7 @@ impl GraphAuthority {
                 return crate::AnalysisConflictSnafu.fail();
             }
         }
+        let dependencies_at = std::time::Instant::now();
         if capture.witnesses.iter().any(|witness| {
             witness.identity.tenant() != capture.tenant
                 || witness.cursor == 0
@@ -244,7 +250,25 @@ impl GraphAuthority {
         }) {
             return Err(Code::Incomplete.error("managed witness lifetime"));
         }
-        control.check()
+        control.check()?;
+        erebor_telemetry::debug!(
+            stage = "graph_authority_timing",
+            instance_id = %capture.instance,
+            cut_revision = capture.revision,
+            call_id = call.call,
+            heads = self.heads.len(),
+            contexts = capture.contexts.len(),
+            dependencies = capture.dependencies.len(),
+            live_s = live_at.duration_since(started).as_secs_f64(),
+            heads_s = heads_at.duration_since(live_at).as_secs_f64(),
+            sources_s = sources_at.duration_since(heads_at).as_secs_f64(),
+            contexts_s = contexts_at.duration_since(sources_at).as_secs_f64(),
+            dependencies_s = dependencies_at.duration_since(contexts_at).as_secs_f64(),
+            tail_s = dependencies_at.elapsed().as_secs_f64(),
+            elapsed_s = started.elapsed().as_secs_f64(),
+            "Graph invocation authority validation completed"
+        );
+        Ok(())
     }
 
     pub(super) fn origin(

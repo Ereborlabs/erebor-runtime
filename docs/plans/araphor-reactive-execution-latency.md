@@ -1,5 +1,67 @@
 # Araphor reactive execution in milliseconds
 
+## Source freshness reader result, 2026-11-05
+
+Data now reads the requested relation versions once in each freshness check.
+The old path issued one query per captured source. The replacement uses one
+query in the same database snapshot, then compares the original captured pairs
+in their original order. Missing versions remain zero. Duplicate pairs and
+cancellation checks retain their behavior. The Graph follow bypass and the
+source-change versus trace-conflict decisions remain at their existing callers.
+There is no validation cache across snapshots.
+
+The final focused build passes in 239.192546 seconds. Five alternating pairs
+run the unchanged exact incident test with identical authority timing fields.
+All ten runs pass with 16,402 records, five managed publications, three
+source-change restart mentions, and 61 authority checks per run. No source edit,
+build, debugger, or other test runs during the comparison.
+
+| Pair | First executable | Baseline test, seconds | Batched source test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 38.57 | 38.82 | -0.2471 |
+| 2 | Batched source | 40.84 | 39.12 | +1.7292 |
+| 3 | Baseline | 41.13 | 40.08 | +1.0470 |
+| 4 | Batched source | 41.26 | 40.17 | +1.0853 |
+| 5 | Baseline | 41.28 | 40.42 | +0.8559 |
+
+The paired whole-test median is 1.0470 seconds lower, or 2.54 percent. Four
+pairs are faster and one is slower. The paired reduction ranges from -0.64 to
++4.23 percent. This small sample does not establish a certain overall gain.
+Notification capture counts are 25/24, 25/23, 26/25, 25/25, and 25/25 for
+baseline/candidate. No separate bulk gain is claimed.
+
+Each warm notification arrival is lower in its matched pair. The second
+notification median falls from 5.532953 to 5.231377 seconds. The third falls
+from 5.932907 to 5.685007 seconds. The initial median is 3.419560 versus
+3.197956 seconds, but the final pair differs by only 5.2 milliseconds.
+Bulk medians are 7.679154 versus 7.575193 seconds.
+
+In the final index call, the median source/trace validation time falls from
+238.994 to 82.294 milliseconds. Complete authority validation falls from
+395.672 to 256.803 milliseconds. Each version performs twelve checks there.
+These spans are children of package execution; do not add them to its time.
+The diagnostic run and all paired runs have no captured context or dependency
+checks in this owner. A context-validation rewrite is not supported by this
+case's measurements.
+
+Result: **Done** for source-version batching and this comparison. The direct
+validation cost is lower. Millisecond latency and the 100-fold target remain
+**Not done**. Full CI and other test targets were not run. Other freshness
+callers and the existing recovery, backup, and retention limits have source
+review only under this qualification.
+
+Proof: `/tmp/araphor-build-source-versions-20261105-a.log` and
+`/tmp/araphor-source-versions-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs in that directory. The baseline is `a2cb8bd9b` plus the
+reviewed authority timing fields. Its patch is
+`/tmp/araphor-authority-timing-baseline-20261105.patch`. The retained executables
+are `target/araphor-notice-comparison-20261105/authority-timing` and
+`source-versions`. Older comparison executables were removed to free link space;
+their logs remain. The preceding diagnostic build passes in 237.211338 seconds,
+and its exact test passes in 39.98 seconds. That single run is not a speed
+comparison.
+
+
 ## Graph origin preparation result, 2026-11-05
 
 Graph preparation now shares one committed `OwnerRead` across its journals.

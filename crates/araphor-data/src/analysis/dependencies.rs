@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
@@ -15,18 +15,38 @@ impl AnalysisStore {
         sources: &[(String, u64)],
         control: &AnalysisReadControl,
     ) -> Result<bool> {
-        for (relation, captured) in sources {
+        let mut current = BTreeMap::new();
+        for (ordinal, (relation, captured)) in sources.iter().enumerate() {
             control.check()?;
-            let changed: u64 = reader
-                .query_row(
-                    "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT
-                 FROM relation_revisions WHERE relation_name = ?",
-                    params![relation],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read package source notice",
-                })?;
+            if ordinal == 0 {
+                let parameters = std::iter::repeat_n("?", sources.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let mut statement = reader
+                    .prepare(&format!(
+                        "SELECT relation_name,COALESCE(MAX(last_changed_revision),0)::UBIGINT
+                         FROM relation_revisions WHERE relation_name IN ({parameters})
+                         GROUP BY relation_name"
+                    ))
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "prepare package source notices",
+                    })?;
+                let rows = statement
+                    .query_map(
+                        duckdb::params_from_iter(sources.iter().map(|(name, _)| name)),
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read package source notice",
+                    })?;
+                for row in rows {
+                    let (name, revision) = row.context(AnalysisDatabaseSnafu {
+                        operation: "decode package source notice",
+                    })?;
+                    current.insert(name, revision);
+                }
+            }
+            let changed = current.get(relation).copied().unwrap_or(0);
             if changed > *captured {
                 return Ok(false);
             }
