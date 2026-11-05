@@ -150,15 +150,14 @@ impl GraphService {
                     .ok_or_else(|| {
                         araphor_data::PackageErrorCodeV1::Invalid.error("Graph actual model")
                     })?;
-                let binding = source
-                    .graph_store()
-                    .graph_call(attempt, call.id, model, stage)?;
                 let budget = memory.managed_budget(Arc::clone(&control), limit);
                 Ok(Arc::new(Self {
                     store: Arc::clone(source.graph_store()),
                     transaction: ManagedGraphTransaction::new(
                         source.graph_store(),
-                        binding,
+                        attempt,
+                        call.id,
+                        model,
                         predecessors,
                         budget,
                         stage,

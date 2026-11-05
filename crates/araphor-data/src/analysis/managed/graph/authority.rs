@@ -3,10 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_graph::ReadOrigin;
-use duckdb::{params, Connection, OptionalExt as _};
+use duckdb::{Connection, OptionalExt as _, params};
 use snafu::ResultExt as _;
 
-use super::super::reader::OwnerRead;
 use super::{ManagedBudget, ManagedGraphCall};
 use crate::analysis::PackageResultRefV1;
 use crate::{
@@ -20,13 +19,13 @@ pub(super) struct GraphAuthority {
     authority: Vec<u8>,
     heads: BTreeSet<u64>,
     origins: BTreeMap<ReadOrigin, OriginAuthority>,
+    pub(super) view: araphor_graph::GraphReadView,
     leases: Vec<Arc<dyn Any + Send + Sync>>,
     _memory: Box<dyn Any + Send + Sync>,
 }
 
 struct OriginAuthority {
     reference: PackageResultRefV1,
-    call: u64,
     grant: PackageGrantV1,
 }
 
@@ -84,13 +83,6 @@ impl GraphAuthority {
         {
             return Err(Code::Conflict.error("Graph current attempt"));
         }
-        store.check_managed_capture(
-            reader,
-            capture,
-            call.attempt.request().time_utc_ns,
-            (&capture.witnesses, &capture.contexts),
-            Default::default(),
-        )?;
         let current =
             AnalysisStore::managed_instance_from(reader, capture.tenant, &capture.instance)?
                 .ok_or_else(|| Code::Missing.error("managed capture instance"))?;
@@ -112,13 +104,31 @@ impl GraphAuthority {
         if authority.capacity() > authority_bytes {
             return Err(Code::Limit.error("Graph authority memory"));
         }
+        let _scratch = budget.reserve(call.relations.len().saturating_mul(size_of::<u64>()))?;
+        let relations = call.relations.values().copied().collect::<Vec<_>>();
+        let mut leases = Vec::new();
+        let view = store.graph_engine.read_view(
+            reader,
+            call.graph,
+            call.attempt.captured_revision(),
+            &relations,
+            || control.check().map_err(araphor_graph::Error::backend),
+            |bytes| {
+                let lease = budget
+                    .reserve(bytes)
+                    .map_err(araphor_graph::Error::backend)?;
+                leases.push(Arc::from(lease));
+                Ok(())
+            },
+        )?;
         Ok(Self {
             attempt: Arc::clone(&call.attempt),
             call: call.call,
             authority,
             heads,
             origins: BTreeMap::new(),
-            leases: Vec::new(),
+            leases,
+            view,
             _memory: memory,
         })
     }
@@ -271,37 +281,56 @@ impl GraphAuthority {
         Ok(())
     }
 
+    pub(super) fn check_snapshot(
+        &self,
+        call: &ManagedGraphCall,
+        store: &AnalysisStore,
+        control: &AnalysisReadControl,
+    ) -> Result<()> {
+        self.check_call(call)?;
+        control.check()?;
+        store.check_managed_claim(&call.attempt)?;
+        call.attempt.1.grant.remaining()?;
+        Ok(())
+    }
+
     pub(super) fn origin(
         &mut self,
         call: &ManagedGraphCall,
-        reader: &Connection,
+        store: &AnalysisStore,
         origin: ReadOrigin,
-        owners: &mut OwnerRead<'_>,
         control: &AnalysisReadControl,
         reserve: &mut dyn FnMut(usize) -> Result<Arc<dyn Any + Send + Sync>>,
     ) -> Result<PackageResultRefV1> {
-        self.check_call(call)?;
-        owners.check_reader(reader, call.attempt.1.spec.tenant)?;
-        let (reference, actual) = call.origin_key(reader, origin)?;
-        if let Some(saved) = self.origins.get(&origin) {
-            if saved.reference != reference || saved.call != actual {
-                return Err(Code::Conflict.error("Graph origin authority"));
-            }
-            saved.grant.permitted_by(&call.attempt.1.grant.selection)?;
-            return Ok(reference);
+        self.check_snapshot(call, store, control)?;
+        if origin.revision > call.attempt.captured_revision() {
+            return Err(Code::Denied.error("Graph origin cut"));
         }
-        let producer = owners.producer(
+        if let Some(saved) = self.origins.get(&origin) {
+            saved.grant.permitted_by(&call.attempt.1.grant.selection)?;
+            return Ok(saved.reference.clone());
+        }
+        let saved = store
+            .managed_results
+            .graph_origin(call.attempt.1.spec.tenant, origin.writer, origin.revision)?
+            .ok_or_else(|| Code::Missing.error("Graph result origin"))?;
+        if saved.graph != call.graph {
+            return Err(Code::Denied.error("Graph result authority"));
+        }
+        let reference = PackageResultRefV1 {
+            result_id: saved.result.clone(),
+            commit_revision: origin.revision,
+        };
+        let producer = store.managed_results.producer(
+            call.attempt.1.spec.tenant,
             &reference.result_id,
             reference.commit_revision,
-            &mut |_, bytes| {
-                control.check()?;
-                reserve(bytes).map(|_| ())
-            },
         )?;
         producer
             .grant()
             .permitted_by(&call.attempt.1.grant.selection)?;
-        if producer.record.instance != call.attempt.1.spec.id || producer.record.call != actual {
+        if producer.record.instance != call.attempt.1.spec.id || producer.record.call != saved.call
+        {
             return Err(Code::Denied.error("Graph result authority"));
         }
         let grant = producer.grant();
@@ -316,7 +345,6 @@ impl GraphAuthority {
             origin,
             OriginAuthority {
                 reference: reference.clone(),
-                call: actual,
                 grant: grant.clone(),
             },
         );

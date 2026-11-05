@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, BinaryArray, RecordBatch, StructArray, UInt64Array};
 use arrow_schema::DataType;
-use duckdb::{params, Connection, OptionalExt as _};
+use duckdb::{Connection, params};
 use snafu::ResultExt as _;
 
 use crate::error::{DatabaseSnafu, InvalidSnafu};
@@ -13,6 +13,9 @@ pub struct ReadOrigin {
     pub writer: u64,
     pub revision: u64,
 }
+
+mod view;
+pub use view::GraphReadView;
 
 impl GraphStore {
     pub fn read(
@@ -25,46 +28,47 @@ impl GraphStore {
         read: Read,
         keys: &RecordBatch,
         mut check: impl FnMut() -> Result<()>,
-        mut reserve: impl FnMut(&RecordBatch) -> Result<()>,
-        mut visit: impl FnMut(RecordBatch, Vec<ReadOrigin>) -> Result<()>,
+        reserve: impl FnMut(&RecordBatch) -> Result<()>,
+        visit: impl FnMut(RecordBatch, Vec<ReadOrigin>) -> Result<()>,
     ) -> Result<()> {
-        if graph == 0
-            || relation == 0
-            || revision == 0
-            || keys.schema().as_ref()
-                != &if matches!(read, Read::Owned(_)) {
-                    arrow_schema::Schema::empty()
-                } else {
-                    Relation::key_schema()
-                }
-            || matches!(read, Read::Owned(0))
-            || matches!(read, Read::Owned(_)) && keys.num_rows() != 0
-            || !matches!(
-                (shape.kind, read),
-                (_, Read::Owned(1..))
-                    | (EntityKind::Node, Read::Nodes)
-                    | (
-                        EntityKind::Edge,
-                        Read::Outgoing | Read::Incoming | Read::Neighbors
-                    )
-            )
-        {
+        if graph == 0 || revision == 0 {
             return InvalidSnafu {
                 field: "Graph read declaration",
             }
             .fail();
         }
-        let declared: Option<(u8,Option<u64>,Option<u64>)> = connection.query_row(
-            "SELECT entity_kind,from_relation,to_relation FROM graph_relations WHERE graph_id=? AND relation_id=?",
-            params![graph,relation],|row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
-        ).optional().context(DatabaseSnafu { operation: "check Graph read relation" })?;
-        if !declared.is_some_and(|(kind, from, to)| {
-            kind == shape.kind as u8
-                && matches!(
-                    (shape.kind, from, to),
-                    (EntityKind::Node, None, None) | (EntityKind::Edge, Some(1..), Some(1..))
-                )
-        }) {
+        GraphReadView::check_read(relation, shape, read, keys)?;
+        self.read_view(connection, graph, revision, &[relation], &mut check, |_| {
+            Ok(())
+        })?
+        .read(relation, shape, read, keys, check, reserve, visit)
+    }
+}
+
+impl GraphReadView {
+    pub fn read(
+        &self,
+        relation: u64,
+        shape: &Relation,
+        read: Read,
+        keys: &RecordBatch,
+        mut check: impl FnMut() -> Result<()>,
+        mut reserve: impl FnMut(&RecordBatch) -> Result<()>,
+        mut visit: impl FnMut(RecordBatch, Vec<ReadOrigin>) -> Result<()>,
+    ) -> Result<()> {
+        check()?;
+        Self::check_read(relation, shape, read, keys)?;
+        if !self
+            .relations
+            .get(&relation)
+            .is_some_and(|(kind, from, to)| {
+                *kind == shape.kind as u8
+                    && matches!(
+                        (shape.kind, from, to),
+                        (EntityKind::Node, None, None) | (EntityKind::Edge, Some(1..), Some(1..))
+                    )
+            })
+        {
             return InvalidSnafu {
                 field: "Graph stored relation",
             }
@@ -90,8 +94,9 @@ impl GraphStore {
                     .collect::<Vec<_>>(),
             )
         };
-        let heads = Self::writer_heads(connection, graph, revision)?;
-        let rows = self.select(relation, &heads, read, keys.as_deref(), &mut check)?;
+        let rows = self
+            .store
+            .select(relation, &self.heads, read, keys.as_deref(), &mut check)?;
         if rows.is_empty() {
             let batch = RecordBatch::new_empty(Arc::new(shape.read_schema()));
             reserve(&batch)?;
@@ -139,7 +144,7 @@ impl GraphStore {
                     arrow_schema::Field::new(field.name(), column.data_type().clone(), false)
                 })
                 .collect::<Vec<_>>();
-            let batch = Self::read_batch(
+            let batch = GraphStore::read_batch(
                 shape,
                 RecordBatch::try_new(Arc::new(arrow_schema::Schema::new(fields)), columns)?,
             )?;
@@ -156,7 +161,36 @@ impl GraphStore {
         }
         Ok(())
     }
+    fn check_read(relation: u64, shape: &Relation, read: Read, keys: &RecordBatch) -> Result<()> {
+        if relation == 0
+            || keys.schema().as_ref()
+                != &if matches!(read, Read::Owned(_)) {
+                    arrow_schema::Schema::empty()
+                } else {
+                    Relation::key_schema()
+                }
+            || matches!(read, Read::Owned(0))
+            || matches!(read, Read::Owned(_)) && keys.num_rows() != 0
+            || !matches!(
+                (shape.kind, read),
+                (_, Read::Owned(1..))
+                    | (EntityKind::Node, Read::Nodes)
+                    | (
+                        EntityKind::Edge,
+                        Read::Outgoing | Read::Incoming | Read::Neighbors
+                    )
+            )
+        {
+            return InvalidSnafu {
+                field: "Graph read declaration",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+}
 
+impl GraphStore {
     fn read_batch(shape: &Relation, batch: RecordBatch) -> Result<RecordBatch> {
         let schema = Arc::new(shape.read_schema());
         if batch.num_columns() != schema.fields().len() {

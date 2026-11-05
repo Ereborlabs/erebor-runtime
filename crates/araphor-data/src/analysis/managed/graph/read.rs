@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use araphor_graph::{Read, ReadOrigin};
-use duckdb::{params, Connection};
+use duckdb::{Connection, params};
 use sdk::arrow_array::{Array, BinaryArray, UInt64Array};
 use snafu::ResultExt as _;
 
@@ -77,20 +77,17 @@ impl ManagedGraphTransaction {
             .work
             .as_mut()
             .ok_or_else(|| Code::Incomplete.error("Graph callback state"))?;
-        let mut reader = store.reader_until(control)?;
-        let (mut batches, base) = control.run(&mut reader, |connection| {
-            self.authority()?
+        let (mut batches, base) = {
+            let bound = self.authority()?;
+            let authority = bound
                 .as_ref()
-                .ok_or_else(|| Code::Incomplete.error("Graph invocation authority"))?
-                .check(&self.call, store, connection, control)?;
+                .ok_or_else(|| Code::Incomplete.error("Graph invocation authority"))?;
+            authority.check_snapshot(&self.call, store, control)?;
             let mut batches = Vec::new();
             let mut origins = BTreeMap::new();
-            store.graph_engine.read(
-                connection,
-                self.call.graph,
+            authority.view.read(
                 relation,
                 &shape,
-                self.call.attempt.captured_revision(),
                 read,
                 arguments,
                 || control.check().map_err(araphor_graph::Error::backend),
@@ -114,8 +111,8 @@ impl ManagedGraphTransaction {
                     Ok(())
                 },
             )?;
-            Ok((batches, origins))
-        })?;
+            (batches, origins)
+        };
         let bytes = self
             .predecessors
             .iter()
@@ -173,34 +170,21 @@ impl ManagedGraphTransaction {
                 });
             }
         }
-        let origins = control.run(&mut reader, |connection| {
+        let origins = {
             let mut bound = self.authority()?;
             let authority = bound
                 .as_mut()
                 .ok_or_else(|| Code::Incomplete.error("Graph invocation authority"))?;
-            let mut owners = super::super::reader::OwnerRead::new(
-                store,
-                connection,
-                self.call.attempt.1.spec.tenant,
-                control,
-            );
             let mut origins = BTreeMap::new();
             for origin in committed {
                 origins.insert(
                     origin,
-                    authority.origin(
-                        &self.call,
-                        connection,
-                        origin,
-                        &mut owners,
-                        control,
-                        &mut reserve,
-                    )?,
+                    authority.origin(&self.call, store, origin, control, &mut reserve)?,
                 );
             }
-            authority.check(&self.call, store, connection, control)?;
-            Ok(origins)
-        })?;
+            authority.check_snapshot(&self.call, store, control)?;
+            origins
+        };
         let bytes = selected
             .iter()
             .try_fold(0usize, |bytes, row| {

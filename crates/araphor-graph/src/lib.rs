@@ -19,7 +19,7 @@ mod read;
 #[cfg(feature = "store")]
 mod validation;
 #[cfg(feature = "store")]
-pub use read::ReadOrigin;
+pub use read::{GraphReadView, ReadOrigin};
 #[cfg(feature = "store")]
 mod store;
 #[cfg(feature = "store")]

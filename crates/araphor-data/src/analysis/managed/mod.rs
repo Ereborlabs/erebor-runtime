@@ -24,7 +24,7 @@ mod version;
 pub use execution::ManagedExecution;
 pub use budget::ManagedBudget;
 pub(in crate::analysis) use budget::PreparedMemory;
-pub use graph::{ ManagedGraphCall, ManagedGraphJournal, ManagedGraphTransaction};
+pub use graph::{ManagedGraphJournal, ManagedGraphTransaction};
 pub use lifecycle::ManagedLease;
 pub use model::*;
 pub use source::{

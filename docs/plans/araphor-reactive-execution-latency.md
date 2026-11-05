@@ -1,5 +1,94 @@
 # Araphor reactive execution in milliseconds
 
+## Invocation Graph view result, 2026-11-05
+
+The package invocation now binds its actual call, authority, native Graph
+writer heads, and relation declarations in one existing Data snapshot. The
+two-step public binding API is removed. Araphor Graph supplies a generic
+`GraphReadView` over its existing native member and adjacency indexes.
+Direct Graph read and presence APIs use the same core. The view contains no
+package or finding rules. SDK reads and staging use the captured heads and
+existing predecessor and local journal overlays.
+
+Data checks control, claim, grant lifetime, declared capability, and schema
+on callbacks. Each actual returned historical origin uses the existing
+immutable Graph origin and producer owners. The original grant must permit
+the requested scope. The retained writer call ID must match the producer.
+Fresh commits and recovery both retain that actual call ID. Freeze drops the
+view before its reservations. No database reader or admission permit spans
+a package callback. No mutable cache, engine change, polling, or archive is
+added.
+
+This changes callback conflict timing. A concurrent source or lifecycle
+change need not fail the next callback. An invocation can read its authorized
+captured view until cancellation or deadline stops it. It cannot see newer
+rows or broader scope. The existing authority watcher and cancellation path
+remain. Freeze retains its full fresh authority check. Preparation retains
+fresh actual-origin SQL and witness-pin checks. Data commit and notification
+delivery retain their checks. Rollback cannot remove bytes already supplied
+to a package. The authorized captured-input contract already has that limit.
+
+The final focused build passes in 362.981385 seconds. Five alternating pairs
+run the unchanged exact incident test. All ten runs pass.
+
+| Pair | First executable | Baseline test, seconds | Invocation view test, seconds | Process time saved, seconds |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 30.15 | 30.07 | +0.0717 |
+| 2 | Invocation view | 30.18 | 28.97 | +1.2209 |
+| 3 | Baseline | 30.02 | 27.98 | +2.0272 |
+| 4 | Invocation view | 30.63 | 27.89 | +2.7385 |
+| 5 | Baseline | 30.34 | 28.19 | +2.1477 |
+
+Whole-process time is lower in every pair. The paired median saving is
+2.027215 seconds, or 6.75 percent. The range is 0.24 to 8.93 percent. The
+first pair is effectively unchanged; it is not a separate clear gain.
+Both executables use the same collector-entry and first durable-save probes.
+
+| Notification | Baseline creation median, seconds | Invocation view creation median, seconds | Paired median saving, seconds |
+| --- | ---: | ---: | ---: |
+| Initial | 2.532117 | 2.116218 | 0.415899 |
+| First warm | 3.244413 | 2.697666 | 0.558732 |
+| Second warm | 3.577868 | 2.928375 | 0.664906 |
+
+Every creation interval is lower in every pair. Paired savings range from
+0.210233 to 0.477930 seconds initially, from 0.402271 to 0.596829 seconds
+for the first warm notification, and from 0.649493 to 0.754597 seconds for
+the second. The boundary starts at trusted Control input, not physical Node
+arrival. The endpoint is first durable creation, before delivery.
+
+Every run retains 16,402 public journal records, 18 collector inputs, three
+first durable notifications, five managed publications, twelve Graph append
+batches, and three source-change restart mentions. Every pair matches all
+Graph apply and append tuples, all five publication cut/revision and result
+identities, and all three creation cut/result pairs. Bulk retains 64 pages,
+16,384 rows, 60 reused pages, 262,144 physical frame rows, and 53,401,792
+body bytes. Fresh authority queries fall from 61 to ten freeze checks, as
+intended. Summed authority validation medians fall from 1.293875 to 0.224741
+seconds. This child span is not added as another saving. Baseline capture
+counts are 23, 24, 26, 26, and 25. Candidate counts are 25, 24, 25, 25, and 25.
+
+The last warm managed commit has a median of about 1.156 seconds. One
+representative final warm commit, in candidate pair 4, has 0.443 seconds of
+preparation, 0.651 seconds of transaction work, and 0.059 seconds of durable
+commit. These child spans overlap the complete commit.
+Publication to first creation has a median of 0.769744 seconds. That interval
+and managed commit do not show a separate gain from this rewrite. Their owners
+are the next review targets. No new storage engine is selected.
+
+Result: **Done** for the invocation view replacement and this comparison.
+Creation below 100 milliseconds and the 100-fold target remain **Not done**.
+Full CI and other test cases were not run. Concurrent revocation, restore,
+rollback, malformed direct calls, and finite budgets have source review only
+under this qualification. Existing assertions and workload are unchanged.
+No source edit, build, debugger, or other test runs during the comparison.
+
+Proof: `/tmp/araphor-build-invocation-view-20261105-a.log` and
+`/tmp/araphor-invocation-view-pairs-20261105/{settings,results,summary}.json`,
+with ten run logs. Baseline source: `8e9f6f55a`. Retained executables are
+`target/araphor-notice-comparison-20261105/source-headers` and
+`invocation-view`. The older `notification-boundary` executable was removed
+for space. Its logs and recorded timing evidence remain.
+
 ## Source header set reader result, 2026-11-05
 
 Data now reads selected source receipts and coverage in one set query. A
@@ -1078,6 +1167,9 @@ lifecycle, grant, completion, source, trace, context, dependency, and expiry
 checks. Historical producers receive full validation on first use. Each later
 use checks the exact canonical result and Graph origin tuple. Freeze drops
 these temporary certificates. Final preparation and commit keep full guards.
+The invocation view replacement at the start of this plan supersedes the
+per-operation current checks in this historical result. Its runtime proof is
+separate from the timing evidence below.
 
 Proof: `/tmp/araphor-build-graph-authority-20261105-a.log` and
 `/tmp/araphor-live-graph-authority-20261105-a.log`.
@@ -1687,8 +1779,11 @@ source frame. Those worker intervals total 2.335 to 3.094 s per bulk frame.
 They are aggregate intervals, not total CPU time. The reviewer agrees to
 reuse the full canonical Input through the existing SourceSnapshot binding
 before per-scan projection. SQL input access closes under the existing
-GraphService gate at guest entry and journal freeze. Direct SDK Graph reads
-stay current. Host and source controls still check each read. The final
+GraphService gate at guest entry and journal freeze. That implementation
+uses current checks on direct SDK Graph reads. The invocation view replacement
+above supersedes those callback checks with captured-cut reads. Host
+cancellation and deadline checks remain on callbacks. Fresh source checks remain
+at freeze, preparation, and commit. The final
 focused Query and Analysis library check passes in 29.88 s. The reviewer
 accepts the input binding and phase guards. The exact build passes in
 212.962373 s. Its log is `/tmp/araphor-build-owned-input-reuse-20261104.log`.

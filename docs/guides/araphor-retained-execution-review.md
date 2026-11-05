@@ -1,5 +1,43 @@
 # Araphor retained execution state review
 
+## Invocation Graph view, 2026-11-05
+
+This section covers the native Graph view replacement and its exact-test
+comparison. The final focused build and all ten alternating runs pass.
+
+[GraphService::bind](../../crates/araphor-query/src/definition/physical/graph.rs) starts the package's Graph invocation.
+  -> [ManagedGraphTransaction::new](../../crates/araphor-data/src/analysis/managed/graph/transaction.rs) opens one Data snapshot for the actual call and retained authority.
+  -> [GraphStore::read_view](../../crates/araphor-graph/src/read/view.rs) binds writer heads and relation declarations at the captured cut.
+  -> [GraphAuthority](../../crates/araphor-data/src/analysis/managed/graph/authority.rs) owns the view and its reservations until freeze.
+  -> [SDK reads](../../crates/araphor-data/src/analysis/managed/graph/read.rs) select native members, apply journal overlays, and check original grants for actual origins.
+  -> [SDK staging](../../crates/araphor-data/src/analysis/managed/graph/transaction.rs) uses presence at the same captured heads and changes the private journal.
+  -> [Freeze](../../crates/araphor-data/src/analysis/managed/graph/transaction.rs) retains the fresh authority check and releases the view before its leases.
+  -> [Preparation](../../crates/araphor-data/src/analysis/managed/graph/commit.rs) retains fresh actual-origin and witness-pin checks before Data's commit.
+
+The native view contains no package or finding rules. It retains existing
+Graph index handles and captured metadata. It holds no database reader or
+admission permit across a package callback. Direct Graph read and presence
+APIs use the same core and retain their prior input validation.
+
+Callbacks check control, claim, grant lifetime, capability, and schema. A
+concurrent database source or lifecycle change need not fail the next SDK
+callback. The invocation can read its authorized captured view until its
+control or deadline stops it. It cannot see newer rows or broader scope.
+The existing authority watcher, cancellation, fresh freeze, preparation,
+writer commit, and delivery checks remain. Rollback cannot remove bytes
+already supplied to a package. The exact incident test is the only runtime
+qualification for this change. No other test result is claimed.
+
+Collector entry to first durable creation has medians of 2.116218, 2.697666,
+and 2.928375 seconds. Every paired creation interval is lower. The paired
+median savings are 0.415899, 0.558732, and 0.664906 seconds. The whole-process
+paired median is 2.027215 seconds, or 6.75 percent, lower. The first whole-test
+pair is effectively unchanged. Actual Graph work, all publication identities,
+inputs, and notification counts match. Fresh authority queries fall from 61
+to ten freeze checks. Creation below 100 milliseconds and the 100-fold target
+remain **Not done**. Concurrent revocation, restore, and finite budgets have
+source review only. See the [invocation view evidence](../plans/araphor-execution-handoff.md#invocation-graph-view-result-2026-11-05).
+
 ## Source header set reader, 2026-11-05
 
 Read [extraction](../../crates/araphor-data/src/analysis/extraction.rs), then
@@ -453,16 +491,21 @@ replacement passes the exact append test in 72.96 seconds.
 The Graph authority binds before the package transfer reserves memory.
 Binding checks the registered attempt, captured source state, admitted model,
 and relation contracts. The owner retains the actual attempt Arc, call ID,
-compatible call-head set, and original native authority bytes. Each operation
-uses a new short Data reader. The operation checks pending status, exact
-current authority, lifecycle, generation, progress, completion, call heads,
-source freshness, trace revocation, context proof, dependencies, and expiry.
+compatible call-head set, and original native authority bytes. The invocation
+view replacement also binds native writer heads and relation declarations in
+that same snapshot. Each SDK operation checks control, claim, grant lifetime,
+and the exact capability. It reads the captured Graph cut and journal overlay.
+A later database change need not fail the next callback. The existing authority
+watcher can cancel the invocation. Callbacks cannot see newer rows or a wider
+scope. Fresh freeze still checks pending status, current authority, lifecycle,
+generation, progress, completion, heads, source freshness, trace revocation,
+context proof, dependencies, and expiry.
 
-The first read of a historical producer validates its full record, selected
-owner, spec, pins, Graph proof, and original grant. Later reads check the exact
-canonical result, Graph layer, writer, revision, tenant, instance, and call.
-The original grant must still permit the bound scope. The owner retains no
-Graph result values. Freeze drops authority scratch and certificates. The
+Each returned historical origin uses the existing immutable Graph origin and
+producer owners. The original grant must permit the bound scope. The tenant,
+Graph, instance, call, and revision remain exact. Final preparation still
+validates actual origin SQL and witness pins. The owner retains no Graph
+result values. Freeze drops the view, its reservations, and certificates. The
 existing journal retains exact origin references and row pins. Final Data
 preparation and commit keep their full validation. The third index invocation takes 1.681420 seconds in the passing run.
 
@@ -1084,8 +1127,11 @@ source frame. Those worker intervals total 2.335 to 3.094 s per bulk frame.
 They are aggregate intervals, not total CPU time. The reviewer agrees to
 reuse the full canonical Input through the existing SourceSnapshot binding
 before per-scan projection. SQL input access closes under the existing
-GraphService gate at guest entry and journal freeze. Direct SDK Graph reads
-stay current. Host and source controls still check each read. The final
+GraphService gate at guest entry and journal freeze. That implementation
+uses current checks on direct SDK Graph reads. The invocation view replacement
+above supersedes those callback checks with captured-cut reads. Host
+cancellation and deadline checks remain on callbacks. Fresh source checks remain
+at freeze, preparation, and commit. The final
 focused Query and Analysis library check passes in 29.88 s. The reviewer
 accepts the input binding and phase guards. The exact build passes in
 212.962373 s. Its log is `/tmp/araphor-build-owned-input-reuse-20261104.log`.

@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use araphor_analysis_sdk as sdk;
-use araphor_graph::{ Journal, ReadOrigin};
+use araphor_graph::{Journal, ReadOrigin};
 
-use super::{authority::GraphAuthority, ManagedBudget, ManagedGraphCall};
+use super::{ManagedAttempt, ManagedBudget, ManagedGraphCall, authority::GraphAuthority};
 use crate::analysis::PackageResultRefV1;
 use crate::{AnalysisReadControl, AnalysisStore, PackageErrorCodeV1 as Code, Result};
 
@@ -65,11 +65,20 @@ impl Drop for Callback<'_> {
 impl ManagedGraphTransaction {
     pub fn new(
         store: &AnalysisStore,
-        call: ManagedGraphCall,
+        attempt: Arc<ManagedAttempt>,
+        call_id: u64,
+        model: &sdk::Model,
         predecessors: Vec<Arc<ManagedGraphJournal>>,
         budget: Arc<dyn ManagedBudget>,
         control: &AnalysisReadControl,
     ) -> Result<Arc<Self>> {
+        let mut reader = store.reader_until(control)?;
+        let (call, authority) = control.run(&mut reader, |reader| {
+            let call = store.graph_call_from(reader, attempt, call_id, model, control)?;
+            let authority = GraphAuthority::bind(&call, store, reader, control, budget.as_ref())?;
+            Ok((call, authority))
+        })?;
+        drop(reader);
         let manifest = &call.attempt.1.spec.manifest;
         let mut ancestors = BTreeSet::new();
         let mut pending = manifest.calls[&call.call]
@@ -103,10 +112,6 @@ impl ManagedGraphTransaction {
             position = next + 1;
         }
         let journal = Journal::new(call.writer)?;
-        let mut reader = store.reader_until(control)?;
-        let authority = control.run(&mut reader, |reader| {
-            GraphAuthority::bind(&call, store, reader, control, budget.as_ref())
-        })?;
         Ok(Arc::new(Self {
             call,
             predecessors,
@@ -200,34 +205,31 @@ impl ManagedGraphTransaction {
             .work
             .as_mut()
             .ok_or_else(|| Code::Incomplete.error("Graph callback state"))?;
-        let mut reader = store.reader_until(control)?;
-        let prepared = control.run(&mut reader, |connection| {
-            self.authority()?
+        let prepared = {
+            let bound = self.authority()?;
+            let authority = bound
                 .as_ref()
-                .ok_or_else(|| Code::Incomplete.error("Graph invocation authority"))?
-                .check(&self.call, store, connection, control)?;
+                .ok_or_else(|| Code::Incomplete.error("Graph invocation authority"))?;
+            authority.check_snapshot(&self.call, store, control)?;
             if name == "graph_clear" {
-                return work.journal.prepare_clear(batch).map_err(Into::into);
+                work.journal.prepare_clear(batch)?
+            } else {
+                let relation = self.call.relations[name];
+                let shape = self
+                    .call
+                    .spec
+                    .relation(name)
+                    .map_err(|_| Code::Denied.error("Graph stage relation"))?
+                    .engine();
+                let present =
+                    authority
+                        .view
+                        .presence(self.call.writer, relation, &batch, || {
+                            control.check().map_err(araphor_graph::Error::backend)
+                        })?;
+                work.journal.prepare(relation, &shape, batch, &present)?
             }
-            let relation = self.call.relations[name];
-            let shape = self
-                .call
-                .spec
-                .relation(name)
-                .map_err(|_| Code::Denied.error("Graph stage relation"))?
-                .engine();
-            let present = store.graph_engine.presence(
-                connection,
-                self.call.writer,
-                relation,
-                self.call.attempt.captured_revision(),
-                &batch,
-                || control.check().map_err(araphor_graph::Error::backend),
-            )?;
-            work.journal
-                .prepare(relation, &shape, batch, &present)
-                .map_err(Into::into)
-        })?;
+        };
         control.check()?;
         work.journal.publish(prepared)?;
         work.leases.push(lease);

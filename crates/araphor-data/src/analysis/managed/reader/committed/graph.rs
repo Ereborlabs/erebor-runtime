@@ -18,6 +18,7 @@ pub(in crate::analysis) struct GraphOrigin {
     pub graph: u64,
     pub result: String,
     pub writer: u64,
+    pub call: u64,
     pub revision: u64,
     pub restricted: bool,
     pub reads: Vec<GraphRead>,
@@ -193,7 +194,7 @@ impl CommittedOwners {
             }
         }
         let mut query = reader.prepare(
-            "SELECT graph.tenant_id,writer.graph_id,result.result_id,result.writer_id,result.revision,result.restricted
+            "SELECT graph.tenant_id,writer.graph_id,result.result_id,result.writer_id,result.revision,result.restricted,writer.call_id
              FROM managed_graph_results result JOIN managed_graph_writers writer USING(writer_id)
              JOIN managed_graphs graph ON graph.graph_id=writer.graph_id"
         ).context(AnalysisDatabaseSnafu { operation: "prepare committed Graph origins" })?;
@@ -206,6 +207,7 @@ impl CommittedOwners {
                     row.get::<_, u64>(3)?,
                     row.get::<_, u64>(4)?,
                     row.get::<_, bool>(5)?,
+                    row.get::<_, u64>(6)?,
                 ))
             })
             .context(AnalysisDatabaseSnafu {
@@ -215,7 +217,7 @@ impl CommittedOwners {
             .context(AnalysisDatabaseSnafu {
                 operation: "decode committed Graph origins",
             })?;
-        for (tenant, graph, result, writer, revision, restricted) in origins {
+        for (tenant, graph, result, writer, revision, restricted, call) in origins {
             let tenant = tenant
                 .try_into()
                 .map_err(|_| Code::Invalid.error("Graph origin tenant"))?;
@@ -253,6 +255,7 @@ impl CommittedOwners {
                     writer,
                     revision,
                     restricted,
+                    call,
                     reads,
                     facts,
                 }),

@@ -12,7 +12,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct ManagedGraphCall {
+pub(super) struct ManagedGraphCall {
     pub(super) attempt: Arc<ManagedAttempt>,
     pub(super) call: u64,
     pub(super) graph: u64,
@@ -203,8 +203,9 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub fn graph_call(
+    fn graph_call_from(
         &self,
+        connection: &duckdb::Connection,
         attempt: Arc<ManagedAttempt>,
         call: u64,
         model: &sdk::Model,
@@ -214,41 +215,38 @@ impl AnalysisStore {
         if attempt.receipt().is_some() || attempt.terminal().is_some() {
             return Err(Code::Conflict.error("Graph attempt completed"));
         }
-        let mut reader = self.reader_until(control)?;
-        control.run(&mut reader, |connection| {
-            self.check_managed_capture(connection, &attempt.0.capture, attempt.request().time_utc_ns,
-                (&attempt.0.capture.witnesses,&attempt.0.capture.contexts), Default::default())?;
-            let declaration = attempt.1.spec.manifest.calls.get(&call)
-                .ok_or_else(|| Code::Denied.error("Graph actual call"))?;
-            let package = Self::managed_contract(connection, attempt.1.spec.tenant, declaration)?;
-            let canonical = package.exports.iter().find(|export| export.name == declaration.export)
-                .ok_or_else(|| Code::Invalid.error("Graph actual export"))?;
-            if canonical.name != model.name || canonical.graph != model.graph {
-                return Err(Code::Denied.error("Graph actual relation contract"));
-            }
-            let spec = model.graph.clone().ok_or_else(|| Code::Denied.error("Graph invocation capability"))?;
-            let (graph,writer): (u64,u64) = connection.query_row(
-                "SELECT graph.graph_id,writer.writer_id FROM managed_graphs graph
-                 JOIN managed_graph_writers writer USING(graph_id)
-                 WHERE graph.tenant_id=? AND graph.instance_id=? AND writer.call_id=?",
-                params![attempt.1.spec.tenant.as_slice(),attempt.1.spec.id,call],
-                |row| Ok((row.get(0)?,row.get(1)?)),
-            ).context(AnalysisDatabaseSnafu { operation: "bind managed Graph writer" })?;
-            let head = connection.query_row(
-                "SELECT layer_id FROM graph_layers WHERE writer_id=? AND revision<=? ORDER BY revision DESC LIMIT 1",
-                params![writer,attempt.captured_revision()], |row| row.get(0),
-            ).optional().context(AnalysisDatabaseSnafu { operation: "bind managed Graph head" })?;
-            let mut relations = BTreeMap::new();
-            for relation in &spec.relations {
-                let (id,bytes): (u64,Vec<u8>) = connection.query_row(
-                    "SELECT relation_id,contract FROM managed_graph_relations WHERE graph_id=? AND relation_name=?",
-                    params![graph,relation.name], |row| Ok((row.get(0)?,row.get(1)?)),
-                ).context(AnalysisDatabaseSnafu { operation: "bind managed Graph relation" })?;
-                let canonical: sdk::GraphRelation = ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
-                if canonical != *relation { return Err(Code::Denied.error("Graph admitted relation contract")); }
-                relations.insert(relation.name.clone(), id);
-            }
-            Ok(ManagedGraphCall { attempt,call,graph,writer,head,spec,relations })
-        })
+        self.check_managed_capture(connection, &attempt.0.capture, attempt.request().time_utc_ns,
+            (&attempt.0.capture.witnesses,&attempt.0.capture.contexts), Default::default())?;
+        let declaration = attempt.1.spec.manifest.calls.get(&call)
+            .ok_or_else(|| Code::Denied.error("Graph actual call"))?;
+        let package = Self::managed_contract(connection, attempt.1.spec.tenant, declaration)?;
+        let canonical = package.exports.iter().find(|export| export.name == declaration.export)
+            .ok_or_else(|| Code::Invalid.error("Graph actual export"))?;
+        if canonical.name != model.name || canonical.graph != model.graph {
+            return Err(Code::Denied.error("Graph actual relation contract"));
+        }
+        let spec = model.graph.clone().ok_or_else(|| Code::Denied.error("Graph invocation capability"))?;
+        let (graph,writer): (u64,u64) = connection.query_row(
+            "SELECT graph.graph_id,writer.writer_id FROM managed_graphs graph
+             JOIN managed_graph_writers writer USING(graph_id)
+             WHERE graph.tenant_id=? AND graph.instance_id=? AND writer.call_id=?",
+            params![attempt.1.spec.tenant.as_slice(),attempt.1.spec.id,call],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "bind managed Graph writer" })?;
+        let head = connection.query_row(
+            "SELECT layer_id FROM graph_layers WHERE writer_id=? AND revision<=? ORDER BY revision DESC LIMIT 1",
+            params![writer,attempt.captured_revision()], |row| row.get(0),
+        ).optional().context(AnalysisDatabaseSnafu { operation: "bind managed Graph head" })?;
+        let mut relations = BTreeMap::new();
+        for relation in &spec.relations {
+            let (id,bytes): (u64,Vec<u8>) = connection.query_row(
+                "SELECT relation_id,contract FROM managed_graph_relations WHERE graph_id=? AND relation_name=?",
+                params![graph,relation.name], |row| Ok((row.get(0)?,row.get(1)?)),
+            ).context(AnalysisDatabaseSnafu { operation: "bind managed Graph relation" })?;
+            let canonical: sdk::GraphRelation = ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
+            if canonical != *relation { return Err(Code::Denied.error("Graph admitted relation contract")); }
+            relations.insert(relation.name.clone(), id);
+        }
+        Ok(ManagedGraphCall { attempt,call,graph,writer,head,spec,relations })
     }
 }

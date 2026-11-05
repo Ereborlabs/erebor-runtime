@@ -250,7 +250,7 @@ impl CommittedOwners {
             .ok_or_else(|| Code::Missing.error("managed selected owner"))
     }
 
-    pub(super) fn producer(
+    pub(in crate::analysis::managed) fn producer(
         &self,
         tenant: [u8; 16],
         id: &str,

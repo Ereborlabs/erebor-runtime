@@ -548,6 +548,7 @@ impl AnalysisStore {
                 writer: request.writer,
                 revision,
                 restricted: floors[&call],
+                call,
                 reads,
                 facts,
             });
