@@ -434,3 +434,35 @@ complete. No compaction timing distribution or engine winner is established.
 The [pilot record](../../crates/araphor-graph/examples/storage_poc/results/compaction-pilot-2026-11-05/pilot.json)
 preserves the exact source, command, observed milestone, and limits.
 Sustained compaction qualification remains **Not done**.
+
+## SurrealKV package scenario comparison: 2026-11-05
+
+The user requests SurrealKV in the same package workload and excludes
+SlateDB from this benchmark. The SurrealKV adapter and bounded comparison
+are **Done** at source `f4717056d`. The adapter uses released SurrealKV 1.2.0,
+native read-only and read/write transactions, native ordered iteration,
+`Durability::Immediate`, and explicit awaited shutdown. It uses the same
+Graph layout and actual Causal package code as redb and Fjall.
+
+All 18 measured runs pass exact runtime traversal keys, frontiers, finding
+values, evidence, Graph deltas, metadata, retained history, rollback, close,
+and reopen checks. All five focused release tests pass. The unchanged
+four-engine qualification also passes all 32 runs; its timings are excluded
+because it overlaps an IDE Cargo check. The measured run starts after the
+host compiler process check returns no active compilers.
+
+Median eight-cycle totals are 28.70 milliseconds for redb, 26.91 for Fjall,
+and 27.27 for SurrealKV. Write totals are 14.54, 11.75, and 13.24 milliseconds.
+The 27 neighbor reads take 2.293, 2.921, and 2.313 milliseconds. Fjall writes
+faster than SurrealKV in all six paired rounds; SurrealKV traverses faster.
+Their paired complete-scenario ratio has a median of 0.9964. This close
+result does not establish a meaningful overall performance winner.
+
+The [guide and retained results](../../crates/araphor-graph/examples/storage_poc/README.md#surrealkv-scenario-result-2026-11-05)
+give the source route, native transaction boundary, commands, raw samples,
+and reviewed calculations. SurrealKV engine versioning is disabled; the same
+application revision keys retain Graph history for all compared engines.
+This result does not qualify native temporal APIs or their retention policy.
+Sustained compaction, large Graphs, production replacement, complete Data and
+DataFusion execution, notification creation, and the complete incident timing
+target remain **Not done**.

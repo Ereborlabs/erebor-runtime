@@ -1,0 +1,80 @@
+{
+  "date": "2026-11-05",
+  "source": "f4717056d",
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics",
+  "logical_cpus": 16,
+  "kernel": "6.8.0-147-generic",
+  "filesystem": "ext4 on /dev/nvme0n1p7; /tmp uses the same device",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "engines": {
+    "redb": "4.4.0",
+    "fjall": "3.1.13",
+    "lsm-tree": "3.1.10",
+    "surrealkv": "1.2.0",
+    "arrow": "59.2.0",
+    "tokio": "1.52.3"
+  },
+  "rust_profile": "cargo release; default opt-level3; debug_assertions=false",
+  "durability": {
+    "redb": "Immediate",
+    "fjall": "transaction SyncAll",
+    "surrealkv": "transaction Immediate; synchronous native reads; commit awaited through one owner runtime"
+  },
+  "surrealkv_history": "Engine versioning disabled; same explicit application Graph history keys as redb and Fjall. Native temporal API and retention are not measured.",
+  "surrealkv_close": "Explicit native tree.close awaited before drop, reopen, and file-size measurement; outside primary interval.",
+  "settings": "Default cache, compression, and maintenance settings. No arbitrary runtime thread or memory limit. One default Tokio multi-thread runtime per SurrealKV owner.",
+  "build_command": "rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 POC_SOURCE_REVISION=f4717056d cargo build --release -p araphor-graph --example storage_poc --features store --config /tmp/araphor-storage-release-override.toml --message-format=short",
+  "run_command": "rtk proxy target/release/examples/storage_poc /tmp/araphor-surrealkv-poc-20261105/release.json surrealkv",
+  "unit_command": "rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 cargo test --release -p araphor-graph --example storage_poc --features store --config /tmp/araphor-storage-release-override.toml --message-format=short",
+  "unit_result": "All five focused example tests pass. Tested Rust source is identical to the measured source.",
+  "normal_qualification": "All 32 unchanged four-engine runs pass at source f4717056d. That run overlaps an IDE Cargo check; qualification-normal.json is correctness evidence only, excluded from timing comparisons.",
+  "pre_run_background": "No cargo, rustc, or cc1plus process at the host process check immediately before the measured run. Shared host; no CPU, IO, or cache isolation.",
+  "linked_duckdb": "Verified prior O3 archive retained through Cargo links override. No DuckDB C++ source changes; DuckDB is not a compared engine in this mode.",
+  "duckdb_archive_sha256": "121c752b58ae133fe0e1627a6c7d3559e185d04fd0a9a51a9d73a9885429b1eb",
+  "duckdb_provenance": "../causal-2026-11-05/cpp-release-provenance.json",
+  "override_config": "[target.x86_64-unknown-linux-gnu.duckdb]\nrustc-link-lib = [\"static=duckdb\", \"stdc++\"]\nrustc-link-search = [\"native=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"]\nrustc-env = { OUT_DIR = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\" }\ninclude = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/src/include\"\nlib_dir = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"\n",
+  "measured_passes": 1,
+  "rounds_per_engine": 6,
+  "scenario_steps_per_round": 8,
+  "neighbor_rounds_per_round": 27,
+  "presence_probes_per_round": 15,
+  "orders": [
+    [
+      "redb",
+      "fjall",
+      "surrealkv"
+    ],
+    [
+      "fjall",
+      "surrealkv",
+      "redb"
+    ],
+    [
+      "surrealkv",
+      "redb",
+      "fjall"
+    ],
+    [
+      "surrealkv",
+      "fjall",
+      "redb"
+    ],
+    [
+      "fjall",
+      "redb",
+      "surrealkv"
+    ],
+    [
+      "redb",
+      "surrealkv",
+      "fjall"
+    ]
+  ],
+  "correctness": "All 18 optimized runs pass exact runtime traversal keys, returned row counts, frontiers, finding Arrow values, six-evidence/two-node/four-stream assertions, 194 additions/8 closures, metadata, history after later writes, rollback, explicit close, and reopen.",
+  "limits": [
+    "Resolved fixture inputs; no production Data authority or native DataFusion source queries.",
+    "No notification creation or complete incident latency measurement.",
+    "No SurrealKV native temporal-feature, large-Graph, steady compaction, memory-pressure, retention-deletion, or power-loss qualification."
+  ],
+  "interpretation": "SurrealKV and Fjall complete-scenario totals are comparable on this small hot fixture. Fjall has lower writes in all six paired rounds; SurrealKV has lower traversal in all six. No general performance winner is established."
+}

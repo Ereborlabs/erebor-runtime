@@ -191,6 +191,9 @@ assertions stay active. The original four-engine mode keeps its eight orders.
 The candidate comparison adds no SlateDB or production storage path.
 
 ```sh
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 POC_SOURCE_REVISION=f4717056d \
+  cargo build --release -p araphor-graph --example storage_poc --features store \
+  --config /tmp/araphor-storage-release-override.toml --message-format=short
 rtk proxy target/release/examples/storage_poc /tmp/araphor-surrealkv-poc/release.json surrealkv
 rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize.py \
   /tmp/araphor-surrealkv-poc/release.json
@@ -199,9 +202,11 @@ rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize.py \
 [native_transactions_and_reopen](surreal.rs) checks read-your-writes, an
 older snapshot across a later commit, deletion, empty values, ordered prefix
 reads, floor reads at zero and `u64::MAX`, rollback, explicit close, and reopen.
-This test passes in release. The same command passes all five example tests.
-The full candidate comparison remains **Not done** until its measured run
-completes.
+This test passes in release. The focused release test command passes all five
+example tests. The [environment record](results/surrealkv-2026-11-05/environment.json)
+contains that command in `unit_command`.
+The measured comparison is recorded below. Native temporal-feature and
+sustained-compaction qualification remain **Not done**.
 
 ## Local append-only store
 
@@ -367,7 +372,7 @@ clean reopen for this scenario. Formatting passes. The debug build has one
 existing unused-import warning in production causal `io.rs`.
 
 A gain against current GraphStore includes the native Graph owner rewrite
-and the physical engine. redb, Fjall, and the local store share the same Graph record
+and the physical engine. redb, Fjall, SurrealKV, and the local store share the same Graph record
 algorithm. The PoC does not run Control intake, raw ingestion, native
 DataFusion input queries, full Data authority/evidence checks, finding
 projection publication, or notification creation. It also does not qualify
@@ -514,3 +519,62 @@ No production Rust source changes. Full workspace CI and the production
 incident test do not run for this example-only comparison. Power-loss,
 large-Graph, memory-pressure, and complete notification qualification remain
 outside this result. The complete 100-fold target remains unproven.
+
+## SurrealKV scenario result: 2026-11-05
+
+SurrealKV integration and bounded comparison: **Done**.
+Production replacement and complete incident latency qualification: **Not done**.
+The measured source is `f4717056d`. The
+[environment record](results/surrealkv-2026-11-05/environment.json) gives the
+exact build, test, and run commands. No compiler process is active at the
+host process check immediately before the measured run. The host remains
+shared. All three engines use the same native Graph record algorithm and
+actual package code. No SlateDB backend is added or tested.
+
+Each table value is a median of six complete round totals in milliseconds.
+A round has eight package cycles, 27 dependent neighbor reads, and 15
+presence probes. Traversal and write times are parts of the complete
+scenario. Separate component medians are not additive. Reopen is outside
+the primary interval and includes native Arrow property-cache restore.
+
+| Measured interval | Native on redb | Native on Fjall | Native on SurrealKV |
+| --- | ---: | ---: | ---: |
+| Complete eight-cycle scenario | 28.70 | 26.91 | 27.27 |
+| Eight writes | 14.54 | 11.75 | 13.24 |
+| 27 neighbor reads | 2.293 | 2.921 | 2.313 |
+| Reopen | 2.70 | 7.39 | 4.90 |
+
+Fjall has lower write totals than SurrealKV in all six paired rounds.
+SurrealKV has lower traversal and reopen totals than Fjall in all six.
+The paired Fjall-to-SurrealKV complete-scenario ratio has a median of
+0.9964 and a range of 0.9438 to 1.0033. The complete totals are close;
+this run does not establish a meaningful overall performance winner.
+SurrealKV's median paired complete-scenario advantage over redb is 1.057
+times. This small difference does not establish a general engine advantage.
+
+The final package cycle has a median of 5.76 milliseconds on redb, 5.40
+on Fjall, and 5.49 on SurrealKV. This interval ends at the Graph commit.
+Notification creation is outside the interval. After explicit close and
+reopen checks, logical file sizes are 2,109,440 bytes for redb, 412,832
+for Fjall, and 1,002,625 for SurrealKV. These sizes cover this small fixture
+under default cache, compression, and maintenance settings.
+
+All 18 measured runs pass exact runtime traversal-key, returned-row,
+frontier, finding-value, evidence, Graph delta, metadata, retained-history,
+rollback, close, and reopen checks. The
+[raw results](results/surrealkv-2026-11-05/release.json) retain all 144 measured
+cycles. The [summary](results/surrealkv-2026-11-05/summary.json) reproduces
+with `summarize.py`. Independent review confirms the counts, engine orders,
+timing sums, and reported values. All five focused release tests pass.
+The unchanged [four-engine qualification](results/surrealkv-2026-11-05/qualification-normal.json)
+also passes all 32 runs. That qualification overlaps an IDE Cargo check;
+its timings are excluded from the measured comparison. Formatting and
+source-link checks pass.
+
+SurrealKV uses `Durability::Immediate`. Engine versioning is disabled;
+the shared application Graph revision keys retain history. Native `get_at`,
+native history retention, large Graphs, steady compaction, memory pressure,
+and power loss remain unqualified. No production Rust path changes. Full
+workspace CI does not run, as the user requests. Production DataFusion source
+queries, notification creation, and the complete 100-fold target remain
+outside this result.
