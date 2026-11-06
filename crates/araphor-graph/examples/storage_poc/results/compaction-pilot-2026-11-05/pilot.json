@@ -1,0 +1,19 @@
+{
+  "source": "644ab7540",
+  "profile": "release",
+  "command": "rtk proxy target/release/examples/storage_poc /tmp/araphor-compaction-20261105/release.json compaction",
+  "result": "Not done",
+  "last_logged_milestone": {
+    "engine": "fjall",
+    "round": 0,
+    "epochs": 288,
+    "successful_physical_merges": 1
+  },
+  "stop": "SIGINT130 after the user narrowed the active request to the SurrealKV benchmark.",
+  "checks": "All per-cycle Oracle, finding, and metadata assertions passed through the last logged milestone. Final historical-cut, rollback, reopen, and matched redb passes did not complete.",
+  "configuration": "Fjall3.1.13 defaults:64MiB memtable, leveled L0 threshold4, SyncAll transactions, explicit application history retained.",
+  "merge_proof": "The progress count uses the exact native lsm_tree::compaction::worker Compaction successful trace message after merge manifest installation. It excludes native no-op attempt counts.",
+  "limits": "The interrupted process did not write its in-memory cycle samples or event log to the output JSON. No compaction latency, tail, or engine-comparison result is retained or claimed.",
+  "observations": "The run became substantially slower with retained-history growth. The shared native read algorithm scans historical postings; this is a source-supported possible cause, not a measured compaction penalty.",
+  "prior_qualification": "All four focused release tests and the separate unchanged32-run scenario passed before this pilot. The two-epoch test checks both redb and Fjall without requiring compaction."
+}

@@ -415,3 +415,22 @@ Incomplete-tail checks do not qualify power-loss recovery. This small PoC
 does not qualify storage growth or memory use. Production replacement,
 complete Data and DataFusion execution, notification creation, and the
 complete incident timing target remain **Not done**.
+
+## Background compaction pilot: 2026-11-05
+
+The sustained driver is implemented at source `644ab7540`. It repeats the
+same eight Causal package steps in one growing database with advancing
+revisions and retained history. It uses default Fjall memory-table and
+leveled-compaction settings. It does not call manual flush or major
+compaction. Native trace messages identify successful physical merges;
+Fjall's completed-attempt counter also counts no-op strategy checks.
+
+The last logged milestone has 288 repeats and one successful physical merge
+on the first Fjall pass. Cycle assertions pass through that milestone.
+The agent interrupts this run to prioritize the user's later SurrealKV
+benchmark request. The process does not emit its in-memory samples or events.
+Final historical cuts, rollback, reopen, and the paired redb passes do not
+complete. No compaction timing distribution or engine winner is established.
+The [pilot record](../../crates/araphor-graph/examples/storage_poc/results/compaction-pilot-2026-11-05/pilot.json)
+preserves the exact source, command, observed milestone, and limits.
+Sustained compaction qualification remains **Not done**.

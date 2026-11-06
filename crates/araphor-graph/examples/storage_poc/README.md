@@ -301,6 +301,16 @@ test does not assert that compaction occurs. Sustained compaction measurement
 and production notification acceptance remain **Not done** until the longer
 run completes.
 
+The [compaction pilot record](results/compaction-pilot-2026-11-05/pilot.json)
+covers source `644ab7540`. The last logged milestone is 288 repeats and one
+successful physical merge on the first Fjall pass. All cycle checks pass
+through that milestone. The agent interrupts the run to prioritize the
+user's later SurrealKV benchmark request. The interrupted process does not
+write its in-memory samples or events to the output JSON. Final historical
+cuts, rollback, reopen, and matched redb passes do not complete. The retained
+record proves no compaction latency distribution or engine comparison.
+The sustained comparison remains **Not done**.
+
 ### Other boundaries
 
 The debug run at source `65d655ec8` passes all 18 engine runs. It proves exact
