@@ -50,6 +50,15 @@ pub struct Incident {
 }
 
 impl Incident {
+    pub fn shift(&mut self, offset: u64) {
+        for context in &mut self.contexts {
+            context.commit_revision += offset;
+        }
+        for record in &mut self.records {
+            record.position.commit_revision += offset;
+        }
+    }
+
     pub fn new() -> Result<Self> {
         let sources = (0..4)
             .map(|i| EvidenceIntakeIdentityV1 {

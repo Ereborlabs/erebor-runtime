@@ -7,6 +7,19 @@ use redb::{ReadableDatabase, ReadableTable, TableDefinition};
 
 use super::Result;
 
+#[derive(Clone, serde::Serialize)]
+pub struct Maintenance {
+    attempts: usize,
+    active: usize,
+    compaction_s: f64,
+    buffer_bytes: u64,
+    queued_flushes: usize,
+    sealed_memtables: usize,
+    l0_tables: usize,
+    tables: usize,
+    journals: usize,
+}
+
 const TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("records");
 pub type Entries = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -28,6 +41,23 @@ pub enum Database {
 }
 
 impl Database {
+    pub fn maintenance(&self) -> Option<Maintenance> {
+        let Self::Fjall(db, table) = self else {
+            return None;
+        };
+        Some(Maintenance {
+            attempts: db.inner().compactions_completed(),
+            active: db.inner().active_compactions(),
+            compaction_s: db.inner().time_compacting().as_secs_f64(),
+            buffer_bytes: db.write_buffer_size(),
+            queued_flushes: db.inner().outstanding_flushes(),
+            sealed_memtables: table.inner().sealed_memtable_count(),
+            l0_tables: table.inner().l0_table_count(),
+            tables: table.inner().table_count(),
+            journals: db.journal_count(),
+        })
+    }
+
     pub fn open(kind: &str, path: &Path) -> Result<Self> {
         Ok(match kind {
             "home" => Self::Home(super::home::Home::open(path)?),

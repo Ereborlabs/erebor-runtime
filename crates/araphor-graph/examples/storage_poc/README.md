@@ -245,6 +245,64 @@ The recorded optimized comparison excludes that mixed diagnostic.
 
 ## Qualification boundary
 
+### Sustained compaction check
+
+[compaction::run](compaction.rs) opens one growing Fjall database.
+  -> [Incident::shift](incident.rs) advances the same source and context revisions for each repeat.
+  -> [compaction::pass](compaction.rs) repeats the same eight package steps and retains historical Graph keys.
+  -> [Trace](compaction.rs) records native compaction choices and successful physical merges on one monotonic clock.
+  -> [compaction::pass](compaction.rs) completes two background merges, finishes the current repeat, and runs one more repeat.
+  -> [compaction::run](compaction.rs) gives redb the same number of repeats in two paired engine orders.
+
+[compaction::pass](compaction.rs) completes the sustained writes.
+  -> [Oracle::check](main.rs) checks all eight cuts in the first, middle, and last repeat after later writes.
+  -> [compaction::pass](compaction.rs) checks rollback and the same retained cuts after reopen.
+  -> [Reference](main.rs) compares exact member values, traversal keys, and frontiers across engines at those cuts.
+  -> [compaction_summary.py](compaction_summary.py) reports cycles that overlap installed physical merges and the matching redb revisions.
+
+This mode repeats the same identities and rebuilds the current Graph at each
+repeat. The first repeat has 194 additions and eight closures. Each later
+repeat has 194 additions and 194 closures. The final live Graph still has 186
+contributions. Physical history grows throughout the run. This is a repeated
+update and rebuild workload, not a set of new independent incidents.
+
+Fjall keeps its default 64 MiB memtable and leveled compaction strategy with
+an L0 threshold of four runs. The driver does not rotate memory tables or
+call major compaction. Its native completed-compaction counter includes
+no-op strategy checks. The exact `Compaction successful` trace message comes
+after a real merge installs its output manifest. The driver retains those
+messages, their choices, warnings, and errors. Trace dispatch stays enabled
+for both engines. No input subscription uses this diagnostic logger.
+
+Each package cycle has timestamps on the same clock as the merge events.
+Maintenance samples record memory-buffer bytes, queued flushes, sealed memory
+tables, L0 tables, total tables, journal count, and native attempt counters.
+These samples and correctness checks are outside the primary scenario time.
+The summarizer separates cycles that overlap merges from other cycles.
+Its paired redb rows use the same revisions and history age. An overlap can
+also include normal history-scan cost; the result does not isolate a causal
+compaction penalty. Existing stable-key history scans can grow with history.
+
+The first Fjall run selects the repeat count from observed merges. The second
+Fjall run uses that same fixed count and reports the merges it actually sees.
+The engine order is Fjall/redb, then redb/Fjall. The four passes use the same
+package, input increments, durability, and retained-history policy.
+
+```sh
+rtk proxy target/release/examples/storage_poc /tmp/araphor-compaction-poc/release.json compaction
+rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/compaction_summary.py \
+  /tmp/araphor-compaction-poc/release.json
+```
+
+[repeated_package_history](compaction.rs) runs two repeats on each engine.
+It checks 388 additions, 202 closures, original finding evidence, retained
+history, exact cross-engine rows and calls, rollback, and reopen. The short
+test does not assert that compaction occurs. Sustained compaction measurement
+and production notification acceptance remain **Not done** until the longer
+run completes.
+
+### Other boundaries
+
 The debug run at source `65d655ec8` passes all 18 engine runs. It proves exact
 cross-engine frontiers, traversal requests and counts, finding values,
 Graph deltas, state and captured-revision markers, history, rollback, and

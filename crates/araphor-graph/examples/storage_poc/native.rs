@@ -41,6 +41,10 @@ impl Key {
 }
 
 impl Native {
+    pub fn maintenance(&self) -> Option<kv::Maintenance> {
+        self.db.maintenance()
+    }
+
     pub fn open(kind: &str, path: &Path) -> Result<Self> {
         let db = kv::Database::open(kind, path)?;
         if db.read(|r| r.get(b"head"))?.is_none() {

@@ -1,3 +1,4 @@
+mod compaction;
 mod duck;
 mod fixture;
 mod home;
@@ -231,11 +232,20 @@ struct Reference {
 
 fn main() -> Result<()> {
     let mut arguments = std::env::args_os().skip(1);
-    let output = arguments.next().ok_or("usage: storage_poc OUTPUT.json")?;
+    let output = arguments
+        .next()
+        .ok_or("usage: storage_poc OUTPUT.json [compaction]")?;
+    let mode = arguments.next();
     if arguments.next().is_some() {
         return Err("unexpected argument".into());
     }
     let output = Path::new(&output);
+    if mode.as_deref() == Some(std::ffi::OsStr::new("compaction")) {
+        return compaction::run(output);
+    }
+    if mode.is_some() {
+        return Err("unknown scenario".into());
+    }
     let parent = output.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)?;
     let fixture = Fixture::new()?;
@@ -319,41 +329,7 @@ fn main() -> Result<()> {
                     ][i]
                 );
                 oracle.check(&mut out, &fixture, spec.revision)?;
-                let findings = out
-                    .rows
-                    .iter()
-                    .filter(|r| r.relation == 1)
-                    .collect::<Vec<_>>();
-                assert_eq!(findings.len(), spec.expected_findings);
-                for row in findings {
-                    use araphor_analysis_types::{FindingMember, values::FindingStateV1};
-                    let members = FindingMember::decode(&araphor_analysis_sdk::Dataset {
-                        name: FindingMember::port().name,
-                        batches: vec![row.value()?],
-                    })?;
-                    assert_eq!(members.len(), 1);
-                    let value = &members[0].value;
-                    assert_eq!(value.state, FindingStateV1::Confirmed);
-                    assert_eq!(value.evidence.len(), 6);
-                    assert_eq!(
-                        value
-                            .evidence
-                            .iter()
-                            .map(|e| &e.stream.node_id)
-                            .collect::<std::collections::BTreeSet<_>>()
-                            .len(),
-                        2
-                    );
-                    assert_eq!(
-                        value
-                            .evidence
-                            .iter()
-                            .map(|e| &e.stream)
-                            .collect::<std::collections::BTreeSet<_>>()
-                            .len(),
-                        4
-                    );
-                }
+                check_findings(&out.rows, spec.expected_findings)?;
                 engine.verify_metadata(&fixture, spec.revision, spec.revision)?;
                 let calls = prepared
                     .calls
@@ -453,6 +429,41 @@ fn main() -> Result<()> {
     }
     std::fs::write(output, serde_json::to_vec_pretty(&report)?)?;
     println!("{}", output.display());
+    Ok(())
+}
+
+fn check_findings(rows: &[Row], expected: usize) -> Result<()> {
+    use araphor_analysis_types::{FindingMember, values::FindingStateV1};
+    let findings = rows.iter().filter(|r| r.relation == 1).collect::<Vec<_>>();
+    assert_eq!(findings.len(), expected);
+    for row in findings {
+        let members = FindingMember::decode(&araphor_analysis_sdk::Dataset {
+            name: FindingMember::port().name,
+            batches: vec![row.value()?],
+        })?;
+        assert_eq!(members.len(), 1);
+        let value = &members[0].value;
+        assert_eq!(value.state, FindingStateV1::Confirmed);
+        assert_eq!(value.evidence.len(), 6);
+        assert_eq!(
+            value
+                .evidence
+                .iter()
+                .map(|e| &e.stream.node_id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            2
+        );
+        assert_eq!(
+            value
+                .evidence
+                .iter()
+                .map(|e| &e.stream)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            4
+        );
+    }
     Ok(())
 }
 

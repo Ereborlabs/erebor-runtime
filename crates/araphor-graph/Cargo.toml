@@ -27,6 +27,7 @@ arrow-buffer = "=59.2.0"
 arrow-ipc = "=59.2.0"
 crc32c.workspace = true
 fjall = "=3.1.13"
+log = "=0.4.29"
 redb = "=4.4.0"
 rmp-serde.workspace = true
 serde.workspace = true

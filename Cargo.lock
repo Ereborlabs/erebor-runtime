@@ -388,6 +388,7 @@ dependencies = [
  "erebor-runtime-error",
  "erebor-telemetry",
  "fjall",
+ "log",
  "redb",
  "rmp-serde",
  "serde",
