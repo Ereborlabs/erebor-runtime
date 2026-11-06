@@ -1,0 +1,103 @@
+{
+  "date": "2026-11-05",
+  "source": "1a367e567",
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics",
+  "logical_cpus": 16,
+  "kernel": "6.8.0-147-generic",
+  "filesystem": "ext4 on /dev/nvme0n1p7; /tmp uses the same device",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "engines": {
+    "redb": "4.4.0",
+    "fjall": "3.1.13",
+    "lsm-tree": "3.1.10",
+    "duckdb-binding": "1.10505.0",
+    "arrow": "59.2.0",
+    "home": "example-only append-only frames and immutable Arc<BTreeMap> index"
+  },
+  "rust_profile": "cargo release; default opt-level=3; debug_assertions=false",
+  "duckdb_cpp": {
+    "compiler": "GNU C++ 13",
+    "optimization": "-O3 and NDEBUG",
+    "archive": "target/release/build/libduckdb-sys-e073672aa6bffaa9/out/libduckdb.a",
+    "archive_bytes": 118952896,
+    "sha256": "121c752b58ae133fe0e1627a6c7d3559e185d04fd0a9a51a9d73a9885429b1eb",
+    "build": "Reuse the previous verified optimized bundled archive through Cargo links override. No DuckDB C++ source changes.",
+    "compiler_evidence": "../causal-2026-11-05/cpp-release-provenance.json",
+    "override_config": "[target.x86_64-unknown-linux-gnu.duckdb]\nrustc-link-lib = [\"static=duckdb\", \"stdc++\"]\nrustc-link-search = [\"native=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"]\nrustc-env = { OUT_DIR = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\" }\ninclude = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/src/include\"\nlib_dir = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"\n"
+  },
+  "build_command": "rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 POC_SOURCE_REVISION=1a367e567 cargo build --release -p araphor-graph --example storage_poc --features store --config /tmp/araphor-storage-release-override.toml --message-format=short",
+  "run_command": "rtk proxy target/release/examples/storage_poc /tmp/araphor-storage-home-20261105/release.json",
+  "unit_command": "rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 cargo test --release -p araphor-graph --example storage_poc --features store --config /tmp/araphor-storage-release-override.toml --message-format=short",
+  "unit_result": "All three home storage tests pass. The measured Rust source and tested Rust source are identical.",
+  "unit_tests": [
+    "home::tests::transactions_and_snapshots",
+    "home::tests::incomplete_tail_and_corruption",
+    "home::tests::failed_append_requires_reopen"
+  ],
+  "scope": "Actual Causal package iterative traversal and detector through SDK InvocationHost; unchanged resolved fixture inputs and shared native Graph algorithm.",
+  "pre_run_background": "No cargo, rustc, or cc1plus process at the host process check immediately before the run. Shared host; no CPU, IO, or cache isolation.",
+  "measured_passes": 1,
+  "rounds_per_engine": 8,
+  "scenario_steps_per_round": 8,
+  "neighbor_rounds_per_round": 27,
+  "presence_probes_per_round": 15,
+  "orders": [
+    [
+      "duckdb",
+      "redb",
+      "home",
+      "fjall"
+    ],
+    [
+      "redb",
+      "fjall",
+      "duckdb",
+      "home"
+    ],
+    [
+      "fjall",
+      "home",
+      "redb",
+      "duckdb"
+    ],
+    [
+      "home",
+      "duckdb",
+      "fjall",
+      "redb"
+    ],
+    [
+      "home",
+      "duckdb",
+      "fjall",
+      "redb"
+    ],
+    [
+      "fjall",
+      "home",
+      "redb",
+      "duckdb"
+    ],
+    [
+      "redb",
+      "fjall",
+      "duckdb",
+      "home"
+    ],
+    [
+      "duckdb",
+      "redb",
+      "home",
+      "fjall"
+    ]
+  ],
+  "correctness": "All32 optimized runs pass exact runtime cross-engine traversal keys, row counts, frontiers, finding Arrow values, six-evidence/two-node/four-stream assertions,194 additions/8 closures, retained history after later writes, rollback, and reopen.",
+  "limits": [
+    "All home physical key/value bytes stay in RAM, including retained history.",
+    "Each home transaction copies the full ordered index; keys and values share byte buffers.",
+    "Home log has no compaction, reclamation, or checkpoint; reopen replays its full history.",
+    "Incomplete-tail unit checks do not qualify power-loss recovery.",
+    "No large-Graph, memory-pressure, notification, or production Data qualification."
+  ],
+  "interpretation": "The home/Fjall complete-scenario difference does not establish a winner. The gain over current GraphStore includes the shared native Graph rewrite. Only home, redb, and Fjall share that algorithm."
+}

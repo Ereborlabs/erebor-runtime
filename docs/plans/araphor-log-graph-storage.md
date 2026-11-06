@@ -374,3 +374,44 @@ do not establish a meaningful overall engine winner.
 Production replacement, native DataFusion input execution, complete Data
 authority and evidence checks, and notification creation remain outside
 this comparison. The complete incident timing target remains **Not done**.
+
+## Local append-only store comparison: 2026-11-05
+
+The user requests a home-grown storage backend in the same PoC. This bounded
+implementation and comparison are **Done** at source `1a367e567`. The backend
+uses one append-only transaction log and an immutable ordered in-memory index.
+It has no embedded database dependency. It uses the same native Graph layout,
+actual Causal package code, eight input increments, traversal, and assertions
+as redb and Fjall. No production Rust source changes.
+
+Each write copies the index, applies private changes, and records each key's
+final put or delete. Commit appends one checksummed frame, calls `sync_all`,
+then publishes the new index root. Read scopes keep their prior immutable
+root. Abort appends nothing. Reopen checks and replays complete frames and
+truncates only an incomplete final frame. A complete corrupt frame makes open fail.
+An append or sync error stops new reads and writes until reopen. Application
+revision keys retain Graph history and change records; physical log offsets
+do not replace input positions.
+
+All 32 optimized runs pass exact runtime traversal-key, frontier, finding,
+evidence, delta, metadata, history, rollback, and reopen checks. Three focused
+storage tests pass. Eight balanced rounds give median eight-cycle totals of
+410.11 milliseconds for current GraphStore, 32.61 for redb, 30.47 for Fjall,
+and 29.77 for the local log. The local log's median paired gain over current
+GraphStore is 14.00 times. This gain includes the native Graph rewrite.
+The local log and Fjall totals do not establish an overall winner.
+
+The local log's 27 neighbor reads take 2.189 milliseconds. Its eight writes
+take 13.58 milliseconds. Reopen, including log replay and Arrow cache restore,
+takes 4.07 milliseconds. The local log occupies 1,030,813 logical bytes after
+close; Fjall occupies 412,832 bytes with default compression. The local store
+has no compression. The [guide and retained results](../../crates/araphor-graph/examples/storage_poc/README.md#local-store-scenario-result-2026-11-05)
+give the source route, exact commands, raw samples, and reviewed calculations.
+
+The local store retains all physical keys and values in memory, including
+historical Graph keys. Each write copies the full index. The log has no
+compaction, reclamation, or checkpoint, and reopen replays the full log.
+Incomplete-tail checks do not qualify power-loss recovery. This small PoC
+does not qualify storage growth or memory use. Production replacement,
+complete Data and DataFusion execution, notification creation, and the
+complete incident timing target remain **Not done**.

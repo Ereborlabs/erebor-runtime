@@ -187,6 +187,26 @@ scenario. CRC32C checks file integrity; it does not detect source changes.
 The generic Graph record layout still owns revision history and change records.
 Physical log offsets do not replace application input positions.
 
+The file starts with the eight-byte version header `ARPHKV01`. Each frame has
+a little-endian `u64` payload length, a little-endian `u32` payload CRC32C,
+and a little-endian `u32` CRC32C of the first 12 header bytes. The payload
+is a MessagePack map from binary keys to optional binary values. A null value
+deletes a key. An empty binary value retains a key with an empty value.
+
+```mermaid
+sequenceDiagram
+    participant Native as Native Graph
+    participant Home as Local store
+    participant Log as home.log
+    Native->>Home: Stage Graph transaction
+    Home->>Home: Copy index and apply changes
+    Home->>Log: Append one transaction frame
+    Home->>Log: sync_all
+    Log-->>Home: Sync completes
+    Home->>Home: Publish immutable index
+    Home-->>Native: Commit returns
+```
+
 The store keeps all current physical keys and values in memory. These keys
 include retained Graph history. Write copy cost grows with the full index.
 The log has no compaction, reclamation, or checkpoint. Reopen replays the full
@@ -212,7 +232,7 @@ latency pass limit. After build, one eight-round run takes less than two minutes
 on the recorded host.
 
 ```sh
-rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 POC_SOURCE_REVISION=65d655ec8 \
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 POC_SOURCE_REVISION=1a367e567 \
   cargo build --release -p araphor-graph --example storage_poc --features store
 rtk proxy target/release/examples/storage_poc /tmp/araphor-causal-poc/release.json
 rtk proxy python3 crates/araphor-graph/examples/storage_poc/summarize.py \
@@ -323,3 +343,59 @@ Full workspace CI does not run, as the user requests. The production
 incident test does not run again because the PoC changes no production
 path. The complete 100-fold and sub-100-millisecond notification targets
 remain unproven.
+
+## Local store scenario result: 2026-11-05
+
+Local store implementation and bounded comparison: **Done**.
+Production replacement and complete incident latency qualification: **Not done**.
+The measured source is `1a367e567`. The
+[environment record](results/home-2026-11-05/environment.json) gives the exact
+commands, eight engine orders, and archive hash. This run reuses the previous
+verified `-O3` DuckDB archive through a Cargo links override. The Rust executable
+uses the release profile. No compiler process is active at the process check
+immediately before this run. The host remains shared.
+
+Each table value is the median of eight round totals in milliseconds. Each
+round has eight package cycles and 27 dependent neighbor reads. Traversal and
+write times are parts of the complete scenario. Reopen is outside that interval.
+Reopen includes the local log replay and native Arrow property-cache restore.
+
+| Measured interval | Current GraphStore | Native on redb | Native on Fjall | Native on local log |
+| --- | ---: | ---: | ---: | ---: |
+| Complete eight-cycle scenario | 410.11 | 32.61 | 30.47 | 29.77 |
+| 27 neighbor reads | 2.047 | 2.573 | 3.369 | 2.189 |
+| Eight writes | 386.94 | 16.35 | 13.21 | 13.58 |
+| Reopen | 79.53 | 3.25 | 8.61 | 4.07 |
+
+The median paired complete-scenario gain over current GraphStore is 14.00
+times for the local log. This comparison includes the native Graph rewrite.
+The local log and Fjall complete-scenario totals are close. Their paired
+ratio has a median of 1.023 and a range of 0.860 to 1.069. The local log has
+a slightly higher write median than Fjall. This run does not establish a
+meaningful overall performance winner between these two backends. Current
+GraphStore's retained member cache still has a lower traversal median.
+
+The final package cycle has a median of 60.30 milliseconds on GraphStore,
+6.41 on redb, 6.00 on Fjall, and 5.59 on the local log. This interval ends
+at the Graph commit. It does not measure notification creation.
+
+After close, logical file sizes are 9,973,760 bytes for GraphStore,
+2,109,440 for redb, 412,832 for Fjall, and 1,030,813 for the local log.
+The local log is one file. These sizes cover this small scenario only.
+Fjall retains its default compression; the local log has no compression.
+The local log retains the full key/value index in memory, copies that index
+for each write, and replays all log bytes on reopen. No compaction or
+reclamation runs. This result does not qualify storage growth or memory use.
+
+All 32 optimized engine runs pass the unchanged runtime traversal-key,
+frontier, finding-value, evidence, delta, metadata, history, rollback, and
+reopen checks. The three committed local storage tests pass in release.
+The [raw results](results/home-2026-11-05/release.json) retain all 256 package
+cycles. The [summary](results/home-2026-11-05/summary.json) reproduces with
+`summarize.py`. Independent review confirms the counts, engine-order balance,
+timing sums, and reported medians. Formatting and source-link checks pass.
+
+No production Rust source changes. Full workspace CI and the production
+incident test do not run for this example-only comparison. Power-loss,
+large-Graph, memory-pressure, and complete notification qualification remain
+outside this result. The complete 100-fold target remains unproven.
