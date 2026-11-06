@@ -1,0 +1,266 @@
+{
+  "date": "2026-11-05",
+  "source": "3b6a3c51d",
+  "source_full": "3b6a3c51d5ec645f7567527236304592a9513182",
+  "neon_source": "fa504217c61bbcaf5c512d75830564541f917f8f",
+  "neon_patch": "../../neon-bench/neon.patch",
+  "neon_patch_sha256": "bf403c88f0ac26c2f372b641ca6a7ac526c536771bf42cbaaf4523896ef3bb58",
+  "isolated_lock": "../../neon-bench/Cargo.lock",
+  "isolated_lock_sha256": "bfd63f642ed8af7de948c527137ba6ca6c36aeea0d871f31a31b88de1dace235",
+  "application_lock_sha256": "81b2e74ac513bfe5635469bc0fcaf94e8186f54105a04f594efb743dc4faefb5",
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics",
+  "logical_cpus": 16,
+  "kernel": "6.8.0-147-generic",
+  "filesystem": "ext4 on /dev/nvme0n1p7; same /tmp device for every engine",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "profile": "cargo release; default opt-level3; debug_assertions=false; no CPU, IO, or cache isolation",
+  "resolved_packages": {
+    "arrow-array": {
+      "version": "59.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "aws-sdk-s3": {
+      "version": "1.155.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "azure_core": {
+      "version": "0.21.0",
+      "source": "git+https://github.com/neondatabase/azure-sdk-for-rust.git?branch=neon#39ab8c6f3533c0350487a20b7c720478a4bade73"
+    },
+    "fjall": {
+      "version": "3.1.13",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "lsm-tree": {
+      "version": "3.1.10",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "mappings": {
+      "version": "0.7.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "pprof_util": {
+      "version": "0.7.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "redb": {
+      "version": "4.4.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "surrealkv": {
+      "version": "1.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "tokio": {
+      "version": "1.52.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "tokio-epoll-uring": {
+      "version": "0.1.0",
+      "source": "git+https://github.com/neondatabase/tokio-epoll-uring.git?branch=main#950499cdea5c5f51fdf1b4a9fb21c481b5ab082d"
+    },
+    "tokio-postgres": {
+      "version": "0.7.10",
+      "source": "git+https://github.com/neondatabase/rust-postgres.git?branch=neon#816e7674e488d5c3455f66dfb9043c6c169b8482"
+    }
+  },
+  "durability": {
+    "redb": "Immediate",
+    "fjall": "transaction SyncAll",
+    "home": "one append-only frame and sync_all per transaction",
+    "duckdb": "normal durable on-disk COMMIT",
+    "surrealkv": "transaction Immediate; explicit Graph history",
+    "surrealkv-native": "transaction Immediate; set_at and soft tombstones at Graph revision; native get_at and history iterator; unlimited retention; shared Graph history also retained",
+    "neon-layers": "native DeltaLayerWriter finish sync_all; atomic committed-layer rename and directory sync; catalog publication after both syncs"
+  },
+  "neon_io": "Native StdFs with buffered filesystem I/O and sync enabled. Native auto detection reports tokio-epoll-uring creation fails with EPERM on this host. Default configured page cache and descriptor count; one owner runtime, native page cache global.",
+  "neon_layout": "One actual delta layer per transaction, including initial revision1. Stable numeric IDs map variable original keys to native 18-byte keys. New mappings and changed payloads share the same layer. RAM stores key-to-ID catalog only; decoded Arrow property cache is shared native Graph behavior.",
+  "neon_limits": "No production Safekeeper WAL/quorum, remote storage, background compaction, or native timeline branching. Forced per-transaction durable layer flush differs from production WAL-backed batching.",
+  "history": "At each original captured Graph cut, replay actual Causal index/detect with original inputs after writes and after reopen, backward then forward. Exact staged Arrow commands, clear sequences, call key vectors, frontier and unchanged head/rollback are asserted at runtime. Exact key bytes and Arrow values are not serialized to this timing report.",
+  "historical_cuts": [
+    24,
+    27,
+    36,
+    44,
+    48,
+    62,
+    71,
+    85
+  ],
+  "history_after_reopen": "Property hydration and eight existing finite historical inspect checks precede these package replays. This is restart/history proof and warm read timing, not a cold-cache test.",
+  "measured_passes": 1,
+  "rounds_per_engine": 14,
+  "engines": [
+    "duckdb",
+    "redb",
+    "neon-layers",
+    "fjall",
+    "surrealkv-native",
+    "home",
+    "surrealkv"
+  ],
+  "orders": [
+    [
+      "duckdb",
+      "redb",
+      "neon-layers",
+      "fjall",
+      "surrealkv-native",
+      "home",
+      "surrealkv"
+    ],
+    [
+      "surrealkv",
+      "home",
+      "surrealkv-native",
+      "fjall",
+      "neon-layers",
+      "redb",
+      "duckdb"
+    ],
+    [
+      "redb",
+      "fjall",
+      "duckdb",
+      "home",
+      "neon-layers",
+      "surrealkv",
+      "surrealkv-native"
+    ],
+    [
+      "surrealkv-native",
+      "surrealkv",
+      "neon-layers",
+      "home",
+      "duckdb",
+      "fjall",
+      "redb"
+    ],
+    [
+      "fjall",
+      "home",
+      "redb",
+      "surrealkv",
+      "duckdb",
+      "surrealkv-native",
+      "neon-layers"
+    ],
+    [
+      "neon-layers",
+      "surrealkv-native",
+      "duckdb",
+      "surrealkv",
+      "redb",
+      "home",
+      "fjall"
+    ],
+    [
+      "home",
+      "surrealkv",
+      "fjall",
+      "surrealkv-native",
+      "redb",
+      "neon-layers",
+      "duckdb"
+    ],
+    [
+      "duckdb",
+      "neon-layers",
+      "redb",
+      "surrealkv-native",
+      "fjall",
+      "surrealkv",
+      "home"
+    ],
+    [
+      "surrealkv",
+      "surrealkv-native",
+      "home",
+      "neon-layers",
+      "fjall",
+      "duckdb",
+      "redb"
+    ],
+    [
+      "redb",
+      "duckdb",
+      "fjall",
+      "neon-layers",
+      "home",
+      "surrealkv-native",
+      "surrealkv"
+    ],
+    [
+      "surrealkv-native",
+      "neon-layers",
+      "surrealkv",
+      "duckdb",
+      "home",
+      "redb",
+      "fjall"
+    ],
+    [
+      "fjall",
+      "redb",
+      "home",
+      "duckdb",
+      "surrealkv",
+      "neon-layers",
+      "surrealkv-native"
+    ],
+    [
+      "neon-layers",
+      "duckdb",
+      "surrealkv-native",
+      "redb",
+      "surrealkv",
+      "fjall",
+      "home"
+    ],
+    [
+      "home",
+      "fjall",
+      "surrealkv",
+      "redb",
+      "surrealkv-native",
+      "duckdb",
+      "neon-layers"
+    ]
+  ],
+  "counts": {
+    "runs": 98,
+    "primary_cycles": 784,
+    "history_evaluations": 3136,
+    "primary_per_run": 8,
+    "history_per_run": 32,
+    "neighbors_per_primary_run": 27,
+    "presence_per_primary_run": 15,
+    "additions_per_run": 194,
+    "closures_per_run": 8
+  },
+  "build_command": "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 POSTGRES_INSTALL_DIR=$PWD/neon/pg_install POC_SOURCE_REVISION=3b6a3c51d cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+  "unit_command": "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 POSTGRES_INSTALL_DIR=$PWD/neon/pg_install cargo test --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+  "unit_result": "All eight focused release tests pass at the measured Rust source. No relevant Rust edit follows that test run.",
+  "normal_root_qualification": "Seven focused root example tests pass before the final removal of an unused Surreal write forwarding method. The final isolated eight-test run covers those same test bodies and the changed write_at calls.",
+  "run_command": "rtk proxy target/release/storage_poc /tmp/araphor-versioned-poc-20261105/release.json versioned",
+  "pre_run_compilers": "Host process check immediately before measurement returns zero cargo, rustc, or cc1plus processes; retained in pre-run-processes.json.",
+  "duckdb_archive_sha256": "121c752b58ae133fe0e1627a6c7d3559e185d04fd0a9a51a9d73a9885429b1eb",
+  "duckdb_archive_provenance": "../causal-2026-11-05/cpp-release-provenance.json",
+  "override_config": "[target.x86_64-unknown-linux-gnu.duckdb]\nrustc-link-lib = [\"static=duckdb\", \"stdc++\"]\nrustc-link-search = [\"native=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"]\nrustc-env = { OUT_DIR = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\" }\ninclude = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/src/include\"\nlib_dir = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"\n",
+  "build_compatibility": [
+    "Neon PostgreSQL14\u201317 header-only setup; no PostgreSQL server is built or run.",
+    "SchedulingResult visibility matches its existing crate-visible trait for the current compiler.",
+    "Isolated mappings dependency pinned to 0.7.0, as in Neon upstream lock; 0.7.2 gives incompatible profiling Mapping types.",
+    "Isolated ABI generator required platform metadata dependency downloads. No ABI validation is disabled."
+  ],
+  "qualification": "All measured engines pass original Graph/member/finding checks, six-evidence/four-stream/two-node assertions, metadata, retained history, rollback, explicit close/reopen and exact historical package replay assertions.",
+  "limits": [
+    "Small actual package fixture with resolved inputs; no native DataFusion source queries, Control intake, Data authority, or notifications.",
+    "No production Neon performance claim; the measured Neon layer adapter has per-transaction layer flush and synchronous KV-to-async read bridging.",
+    "Native Surreal history is additional to shared explicit Graph revision keys; no specialized native-only Graph layout is measured.",
+    "No power-loss, steady compaction, large Graph, branch creation, retention deletion, or memory-pressure qualification.",
+    "Full workspace CI does not run, as the user requests."
+  ],
+  "run_completed_utc": "2026-11-06T04:55:47.660811+00:00",
+  "run_completed_toronto": "2026-11-05T23:55:47.660811-05:00"
+}

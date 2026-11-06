@@ -473,7 +473,7 @@ target remain **Not done**.
 The user requests a benchmark with the cloned Neon crates and Graph revision
 history for all compared engines. The implementer and reviewer agree on the
 bounded adapter and historical package replay. Direction is **Done**.
-Build and focused runtime proof are **Done**. Measured results are **Not done**.
+Build, focused runtime proof, and the bounded measured comparison are **Done**.
 
 Use the real Neon delta-layer writer, disk index, and blob reader. Name this
 candidate `neon-layers`. Include each durable layer flush and directory sync
@@ -493,3 +493,36 @@ historical range API.
 The [implementation route](../../crates/araphor-graph/examples/storage_poc/README.md#neon-layers-and-graph-revision-benchmark)
 records owners, native calls, lifecycle, and qualification limits. No
 production storage or subscription owner changes.
+
+
+### Retained comparison result
+
+The measured source is `3b6a3c51d`. All 98 runs, 784 primary package cycles,
+and 3,136 historical package evaluations pass. All eight focused release
+tests pass. Every engine receives the same eight original commits, inputs,
+Graph deltas, findings, and historical cuts. Historical evaluations run after
+later writes and after reopen in both directions. Exact staged Arrow values,
+clear sequences, traversal keys, and frontiers are compared at runtime.
+
+Median eight-cycle times are 24.30 milliseconds for Fjall and 76.25 for the
+Neon layer adapter. The 16 historical evaluations after reopen take 23.94
+and 116.67 milliseconds. The corresponding paired costs are 3.13 and 4.86
+times Fjall. The adapter's Graph traversal path dominates its extra cost.
+The adapter flushes each transaction to a durable native layer. This result
+does not measure production Neon WAL batching or quorum performance.
+
+SurrealKV application history takes 23.90 milliseconds for eight cycles and
+28.75 for 16 historical evaluations after reopen. Native history takes 30.08
+and 43.50 milliseconds. Both preserve the Graph revision contract. The native
+variant retains the shared explicit Graph history as well as native versions.
+This result does not test a specialized native-only Graph layout. redb has
+lower historical read totals than Fjall; Fjall has lower write totals.
+
+The [reviewed report and evidence](../../crates/araphor-graph/examples/storage_poc/README.md#versioned-graph-result-2026-11-05)
+include every compared engine, raw samples, resolved lock, source and patch
+identity, exact commands, and qualification limits. Independent review
+confirms counts, engine order, Graph cuts, timing sums, and paired ratios.
+The bounded benchmark is **Done**. Production replacement, large retained
+history, steady compaction, native branches, power-loss recovery, complete
+DataFusion execution, notification delivery, and the complete incident
+latency target remain **Not done**.

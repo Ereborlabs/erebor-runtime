@@ -584,7 +584,7 @@ outside this result.
 
 Implementation and reviewer direction: **Done**.
 Build and focused runtime qualification: **Done**.
-Measured comparison: **Not done**.
+Measured comparison: **Done**. The retained result is below.
 
 The user requests the cloned Neon crates and Graph revision reads for all
 engines. The benchmark keeps the same eight Causal package commits. It adds
@@ -696,3 +696,80 @@ versions for this candidate build.
 After-reopen package reads run after property-cache restore and finite
 historical verification reads. These reads prove retained Graph history
 after restart. They do not measure cold-cache traversal.
+
+
+## Versioned Graph result: 2026-11-05
+
+The bounded Neon layer comparison and Graph revision benchmark are **Done**.
+The measured application source is `3b6a3c51d`. The cloned Neon source is
+`fa504217c61bbcaf5c512d75830564541f917f8f` with the retained benchmark patch.
+The [environment record](results/versioned-2026-11-05/environment.json)
+records the exact source, resolved dependency lock, patch hashes, commands,
+durability, filesystem, and limits. The host process check returns no active
+compiler immediately before this run. The host remains shared.
+
+All values below are median round totals in milliseconds across 14 rounds.
+The normal scenario contains eight package cycles and durable commits.
+Each historical stage contains 16 package evaluations: the eight original
+captured cuts backward and forward. Historical evaluations stage commands
+for comparison and do not commit. Reopen time is separate from these totals.
+
+| Engine | Eight normal cycles | Eight writes | Historical 16 after writes | Historical 16 after reopen |
+| --- | ---: | ---: | ---: | ---: |
+| Current GraphStore on DuckDB | 350.67 | 332.64 | 35.98 | 34.53 |
+| Native Graph on redb | 25.75 | 14.21 | 23.01 | 21.90 |
+| Native Graph on Fjall | 24.30 | 12.02 | 24.26 | 23.94 |
+| Native Graph on local append-only store | 21.84 | 10.94 | 21.13 | 20.51 |
+| Native Graph on SurrealKV, application history | 23.90 | 12.73 | 22.92 | 28.75 |
+| Native Graph on SurrealKV, native history | 30.08 | 13.36 | 32.99 | 43.50 |
+| Native Graph on Neon layers | 76.25 | 21.61 | 117.29 | 116.67 |
+
+The Neon layer adapter has a median paired complete-scenario cost of 3.13
+times Fjall. Its historical package replay after reopen costs 4.86 times
+Fjall in the median paired round. Its 27 normal neighbor reads take 43.28
+milliseconds per round, compared with 2.67 for Fjall. This traversal cost
+includes the key catalog, search through eligible layers, runtime bridge,
+and actual native disk-index and blob reads. This result applies to this
+adapter. Production Neon WAL commits and batched layer flushes are outside
+the result.
+
+Native SurrealKV history passes the same Graph revision contract. In this
+shared Graph layout, its median paired complete-scenario cost is 1.26 times
+the application-history variant. Historical replay after reopen costs 1.52
+times that variant. The native variant retains explicit Graph history as
+well as engine history. Native range reconstruction uses a timestamp-filtered
+history iterator. This result does not compare a specialized Graph layout
+that uses only native temporal records.
+
+redb has lower historical replay totals than Fjall in 13 of 14 paired rounds
+after writes and in all 14 after reopen. Fjall has lower write totals than
+redb in all 14 paired rounds. The local
+append-only prototype is fast on this small fixture, but it has no checkpoint,
+compaction, or reclamation. These results do not establish one engine as the
+fastest for every workload.
+
+All 98 runs pass. The [raw report](results/versioned-2026-11-05/release.json)
+contains 784 primary cycles and 3,136 historical evaluations. Every primary
+run adds 194 versions, closes eight, and retains 186 live contributions.
+It performs 27 neighbor reads and 15 presence probes. The actual package
+findings still contain six evidence records from four streams and two nodes.
+Historical replay checks exact staged Arrow commands, clear sequences,
+traversal key vectors, returned counts, and frontiers at runtime. The timing
+JSON retains counts and frontiers; it does not retain exact key bytes or
+Arrow values. Metadata, retained member history, rollback, close, and reopen
+checks also pass. All eight focused release tests pass.
+
+The [summary](results/versioned-2026-11-05/summary.json) reproduces with
+`summarize.py`. Independent review confirms engine order balance, sample
+counts, captured cuts, timing sums, summary reproduction, and paired ratios.
+Formatting, source identity, patch identity, and local source-link checks
+pass. The [build log](results/versioned-2026-11-05/build.log) retains existing
+Neon and production causal warnings.
+
+After-reopen replay includes warm native caches and follows finite history
+verification. This result does not qualify cold-cache latency, power loss,
+steady compaction, large Graphs, memory pressure, native branching, or
+retention deletion. No production storage owner changes. Full workspace CI
+and the complete incident test do not run. Complete DataFusion source
+execution, notification latency, and the complete 100-fold target remain
+**Not done**.
