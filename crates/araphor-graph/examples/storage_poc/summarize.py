@@ -38,6 +38,19 @@ def summarize(report):
         }
         if "scenario_s" in runs[0]:
             entry["scenario_ms"] = stats([r["scenario_s"] * 1000 for r in runs])
+            for name in ("capture_s", "index_s", "resolve_s", "detect_s", "normalize_s"):
+                entry[name.removesuffix("_s") + "_ms"] = stats([
+                    sum(sample[name] for sample in samples
+                        if sample["round"] == run["round"]) * 1000
+                    for run in runs
+                ])
+            for name, operation in (("traversal_ms", "neighbors"), ("presence_ms", "presence")):
+                entry[name] = stats([
+                    sum(call["elapsed_s"] for sample in samples
+                        if sample["round"] == run["round"]
+                        for call in sample["calls"] if call["operation"] == operation) * 1000
+                    for run in runs
+                ])
         for name in ("file_bytes", "allocated_bytes", "files"):
             entry[name] = stats([r[name] for r in runs])
         entry["per_commit_ms"] = {

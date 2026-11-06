@@ -1,0 +1,80 @@
+[
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "optimization": [
+      "-O3"
+    ],
+    "defines": [
+      "DUCKDB_EXTENSION_CORE_FUNCTIONS_LINKED=1",
+      "DUCKDB_EXTENSION_AUTOINSTALL_DEFAULT=1",
+      "DUCKDB_EXTENSION_AUTOLOAD_DEFAULT=1",
+      "NDEBUG"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/ub_src_common.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "optimization": [
+      "-O3"
+    ],
+    "defines": [
+      "DUCKDB_EXTENSION_CORE_FUNCTIONS_LINKED=1",
+      "DUCKDB_EXTENSION_AUTOINSTALL_DEFAULT=1",
+      "DUCKDB_EXTENSION_AUTOLOAD_DEFAULT=1",
+      "NDEBUG"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/ub_src_common_sort.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "optimization": [
+      "-O3"
+    ],
+    "defines": [
+      "DUCKDB_EXTENSION_CORE_FUNCTIONS_LINKED=1",
+      "DUCKDB_EXTENSION_AUTOINSTALL_DEFAULT=1",
+      "DUCKDB_EXTENSION_AUTOLOAD_DEFAULT=1",
+      "NDEBUG"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/ub_src_common_types.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "optimization": [
+      "-O3"
+    ],
+    "defines": [
+      "DUCKDB_EXTENSION_CORE_FUNCTIONS_LINKED=1",
+      "DUCKDB_EXTENSION_AUTOINSTALL_DEFAULT=1",
+      "DUCKDB_EXTENSION_AUTOLOAD_DEFAULT=1",
+      "NDEBUG"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/ub_src_common_types_row.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "optimization": [
+      "-O3"
+    ],
+    "defines": [
+      "DUCKDB_EXTENSION_CORE_FUNCTIONS_LINKED=1",
+      "DUCKDB_EXTENSION_AUTOINSTALL_DEFAULT=1",
+      "DUCKDB_EXTENSION_AUTOLOAD_DEFAULT=1",
+      "NDEBUG"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/ub_src_common_types_variant.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "optimization": [
+      "-O3"
+    ],
+    "defines": [
+      "DUCKDB_EXTENSION_CORE_FUNCTIONS_LINKED=1",
+      "DUCKDB_EXTENSION_AUTOINSTALL_DEFAULT=1",
+      "DUCKDB_EXTENSION_AUTOLOAD_DEFAULT=1",
+      "NDEBUG"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/ub_src_execution.cpp"
+  }
+]

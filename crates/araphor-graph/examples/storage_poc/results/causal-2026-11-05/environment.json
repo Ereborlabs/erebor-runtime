@@ -1,0 +1,37 @@
+{
+  "date": "2026-11-05",
+  "source": "65d655ec8",
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics",
+  "logical_cpus": 16,
+  "kernel": "6.8.0-147-generic",
+  "filesystem": "ext4 on /dev/nvme0n1p7; /tmp uses the same device",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "engines": {
+    "redb": "4.4.0",
+    "fjall": "3.1.13",
+    "lsm-tree": "3.1.10",
+    "duckdb-binding": "1.10505.0",
+    "arrow": "59.2.0"
+  },
+  "rust_profile": "cargo release; default opt-level=3; debug_assertions=false",
+  "duckdb_cpp": {
+    "compiler": "GNU C++ 13",
+    "optimization": "-O3 and NDEBUG observed in compiler arguments",
+    "archive": "target/release/build/libduckdb-sys-e073672aa6bffaa9/out/libduckdb.a",
+    "archive_bytes": 118952896,
+    "build": "normal bundled build; no cached debug archive override"
+  },
+  "build_command": "rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 POC_SOURCE_REVISION=65d655ec8 cargo build --release -p araphor-graph --example storage_poc --features store --message-format=short",
+  "run_command": "rtk proxy target/release/examples/storage_poc /tmp/araphor-storage-poc-20261105/causal-release.json",
+  "debug_smoke": "18 engine runs,144 package cycles; final Rust source65d655ec8 built before commit with existing debug DuckDB archive",
+  "excluded_run": "release-rust-with-debug-duckdb.json is a mixed-profile diagnostic; exclude it from optimized comparisons",
+  "scope": "actual Causal package iterative traversal and detector through SDK InvocationHost; resolved fixture inputs",
+  "pre_run_background": "No C++ compiler or IDE Cargo check active at process check before the run. Shared host; no CPU, IO, or cache isolation.",
+  "measured_passes": 1,
+  "rounds_per_engine": 6,
+  "scenario_steps_per_round": 8,
+  "neighbor_rounds_per_round": 27,
+  "correctness": "All18 optimized runs passed exact cross-engine traversal keys/row counts/frontiers/finding Arrow values, original six-evidence/two-node/four-stream assertions,194insertions/8closures, history after later writes, rollback, and reopen.",
+  "interpretation": "Fjall/redb whole-scenario timing difference does not establish an overall winner. Both native layouts reduce commit/view-capture costs versus current GraphStore; current in-memory member cache traverses faster in this fixture.",
+  "disk_available_bytes_after_run": 4394041344
+}

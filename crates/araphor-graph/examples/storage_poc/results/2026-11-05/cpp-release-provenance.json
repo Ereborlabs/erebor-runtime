@@ -1,0 +1,86 @@
+[
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "options": [
+      "-D_GNU_SOURCE",
+      "-D",
+      "-D",
+      "-D",
+      "-D",
+      "-D_FORTIFY_SOURCE=3",
+      "-O3",
+      "-std=c++11"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-205d229a6f0dba70/out/duckdb/ub_src_execution_operator_persistent.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "options": [
+      "-D_GNU_SOURCE",
+      "-D",
+      "-D",
+      "-D",
+      "-D",
+      "-D_FORTIFY_SOURCE=3",
+      "-O3",
+      "-std=c++11"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-205d229a6f0dba70/out/duckdb/ub_src_execution_physical_plan.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "options": [
+      "-D_GNU_SOURCE",
+      "-D",
+      "-D",
+      "-D",
+      "-D",
+      "-D_FORTIFY_SOURCE=3",
+      "-O3",
+      "-std=c++11"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-205d229a6f0dba70/out/duckdb/ub_src_function.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "options": [
+      "-D_GNU_SOURCE",
+      "-D",
+      "-D",
+      "-D",
+      "-D",
+      "-D_FORTIFY_SOURCE=3",
+      "-O3",
+      "-std=c++11"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-205d229a6f0dba70/out/duckdb/ub_src_function_aggregate_distributive.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "options": [
+      "-D_GNU_SOURCE",
+      "-D",
+      "-D",
+      "-D",
+      "-D",
+      "-D_FORTIFY_SOURCE=3",
+      "-O3",
+      "-std=c++11"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-205d229a6f0dba70/out/duckdb/ub_src_function_cast.cpp"
+  },
+  {
+    "compiler": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus",
+    "options": [
+      "-D_GNU_SOURCE",
+      "-D",
+      "-D",
+      "-D",
+      "-D",
+      "-D_FORTIFY_SOURCE=3",
+      "-O3",
+      "-std=c++11"
+    ],
+    "unit": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-205d229a6f0dba70/out/duckdb/ub_src_function_cast_variant.cpp"
+  }
+]

@@ -1,0 +1,35 @@
+{
+  "date": "2026-11-05",
+  "source": "dcf84a041",
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics",
+  "logical_cpus": 16,
+  "kernel": "6.8.0-147-generic",
+  "filesystem": "ext4 on /dev/nvme0n1p7; /tmp uses the same device",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "engines": {
+    "redb": "4.4.0",
+    "fjall": "3.1.13",
+    "lsm-tree": "3.1.10",
+    "duckdb-binding": "1.10505.0",
+    "arrow": "59.2.0"
+  },
+  "rust_profile": "cargo release; default opt-level=3; debug_assertions=false",
+  "duckdb_cpp": {
+    "compiler": "GNU C++ 13",
+    "optimization": "-O3 observed in compiler arguments",
+    "archive": "target/release/build/libduckdb-sys-205d229a6f0dba70/out/libduckdb.a",
+    "archive_bytes": 118952896,
+    "build": "normal bundled build; no cached debug archive override"
+  },
+  "build_command": "rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 POC_SOURCE_REVISION=dcf84a041 cargo build --release -p araphor-graph --example storage_poc --features store --message-format=short",
+  "run_command": "rtk proxy target/release/examples/storage_poc /tmp/araphor-storage-poc-20261105/release.json",
+  "debug_smoke": "same Rust source before commit; Rust debug plus existing DuckDB C++ -O0 archive",
+  "excluded_run": "release-rust-with-debug-duckdb.json is a mixed-profile diagnostic; exclude it from optimized comparisons",
+  "passes": {
+    "release.json": "First fully optimized pass. C++ compilation had stopped; a residual IDE cargo check was observed after the run. Durable sync times varied.",
+    "release-repeat.json": "One identical repeat after observing zero Rust/C++ compilers and zero IDE cargo checks. Host remains shared; no process isolation.",
+    "debug.json": "Debug smoke and supplementary debug timings, same committed Rust source.",
+    "excluded": "Mixed-profile diagnostic remains under /tmp and is not included in these comparison results."
+  },
+  "correctness": "All 36 optimized engine runs and 288 measured commits completed with row, Arrow, state, progress-marker, CDC reference, head, parent/capture, rollback and reopen assertions."
+}

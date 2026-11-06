@@ -321,3 +321,56 @@ the SQL storage request work as well as replace the engine. No engine gain,
 
 Review evidence: `/tmp/araphor-log-graph-storage-review-20261105.json` and
 `/tmp/araphor-log-graph-layout-review-20261105.json`.
+
+## Historical storage screen: 2026-11-05
+
+The user requests a separate small redb and Fjall comparison. This bounded
+generic storage screen is **Done**. The user then requests actual package
+traversal scenarios. That separate qualification is recorded below.
+Production replacement and complete notification
+latency qualification remain **Not done**. The earlier source review above
+precedes this experiment.
+
+The [screen results](../../crates/araphor-graph/examples/storage_poc/results/2026-11-05/environment.json)
+at source `dcf84a041` use the incident trace's eight Graph write sizes and production property
+schemas. They compare the existing GraphStore with one native Graph
+algorithm on redb and Fjall. State and progress records are synthetic. Raw
+capture, full Data validation, packages, DataFusion execution, and notification
+creation are outside the measurement.
+
+Two fully optimized passes each use six engine orders. All historical-view,
+value, metadata, rollback, and reopen checks pass. Paired median write gains
+over GraphStore are 7.90 and 12.71 times for redb, and 9.26 and 14.54 times
+for Fjall. Fjall has the lower write total in all 12 paired rounds. redb has
+the lower read total in 11 rounds. The record retains both passes and their
+host variation. This result includes the native Graph owner rewrite. It
+does not isolate the physical engine gain over DuckDB or prove the complete
+incident target.
+
+## Actual package Graph scenario result: 2026-11-05
+
+The user requires the package's actual dependent traversal and changes.
+This separate PoC qualification is **Done** at Rust source `65d655ec8`.
+The PoC runs the existing Causal index and detect exports through SDK input
+and output checks. It supplies the incident's resolved source Arrow and
+feeds the actual returned frontier into detection. It adds no SQL operator
+or production Graph implementation.
+
+The eight cycles perform 27 dependent neighbor reads in both directions,
+owner clears, actual node/edge/finding staging, 194 additions, and eight
+closures. All 18 optimized engine runs pass exact runtime traversal-key,
+frontier, finding-value, metadata, history, rollback, and reopen checks.
+The [guide and retained results](../../crates/araphor-graph/examples/storage_poc/README.md#recorded-scenario-result-2026-11-05)
+give the source reading route, commands, host limits, and raw samples.
+
+Median complete eight-cycle totals are 448.29 milliseconds for current
+GraphStore, 35.92 for native Graph on redb, and 35.39 for native Graph on
+Fjall. Median paired gains are 12.54 and 12.73 times. The 27 neighbor reads
+take 2.32, 2.87, and 3.88 milliseconds. Current GraphStore's member cache
+therefore has the lower traversal time in this fixture. The main gain comes
+from mutation and view capture. The close redb/Fjall complete-scenario totals
+do not establish a meaningful overall engine winner.
+
+Production replacement, native DataFusion input execution, complete Data
+authority and evidence checks, and notification creation remain outside
+this comparison. The complete incident timing target remains **Not done**.
