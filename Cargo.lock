@@ -373,6 +373,8 @@ dependencies = [
 name = "araphor-graph"
 version = "0.1.0"
 dependencies = [
+ "araphor-analysis-builtins",
+ "araphor-analysis-sdk",
  "araphor-analysis-types",
  "arrow-array",
  "arrow-buffer",
@@ -381,12 +383,15 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "duckdb",
+ "erebor-interceptor-abi",
  "erebor-runtime-error",
  "erebor-telemetry",
  "fjall",
  "redb",
  "rmp-serde",
  "serde",
+ "serde_arrow",
+ "serde_bytes",
  "serde_json",
  "snafu",
  "tempfile",

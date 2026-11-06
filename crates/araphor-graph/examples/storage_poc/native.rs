@@ -9,7 +9,7 @@ use arrow_ipc::{reader::StreamReader, writer::StreamWriter};
 
 use super::fixture::{Fixture, Member, Row, Step};
 use super::kv::{self, Read, Write};
-use super::{Change, Readout, Result, Timing};
+use super::{Change, GraphRead, Readout, Result, Timing};
 
 pub struct Native {
     db: kv::Database,
@@ -63,10 +63,8 @@ impl Native {
         Ok(Self { db, properties })
     }
 
-    pub fn apply(&mut self, fixture: &Fixture, step: &Step, commit: bool) -> Result<Timing> {
+    pub fn apply(&mut self, _fixture: &Fixture, step: &Step, commit: bool) -> Result<Timing> {
         let started = Instant::now();
-        let journals = fixture.journals(step)?;
-        assert_eq!(journals.len(), 2);
         let prepare_s = started.elapsed().as_secs_f64();
         let (prepared, work, commit_s) = self.db.write(commit, |tx| Self::stage(tx, step))?;
         let mut sample = Timing {
@@ -80,7 +78,6 @@ impl Native {
             ..Default::default()
         };
         assert_eq!(sample.added, step.added());
-        assert_eq!(sample.closed, step.closed);
         if commit {
             self.properties.extend(prepared.properties);
         }
@@ -99,6 +96,21 @@ impl Native {
             encoded: 0,
         };
         let mut changes = Vec::new();
+        for (writer, owner) in &step.clears {
+            let prefix = if let Some(owner) = owner {
+                let Some(id) = tx.get(&Key::dictionary(0, *writer, owner))? else {
+                    continue;
+                };
+                Key::new(b'A', &[*writer, Key::number(&id)?])
+            } else {
+                Key::new(b'A', &[*writer])
+            };
+            for (active, member) in tx.prefix(&prefix)? {
+                changes.push(Self::close(tx, &member, step.revision)?);
+                tx.remove(&active)?;
+                result.closed += 1;
+            }
+        }
         for group in &step.groups {
             let chunk = Self::allocate(&mut next);
             let batch = group.rows[0].properties.as_ref();
@@ -116,15 +128,9 @@ impl Native {
                 let entity = Self::intern(tx, &mut next, 1, row.relation, &row.key)?;
                 let open = Key::new(b'A', &[row.writer, owner, row.relation, entity]);
                 let old = tx.get(&open)?;
-                assert_eq!(old.is_some(), step.is_update(row));
                 if let Some(oldkey) = old {
-                    let mut old: Member =
-                        rmp_serde::from_slice(&tx.get(&oldkey)?.ok_or("old member absent")?)?;
-                    assert_eq!(old.closed, None);
-                    old.closed = Some(step.revision);
-                    tx.put(&oldkey, &rmp_serde::to_vec(&old)?)?;
+                    changes.push(Self::close(tx, &oldkey, step.revision)?);
                     tx.remove(&open)?;
-                    changes.push(Change::new(row, old.opened, false));
                     result.closed += 1;
                 }
                 let endpoints = if let Some([from, to, label]) = &row.endpoints {
@@ -243,6 +249,46 @@ impl Native {
         Ok(result)
     }
 
+    fn close(tx: &mut dyn Write, key: &[u8], revision: u64) -> Result<Change> {
+        let mut member: Member = rmp_serde::from_slice(&tx.get(key)?.ok_or("member absent")?)?;
+        assert!(member.closed.is_none());
+        member.closed = Some(revision);
+        tx.put(key, &rmp_serde::to_vec(&member)?)?;
+        Ok(Change {
+            writer: member.writer,
+            relation: member.relation,
+            owner: tx
+                .get(&Key::new(b'V', &[member.owner]))?
+                .ok_or("owner absent")?,
+            key: tx
+                .get(&Key::new(b'V', &[member.entity]))?
+                .ok_or("entity absent")?,
+            opened: member.opened,
+            added: false,
+        })
+    }
+
+    pub fn capture<T>(
+        &self,
+        fixture: &Fixture,
+        revision: u64,
+        action: impl FnOnce(&dyn GraphRead, f64) -> Result<T>,
+    ) -> Result<T> {
+        let started = Instant::now();
+        self.db.read(|tx| {
+            for writer in [1, 2] {
+                let _ = tx.floor(&Key::new(b'H', &[writer]), revision)?;
+            }
+            let view = View {
+                tx,
+                properties: &self.properties,
+                fixture,
+                revision,
+            };
+            action(&view, started.elapsed().as_secs_f64())
+        })
+    }
+
     fn allocate(next: &mut u64) -> u64 {
         let value = *next;
         *next += 1;
@@ -266,7 +312,7 @@ impl Native {
         Ok(id)
     }
 
-    pub fn inspect(&self, fixture: &Fixture, revision: u64, all: bool) -> Result<Readout> {
+    pub fn inspect(&self, fixture: &Fixture, revision: u64, _all: bool) -> Result<Readout> {
         let started = Instant::now();
         self.db.read(|tx| {
             for writer in [1, 2] {
@@ -283,29 +329,8 @@ impl Native {
             let capture_s = started.elapsed().as_secs_f64();
             let started = Instant::now();
             let mut rows = Vec::new();
-            if all {
-                for (_, key) in tx.prefix(b"R")? {
-                    Self::select(tx, &self.properties, &key, revision, &mut rows)?;
-                }
-            } else {
-                for relation in [2, 3] {
-                    let mut seen = BTreeSet::new();
-                    for probe in &fixture.probes {
-                        let Some(id) = tx.get(&Key::dictionary(1, 2, probe))? else {
-                            continue;
-                        };
-                        let id = Key::number(&id)?;
-                        let kind = if relation == 2 { b'K' } else { b'O' };
-                        for (_, key) in tx.prefix(&Key::new(kind, &[relation, id]))? {
-                            if seen.insert(key.clone()) {
-                                Self::select(tx, &self.properties, &key, revision, &mut rows)?;
-                            }
-                        }
-                    }
-                }
-                for (_, key) in tx.prefix(&Key::new(b'R', &[1, 2]))? {
-                    Self::select(tx, &self.properties, &key, revision, &mut rows)?;
-                }
+            for (_, key) in tx.prefix(b"R")? {
+                Self::select(tx, &self.properties, &key, revision, &mut rows)?;
             }
             let read_s = started.elapsed().as_secs_f64();
             let started = Instant::now();
@@ -391,5 +416,94 @@ impl Native {
             opened: m.opened,
         });
         Ok(())
+    }
+}
+
+struct View<'a> {
+    tx: &'a dyn Read,
+    properties: &'a BTreeMap<u64, Arc<RecordBatch>>,
+    fixture: &'a Fixture,
+    revision: u64,
+}
+impl GraphRead for View<'_> {
+    fn query(
+        &self,
+        relation: u64,
+        read: araphor_graph::Read,
+        keys: &RecordBatch,
+    ) -> Result<Vec<RecordBatch>> {
+        use araphor_graph::Read as Operation;
+        let mut rows = Vec::new();
+        let mut seen = BTreeSet::new();
+        if let Operation::Owned(writer) = read {
+            for (_, key) in self.tx.prefix(&Key::new(b'R', &[relation, writer]))? {
+                Native::select(self.tx, self.properties, &key, self.revision, &mut rows)?;
+            }
+        } else {
+            let input = super::binary(keys, "key")?;
+            for key in input.iter().flatten() {
+                let scope = if matches!(read, Operation::Nodes) {
+                    relation
+                } else {
+                    2
+                };
+                let Some(id) = self.tx.get(&Key::dictionary(1, scope, key))? else {
+                    continue;
+                };
+                let id = Key::number(&id)?;
+                let kinds: &[u8] = match read {
+                    Operation::Nodes => b"K",
+                    Operation::Outgoing => b"O",
+                    Operation::Incoming => b"I",
+                    Operation::Neighbors => b"OI",
+                    _ => unreachable!(),
+                };
+                for kind in kinds {
+                    for (_, key) in self.tx.prefix(&Key::new(*kind, &[relation, id]))? {
+                        if seen.insert(key.clone()) {
+                            Native::select(
+                                self.tx,
+                                self.properties,
+                                &key,
+                                self.revision,
+                                &mut rows,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+        let mut batches = super::batches_from_rows(rows, self.fixture)?;
+        if batches.is_empty() {
+            batches.push(RecordBatch::new_empty(Arc::new(
+                self.fixture.shapes[&relation].read_schema(),
+            )));
+        }
+        Ok(batches)
+    }
+    fn presence(&self, writer: u64, relation: u64, batch: &RecordBatch) -> Result<Vec<bool>> {
+        let owners = super::binary(batch, "owner")?;
+        let keys = super::binary(batch, "key")?;
+        let mut result = Vec::new();
+        for i in 0..batch.num_rows() {
+            let owner = self.tx.get(&Key::dictionary(0, writer, owners.value(i)))?;
+            let entity = self.tx.get(&Key::dictionary(1, relation, keys.value(i)))?;
+            let mut present = false;
+            if let (Some(owner), Some(entity)) = (owner, entity) {
+                let owner = Key::number(&owner)?;
+                let entity = Key::number(&entity)?;
+                for (_, key) in self
+                    .tx
+                    .prefix(&Key::new(b'K', &[relation, entity, writer, owner]))?
+                {
+                    let member: Member =
+                        rmp_serde::from_slice(&self.tx.get(&key)?.ok_or("member absent")?)?;
+                    present |= member.opened <= self.revision
+                        && member.closed.is_none_or(|r| r > self.revision);
+                }
+            }
+            result.push(present);
+        }
+        Ok(result)
     }
 }

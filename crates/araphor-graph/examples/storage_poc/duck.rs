@@ -8,7 +8,7 @@ use arrow_array::RecordBatch;
 use duckdb::{Connection, OptionalExt, params};
 
 use super::fixture::{Fixture, Step};
-use super::{Change, Readout, Result, Timing};
+use super::{Change, GraphRead, Readout, Result, Timing};
 
 pub struct Duck {
     connection: Connection,
@@ -54,7 +54,7 @@ impl Duck {
 
     pub fn apply(&mut self, fixture: &Fixture, step: &Step, commit: bool) -> Result<Timing> {
         let started = Instant::now();
-        let journals = fixture.journals(step)?;
+        let journals = &step.journals;
         let view = self.graph.read_view(
             &self.connection,
             1,
@@ -91,8 +91,6 @@ impl Duck {
         let (added, closed) = counts
             .values()
             .fold((0, 0), |(a, c), (x, y)| (a + *x as usize, c + *y as usize));
-        assert_eq!(added, step.added());
-        assert_eq!(closed, step.closed);
         {
             let mut appender = tx.appender("poc_state")?;
             for writer in [1, 2] {
@@ -156,6 +154,24 @@ impl Duck {
         })
     }
 
+    pub fn capture<T>(
+        &self,
+        fixture: &Fixture,
+        revision: u64,
+        action: impl FnOnce(&dyn GraphRead, f64) -> Result<T>,
+    ) -> Result<T> {
+        let started = Instant::now();
+        let view = self.graph.read_view(
+            &self.connection,
+            1,
+            revision,
+            &[1, 2, 3],
+            || Ok(()),
+            |_| Ok(()),
+        )?;
+        action(&View { view, fixture }, started.elapsed().as_secs_f64())
+    }
+
     pub fn verify_metadata(&self, fixture: &Fixture, revision: u64, current: u64) -> Result<()> {
         let head: u64 = self
             .connection
@@ -191,7 +207,7 @@ impl Duck {
         Ok(())
     }
 
-    pub fn inspect(&self, fixture: &Fixture, revision: u64, all: bool) -> Result<Readout> {
+    pub fn inspect(&self, fixture: &Fixture, revision: u64, _all: bool) -> Result<Readout> {
         let started = Instant::now();
         let view = self.graph.read_view(
             &self.connection,
@@ -220,41 +236,19 @@ impl Duck {
         let started = Instant::now();
         let mut rows = Vec::new();
         let mut batches = Vec::new();
-        if all {
-            for relation in [1, 2, 3] {
-                view.read(
-                    relation,
-                    &fixture.shapes[&relation],
-                    Read::Owned(if relation == 1 { 2 } else { 1 }),
-                    &RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty())),
-                    || Ok(()),
-                    |_| Ok(()),
-                    |batch, origins| {
-                        batches.push((relation, batch, origins));
-                        Ok(())
-                    },
-                )?;
-            }
-        } else {
-            let keys = fixture.keys()?;
-            for (relation, operation) in
-                [(2, Read::Nodes), (3, Read::Outgoing), (1, Read::Owned(2))]
-            {
-                let empty = RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty()));
-                let keys = if relation == 1 { &empty } else { &keys };
-                view.read(
-                    relation,
-                    &fixture.shapes[&relation],
-                    operation,
-                    keys,
-                    || Ok(()),
-                    |_| Ok(()),
-                    |batch, origins| {
-                        batches.push((relation, batch, origins));
-                        Ok(())
-                    },
-                )?;
-            }
+        for relation in [1, 2, 3] {
+            view.read(
+                relation,
+                &fixture.shapes[&relation],
+                Read::Owned(if relation == 1 { 2 } else { 1 }),
+                &RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty())),
+                || Ok(()),
+                |_| Ok(()),
+                |batch, origins| {
+                    batches.push((relation, batch, origins));
+                    Ok(())
+                },
+            )?;
         }
         for (relation, batch, origins) in batches {
             rows.extend(super::rows_from_batch(
@@ -284,5 +278,36 @@ impl Duck {
             read_s,
             cdc_s: started.elapsed().as_secs_f64(),
         })
+    }
+}
+
+struct View<'a> {
+    view: araphor_graph::GraphReadView,
+    fixture: &'a Fixture,
+}
+impl GraphRead for View<'_> {
+    fn query(&self, relation: u64, read: Read, keys: &RecordBatch) -> Result<Vec<RecordBatch>> {
+        let mut batches = Vec::new();
+        self.view.read(
+            relation,
+            &self.fixture.shapes[&relation],
+            read,
+            keys,
+            || Ok(()),
+            |_| Ok(()),
+            |batch, _| {
+                batches.push(batch);
+                Ok(())
+            },
+        )?;
+        if batches.is_empty() {
+            batches.push(RecordBatch::new_empty(Arc::new(
+                self.fixture.shapes[&relation].read_schema(),
+            )));
+        }
+        Ok(batches)
+    }
+    fn presence(&self, writer: u64, relation: u64, batch: &RecordBatch) -> Result<Vec<bool>> {
+        Ok(self.view.presence(writer, relation, batch, || Ok(()))?)
     }
 }

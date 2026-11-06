@@ -20,6 +20,8 @@ erebor-telemetry = { path = "../erebor-telemetry", optional = true }
 snafu.workspace = true
 
 [dev-dependencies]
+araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
+araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 araphor-analysis-types = { path = "../araphor-analysis-types" }
 arrow-buffer = "=59.2.0"
 arrow-ipc = "=59.2.0"
@@ -28,6 +30,9 @@ redb = "=4.4.0"
 rmp-serde.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_bytes = "=0.11.19"
+serde_arrow = { version = "=0.15.1", default-features = false, features = ["arrow-59"] }
+erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 tempfile = "3.23.0"
 
 [[example]]
