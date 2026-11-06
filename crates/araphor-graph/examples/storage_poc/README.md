@@ -166,10 +166,10 @@ tail bound. The older three-engine results below use six rounds.
   -> [Surreal::read](surreal.rs) captures one native read-only transaction.
   -> [Transaction](surreal.rs) uses native get, bounded prefix iteration, and reverse iteration for revision-floor reads.
 
-[Surreal::write](surreal.rs) starts one native read/write transaction.
+[Surreal::write_at](surreal.rs) starts one native read/write transaction.
   -> [Transaction](surreal.rs) reads its own writes and stages native set and delete calls.
-  -> [Surreal::write](surreal.rs) selects `Durability::Immediate` and waits for commit through the runtime.
-  -> [Surreal::write](surreal.rs) rolls back without commit when the caller aborts.
+  -> [Surreal::write_at](surreal.rs) selects `Durability::Immediate` and waits for commit through the runtime.
+  -> [Surreal::write_at](surreal.rs) rolls back without commit when the caller aborts.
 
 [Engine::close](main.rs) closes the candidate before drop and reopen.
   -> [Native::shutdown](native.rs) forwards close to the physical owner.
@@ -578,3 +578,121 @@ and power loss remain unqualified. No production Rust path changes. Full
 workspace CI does not run, as the user requests. Production DataFusion source
 queries, notification creation, and the complete 100-fold target remain
 outside this result.
+
+
+## Neon layers and Graph revision benchmark
+
+Implementation and reviewer direction: **Done**.
+Build and focused runtime qualification: **Done**.
+Measured comparison: **Not done**.
+
+The user requests the cloned Neon crates and Graph revision reads for all
+engines. The benchmark keeps the same eight Causal package commits. It adds
+read-only package evaluations at each original captured Graph cut after all
+writes and after reopen. Each stage visits the cuts backward, then forward.
+The benchmark compares exact staged Arrow commands, clear sequences,
+traversal keys, returned counts, and frontiers with the original evaluation.
+It checks that the current head remains 87 and aborted revision 88 is absent.
+
+[History::remember](history.rs) retains each original package evaluation.
+  -> [History::replay](history.rs) captures an earlier Graph cut.
+  -> [package::evaluate](package.rs) executes the unchanged package and resolved inputs.
+  -> [Reference::check](history.rs) compares staged values, calls, and frontier.
+  -> [Engine::verify_metadata](main.rs) checks the unchanged current commit.
+
+The versioned mode includes DuckDB, redb, Fjall, the local store, SurrealKV,
+and SurrealKV native history. The isolated Neon build adds `neon-layers`.
+Balanced engine orders put each engine in each position twice and each
+ordered predecessor pair twice. Each engine round has 32 historical package
+evaluations: eight cuts, two directions, and two lifecycle stages. These
+reads do not commit their staged commands. No workload event changes.
+
+[Surreal::open_versioned](surreal.rs) enables native history without a retention limit.
+  -> [Surreal::write_at](surreal.rs) stamps each set and soft tombstone with the Graph revision.
+  -> [Transaction::get](surreal.rs) uses native `get_at` for a historical capture.
+  -> [Transaction::history](surreal.rs) iterates native history through that revision and selects the newest version of each key.
+  -> [Transaction::floor](surreal.rs) selects the last live key from that historical range.
+
+SurrealKV 1.2.0 ordinary range reads do not accept a timestamp. The historical
+adapter uses `history_with_options` with tombstones and a timestamp range.
+The first eligible tombstone hides the key. Hard deletes are not used in
+this variant because hard deletes remove earlier history. The original
+application-history variant stays separate. Both variants retain the shared
+Graph intervals and revision keys. This comparison therefore includes the
+cost of native history in addition to that shared Graph layout.
+
+[Neon::open](neon.rs) opens an exclusive physical owner and restores the key catalog.
+  -> [Neon::write_at](neon.rs) stages Graph records and new key identities.
+  -> [DeltaLayerWriter](../../../../neon/pageserver/src/tenant/storage_layer/delta_layer.rs) writes actual native image values and their disk index.
+  -> [Neon::write_at](neon.rs) waits for native layer sync, renames the layer, and syncs the directory.
+  -> [Neon::write_at](neon.rs) publishes the catalog and committed layer together in memory.
+
+[Neon::read_at](neon.rs) captures a committed layer list and Graph revision.
+  -> [Snapshot::get](neon.rs) searches eligible layers from newest to oldest.
+  -> [DeltaLayer::image_for_bench](../../../../neon/pageserver/src/tenant/storage_layer/delta_layer.rs) uses the actual Neon disk B-tree and blob reader.
+  -> [Snapshot::prefix](neon.rs) selects exact original keys from the catalog and reads their values through the native index.
+  -> [Neon::close](neon.rs) closes the gate, drops layers, and releases the exclusive owner.
+
+Neon keys have a fixed 18-byte representation. The adapter assigns stable
+numeric keys to the original variable-length keys. New key mappings are
+immutable native image records in the same layer as changed values. A value
+has a one-byte presence marker so a deletion differs from an empty value.
+Reopen rebuilds only the key-to-ID catalog in memory. Each requested key/value record is read through Neon. The adapter does not
+cache complete key/value records. The shared native Graph owner retains its
+decoded Arrow property cache, as it does for the other candidates.
+Catalog copies, envelopes, native encoding, native writes, syncs, and
+publication stay inside the measured transaction. Aborted writes publish no
+layer. A transaction I/O error requires reopen before new reads or writes.
+
+The isolated [Cargo project](neon-bench/Cargo.toml) uses the cloned pageserver,
+API, utility, and value crates. Normal workspace builds do not require the
+clone. The clone is excluded from the parent Cargo workspace. The upstream
+`benchmarking` feature exposes three narrow layer wrappers. One visibility
+change makes the scheduler return type match its existing crate-visible
+trait on the current compiler. The tracked patch and pinned source record
+must accompany results.
+
+This candidate flushes one native delta layer per durable transaction.
+Production Neon batches layer flushes behind replicated WAL. This adapter
+has no Safekeeper quorum, object store, native branch creation, or background
+compaction. Its result measures the named local layer adapter. It does not
+measure production Neon commit performance. The native global page cache
+uses its configured size. The file adapter uses buffered native filesystem
+I/O with sync enabled.
+
+
+The [Neon patch](neon-bench/neon.patch) applies to source
+`fa504217c61bbcaf5c512d75830564541f917f8f`. Apply the patch only once. The
+benchmark uses the current application compiler. PostgreSQL header generation
+builds no database server. The configuration disables optional libraries that are not required
+by the generated bindings.
+
+```sh
+rtk proxy git -C neon apply --unidiff-zero --check ../crates/araphor-graph/examples/storage_poc/neon-bench/neon.patch
+rtk proxy git -C neon apply --unidiff-zero ../crates/araphor-graph/examples/storage_poc/neon-bench/neon.patch
+rtk proxy git -C neon submodule update --init --depth 1 --jobs 4 \
+  vendor/postgres-v14 vendor/postgres-v15 vendor/postgres-v16 vendor/postgres-v17
+rtk proxy make -C neon -j6 postgres-headers BUILD_TYPE=release \
+  'PG_CONFIGURE_OPTS=--without-readline --without-icu --without-zlib'
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 \
+  POSTGRES_INSTALL_DIR="$PWD/neon/pg_install" \
+  cargo test --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml \
+  --config /tmp/araphor-storage-release-override.toml --locked
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=6 \
+  POSTGRES_INSTALL_DIR="$PWD/neon/pg_install" \
+  cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml \
+  --config /tmp/araphor-storage-release-override.toml --locked
+rtk proxy target/release/storage_poc /tmp/araphor-versioned-poc/release.json versioned
+rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize.py \
+  /tmp/araphor-versioned-poc/release.json
+```
+
+The retained environment record supplies the cached DuckDB archive override.
+Use a normal bundled build when that archive is absent. Its C++ objects must
+also be optimized for a release comparison. Root-workspace and isolated
+lockfiles are separate; the isolated lock records the resolved dependency
+versions for this candidate build.
+
+After-reopen package reads run after property-cache restore and finite
+historical verification reads. These reads prove retained Graph history
+after restart. They do not measure cold-cache traversal.

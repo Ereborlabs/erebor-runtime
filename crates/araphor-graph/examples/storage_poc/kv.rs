@@ -36,15 +36,32 @@ pub trait Write: Read {
 
 pub enum Database {
     Home(super::home::Home),
+    #[cfg(feature = "neon-poc")]
+    Neon(super::neon::Neon),
     Surreal(super::surreal::Surreal),
     Redb(redb::Database),
     Fjall(fjall::SingleWriterTxDatabase, fjall::SingleWriterTxKeyspace),
 }
 
 impl Database {
+    pub fn read_at<T>(
+        &self,
+        revision: u64,
+        action: impl FnOnce(&dyn Read) -> Result<T>,
+    ) -> Result<T> {
+        match self {
+            Self::Surreal(db) => db.read_at(Some(revision), action),
+            #[cfg(feature = "neon-poc")]
+            Self::Neon(db) => db.read_at(revision, action),
+            _ => self.read(action),
+        }
+    }
+
     pub fn close(&self) -> Result<()> {
         match self {
             Self::Surreal(db) => db.close(),
+            #[cfg(feature = "neon-poc")]
+            Self::Neon(db) => db.close(),
             _ => Ok(()),
         }
     }
@@ -69,6 +86,11 @@ impl Database {
     pub fn open(kind: &str, path: &Path) -> Result<Self> {
         Ok(match kind {
             "home" => Self::Home(super::home::Home::open(path)?),
+            #[cfg(feature = "neon-poc")]
+            "neon-layers" => Self::Neon(super::neon::Neon::open(path)?),
+            "surrealkv-native" => {
+                Self::Surreal(super::surreal::Surreal::open_versioned(path, true)?)
+            }
             "surrealkv" => Self::Surreal(super::surreal::Surreal::open(path)?),
             "redb" => {
                 let db = redb::Database::create(path.join("store.redb"))?;
@@ -89,6 +111,8 @@ impl Database {
     pub fn read<T>(&self, action: impl FnOnce(&dyn Read) -> Result<T>) -> Result<T> {
         match self {
             Self::Home(db) => db.read(action),
+            #[cfg(feature = "neon-poc")]
+            Self::Neon(db) => db.read_at(u64::MAX, action),
             Self::Surreal(db) => db.read(action),
             Self::Redb(db) => {
                 let tx = db.begin_read()?;
@@ -107,10 +131,21 @@ impl Database {
         commit: bool,
         action: impl FnOnce(&mut dyn Write) -> Result<T>,
     ) -> Result<(T, f64, f64)> {
+        self.write_at(1, commit, action)
+    }
+
+    pub fn write_at<T>(
+        &self,
+        revision: u64,
+        commit: bool,
+        action: impl FnOnce(&mut dyn Write) -> Result<T>,
+    ) -> Result<(T, f64, f64)> {
         let started = Instant::now();
         match self {
             Self::Home(db) => db.write(commit, action),
-            Self::Surreal(db) => db.write(commit, action),
+            Self::Surreal(db) => db.write_at(revision, commit, action),
+            #[cfg(feature = "neon-poc")]
+            Self::Neon(db) => db.write_at(revision, commit, action),
             Self::Redb(db) => {
                 let mut tx = db.begin_write()?;
                 tx.set_durability(redb::Durability::Immediate)?;

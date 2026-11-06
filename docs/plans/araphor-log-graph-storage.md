@@ -466,3 +466,30 @@ This result does not qualify native temporal APIs or their retention policy.
 Sustained compaction, large Graphs, production replacement, complete Data and
 DataFusion execution, notification creation, and the complete incident timing
 target remain **Not done**.
+
+
+## Neon crates and retained Graph cuts
+
+The user requests a benchmark with the cloned Neon crates and Graph revision
+history for all compared engines. The implementer and reviewer agree on the
+bounded adapter and historical package replay. Direction is **Done**.
+Build and focused runtime proof are **Done**. Measured results are **Not done**.
+
+Use the real Neon delta-layer writer, disk index, and blob reader. Name this
+candidate `neon-layers`. Include each durable layer flush and directory sync
+in the transaction timing. Keep the variable-key catalog in the same native
+layer as the Graph changes. Do not describe the adapter as production Neon
+WAL, quorum, remote storage, or compaction performance.
+
+Keep the same eight package commits. After later writes and after reopen,
+read the original captured cuts backward and forward. Compare the actual
+package's staged Arrow commands, traversal keys, and frontier with its
+original evaluation. Do not commit historical evaluations. Compare the
+existing engines, an additional SurrealKV native-history variant, and the
+Neon layer adapter in balanced orders. Native SurrealKV history uses explicit
+Graph timestamps and soft tombstones. Its ordinary range API is not a
+historical range API.
+
+The [implementation route](../../crates/araphor-graph/examples/storage_poc/README.md#neon-layers-and-graph-revision-benchmark)
+records owners, native calls, lifecycle, and qualification limits. No
+production storage or subscription owner changes.

@@ -1,10 +1,15 @@
+#![allow(unexpected_cfgs)]
+
 mod compaction;
 mod duck;
 mod fixture;
+mod history;
 mod home;
 mod incident;
 mod kv;
 mod native;
+#[cfg(feature = "neon-poc")]
+mod neon;
 mod package;
 mod surreal;
 
@@ -231,6 +236,8 @@ struct Report {
     workload: serde_json::Value,
     runs: Vec<Run>,
     samples: Vec<Sample>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    history: Vec<history::Sample>,
 }
 struct Reference {
     rows: Vec<Row>,
@@ -242,7 +249,7 @@ fn main() -> Result<()> {
     let mut arguments = std::env::args_os().skip(1);
     let output = arguments
         .next()
-        .ok_or("usage: storage_poc OUTPUT.json [compaction|surrealkv]")?;
+        .ok_or("usage: storage_poc OUTPUT.json [compaction|surrealkv|versioned]")?;
     let mode = arguments.next();
     if arguments.next().is_some() {
         return Err("unexpected argument".into());
@@ -251,6 +258,7 @@ fn main() -> Result<()> {
     if mode.as_deref() == Some(std::ffi::OsStr::new("compaction")) {
         return compaction::run(output);
     }
+    let versioned = mode.as_deref() == Some(std::ffi::OsStr::new("versioned"));
     let orders: Vec<Vec<&str>> = match mode.as_deref() {
         None => vec![
             vec!["duckdb", "redb", "home", "fjall"],
@@ -270,6 +278,7 @@ fn main() -> Result<()> {
             vec!["fjall", "redb", "surrealkv"],
             vec!["redb", "surrealkv", "fjall"],
         ],
+        Some(mode) if mode == "versioned" => history::History::orders(),
         _ => return Err("unknown scenario".into()),
     };
     let parent = output.parent().unwrap_or(Path::new("."));
@@ -283,6 +292,7 @@ fn main() -> Result<()> {
         .map(|(i, s)| incident.index_input(i, *s))
         .collect::<Result<Vec<_>>>()?;
     let mut references = BTreeMap::<u64, Reference>::new();
+    let mut history = history::History::default();
     let mut report = Report {
         profile: if cfg!(debug_assertions) {
             "debug"
@@ -302,7 +312,11 @@ fn main() -> Result<()> {
             "qualification_reads":"8 post-commit finite all-member reads; historical snapshots, rollback and reopen outside primary interval"}),
         runs: Vec::new(),
         samples: Vec::new(),
+        history: Vec::new(),
     };
+    if versioned {
+        report.workload["history"] = serde_json::json!({"scope":"actual package replay at original Graph input cuts", "order":"backward then forward", "stages":["after-writes", "after-reopen"], "writes":false, "surrealkv-native":"set_at, soft tombstones, get_at, timestamp-filtered native history; unlimited retention", "neon-layers":"native durable delta per transaction; exact-key RAM catalog; no quorum WAL or compaction"});
+    }
     for (round, order) in orders.into_iter().enumerate() {
         for kind in order {
             let directory = tempfile::Builder::new()
@@ -369,6 +383,9 @@ fn main() -> Result<()> {
                         },
                     );
                 }
+                if versioned {
+                    history.remember(spec.revision, &prepared)?;
+                }
                 report.samples.push(Sample {
                     engine: kind.into(),
                     round,
@@ -390,6 +407,17 @@ fn main() -> Result<()> {
                 historical_read_s += out.capture_s + out.read_s + out.cdc_s;
                 oracle.check(&mut out, &fixture, spec.revision)?;
                 engine.verify_metadata(&fixture, spec.revision, 87)?;
+            }
+            if versioned {
+                report.history.extend(history.replay(
+                    &engine,
+                    &fixture,
+                    &incident,
+                    &inputs,
+                    kind,
+                    round,
+                    "after-writes",
+                )?);
             }
             let rollback = fixture::Spec {
                 revision: 88,
@@ -416,6 +444,17 @@ fn main() -> Result<()> {
                 reopened_read_s += out.capture_s + out.read_s + out.cdc_s;
                 oracle.check(&mut out, &fixture, spec.revision)?;
                 engine.verify_metadata(&fixture, spec.revision, 87)?;
+            }
+            if versioned {
+                report.history.extend(history.replay(
+                    &engine,
+                    &fixture,
+                    &incident,
+                    &inputs,
+                    kind,
+                    round,
+                    "after-reopen",
+                )?);
             }
             oracle.check(&mut engine.inspect(&fixture, 88)?, &fixture, 88)?;
             engine.verify_metadata(&fixture, 88, 87)?;

@@ -103,14 +103,42 @@ def summarize(report):
                 }
                 for revision in sorted({s["write"]["revision"] for s in samples})
             }
+        historical = [sample for sample in report.get("history", []) if sample["engine"] == engine]
+        if historical:
+            entry["history"] = {}
+            for stage in sorted({sample["stage"] for sample in historical}):
+                selected = [sample for sample in historical if sample["stage"] == stage]
+                metrics = ("elapsed_s", "capture_s", "index_s", "resolve_s", "detect_s", "normalize_s")
+                totals = {
+                    name.removesuffix("_s") + "_ms": stats([
+                        sum(sample[name] for sample in selected if sample["round"] == run["round"]) * 1000
+                        for run in runs
+                    ]) for name in metrics
+                }
+                totals["traversal_ms"] = stats([
+                    sum(call["elapsed_s"] for sample in selected if sample["round"] == run["round"]
+                        for call in sample["calls"] if call["operation"] == "neighbors") * 1000
+                    for run in runs
+                ])
+                totals["evaluations_per_round"] = len(selected) // len(runs)
+                totals["by_cut_ms"] = {
+                    str(revision): {
+                        direction: stats([sample["elapsed_s"] * 1000 for sample in selected
+                            if sample["captured"] == revision and sample["direction"] == direction])
+                        for direction in ("backward", "forward")
+                    } for revision in sorted({sample["captured"] for sample in selected})
+                }
+                entry["history"][stage] = totals
         result["engines"][engine] = entry
     runs = {(r["round"], r["engine"]): r for r in report["runs"]}
     pairs = [("redb", "duckdb"), ("fjall", "duckdb"), ("fjall", "redb")]
     pairs = [(a, b) for a, b in pairs if a in engines and b in engines]
     if "home" in engines:
         pairs.extend(("home", engine) for engine in engines if engine != "home")
-    if "surrealkv" in engines:
-        pairs.extend(("surrealkv", engine) for engine in engines if engine != "surrealkv")
+    for candidate in ("surrealkv", "surrealkv-native", "neon-layers"):
+        if candidate in engines:
+            pairs.extend((candidate, engine) for engine in engines if engine != candidate)
+    pairs = list(dict.fromkeys(pairs))
     for faster, slower in pairs:
         result["paired_round_ratios"][slower + "_over_" + faster] = {
             name.removesuffix("_s"): stats([
@@ -120,6 +148,16 @@ def summarize(report):
             for name in (("scenario_s", "write_s", "warm_read_s")
                          if "scenario_s" in report["runs"][0] else ("write_s", "warm_read_s"))
         }
+        if report.get("history"):
+            result["paired_round_ratios"][slower + "_over_" + faster]["history"] = {
+                stage: stats([
+                    sum(sample["elapsed_s"] for sample in report["history"]
+                        if sample["round"] == round_ and sample["engine"] == slower and sample["stage"] == stage)
+                    / sum(sample["elapsed_s"] for sample in report["history"]
+                        if sample["round"] == round_ and sample["engine"] == faster and sample["stage"] == stage)
+                    for round_ in range(report["rounds"])
+                ]) for stage in sorted({sample["stage"] for sample in report["history"]})
+            }
     return result
 
 

@@ -74,7 +74,9 @@ impl Native {
     pub fn apply(&mut self, _fixture: &Fixture, step: &Step, commit: bool) -> Result<Timing> {
         let started = Instant::now();
         let prepare_s = started.elapsed().as_secs_f64();
-        let (prepared, work, commit_s) = self.db.write(commit, |tx| Self::stage(tx, step))?;
+        let (prepared, work, commit_s) = self
+            .db
+            .write_at(step.revision, commit, |tx| Self::stage(tx, step))?;
         let mut sample = Timing {
             revision: step.revision,
             prepare_s,
@@ -283,7 +285,7 @@ impl Native {
         action: impl FnOnce(&dyn GraphRead, f64) -> Result<T>,
     ) -> Result<T> {
         let started = Instant::now();
-        self.db.read(|tx| {
+        self.db.read_at(revision, |tx| {
             for writer in [1, 2] {
                 let _ = tx.floor(&Key::new(b'H', &[writer]), revision)?;
             }
@@ -322,7 +324,7 @@ impl Native {
 
     pub fn inspect(&self, fixture: &Fixture, revision: u64, _all: bool) -> Result<Readout> {
         let started = Instant::now();
-        self.db.read(|tx| {
+        self.db.read_at(revision, |tx| {
             for writer in [1, 2] {
                 let head = tx.floor(&Key::new(b'H', &[writer]), revision)?;
                 if fixture.steps.iter().any(|s| s.revision <= revision) {
