@@ -41,6 +41,10 @@ impl Key {
 }
 
 impl Native {
+    pub fn shutdown(&self) -> Result<()> {
+        self.db.close()
+    }
+
     pub fn maintenance(&self) -> Option<kv::Maintenance> {
         self.db.maintenance()
     }

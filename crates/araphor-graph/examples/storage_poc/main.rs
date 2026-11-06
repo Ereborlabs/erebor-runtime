@@ -6,6 +6,7 @@ mod incident;
 mod kv;
 mod native;
 mod package;
+mod surreal;
 
 use araphor_graph::Read;
 use arrow_array::{Array, ArrayRef, BinaryArray, RecordBatch, StructArray, UInt64Array};
@@ -141,6 +142,13 @@ enum Engine {
     Native(native::Native),
 }
 impl Engine {
+    fn close(&self) -> Result<()> {
+        match self {
+            Self::Duck(_) => Ok(()),
+            Self::Native(db) => db.shutdown(),
+        }
+    }
+
     fn open(kind: &str, path: &Path, fixture: &Fixture) -> Result<Self> {
         if kind == "duckdb" {
             Ok(Self::Duck(duck::Duck::open(path, fixture)?))
@@ -234,7 +242,7 @@ fn main() -> Result<()> {
     let mut arguments = std::env::args_os().skip(1);
     let output = arguments
         .next()
-        .ok_or("usage: storage_poc OUTPUT.json [compaction]")?;
+        .ok_or("usage: storage_poc OUTPUT.json [compaction|surrealkv]")?;
     let mode = arguments.next();
     if arguments.next().is_some() {
         return Err("unexpected argument".into());
@@ -243,9 +251,27 @@ fn main() -> Result<()> {
     if mode.as_deref() == Some(std::ffi::OsStr::new("compaction")) {
         return compaction::run(output);
     }
-    if mode.is_some() {
-        return Err("unknown scenario".into());
-    }
+    let orders: Vec<Vec<&str>> = match mode.as_deref() {
+        None => vec![
+            vec!["duckdb", "redb", "home", "fjall"],
+            vec!["redb", "fjall", "duckdb", "home"],
+            vec!["fjall", "home", "redb", "duckdb"],
+            vec!["home", "duckdb", "fjall", "redb"],
+            vec!["home", "duckdb", "fjall", "redb"],
+            vec!["fjall", "home", "redb", "duckdb"],
+            vec!["redb", "fjall", "duckdb", "home"],
+            vec!["duckdb", "redb", "home", "fjall"],
+        ],
+        Some(mode) if mode == "surrealkv" => vec![
+            vec!["redb", "fjall", "surrealkv"],
+            vec!["fjall", "surrealkv", "redb"],
+            vec!["surrealkv", "redb", "fjall"],
+            vec!["surrealkv", "fjall", "redb"],
+            vec!["fjall", "redb", "surrealkv"],
+            vec!["redb", "surrealkv", "fjall"],
+        ],
+        _ => return Err("unknown scenario".into()),
+    };
     let parent = output.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)?;
     let fixture = Fixture::new()?;
@@ -264,29 +290,19 @@ fn main() -> Result<()> {
             "release"
         },
         source: option_env!("POC_SOURCE_REVISION").unwrap_or("working-tree"),
-        rounds: 8,
+        rounds: orders.len(),
         workload: serde_json::json!({"scope":"actual Causal package Graph scenario through SDK InvocationHost",
             "case":"discovery::packages::required::incident::incremental::follows_incremental_sources",
             "package":"HF-CAUSAL-001","exports":["index","detect"],"steps":8,"source_streams":4,"nodes":2,"episodes":3,
             "scenario_interval":"capture -> actual index traversal/staging -> resolved detect inputs -> actual detection/staging -> durable atomic Graph/state commit",
             "traversal":"actual package iterative neighbors(Either); next keys depend on returned edges",
             "source_inputs":"typed incident audit and observation fixture; same6-action scenario; prepared index inputs",
-            "durability":{"redb":"Immediate","fjall":"transaction SyncAll","duckdb":"normal on-disk COMMIT","home":"one append-only frame and sync_all per transaction; immutable RAM index"},
+            "durability":{"redb":"Immediate","fjall":"transaction SyncAll","duckdb":"normal on-disk COMMIT","home":"one append-only frame and sync_all per transaction; immutable RAM index","surrealkv":"transaction Immediate; native transactions; engine versioning off; same explicit Graph history keys"},
             "excludes":["Control/raw ingestion","native DataFusion input execution","Data authority/evidence pins","notification creation","steady compaction/power loss"],
             "qualification_reads":"8 post-commit finite all-member reads; historical snapshots, rollback and reopen outside primary interval"}),
         runs: Vec::new(),
         samples: Vec::new(),
     };
-    let orders = [
-        ["duckdb", "redb", "home", "fjall"],
-        ["redb", "fjall", "duckdb", "home"],
-        ["fjall", "home", "redb", "duckdb"],
-        ["home", "duckdb", "fjall", "redb"],
-        ["home", "duckdb", "fjall", "redb"],
-        ["fjall", "home", "redb", "duckdb"],
-        ["redb", "fjall", "duckdb", "home"],
-        ["duckdb", "redb", "home", "fjall"],
-    ];
     for (round, order) in orders.into_iter().enumerate() {
         for kind in order {
             let directory = tempfile::Builder::new()
@@ -389,6 +405,7 @@ fn main() -> Result<()> {
             engine.apply(&fixture, &prepared.step, false)?;
             oracle.check(&mut engine.inspect(&fixture, 87)?, &fixture, 87)?;
             engine.verify_metadata(&fixture, 88, 87)?;
+            engine.close()?;
             drop(engine);
             let started = Instant::now();
             let engine = Engine::open(kind, directory.path(), &fixture)?;
@@ -402,6 +419,7 @@ fn main() -> Result<()> {
             }
             oracle.check(&mut engine.inspect(&fixture, 88)?, &fixture, 88)?;
             engine.verify_metadata(&fixture, 88, 87)?;
+            engine.close()?;
             drop(engine);
             let (file_bytes, allocated_bytes, files) = usage(directory.path())?;
             eprintln!(

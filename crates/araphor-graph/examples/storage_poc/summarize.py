@@ -106,8 +106,11 @@ def summarize(report):
         result["engines"][engine] = entry
     runs = {(r["round"], r["engine"]): r for r in report["runs"]}
     pairs = [("redb", "duckdb"), ("fjall", "duckdb"), ("fjall", "redb")]
+    pairs = [(a, b) for a, b in pairs if a in engines and b in engines]
     if "home" in engines:
         pairs.extend(("home", engine) for engine in engines if engine != "home")
+    if "surrealkv" in engines:
+        pairs.extend(("surrealkv", engine) for engine in engines if engine != "surrealkv")
     for faster, slower in pairs:
         result["paired_round_ratios"][slower + "_over_" + faster] = {
             name.removesuffix("_s"): stats([

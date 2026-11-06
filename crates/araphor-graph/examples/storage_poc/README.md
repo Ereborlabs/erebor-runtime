@@ -5,6 +5,9 @@ DuckDB GraphStore, redb, Fjall, and a local append-only store. It measures the p
 traversal and staged changes through one durable commit. The production store
 and the incident test stay unchanged.
 
+An additional mode compares SurrealKV with redb and Fjall through the same
+native Graph algorithm. It uses the same eight package cycles and assertions.
+
 ## Intended end state
 
 Compare the actual Graph work in
@@ -27,7 +30,7 @@ that complete path.
   -> [Detect::compute](../../../araphor-analysis-builtins/src/causal/detect.rs) checks the causal chain and stages actual FindingMember values.
   -> [Step::new](fixture.rs) exposes the actual package journals to the measured store path.
   -> [Duck::apply](duck.rs) prepares and applies the production GraphStore layers.
-  -> [Native::apply](native.rs) applies the same native Graph record algorithm on redb, Fjall, or the local store.
+  -> [Native::apply](native.rs) applies the same native Graph record algorithm on redb, Fjall, SurrealKV, or the local store.
   -> [Database::write](kv.rs) durably commits Graph, head, state, progress marker, and change references together.
 
 [main](main.rs) completes the measured package cycle.
@@ -36,6 +39,7 @@ that complete path.
   -> [verify_metadata](native.rs) checks exact writer heads and parent/captured commit records outside timing.
   -> [Engine::inspect](main.rs) checks all earlier views after the later commits.
   -> [Engine::apply](main.rs) stages revision 88 and rolls the transaction back.
+  -> [Engine::close](main.rs) waits for explicit SurrealKV shutdown when that backend is selected.
   -> [Engine::open](main.rs) reopens the database and restores the property cache.
   -> [Oracle::check](main.rs) checks retained history and rollback state again.
   -> [TempDir](main.rs) removes that round's database files after close and size measurement.
@@ -102,7 +106,7 @@ and native cache publication. The example supplies small metadata tables for
 state, progress, commits, and change references. DuckDB uses two threads and
 the production unlimited memory setting.
 
-redb, Fjall, and the local store share one native record algorithm through [Database](kv.rs).
+redb, Fjall, SurrealKV, and the local store share one native record algorithm through [Database](kv.rs).
 Binary dictionaries map identities to stable numeric references. Historical
 member intervals and relation, entity, owner, outgoing, incoming, and label
 indexes select members. The read view holds one physical snapshot while the
@@ -155,6 +159,49 @@ engine position and each ordered predecessor pair twice. Each engine has 64
 measured package cycles and 64 commits. The summarizer computes paired ratios
 from complete round totals. Eight samples per revision do not establish a
 tail bound. The older three-engine results below use six rounds.
+
+## SurrealKV comparison
+
+[Surreal::open](surreal.rs) creates one Tokio runtime and opens the native tree.
+  -> [Surreal::read](surreal.rs) captures one native read-only transaction.
+  -> [Transaction](surreal.rs) uses native get, bounded prefix iteration, and reverse iteration for revision-floor reads.
+
+[Surreal::write](surreal.rs) starts one native read/write transaction.
+  -> [Transaction](surreal.rs) reads its own writes and stages native set and delete calls.
+  -> [Surreal::write](surreal.rs) selects `Durability::Immediate` and waits for commit through the runtime.
+  -> [Surreal::write](surreal.rs) rolls back without commit when the caller aborts.
+
+[Engine::close](main.rs) closes the candidate before drop and reopen.
+  -> [Native::shutdown](native.rs) forwards close to the physical owner.
+  -> [Surreal::close](surreal.rs) waits for native tree shutdown and returns close errors.
+
+The candidate uses released SurrealKV 1.2.0. Synchronous reads do not cross
+the runtime. Commit bridging stays inside measured commit work. The native
+Graph layout, Arrow properties, revision keys, and synthetic metadata stay
+the same across the three compared engines. SurrealKV engine versioning is
+disabled. The existing application keys already retain the required Graph
+history; this comparison does not add a second history policy to one engine.
+It does not measure SurrealKV `get_at` or `history` features.
+
+The `surrealkv` mode uses all six orders of redb, Fjall, and SurrealKV. Each
+engine has 48 measured package cycles in six fresh databases. Default cache,
+compression, and maintenance settings stay active. All original finding,
+frontier, traversal, Graph delta, metadata, history, rollback, and reopen
+assertions stay active. The original four-engine mode keeps its eight orders.
+The candidate comparison adds no SlateDB or production storage path.
+
+```sh
+rtk proxy target/release/examples/storage_poc /tmp/araphor-surrealkv-poc/release.json surrealkv
+rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize.py \
+  /tmp/araphor-surrealkv-poc/release.json
+```
+
+[native_transactions_and_reopen](surreal.rs) checks read-your-writes, an
+older snapshot across a later commit, deletion, empty values, ordered prefix
+reads, floor reads at zero and `u64::MAX`, rollback, explicit close, and reopen.
+This test passes in release. The same command passes all five example tests.
+The full candidate comparison remains **Not done** until its measured run
+completes.
 
 ## Local append-only store
 

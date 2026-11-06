@@ -298,6 +298,7 @@ fn pass(
     })?;
     engine.apply(&fixture, &prepared.step, false)?;
     engine.verify_metadata(&fixture, current + 1, current)?;
+    engine.shutdown()?;
     drop(engine);
     let started = Instant::now();
     let engine = Native::open(kind, directory.path())?;
@@ -313,6 +314,7 @@ fn pass(
     out.rows = materialize(out.rows, &fixture)?;
     oracle.check(&mut out, &fixture, current + 1)?;
     engine.verify_metadata(&fixture, current + 1, current)?;
+    engine.shutdown()?;
     drop(engine);
     let ended_s = TRACE.elapsed();
     let events = TRACE

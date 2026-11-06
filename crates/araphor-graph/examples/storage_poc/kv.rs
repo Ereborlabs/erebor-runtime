@@ -36,11 +36,19 @@ pub trait Write: Read {
 
 pub enum Database {
     Home(super::home::Home),
+    Surreal(super::surreal::Surreal),
     Redb(redb::Database),
     Fjall(fjall::SingleWriterTxDatabase, fjall::SingleWriterTxKeyspace),
 }
 
 impl Database {
+    pub fn close(&self) -> Result<()> {
+        match self {
+            Self::Surreal(db) => db.close(),
+            _ => Ok(()),
+        }
+    }
+
     pub fn maintenance(&self) -> Option<Maintenance> {
         let Self::Fjall(db, table) = self else {
             return None;
@@ -61,6 +69,7 @@ impl Database {
     pub fn open(kind: &str, path: &Path) -> Result<Self> {
         Ok(match kind {
             "home" => Self::Home(super::home::Home::open(path)?),
+            "surrealkv" => Self::Surreal(super::surreal::Surreal::open(path)?),
             "redb" => {
                 let db = redb::Database::create(path.join("store.redb"))?;
                 let tx = db.begin_write()?;
@@ -80,6 +89,7 @@ impl Database {
     pub fn read<T>(&self, action: impl FnOnce(&dyn Read) -> Result<T>) -> Result<T> {
         match self {
             Self::Home(db) => db.read(action),
+            Self::Surreal(db) => db.read(action),
             Self::Redb(db) => {
                 let tx = db.begin_read()?;
                 let table = tx.open_table(TABLE)?;
@@ -100,6 +110,7 @@ impl Database {
         let started = Instant::now();
         match self {
             Self::Home(db) => db.write(commit, action),
+            Self::Surreal(db) => db.write(commit, action),
             Self::Redb(db) => {
                 let mut tx = db.begin_write()?;
                 tx.set_durability(redb::Durability::Immediate)?;
@@ -139,7 +150,7 @@ impl<T: ReadableTable<&'static [u8], &'static [u8]>> Read for RedbRead<'_, T> {
         Ok(self.0.get(key)?.map(|v| v.value().to_vec()))
     }
     fn prefix(&self, prefix: &[u8]) -> Result<Entries> {
-        let end = Self::end(prefix);
+        let end = prefix_end(prefix);
         self.0
             .range::<&[u8]>((Included(prefix), Excluded(end.as_slice())))?
             .map(|row| {
@@ -161,17 +172,15 @@ impl<T: ReadableTable<&'static [u8], &'static [u8]>> Read for RedbRead<'_, T> {
     }
 }
 
-impl<T> RedbRead<'_, T> {
-    fn end(prefix: &[u8]) -> Vec<u8> {
-        let mut end = prefix.to_vec();
-        let index = end
-            .iter()
-            .rposition(|b| *b != 255)
-            .expect("PoC prefixes have a successor");
-        end[index] += 1;
-        end.truncate(index + 1);
-        end
-    }
+pub fn prefix_end(prefix: &[u8]) -> Vec<u8> {
+    let mut end = prefix.to_vec();
+    let index = end
+        .iter()
+        .rposition(|b| *b != 255)
+        .expect("PoC prefixes have a successor");
+    end[index] += 1;
+    end.truncate(index + 1);
+    end
 }
 
 struct RedbWrite<'a>(redb::Table<'a, &'static [u8], &'static [u8]>);
