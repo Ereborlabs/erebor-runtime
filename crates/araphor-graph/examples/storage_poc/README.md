@@ -1,7 +1,7 @@
 # Causal package Graph scenario comparison
 
 This proof of concept (PoC) runs the existing causal package against current
-DuckDB GraphStore, redb, and Fjall. It measures the package's dependent Graph
+DuckDB GraphStore, redb, Fjall, and a local append-only store. It measures the package's dependent Graph
 traversal and staged changes through one durable commit. The production store
 and the incident test stay unchanged.
 
@@ -27,7 +27,7 @@ that complete path.
   -> [Detect::compute](../../../araphor-analysis-builtins/src/causal/detect.rs) checks the causal chain and stages actual FindingMember values.
   -> [Step::new](fixture.rs) exposes the actual package journals to the measured store path.
   -> [Duck::apply](duck.rs) prepares and applies the production GraphStore layers.
-  -> [Native::apply](native.rs) applies the same native Graph record algorithm on redb or Fjall.
+  -> [Native::apply](native.rs) applies the same native Graph record algorithm on redb, Fjall, or the local store.
   -> [Database::write](kv.rs) durably commits Graph, head, state, progress marker, and change references together.
 
 [main](main.rs) completes the measured package cycle.
@@ -102,7 +102,7 @@ and native cache publication. The example supplies small metadata tables for
 state, progress, commits, and change references. DuckDB uses two threads and
 the production unlimited memory setting.
 
-redb and Fjall share one native record algorithm through [Database](kv.rs).
+redb, Fjall, and the local store share one native record algorithm through [Database](kv.rs).
 Binary dictionaries map identities to stable numeric references. Historical
 member intervals and relation, entity, owner, outgoing, incoming, and label
 indexes select members. The read view holds one physical snapshot while the
@@ -148,18 +148,67 @@ vectors remain in memory for comparison. Traversal time is nested inside
 index time. Component medians are not additive.
 
 redb uses `Durability::Immediate`. Fjall uses transaction
-`PersistMode::SyncAll`. DuckDB uses durable on-disk `COMMIT`. All engines
-keep their default cache and compression settings. Six rounds use all six
-engine orders. Each engine has 48 measured package cycles and 48 commits.
-The summarizer computes paired ratios from complete round totals. Six
-samples per revision do not establish a tail bound.
+`PersistMode::SyncAll`. DuckDB uses durable on-disk `COMMIT`. The local store
+uses one transaction frame and `sync_all` per commit. The existing engines
+keep their default cache and compression settings. Eight rounds balance each
+engine position and each ordered predecessor pair twice. Each engine has 64
+measured package cycles and 64 commits. The summarizer computes paired ratios
+from complete round totals. Eight samples per revision do not establish a
+tail bound. The older three-engine results below use six rounds.
+
+## Local append-only store
+
+[Home::open](home.rs) opens `home.log` and acquires an exclusive file lock.
+  -> [Home::open](home.rs) checks the version header and each complete transaction frame.
+  -> [Home::open](home.rs) replays the final put and delete for each key into an ordered in-memory index.
+  -> [Home::open](home.rs) truncates an incomplete final header or payload and syncs the truncation.
+  -> [Home::open](home.rs) rejects a complete frame with an invalid checksum or payload.
+
+[Home::read](home.rs) clones the immutable index root for one read scope.
+  -> [Index](home.rs) serves exact keys, ordered prefixes, and revision-floor reads.
+
+[Home::write](home.rs) copies the index into one private transaction.
+  -> [Transaction](home.rs) applies staged changes and records the final put or delete for each changed key.
+  -> [Home::write](home.rs) encodes that delta with the existing MessagePack codec.
+  -> [Home::write](home.rs) appends one length-delimited frame with header and payload CRC32C checksums.
+  -> [Home::write](home.rs) syncs the file before it publishes the new immutable index root.
+
+[Home::write](home.rs) aborts before append.
+  -> [Transaction](home.rs) drops the private index and changes without file writes.
+
+[Home::write](home.rs) receives an append or sync error.
+  -> [State::check](home.rs) refuses new read scopes and writes until reopen.
+
+This backend is an ordered in-memory key/value index with a durable transaction
+log. It has no embedded database dependency. Keys and values use shared byte
+buffers. A write copies all index entries once. The copy, delta recording,
+encoding, checksums, append, sync, and publication stay inside the measured
+scenario. CRC32C checks file integrity; it does not detect source changes.
+The generic Graph record layout still owns revision history and change records.
+Physical log offsets do not replace application input positions.
+
+The store keeps all current physical keys and values in memory. These keys
+include retained Graph history. Write copy cost grows with the full index.
+The log has no compaction, reclamation, or checkpoint. Reopen replays the full
+log before the native Graph owner restores Arrow property chunks. This small
+experiment does not qualify large Graphs or power-loss recovery. An incomplete
+tail check is not a power-loss test. No DataFusion operator or production path
+changes.
+
+[transactions_and_snapshots](home.rs) checks read-your-writes, an older active
+snapshot across a later commit, key deletion, empty values, ordered prefix and
+floor reads, exclusive open, abort without append, and reopen.
+[incomplete_tail_and_corruption](home.rs) checks every byte cut in the final
+frame, a commit after recovery, and complete header or payload corruption.
+[failed_append_requires_reopen](home.rs) uses a read-only file handle to check
+the failed-append state. These checks are outside scenario timing.
 
 ## Commands
 
 Run from the repository root. Use the same local on-disk parent directory for
 all engines. The executable creates and removes temporary databases beside
 the output file. A value or traversal mismatch fails the process. There is no
-latency pass limit. After build, one six-round run takes less than two minutes
+latency pass limit. After build, one eight-round run takes less than two minutes
 on the recorded host.
 
 ```sh
@@ -183,7 +232,7 @@ clean reopen for this scenario. Formatting passes. The debug build has one
 existing unused-import warning in production causal `io.rs`.
 
 A gain against current GraphStore includes the native Graph owner rewrite
-and the physical engine. Only redb versus Fjall shares the same Graph record
+and the physical engine. redb, Fjall, and the local store share the same Graph record
 algorithm. The PoC does not run Control intake, raw ingestion, native
 DataFusion input queries, full Data authority/evidence checks, finding
 projection publication, or notification creation. It also does not qualify

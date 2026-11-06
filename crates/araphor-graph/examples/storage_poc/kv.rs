@@ -22,6 +22,7 @@ pub trait Write: Read {
 }
 
 pub enum Database {
+    Home(super::home::Home),
     Redb(redb::Database),
     Fjall(fjall::SingleWriterTxDatabase, fjall::SingleWriterTxKeyspace),
 }
@@ -29,6 +30,7 @@ pub enum Database {
 impl Database {
     pub fn open(kind: &str, path: &Path) -> Result<Self> {
         Ok(match kind {
+            "home" => Self::Home(super::home::Home::open(path)?),
             "redb" => {
                 let db = redb::Database::create(path.join("store.redb"))?;
                 let tx = db.begin_write()?;
@@ -47,6 +49,7 @@ impl Database {
 
     pub fn read<T>(&self, action: impl FnOnce(&dyn Read) -> Result<T>) -> Result<T> {
         match self {
+            Self::Home(db) => db.read(action),
             Self::Redb(db) => {
                 let tx = db.begin_read()?;
                 let table = tx.open_table(TABLE)?;
@@ -66,6 +69,7 @@ impl Database {
     ) -> Result<(T, f64, f64)> {
         let started = Instant::now();
         match self {
+            Self::Home(db) => db.write(commit, action),
             Self::Redb(db) => {
                 let mut tx = db.begin_write()?;
                 tx.set_durability(redb::Durability::Immediate)?;

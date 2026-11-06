@@ -22,11 +22,12 @@ def summarize(report):
         "source": report["source"],
         "profile": report["profile"],
         "time_unit": "ms",
-        "percentile_limit": "Descriptive samples; six rounds do not establish a tail bound.",
+        "percentile_limit": f"Descriptive samples; {report['rounds']} rounds do not establish a tail bound.",
         "engines": {},
         "paired_round_ratios": {},
     }
-    for engine in ("duckdb", "redb", "fjall"):
+    engines = list(dict.fromkeys(run["engine"] for run in report["runs"]))
+    for engine in engines:
         runs = [r for r in report["runs"] if r["engine"] == engine]
         samples = [s for s in report["samples"] if s["engine"] == engine]
         entry = {
@@ -104,7 +105,10 @@ def summarize(report):
             }
         result["engines"][engine] = entry
     runs = {(r["round"], r["engine"]): r for r in report["runs"]}
-    for faster, slower in (("redb", "duckdb"), ("fjall", "duckdb"), ("fjall", "redb")):
+    pairs = [("redb", "duckdb"), ("fjall", "duckdb"), ("fjall", "redb")]
+    if "home" in engines:
+        pairs.extend(("home", engine) for engine in engines if engine != "home")
+    for faster, slower in pairs:
         result["paired_round_ratios"][slower + "_over_" + faster] = {
             name.removesuffix("_s"): stats([
                 runs[round_, slower][name] / runs[round_, faster][name]

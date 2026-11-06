@@ -1,5 +1,6 @@
 mod duck;
 mod fixture;
+mod home;
 mod incident;
 mod kv;
 mod native;
@@ -253,26 +254,28 @@ fn main() -> Result<()> {
             "release"
         },
         source: option_env!("POC_SOURCE_REVISION").unwrap_or("working-tree"),
-        rounds: 6,
+        rounds: 8,
         workload: serde_json::json!({"scope":"actual Causal package Graph scenario through SDK InvocationHost",
             "case":"discovery::packages::required::incident::incremental::follows_incremental_sources",
             "package":"HF-CAUSAL-001","exports":["index","detect"],"steps":8,"source_streams":4,"nodes":2,"episodes":3,
             "scenario_interval":"capture -> actual index traversal/staging -> resolved detect inputs -> actual detection/staging -> durable atomic Graph/state commit",
             "traversal":"actual package iterative neighbors(Either); next keys depend on returned edges",
             "source_inputs":"typed incident audit and observation fixture; same6-action scenario; prepared index inputs",
-            "durability":{"redb":"Immediate","fjall":"transaction SyncAll","duckdb":"normal on-disk COMMIT"},
+            "durability":{"redb":"Immediate","fjall":"transaction SyncAll","duckdb":"normal on-disk COMMIT","home":"one append-only frame and sync_all per transaction; immutable RAM index"},
             "excludes":["Control/raw ingestion","native DataFusion input execution","Data authority/evidence pins","notification creation","steady compaction/power loss"],
             "qualification_reads":"8 post-commit finite all-member reads; historical snapshots, rollback and reopen outside primary interval"}),
         runs: Vec::new(),
         samples: Vec::new(),
     };
     let orders = [
-        ["duckdb", "redb", "fjall"],
-        ["redb", "fjall", "duckdb"],
-        ["fjall", "duckdb", "redb"],
-        ["fjall", "redb", "duckdb"],
-        ["redb", "duckdb", "fjall"],
-        ["duckdb", "fjall", "redb"],
+        ["duckdb", "redb", "home", "fjall"],
+        ["redb", "fjall", "duckdb", "home"],
+        ["fjall", "home", "redb", "duckdb"],
+        ["home", "duckdb", "fjall", "redb"],
+        ["home", "duckdb", "fjall", "redb"],
+        ["fjall", "home", "redb", "duckdb"],
+        ["redb", "fjall", "duckdb", "home"],
+        ["duckdb", "redb", "home", "fjall"],
     ];
     for (round, order) in orders.into_iter().enumerate() {
         for kind in order {

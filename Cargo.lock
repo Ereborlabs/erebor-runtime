@@ -382,6 +382,7 @@ dependencies = [
  "arrow-ipc",
  "arrow-schema",
  "arrow-select",
+ "crc32c",
  "duckdb",
  "erebor-interceptor-abi",
  "erebor-runtime-error",

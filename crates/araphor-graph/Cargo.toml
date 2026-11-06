@@ -25,6 +25,7 @@ araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 araphor-analysis-types = { path = "../araphor-analysis-types" }
 arrow-buffer = "=59.2.0"
 arrow-ipc = "=59.2.0"
+crc32c.workspace = true
 fjall = "=3.1.13"
 redb = "=4.4.0"
 rmp-serde.workspace = true
