@@ -1,0 +1,108 @@
+{
+  "date": "2026-11-08",
+  "recorded_at_utc": "2026-11-08T05:27:52.670593+00:00",
+  "source_full": "5066c4679d2d076a413249fb2c88aab07c1bbff7",
+  "source_state": "Named PoC source paths committed and unchanged. Unrelated user document edits and cloned trees remain outside this result.",
+  "fjall_source": "87006048139bfe1b072bbc29a5a92bf1f97628e3",
+  "fjall_patch": "../../cdc-bench/fjall.patch",
+  "fjall_patch_sha256": "07eee2c2b728ae128252b2c5d3730450dfdf77b211593c0a18c6c8cf7aff4f3f",
+  "isolated_lock": "../../cdc-bench/Cargo.lock",
+  "isolated_lock_sha256": "75849b6dc141a99f11d1c2886e52d6e0137149ab6f249ec36930fba21eaf6a23",
+  "fjall_tests_lock": "../../cdc-bench/fjall-tests.lock",
+  "fjall_tests_lock_sha256": "d1e9119ea455598f9bb1e7ed21e10bb9b16f801d5ef31a3a96e9606e42b33b1f",
+  "resolved_packages": {
+    "arrow-array": {
+      "version": "59.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "fjall": {
+      "version": "3.1.13"
+    },
+    "libc": {
+      "version": "0.2.186",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "log": {
+      "version": "0.4.29",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "lsm-tree": {
+      "version": "3.1.10",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "redb": {
+      "version": "4.4.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "surrealkv": {
+      "version": "1.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "tokio": {
+      "version": "1.52.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    }
+  },
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics",
+  "logical_cpus": 16,
+  "kernel": "6.8.0-147-generic",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "filesystem": "ext4 on /dev/nvme0n1p7; /tmp uses the same device as the checkout",
+  "profile": "Cargo release, default opt-level3; debug_assertions=false; shared host; no CPU, I/O or cold-cache isolation",
+  "binary_sha256": "8a9cef60fb9cf46d76289d6d7e4bcaf016e873a6c52577922c747a63295e6842",
+  "duckdb_cached_archive": "target/release/build/libduckdb-sys-e073672aa6bffaa9/out/libduckdb.a",
+  "duckdb_cached_archive_sha256": "121c752b58ae133fe0e1627a6c7d3559e185d04fd0a9a51a9d73a9885429b1eb",
+  "duckdb_override": "[target.x86_64-unknown-linux-gnu.duckdb]\nrustc-link-lib = [\"static=duckdb\", \"stdc++\"]\nrustc-link-search = [\"native=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"]\nrustc-env = { OUT_DIR = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\" }\ninclude = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/src/include\"\nlib_dir = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"\n",
+  "commands": [
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 cargo test --manifest-path fjall/Cargo.toml --features journal-cdc --lib cdc::tests --locked --offline --message-format=short",
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 cargo test --manifest-path fjall/Cargo.toml --test keyspace_clear --test recover_flushed_journal --locked --offline --message-format=short",
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 cargo test --release --manifest-path crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 POC_SOURCE_REVISION=5066c4679d2d076a413249fb2c88aab07c1bbff7 cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+    "rtk proxy target/release/storage_cdc /tmp/araphor-cdc-poc-20261108/release.json cdc",
+    "rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize_cdc.py /tmp/araphor-cdc-poc-20261108/release.json"
+  ],
+  "durability": {
+    "fjall": "CDC-enabled native batch/raw writes force SyncAll; native batch boundaries after snapshot publication",
+    "home": "original transaction frame, sync_all, then publish root and generic journal end"
+  },
+  "subscription": "One original-journal walker selects input/frontier and actual member mutations. Source metadata carries the existing fixture captured cut. Prepared Arrow inputs remain in memory.",
+  "cursor": "Native Fjall journal ID, complete-batch end offset and sequence; local frame-end offset. Package source cursor commits with Graph edits. Output acknowledgement is separate. One caller-managed monotone minimum floor; feed registration does not pin history.",
+  "ordinary_samples_per_engine": 28,
+  "restart_samples_per_engine": 4,
+  "primary_cycles": 64,
+  "source_wakes": 64,
+  "graph_wakes": 64,
+  "historical_views": 128,
+  "checks": "Exact member counts and identities, Arrow rows across engines, traversal calls and frontier, actual findings, current and historical writer metadata, aborted source and Graph transactions, saved cursor unchanged on Graph rollback, unrelated writes quiet after scan barrier, unread resume after reopen, native rotation/compaction and retained-journal collection.",
+  "maintenance": "Four explicit Fjall major compactions complete, one per engine run. Restart sample includes maintenance, shutdown and reopen. Local prototype has no compaction or rotation.",
+  "history": "Retained logical Graph revisions are checked before and after final reopen; this CDC mode does not repeat historical package evaluation. See prior versioned benchmark for that different check.",
+  "native_tests": "Five journal tests and six original recovery tests with CDC disabled; seven shared release PoC tests. Poison test injects the existing worker poison owner, not a physical disk failure.",
+  "limits": [
+    "prepared input Arrow, no DataFusion source query",
+    "synthetic source metadata, no event capture",
+    "no production notification delivery",
+    "no branch qualification",
+    "Fjall bulk ingestion and keyspace catalog changes are not CDC supported",
+    "explicit flush/rotation/major compaction is correctness proof, not sustained compaction timing",
+    "single caller-managed walker floor; no safe arbitrary late consumer behind released history",
+    "no power-loss qualification",
+    "small retained Graph, no sustained background compaction or large backlog",
+    "full workspace CI and production incident test not run; user restricts iteration to focused qualification"
+  ],
+  "unsupported": {
+    "duckdb": "no supported retained original-WAL CDC API",
+    "fjall-stock": "no public retained journal feed or event-driven CDC API",
+    "neon-layers": "the layer adapter does not produce or stream PostgreSQL WAL",
+    "redb": "copy-on-write pages; no original WAL feed",
+    "surrealkv": "private WAL reader; no retained CDC API; value-log references also need retention"
+  },
+  "source_checks": [
+    "PoC source paths match committed source",
+    "Retained patch reverse-applies to measured clone",
+    "Retained patch applies to pristine pinned Fjall archive and reproduces all changed source files",
+    "Fjall and shared source formatting pass",
+    "Changed source and guide whitespace checks pass",
+    "Local guide and plan links resolve"
+  ],
+  "independent_review": "Passed: engine order, exact cycle inputs and counts, events, cursor order, native rotation and physical compaction, focused tests, source and binary identity, patch/lock hashes, guide links, and exact summary reproduction. Read-only reviewer cleared the bounded evidence."
+}

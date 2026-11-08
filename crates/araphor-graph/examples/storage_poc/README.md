@@ -887,3 +887,52 @@ proves correctness; it does not measure sustained background compaction.
 Production DataFusion input, package admission, notification creation and
 delivery, large retained history, power loss, dynamic consumer registration,
 native branches, and the complete incident latency target remain **Not done**.
+
+## Original-journal CDC result: 2026-11-08
+
+The bounded CDC qualification is **Done** at application source `5066c4679`.
+The [environment record](results/cdc-2026-11-08/environment.json) records the
+Fjall source, retained patch and lock hashes, optimized build, durability,
+commands, and limits. The host process check finds no active compiler before
+the measured run. The host remains shared.
+
+All eight engine runs pass: four patched Fjall runs and four local-store runs.
+The [raw report](results/cdc-2026-11-08/release.json) contains 64 original package
+cycles, 64 matched source events, 64 matched Graph events, and 128 historical
+view checks. Each Fjall run completes one physical compaction. Each run
+resumes the unread fifth input after reopen. Exact Graph rows, traversal
+requests, frontiers, findings, current and historical metadata, rollback,
+and unrelated-write checks pass. These values are asserted at runtime;
+the timing JSON does not retain the Arrow values or exact traversal keys.
+
+The values below are milliseconds across 28 ordinary samples per engine.
+Each source or Graph wake interval includes its durable commit and native
+journal read. The complete interval ends when the Graph consumer receives
+its event. Component medians are not additive.
+
+| Engine | Source commit start to source event, median | Package, median | Graph commit start to Graph event, median | Complete interval, median | Complete interval, maximum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Provided Fjall with CDC patch | 0.61 | 1.88 | 1.68 | 3.95 | 7.88 |
+| Local append-only prototype | 0.62 | 1.23 | 1.39 | 3.24 | 6.32 |
+
+Four additional samples per engine include explicit maintenance, shutdown,
+and reopen before the pending source event is consumed. Fjall takes
+14.95 to 16.59 milliseconds for those complete intervals. The local prototype
+takes 4.19 to 4.31 milliseconds. It performs no compaction or rotation.
+The [summary](results/cdc-2026-11-08/summary.json) separates these samples.
+
+Five Fjall journal tests pass. Six original Fjall recovery tests pass with
+CDC disabled. Seven shared release tests pass. The retained logs include
+the existing upstream and Causal warnings. Formatting, patch reverse-apply,
+and local source-link checks pass. The patch also applies to pristine pinned
+Fjall source and reproduces the measured files. Independent review confirms
+the report counts, cursor order, events, compactions, source identity, and
+exact summary reproduction.
+
+This result establishes native journal-driven wakes for this small PoC.
+Stock engines without an exposed retained original-log feed have no CDC
+timing result. The local prototype still copies its full index on each write
+and has no reclamation. The result does not establish production notification
+latency, sustained compaction, power-loss behavior, native branches, or the
+complete 100-fold improvement. Full workspace CI and the production incident
+test do not run. Production integration remains **Not done**.

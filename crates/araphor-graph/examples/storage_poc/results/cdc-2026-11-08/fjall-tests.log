@@ -1,0 +1,17 @@
+   Compiling fjall v3.1.13 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall)
+src/journal/entry.rs:200:41: warning: usage of an `unsafe` block
+src/journal/error.rs:10:10: warning: enum `RecoveryMode` is never used
+src/supervisor.rs:35:16: warning: field `backpressure_lock` is never read
+warning: `fjall` (lib test) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.80s
+     Running unittests src/lib.rs (target/debug/deps/fjall-a9928de30de2cd7c)
+
+running 5 tests
+test cdc::tests::poison_wakes_blocked_reader ... ok
+test cdc::tests::corrupt_reader_does_not_truncate ... ok
+test cdc::tests::empty_reopen_and_first_batch ... ok
+test cdc::tests::raw_mutations_and_rollback ... ok
+test cdc::tests::unread_rotation_compaction_and_clear_recovery ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 76 filtered out; finished in 0.05s
+

@@ -1,0 +1,8 @@
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/causal/io.rs:8:5: warning: unused import: `source::DiscoveryRecordIdV1`
+warning: `araphor-analysis-builtins` (lib) generated 1 warning (run `cargo fix --lib -p araphor-analysis-builtins` to apply 1 suggestion)
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall/src/journal/entry.rs:200:41: warning: usage of an `unsafe` block
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall/src/journal/error.rs:10:10: warning: enum `RecoveryMode` is never used
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall/src/supervisor.rs:35:16: warning: field `backpressure_lock` is never read
+warning: `fjall` (lib) generated 3 warnings
+   Compiling araphor-journal-storage-poc v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/cdc-bench)
+    Finished `release` profile [optimized] target(s) in 8.56s

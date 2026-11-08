@@ -1,0 +1,24 @@
+   Compiling fjall v3.1.13 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall)
+src/journal/entry.rs:200:41: warning: usage of an `unsafe` block
+src/journal/error.rs:10:10: warning: enum `RecoveryMode` is never used
+src/supervisor.rs:35:16: warning: field `backpressure_lock` is never read
+warning: `fjall` (lib) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.33s
+     Running tests/keyspace_clear.rs (target/debug/deps/keyspace_clear-aae0d01f1288e153)
+
+running 2 tests
+test clear_recover ... ok
+test clear_recover_multi_tree ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/recover_flushed_journal.rs (target/debug/deps/recover_flushed_journal-4c93542c4dda7fff)
+
+running 4 tests
+test recover_does_not_replay_flushed_items ... ok
+test recover_partially_flushed_batch ... ok
+test recover_partially_flushed_write_tx ... ok
+test recover_flushed_items_after_clear ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

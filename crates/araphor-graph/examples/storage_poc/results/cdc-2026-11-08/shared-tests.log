@@ -1,0 +1,22 @@
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/causal/io.rs:8:5: warning: unused import: `source::DiscoveryRecordIdV1`
+warning: `araphor-analysis-builtins` (lib) generated 1 warning (run `cargo fix --lib -p araphor-analysis-builtins` to apply 1 suggestion)
+   Compiling fjall v3.1.13 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall)
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall/src/journal/entry.rs:200:41: warning: usage of an `unsafe` block
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall/src/journal/error.rs:10:10: warning: enum `RecoveryMode` is never used
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall/src/supervisor.rs:35:16: warning: field `backpressure_lock` is never read
+warning: `fjall` (lib) generated 3 warnings
+   Compiling araphor-journal-storage-poc v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/cdc-bench)
+    Finished `release` profile [optimized] target(s) in 8.87s
+     Running unittests ../main.rs (target/release/deps/storage_cdc-ab38218cee80e96c)
+
+running 7 tests
+test history::tests::balanced_orders ... ok
+test home::tests::failed_append_requires_reopen ... ok
+test home::tests::transactions_and_snapshots ... ok
+test surreal::tests::native_transactions_and_reopen ... ok
+test surreal::tests::native_history_and_reopen ... ok
+test home::tests::incomplete_tail_and_corruption ... ok
+test compaction::tests::repeated_package_history ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+

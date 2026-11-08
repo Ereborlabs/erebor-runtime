@@ -548,7 +548,23 @@ Stock Fjall, redb, DuckDB, SurrealKV, and the existing Neon layer adapter have
 no qualified original-log CDC result in this runner. Do not substitute a
 logical change table or a native layer scan for that result.
 
-Implementation and focused pilot: **Done**. Frozen-source measurement:
-**Not done**. Production source input, DataFusion execution, notifications,
+Implementation and bounded frozen-source qualification: **Done** at
+`5066c4679`. The [result](../../crates/araphor-graph/examples/storage_poc/README.md#original-journal-cdc-result-2026-11-08)
+contains eight engine runs, 64 original package cycles, 64 source wakes,
+64 Graph wakes, and 128 historical views. Each Fjall run completes native
+rotation and one physical compaction, then resumes unread work after reopen.
+All exact result, metadata, rollback, and unrelated-write checks pass.
+Five journal tests, six feature-off recovery tests, and seven shared release
+tests pass.
+
+Across 28 ordinary samples, patched Fjall takes 0.61 milliseconds from source
+commit start to the matched source event. The complete source commit, package,
+Graph commit, and matched output event takes 3.95 milliseconds in the median
+and 7.88 milliseconds at maximum. Four separate samples include forced
+maintenance and reopen; these take 14.95 to 16.59 milliseconds. The local
+prototype takes 3.24 milliseconds in the ordinary median but has no compaction
+or reclamation. These are bounded PoC results, not production event-to-notification
+measurements. Production source input, DataFusion execution, notifications,
 large retained history, dynamic consumer registration, native branches, and
-the complete incident latency target remain **Not done**.
+the complete incident latency target remain **Not done**. Full workspace CI
+and the production incident test do not run.
