@@ -1046,3 +1046,65 @@ bundled build is available. There is no production owner, BPF, or ABI change.
 Large-history retention, property reclamation, sustained compaction, power
 loss, native branches, production notifications, and combined stable-key
 native-history plus journal-subscription qualification remain **Not done**.
+
+## Stable-key result: 2026-11-08
+
+The bounded comparison is **Done** at source `b7df5c3b4`. The
+[environment record](results/stable-2026-11-08/environment.json) records both
+clone sources, retained patches, dependency lock, optimized binary, commands,
+durability, and limits. The host process check finds no active compiler before
+the run. The host remains shared.
+
+All 128 primary cycles pass across four conditions and four balanced rounds.
+These include 64 stable-key cycles and 64 revision-key control cycles.
+The [report](results/stable-2026-11-08/release.json) contains 576 historical
+package evaluations and 288 finite historical view checks. Exact Arrow rows,
+commands, changes, traversal requests, frontiers, finding evidence, metadata,
+and rollback checks pass. Each run still adds 194 members and closes eight.
+The control retains 194 explicit member-version keys. The stable layout has
+186 current member keys, each 33 bytes long, with no revision suffix.
+
+| Layout | Old Graph and package reads after writes | After physical compaction | Old Graph and package reads after reopen |
+| --- | --- | --- | --- |
+| Fjall, explicit revision keys | Pass | Pass | Pass |
+| Fjall, stable keys and held snapshots | Pass | Pass while snapshots are held | Unsupported by this snapshot-handle API |
+| Neon layers, explicit revision keys | Pass | Not qualified | Pass |
+| Neon layers, stable keys and native LSN | Pass | Not qualified | Pass |
+
+Stable Fjall checks 15 rejected earlier requests after each reopen. The
+requests cover 12 distinct cuts because captured and publication cuts overlap.
+There are 60 rejected requests across four runs. The current Graph is correct
+after reopen and compaction. No historical snapshot is reconstructed. The
+result does not establish that all old physical values are absent, or that
+Fjall cannot support a different retained-history extension.
+
+The following values are median round totals in milliseconds. A normal round
+has eight package cycles and durable Graph commits. A historical stage has
+16 package evaluations, backward then forward, without a commit. Explicit
+compaction and reopen are outside these intervals.
+
+| Layout | Eight normal cycles | Historical 16 after writes | Historical 16 after compaction | Historical 16 after reopen |
+| --- | ---: | ---: | ---: | ---: |
+| Fjall, explicit revision keys | 27.04 | 32.86 | 31.35 | 31.31 |
+| Fjall, stable keys | 25.63 | 27.26 | 27.04 | Unsupported |
+| Neon layers, explicit revision keys | 71.30 | 114.54 | Not qualified | 113.56 |
+| Neon layers, stable keys | 72.75 | 112.18 | Not qualified | 113.17 |
+
+The [summary](results/stable-2026-11-08/summary.json) reproduces with
+`summarize_stable.py`. Four balanced rounds are a bounded comparison. Small
+timing differences do not establish a general performance gain. These are
+package and Graph timings, not source-event or notification latency.
+
+Eight focused release tests pass. The separate
+[CDC regression](results/stable-2026-11-08/cdc-regression.json) also passes
+eight runs and 64 package cycles. That mode still uses revision-bearing Graph
+keys. It does not combine stable-key native history with subscription wakes.
+The retained build and test logs include the existing upstream and Causal
+warnings. Formatting checks parse shared files as Rust 2021 and use their
+existing Rust 2024 style.
+
+Stable mutable application keys with durable native history are verified for
+the local Neon layer adapter. Durable native Fjall history through this API,
+combined stable-key history and original-log CDC, production integration,
+native branches, sustained compaction, power loss, and the complete incident
+latency target remain **Not done**. Full workspace CI does not run.

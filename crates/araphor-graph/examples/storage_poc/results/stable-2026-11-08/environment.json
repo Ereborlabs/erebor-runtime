@@ -1,0 +1,93 @@
+{
+  "date": "2026-11-08",
+  "source_full": "b7df5c3b4786aed36dede8b8630d0e77aa908f40",
+  "source_state": "PoC implementation and guides committed; unrelated user edits remain outside this test.",
+  "fjall_source": "87006048139bfe1b072bbc29a5a92bf1f97628e3",
+  "fjall_patch": "../../cdc-bench/fjall.patch",
+  "fjall_patch_sha256": "07eee2c2b728ae128252b2c5d3730450dfdf77b211593c0a18c6c8cf7aff4f3f",
+  "neon_source": "fa504217c61bbcaf5c512d75830564541f917f8f",
+  "neon_patch": "../../neon-bench/neon.patch",
+  "neon_patch_sha256": "bf403c88f0ac26c2f372b641ca6a7ac526c536771bf42cbaaf4523896ef3bb58",
+  "isolated_lock": "../../neon-bench/Cargo.lock",
+  "isolated_lock_sha256": "f45612864b609341a38da9f6edc314321d5049948c7bc3811740760c7ea111d5",
+  "resolved_packages": {
+    "arrow-array": {
+      "version": "59.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "fjall": {
+      "version": "3.1.13"
+    },
+    "log": {
+      "version": "0.4.29",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "lsm-tree": {
+      "version": "3.1.10",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "pageserver": {
+      "version": "0.1.0"
+    },
+    "redb": {
+      "version": "4.4.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "surrealkv": {
+      "version": "1.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "tokio": {
+      "version": "1.52.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    }
+  },
+  "binary_sha256": "1a9adf472f0f79f240883ef57b144b70ca0e49285dfb4e05126d489ac4356d89",
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics",
+  "logical_cpus": 16,
+  "kernel": "6.8.0-147-generic",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "filesystem": "ext4 on /dev/nvme0n1p7; /tmp uses the same device as the checkout",
+  "profile": "Cargo release opt-level3; shared host, no CPU/I/O/cache isolation; native Neon StdFs and sync enabled",
+  "duckdb_cached_archive": "target/release/build/libduckdb-sys-e073672aa6bffaa9/out/libduckdb.a",
+  "duckdb_cached_archive_sha256": "121c752b58ae133fe0e1627a6c7d3559e185d04fd0a9a51a9d73a9885429b1eb",
+  "duckdb_override": "[target.x86_64-unknown-linux-gnu.duckdb]\nrustc-link-lib = [\"static=duckdb\", \"stdc++\"]\nrustc-link-search = [\"native=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"]\nrustc-env = { OUT_DIR = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\" }\ninclude = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/src/include\"\nlib_dir = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"\n",
+  "commands": [
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 POSTGRES_INSTALL_DIR=$PWD/neon/pg_install cargo test --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 POSTGRES_INSTALL_DIR=$PWD/neon/pg_install POC_SOURCE_REVISION=b7df5c3b4786aed36dede8b8630d0e77aa908f40 cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+    "rtk proxy target/release/storage_poc /tmp/araphor-stable-poc-20261108/release.json stable",
+    "rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize_stable.py /tmp/araphor-stable-poc-20261108/release.json",
+    "rtk proxy target/release/storage_poc /tmp/araphor-stable-poc-20261108/cdc-regression.json cdc",
+    "rtk proxy rustfmt --edition 2021 --config style_edition=2024,skip_children=true --check crates/araphor-graph/examples/storage_poc/native.rs crates/araphor-graph/examples/storage_poc/kv.rs crates/araphor-graph/examples/storage_poc/main.rs crates/araphor-graph/examples/storage_poc/stable.rs"
+  ],
+  "durability": {
+    "fjall": "provided clone with existing journal-cdc opt-in; SyncAll native writes",
+    "neon": "existing native DeltaLayerWriter finish sync_all, rename committed layer and sync directory; one layer per commit"
+  },
+  "layout": "Controls retain explicit application revision suffixes. Stable variant uses fixed M/R/K/O/I/B/H/S/T keys and singleton J/C. Closures remove current members/indexes. Engine read view supplies version visibility. Opened revision stays in values; dictionary IDs and immutable Arrow property chunk IDs stay semantic identities.",
+  "fjall_history": "Native public read_tx Snapshot handles retained in RAM at each committed Graph head. Old Graph reads and package replay pass before/after physical compaction while handles are held. After owner drop/reopen only current87 handle is captured; earlier native handles cannot be restored by this API. Fifteen requests per run are explicitly Unsupported, covering12distinct cuts with overlap. This does not prove every old native byte is gone.",
+  "neon_history": "Stable variable keys keep the same native numeric Key across writes; Lsn is separate. Historical native disk-index/blob reads and exact package replay pass after reopen. No PostgreSQL WAL feed or background compaction/branch qualification.",
+  "history_checks": "128 primary cycles;576 historical package evaluations;288 finite historical views. Exact rows, Arrow commands, clears, traversal key requests, frontier, semantic194 additions/8closures per run, finding evidence, writer heads/state, parent/captured metadata and rollback are asserted. JSON retains timings/counts, not exact Arrow values or call key bytes.",
+  "cdc_regression": "Separate original journal-driven mode:8runs,64cycles,64source events,64Graph events,128historical views. Graph keys retain revision suffixes in that mode. This is not combined stable-key/native-history/subscription qualification.",
+  "maintenance": "Both Fjall conditions flush first4primary increments outside timing, then flush/complete major compaction after all writes. Stable condition holds native snapshots; revision-key control retains application version keys. Old Graph views and package evaluations checked before and after compaction. Neon local adapter has no background compaction.",
+  "focused_tests": "Eight release tests pass. Earlier focused engine tests are unchanged; no new engine-source patch in this test.",
+  "limits": [
+    "Fjall held snapshots and logical-to-handle map are in RAM only",
+    "Neon adapter has no original WAL CDC, native branches or background compaction",
+    "immutable property chunks and dictionary IDs remain; no property reclamation",
+    "prepared source Arrow; no production DataFusion input or notification path",
+    "no steady compaction, large-history, cold-cache or power-loss qualification",
+    "full workspace CI and production incident test not run",
+    "unsupported old Fjall requests are repeated requests, not60distinct revisions",
+    "four balanced rounds per condition are a bounded screen, not proof of a small speed gain",
+    "native Neon auto I/O selection falls back to StdFs because tokio-epoll-uring returns EPERM"
+  ],
+  "source_checks": [
+    "Changed shared source parses Rust2021 and passes existing2024 style",
+    "Named source paths match frozen commit",
+    "Scoped source/guide whitespace checks pass",
+    "Local source and result links resolve",
+    "Summary and source/captured-cut counts reproduce exactly"
+  ],
+  "independent_review": "Passed:16 balanced runs, exact member/semantic counts, original traversal and captured cuts, historical stage counts, unsupported request classification, all medians,8tests, separate64cycleCDC regression and64+64wakes, source/binary/locks/resolved versions/clone/patch identity, result prose and limits. Evidence commit cleared."
+}

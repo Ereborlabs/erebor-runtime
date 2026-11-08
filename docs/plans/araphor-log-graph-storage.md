@@ -591,9 +591,27 @@ and checks old values after reopen. All mutable key lengths are checked.
 Opened revisions remain semantic value fields. Immutable property chunks and
 dictionary IDs remain identities.
 
-Implementation and focused pilot: **Done**. Frozen-source measurement:
-**Not done**. The original journal-subscription proof remains separate and
-passes its focused regression. This stable-key driver does not run source
-subscriptions or production notification delivery. Production integration,
-durable native Fjall history, combined stable-key history and CDC, and the
-complete incident latency target remain **Not done**.
+Implementation and frozen-source bounded comparison: **Done** at
+`b7df5c3b4`. The [result](../../crates/araphor-graph/examples/storage_poc/README.md#stable-key-result-2026-11-08)
+contains 128 primary package cycles, 576 historical package evaluations, and
+288 finite historical views. Exact rows, commands, traversal requests,
+frontiers, changes, state, metadata, finding evidence, and rollback checks
+pass. Mutable member keys are 33 bytes in the stable layout and have no
+revision suffix. The opened revision remains a value field.
+
+Stable Neon reads earlier Graph and package state through native LSNs after
+reopen. Stable Fjall reads earlier state through physical compaction while
+native snapshots are held. After reopen, 60 earlier requests across four
+runs are unsupported by the snapshot-handle API. These requests include
+overlapping cuts. The current Graph passes after reopen and compaction.
+This result does not establish that all older native values are absent.
+
+Median eight-cycle totals are 27.04 milliseconds for revision-key Fjall,
+25.63 for stable-key Fjall, 71.30 for revision-key Neon layers, and 72.75 for
+stable-key Neon layers. Four balanced rounds do not establish a small general
+speed gain. Eight focused release tests and the separate 64-cycle original
+journal-subscription regression pass. This stable-key driver does not run
+source subscriptions or production notification delivery. Production
+integration, durable native Fjall history, combined stable-key history and
+CDC, native branches, sustained compaction, power loss, and the complete
+incident latency target remain **Not done**. Full workspace CI does not run.

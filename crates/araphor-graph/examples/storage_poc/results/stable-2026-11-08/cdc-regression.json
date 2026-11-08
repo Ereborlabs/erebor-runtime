@@ -1,0 +1,1978 @@
+{
+  "limits": [
+    "prepared input Arrow, no DataFusion source query",
+    "synthetic source metadata, no event capture",
+    "no production notification delivery",
+    "no branch qualification",
+    "Fjall bulk ingestion and keyspace catalog changes are not CDC supported",
+    "explicit flush/rotation/major compaction is correctness proof, not sustained compaction timing"
+  ],
+  "profile": "release",
+  "runs": [
+    {
+      "compactions": 1,
+      "engine": "fjall",
+      "historical_views": 16,
+      "reopen_s": 0.004573189,
+      "rotation": true,
+      "round": 0,
+      "samples": [
+        {
+          "captured": 24,
+          "engine": "fjall",
+          "findings": 0,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 75686,
+            "sequence": 4
+          },
+          "members": 50,
+          "output_commit_s": 0.001579943,
+          "output_ready_s": 0.002308106,
+          "output_wake_s": 0.002297141,
+          "package_s": 0.00116837,
+          "restarted": false,
+          "revision": 26,
+          "round": 0,
+          "source_commit_s": 0.000563827,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 161,
+            "sequence": 3
+          },
+          "source_ready_s": 0.000660696,
+          "source_wake_s": 0.000645331,
+          "total_s": 0.004141572
+        },
+        {
+          "captured": 27,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 112426,
+            "sequence": 8
+          },
+          "members": 12,
+          "output_commit_s": 0.002075675,
+          "output_ready_s": 0.002637127,
+          "output_wake_s": 0.002625813,
+          "package_s": 0.001538178,
+          "restarted": false,
+          "revision": 29,
+          "round": 0,
+          "source_commit_s": 0.000537078,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 75838,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000569484,
+          "source_wake_s": 0.000559986,
+          "total_s": 0.00474912
+        },
+        {
+          "captured": 36,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 130860,
+            "sequence": 12
+          },
+          "members": 2,
+          "output_commit_s": 0.001111869,
+          "output_ready_s": 0.00132656,
+          "output_wake_s": 0.001313639,
+          "package_s": 0.001859657,
+          "restarted": false,
+          "revision": 44,
+          "round": 0,
+          "source_commit_s": 0.000652385,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 112578,
+            "sequence": 11
+          },
+          "source_ready_s": 0.000690448,
+          "source_wake_s": 0.000681439,
+          "total_s": 0.003880367
+        },
+        {
+          "captured": 44,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 149294,
+            "sequence": 16
+          },
+          "members": 2,
+          "output_commit_s": 0.001130167,
+          "output_ready_s": 0.001305119,
+          "output_wake_s": 0.001294294,
+          "package_s": 0.001618984,
+          "restarted": false,
+          "revision": 46,
+          "round": 0,
+          "source_commit_s": 0.000564735,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 131012,
+            "sequence": 15
+          },
+          "source_ready_s": 0.000601052,
+          "source_wake_s": 0.000590506,
+          "total_s": 0.003528927
+        },
+        {
+          "captured": 48,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18282,
+            "sequence": 20
+          },
+          "members": 2,
+          "output_commit_s": 0.001055996,
+          "output_ready_s": 0.001361201,
+          "output_wake_s": 0.001350655,
+          "package_s": 0.001764533,
+          "restarted": true,
+          "revision": 62,
+          "round": 0,
+          "source_commit_s": 0.000608385,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 149446,
+            "sequence": 19
+          },
+          "source_ready_s": 0.013378954,
+          "source_wake_s": 0.013364846,
+          "total_s": 0.016508949
+        },
+        {
+          "captured": 62,
+          "engine": "fjall",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 128884,
+            "sequence": 23
+          },
+          "members": 64,
+          "output_commit_s": 0.00228834,
+          "output_ready_s": 0.003251518,
+          "output_wake_s": 0.003241461,
+          "package_s": 0.002244062,
+          "restarted": false,
+          "revision": 64,
+          "round": 0,
+          "source_commit_s": 0.000546855,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18434,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000578842,
+          "source_wake_s": 0.000569204,
+          "total_s": 0.006078613
+        },
+        {
+          "captured": 71,
+          "engine": "fjall",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 149287,
+            "sequence": 26
+          },
+          "members": 4,
+          "output_commit_s": 0.001264472,
+          "output_ready_s": 0.001630858,
+          "output_wake_s": 0.001617029,
+          "package_s": 0.00235441,
+          "restarted": false,
+          "revision": 85,
+          "round": 0,
+          "source_commit_s": 0.000534493,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 129036,
+            "sequence": 25
+          },
+          "source_ready_s": 0.000566899,
+          "source_wake_s": 0.000557401,
+          "total_s": 0.004556427
+        },
+        {
+          "captured": 85,
+          "engine": "fjall",
+          "findings": 3,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 262088,
+            "sequence": 29
+          },
+          "members": 66,
+          "output_commit_s": 0.002512461,
+          "output_ready_s": 0.00351468,
+          "output_wake_s": 0.003499245,
+          "package_s": 0.003098078,
+          "restarted": false,
+          "revision": 87,
+          "round": 0,
+          "source_commit_s": 0.000585408,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 149439,
+            "sequence": 28
+          },
+          "source_ready_s": 0.000621097,
+          "source_wake_s": 0.000608735,
+          "total_s": 0.00723958
+        }
+      ],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 149285,
+          "read_s": 0.013180116,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 280676,
+          "read_s": 0.003056733,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 0,
+      "engine": "home",
+      "historical_views": 16,
+      "reopen_s": 0.00135289,
+      "rotation": false,
+      "round": 0,
+      "samples": [
+        {
+          "captured": 24,
+          "engine": "home",
+          "findings": 0,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 77486,
+            "sequence": 77486
+          },
+          "members": 50,
+          "output_commit_s": 0.001205596,
+          "output_ready_s": 0.001495715,
+          "output_wake_s": 0.001470852,
+          "package_s": 0.000845006,
+          "restarted": false,
+          "revision": 26,
+          "round": 0,
+          "source_commit_s": 0.000546017,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 100,
+            "sequence": 100
+          },
+          "source_ready_s": 0.000626055,
+          "source_wake_s": 0.000584569,
+          "total_s": 0.002971456
+        },
+        {
+          "captured": 27,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 194866,
+            "sequence": 194866
+          },
+          "members": 12,
+          "output_commit_s": 0.001108796,
+          "output_ready_s": 0.001294923,
+          "output_wake_s": 0.001282212,
+          "package_s": 0.001033228,
+          "restarted": false,
+          "revision": 29,
+          "round": 0,
+          "source_commit_s": 0.000604125,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 77586,
+            "sequence": 77586
+          },
+          "source_ready_s": 0.000630804,
+          "source_wake_s": 0.000618582,
+          "total_s": 0.002963284
+        },
+        {
+          "captured": 36,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 291262,
+            "sequence": 291262
+          },
+          "members": 2,
+          "output_commit_s": 0.001025476,
+          "output_ready_s": 0.001137222,
+          "output_wake_s": 0.001126257,
+          "package_s": 0.000971838,
+          "restarted": false,
+          "revision": 44,
+          "round": 0,
+          "source_commit_s": 0.000581636,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 194966,
+            "sequence": 194966
+          },
+          "source_ready_s": 0.000610969,
+          "source_wake_s": 0.000598049,
+          "total_s": 0.002724428
+        },
+        {
+          "captured": 44,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 387658,
+            "sequence": 387658
+          },
+          "members": 2,
+          "output_commit_s": 0.001036511,
+          "output_ready_s": 0.001163691,
+          "output_wake_s": 0.001150212,
+          "package_s": 0.000968346,
+          "restarted": false,
+          "revision": 46,
+          "round": 0,
+          "source_commit_s": 0.000581846,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 291362,
+            "sequence": 291362
+          },
+          "source_ready_s": 0.000618582,
+          "source_wake_s": 0.000600354,
+          "total_s": 0.002755368
+        },
+        {
+          "captured": 48,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 484054,
+            "sequence": 484054
+          },
+          "members": 2,
+          "output_commit_s": 0.001030923,
+          "output_ready_s": 0.001213906,
+          "output_wake_s": 0.001200567,
+          "package_s": 0.00111578,
+          "restarted": true,
+          "revision": 62,
+          "round": 0,
+          "source_commit_s": 0.00055782,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 387758,
+            "sequence": 387758
+          },
+          "source_ready_s": 0.002251185,
+          "source_wake_s": 0.002235122,
+          "total_s": 0.004585062
+        },
+        {
+          "captured": 62,
+          "engine": "home",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 690860,
+            "sequence": 690860
+          },
+          "members": 64,
+          "output_commit_s": 0.001784648,
+          "output_ready_s": 0.002146285,
+          "output_wake_s": 0.002136786,
+          "package_s": 0.001410859,
+          "restarted": false,
+          "revision": 64,
+          "round": 0,
+          "source_commit_s": 0.000569554,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 484154,
+            "sequence": 484154
+          },
+          "source_ready_s": 0.000593369,
+          "source_wake_s": 0.000584011,
+          "total_s": 0.004154353
+        },
+        {
+          "captured": 71,
+          "engine": "home",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 805097,
+            "sequence": 805097
+          },
+          "members": 4,
+          "output_commit_s": 0.001229411,
+          "output_ready_s": 0.001370979,
+          "output_wake_s": 0.00136183,
+          "package_s": 0.001406179,
+          "restarted": false,
+          "revision": 85,
+          "round": 0,
+          "source_commit_s": 0.000591623,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 690960,
+            "sequence": 690960
+          },
+          "source_ready_s": 0.000622143,
+          "source_wake_s": 0.000610201,
+          "total_s": 0.003403492
+        },
+        {
+          "captured": 85,
+          "engine": "home",
+          "findings": 3,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 1031892,
+            "sequence": 1031892
+          },
+          "members": 66,
+          "output_commit_s": 0.002219617,
+          "output_ready_s": 0.002518048,
+          "output_wake_s": 0.002507641,
+          "package_s": 0.001757689,
+          "restarted": false,
+          "revision": 87,
+          "round": 0,
+          "source_commit_s": 0.000669775,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 805197,
+            "sequence": 805197
+          },
+          "source_ready_s": 0.000698689,
+          "source_wake_s": 0.000688702,
+          "total_s": 0.004978686
+        }
+      ],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 387658,
+          "read_s": 0.0007338189999999999,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 740632,
+          "read_s": 0.00120308,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 0,
+      "engine": "home",
+      "historical_views": 16,
+      "reopen_s": 0.001175285,
+      "rotation": false,
+      "round": 1,
+      "samples": [
+        {
+          "captured": 24,
+          "engine": "home",
+          "findings": 0,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 77486,
+            "sequence": 77486
+          },
+          "members": 50,
+          "output_commit_s": 0.001789955,
+          "output_ready_s": 0.002056678,
+          "output_wake_s": 0.002046621,
+          "package_s": 0.000720689,
+          "restarted": false,
+          "revision": 26,
+          "round": 1,
+          "source_commit_s": 0.000592951,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 100,
+            "sequence": 100
+          },
+          "source_ready_s": 0.000650639,
+          "source_wake_s": 0.000630595,
+          "total_s": 0.003433245
+        },
+        {
+          "captured": 27,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 194866,
+            "sequence": 194866
+          },
+          "members": 12,
+          "output_commit_s": 0.001183387,
+          "output_ready_s": 0.00138837,
+          "output_wake_s": 0.001379919,
+          "package_s": 0.001321811,
+          "restarted": false,
+          "revision": 29,
+          "round": 1,
+          "source_commit_s": 0.000549858,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 77586,
+            "sequence": 77586
+          },
+          "source_ready_s": 0.000574093,
+          "source_wake_s": 0.000564176,
+          "total_s": 0.003288674
+        },
+        {
+          "captured": 36,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 291262,
+            "sequence": 291262
+          },
+          "members": 2,
+          "output_commit_s": 0.001038186,
+          "output_ready_s": 0.001175633,
+          "output_wake_s": 0.001162014,
+          "package_s": 0.000967996,
+          "restarted": false,
+          "revision": 44,
+          "round": 1,
+          "source_commit_s": 0.000574372,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 194966,
+            "sequence": 194966
+          },
+          "source_ready_s": 0.000605242,
+          "source_wake_s": 0.000592601,
+          "total_s": 0.002753202
+        },
+        {
+          "captured": 44,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 387658,
+            "sequence": 387658
+          },
+          "members": 2,
+          "output_commit_s": 0.001055507,
+          "output_ready_s": 0.001175983,
+          "output_wake_s": 0.001165995,
+          "package_s": 0.000979381,
+          "restarted": false,
+          "revision": 46,
+          "round": 1,
+          "source_commit_s": 0.000583312,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 291362,
+            "sequence": 291362
+          },
+          "source_ready_s": 0.0006109,
+          "source_wake_s": 0.000601262,
+          "total_s": 0.002770593
+        },
+        {
+          "captured": 48,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 484054,
+            "sequence": 484054
+          },
+          "members": 2,
+          "output_commit_s": 0.00103218,
+          "output_ready_s": 0.001214605,
+          "output_wake_s": 0.001201265,
+          "package_s": 0.00104119,
+          "restarted": true,
+          "revision": 62,
+          "round": 1,
+          "source_commit_s": 0.000573325,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 387758,
+            "sequence": 387758
+          },
+          "source_ready_s": 0.002111084,
+          "source_wake_s": 0.00209523,
+          "total_s": 0.004371209
+        },
+        {
+          "captured": 62,
+          "engine": "home",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 690860,
+            "sequence": 690860
+          },
+          "members": 64,
+          "output_commit_s": 0.001653276,
+          "output_ready_s": 0.002023783,
+          "output_wake_s": 0.002012189,
+          "package_s": 0.001403455,
+          "restarted": false,
+          "revision": 64,
+          "round": 1,
+          "source_commit_s": 0.000583591,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 484154,
+            "sequence": 484154
+          },
+          "source_ready_s": 0.000612156,
+          "source_wake_s": 0.000599236,
+          "total_s": 0.004043725
+        },
+        {
+          "captured": 71,
+          "engine": "home",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 805097,
+            "sequence": 805097
+          },
+          "members": 4,
+          "output_commit_s": 0.001076111,
+          "output_ready_s": 0.001244777,
+          "output_wake_s": 0.001232066,
+          "package_s": 0.001529029,
+          "restarted": false,
+          "revision": 85,
+          "round": 1,
+          "source_commit_s": 0.000596233,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 690960,
+            "sequence": 690960
+          },
+          "source_ready_s": 0.000634855,
+          "source_wake_s": 0.000624448,
+          "total_s": 0.003413479
+        },
+        {
+          "captured": 85,
+          "engine": "home",
+          "findings": 3,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 1031892,
+            "sequence": 1031892
+          },
+          "members": 66,
+          "output_commit_s": 0.001728565,
+          "output_ready_s": 0.002070647,
+          "output_wake_s": 0.002056678,
+          "package_s": 0.00177005,
+          "restarted": false,
+          "revision": 87,
+          "round": 1,
+          "source_commit_s": 0.00059309,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 805197,
+            "sequence": 805197
+          },
+          "source_ready_s": 0.000620956,
+          "source_wake_s": 0.000609013,
+          "total_s": 0.004465913
+        }
+      ],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 387658,
+          "read_s": 0.0007678310000000002,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 740632,
+          "read_s": 0.001272222,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 1,
+      "engine": "fjall",
+      "historical_views": 16,
+      "reopen_s": 0.004407736,
+      "rotation": true,
+      "round": 1,
+      "samples": [
+        {
+          "captured": 24,
+          "engine": "fjall",
+          "findings": 0,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 75686,
+            "sequence": 4
+          },
+          "members": 50,
+          "output_commit_s": 0.001364763,
+          "output_ready_s": 0.002040126,
+          "output_wake_s": 0.002028532,
+          "package_s": 0.000759311,
+          "restarted": false,
+          "revision": 26,
+          "round": 1,
+          "source_commit_s": 0.000570112,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 161,
+            "sequence": 3
+          },
+          "source_ready_s": 0.000664956,
+          "source_wake_s": 0.000649381,
+          "total_s": 0.003468654
+        },
+        {
+          "captured": 27,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 112426,
+            "sequence": 8
+          },
+          "members": 12,
+          "output_commit_s": 0.001156776,
+          "output_ready_s": 0.001773333,
+          "output_wake_s": 0.001761949,
+          "package_s": 0.001425176,
+          "restarted": false,
+          "revision": 29,
+          "round": 1,
+          "source_commit_s": 0.000550207,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 75838,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000597699,
+          "source_wake_s": 0.000587223,
+          "total_s": 0.00379956
+        },
+        {
+          "captured": 36,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 130860,
+            "sequence": 12
+          },
+          "members": 2,
+          "output_commit_s": 0.0010451,
+          "output_ready_s": 0.00129562,
+          "output_wake_s": 0.001285214,
+          "package_s": 0.001690223,
+          "restarted": false,
+          "revision": 44,
+          "round": 1,
+          "source_commit_s": 0.00056662,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 112578,
+            "sequence": 11
+          },
+          "source_ready_s": 0.000613344,
+          "source_wake_s": 0.000603776,
+          "total_s": 0.003603517
+        },
+        {
+          "captured": 44,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 149294,
+            "sequence": 16
+          },
+          "members": 2,
+          "output_commit_s": 0.000978123,
+          "output_ready_s": 0.001179265,
+          "output_wake_s": 0.001167881,
+          "package_s": 0.001654743,
+          "restarted": false,
+          "revision": 46,
+          "round": 1,
+          "source_commit_s": 0.000554747,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 131012,
+            "sequence": 15
+          },
+          "source_ready_s": 0.000596791,
+          "source_wake_s": 0.000586245,
+          "total_s": 0.00343506
+        },
+        {
+          "captured": 48,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18282,
+            "sequence": 20
+          },
+          "members": 2,
+          "output_commit_s": 0.000992651,
+          "output_ready_s": 0.001248827,
+          "output_wake_s": 0.00123884,
+          "package_s": 0.001702724,
+          "restarted": true,
+          "revision": 62,
+          "round": 1,
+          "source_commit_s": 0.000580239,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 149446,
+            "sequence": 19
+          },
+          "source_ready_s": 0.01317886,
+          "source_wake_s": 0.013164892,
+          "total_s": 0.016133763
+        },
+        {
+          "captured": 62,
+          "engine": "fjall",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 128884,
+            "sequence": 23
+          },
+          "members": 64,
+          "output_commit_s": 0.002314043,
+          "output_ready_s": 0.003279874,
+          "output_wake_s": 0.003267023,
+          "package_s": 0.002011492,
+          "restarted": false,
+          "revision": 64,
+          "round": 1,
+          "source_commit_s": 0.00056669,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18434,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000602519,
+          "source_wake_s": 0.000592881,
+          "total_s": 0.005897795
+        },
+        {
+          "captured": 71,
+          "engine": "fjall",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 149287,
+            "sequence": 26
+          },
+          "members": 4,
+          "output_commit_s": 0.001136103,
+          "output_ready_s": 0.001564997,
+          "output_wake_s": 0.00155061,
+          "package_s": 0.002244201,
+          "restarted": false,
+          "revision": 85,
+          "round": 1,
+          "source_commit_s": 0.000583801,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 129036,
+            "sequence": 25
+          },
+          "source_ready_s": 0.000622842,
+          "source_wake_s": 0.000609572,
+          "total_s": 0.00443686
+        },
+        {
+          "captured": 85,
+          "engine": "fjall",
+          "findings": 3,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 262088,
+            "sequence": 29
+          },
+          "members": 66,
+          "output_commit_s": 0.002304753,
+          "output_ready_s": 0.00321087,
+          "output_wake_s": 0.003199975,
+          "package_s": 0.002754879,
+          "restarted": false,
+          "revision": 87,
+          "round": 1,
+          "source_commit_s": 0.000580029,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 149439,
+            "sequence": 28
+          },
+          "source_ready_s": 0.000617743,
+          "source_wake_s": 0.000608105,
+          "total_s": 0.006587823
+        }
+      ],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 149285,
+          "read_s": 0.0018932509999999999,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 280676,
+          "read_s": 0.0030557519999999993,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 0,
+      "engine": "home",
+      "historical_views": 16,
+      "reopen_s": 0.001343392,
+      "rotation": false,
+      "round": 2,
+      "samples": [
+        {
+          "captured": 24,
+          "engine": "home",
+          "findings": 0,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 77486,
+            "sequence": 77486
+          },
+          "members": 50,
+          "output_commit_s": 0.001153983,
+          "output_ready_s": 0.001424059,
+          "output_wake_s": 0.001411068,
+          "package_s": 0.000782428,
+          "restarted": false,
+          "revision": 26,
+          "round": 2,
+          "source_commit_s": 0.000601122,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 100,
+            "sequence": 100
+          },
+          "source_ready_s": 0.000655528,
+          "source_wake_s": 0.000633528,
+          "total_s": 0.002865367
+        },
+        {
+          "captured": 27,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 194866,
+            "sequence": 194866
+          },
+          "members": 12,
+          "output_commit_s": 0.001202942,
+          "output_ready_s": 0.001387462,
+          "output_wake_s": 0.001374681,
+          "package_s": 0.001196795,
+          "restarted": false,
+          "revision": 29,
+          "round": 2,
+          "source_commit_s": 0.000564106,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 77586,
+            "sequence": 77586
+          },
+          "source_ready_s": 0.000588131,
+          "source_wake_s": 0.000577725,
+          "total_s": 0.00317616
+        },
+        {
+          "captured": 36,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 291262,
+            "sequence": 291262
+          },
+          "members": 2,
+          "output_commit_s": 0.001114034,
+          "output_ready_s": 0.001232554,
+          "output_wake_s": 0.001221659,
+          "package_s": 0.001388719,
+          "restarted": false,
+          "revision": 44,
+          "round": 2,
+          "source_commit_s": 0.000569204,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 194966,
+            "sequence": 194966
+          },
+          "source_ready_s": 0.000600143,
+          "source_wake_s": 0.000587782,
+          "total_s": 0.003225747
+        },
+        {
+          "captured": 44,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 387658,
+            "sequence": 387658
+          },
+          "members": 2,
+          "output_commit_s": 0.001017584,
+          "output_ready_s": 0.00113792,
+          "output_wake_s": 0.001127513,
+          "package_s": 0.00100606,
+          "restarted": false,
+          "revision": 46,
+          "round": 2,
+          "source_commit_s": 0.00059316,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 291362,
+            "sequence": 291362
+          },
+          "source_ready_s": 0.000628919,
+          "source_wake_s": 0.000617535,
+          "total_s": 0.002777647
+        },
+        {
+          "captured": 48,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 484054,
+            "sequence": 484054
+          },
+          "members": 2,
+          "output_commit_s": 0.001053202,
+          "output_ready_s": 0.001236884,
+          "output_wake_s": 0.001224452,
+          "package_s": 0.001124091,
+          "restarted": true,
+          "revision": 62,
+          "round": 2,
+          "source_commit_s": 0.000625566,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 387758,
+            "sequence": 387758
+          },
+          "source_ready_s": 0.00233269,
+          "source_wake_s": 0.002317325,
+          "total_s": 0.004697018
+        },
+        {
+          "captured": 62,
+          "engine": "home",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 690860,
+            "sequence": 690860
+          },
+          "members": 64,
+          "output_commit_s": 0.001663054,
+          "output_ready_s": 0.002021897,
+          "output_wake_s": 0.002010304,
+          "package_s": 0.001414699,
+          "restarted": false,
+          "revision": 64,
+          "round": 2,
+          "source_commit_s": 0.000581426,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 484154,
+            "sequence": 484154
+          },
+          "source_ready_s": 0.000610061,
+          "source_wake_s": 0.000598258,
+          "total_s": 0.004051058
+        },
+        {
+          "captured": 71,
+          "engine": "home",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 805097,
+            "sequence": 805097
+          },
+          "members": 4,
+          "output_commit_s": 0.001142809,
+          "output_ready_s": 0.001315246,
+          "output_wake_s": 0.001305259,
+          "package_s": 0.001396611,
+          "restarted": false,
+          "revision": 85,
+          "round": 2,
+          "source_commit_s": 0.000591623,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 690960,
+            "sequence": 690960
+          },
+          "source_ready_s": 0.000616347,
+          "source_wake_s": 0.000607267,
+          "total_s": 0.003332045
+        },
+        {
+          "captured": 85,
+          "engine": "home",
+          "findings": 3,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 1031892,
+            "sequence": 1031892
+          },
+          "members": 66,
+          "output_commit_s": 0.001844851,
+          "output_ready_s": 0.002151662,
+          "output_wake_s": 0.002139161,
+          "package_s": 0.001888222,
+          "restarted": false,
+          "revision": 87,
+          "round": 2,
+          "source_commit_s": 0.000595325,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 805197,
+            "sequence": 805197
+          },
+          "source_ready_s": 0.000623959,
+          "source_wake_s": 0.000612086,
+          "total_s": 0.004668173
+        }
+      ],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 387658,
+          "read_s": 0.0007183840000000002,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 740632,
+          "read_s": 0.001245477,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 1,
+      "engine": "fjall",
+      "historical_views": 16,
+      "reopen_s": 0.004306816,
+      "rotation": true,
+      "round": 2,
+      "samples": [
+        {
+          "captured": 24,
+          "engine": "fjall",
+          "findings": 0,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 75686,
+            "sequence": 4
+          },
+          "members": 50,
+          "output_commit_s": 0.001363576,
+          "output_ready_s": 0.002029789,
+          "output_wake_s": 0.002019662,
+          "package_s": 0.000787387,
+          "restarted": false,
+          "revision": 26,
+          "round": 2,
+          "source_commit_s": 0.000289141,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 161,
+            "sequence": 3
+          },
+          "source_ready_s": 0.000389154,
+          "source_wake_s": 0.000373439,
+          "total_s": 0.003210521
+        },
+        {
+          "captured": 27,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 112426,
+            "sequence": 8
+          },
+          "members": 12,
+          "output_commit_s": 0.001253157,
+          "output_ready_s": 0.001832069,
+          "output_wake_s": 0.001821523,
+          "package_s": 0.001387392,
+          "restarted": false,
+          "revision": 29,
+          "round": 2,
+          "source_commit_s": 0.000568855,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 75838,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000612855,
+          "source_wake_s": 0.000601262,
+          "total_s": 0.003836507
+        },
+        {
+          "captured": 36,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 130860,
+            "sequence": 12
+          },
+          "members": 2,
+          "output_commit_s": 0.001024986,
+          "output_ready_s": 0.001233532,
+          "output_wake_s": 0.001223544,
+          "package_s": 0.001985091,
+          "restarted": false,
+          "revision": 44,
+          "round": 2,
+          "source_commit_s": 0.000568576,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 112578,
+            "sequence": 11
+          },
+          "source_ready_s": 0.000617115,
+          "source_wake_s": 0.000602937,
+          "total_s": 0.003839999
+        },
+        {
+          "captured": 44,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 149294,
+            "sequence": 16
+          },
+          "members": 2,
+          "output_commit_s": 0.000994955,
+          "output_ready_s": 0.001229411,
+          "output_wake_s": 0.001219424,
+          "package_s": 0.001958272,
+          "restarted": false,
+          "revision": 46,
+          "round": 2,
+          "source_commit_s": 0.000544061,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 131012,
+            "sequence": 15
+          },
+          "source_ready_s": 0.000589737,
+          "source_wake_s": 0.000578772,
+          "total_s": 0.003781751
+        },
+        {
+          "captured": 48,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18282,
+            "sequence": 20
+          },
+          "members": 2,
+          "output_commit_s": 0.001017793,
+          "output_ready_s": 0.001291151,
+          "output_wake_s": 0.001279697,
+          "package_s": 0.001671435,
+          "restarted": true,
+          "revision": 62,
+          "round": 2,
+          "source_commit_s": 0.000546994,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 149446,
+            "sequence": 19
+          },
+          "source_ready_s": 0.012800042,
+          "source_wake_s": 0.012786283,
+          "total_s": 0.015767377
+        },
+        {
+          "captured": 62,
+          "engine": "fjall",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 128884,
+            "sequence": 23
+          },
+          "members": 64,
+          "output_commit_s": 0.002200202,
+          "output_ready_s": 0.003326109,
+          "output_wake_s": 0.003311791,
+          "package_s": 0.002041523,
+          "restarted": false,
+          "revision": 64,
+          "round": 2,
+          "source_commit_s": 0.000555934,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18434,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000604683,
+          "source_wake_s": 0.000594696,
+          "total_s": 0.005976994
+        },
+        {
+          "captured": 71,
+          "engine": "fjall",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 149287,
+            "sequence": 26
+          },
+          "members": 4,
+          "output_commit_s": 0.001086516,
+          "output_ready_s": 0.001439982,
+          "output_wake_s": 0.001425804,
+          "package_s": 0.002119047,
+          "restarted": false,
+          "revision": 85,
+          "round": 2,
+          "source_commit_s": 0.000568087,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 129036,
+            "sequence": 25
+          },
+          "source_ready_s": 0.00060629,
+          "source_wake_s": 0.000596652,
+          "total_s": 0.004169578
+        },
+        {
+          "captured": 85,
+          "engine": "fjall",
+          "findings": 3,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 262088,
+            "sequence": 29
+          },
+          "members": 66,
+          "output_commit_s": 0.002232677,
+          "output_ready_s": 0.003111696,
+          "output_wake_s": 0.003099404,
+          "package_s": 0.002992408,
+          "restarted": false,
+          "revision": 87,
+          "round": 2,
+          "source_commit_s": 0.000547972,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 149439,
+            "sequence": 28
+          },
+          "source_ready_s": 0.000581426,
+          "source_wake_s": 0.000571229,
+          "total_s": 0.00669028
+        }
+      ],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 149285,
+          "read_s": 0.0018709020000000002,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 280676,
+          "read_s": 0.0031088319999999997,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 1,
+      "engine": "fjall",
+      "historical_views": 16,
+      "reopen_s": 0.004760713,
+      "rotation": true,
+      "round": 3,
+      "samples": [
+        {
+          "captured": 24,
+          "engine": "fjall",
+          "findings": 0,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 75686,
+            "sequence": 4
+          },
+          "members": 50,
+          "output_commit_s": 0.001527842,
+          "output_ready_s": 0.002080564,
+          "output_wake_s": 0.00206904,
+          "package_s": 0.001027361,
+          "restarted": false,
+          "revision": 26,
+          "round": 3,
+          "source_commit_s": 0.000274545,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 161,
+            "sequence": 3
+          },
+          "source_ready_s": 0.000357656,
+          "source_wake_s": 0.000343129,
+          "total_s": 0.003469771
+        },
+        {
+          "captured": 27,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 112426,
+            "sequence": 8
+          },
+          "members": 12,
+          "output_commit_s": 0.001183736,
+          "output_ready_s": 0.001680794,
+          "output_wake_s": 0.001667315,
+          "package_s": 0.002015752,
+          "restarted": false,
+          "revision": 29,
+          "round": 3,
+          "source_commit_s": 0.000567109,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 75838,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000623401,
+          "source_wake_s": 0.000608735,
+          "total_s": 0.004323718
+        },
+        {
+          "captured": 36,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 130860,
+            "sequence": 12
+          },
+          "members": 2,
+          "output_commit_s": 0.001165995,
+          "output_ready_s": 0.001391512,
+          "output_wake_s": 0.001381455,
+          "package_s": 0.001594191,
+          "restarted": false,
+          "revision": 44,
+          "round": 3,
+          "source_commit_s": 0.000544061,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 112578,
+            "sequence": 11
+          },
+          "source_ready_s": 0.000578353,
+          "source_wake_s": 0.000568925,
+          "total_s": 0.003568387
+        },
+        {
+          "captured": 44,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 149294,
+            "sequence": 16
+          },
+          "members": 2,
+          "output_commit_s": 0.001042587,
+          "output_ready_s": 0.001217539,
+          "output_wake_s": 0.001206504,
+          "package_s": 0.001682331,
+          "restarted": false,
+          "revision": 46,
+          "round": 3,
+          "source_commit_s": 0.000604823,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 131012,
+            "sequence": 15
+          },
+          "source_ready_s": 0.00065923,
+          "source_wake_s": 0.000644842,
+          "total_s": 0.003563917
+        },
+        {
+          "captured": 48,
+          "engine": "fjall",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18282,
+            "sequence": 20
+          },
+          "members": 2,
+          "output_commit_s": 0.001021145,
+          "output_ready_s": 0.001288776,
+          "output_wake_s": 0.001277811,
+          "package_s": 0.002279052,
+          "restarted": true,
+          "revision": 62,
+          "round": 3,
+          "source_commit_s": 0.000553769,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 149446,
+            "sequence": 19
+          },
+          "source_ready_s": 0.013475125,
+          "source_wake_s": 0.013460389,
+          "total_s": 0.017046375
+        },
+        {
+          "captured": 62,
+          "engine": "fjall",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 128884,
+            "sequence": 23
+          },
+          "members": 64,
+          "output_commit_s": 0.002127147,
+          "output_ready_s": 0.003071328,
+          "output_wake_s": 0.003058198,
+          "package_s": 0.00194619,
+          "restarted": false,
+          "revision": 64,
+          "round": 3,
+          "source_commit_s": 0.000548601,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18434,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000581916,
+          "source_wake_s": 0.000572068,
+          "total_s": 0.005603834
+        },
+        {
+          "captured": 71,
+          "engine": "fjall",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 149287,
+            "sequence": 26
+          },
+          "members": 4,
+          "output_commit_s": 0.001090637,
+          "output_ready_s": 0.001417982,
+          "output_wake_s": 0.001408344,
+          "package_s": 0.002185884,
+          "restarted": false,
+          "revision": 85,
+          "round": 3,
+          "source_commit_s": 0.000580589,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 129036,
+            "sequence": 25
+          },
+          "source_ready_s": 0.000617255,
+          "source_wake_s": 0.000604893,
+          "total_s": 0.004225451
+        },
+        {
+          "captured": 85,
+          "engine": "fjall",
+          "findings": 3,
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 262088,
+            "sequence": 29
+          },
+          "members": 66,
+          "output_commit_s": 0.002268157,
+          "output_ready_s": 0.003237271,
+          "output_wake_s": 0.003216109,
+          "package_s": 0.002736511,
+          "restarted": false,
+          "revision": 87,
+          "round": 3,
+          "source_commit_s": 0.000555725,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 149439,
+            "sequence": 28
+          },
+          "source_ready_s": 0.000591553,
+          "source_wake_s": 0.000581915,
+          "total_s": 0.006568687
+        }
+      ],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 149285,
+          "read_s": 0.001604668,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 280676,
+          "read_s": 0.0031025490000000005,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 0,
+      "engine": "home",
+      "historical_views": 16,
+      "reopen_s": 0.001287938,
+      "rotation": false,
+      "round": 3,
+      "samples": [
+        {
+          "captured": 24,
+          "engine": "home",
+          "findings": 0,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 77486,
+            "sequence": 77486
+          },
+          "members": 50,
+          "output_commit_s": 0.001240725,
+          "output_ready_s": 0.001505074,
+          "output_wake_s": 0.001489709,
+          "package_s": 0.000773978,
+          "restarted": false,
+          "revision": 26,
+          "round": 3,
+          "source_commit_s": 0.000544341,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 100,
+            "sequence": 100
+          },
+          "source_ready_s": 0.000618931,
+          "source_wake_s": 0.000597769,
+          "total_s": 0.002902174
+        },
+        {
+          "captured": 27,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 194866,
+            "sequence": 194866
+          },
+          "members": 12,
+          "output_commit_s": 0.001127443,
+          "output_ready_s": 0.001312662,
+          "output_wake_s": 0.001303094,
+          "package_s": 0.000982174,
+          "restarted": false,
+          "revision": 29,
+          "round": 3,
+          "source_commit_s": 0.000570042,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 77586,
+            "sequence": 77586
+          },
+          "source_ready_s": 0.000595813,
+          "source_wake_s": 0.000584499,
+          "total_s": 0.00289491
+        },
+        {
+          "captured": 36,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 291262,
+            "sequence": 291262
+          },
+          "members": 2,
+          "output_commit_s": 0.001025127,
+          "output_ready_s": 0.001141691,
+          "output_wake_s": 0.001130307,
+          "package_s": 0.000964923,
+          "restarted": false,
+          "revision": 44,
+          "round": 3,
+          "source_commit_s": 0.000558798,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 194966,
+            "sequence": 194966
+          },
+          "source_ready_s": 0.000581636,
+          "source_wake_s": 0.000572976,
+          "total_s": 0.002692651
+        },
+        {
+          "captured": 44,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 387658,
+            "sequence": 387658
+          },
+          "members": 2,
+          "output_commit_s": 0.001183805,
+          "output_ready_s": 0.001322998,
+          "output_wake_s": 0.001311195,
+          "package_s": 0.001060326,
+          "restarted": false,
+          "revision": 46,
+          "round": 3,
+          "source_commit_s": 0.000608246,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 291362,
+            "sequence": 291362
+          },
+          "source_ready_s": 0.000640233,
+          "source_wake_s": 0.000628779,
+          "total_s": 0.003027469
+        },
+        {
+          "captured": 48,
+          "engine": "home",
+          "findings": 1,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 484054,
+            "sequence": 484054
+          },
+          "members": 2,
+          "output_commit_s": 0.001095107,
+          "output_ready_s": 0.001330261,
+          "output_wake_s": 0.001316992,
+          "package_s": 0.001264681,
+          "restarted": true,
+          "revision": 62,
+          "round": 3,
+          "source_commit_s": 0.000562989,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 387758,
+            "sequence": 387758
+          },
+          "source_ready_s": 0.002238754,
+          "source_wake_s": 0.002223598,
+          "total_s": 0.004837887
+        },
+        {
+          "captured": 62,
+          "engine": "home",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 690860,
+            "sequence": 690860
+          },
+          "members": 64,
+          "output_commit_s": 0.001711314,
+          "output_ready_s": 0.002107662,
+          "output_wake_s": 0.002094252,
+          "package_s": 0.00162562,
+          "restarted": false,
+          "revision": 64,
+          "round": 3,
+          "source_commit_s": 0.000589249,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 484154,
+            "sequence": 484154
+          },
+          "source_ready_s": 0.000619281,
+          "source_wake_s": 0.000609433,
+          "total_s": 0.004356334
+        },
+        {
+          "captured": 71,
+          "engine": "home",
+          "findings": 2,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 805097,
+            "sequence": 805097
+          },
+          "members": 4,
+          "output_commit_s": 0.001137012,
+          "output_ready_s": 0.001303722,
+          "output_wake_s": 0.001291989,
+          "package_s": 0.001434185,
+          "restarted": false,
+          "revision": 85,
+          "round": 3,
+          "source_commit_s": 0.000596302,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 690960,
+            "sequence": 690960
+          },
+          "source_ready_s": 0.000639254,
+          "source_wake_s": 0.000625426,
+          "total_s": 0.003381562
+        },
+        {
+          "captured": 85,
+          "engine": "home",
+          "findings": 3,
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 1031892,
+            "sequence": 1031892
+          },
+          "members": 66,
+          "output_commit_s": 0.001930685,
+          "output_ready_s": 0.002296582,
+          "output_wake_s": 0.002286036,
+          "package_s": 0.002048297,
+          "restarted": false,
+          "revision": 87,
+          "round": 3,
+          "source_commit_s": 0.000690798,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 805197,
+            "sequence": 805197
+          },
+          "source_ready_s": 0.000738499,
+          "source_wake_s": 0.00071615,
+          "total_s": 0.005087709
+        }
+      ],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 387658,
+          "read_s": 0.0007606370000000003,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 740632,
+          "read_s": 0.001420356,
+          "source_wakes": 4
+        }
+      ]
+    }
+  ],
+  "source": "b7df5c3b4786aed36dede8b8630d0e77aa908f40",
+  "supported": {
+    "fjall": "provided clone with opt-in journal-cdc patch",
+    "home": "original durable transaction frames"
+  },
+  "unsupported": {
+    "duckdb": "no supported retained original-WAL CDC API",
+    "fjall-stock": "no public retained journal feed or event-driven CDC API",
+    "neon-layers": "the layer adapter does not produce or stream PostgreSQL WAL",
+    "redb": "copy-on-write pages; no original WAL feed",
+    "surrealkv": "private WAL reader; no retained CDC API; value-log references also need retention"
+  },
+  "workload": "original eight Causal cycles, synthetic source-frontier metadata, original engine-journal reader drives both subscription wakes"
+}
