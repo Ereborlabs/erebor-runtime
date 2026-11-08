@@ -245,9 +245,9 @@ impl Write for RedbWrite<'_> {
     }
 }
 
-struct FjallRead<'a> {
-    tx: fjall::Snapshot,
-    table: &'a fjall::SingleWriterTxKeyspace,
+pub(super) struct FjallRead<'a> {
+    pub(super) tx: fjall::Snapshot,
+    pub(super) table: &'a fjall::SingleWriterTxKeyspace,
 }
 impl Read for FjallRead<'_> {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {

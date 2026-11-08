@@ -13,6 +13,8 @@ mod native;
 #[cfg(feature = "neon-poc")]
 mod neon;
 mod package;
+#[cfg(all(feature = "neon-poc", feature = "cdc-poc"))]
+mod stable;
 mod surreal;
 
 use araphor_graph::Read;
@@ -248,6 +250,12 @@ struct Reference {
 }
 
 fn main() -> Result<()> {
+    #[cfg(all(feature = "neon-poc", feature = "cdc-poc"))]
+    if std::env::args().nth(2).as_deref() == Some("stable") {
+        return stable::run(Path::new(
+            &std::env::args().nth(1).ok_or("output path required")?,
+        ));
+    }
     #[cfg(feature = "cdc-poc")]
     if std::env::args().nth(2).as_deref() == Some("cdc") {
         return cdc::run(Path::new(

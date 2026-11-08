@@ -14,6 +14,8 @@ use super::{Change, GraphRead, Readout, Result, Timing};
 pub struct Native {
     db: kv::Database,
     properties: BTreeMap<u64, Arc<RecordBatch>>,
+    stable: bool,
+    snapshots: BTreeMap<u64, fjall::Snapshot>,
 }
 
 struct Prepared {
@@ -38,6 +40,13 @@ impl Key {
     fn number(bytes: &[u8]) -> Result<u64> {
         Ok(u64::from_be_bytes(bytes.try_into()?))
     }
+    fn at(kind: u8, fields: &[u64], revision: u64, stable: bool) -> Vec<u8> {
+        let mut key = Self::new(kind, fields);
+        if !stable {
+            key.extend_from_slice(&revision.to_be_bytes());
+        }
+        key
+    }
 }
 
 impl Native {
@@ -50,6 +59,12 @@ impl Native {
     }
 
     pub fn open(kind: &str, path: &Path) -> Result<Self> {
+        let stable = matches!(kind, "fjall-stable" | "neon-stable");
+        let kind = match kind {
+            "fjall-stable" => "fjall",
+            "neon-stable" => "neon-layers",
+            other => other,
+        };
         let db = kv::Database::open(kind, path)?;
         if db.read(|r| r.get(b"head"))?.is_none() {
             db.write(true, |tx| {
@@ -68,7 +83,19 @@ impl Native {
             }
             Ok(values)
         })?;
-        Ok(Self { db, properties })
+        let mut snapshots = BTreeMap::new();
+        if stable {
+            if let kv::Database::Fjall(database, _) = &db {
+                let head = db.read(|tx| Key::number(&tx.get(b"head")?.ok_or("head absent")?))?;
+                snapshots.insert(head, database.read_tx());
+            }
+        }
+        Ok(Self {
+            db,
+            properties,
+            stable,
+            snapshots,
+        })
     }
 
     pub fn apply(&mut self, _fixture: &Fixture, step: &Step, commit: bool) -> Result<Timing> {
@@ -89,7 +116,7 @@ impl Native {
         let started = Instant::now();
         let prepare_s = started.elapsed().as_secs_f64();
         let (prepared, work, commit_s) = self.db.write_at(step.revision, commit, |tx| {
-            let prepared = Self::stage(tx, step)?;
+            let prepared = Self::stage(tx, step, self.stable)?;
             if let Some(cursor) = cursor {
                 tx.put(b"cursor/package", cursor)?;
             }
@@ -108,12 +135,17 @@ impl Native {
         assert_eq!(sample.added, step.added());
         if commit {
             self.properties.extend(prepared.properties);
+            if self.stable {
+                if let kv::Database::Fjall(db, _) = &self.db {
+                    self.snapshots.insert(step.revision, db.read_tx());
+                }
+            }
         }
         sample.total_s = started.elapsed().as_secs_f64();
         Ok(sample)
     }
 
-    fn stage(tx: &mut dyn Write, step: &Step) -> Result<Prepared> {
+    fn stage(tx: &mut dyn Write, step: &Step, stable: bool) -> Result<Prepared> {
         let head = Key::number(&tx.get(b"head")?.ok_or("head absent")?)?;
         assert_eq!(head, step.previous);
         let mut next = Key::number(&tx.get(b"next")?.ok_or("allocator absent")?)?;
@@ -134,7 +166,7 @@ impl Native {
                 Key::new(b'A', &[*writer])
             };
             for (active, member) in tx.prefix(&prefix)? {
-                changes.push(Self::close(tx, &member, step.revision)?);
+                changes.push(Self::close(tx, &member, step.revision, stable)?);
                 tx.remove(&active)?;
                 result.closed += 1;
             }
@@ -157,7 +189,7 @@ impl Native {
                 let open = Key::new(b'A', &[row.writer, owner, row.relation, entity]);
                 let old = tx.get(&open)?;
                 if let Some(oldkey) = old {
-                    changes.push(Self::close(tx, &oldkey, step.revision)?);
+                    changes.push(Self::close(tx, &oldkey, step.revision, stable)?);
                     tx.remove(&open)?;
                     result.closed += 1;
                 }
@@ -185,39 +217,40 @@ impl Native {
                     property,
                     endpoints,
                 };
-                let key = Key::new(
+                let key = Key::at(
                     b'M',
-                    &[row.writer, owner, row.relation, entity, step.revision],
+                    &[row.writer, owner, row.relation, entity],
+                    step.revision,
+                    stable,
                 );
                 tx.put(&key, &rmp_serde::to_vec(&member)?)?;
                 tx.put(&open, &key)?;
                 tx.put(
-                    &Key::new(
+                    &Key::at(
                         b'R',
-                        &[row.relation, row.writer, owner, entity, step.revision],
+                        &[row.relation, row.writer, owner, entity],
+                        step.revision,
+                        stable,
                     ),
                     &key,
                 )?;
                 tx.put(
-                    &Key::new(
+                    &Key::at(
                         b'K',
-                        &[row.relation, entity, row.writer, owner, step.revision],
+                        &[row.relation, entity, row.writer, owner],
+                        step.revision,
+                        stable,
                     ),
                     &key,
                 )?;
                 if let Some([from, to, label]) = endpoints {
                     for (kind, endpoint) in [(b'O', from), (b'I', to), (b'B', label)] {
                         tx.put(
-                            &Key::new(
+                            &Key::at(
                                 kind,
-                                &[
-                                    row.relation,
-                                    endpoint,
-                                    row.writer,
-                                    owner,
-                                    entity,
-                                    step.revision,
-                                ],
+                                &[row.relation, endpoint, row.writer, owner, entity],
+                                step.revision,
+                                stable,
                             ),
                             &key,
                         )?;
@@ -249,27 +282,31 @@ impl Native {
         }
         for writer in [1, 2] {
             tx.put(
-                &Key::new(b'H', &[writer, step.revision]),
+                &Key::at(b'H', &[writer], step.revision, stable),
                 &step.revision.to_be_bytes(),
             )?;
             tx.put(
-                &Key::new(b'S', &[writer, step.revision]),
+                &Key::at(b'S', &[writer], step.revision, stable),
                 &step.state(writer),
             )?;
             tx.put(
-                &Key::new(b'T', &[writer, step.revision]),
+                &Key::at(b'T', &[writer], step.revision, stable),
                 &step.captured.to_be_bytes(),
             )?;
         }
         changes.sort();
-        for (slot, change) in changes.iter().enumerate() {
-            tx.put(
-                &Key::new(b'C', &[step.revision, slot as u64]),
-                &rmp_serde::to_vec(change)?,
-            )?;
+        if stable {
+            tx.put(b"C", &rmp_serde::to_vec(&changes)?)?;
+        } else {
+            for (slot, change) in changes.iter().enumerate() {
+                tx.put(
+                    &Key::new(b'C', &[step.revision, slot as u64]),
+                    &rmp_serde::to_vec(change)?,
+                )?;
+            }
         }
         tx.put(
-            &Key::new(b'J', &[step.revision]),
+            &Key::at(b'J', &[], step.revision, stable),
             &rmp_serde::to_vec(&(step.previous, step.captured))?,
         )?;
         tx.put(b"next", &next.to_be_bytes())?;
@@ -277,11 +314,37 @@ impl Native {
         Ok(result)
     }
 
-    fn close(tx: &mut dyn Write, key: &[u8], revision: u64) -> Result<Change> {
+    fn close(tx: &mut dyn Write, key: &[u8], revision: u64, stable: bool) -> Result<Change> {
         let mut member: Member = rmp_serde::from_slice(&tx.get(key)?.ok_or("member absent")?)?;
         assert!(member.closed.is_none());
-        member.closed = Some(revision);
-        tx.put(key, &rmp_serde::to_vec(&member)?)?;
+        if stable {
+            tx.remove(key)?;
+            tx.remove(&Key::new(
+                b'R',
+                &[member.relation, member.writer, member.owner, member.entity],
+            ))?;
+            tx.remove(&Key::new(
+                b'K',
+                &[member.relation, member.entity, member.writer, member.owner],
+            ))?;
+            if let Some([from, to, label]) = member.endpoints {
+                for (kind, endpoint) in [(b'O', from), (b'I', to), (b'B', label)] {
+                    tx.remove(&Key::new(
+                        kind,
+                        &[
+                            member.relation,
+                            endpoint,
+                            member.writer,
+                            member.owner,
+                            member.entity,
+                        ],
+                    ))?;
+                }
+            }
+        } else {
+            member.closed = Some(revision);
+            tx.put(key, &rmp_serde::to_vec(&member)?)?;
+        }
         Ok(Change {
             writer: member.writer,
             relation: member.relation,
@@ -303,18 +366,50 @@ impl Native {
         action: impl FnOnce(&dyn GraphRead, f64) -> Result<T>,
     ) -> Result<T> {
         let started = Instant::now();
-        self.db.read_at(revision, |tx| {
+        self.read_at(revision, |tx| {
             for writer in [1, 2] {
-                let _ = tx.floor(&Key::new(b'H', &[writer]), revision)?;
+                let _ = Self::metadata(tx, b'H', writer, revision, self.stable)?;
             }
             let view = View {
                 tx,
                 properties: &self.properties,
                 fixture,
                 revision,
+                stable: self.stable,
             };
             action(&view, started.elapsed().as_secs_f64())
         })
+    }
+
+    fn read_at<T>(&self, revision: u64, action: impl FnOnce(&dyn Read) -> Result<T>) -> Result<T> {
+        if self.stable {
+            if let kv::Database::Fjall(_, table) = &self.db {
+                let (_, snapshot) = self
+                    .snapshots
+                    .range(..=revision)
+                    .next_back()
+                    .ok_or("Fjall historical snapshot is not open")?;
+                return action(&kv::FjallRead {
+                    tx: snapshot.clone(),
+                    table,
+                });
+            }
+        }
+        self.db.read_at(revision, action)
+    }
+
+    fn metadata(
+        tx: &dyn Read,
+        kind: u8,
+        writer: u64,
+        revision: u64,
+        stable: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        if stable {
+            tx.get(&Key::new(kind, &[writer]))
+        } else {
+            tx.floor(&Key::new(kind, &[writer]), revision)
+        }
     }
 
     fn allocate(next: &mut u64) -> u64 {
@@ -342,29 +437,39 @@ impl Native {
 
     pub fn inspect(&self, fixture: &Fixture, revision: u64, _all: bool) -> Result<Readout> {
         let started = Instant::now();
-        self.db.read_at(revision, |tx| {
+        self.read_at(revision, |tx| {
             for writer in [1, 2] {
-                let head = tx.floor(&Key::new(b'H', &[writer]), revision)?;
+                let head = Self::metadata(tx, b'H', writer, revision, self.stable)?;
                 if fixture.steps.iter().any(|s| s.revision <= revision) {
                     assert!(head.is_some());
                 }
             }
             let mut states = Vec::new();
             for writer in [1, 2] {
-                states.push(tx.floor(&Key::new(b'S', &[writer]), revision)?);
-                states.push(tx.floor(&Key::new(b'T', &[writer]), revision)?);
+                states.push(Self::metadata(tx, b'S', writer, revision, self.stable)?);
+                states.push(Self::metadata(tx, b'T', writer, revision, self.stable)?);
             }
             let capture_s = started.elapsed().as_secs_f64();
             let started = Instant::now();
             let mut rows = Vec::new();
             for (_, key) in tx.prefix(b"R")? {
-                Self::select(tx, &self.properties, &key, revision, &mut rows)?;
+                Self::select(tx, &self.properties, &key, revision, self.stable, &mut rows)?;
             }
             let read_s = started.elapsed().as_secs_f64();
             let started = Instant::now();
             let mut changes = Vec::new();
-            for (_, value) in tx.prefix(&Key::new(b'C', &[revision]))? {
-                changes.push(rmp_serde::from_slice::<Change>(&value)?);
+            if self.stable {
+                if tx.get(b"head")?.as_deref() == Some(revision.to_be_bytes().as_slice()) {
+                    changes = tx
+                        .get(b"C")?
+                        .map(|v| rmp_serde::from_slice(&v))
+                        .transpose()?
+                        .unwrap_or_default();
+                }
+            } else {
+                for (_, value) in tx.prefix(&Key::new(b'C', &[revision]))? {
+                    changes.push(rmp_serde::from_slice::<Change>(&value)?);
+                }
             }
             changes.sort();
             Ok(Readout {
@@ -384,6 +489,9 @@ impl Native {
                 Key::number(&tx.get(b"head")?.ok_or("head absent")?)?,
                 current
             );
+            Ok(())
+        })?;
+        self.read_at(revision, |tx| {
             let last = fixture
                 .steps
                 .iter()
@@ -391,14 +499,20 @@ impl Native {
                 .next_back();
             for writer in [1, 2] {
                 assert_eq!(
-                    tx.floor(&Key::new(b'H', &[writer]), revision)?,
+                    Self::metadata(tx, b'H', writer, revision, self.stable)?,
                     last.map(|s| s.revision.to_be_bytes().to_vec())
                 );
             }
-            let actual = tx
-                .get(&Key::new(b'J', &[revision]))?
-                .map(|bytes| rmp_serde::from_slice::<(u64, u64)>(&bytes))
-                .transpose()?;
+            let key = Key::at(b'J', &[], revision, self.stable);
+            let actual = if self.stable
+                && tx.get(b"head")?.as_deref() != Some(revision.to_be_bytes().as_slice())
+            {
+                None
+            } else {
+                tx.get(&key)?
+                    .map(|bytes| rmp_serde::from_slice::<(u64, u64)>(&bytes))
+                    .transpose()?
+            };
             let expected = fixture
                 .steps
                 .iter()
@@ -414,11 +528,12 @@ impl Native {
         properties: &BTreeMap<u64, Arc<RecordBatch>>,
         key: &[u8],
         revision: u64,
+        stable: bool,
         rows: &mut Vec<Row>,
     ) -> Result<()> {
         let value = tx.get(key)?.ok_or("member absent")?;
         let m: Member = rmp_serde::from_slice(&value)?;
-        if m.opened > revision || m.closed.is_some_and(|r| r <= revision) {
+        if !stable && (m.opened > revision || m.closed.is_some_and(|r| r <= revision)) {
             return Ok(());
         }
         let (chunk, row): (u64, usize) = rmp_serde::from_slice(
@@ -452,6 +567,7 @@ struct View<'a> {
     properties: &'a BTreeMap<u64, Arc<RecordBatch>>,
     fixture: &'a Fixture,
     revision: u64,
+    stable: bool,
 }
 impl GraphRead for View<'_> {
     fn query(
@@ -465,7 +581,14 @@ impl GraphRead for View<'_> {
         let mut seen = BTreeSet::new();
         if let Operation::Owned(writer) = read {
             for (_, key) in self.tx.prefix(&Key::new(b'R', &[relation, writer]))? {
-                Native::select(self.tx, self.properties, &key, self.revision, &mut rows)?;
+                Native::select(
+                    self.tx,
+                    self.properties,
+                    &key,
+                    self.revision,
+                    self.stable,
+                    &mut rows,
+                )?;
             }
         } else {
             let input = super::binary(keys, "key")?;
@@ -494,6 +617,7 @@ impl GraphRead for View<'_> {
                                 self.properties,
                                 &key,
                                 self.revision,
+                                self.stable,
                                 &mut rows,
                             )?;
                         }
@@ -526,8 +650,9 @@ impl GraphRead for View<'_> {
                 {
                     let member: Member =
                         rmp_serde::from_slice(&self.tx.get(&key)?.ok_or("member absent")?)?;
-                    present |= member.opened <= self.revision
-                        && member.closed.is_none_or(|r| r > self.revision);
+                    present |= self.stable
+                        || (member.opened <= self.revision
+                            && member.closed.is_none_or(|r| r > self.revision));
                 }
             }
             result.push(present);

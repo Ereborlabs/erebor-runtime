@@ -936,3 +936,113 @@ and has no reclamation. The result does not establish production notification
 latency, sustained compaction, power-loss behavior, native branches, or the
 complete 100-fold improvement. Full workspace CI and the production incident
 test do not run. Production integration remains **Not done**.
+
+## Stable keys and native history
+
+The original Graph layout includes the opened revision in member and
+adjacency keys. It does this for Fjall and the Neon adapter. The CDC patch
+retains original journals but does not change those Graph keys.
+
+The separate [stable runner](stable.rs) compares that control with a layout
+that has no revision suffix on mutable keys. It uses the original eight
+Causal package cycles. Source Arrow stays prepared in memory. This driver
+does not start journal subscriptions. The earlier CDC proof and this native
+history proof remain separate.
+
+### Intended end state
+
+Use stable Graph coordinates for members, adjacency, writer heads, package
+state, and commit metadata. Use the engine's selected view to read earlier
+values. Preserve exact Graph results and package behavior. State an unsupported
+history operation when the engine cannot restore it.
+
+[stable::scenario](stable.rs) selects one original captured Graph position.
+  -> [Native::capture](native.rs) selects a native read view.
+  -> [package::evaluate](package.rs) runs the original Causal index and detect exports.
+  -> [Native::stage](native.rs) overwrites stable member and adjacency keys.
+  -> [Native::close](native.rs) deletes closed members and their adjacency keys.
+  -> [Database::write_at](kv.rs) commits Graph, state, and metadata together.
+  -> [Oracle::check](main.rs) checks exact rows, changes, and state.
+  -> [History::remember](history.rs) checks exact commands, traversal requests, and frontiers.
+
+[stable::scenario](stable.rs) completes later Graph writes.
+  -> [History::replay](history.rs) runs the same package backward and forward at earlier cuts.
+  -> [stable::flush](stable.rs) flushes Fjall and completes physical compaction.
+  -> [History::replay](history.rs) checks the earlier package results again.
+  -> [Engine::close](main.rs) closes the owner before the runner drops it.
+  -> [Engine::open](main.rs) restores the database and property cache.
+  -> [Neon::read_at](neon.rs) reads earlier values by native layer LSN.
+  -> Partial [Native::read_at](native.rs): Fjall has no earlier open snapshot handle after reopen.
+
+```mermaid
+sequenceDiagram
+    participant R as Runner
+    participant N as Native Graph
+    participant E as Engine
+    R->>N: Select captured position
+    N->>E: Select native view
+    R->>N: Run package and stage edits
+    N->>E: Commit stable keys
+    R->>N: Read earlier position
+    N->>E: Read old native values
+```
+
+The stable layout stores members by writer, owner, relation, and entity.
+Relation and endpoint indexes use the same stable coordinates. A close removes
+the current member and indexes. There is no application interval filter in
+this mode. The opened revision remains a value field because exact Graph
+results require it. Dictionary IDs and immutable Arrow property chunk IDs
+remain identities. They contain no encoded application revision.
+
+Writer head, state, and captured-input keys contain only the writer ID.
+The commit key and current change-vector key are singletons. Native versions
+retain their earlier values. The current change vector is the existing
+fixture's Graph metadata; it does not drive subscription wakes. All these
+key lengths and record counts are asserted. Result checks remain outside
+the primary timing interval.
+
+Fjall uses public `read_tx()` snapshot handles. `Native` retains a handle for
+each committed Graph position, including the initial head. The map exists
+only in memory. A captured cut selects the preceding handle. Rollback adds
+no handle. The handles retain native versions during flush and compaction.
+Dropping `Native` drops the handles. Reopen can capture the current head but
+cannot restore an earlier handle through this API. The runner rejects 15
+earlier requests per run, including overlapping captured and publication
+cuts. It verifies the current Graph after reopen and compaction. This proves
+an API limit; it does not prove that every old physical byte is absent.
+
+Neon maps each stable Graph key to the same native numeric `Key` at each
+write. `Lsn` is a separate version coordinate. Reads select eligible native
+layers and use their disk index. Reopen restores the key catalog and reads
+earlier layers again. This local adapter still has one durable layer per
+transaction, no PostgreSQL WAL feed, no background compaction, and no native
+branch qualification.
+
+The [isolated project](neon-bench/Cargo.toml) now uses the provided Fjall
+clone and the retained CDC patch as well as the provided Neon clone. Normal
+workspace builds do not require either clone. The new mode uses four balanced
+orders of four conditions: revision-key Fjall, stable-key Fjall, revision-key
+Neon, and stable-key Neon. Each run uses eight primary cycles. Historical
+package replay checks 16 evaluations per available stage. The stable Fjall
+condition has no historical replay after reopen; that contract is unsupported.
+
+```sh
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 \
+  POSTGRES_INSTALL_DIR="$PWD/neon/pg_install" \
+  cargo test --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml \
+  --config /tmp/araphor-storage-release-override.toml --locked
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 \
+  POSTGRES_INSTALL_DIR="$PWD/neon/pg_install" POC_SOURCE_REVISION="$(rtk proxy git rev-parse HEAD)" \
+  cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml \
+  --config /tmp/araphor-storage-release-override.toml --locked
+rtk proxy target/release/storage_poc /tmp/araphor-stable-poc/release.json stable
+rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize_stable.py /tmp/araphor-stable-poc/release.json
+rtk proxy target/release/storage_poc /tmp/araphor-stable-poc/cdc-regression.json cdc
+```
+
+The earlier clone patch and PostgreSQL header commands still apply. The
+cached optimized DuckDB override is optional when an equivalent optimized
+bundled build is available. There is no production owner, BPF, or ABI change.
+Large-history retention, property reclamation, sustained compaction, power
+loss, native branches, production notifications, and combined stable-key
+native-history plus journal-subscription qualification remain **Not done**.

@@ -568,3 +568,32 @@ measurements. Production source input, DataFusion execution, notifications,
 large retained history, dynamic consumer registration, native branches, and
 the complete incident latency target remain **Not done**. Full workspace CI
 and the production incident test do not run.
+
+## Stable-key native history test, 2026-11-08
+
+The user asks whether the CDC Fjall and Neon tests omit revision fields from
+application keys. They do not. The common Graph algorithm still includes
+revision fields in mutable member, adjacency, and metadata keys. Neon also
+uses a separate native LSN. The Fjall CDC extension retains original journals;
+it does not add a durable historical snapshot API.
+
+The implementer and reviewer agree to compare stable mutable Graph keys with
+the original layout. The [review guide](../../crates/araphor-graph/examples/storage_poc/README.md#stable-keys-and-native-history)
+links the shared Graph code, native view selection, exact result checks, and
+commands. No new Fjall temporal engine or production storage change is approved
+by this bounded test.
+
+The [runner](../../crates/araphor-graph/examples/storage_poc/stable.rs) uses the
+same eight Causal package cycles. Stable Fjall uses held native snapshots and
+checks old views through physical compaction. Old native snapshot handles
+after reopen are unsupported. Stable Neon uses native key and LSN coordinates
+and checks old values after reopen. All mutable key lengths are checked.
+Opened revisions remain semantic value fields. Immutable property chunks and
+dictionary IDs remain identities.
+
+Implementation and focused pilot: **Done**. Frozen-source measurement:
+**Not done**. The original journal-subscription proof remains separate and
+passes its focused regression. This stable-key driver does not run source
+subscriptions or production notification delivery. Production integration,
+durable native Fjall history, combined stable-key history and CDC, and the
+complete incident latency target remain **Not done**.

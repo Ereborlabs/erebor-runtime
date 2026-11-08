@@ -7,8 +7,9 @@ license = "Apache-2.0"
 [workspace]
 
 [features]
-default = ["neon-poc"]
+default = ["neon-poc", "cdc-poc"]
 neon-poc = []
+cdc-poc = []
 
 [[bin]]
 name = "storage_poc"
@@ -26,7 +27,7 @@ arrow-select = "=59.2.0"
 arrow-ipc = "=59.2.0"
 crc32c = "0.6.8"
 duckdb = { version = "=1.10505.0", default-features = false, features = ["bundled", "appender-arrow"] }
-fjall = "=3.1.13"
+fjall = { path = "../../../../../fjall", features = ["journal-cdc"] }
 redb = "=4.4.0"
 surrealkv = "=1.2.0"
 log = "=0.4.29"
