@@ -6,58 +6,49 @@ index 8dc1d57b5..f867ba2e4 100644
 -pub(super) struct SchedulingResult<PJ> {
 +pub(crate) struct SchedulingResult<PJ> {
 diff --git a/pageserver/src/tenant/storage_layer/delta_layer.rs b/pageserver/src/tenant/storage_layer/delta_layer.rs
-index f963fdac9..8888139ab 100644
+index f963fdac9..caf3f04b0 100644
 --- a/pageserver/src/tenant/storage_layer/delta_layer.rs
 +++ b/pageserver/src/tenant/storage_layer/delta_layer.rs
-@@ -282,0 +283,47 @@ impl DeltaLayer {
+@@ -282,0 +283,38 @@ impl DeltaLayer {
 +    #[cfg(feature = "benchmarking")]
-+    pub async fn image_for_bench(
++    pub async fn images_for_bench(
 +        &self,
-+        key: Key,
++        keys: &[Key],
 +        lsn: Lsn,
 +        ctx: &RequestContext,
-+    ) -> Result<Option<bytes::Bytes>> {
++    ) -> Result<Vec<Option<bytes::Bytes>>> {
 +        let inner = self.load(ctx).await?;
 +        let reader = DiskBtreeReader::<_, DELTA_KEY_SIZE>::new(
 +            inner.index_start_blk,
 +            inner.index_root_blk,
 +            FileBlockReader::new(&inner.file, inner.file_id),
 +        );
-+        let Some(offset) = reader
-+            .get(&DeltaKey::from_key_lsn(&key, lsn).0, ctx)
-+            .await?
-+        else {
-+            return Ok(None);
-+        };
-+        let value = ValueRef {
-+            blob_ref: BlobRef(offset),
-+            layer: inner,
-+        }
-+        .load(ctx)
-+        .await?;
-+        match value {
-+            Value::Image(bytes) => Ok(Some(bytes)),
-+            Value::WalRecord(_) => anyhow::bail!("benchmark expects image values"),
-+        }
-+    }
-+
-+    #[cfg(feature = "benchmarking")]
-+    pub async fn images_for_bench(
-+        &self,
-+        ctx: &RequestContext,
-+    ) -> Result<Vec<(Key, Lsn, bytes::Bytes)>> {
-+        let inner = self.load(ctx).await?;
-+        let mut values = Vec::new();
-+        for entry in inner.index_entries(ctx).await? {
-+            match entry.val.load(ctx).await? {
-+                Value::Image(bytes) => values.push((entry.key, entry.lsn, bytes)),
++        let mut values = Vec::with_capacity(keys.len());
++        for key in keys {
++            let Some(offset) = reader.get(&DeltaKey::from_key_lsn(key, lsn).0, ctx).await? else {
++                values.push(None);
++                continue;
++            };
++            let value = ValueRef {
++                blob_ref: BlobRef(offset),
++                layer: inner,
++            }
++            .load(ctx)
++            .await?;
++            match value {
++                Value::Image(bytes) => values.push(Some(bytes)),
 +                Value::WalRecord(_) => anyhow::bail!("benchmark expects image values"),
 +            }
 +        }
 +        Ok(values)
 +    }
 +
-@@ -690,0 +738,9 @@ pub async fn new(
++    #[cfg(feature = "benchmarking")]
++    pub async fn keys_for_bench(&self, ctx: &RequestContext) -> Result<Vec<Key>> {
++        self.load(ctx).await?.load_keys(ctx).await
++    }
++
+@@ -690,0 +729,9 @@ pub async fn new(
 +    #[cfg(feature = "benchmarking")]
 +    pub async fn finish_for_bench(
 +        self,

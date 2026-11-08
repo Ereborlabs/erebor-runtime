@@ -621,23 +621,26 @@ application-history variant stays separate. Both variants retain the shared
 Graph intervals and revision keys. This comparison therefore includes the
 cost of native history in addition to that shared Graph layout.
 
-[Neon::open](neon.rs) opens an exclusive physical owner and restores the key catalog.
+[Neon::open](neon.rs) opens an exclusive physical owner and restores key and publication metadata.
   -> [Neon::write_at](neon.rs) stages Graph records and new key identities.
   -> [DeltaLayerWriter](../../../../neon/pageserver/src/tenant/storage_layer/delta_layer.rs) writes actual native image values and their disk index.
   -> [Neon::write_at](neon.rs) waits for native layer sync, renames the layer, and syncs the directory.
   -> [Neon::write_at](neon.rs) publishes the catalog and committed layer together in memory.
 
 [Neon::read_at](neon.rs) captures a committed layer list and Graph revision.
-  -> [Snapshot::get](neon.rs) searches eligible layers from newest to oldest.
-  -> [DeltaLayer::image_for_bench](../../../../neon/pageserver/src/tenant/storage_layer/delta_layer.rs) uses the actual Neon disk B-tree and blob reader.
-  -> [Snapshot::prefix](neon.rs) selects exact original keys from the catalog and reads their values through the native index.
+  -> [Snapshot::read](neon.rs) selects each key's latest native publication at or before the requested revision.
+  -> [Snapshot::read](neon.rs) groups selected keys by their native layer.
+  -> [DeltaLayer::images_for_bench](../../../../neon/pageserver/src/tenant/storage_layer/delta_layer.rs) reads each group through the actual Neon disk B-tree and blob reader.
+  -> [Snapshot::prefix](neon.rs) returns live values in original key order.
   -> [Neon::close](neon.rs) closes the gate, drops layers, and releases the exclusive owner.
 
 Neon keys have a fixed 18-byte representation. The adapter assigns stable
 numeric keys to the original variable-length keys. New key mappings are
 immutable native image records in the same layer as changed values. A value
 has a one-byte presence marker so a deletion differs from an empty value.
-Reopen rebuilds only the key-to-ID catalog in memory. Each requested key/value record is read through Neon. The adapter does not
+Reopen rebuilds key identities and native publication positions from layer
+indexes. Only dictionary blobs are loaded during that rebuild. Each requested
+key/value record is read through Neon. The adapter does not
 cache complete key/value records. The shared native Graph owner retains its
 decoded Arrow property cache, as it does for the other candidates.
 Catalog copies, envelopes, native encoding, native writes, syncs, and
@@ -1297,3 +1300,63 @@ shared host do not establish a small general speed gain. Production input
 execution, notification delivery, sustained compaction, and the complete
 incident test's 100-fold target remain **Not done**. Full workspace CI does
 not run under the user's focused-iteration constraint.
+
+## Native Neon adapter read optimization
+
+The adapter replaces repeated layer probes for each Graph key. This change
+uses native key and LSN publication metadata to route requests to the correct
+layer. It retains the same Graph workload, native values, and durability.
+
+### Intended end state
+
+Reduce Graph read work and measure the remaining difference from Fjall. Keep
+the original eight primary cycles and all historical package checks. The
+fixed-key target keeps its keys and native LSN history through reopen.
+
+[Snapshot::read](neon.rs) receives exact logical keys from a point or prefix request.
+  -> [Entry](neon.rs) supplies the stable numeric ID and native publication positions.
+  -> [Snapshot::read](neon.rs) selects the last position at or before the captured cut.
+  -> [Snapshot::read](neon.rs) groups requests by the selected layer.
+  -> [DeltaLayer::images_for_bench](../../../../neon/pageserver/src/tenant/storage_layer/delta_layer.rs) loads each native reader once and reads the group's values through its disk index and blob reader.
+  -> [Snapshot::read](neon.rs) suppresses deletions and restores logical key order.
+
+The catalog contains identities and positions, not Graph values. Every
+requested value still uses Neon. A selected deletion does not search an
+older layer. Point, prefix, and floor reads share the same version selection.
+One synchronous runtime entry serves a complete point or prefix request.
+The batch helper uses native point lookups within each group. It does not
+replace the native index or implement a new file format.
+
+[Neon::write_at](neon.rs) stages changed values and new dictionary records.
+  -> [DeltaLayerWriter::finish](../../../../neon/pageserver/src/tenant/storage_layer/delta_layer.rs) writes and syncs the native layer.
+  -> [Neon::write_at](neon.rs) renames the file and syncs the directory.
+  -> [Neon::write_at](neon.rs) publishes the layer and catalog positions together.
+
+The temporary transaction snapshot is released before publication. The
+catalog uses `Arc::make_mut` after durability. A held reader retains its prior
+catalog and layer list. An abort publishes no metadata. An I/O failure leaves
+the owner unavailable until reopen. Commit timing includes durable layer
+creation and catalog publication; it is not an isolated sync syscall.
+
+[Neon::open](neon.rs) restores the catalog after reopen.
+  -> [DeltaLayer::keys_for_bench](../../../../neon/pageserver/src/tenant/storage_layer/delta_layer.rs) reads actual native index keys.
+  -> [Neon::open](neon.rs) reads dictionary blobs and rebuilds publication positions.
+  -> [Snapshot::read](neon.rs) reads Graph values from their native layers on demand.
+
+The existing `transactions_history_and_reopen` test checks point, prefix,
+floor, deletion, empty values, abort, and historical reads after reopen.
+The new `batched_history_and_overlay` test checks mixed-layer prefix order,
+held snapshot isolation, transaction overlays, rollback, and historical
+prefix reads after reopen. The unchanged [stable runner](stable.rs) checks
+the actual Causal package, exact Graph states, native historical views,
+staged Arrow values, traversal calls, and frontiers.
+
+[compare_neon.py](compare_neon.py) checks both release reports with the existing
+summary assertions. It also compares before/after change counts, property
+byte counts, traversal call shapes, frontiers, cuts, and lifecycle stages.
+It prints read, write, complete-cycle, historical, and reopen timings. It
+reports Neon/Fjall ratios within each round to show host timing differences.
+The reports contain four balanced rounds per condition. Source Arrow stays
+prepared. No production DataFusion query, notification owner, BPF, or ABI
+changes. Native Neon CDC, branches, compaction, garbage collection, and
+large retained-history routing memory remain unqualified.

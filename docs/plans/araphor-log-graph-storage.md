@@ -661,3 +661,36 @@ available from current head 46 at captured cut 48. The present Neon adapter
 has no original-WAL CDC feed and no comparable result. Production source
 queries, notification delivery, sustained load, native branches, power loss,
 and the complete incident latency target remain **Not done**.
+
+## Neon adapter read optimization, 2026-11-08
+
+The user requests an adapter change and another Fjall comparison. The
+implementer and reviewer agree to replace repeated layer probes with native
+publication routing and grouped native reads. The same eight-cycle workload,
+four-condition balanced order, durability, and exact history checks remain.
+
+A package requests Graph data.
+  -> The adapter selects each key's latest native publication at the requested cut.
+  -> The adapter groups selected keys by their layer.
+  -> One runtime entry reads groups through native disk indexes and blob readers.
+  -> A selected deletion suppresses the key.
+  -> The adapter returns live values in original key order.
+
+The enclosing owner commits Graph edits.
+  -> The adapter writes the unchanged native layer and dictionary records.
+  -> Native layer sync, rename, and directory sync complete.
+  -> The adapter publishes key and LSN metadata with copy-on-write when a held reader needs the prior catalog.
+
+The adapter reopens.
+  -> Native index keys restore publication metadata.
+  -> Native dictionary blobs restore original key identities.
+  -> Every requested Graph value still uses the native reader.
+
+No Graph value cache or new persistent index is added. No commit sync is
+removed. The earlier revision-key and fixed-key conditions both remain.
+Implementation, source review, nine release tests, and the focused pilot:
+**Done**. The pilot retains 128 primary cycles, 576 historical evaluations,
+and 288 historical views. The frozen-source comparison: **Not done**.
+Neon original-WAL CDC, native branches, compaction,
+garbage collection, and production integration remain outside this adapter
+comparison.
