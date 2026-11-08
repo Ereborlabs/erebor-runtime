@@ -1108,3 +1108,121 @@ the local Neon layer adapter. Durable native Fjall history through this API,
 combined stable-key history and original-log CDC, production integration,
 native branches, sustained compaction, power loss, and the complete incident
 latency target remain **Not done**. Full workspace CI does not run.
+
+## Combined fixed-key Graph and CDC benchmark
+
+The separate Graph-history and journal tests do not measure the user's full
+storage workload together. The `combined` mode now measures fixed application
+keys, package Graph reads and writes, original-journal subscription wakes,
+result reads, saved-cursor resume, and later appends in one run. The existing
+revision-key layout supplies the control. The original eight Causal cycles
+and exact semantic checks stay the same.
+
+### Intended end state
+
+Measure the complete storage flow with no revision suffix in the target's
+mutable keys. Record Graph read calls, write work, durable commit time,
+journal reads, subscription wake time, resume boundaries, and continued reads.
+Compare exact Graph data and package behavior with the control.
+
+[cdc::scenario](cdc.rs) commits the next source frontier.
+  -> [Walker::start](cdc.rs) reads original journal batches after its scan cursor.
+  -> [Walker::start](cdc.rs) matches the source mutation and wakes the package consumer.
+  -> [Native::capture](native.rs) opens the Graph view for that source cut.
+  -> [package::evaluate](package.rs) runs actual Graph reads and the Causal package.
+  -> [Native::apply_checkpoint](native.rs) commits fixed-key Graph writes and the consumed source cursor together.
+  -> [Walker::start](cdc.rs) reads the committed member mutations and wakes the output consumer.
+  -> [Native::inspect](native.rs) reads the actual Graph result.
+  -> [Oracle::check](main.rs) checks exact data outside the complete timing interval.
+
+[cdc::scenario](cdc.rs) stops a caught-up walker and commits the fifth source frontier.
+  -> [cdc::maintain](cdc.rs) flushes, rotates the native journal, and completes compaction.
+  -> [Native::open](native.rs) restores the store after close and reopen.
+  -> [Walker::start](cdc.rs) resumes after the minimum saved source and output cursor.
+  -> [Resume](cdc.rs) records the first decoded batch, first matching source, and caught-up boundary.
+  -> [cdc::scenario](cdc.rs) processes the pending fifth input through the same read/write path.
+  -> [cdc::scenario](cdc.rs) appends three new inputs and checks continued source and output events.
+
+```mermaid
+sequenceDiagram
+    participant W as Writer
+    participant J as Journal walker
+    participant P as Package consumer
+    participant G as Graph result consumer
+    W->>J: Durable frontier available
+    J->>J: Read original bytes from cursor
+    J->>P: Matched source change
+    P->>P: Read Graph and run package
+    P->>J: Durable Graph and input cursor available
+    J->>J: Read original member changes
+    J->>G: Matched Graph change
+    G->>G: Read actual result
+```
+
+The writer signals only durable journal availability. Both consumer events
+come from decoded original journal records. A rollback or an unrelated write
+produces no matching consumer event. The package cannot commit its transaction.
+The benchmark owner commits its Graph edits and source cursor atomically.
+
+The complete interval starts before the source write and ends after the result
+read. Graph SDK calls record operation, key counts, rows, and elapsed time. Package
+capture, index, input resolution, detection, normalization, write staging,
+native durable commit, and result read have separate fields. Native commit
+time includes sync and native publication; it is not an isolated fsync syscall.
+Graph SDK time is inside package time. Component medians are not additive.
+
+Per-event CDC read time is the duration of the complete `Feed::read` call that
+returned that event. More than one event can share a call. `Walk::read_s`
+records total journal work. Do not add per-event durations to that total.
+The native API returns a vector of decoded batches. `first_decoded` marks the
+first walker dispatch after that read completes, not the first byte decoded.
+
+Resume keeps three boundaries separate. The scan starts after the older saved
+source cursor. The first decoded batch is the already-consumed Graph commit.
+It produces no duplicate output event. The third batch contains the pending
+source frontier and produces the first new source event. Its physical cursor
+is also the caught-up boundary. Later appends must have larger cursors.
+The report includes the three backlog batches, bytes, items, read time, feed
+open time, first dispatch, first match, and caught-up time. The complete fifth
+cycle also includes maintenance and reopen, and is reported separately.
+
+Fixed keys can coalesce a close and add into one native member write. The
+semantic checks still require 194 additions and eight closures. The control
+has 202 physical member writes; the target has 194. Each native batch's exact
+member coordinates are compared with independent Oracle changes through
+[Native::assert_member_keys](native.rs). No semantic change is discarded.
+[Native::assert_stable_keys](native.rs) checks the target's mutable key shapes.
+
+The fixed-key target retains native snapshot handles while open. After the
+middle reopen, current Graph head 46 supplies the pending captured cut 48
+because the fixture has no Graph publication between them. This proves this
+forward continuation. It does not restore arbitrary historical snapshots.
+The target explicitly reports three unavailable old views after continuation
+and seven after the final reopen. Six available views are still checked.
+The control retains all 16 historical checks. These limitations do not change
+the exact eight primary read/write and package behavior checks.
+
+The benchmark uses provided Fjall with the existing retained `journal-cdc`
+patch. It adds no new storage-engine patch. The present Neon layer adapter has
+no original-WAL CDC feed. It has no result for this combined contract. Native
+layer enumeration is not used as a substitute. Source Arrow remains prepared;
+the source-frontier record is metadata. Production DataFusion source execution,
+notification delivery, sustained load, native branches, and power loss remain
+outside this bounded benchmark. No production owner, BPF, or ABI changes.
+
+```sh
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 \
+  cargo test --release --manifest-path crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml \
+  --config /tmp/araphor-storage-release-override.toml --locked
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 \
+  POC_SOURCE_REVISION="$(rtk proxy git rev-parse HEAD)" \
+  cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml \
+  --config /tmp/araphor-storage-release-override.toml --locked
+rtk proxy target/release/storage_cdc /tmp/araphor-combined-poc/release.json combined
+rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize_cdc.py /tmp/araphor-combined-poc/release.json
+```
+
+Four balanced target/control pairs use the unchanged eight-cycle fixture.
+The summary separates 28 ordinary samples and 12 later-append samples per
+layout from four maintenance/restart samples. It checks the actual positions,
+read calls, data counts, and timing fields before printing the benchmark.

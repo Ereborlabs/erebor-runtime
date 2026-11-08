@@ -615,3 +615,33 @@ source subscriptions or production notification delivery. Production
 integration, durable native Fjall history, combined stable-key history and
 CDC, native branches, sustained compaction, power loss, and the complete
 incident latency target remain **Not done**. Full workspace CI does not run.
+
+## Combined fixed-key read, write, and CDC benchmark, 2026-11-08
+
+The user rejects separate Graph-history and CDC timing results. The required
+benchmark combines fixed application keys, actual Graph reads and writes,
+subscription wakes from original journal records, result reads, saved-cursor
+resume, and continued CDC. The implementer and reviewer agree on this flow
+before editing. No new storage-engine patch is required.
+
+The [combined runner and review guide](../../crates/araphor-graph/examples/storage_poc/README.md#combined-fixed-key-graph-and-cdc-benchmark)
+reuse the original eight Causal cycles. Four balanced pairs compare provided
+Fjall with fixed keys against the revision-key control. The source write wakes
+the package only after original journal decode. Graph writes and the source
+cursor commit atomically. A second journal match wakes the output consumer,
+which reads the actual result before the complete timing interval ends.
+
+The pending fifth input survives flush, native journal rotation, physical
+compaction, close, and reopen. Resume starts after the saved minimum cursor.
+The first decoded batch and first matching source are separate positions.
+Three fresh inputs then use the same continued CDC path. Read calls, write
+staging, native commit, journal bytes and batches, resume timing, and wake
+timing are recorded together. Exact package and Graph checks stay unchanged.
+
+Implementation and focused pilot: **Done**. Frozen-source measurement:
+**Not done**. Arbitrary native historical views after reopen remain unsupported
+by the tested Fjall snapshot API. The exact required forward Graph cut is
+available from current head 46 at captured cut 48. The present Neon adapter
+has no original-WAL CDC feed and no comparable result. Production source
+queries, notification delivery, sustained load, native branches, power loss,
+and the complete incident latency target remain **Not done**.

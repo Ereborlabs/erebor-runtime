@@ -250,6 +250,12 @@ struct Reference {
 }
 
 fn main() -> Result<()> {
+    #[cfg(feature = "cdc-poc")]
+    if std::env::args().nth(2).as_deref() == Some("combined") {
+        return cdc::combined(Path::new(
+            &std::env::args().nth(1).ok_or("output path required")?,
+        ));
+    }
     #[cfg(all(feature = "neon-poc", feature = "cdc-poc"))]
     if std::env::args().nth(2).as_deref() == Some("stable") {
         return stable::run(Path::new(

@@ -112,6 +112,62 @@ impl Native {
         self.apply_saved(step, commit, Some(cursor))
     }
 
+    #[cfg(feature = "cdc-poc")]
+    pub fn assert_member_keys(&self, changes: &[Change], actual: &[Vec<u8>]) -> Result<()> {
+        self.db.read(|tx| {
+            let mut expected = BTreeSet::new();
+            for change in changes {
+                let owner = Key::number(
+                    &tx.get(&Key::dictionary(0, change.writer, &change.owner))?
+                        .ok_or("changed owner absent")?,
+                )?;
+                let entity = Key::number(
+                    &tx.get(&Key::dictionary(1, change.relation, &change.key))?
+                        .ok_or("changed entity absent")?,
+                )?;
+                expected.insert(Key::at(
+                    b'M',
+                    &[change.writer, owner, change.relation, entity],
+                    change.opened,
+                    self.stable,
+                ));
+            }
+            let keys = actual.iter().cloned().collect::<BTreeSet<_>>();
+            assert_eq!(keys.len(), actual.len());
+            assert_eq!(keys, expected);
+            Ok(())
+        })
+    }
+
+    #[cfg(feature = "cdc-poc")]
+    pub fn assert_stable_keys(&self) -> Result<()> {
+        assert!(self.stable);
+        self.db.read(|tx| {
+            for (kind, fields) in [
+                (b'M', 4),
+                (b'R', 4),
+                (b'K', 4),
+                (b'O', 5),
+                (b'I', 5),
+                (b'B', 5),
+                (b'H', 1),
+                (b'S', 1),
+                (b'T', 1),
+                (b'J', 0),
+                (b'C', 0),
+            ] {
+                for (key, _) in tx.prefix(&[kind])? {
+                    assert_eq!(key.len(), 1 + fields * 8);
+                }
+            }
+            assert_eq!(tx.prefix(b"M")?.len(), 186);
+            assert_eq!(tx.prefix(b"H")?.len(), 2);
+            assert_eq!(tx.prefix(b"J")?.len(), 1);
+            assert_eq!(tx.prefix(b"C")?.len(), 1);
+            Ok(())
+        })
+    }
+
     fn apply_saved(&mut self, step: &Step, commit: bool, cursor: Option<&[u8]>) -> Result<Timing> {
         let started = Instant::now();
         let prepare_s = started.elapsed().as_secs_f64();

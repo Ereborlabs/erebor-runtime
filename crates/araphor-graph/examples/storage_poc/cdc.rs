@@ -127,6 +127,17 @@ struct Event {
     value: u64,
     seen: Instant,
     members: usize,
+    keys: Vec<Vec<u8>>,
+    read_s: f64,
+}
+
+struct Scan {
+    cursor: Cursor,
+    seen: Instant,
+    batches: usize,
+    items: usize,
+    journal_bytes: u64,
+    read_s: f64,
 }
 #[derive(Default, Serialize)]
 struct Walk {
@@ -140,7 +151,7 @@ struct Walk {
 struct Walker {
     source: Receiver<Event>,
     graph: Receiver<Event>,
-    progress: Receiver<Cursor>,
+    progress: Receiver<Scan>,
     cancel: Cancel,
     join: Option<JoinHandle<std::result::Result<Walk, String>>>,
 }
@@ -166,7 +177,8 @@ impl Walker {
                 loop {
                     let started = Instant::now();
                     let batches = feed.read()?;
-                    totals.read_s += started.elapsed().as_secs_f64();
+                    let read_s = started.elapsed().as_secs_f64();
+                    totals.read_s += read_s;
                     for batch in batches {
                         totals.batches += 1;
                         totals.items += batch.items.len();
@@ -196,6 +208,8 @@ impl Walker {
                                     value,
                                     seen: Instant::now(),
                                     members: 0,
+                                    keys: Vec::new(),
+                                    read_s,
                                 })?;
                                 totals.source_wakes += 1;
                             }
@@ -204,15 +218,30 @@ impl Walker {
                             let value = u64::from_be_bytes(
                                 head.ok_or("Graph batch head absent")?.try_into()?,
                             );
+                            let keys = batch
+                                .items
+                                .into_iter()
+                                .filter(|i| i.key.first() == Some(&b'M'))
+                                .map(|i| i.key)
+                                .collect();
                             graph_tx.send(Event {
                                 cursor: batch.cursor,
                                 value,
                                 seen: Instant::now(),
                                 members,
+                                keys,
+                                read_s,
                             })?;
                             totals.graph_wakes += 1;
                         }
-                        progress_tx.send(batch.cursor)?;
+                        progress_tx.send(Scan {
+                            cursor: batch.cursor,
+                            seen: Instant::now(),
+                            batches: totals.batches,
+                            items: totals.items,
+                            journal_bytes: totals.journal_bytes,
+                            read_s: totals.read_s,
+                        })?;
                     }
                     if !feed.wait()? {
                         break;
@@ -235,10 +264,11 @@ impl Walker {
             .recv_timeout(Duration::from_secs(5))
             .map_err(|error| format!("journal subscription did not advance: {error}").into())
     }
-    fn scanned(&self, cursor: Cursor) -> Result<()> {
+    fn scanned(&self, cursor: Cursor) -> Result<Scan> {
         loop {
-            if self.progress.recv_timeout(Duration::from_secs(5))? >= cursor {
-                return Ok(());
+            let scan = self.progress.recv_timeout(Duration::from_secs(5))?;
+            if scan.cursor >= cursor {
+                return Ok(scan);
             }
         }
     }
@@ -281,15 +311,60 @@ struct Sample {
     source_commit_s: f64,
     source_wake_s: f64,
     source_ready_s: f64,
+    source_cdc_read_s: f64,
     package_s: f64,
     output_commit_s: f64,
     output_wake_s: f64,
     output_ready_s: f64,
+    output_cdc_read_s: f64,
     total_s: f64,
     source_cursor: Cursor,
     graph_cursor: Cursor,
     members: usize,
     findings: usize,
+    phase: &'static str,
+    capture_s: f64,
+    index_s: f64,
+    resolve_s: f64,
+    detect_s: f64,
+    normalize_s: f64,
+    graph_read_s: f64,
+    graph_read_rows: usize,
+    graph_read_keys: usize,
+    output_stage_s: f64,
+    output_sync_s: f64,
+    output_bytes: usize,
+    result_read_s: f64,
+    result_rows: usize,
+    added: usize,
+    closed: usize,
+    calls: Vec<package::Call>,
+    frontier: Vec<usize>,
+}
+
+#[derive(Serialize)]
+struct Resume {
+    saved_source: Cursor,
+    saved_graph: Cursor,
+    started_after: Cursor,
+    pending_head: Cursor,
+    first_decoded: Cursor,
+    first_match: Cursor,
+    caught_up: Cursor,
+    feed_open_s: f64,
+    first_decoded_s: f64,
+    first_match_s: f64,
+    caught_up_s: f64,
+    batches: usize,
+    items: usize,
+    journal_bytes: u64,
+    read_s: f64,
+}
+
+#[derive(Serialize)]
+struct Unavailable {
+    stage: &'static str,
+    revision: u64,
 }
 #[derive(Serialize)]
 struct Run {
@@ -301,6 +376,8 @@ struct Run {
     compactions: usize,
     rotation: bool,
     historical_views: usize,
+    unavailable: Vec<Unavailable>,
+    resume: Option<Resume>,
 }
 
 fn head(native: &Native) -> Result<Cursor> {
@@ -341,10 +418,42 @@ fn maintain(native: &Native, rotate: bool) -> Result<()> {
     Ok(())
 }
 
+fn history_views(
+    native: &Native,
+    fixture: &Fixture,
+    oracle: &Oracle,
+    unavailable: &[u64],
+    stage: &'static str,
+    run: &mut Run,
+) -> Result<()> {
+    for spec in &fixture.steps {
+        let result = native.inspect(fixture, spec.revision, true);
+        if unavailable.contains(&spec.revision) {
+            assert_eq!(
+                result
+                    .err()
+                    .ok_or("unexpected historical Fjall handle")?
+                    .to_string(),
+                "Fjall historical snapshot is not open"
+            );
+            run.unavailable.push(Unavailable {
+                stage,
+                revision: spec.revision,
+            });
+        } else {
+            oracle.check(&mut result?, fixture, spec.revision)?;
+            native.verify_metadata(fixture, spec.revision, 87)?;
+            run.historical_views += 1;
+        }
+    }
+    Ok(())
+}
+
 fn scenario(
     kind: &str,
     round: usize,
     references: &mut std::collections::BTreeMap<u64, super::Reference>,
+    combined: bool,
 ) -> Result<Run> {
     let directory = tempfile::tempdir()?;
     let fixture = Fixture::new()?;
@@ -369,18 +478,31 @@ fn scenario(
         compactions: 0,
         rotation: false,
         historical_views: 0,
+        unavailable: Vec::new(),
+        resume: None,
     };
     for (i, spec) in fixture.steps.iter().copied().enumerate() {
         let restarted = i == 4;
         if restarted {
+            if combined {
+                walker.as_ref().unwrap().scanned(head(&native)?)?;
+                walker.as_ref().unwrap().quiet();
+            }
             run.walks.push(walker.take().unwrap().stop()?);
         }
         let started = Instant::now();
         write(&native, SOURCE, &spec.captured.to_be_bytes(), true)?;
         let source_commit_s = started.elapsed().as_secs_f64();
+        let pending = if restarted && combined {
+            Some(head(&native)?)
+        } else {
+            None
+        };
+        let mut resume_start = None;
+        let mut first_scan = None;
         if restarted {
             maintain(&native, true)?;
-            run.rotation = kind == "fjall";
+            run.rotation = matches!(native.database(), Database::Fjall(..));
             let package_cursor = saved(&native, PACKAGE_ACK, initial)?;
             let graph_cursor = saved(&native, GRAPH_ACK, initial)?;
             acknowledge(&native, package_cursor.min(graph_cursor))?;
@@ -391,21 +513,69 @@ fn scenario(
             run.reopen_s = reopened.elapsed().as_secs_f64();
             assert_eq!(saved(&native, PACKAGE_ACK, initial)?, package_cursor);
             assert_eq!(saved(&native, GRAPH_ACK, initial)?, graph_cursor);
+            let resumed = Instant::now();
             walker = Some(Walker::start(
                 &native,
                 directory.path(),
                 package_cursor,
                 graph_cursor,
             )?);
+            let opened = resumed.elapsed().as_secs_f64();
+            if combined {
+                first_scan = Some(
+                    walker
+                        .as_ref()
+                        .unwrap()
+                        .progress
+                        .recv_timeout(Duration::from_secs(5))?,
+                );
+                resume_start = Some((resumed, package_cursor, graph_cursor, opened));
+            }
             acknowledge(&native, package_cursor.min(graph_cursor))?;
         }
         let active = walker.as_ref().unwrap();
         let source = Walker::receive(&active.source)?;
         let source_ready_s = started.elapsed().as_secs_f64();
         assert_eq!(source.value, spec.captured);
+        if let Some((resumed, package_cursor, graph_cursor, opened)) = resume_start {
+            let pending = pending.unwrap();
+            let first = first_scan.unwrap();
+            let caught = active.scanned(pending)?;
+            assert_eq!(first.batches, 1);
+            assert_eq!(first.cursor, graph_cursor);
+            assert!(first.cursor > package_cursor.min(graph_cursor));
+            assert_eq!(source.cursor, pending);
+            assert_eq!(caught.cursor, pending);
+            assert_eq!(caught.batches, 3);
+            assert_eq!(spec.previous, 46);
+            assert_eq!(spec.captured, 48);
+            run.resume = Some(Resume {
+                saved_source: package_cursor,
+                saved_graph: graph_cursor,
+                started_after: package_cursor.min(graph_cursor),
+                pending_head: pending,
+                first_decoded: first.cursor,
+                first_match: source.cursor,
+                caught_up: caught.cursor,
+                feed_open_s: opened,
+                first_decoded_s: first.seen.duration_since(resumed).as_secs_f64(),
+                first_match_s: source.seen.duration_since(resumed).as_secs_f64(),
+                caught_up_s: caught.seen.duration_since(resumed).as_secs_f64(),
+                batches: caught.batches,
+                items: caught.items,
+                journal_bytes: caught.journal_bytes,
+                read_s: caught.read_s,
+            });
+        }
+        if combined && i > 4 {
+            assert!(source.cursor > run.resume.as_ref().unwrap().pending_head);
+        }
         let capture = Instant::now();
-        let prepared = native.capture(&fixture, source.value, |view, _| {
-            package::evaluate(view, &fixture, &incident, spec, &inputs[i])
+        let (prepared, capture_s) = native.capture(&fixture, source.value, |view, capture_s| {
+            Ok((
+                package::evaluate(view, &fixture, &incident, spec, &inputs[i])?,
+                capture_s,
+            ))
         })?;
         let package_s = capture.elapsed().as_secs_f64();
         let output = Instant::now();
@@ -413,7 +583,15 @@ fn scenario(
         let output_commit_s = output.elapsed().as_secs_f64();
         let graph = Walker::receive(&active.graph)?;
         let output_ready_s = output.elapsed().as_secs_f64();
-        let total_s = started.elapsed().as_secs_f64();
+        let wake_total = started.elapsed().as_secs_f64();
+        let result_started = Instant::now();
+        let mut state = native.inspect(&fixture, graph.value, true)?;
+        let result_read_s = result_started.elapsed().as_secs_f64();
+        let total_s = if combined {
+            started.elapsed().as_secs_f64()
+        } else {
+            wake_total
+        };
         let counts = oracle.apply(&prepared.step);
         assert_eq!(counts, (applied.added, applied.closed));
         assert_eq!(
@@ -430,14 +608,18 @@ fn scenario(
             ][i]
         );
         assert_eq!(graph.value, spec.revision);
-        assert_eq!(graph.members, applied.added + applied.closed);
+        if combined {
+            native.assert_member_keys(&oracle.changes[&spec.revision], &graph.keys)?;
+        } else {
+            assert_eq!(graph.members, applied.added + applied.closed);
+        }
         assert_eq!(saved(&native, PACKAGE_ACK, initial)?, source.cursor);
-        let mut state = native.inspect(&fixture, graph.value, true)?;
         oracle.check(&mut state, &fixture, graph.value)?;
         super::check_findings(&state.rows, spec.expected_findings)?;
         native.verify_metadata(&fixture, spec.revision, spec.revision)?;
         write(&native, GRAPH_ACK, &graph.cursor.bytes(), true)?;
         acknowledge(&native, source.cursor.min(graph.cursor))?;
+        let result_rows = state.rows.len();
         let calls = prepared
             .calls
             .iter()
@@ -469,15 +651,41 @@ fn scenario(
             source_commit_s,
             source_wake_s: source.seen.duration_since(started).as_secs_f64(),
             source_ready_s,
+            source_cdc_read_s: source.read_s,
             package_s,
             output_commit_s,
             output_wake_s: graph.seen.duration_since(output).as_secs_f64(),
             output_ready_s,
+            output_cdc_read_s: graph.read_s,
             total_s,
             source_cursor: source.cursor,
             graph_cursor: graph.cursor,
             members: graph.members,
             findings: spec.expected_findings,
+            phase: if restarted {
+                "resume"
+            } else if i > 4 {
+                "continued"
+            } else {
+                "initial"
+            },
+            capture_s,
+            index_s: prepared.index_s,
+            resolve_s: prepared.resolve_s,
+            detect_s: prepared.detect_s,
+            normalize_s: prepared.normalize_s,
+            graph_read_s: prepared.calls.iter().map(|c| c.elapsed_s).sum(),
+            graph_read_rows: prepared.calls.iter().map(|c| c.rows).sum(),
+            graph_read_keys: prepared.calls.iter().map(|c| c.key_count).sum(),
+            output_stage_s: applied.work_s,
+            output_sync_s: applied.commit_s,
+            output_bytes: applied.encoded_bytes,
+            result_read_s,
+            result_rows,
+            added: applied.added,
+            closed: applied.closed,
+            calls: prepared.calls,
+            frontier: prepared.frontier,
         });
         if i < 4 {
             maintain(&native, false)?;
@@ -515,29 +723,41 @@ fn scenario(
     active.scanned(last)?;
     active.quiet();
     run.walks.push(walker.take().unwrap().stop()?);
-    for spec in &fixture.steps {
-        oracle.check(
-            &mut native.inspect(&fixture, spec.revision, true)?,
-            &fixture,
-            spec.revision,
-        )?;
-        native.verify_metadata(&fixture, spec.revision, 87)?;
-        run.historical_views += 1;
+    if kind == "fjall-stable" {
+        native.assert_stable_keys()?;
     }
+    history_views(
+        &native,
+        &fixture,
+        &oracle,
+        if kind == "fjall-stable" {
+            &[26, 29, 44]
+        } else {
+            &[]
+        },
+        "after-continue",
+        &mut run,
+    )?;
     native.shutdown()?;
     drop(native);
     native = Native::open(kind, directory.path())?;
-    for spec in &fixture.steps {
-        oracle.check(
-            &mut native.inspect(&fixture, spec.revision, true)?,
-            &fixture,
-            spec.revision,
-        )?;
-        native.verify_metadata(&fixture, spec.revision, 87)?;
-        run.historical_views += 1;
+    history_views(
+        &native,
+        &fixture,
+        &oracle,
+        if kind == "fjall-stable" {
+            &[26, 29, 44, 46, 62, 64, 85]
+        } else {
+            &[]
+        },
+        "after-final-reopen",
+        &mut run,
+    )?;
+    if kind == "fjall-stable" {
+        native.assert_stable_keys()?;
     }
     run.compactions = super::compaction::Trace::completed() - before;
-    if kind == "fjall" {
+    if matches!(native.database(), Database::Fjall(..)) {
         assert!(run.compactions > 0, "no physical compaction completed");
     }
     assert_eq!(run.walks.iter().map(|w| w.source_wakes).sum::<usize>(), 8);
@@ -561,7 +781,7 @@ pub fn run(output: &Path) -> Result<()> {
     .enumerate()
     {
         for kind in order {
-            runs.push(scenario(kind, round, &mut reference)?);
+            runs.push(scenario(kind, round, &mut reference, false)?);
         }
     }
     let report = serde_json::json!({
@@ -587,6 +807,43 @@ pub fn run(output: &Path) -> Result<()> {
         "{} journal-driven runs, {} package cycles passed: {}",
         report["runs"].as_array().unwrap().len(),
         64,
+        output.display()
+    );
+    Ok(())
+}
+
+pub fn combined(output: &Path) -> Result<()> {
+    super::compaction::Trace::install()?;
+    let mut runs = Vec::new();
+    let mut reference = std::collections::BTreeMap::new();
+    for (round, order) in [
+        ["fjall", "fjall-stable"],
+        ["fjall-stable", "fjall"],
+        ["fjall-stable", "fjall"],
+        ["fjall", "fjall-stable"],
+    ]
+    .iter()
+    .enumerate()
+    {
+        for kind in order {
+            runs.push(scenario(kind, round, &mut reference, true)?);
+        }
+    }
+    let report = serde_json::json!({
+        "mode": "combined", "source": option_env!("POC_SOURCE_REVISION").unwrap_or("unrecorded"),
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "workload": "original eight Causal cycles; fixed application keys versus revision-key control; native journal source wake, package Graph reads, atomic Graph/cursor write, journal Graph wake, result read, resume and continued appends",
+        "target": "fjall-stable", "control": "fjall",
+        "unsupported": { "neon-layers": "present adapter has no original-WAL CDC feed; native layer enumeration is not substituted" },
+        "limits": ["prepared source Arrow and synthetic source-frontier metadata; no production DataFusion input", "no production notification delivery", "forward continuation after reopen reads current Graph head46 at captured cut48; arbitrary old native snapshots are not restored", "native reader returns decoded batches as a vector; first_decoded measures first walker dispatch after that read, not first-byte decode", "single caller-managed minimum consumer cursor; no dynamic consumer registration behind released history", "explicit maintenance and restart separated from ordinary samples; no sustained compaction, native branches or power-loss proof"],
+        "runs": runs
+    });
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(output, serde_json::to_vec_pretty(&report)?)?;
+    println!(
+        "64 combined package cycles: Graph reads/writes, journal wakes, saved resume and continued CDC: {}",
         output.display()
     );
     Ok(())
