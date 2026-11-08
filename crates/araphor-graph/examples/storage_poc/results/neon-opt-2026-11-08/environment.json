@@ -1,0 +1,135 @@
+{
+  "date": "2026-11-08",
+  "recorded_at_utc": "2026-11-08T18:02:12.101420+00:00",
+  "source_full": "d339ed08f6a5c82afd9b1a1e70aac60fe38020a0",
+  "baseline_source": "8a3f8e99bf797750587c00b27ad2c72a54990b21",
+  "source_state": "Named benchmark source matches the committed implementation. Only neon.rs changes among the existing benchmark Rust modules. The driver, workload, package, Graph owner, fixtures, and history checks remain unchanged. Unrelated user changes remain outside this result.",
+  "neon_source": "fa504217c61bbcaf5c512d75830564541f917f8f",
+  "neon_patch": "../../neon-bench/neon.patch",
+  "neon_patch_sha256": "8553b393d62d71e9cf0d8b1cd6ee688044286bfdad0ca68d6eb336f172612c99",
+  "baseline_neon_patch": "baseline-neon.patch",
+  "baseline_neon_patch_sha256": "bf403c88f0ac26c2f372b641ca6a7ac526c536771bf42cbaaf4523896ef3bb58",
+  "fjall_source": "87006048139bfe1b072bbc29a5a92bf1f97628e3",
+  "fjall_patch": "../../cdc-bench/fjall.patch",
+  "fjall_patch_sha256": "07eee2c2b728ae128252b2c5d3730450dfdf77b211593c0a18c6c8cf7aff4f3f",
+  "isolated_lock": "../../neon-bench/Cargo.lock",
+  "isolated_lock_sha256": "f45612864b609341a38da9f6edc314321d5049948c7bc3811740760c7ea111d5",
+  "resolved_packages": {
+    "arrow-array": {
+      "version": "59.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "fjall": {
+      "version": "3.1.13"
+    },
+    "log": {
+      "version": "0.4.29",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "lsm-tree": {
+      "version": "3.1.10",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "pageserver": {
+      "version": "0.1.0"
+    },
+    "redb": {
+      "version": "4.4.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "surrealkv": {
+      "version": "1.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "tokio": {
+      "version": "1.52.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    }
+  },
+  "binary_sha256": "59350a9ed476bfe8bf5fb4b26609ef541ca2db7ece3e7514df01ce56eec0aa85",
+  "baseline_binary_sha256": "e7de4061daef162fa2889c63edf79f1f233d52555e106388dd28e90b97ab33cf",
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics",
+  "logical_cpus": 16,
+  "kernel": "6.8.0-147-generic",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "filesystem": "ext4 on /dev/nvme0n1p7; /tmp uses the same device as the checkout",
+  "profile": "Cargo release opt-level 3; debug assertions disabled. Shared host without CPU, I/O, thermal, or cache isolation. No build runs during measurement. Process-name audits and sampled pressure, frequency, and temperature are retained.",
+  "duckdb_cached_archive": "target/release/build/libduckdb-sys-e073672aa6bffaa9/out/libduckdb.a",
+  "duckdb_cached_archive_sha256": "121c752b58ae133fe0e1627a6c7d3559e185d04fd0a9a51a9d73a9885429b1eb",
+  "duckdb_override": "[target.x86_64-unknown-linux-gnu.duckdb]\nrustc-link-lib = [\"static=duckdb\", \"stdc++\"]\nrustc-link-search = [\"native=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"]\nrustc-env = { OUT_DIR = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\" }\ninclude = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/src/include\"\nlib_dir = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"\n",
+  "commands": [
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 POSTGRES_INSTALL_DIR=$PWD/neon/pg_install POC_SOURCE_REVISION=8a3f8e99bf797750587c00b27ad2c72a54990b21 cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+    "rtk proxy target/release/storage_poc /tmp/araphor-neon-opt-20261108/baseline.json stable",
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 POSTGRES_INSTALL_DIR=$PWD/neon/pg_install POC_SOURCE_REVISION=d339ed08f6a5c82afd9b1a1e70aac60fe38020a0 cargo test --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 POSTGRES_INSTALL_DIR=$PWD/neon/pg_install POC_SOURCE_REVISION=d339ed08f6a5c82afd9b1a1e70aac60fe38020a0 cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+    "rtk proxy target/release/storage_poc /tmp/araphor-neon-opt-20261108/release.json stable",
+    "rtk proxy target/release/storage_poc /tmp/araphor-neon-opt-20261108/repeat.json stable",
+    "rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize_stable.py /tmp/araphor-neon-opt-20261108/repeat.json",
+    "rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/compare_neon.py /tmp/araphor-neon-opt-20261108/baseline.json /tmp/araphor-neon-opt-20261108/repeat.json",
+    "rtk proxy rustfmt --edition 2021 --config style_edition=2024,skip_children=true --check crates/araphor-graph/examples/storage_poc/neon.rs",
+    "rtk proxy git -C neon apply --reverse --check --unidiff-zero ../crates/araphor-graph/examples/storage_poc/neon-bench/neon.patch"
+  ],
+  "retained_names": "The repeat is release.json, summary.json, comparison.json, run.log, and host.json. The first frozen pass is experiments/variable-release.json with its summary, comparison, log, and host record. Both use the identical frozen binary.",
+  "layout": "Both original revision-key and fixed-key conditions remain. Fixed mutable Graph keys omit application revision suffixes. The native layer index stores key and LSN coordinates. Application key IDs and publication metadata route reads; no Graph value cache is added.",
+  "reads": "Point, prefix, and floor requests select the latest per-key native LSN at or before the cut. Prefix requests group keys by layer and enter the runtime once. One native DiskBtreeReader serves each group; native ValueRef blob reads supply every value. Tombstones suppress older values. Reopen reads native index keys and dictionary blobs to reconstruct routing metadata.",
+  "writes": "No unconditional catalog clone. The internal transaction snapshot is dropped before publication. The existing native layer finish sync, rename, and directory sync remain. Arc::make_mut publishes metadata after durability and preserves outer held snapshots. All work remains in the measured write interval.",
+  "checks_per_pass": {
+    "runs": 16,
+    "primary_cycles": 128,
+    "historical_package_evaluations": 576,
+    "historical_views": 288,
+    "primary_sdk_calls_per_run": 42,
+    "semantic_additions_per_run": 194,
+    "semantic_closures_per_run": 8
+  },
+  "checks": "Exact Graph rows, findings, staged Arrow values, clear sequences, traversal keys, frontiers, current and historical metadata, held snapshots, rollback, native historical reads, and reopen. The comparison script checks unchanged report shape, semantic changes, encoded property bytes, call counts and rows, frontier records, historical cuts, and lifecycle stages.",
+  "focused_tests": "Nine release tests pass on the final frozen source. The new test covers mixed-layer prefix ordering, held snapshot isolation, transaction overlays, deletion, rollback, future keys, and historical prefix reads after reopen. The rejected vectored variant passed ten tests, including its oversized-blob case; those ten tests do not describe the retained source.",
+  "variable_pass": "The first frozen pass has fixed Fjall median 74.0895655 ms and Neon median 130.291104 ms, with large within-pass Fjall variation. Its cause is not established. The same binary repeat has fixed Fjall median 26.984721 ms and Neon median 52.0067305 ms. Both complete all checks and are retained.",
+  "performance_claim": "The repeat observes a narrower per-round Neon/Fjall median ratio: 1.9273207886 versus baseline 2.5689507401. Before and after are separate passes on a shared host. Do not attribute the full raw 92.974043 to 52.0067305 ms change to code or claim a precise causal percentage. This is a bounded observed comparison, not an intrinsic engine ranking.",
+  "experiments": {
+    "routing_pilot": "Working-tree tag working-tree-neon-opt; retained as experiments/pilot.json. Fixed Neon median 65.177776 ms and paired ratio 1.79926693. The implementation is retained in d339ed08.",
+    "candidate": "Working-tree tag working-tree-neon-vector; source is d339ed08 plus experiments/vectored-experiment.patch. The complete native patch is experiments/vectored-neon.patch. It uses native plan_reads and read_blobs with the configured read size.",
+    "rejection": "Fixed Neon median rises from 65.177776 to 89.4057005 ms, with disjoint round ranges. Fixed Fjall changes from 36.7368515 to 37.781552 ms with overlapping ranges. Independent review confirms the regression. Only the uncommitted experiment is restored. experiments/vectored-comparison.json compares the original baseline to this candidate.",
+    "final_source": "The vectored path and its oversized test are not in the final source. Retained source and native patch are byte-identical to d339ed08."
+  },
+  "limits": [
+    "Four balanced rounds per condition in each pass; no CPU or cache isolation.",
+    "Before and after adapters are measured in separate passes, not an alternating binary experiment.",
+    "Fjall fixed keys retain native snapshot handles in RAM; arbitrary old handles after reopen remain unsupported. Neon fixed keys retain native LSN history after reopen.",
+    "Neon uses one durable native layer per commit; no production WAL service, quorum, original-WAL CDC, compaction, garbage collection, or branch qualification.",
+    "Routing metadata memory grows with retained publications; no large-history scaling or reclamation proof.",
+    "Prepared source Arrow; no production DataFusion source query or notification delivery.",
+    "Full workspace CI and the production incident test do not run under the focused-iteration constraint."
+  ],
+  "source_files_sha256": {
+    "cdc.rs": "18da1ebfe848cf499b92b57ffe025073758328deaea68862d7575e54ef27c77d",
+    "compaction.rs": "9107a5934083f31209eb3868c0fd68f04c6c2c1ba14e6922f270d0938a73aeef",
+    "compare_neon.py": "56e8dfa3dc3dd3c79e8536a7183bf34ed787792ab6051f1e21d49c5ae9886d55",
+    "duck.rs": "96c68b1179af294ee3adbc015cf4c7203bd9083e55b46cc930b2f714b16f4a7e",
+    "fixture.rs": "068d9f361bbc8c73189eb0c7188934b5031427841e90b955f02ddab6a15dd0fb",
+    "history.rs": "37b43a7bb61c036d465524ba2b05e8882b9a6b359d043bd005b76fac6bd2e244",
+    "home.rs": "dea20a8847a293cea420c45f5777d4089553ba485b670e7b4fc354ba812d9ffc",
+    "incident.rs": "74b4d6b7fcffeb1d878b13c1a72e513597b873f4b855a968f7280e4bbf1fdd22",
+    "kv.rs": "c1d10ef9b4fc78ba99a15acc38bf39fc717782b2425575683865a3bb032bd6d2",
+    "main.rs": "bdefd4d09dc7767873b44049f718a734dbf692a3c969071d1e12562273c539dc",
+    "native.rs": "aa4431e424042ce454115cab312a549304ca3040f7389904a923182d6b49c562",
+    "neon-bench/Cargo.lock": "f45612864b609341a38da9f6edc314321d5049948c7bc3811740760c7ea111d5",
+    "neon-bench/Cargo.toml": "92671b3b05984f2524a9c0fdacf0b78c42386f8bcdb57819dc90decabe12ce05",
+    "neon-bench/neon.patch": "8553b393d62d71e9cf0d8b1cd6ee688044286bfdad0ca68d6eb336f172612c99",
+    "neon.rs": "f979877aa39db76814271e74f8187112038c2fc124ceb8f190fa17b8dccd0c37",
+    "package.rs": "84e444a130fd25b94fe829476202e2e64c0d1901903e87d2cbeb984ac42625f1",
+    "stable.rs": "bb24ee749b12c1519e9ce396b94d6e501e1174409c95bc72ee98eae19807a013",
+    "summarize_stable.py": "a412c00f95ea90768f6fadbe98ddec7cb7fd2c57c586871fae0cb7b6bc26d3cf",
+    "surreal.rs": "e9560aaf5bac17ae8caff1be50d42db1398b70e9540ab3a644899de604749831"
+  },
+  "independent_review": "Passed. The read-only reviewer checks every pass, balanced order, 128 primary cycles, 576 historical evaluations, 288 views, exact semantic changes, 42 SDK calls with 376 key requests and 442 rows per run, current and unsupported historical view matrices, source and binary identity, locks, native patches, rejected experiment restoration, tests, summaries, comparisons, documentation, and links. Both frozen passes remain. The accepted claim is a bounded observed narrower relative gap. No causal percentage, timing parity, original-WAL CDC, branch, or production claim is made.",
+  "source_checks": [
+    "All summaries and all four comparisons reproduce exactly.",
+    "A changed frontier is rejected by the comparison script.",
+    "All 19 named source files match disk, retained hashes, and frozen Git blobs.",
+    "Current native wrapper changes exactly match the retained zero-context patch.",
+    "Frozen binary, clone bases, lock, resolved versions, and baseline patch identities match.",
+    "The driver, fixtures, package, Graph owner, and history code do not change.",
+    "Scoped formatting, whitespace, and local guide and result links pass."
+  ]
+}

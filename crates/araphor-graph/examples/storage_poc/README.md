@@ -1360,3 +1360,95 @@ The reports contain four balanced rounds per condition. Source Arrow stays
 prepared. No production DataFusion query, notification owner, BPF, or ABI
 changes. Native Neon CDC, branches, compaction, garbage collection, and
 large retained-history routing memory remain unqualified.
+
+### Adapter comparison result, 2026-11-08
+
+The retained implementation is `d339ed08f6a5c82afd9b1a1e70aac60fe38020a0`.
+The baseline is `8a3f8e99bf797750587c00b27ad2c72a54990b21`.
+The [comparison](results/neon-opt-2026-11-08/comparison.json),
+[baseline](results/neon-opt-2026-11-08/baseline.json),
+[frozen repeat](results/neon-opt-2026-11-08/release.json), and
+[environment](results/neon-opt-2026-11-08/environment.json) retain the source,
+binary, locks, engine patches, commands, samples, and limits.
+
+Each pass completes 16 balanced runs, 128 primary package cycles, 576
+historical package evaluations, and 288 historical views. Exact rows,
+findings, staged values, traversal calls, frontiers, metadata, rollback, and
+reopen checks pass. Nine focused release tests pass on the frozen source.
+The driver, package, fixtures, Graph code, and history checks do not change.
+Fixed mutable keys still have no application revision suffix.
+
+The table shows milliseconds for eight package and Graph-write cycles.
+The ratio is computed within each round, then summarized by its median.
+It is not the ratio of the two displayed medians.
+
+| Fixed-key pass | Fjall median | Neon median | Median round Neon/Fjall ratio |
+| --- | ---: | ---: | ---: |
+| Baseline | 35.611 | 92.974 | 2.569 |
+| First frozen pass, variable control | 74.090 | 130.291 | 1.737 |
+| Same frozen binary, repeat | 26.985 | 52.007 | 1.927 |
+
+The [first frozen pass](results/neon-opt-2026-11-08/experiments/variable-release.json)
+passes all checks. Its Fjall round totals vary from 44.901 to 80.167
+milliseconds. The cause is not established. The repeat uses the identical
+binary with no intervening source or build change. Its Fjall round totals
+range from 26.715 to 27.398 milliseconds. Both passes remain in the evidence.
+The repeat observes a smaller relative gap. Do not attribute the full raw
+92.974 to 52.007 millisecond change to code. Before and after are separate
+passes on a shared host. A precise causal percentage needs an alternating
+old/new adapter experiment.
+
+The detailed table uses the fixed-key baseline and frozen repeat. Component
+medians are not additive. Graph SDK time is inside package time. Write commit
+time includes native layer creation, sync, rename, directory sync, and catalog
+publication. Primary cycle timing ends after the Graph write. Result
+verification reads and historical package evaluations run separately.
+
+| Work in eight cycles, milliseconds | Fjall baseline | Neon baseline | Fjall repeat | Neon repeat |
+| --- | ---: | ---: | ---: | ---: |
+| Package Graph SDK reads | 7.363 | 51.902 | 5.649 | 23.188 |
+| Write work before commit | 6.589 | 8.959 | 4.819 | 5.219 |
+| Write commit and publication | 8.807 | 16.326 | 7.073 | 14.080 |
+| Complete Graph writes | 15.312 | 25.701 | 11.950 | 19.306 |
+| Package and write cycles | 35.611 | 92.974 | 26.985 | 52.007 |
+
+Sixteen fixed-key historical package evaluations after writes take 143.955
+milliseconds for baseline Neon and 63.481 for the repeat. Fjall takes 38.631
+and 29.669 respectively. After reopen, the same 16 Neon evaluations take
+144.673 and 63.129 milliseconds. Fixed-key Fjall still cannot restore those
+old snapshot handles. This capability difference remains explicit.
+
+The original revision-key controls also pass. Their median round Neon/Fjall
+ratio changes from 2.338 to 1.828 in the repeat. No durability operation is
+removed. Every requested Graph value still uses native storage.
+
+The [routing pilot](results/neon-opt-2026-11-08/experiments/pilot.json) uses a
+working-tree source tag. A second experiment replaces native cached point
+blob reads with Neon's native vectored planner. Its
+[report](results/neon-opt-2026-11-08/experiments/vectored.json) passes the same
+checks and ten release tests. Fixed Neon rises from 65.178 milliseconds in
+the routing pilot to 89.406 in the vectored experiment. All four vectored
+rounds exceed all four routing-pilot rounds. Fjall changes from 36.737 to
+37.782 milliseconds with overlapping round ranges. Independent review
+confirms the regression. The vectored change is removed. Its
+[source diff](results/neon-opt-2026-11-08/experiments/vectored-experiment.patch)
+and native patch remain as rejected experiment evidence.
+
+To reproduce the baseline, use its source revision and the retained
+`baseline-neon.patch` in an isolated checkout. To reproduce the retained
+adapter, use its source revision and `neon-bench/neon.patch`. Both patches
+apply to the pinned Neon source with `git apply --unidiff-zero`.
+Build with the existing isolated release command. Run `storage_poc` in
+`stable` mode, then compare the two reports:
+
+```sh
+rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/compare_neon.py \
+  crates/araphor-graph/examples/storage_poc/results/neon-opt-2026-11-08/baseline.json \
+  crates/araphor-graph/examples/storage_poc/results/neon-opt-2026-11-08/release.json
+```
+
+This bounded adapter comparison is **Done**. Timing parity with Fjall remains
+**Not done**. Full workspace CI, the production incident test, and production
+event-to-notification timing do not run. Native Neon original-WAL CDC,
+branches, compaction, garbage collection, and large-history scaling remain
+unqualified.

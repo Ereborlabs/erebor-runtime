@@ -1,0 +1,11 @@
+{
+  "recorded_at_utc": "2026-11-08T17:56:54.705288+00:00",
+  "active_build_or_benchmark": {},
+  "load_average": [
+    4.53369140625,
+    4.5107421875,
+    3.89599609375
+  ],
+  "unreadable": 0,
+  "check": "Process names only; no arguments or environment."
+}

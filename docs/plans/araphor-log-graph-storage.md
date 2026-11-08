@@ -690,7 +690,22 @@ No Graph value cache or new persistent index is added. No commit sync is
 removed. The earlier revision-key and fixed-key conditions both remain.
 Implementation, source review, nine release tests, and the focused pilot:
 **Done**. The pilot retains 128 primary cycles, 576 historical evaluations,
-and 288 historical views. The frozen-source comparison: **Not done**.
-Neon original-WAL CDC, native branches, compaction,
-garbage collection, and production integration remain outside this adapter
-comparison.
+and 288 historical views. The frozen-source bounded comparison is **Done**
+at `d339ed08f`. The [result](../../crates/araphor-graph/examples/storage_poc/README.md#adapter-comparison-result-2026-11-08)
+retains the baseline, both frozen passes, and the rejected native vectored
+experiment. Every pass retains the unchanged workload and exact checks.
+
+The baseline fixed-key Neon/Fjall median round ratio is 2.569. The frozen
+repeat observes 1.927, with Neon at 52.007 milliseconds and Fjall at 26.985
+for eight cycles. A first frozen pass has a variable Fjall control and a
+ratio of 1.737. Both frozen passes use the identical binary. The cause of the
+timing variation is not established. Do not attribute the full raw baseline
+to repeat difference to code or claim a precise causal percentage.
+
+Nine release tests pass on the retained source. Native vectored reads pass
+the same scenario but regress relative to the routing pilot. Independent
+review confirms that regression, and only that experiment is removed.
+Timing parity with Fjall remains **Not done**. Full workspace CI and the
+production incident test do not run. Neon original-WAL CDC, native branches,
+compaction, garbage collection, large-history scaling, and production
+integration remain outside this adapter comparison.

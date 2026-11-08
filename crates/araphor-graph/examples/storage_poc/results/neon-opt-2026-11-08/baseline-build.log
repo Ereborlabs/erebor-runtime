@@ -1,0 +1,74 @@
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/pq_proto/src/lib.rs:646:33: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/pq_proto/src/lib.rs:658:33: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+warning: `pq_proto` (lib) generated 2 warnings (run `cargo fix --lib -p pq_proto` to apply 2 suggestions)
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/utils/src/zstd.rs:49:21: warning: a method with this name may be added to the standard library in the future
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/utils/src/poison.rs:53:26: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+warning: `utils` (lib) generated 2 warnings (run `cargo fix --lib -p utils` to apply 1 suggestion)
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:9:5: warning: unused import: `GCSVersionListing`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:12:5: warning: unused import: `azure_core::Etag`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:14:5: warning: unused import: `bytes::BytesMut`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:19:16: warning: unused import: `Token`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:20:5: warning: unused import: `http::Method`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:27:28: warning: unused import: `ParseIntError`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:28:16: warning: unused imports: `Pin` and `pin`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:33:25: warning: unused imports: `BytesCodec` and `FramedRead`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:36:11: warning: unused imports: `ParseError` and `Url`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:700:9: warning: unused doc comment
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:1248:16: warning: unused doc comment: rustdoc does not generate documentation for macro invocations
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:1252:12: warning: unused doc comment
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:235:17: warning: variable does not need to be mutable
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:361:13: warning: variable does not need to be mutable
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:789:13: warning: variable does not need to be mutable
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:1170:13: warning: variable does not need to be mutable
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:17:5: warning: unused import: `futures::stream::TryStreamExt`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:235:17: warning: unused variable: `req_uri`: help: if this is intentional, prefix it with an underscore: `_req_uri`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:693:13: warning: unused variable: `permit`: help: if this is intentional, prefix it with an underscore: `_permit`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:837:13: warning: unused variable: `remaining`: help: if this is intentional, prefix it with an underscore: `_remaining`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:861:9: warning: unused variable: `from`: help: if this is intentional, prefix it with an underscore: `_from`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:863:9: warning: unused variable: `cancel`: help: if this is intentional, prefix it with an underscore: `_cancel`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:961:17: warning: variable `continuation_token` is assigned to, but never used
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:1049:17: warning: value assigned to `continuation_token` is never read
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:1170:13: warning: unused variable: `delete_objects`: help: if this is intentional, prefix it with an underscore: `_delete_objects`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:58:5: warning: fields `bucket` and `etag` are never read
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/remote_storage/src/gcs_bucket.rs:138:8: warning: method `max_keys_per_delete` is never used
+warning: `remote_storage` (lib) generated 27 warnings (run `cargo fix --lib -p remote_storage` to apply 19 suggestions)
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/postgres_backend/src/lib.rs:402:27: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+warning: `postgres_backend` (lib) generated 1 warning (run `cargo fix --lib -p postgres_backend` to apply 1 suggestion)
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/libs/pageserver_api/src/models/partitioning.rs:96:50: warning: unnecessary parentheses around closure body
+warning: `pageserver_api` (lib) generated 1 warning (run `cargo fix --lib -p pageserver_api` to apply 1 suggestion)
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall/src/journal/entry.rs:200:41: warning: usage of an `unsafe` block
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall/src/journal/error.rs:10:10: warning: enum `RecoveryMode` is never used
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall/src/supervisor.rs:35:16: warning: field `backpressure_lock` is never read
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins/src/causal/io.rs:8:5: warning: unused import: `source::DiscoveryRecordIdV1`
+warning: `fjall` (lib) generated 3 warnings
+warning: `araphor-analysis-builtins` (lib) generated 1 warning (run `cargo fix --lib -p araphor-analysis-builtins` to apply 1 suggestion)
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/http/routes.rs:3728:35: warning: unnecessary parentheses around type
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/disk_btree.rs:33:5: warning: unused import: `tracing::error`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/ephemeral_file.rs:13:15: warning: unused import: `error`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/remote_timeline_client.rs:205:34: warning: unused import: `error`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/timeline/walreceiver/walreceiver_connection.rs:27:34: warning: unused import: `error`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant.rs:5582:5: warning: type `CalculateSyntheticSizeError` is more private than the item `TenantShard::gather_size_inputs`: method `TenantShard::gather_size_inputs` is reachable at visibility `pub`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant.rs:5625:5: warning: type `CalculateSyntheticSizeError` is more private than the item `TenantShard::calculate_synthetic_size`: method `TenantShard::calculate_synthetic_size` is reachable at visibility `pub`
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/pgdatadir_mapping.rs:3183:8: warning: struct `RelSizeEntry` is never constructed
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/virtual_file/owned_buffers_io/aligned_buffer/alignment.rs:18:12: warning: struct `RuntimeAlign` is never constructed
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/metrics.rs:2713:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/page_cache.rs:323:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/page_cache.rs:364:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/page_cache.rs:415:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/page_cache.rs:552:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/pgdatadir_mapping.rs:217:31: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/pgdatadir_mapping.rs:235:42: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant.rs:2548:15: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/block_io.rs:95:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/block_io.rs:160:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/disk_btree.rs:134:21: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/storage_layer/delta_layer.rs:1576:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/mgr.rs:1153:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/timeline/layer_manager.rs:131:30: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/timeline/layer_manager.rs:141:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/timeline/layer_manager.rs:153:31: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/tenant/timeline/layer_manager.rs:163:9: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/neon/pageserver/src/virtual_file.rs:344:31: warning: hiding a lifetime that's elided elsewhere is confusing: the lifetime is elided here, the same lifetime is hidden here
+warning: `pageserver` (lib) generated 27 warnings (run `cargo fix --lib -p pageserver` to apply 23 suggestions)
+   Compiling araphor-neon-storage-poc v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/neon-bench)
+    Finished `release` profile [optimized] target(s) in 20.57s

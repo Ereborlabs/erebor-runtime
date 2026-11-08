@@ -1,0 +1,74 @@
+diff --git a/pageserver/src/tenant/secondary/scheduler.rs b/pageserver/src/tenant/secondary/scheduler.rs
+index 8dc1d57b5..f867ba2e4 100644
+--- a/pageserver/src/tenant/secondary/scheduler.rs
++++ b/pageserver/src/tenant/secondary/scheduler.rs
+@@ -118 +118 @@ pub(crate) trait JobGenerator<PJ, RJ, C, CMD>
+-pub(super) struct SchedulingResult<PJ> {
++pub(crate) struct SchedulingResult<PJ> {
+diff --git a/pageserver/src/tenant/storage_layer/delta_layer.rs b/pageserver/src/tenant/storage_layer/delta_layer.rs
+index f963fdac9..088f74a9f 100644
+--- a/pageserver/src/tenant/storage_layer/delta_layer.rs
++++ b/pageserver/src/tenant/storage_layer/delta_layer.rs
+@@ -282,0 +283,52 @@ impl DeltaLayer {
++    #[cfg(feature = "benchmarking")]
++    pub async fn images_for_bench(
++        &self,
++        keys: &[Key],
++        lsn: Lsn,
++        max_read_bytes: MaxVectoredReadBytes,
++        ctx: &RequestContext,
++    ) -> Result<Vec<Option<bytes::Bytes>>> {
++        let inner = self.load(ctx).await?;
++        let reader = DiskBtreeReader::<_, DELTA_KEY_SIZE>::new(
++            inner.index_start_blk,
++            inner.index_root_blk,
++            FileBlockReader::new(&inner.file, inner.file_id),
++        );
++        let mut keyspace = pageserver_api::keyspace::KeySpaceRandomAccum::new();
++        for key in keys {
++            keyspace.add_key(*key);
++        }
++        let reads = DeltaLayerInner::plan_reads(
++            &keyspace.to_keyspace(),
++            lsn..Lsn(lsn.0 + 1),
++            inner.index_start_offset(),
++            reader,
++            VectoredReadPlanner::new(max_read_bytes.0.get()),
++            ctx,
++        )
++        .await?;
++        let size = DeltaLayerInner::get_min_read_buffer_size(&reads, max_read_bytes.0.get());
++        let blob_reader = VectoredBlobReader::new(&inner.file);
++        let mut buffer = IoBufferMut::with_capacity(size);
++        let mut values = HashMap::new();
++        for read in reads {
++            let blobs = blob_reader.read_blobs(&read, buffer, ctx).await?;
++            let view = BufView::new_slice(&blobs.buf);
++            for blob in &blobs.blobs {
++                match Value::des(&blob.read(&view).await?)? {
++                    Value::Image(bytes) => {
++                        values.insert(blob.meta.key, bytes);
++                    }
++                    Value::WalRecord(_) => anyhow::bail!("benchmark expects image values"),
++                }
++            }
++            buffer = blobs.buf;
++        }
++        Ok(keys.iter().map(|key| values.get(key).cloned()).collect())
++    }
++
++    #[cfg(feature = "benchmarking")]
++    pub async fn keys_for_bench(&self, ctx: &RequestContext) -> Result<Vec<Key>> {
++        self.load(ctx).await?.load_keys(ctx).await
++    }
++
+@@ -690,0 +743,9 @@ pub async fn new(
++    #[cfg(feature = "benchmarking")]
++    pub async fn finish_for_bench(
++        self,
++        key_end: Key,
++        ctx: &RequestContext,
++    ) -> anyhow::Result<(PersistentLayerDesc, Utf8PathBuf)> {
++        self.finish(key_end, ctx).await
++    }
++

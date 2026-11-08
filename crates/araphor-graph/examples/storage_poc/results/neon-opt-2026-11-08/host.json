@@ -1,0 +1,34 @@
+{
+  "recorded_at_utc": "2026-11-08T17:58:11.763107+00:00",
+  "load_average": [
+    3.06884765625,
+    4.1025390625,
+    3.802734375
+  ],
+  "pressure": {
+    "cpu": "some avg10=0.00 avg60=0.00 avg300=0.00 total=1344020793\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+    "io": "some avg10=0.00 avg60=0.00 avg300=0.00 total=389609682\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=353230074\n",
+    "memory": "some avg10=0.00 avg60=0.00 avg300=0.00 total=57932238\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=52256352\n"
+  },
+  "cpu_frequency_khz": {
+    "cpu11": "4068069",
+    "cpu9": "400000",
+    "cpu7": "3193581",
+    "cpu5": "3297941",
+    "cpu3": "3151579",
+    "cpu14": "3992708",
+    "cpu1": "3217961",
+    "cpu12": "3156008",
+    "cpu10": "3194168",
+    "cpu8": "4017632",
+    "cpu6": "3236687",
+    "cpu4": "3571591",
+    "cpu15": "4033963",
+    "cpu2": "3260396",
+    "cpu13": "3243540",
+    "cpu0": "3217106"
+  },
+  "temperature_millidegrees": {
+    "/sys/class/thermal/thermal_zone0/temp": "77000"
+  }
+}

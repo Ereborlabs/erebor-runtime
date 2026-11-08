@@ -1,0 +1,212 @@
+{
+  "before_source": "8a3f8e99bf797750587c00b27ad2c72a54990b21",
+  "after_source": "working-tree-neon-opt",
+  "before": {
+    "fjall": {
+      "eight_cycles_ms": {
+        "complete": 37.2902225,
+        "graph_reads": 7.4913225,
+        "write_work": 6.7530035,
+        "write_commit": 8.6257105,
+        "write_total": 15.442302999999999
+      },
+      "complete_rounds_ms": [
+        41.284164999999994,
+        36.888322,
+        37.692123,
+        34.600277
+      ],
+      "historical_16_ms": {
+        "after-compaction": 43.564536000000004,
+        "after-reopen": 44.842585,
+        "after-writes": 47.828308
+      },
+      "reopen_ms": 9.247504
+    },
+    "fjall-stable": {
+      "eight_cycles_ms": {
+        "complete": 35.6112875,
+        "graph_reads": 7.362746,
+        "write_work": 6.589297,
+        "write_commit": 8.806808,
+        "write_total": 15.3120145
+      },
+      "complete_rounds_ms": [
+        35.658635000000004,
+        37.664322,
+        34.77425,
+        35.56394
+      ],
+      "historical_16_ms": {
+        "after-compaction": 37.755331500000004,
+        "after-writes": 38.630711000000005
+      },
+      "reopen_ms": 9.342696499999999
+    },
+    "neon-layers": {
+      "eight_cycles_ms": {
+        "complete": 89.003671,
+        "graph_reads": 49.607472,
+        "write_work": 9.151891,
+        "write_commit": 16.130930999999997,
+        "write_total": 25.49849
+      },
+      "complete_rounds_ms": [
+        90.96499999999999,
+        87.535612,
+        86.796145,
+        90.47173
+      ],
+      "historical_16_ms": {
+        "after-reopen": 145.416587,
+        "after-writes": 144.687872
+      },
+      "reopen_ms": 14.06309
+    },
+    "neon-stable": {
+      "eight_cycles_ms": {
+        "complete": 92.974043,
+        "graph_reads": 51.901632,
+        "write_work": 8.959341,
+        "write_commit": 16.3260345,
+        "write_total": 25.700646
+      },
+      "complete_rounds_ms": [
+        97.252614,
+        94.893683,
+        91.05440300000001,
+        89.371174
+      ],
+      "historical_16_ms": {
+        "after-reopen": 144.67282749999998,
+        "after-writes": 143.9552865
+      },
+      "reopen_ms": 12.9750405
+    }
+  },
+  "after": {
+    "fjall": {
+      "eight_cycles_ms": {
+        "complete": 38.6308435,
+        "graph_reads": 7.9198655,
+        "write_work": 7.0975215,
+        "write_commit": 8.9959465,
+        "write_total": 16.157406
+      },
+      "complete_rounds_ms": [
+        41.771118,
+        37.909102,
+        35.755546,
+        39.352585000000005
+      ],
+      "historical_16_ms": {
+        "after-compaction": 45.361557000000005,
+        "after-reopen": 46.041951999999995,
+        "after-writes": 46.65956
+      },
+      "reopen_ms": 10.4778755
+    },
+    "fjall-stable": {
+      "eight_cycles_ms": {
+        "complete": 36.7368515,
+        "graph_reads": 7.508851999999999,
+        "write_work": 6.6514085,
+        "write_commit": 8.648240999999999,
+        "write_total": 15.3699805
+      },
+      "complete_rounds_ms": [
+        35.693109,
+        36.873706,
+        37.065278,
+        36.599996999999995
+      ],
+      "historical_16_ms": {
+        "after-compaction": 40.575854500000005,
+        "after-writes": 40.539222499999994
+      },
+      "reopen_ms": 10.108763
+    },
+    "neon-layers": {
+      "eight_cycles_ms": {
+        "complete": 66.307318,
+        "graph_reads": 28.75301,
+        "write_work": 7.1707475,
+        "write_commit": 16.689318,
+        "write_total": 23.913914000000002
+      },
+      "complete_rounds_ms": [
+        71.432309,
+        66.722139,
+        64.820083,
+        65.89249699999999
+      ],
+      "historical_16_ms": {
+        "after-reopen": 81.560945,
+        "after-writes": 82.435499
+      },
+      "reopen_ms": 17.4696905
+    },
+    "neon-stable": {
+      "eight_cycles_ms": {
+        "complete": 65.177776,
+        "graph_reads": 28.2558455,
+        "write_work": 6.849513,
+        "write_commit": 16.77903,
+        "write_total": 23.788551
+      },
+      "complete_rounds_ms": [
+        65.805265,
+        68.22470899999999,
+        64.550287,
+        64.229088
+      ],
+      "historical_16_ms": {
+        "after-reopen": 81.619614,
+        "after-writes": 80.40716499999999
+      },
+      "reopen_ms": 16.2697465
+    }
+  },
+  "paired_ratios": {
+    "neon-layers": {
+      "before": {
+        "rounds": [
+          2.2033871824705673,
+          2.372989804198738,
+          2.302766150901078,
+          2.614768951127183
+        ],
+        "median": 2.337877977549908
+      },
+      "after": {
+        "rounds": [
+          1.710088511396798,
+          1.7600559095280073,
+          1.8128679394239986,
+          1.6744134343398276
+        ],
+        "median": 1.7350722104624028
+      }
+    },
+    "neon-stable": {
+      "before": {
+        "rounds": [
+          2.7273229611845764,
+          2.519458149279841,
+          2.61844333091296,
+          2.512971678616036
+        ],
+        "median": 2.5689507400964007
+      },
+      "after": {
+        "rounds": [
+          1.8436406030082728,
+          1.8502265272712213,
+          1.7415298220614992,
+          1.7548932585978085
+        ],
+        "median": 1.7992669308030407
+      }
+    }
+  }
+}
