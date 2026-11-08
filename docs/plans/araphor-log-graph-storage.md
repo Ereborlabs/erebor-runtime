@@ -638,8 +638,24 @@ Three fresh inputs then use the same continued CDC path. Read calls, write
 staging, native commit, journal bytes and batches, resume timing, and wake
 timing are recorded together. Exact package and Graph checks stay unchanged.
 
-Implementation and focused pilot: **Done**. Frozen-source measurement:
-**Not done**. Arbitrary native historical views after reopen remain unsupported
+Implementation and frozen-source bounded measurement: **Done** at
+`beea72d9d`. The [result](../../crates/araphor-graph/examples/storage_poc/README.md#combined-result-2026-11-08)
+contains 64 primary cycles, 64 source wakes, 64 Graph wakes, and 216 decoded
+batches including replay. Fixed keys take 0.745 milliseconds for package Graph
+reads, 1.304 milliseconds for the complete Graph write, and 4.370 milliseconds
+for source write through actual result read in the ordinary median. The
+complete ordinary maximum is 8.717 milliseconds.
+
+After reopen, the fixed-key walker reads three retained batches with 18,203
+bytes. Native read time is 0.182 milliseconds in the median. First matching
+source time is 0.250 milliseconds from feed-open start. Catch-up takes 0.252
+milliseconds in the median. Three fresh inputs continue after catch-up in
+each run. Their complete median is 6.951 milliseconds across 12 samples.
+Seven release tests and the frozen binary's separate 64-cycle CDC regression
+pass. Four balanced pairs on a shared host do not prove a small general speed
+gain. Full workspace CI does not run.
+
+Arbitrary native historical views after reopen remain unsupported
 by the tested Fjall snapshot API. The exact required forward Graph cut is
 available from current head 46 at captured cut 48. The present Neon adapter
 has no original-WAL CDC feed and no comparable result. Production source

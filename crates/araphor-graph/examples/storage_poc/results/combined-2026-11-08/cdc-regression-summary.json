@@ -1,0 +1,100 @@
+{
+  "source": "beea72d9d08acaf16a6c5df26a930c1e6eb29519",
+  "engines": {
+    "fjall": {
+      "ordinary_samples": 28,
+      "ordinary_ms": {
+        "source_commit": {
+          "median": 0.5604865,
+          "max": 0.615662
+        },
+        "source_wake": {
+          "median": 0.5969095,
+          "max": 0.655822
+        },
+        "source_ready": {
+          "median": 0.6083289999999999,
+          "max": 0.669092
+        },
+        "package": {
+          "median": 1.9901624999999998,
+          "max": 3.9938059999999997
+        },
+        "output_commit": {
+          "median": 1.3890635,
+          "max": 2.745999
+        },
+        "output_wake": {
+          "median": 1.8885425,
+          "max": 3.8145890000000002
+        },
+        "output_ready": {
+          "median": 1.8999615,
+          "max": 3.829117
+        },
+        "total": {
+          "median": 4.336348,
+          "max": 8.392697
+        }
+      },
+      "restart_including_maintenance_ms": [
+        16.453853000000002,
+        16.166521,
+        15.959926,
+        16.25103
+      ],
+      "physical_compactions": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "journal_bytes": 1719844
+    },
+    "home": {
+      "ordinary_samples": 28,
+      "ordinary_ms": {
+        "source_commit": {
+          "median": 0.599912,
+          "max": 0.805983
+        },
+        "source_wake": {
+          "median": 0.6201315000000001,
+          "max": 0.840276
+        },
+        "source_ready": {
+          "median": 0.6320049999999999,
+          "max": 0.856689
+        },
+        "package": {
+          "median": 1.507097,
+          "max": 3.598776
+        },
+        "output_commit": {
+          "median": 1.2866385,
+          "max": 2.736081
+        },
+        "output_wake": {
+          "median": 1.4904739999999999,
+          "max": 2.8872899999999997
+        },
+        "output_ready": {
+          "median": 1.5017189999999998,
+          "max": 2.9033539999999998
+        },
+        "total": {
+          "median": 3.5199235,
+          "max": 7.073163
+        }
+      },
+      "restart_including_maintenance_ms": [
+        5.05206,
+        7.485094,
+        5.260749000000001,
+        4.968038999999999
+      ],
+      "physical_compactions": null,
+      "journal_bytes": 4513160
+    }
+  }
+}

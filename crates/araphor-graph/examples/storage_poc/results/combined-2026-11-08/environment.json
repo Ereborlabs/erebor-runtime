@@ -1,0 +1,127 @@
+{
+  "date": "2026-11-08",
+  "recorded_at_utc": "2026-11-08T17:06:11.895459+00:00",
+  "source_full": "beea72d9d08acaf16a6c5df26a930c1e6eb29519",
+  "source_state": "Combined benchmark source and review guide committed. Named Rust and summary sources remain unchanged. Unrelated user changes remain outside this result.",
+  "fjall_source": "87006048139bfe1b072bbc29a5a92bf1f97628e3",
+  "fjall_patch": "../../cdc-bench/fjall.patch",
+  "fjall_patch_sha256": "07eee2c2b728ae128252b2c5d3730450dfdf77b211593c0a18c6c8cf7aff4f3f",
+  "engine_change": "No new engine patch in this benchmark. The retained zero-context journal-cdc patch reverse-checks against the measured provided Fjall clone.",
+  "isolated_lock": "../../cdc-bench/Cargo.lock",
+  "isolated_lock_sha256": "75849b6dc141a99f11d1c2886e52d6e0137149ab6f249ec36930fba21eaf6a23",
+  "resolved_packages": {
+    "arrow-array": {
+      "version": "59.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "fjall": {
+      "version": "3.1.13"
+    },
+    "libc": {
+      "version": "0.2.186",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "log": {
+      "version": "0.4.29",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "lsm-tree": {
+      "version": "3.1.10",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "redb": {
+      "version": "4.4.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "surrealkv": {
+      "version": "1.2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    },
+    "tokio": {
+      "version": "1.52.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index"
+    }
+  },
+  "binary_sha256": "fcf960929ae40a44045f97625980162c12c8665d12b107be6fdd78639ef54f1d",
+  "cpu": "AMD Ryzen 9 5900HX with Radeon Graphics",
+  "logical_cpus": 16,
+  "kernel": "6.8.0-147-generic",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "filesystem": "ext4 on /dev/nvme0n1p7; /tmp uses the same device as the checkout",
+  "profile": "Cargo release opt-level3; debug_assertions=false; shared host, no CPU/I/O/cache isolation. Premeasurement process-name audit has no active build or benchmark.",
+  "duckdb_cached_archive": "target/release/build/libduckdb-sys-e073672aa6bffaa9/out/libduckdb.a",
+  "duckdb_cached_archive_sha256": "121c752b58ae133fe0e1627a6c7d3559e185d04fd0a9a51a9d73a9885429b1eb",
+  "duckdb_override": "[target.x86_64-unknown-linux-gnu.duckdb]\nrustc-link-lib = [\"static=duckdb\", \"stdc++\"]\nrustc-link-search = [\"native=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"]\nrustc-env = { OUT_DIR = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\" }\ninclude = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out/duckdb/src/include\"\nlib_dir = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"\n",
+  "commands": [
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 cargo test --release --manifest-path crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+    "rtk proxy env CARGO_TARGET_DIR=$PWD/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 POC_SOURCE_REVISION=beea72d9d08acaf16a6c5df26a930c1e6eb29519 cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml --locked --offline --config /tmp/araphor-storage-release-override.toml --message-format=short",
+    "rtk proxy target/release/storage_cdc /tmp/araphor-combined-poc-20261108/release.json combined",
+    "rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize_cdc.py /tmp/araphor-combined-poc-20261108/release.json",
+    "rtk proxy target/release/storage_cdc /tmp/araphor-combined-poc-20261108/cdc-regression.json cdc",
+    "rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize_cdc.py /tmp/araphor-combined-poc-20261108/cdc-regression.json",
+    "rtk proxy rustfmt --edition 2021 --config style_edition=2024,skip_children=true --check crates/araphor-graph/examples/storage_poc/cdc.rs crates/araphor-graph/examples/storage_poc/native.rs crates/araphor-graph/examples/storage_poc/main.rs",
+    "rtk proxy git -C fjall apply --reverse --check --unidiff-zero ../crates/araphor-graph/examples/storage_poc/cdc-bench/fjall.patch"
+  ],
+  "layout": "Target mutable M/R/K/O/I/B/H/S/T keys have fixed coordinate lengths and no application revision suffix. J/C are singleton keys. Opened revisions remain semantic values; immutable dictionaries and Arrow property chunks retain identity keys. Control uses explicit application revision keys.",
+  "durability": "Provided Fjall with journal-cdc opt-in; native writes force SyncAll. Enclosing owner commits Graph changes and consumed source cursor together. Graph acknowledgement is separate.",
+  "workload": "Original eight Causal cycles, four balanced control/target pairs. Actual package Graph SDK calls and actual result reads. Prepared Arrow input and source-frontier metadata. No production DataFusion source execution or notification delivery.",
+  "primary_cycles": 64,
+  "source_wakes": 64,
+  "graph_wakes": 64,
+  "decoded_batches_including_replay": 216,
+  "ordinary_samples_per_layout": 28,
+  "continued_samples_per_layout": 12,
+  "resume_samples_per_layout": 4,
+  "graph_sdk_calls_per_run": 42,
+  "graph_sdk_key_requests_per_run": 376,
+  "graph_sdk_rows_per_run": 442,
+  "historical_views": 88,
+  "unsupported_historical_requests": 40,
+  "checks": "Exact eight primary Graph states, findings, Arrow commands, traversal calls and frontiers, writer state, and metadata. Each run has 194 semantic additions and eight closures. Native member coordinates equal Oracle changes. Source and Graph rollbacks keep cursors unchanged. Unrelated writes produce no consumer wake. Mutable key lengths, saved cursor order, replay, match, catch-up, and fresh continuation are checked.",
+  "resume": "Each layout flushes, rotates, compacts, closes and reopens with the fifth source write pending. Walker starts after minimum saved cursor. First decoded batch equals already-consumed Graph cursor and produces no duplicate event. Third batch equals pending source cursor and catch-up boundary. Three later source writes and their Graph outputs continue through the same walker.",
+  "metrics": "Complete interval includes source write, CDC source wake, Graph capture/package reads, Graph write, CDC output wake, and actual result read. SDK read time is inside package time. Native commit includes sync and publication. Per-event CDC duration is the whole containing Feed.read vector call and is not additive. Resume first_decoded measures first dispatch after vector decode.",
+  "history_limit": "Stable target uses held native snapshots while open. Reopen restores current head46 for required captured cut48 because no Graph publication lies between. Arbitrary old handles are not restored. Target checks6available views and records10unsupported requests per run (3 after continuation,7 after final reopen); control checks16views.",
+  "focused_tests": "Seven release tests pass for unchanged final Rust source. The frozen optimized binary also completes the separate 64-cycle CDC regression. Existing upstream warnings remain in the logs. Earlier native journal tests are not rerun; engine source is unchanged.",
+  "limits": [
+    "prepared source Arrow and synthetic source-frontier metadata; no production DataFusion input",
+    "no production notification delivery",
+    "forward continuation after reopen reads current Graph head46 at captured cut48; arbitrary old native snapshots are not restored",
+    "native reader returns decoded batches as a vector; first_decoded measures first walker dispatch after that read, not first-byte decode",
+    "single caller-managed minimum consumer cursor; no dynamic consumer registration behind released history",
+    "explicit maintenance and restart separated from ordinary samples; no sustained compaction, native branches or power-loss proof",
+    "Four balanced pairs are a bounded screen and do not establish a small general speed gain.",
+    "Fixed-key target does not provide durable arbitrary historical snapshots after reopen.",
+    "Full workspace CI and production incident test do not run, per the focused-iteration constraint.",
+    "Native journal retention uses one caller-managed monotone floor. Late consumers behind released history are not supported."
+  ],
+  "unsupported": {
+    "neon-layers": "present adapter has no original-WAL CDC feed; native layer enumeration is not substituted"
+  },
+  "source_files_sha256": {
+    "cdc-bench/Cargo.lock": "75849b6dc141a99f11d1c2886e52d6e0137149ab6f249ec36930fba21eaf6a23",
+    "cdc-bench/Cargo.toml": "c1a58681cfb1e513bb6f9e6796e442d9a1f203d7322643572835881c63b6bcc7",
+    "cdc.rs": "18da1ebfe848cf499b92b57ffe025073758328deaea68862d7575e54ef27c77d",
+    "compaction.rs": "9107a5934083f31209eb3868c0fd68f04c6c2c1ba14e6922f270d0938a73aeef",
+    "duck.rs": "96c68b1179af294ee3adbc015cf4c7203bd9083e55b46cc930b2f714b16f4a7e",
+    "fixture.rs": "068d9f361bbc8c73189eb0c7188934b5031427841e90b955f02ddab6a15dd0fb",
+    "history.rs": "37b43a7bb61c036d465524ba2b05e8882b9a6b359d043bd005b76fac6bd2e244",
+    "home.rs": "dea20a8847a293cea420c45f5777d4089553ba485b670e7b4fc354ba812d9ffc",
+    "incident.rs": "74b4d6b7fcffeb1d878b13c1a72e513597b873f4b855a968f7280e4bbf1fdd22",
+    "kv.rs": "c1d10ef9b4fc78ba99a15acc38bf39fc717782b2425575683865a3bb032bd6d2",
+    "main.rs": "bdefd4d09dc7767873b44049f718a734dbf692a3c969071d1e12562273c539dc",
+    "native.rs": "aa4431e424042ce454115cab312a549304ca3040f7389904a923182d6b49c562",
+    "neon.rs": "5a346fc52c71318296d4b45b83b93263c47229260321c3e246675e18ee7f32b0",
+    "package.rs": "84e444a130fd25b94fe829476202e2e64c0d1901903e87d2cbeb984ac42625f1",
+    "stable.rs": "bb24ee749b12c1519e9ce396b94d6e501e1174409c95bc72ee98eae19807a013",
+    "summarize_cdc.py": "ccfddf67e7b3f84d931d9d6ec727683bf5b21ece21eadcf48b4f133dc1954df2",
+    "surreal.rs": "e9560aaf5bac17ae8caff1be50d42db1398b70e9540ab3a644899de604749831"
+  },
+  "independent_review": "Passed: eight balanced runs, 64 cycles, 64 source wakes, 64 Graph wakes, and 216 decoded batches. Each run has 42 SDK calls, 376 key requests, and 442 returned rows. The review checks exact semantic and physical changes, saved cursor boundaries, replay, matching, catch-up, and fresh continuation. All ordinary, continued, and resume timings match. The review checks history limits, seven release tests, the same binary in the separate 64-cycle CDC regression, source identity, binary identity, engine identity, patch identity, lock identity, documentation, and local links. The read-only reviewer clears this bounded evidence.",
+  "source_checks": [
+    "Named Rust and summary sources match the frozen commit and retained SHA256 values.",
+    "All 13 measured Fjall changes match retained patch postimages; no extra engine path changes.",
+    "Optimized binary, engine head, lock, resolved versions, cached archive, and patch identity are checked.",
+    "Both saved summaries reproduce exactly.",
+    "Scoped Rust 2021 formatting with existing 2024 style, whitespace, and combined local links pass."
+  ]
+}

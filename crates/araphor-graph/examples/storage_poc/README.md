@@ -1226,3 +1226,74 @@ Four balanced target/control pairs use the unchanged eight-cycle fixture.
 The summary separates 28 ordinary samples and 12 later-append samples per
 layout from four maintenance/restart samples. It checks the actual positions,
 read calls, data counts, and timing fields before printing the benchmark.
+
+### Combined result, 2026-11-08
+
+The optimized binary uses frozen source `beea72d9d08acaf16a6c5df26a930c1e6eb29519`.
+The [raw report](results/combined-2026-11-08/release.json),
+[summary](results/combined-2026-11-08/summary.json), and
+[environment](results/combined-2026-11-08/environment.json) retain the result.
+Four balanced pairs complete 64 primary package cycles, 64 source events,
+64 Graph events, and 216 decoded batches including replay. Each eight-cycle
+run makes 42 actual Graph SDK calls with 376 key requests and 442 returned
+rows. All exact primary data, findings, traversal, metadata, rollback, and
+unrelated-write checks pass.
+
+The table uses milliseconds. Ordinary samples exclude the fifth cycle, which
+includes forced maintenance and reopen. The 12 later-append samples per layout
+are a subset of the 28 ordinary samples. Source wake starts before the source
+write. Output wake starts before Graph write staging. These intervals include
+their writes. Nested timings and component medians are not additive.
+
+| Operation | Revision-key control median | Fixed-key target median | Fixed-key target maximum |
+| --- | ---: | ---: | ---: |
+| Durable source write | 0.556 | 0.551 | 0.624 |
+| Source CDC containing read call | 0.020 | 0.021 | 0.040 |
+| Source write through package subscription wake | 0.587 | 0.582 | 0.655 |
+| Graph SDK reads inside package | 0.763 | 0.745 | 1.511 |
+| Package execution including Graph reads | 2.029 | 2.033 | 3.784 |
+| Graph write staging | 0.538 | 0.500 | 1.373 |
+| Native Graph durable commit | 0.858 | 0.804 | 1.160 |
+| Complete Graph write | 1.372 | 1.304 | 2.510 |
+| Output CDC containing read call | 0.447 | 0.399 | 0.872 |
+| Graph write through output subscription wake | 1.773 | 1.742 | 3.379 |
+| Actual Graph result read after wake | 0.379 | 0.404 | 1.089 |
+| Complete source write through result read | 4.530 | 4.370 | 8.717 |
+
+After reopen, each fixed-key run reads three retained batches with 19 items
+and 18,203 original journal bytes. Median native read time is 0.182 milliseconds.
+Median time from feed-open start to the first matching pending source is
+0.250 milliseconds. Catch-up takes 0.252 milliseconds in the median and
+0.277 milliseconds at maximum. The first dispatch is the already-consumed
+Graph batch; it does not produce a duplicate output event. The control reads
+18,434 bytes and catches up in 0.347 milliseconds in the median.
+
+Three fresh source inputs then continue after catch-up in each run. Across
+12 such fixed-key cycles, source wake takes 0.590 milliseconds in the median.
+The complete read/write/wake/result path takes 6.951 milliseconds in the median
+and 8.717 milliseconds at maximum. These cycles process the larger final
+fixture graphs. The four fixed-key fifth-cycle totals, including forced
+maintenance, reopen, and pending-input processing, range from 16.051 to
+16.957 milliseconds.
+
+Per eight-cycle run, the fixed-key walker decodes 329,812 bytes in 27 batches.
+The control decodes 429,961 bytes in 27 batches. Median total native journal
+read time per run is 3.869 milliseconds for fixed keys and 4.490 milliseconds
+for the control. These byte counts include the original member records and
+other native writes, plus replay. They are not separate logical change-table
+records.
+
+The fixed-key target checks 24 available historical views across four runs.
+It explicitly records 40 unsupported old-view requests after reopen. The
+control checks 64 historical views. The combined flow passes; durable arbitrary
+old Fjall snapshots after reopen remain **Not done**. The current Neon layer
+adapter remains unsupported for original-WAL CDC.
+
+Seven focused release tests pass. The same frozen optimized binary also
+completes the separate [64-cycle CDC regression](results/combined-2026-11-08/cdc-regression.json).
+The retained logs contain existing upstream warnings. Formatting, scoped
+whitespace checks, source identity, and local links pass. Four pairs on a
+shared host do not establish a small general speed gain. Production input
+execution, notification delivery, sustained compaction, and the complete
+incident test's 100-fold target remain **Not done**. Full workspace CI does
+not run under the user's focused-iteration constraint.
