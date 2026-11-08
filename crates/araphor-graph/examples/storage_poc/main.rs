@@ -1,5 +1,7 @@
 #![allow(unexpected_cfgs)]
 
+#[cfg(feature = "cdc-poc")]
+mod cdc;
 mod compaction;
 mod duck;
 mod fixture;
@@ -246,6 +248,13 @@ struct Reference {
 }
 
 fn main() -> Result<()> {
+    #[cfg(feature = "cdc-poc")]
+    if std::env::args().nth(2).as_deref() == Some("cdc") {
+        return cdc::run(Path::new(
+            &std::env::args().nth(1).ok_or("output path required")?,
+        ));
+    }
+
     let mut arguments = std::env::args_os().skip(1);
     let output = arguments
         .next()

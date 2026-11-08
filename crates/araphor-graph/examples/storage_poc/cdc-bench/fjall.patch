@@ -1,0 +1,922 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 488ad77..961439f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -24,0 +25 @@ __internal_whitebox = []
++journal-cdc = []
+diff --git a/src/batch/mod.rs b/src/batch/mod.rs
+index 1bba5ef..7c5ccad 100644
+--- a/src/batch/mod.rs
++++ b/src/batch/mod.rs
+@@ -121 +121 @@ impl WriteBatch {
+-                self.db.is_poisoned.poison();
++                self.db.config.poison_cdc(&self.db.is_poisoned);
+@@ -124 +124 @@ impl WriteBatch {
+-        if let Some(mode) = self.durability {
++        if let Some(mode) = self.db.config.durable_mode(self.durability) {
+@@ -129 +129 @@ impl WriteBatch {
+-                self.db.is_poisoned.poison();
++                self.db.config.poison_cdc(&self.db.is_poisoned);
+@@ -164,0 +165,4 @@ impl WriteBatch {
++        self.db
++            .config
++            .publish_cdc(&mut journal_writer, batch_seqno)
++            .inspect_err(|_| self.db.config.poison_cdc(&self.db.is_poisoned))?;
+diff --git a/src/builder.rs b/src/builder.rs
+index dcff418..bd218fb 100644
+--- a/src/builder.rs
++++ b/src/builder.rs
+@@ -34,0 +35,7 @@ impl<O: Openable> Builder<O> {
++    /// Enables durable journal reads and retains history until acknowledgement.
++    #[cfg(feature = "journal-cdc")]
++    pub fn journal_cdc(mut self) -> Self {
++        self.inner.cdc = Some(Arc::new(crate::cdc::Signal::default()));
++        self
++    }
++
+@@ -38,2 +45 @@ impl<O: Openable> Builder<O> {
+-    ///
+-    /// Errors if an I/O error occurred, or if the database can not be opened.
++    /// Returns an error if the database cannot be opened.
+diff --git a/src/db.rs b/src/db.rs
+index a5530a0..a65cdf0 100644
+--- a/src/db.rs
++++ b/src/db.rs
+@@ -358 +358 @@ impl Database {
+-            self.is_poisoned.poison();
++            self.config.poison_cdc(&self.is_poisoned);
+@@ -602,0 +603,6 @@ impl Database {
++        #[cfg(feature = "journal-cdc")]
++        let journal_manager = {
++            let mut manager = journal_manager;
++            manager.cdc = config.cdc.clone();
++            manager
++        };
+@@ -702 +708,3 @@ impl Database {
+-                let reader = db.supervisor.journal.get_reader()?;
++                let mut reader = db.supervisor.journal.get_reader()?;
++                #[cfg(feature = "journal-cdc")]
++                let mut last_cdc = None;
+@@ -706 +714 @@ impl Database {
+-                for batch in reader {
++                while let Some(batch) = reader.next() {
+@@ -707,0 +716,8 @@ impl Database {
++                    #[cfg(feature = "journal-cdc")]
++                    {
++                        last_cdc = Some((reader.last_valid_pos, batch.seqno));
++                    }
++                    #[cfg(feature = "journal-cdc")]
++                    if db.config.cdc.is_some() {
++                        db.supervisor.seqno.fetch_max(batch.seqno + 1);
++                    }
+@@ -758,0 +775,13 @@ impl Database {
++                        #[cfg(feature = "journal-cdc")]
++                        if db.config.cdc.is_some() {
++                            let persisted = *persisted_seqnos
++                                .entry(*keyspace_id)
++                                .or_insert_with(|| keyspace.tree.get_highest_persisted_seqno());
++                            if persisted.is_some_and(|seqno| batch.seqno <= seqno) {
++                                continue;
++                            }
++                            keyspace.tree.clear()?;
++                        } else {
++                            keyspace.tree.clear().ok();
++                        }
++                        #[cfg(not(feature = "journal-cdc"))]
+@@ -764,0 +794,5 @@ impl Database {
++                #[cfg(feature = "journal-cdc")]
++                if let (Some(signal), Some((offset, sequence))) = (&db.config.cdc, last_cdc) {
++                    signal.recover(&db.supervisor.journal.path()?, offset, sequence)?;
++                }
++
+@@ -842 +876 @@ impl Database {
+-            &PoisonDart::new(db.is_poisoned.clone()),
++            &PoisonDart::new(db.is_poisoned.clone(), &db.config),
+@@ -922 +956,10 @@ impl Database {
+-            journal_manager: Arc::new(RwLock::new(JournalManager::new())),
++            journal_manager: Arc::new(RwLock::new({
++                let manager = JournalManager::new();
++                #[cfg(feature = "journal-cdc")]
++                let manager = {
++                    let mut manager = manager;
++                    manager.cdc = config.cdc.clone();
++                    manager
++                };
++                manager
++            })),
+@@ -949 +992 @@ impl Database {
+-            &PoisonDart::new(db.is_poisoned.clone()),
++            &PoisonDart::new(db.is_poisoned.clone(), &db.config),
+diff --git a/src/db_config.rs b/src/db_config.rs
+index 775427c..ada48a8 100644
+--- a/src/db_config.rs
++++ b/src/db_config.rs
+@@ -17,0 +18,2 @@ pub struct Config {
++    #[cfg(feature = "journal-cdc")]
++    pub(crate) cdc: Option<Arc<crate::cdc::Signal>>,
+@@ -77,0 +80,2 @@ impl Config {
++            #[cfg(feature = "journal-cdc")]
++            cdc: None,
+@@ -100,0 +105,36 @@ impl Config {
++
++impl Config {
++    pub(crate) fn durable_mode(
++        &self,
++        requested: Option<crate::PersistMode>,
++    ) -> Option<crate::PersistMode> {
++        #[cfg(feature = "journal-cdc")]
++        if self.cdc.is_some() {
++            return Some(crate::PersistMode::SyncAll);
++        }
++        requested
++    }
++
++    pub(crate) fn publish_cdc(
++        &self,
++        _writer: &mut crate::journal::writer::Writer,
++        _seqno: u64,
++    ) -> crate::Result<()> {
++        #[cfg(feature = "journal-cdc")]
++        if let Some(signal) = &self.cdc {
++            signal.publish(_writer, _seqno)?;
++        }
++        Ok(())
++    }
++}
++
++impl Config {
++    pub(crate) fn poison_cdc(&self, poison: &crate::poison::PoisonSignal) {
++        #[cfg(feature = "journal-cdc")]
++        if let Some(signal) = &self.cdc {
++            signal.poison(poison);
++            return;
++        }
++        poison.poison();
++    }
++}
+diff --git a/src/journal/batch_reader.rs b/src/journal/batch_reader.rs
+index 4b858d8..62ff608 100644
+--- a/src/journal/batch_reader.rs
++++ b/src/journal/batch_reader.rs
+@@ -33 +33 @@ pub struct JournalBatchReader {
+-    last_valid_pos: u64,
++    pub(crate) last_valid_pos: u64,
+@@ -52,0 +53,7 @@ impl JournalBatchReader {
++        if self.reader.read_end.is_some() {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidData,
++                "invalid journal batch",
++            )
++            .into());
++        }
+diff --git a/src/journal/manager.rs b/src/journal/manager.rs
+index 3fad1b5..c75cdb9 100644
+--- a/src/journal/manager.rs
++++ b/src/journal/manager.rs
+@@ -25,0 +26,4 @@ pub struct Item {
++    #[cfg(feature = "journal-cdc")]
++    pub(crate) end: u64,
++    #[cfg(feature = "journal-cdc")]
++    pub(crate) last_sequence: Option<u64>,
+@@ -45 +49,3 @@ pub struct JournalManager {
+-    items: Vec<Item>,
++    pub(crate) items: Vec<Item>,
++    #[cfg(feature = "journal-cdc")]
++    pub(crate) cdc: Option<std::sync::Arc<crate::cdc::Signal>>,
+@@ -64,0 +71,2 @@ impl JournalManager {
++            #[cfg(feature = "journal-cdc")]
++            cdc: None,
+@@ -123,0 +132,8 @@ impl JournalManager {
++            #[cfg(feature = "journal-cdc")]
++            if self.cdc.as_ref().is_some_and(|signal| {
++                item.last_sequence
++                    .is_some_and(|sequence| sequence >= signal.floor())
++            }) {
++                return Ok(());
++            }
++
+@@ -174,0 +191,7 @@ impl JournalManager {
++        #[cfg(feature = "journal-cdc")]
++        let end = journal_writer.pos()?;
++        #[cfg(feature = "journal-cdc")]
++        let last_sequence = self
++            .cdc
++            .as_ref()
++            .and_then(|signal| signal.last_sequence(&journal_writer.path));
+@@ -179,0 +203,4 @@ impl JournalManager {
++            #[cfg(feature = "journal-cdc")]
++            end,
++            #[cfg(feature = "journal-cdc")]
++            last_sequence,
+diff --git a/src/journal/reader.rs b/src/journal/reader.rs
+index e1cb6eb..80775df 100644
+--- a/src/journal/reader.rs
++++ b/src/journal/reader.rs
+@@ -21,0 +22 @@ pub struct JournalReader {
++    pub(crate) read_end: Option<u64>,
+@@ -31,0 +33,13 @@ impl JournalReader {
++            read_end: None,
++        })
++    }
++
++    #[cfg(feature = "journal-cdc")]
++    pub(crate) fn read_only(path: &Path, start: u64, end: u64) -> crate::Result<Self> {
++        let mut reader = BufReader::new(File::open(path)?);
++        reader.seek(std::io::SeekFrom::Start(start))?;
++        Ok(Self {
++            path: path.into(),
++            reader,
++            last_valid_pos: start,
++            read_end: Some(end),
+@@ -35,0 +50,7 @@ impl JournalReader {
++        if self.read_end.is_some() {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidData,
++                "invalid journal batch",
++            )
++            .into());
++        }
+@@ -56,0 +78,3 @@ impl Iterator for JournalReader {
++        if self.read_end.is_some_and(|end| self.last_valid_pos >= end) {
++            return None;
++        }
+@@ -62,0 +87,3 @@ impl Iterator for JournalReader {
++                if self.read_end.is_some() {
++                    return Some(Err(e));
++                }
+diff --git a/src/keyspace/mod.rs b/src/keyspace/mod.rs
+index fb6c08c..e2b5841 100644
+--- a/src/keyspace/mod.rs
++++ b/src/keyspace/mod.rs
+@@ -253 +253 @@ impl Keyspace {
+-                self.is_poisoned.poison();
++                self.supervisor.db_config.poison_cdc(&self.is_poisoned);
+@@ -256 +256,3 @@ impl Keyspace {
+-        if !self.config.manual_journal_persist {
++        if let Some(mode) = self.supervisor.db_config.durable_mode(
++            (!self.config.manual_journal_persist).then_some(crate::PersistMode::Buffer),
++        ) {
+@@ -258 +260 @@ impl Keyspace {
+-                .persist(crate::PersistMode::Buffer)
++                .persist(mode)
+@@ -261 +263 @@ impl Keyspace {
+-                    self.is_poisoned.poison();
++                    self.supervisor.db_config.poison_cdc(&self.is_poisoned);
+@@ -266 +268 @@ impl Keyspace {
+-            self.is_poisoned.poison();
++            self.supervisor.db_config.poison_cdc(&self.is_poisoned);
+@@ -269,0 +272,4 @@ impl Keyspace {
++        self.supervisor
++            .db_config
++            .publish_cdc(&mut journal_writer, seqno)
++            .inspect_err(|_| self.supervisor.db_config.poison_cdc(&self.is_poisoned))?;
+@@ -1003 +1009 @@ impl Keyspace {
+-                self.is_poisoned.poison();
++                self.supervisor.db_config.poison_cdc(&self.is_poisoned);
+@@ -1006 +1012,3 @@ impl Keyspace {
+-        if !self.config.manual_journal_persist {
++        if let Some(mode) = self.supervisor.db_config.durable_mode(
++            (!self.config.manual_journal_persist).then_some(crate::PersistMode::Buffer),
++        ) {
+@@ -1008 +1016 @@ impl Keyspace {
+-                .persist(crate::PersistMode::Buffer)
++                .persist(mode)
+@@ -1011 +1019 @@ impl Keyspace {
+-                    self.is_poisoned.poison();
++                    self.supervisor.db_config.poison_cdc(&self.is_poisoned);
+@@ -1017,0 +1026,4 @@ impl Keyspace {
++        self.supervisor
++            .db_config
++            .publish_cdc(&mut journal_writer, seqno)
++            .inspect_err(|_| self.supervisor.db_config.poison_cdc(&self.is_poisoned))?;
+@@ -1077 +1089 @@ impl Keyspace {
+-                self.is_poisoned.poison();
++                self.supervisor.db_config.poison_cdc(&self.is_poisoned);
+@@ -1080 +1092,3 @@ impl Keyspace {
+-        if !self.config.manual_journal_persist {
++        if let Some(mode) = self.supervisor.db_config.durable_mode(
++            (!self.config.manual_journal_persist).then_some(crate::PersistMode::Buffer),
++        ) {
+@@ -1082 +1096 @@ impl Keyspace {
+-                .persist(crate::PersistMode::Buffer)
++                .persist(mode)
+@@ -1085 +1099 @@ impl Keyspace {
+-                    self.is_poisoned.poison();
++                    self.supervisor.db_config.poison_cdc(&self.is_poisoned);
+@@ -1091,0 +1106,4 @@ impl Keyspace {
++        self.supervisor
++            .db_config
++            .publish_cdc(&mut journal_writer, seqno)
++            .inspect_err(|_| self.supervisor.db_config.poison_cdc(&self.is_poisoned))?;
+@@ -1169 +1187 @@ impl Keyspace {
+-                self.is_poisoned.poison();
++                self.supervisor.db_config.poison_cdc(&self.is_poisoned);
+@@ -1172 +1190,3 @@ impl Keyspace {
+-        if !self.config.manual_journal_persist {
++        if let Some(mode) = self.supervisor.db_config.durable_mode(
++            (!self.config.manual_journal_persist).then_some(crate::PersistMode::Buffer),
++        ) {
+@@ -1174 +1194 @@ impl Keyspace {
+-                .persist(crate::PersistMode::Buffer)
++                .persist(mode)
+@@ -1179 +1199 @@ impl Keyspace {
+-                    self.is_poisoned.poison();
++                    self.supervisor.db_config.poison_cdc(&self.is_poisoned);
+@@ -1185,0 +1206,4 @@ impl Keyspace {
++        self.supervisor
++            .db_config
++            .publish_cdc(&mut journal_writer, seqno)
++            .inspect_err(|_| self.supervisor.db_config.poison_cdc(&self.is_poisoned))?;
+diff --git a/src/lib.rs b/src/lib.rs
+index cca66a5..b317c3e 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -109,0 +110,2 @@ mod db_test;
++#[cfg(feature = "journal-cdc")]
++pub mod cdc;
+diff --git a/src/poison.rs b/src/poison.rs
+index 5744b6c..4e0b15a 100644
+--- a/src/poison.rs
++++ b/src/poison.rs
+@@ -22 +22,4 @@ impl PoisonSignal {
+-pub struct PoisonDart(PoisonSignal);
++pub struct PoisonDart(
++    PoisonSignal,
++    #[cfg(feature = "journal-cdc")] Option<Arc<crate::cdc::Signal>>,
++);
+@@ -25,2 +28,6 @@ impl PoisonDart {
+-    pub fn new(signal: PoisonSignal) -> Self {
+-        Self(signal)
++    pub fn new(signal: PoisonSignal, _config: &crate::Config) -> Self {
++        Self(
++            signal,
++            #[cfg(feature = "journal-cdc")]
++            _config.cdc.clone(),
++        )
+@@ -29,0 +37,5 @@ impl PoisonDart {
++        #[cfg(feature = "journal-cdc")]
++        if let Some(signal) = &self.1 {
++            signal.poison(&self.0);
++            return;
++        }
+diff --git a/src/recovery.rs b/src/recovery.rs
+index 09bd3b0..4d5c268 100644
+--- a/src/recovery.rs
++++ b/src/recovery.rs
+@@ -154,0 +155,2 @@ pub fn recover_sealed_memtables(
++        #[cfg(feature = "journal-cdc")]
++        let mut last_sequence = None;
+@@ -156,0 +159,8 @@ pub fn recover_sealed_memtables(
++            #[cfg(feature = "journal-cdc")]
++            {
++                last_sequence = Some(batch.seqno);
++            }
++            #[cfg(feature = "journal-cdc")]
++            if db.config.cdc.is_some() {
++                db.supervisor.seqno.fetch_max(batch.seqno + 1);
++            }
+@@ -226,0 +237,10 @@ pub fn recover_sealed_memtables(
++                #[cfg(feature = "journal-cdc")]
++                if db.config.cdc.is_some() {
++                    let persisted = *persisted_seqnos
++                        .entry(*keyspace_id)
++                        .or_insert_with(|| handle.tree.get_highest_persisted_seqno());
++                    if persisted.is_some_and(|seqno| batch.seqno <= seqno) {
++                        continue;
++                    }
++                }
++
+@@ -234,0 +255,5 @@ pub fn recover_sealed_memtables(
++        #[cfg(feature = "journal-cdc")]
++        if let (Some(signal), Some(sequence)) = (&db.config.cdc, last_sequence) {
++            signal.recover(journal_path, journal_path.metadata()?.len(), sequence)?;
++        }
++
+@@ -286,0 +312,4 @@ pub fn recover_sealed_memtables(
++            #[cfg(feature = "journal-cdc")]
++            end: journal_path.metadata()?.len(),
++            #[cfg(feature = "journal-cdc")]
++            last_sequence,
+diff --git a/src/cdc.rs b/src/cdc.rs
+new file mode 100644
+--- /dev/null
++++ b/src/cdc.rs
+@@ -0,0 +1,518 @@
++//! Read committed native journal batches from a retained cursor.
++use crate::journal::{batch_reader::JournalBatchReader, reader::JournalReader, writer::Writer};
++use crate::{Database, Slice};
++use std::io::{Error, ErrorKind};
++use std::path::Path;
++use std::sync::{
++    atomic::{AtomicBool, AtomicU64, Ordering},
++    Arc, Condvar, Mutex,
++};
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
++/// The end of one complete, durable journal batch.
++pub struct Cursor {
++    /// The physical journal identity.
++    pub journal: u64,
++    /// The byte offset after the batch terminator.
++    pub offset: u64,
++    /// The native batch sequence number.
++    pub sequence: u64,
++}
++
++/// One native key mutation.
++pub struct Item {
++    /// The native keyspace identity.
++    pub keyspace: u64,
++    /// The original stored key.
++    pub key: Slice,
++    /// The stored value, or no value for a deletion.
++    pub value: Option<Slice>,
++}
++
++/// One complete transaction from the original journal.
++pub struct Batch {
++    /// The position after this transaction.
++    pub cursor: Cursor,
++    /// The original key mutations.
++    pub items: Vec<Item>,
++    /// The keyspaces cleared by this transaction.
++    pub clears: Vec<u64>,
++}
++
++#[derive(Debug, Default)]
++pub(crate) struct Signal {
++    head: Mutex<Option<Cursor>>,
++    ready: Condvar,
++    ack: AtomicU64,
++}
++
++fn invalid(message: &str) -> crate::Error {
++    Error::new(ErrorKind::InvalidData, message).into()
++}
++
++fn journal_id(path: &Path) -> crate::Result<u64> {
++    path.file_stem()
++        .and_then(|s| s.to_str())
++        .and_then(|s| s.parse().ok())
++        .ok_or_else(|| invalid("invalid journal identity"))
++}
++
++impl Signal {
++    pub(crate) fn publish(&self, writer: &mut Writer, sequence: u64) -> crate::Result<()> {
++        let offset = writer.pos()?;
++        self.restore(writer, offset, sequence)
++    }
++
++    pub(crate) fn restore(
++        &self,
++        writer: &mut Writer,
++        offset: u64,
++        sequence: u64,
++    ) -> crate::Result<()> {
++        self.recover(&writer.path, offset, sequence)
++    }
++
++    pub(crate) fn recover(&self, path: &Path, offset: u64, sequence: u64) -> crate::Result<()> {
++        let cursor = Cursor {
++            journal: journal_id(path)?,
++            offset,
++            sequence,
++        };
++        *self.head.lock().map_err(|_| crate::Error::Poisoned)? = Some(cursor);
++        self.ready.notify_all();
++        Ok(())
++    }
++
++    pub(crate) fn last_sequence(&self, path: &Path) -> Option<u64> {
++        let id = journal_id(path).ok()?;
++        self.head
++            .lock()
++            .ok()?
++            .filter(|cursor| cursor.journal == id && cursor.offset > 0)
++            .map(|cursor| cursor.sequence)
++    }
++
++    pub(crate) fn poison(&self, poison: &crate::poison::PoisonSignal) {
++        let _guard = self
++            .head
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner);
++        poison.poison();
++        self.ready.notify_all();
++    }
++
++    pub(crate) fn floor(&self) -> u64 {
++        self.ack.load(Ordering::Acquire)
++    }
++}
++
++/// A non-mutating journal reader with a private scan cursor.
++pub struct Feed {
++    db: Database,
++    signal: Arc<Signal>,
++    cursor: Option<Cursor>,
++    stopped: Arc<AtomicBool>,
++}
++
++#[derive(Clone)]
++/// A stop handle for one blocked reader.
++pub struct Cancel {
++    signal: Arc<Signal>,
++    stopped: Arc<AtomicBool>,
++}
++
++impl Cancel {
++    /// Stops this reader without publishing a data change.
++    pub fn stop(&self) {
++        let _guard = self.signal.head.lock().expect("journal signal poisoned");
++        self.stopped.store(true, Ordering::Release);
++        self.signal.ready.notify_all();
++    }
++}
++
++impl Database {
++    /// Starts after a saved cursor, or at the earliest retained journal.
++    pub fn journal_feed(&self, cursor: Option<Cursor>) -> crate::Result<Feed> {
++        let signal = self
++            .config
++            .cdc
++            .clone()
++            .ok_or_else(|| invalid("journal CDC is disabled"))?;
++        let head = *signal.head.lock().map_err(|_| crate::Error::Poisoned)?;
++        if cursor.is_some_and(|cursor| head.is_none_or(|head| cursor > head)) {
++            return Err(invalid("journal cursor exceeds committed head"));
++        }
++        Ok(Feed {
++            db: self.clone(),
++            signal,
++            cursor,
++            stopped: Arc::default(),
++        })
++    }
++
++    /// Returns the complete durable journal boundary.
++    pub fn journal_head(&self) -> crate::Result<Option<Cursor>> {
++        let signal = self
++            .config
++            .cdc
++            .as_ref()
++            .ok_or_else(|| invalid("journal CDC is disabled"))?;
++        Ok(*signal.head.lock().map_err(|_| crate::Error::Poisoned)?)
++    }
++
++    /// Releases history before a cursor that the caller has durably saved.
++    /// Keep the minimum cursor of all consumers. Start with no acknowledgement after reopen.
++    pub fn retain_after(&self, cursor: Cursor) -> crate::Result<()> {
++        let signal = self
++            .config
++            .cdc
++            .as_ref()
++            .ok_or_else(|| invalid("journal CDC is disabled"))?;
++        if self.journal_head()?.is_none_or(|head| cursor > head) {
++            return Err(invalid("journal acknowledgement exceeds committed head"));
++        }
++        signal.ack.fetch_max(cursor.sequence, Ordering::AcqRel);
++        Ok(())
++    }
++
++    /// Seals the current native journal.
++    pub fn rotate_journal(&self) -> crate::Result<()> {
++        let mut writer = self.supervisor.journal.get_writer()?;
++        let mut manager = self
++            .supervisor
++            .journal_manager
++            .write()
++            .map_err(|_| crate::Error::Poisoned)?;
++        let keyspaces = self
++            .supervisor
++            .keyspaces
++            .write()
++            .map_err(|_| crate::Error::Poisoned)?;
++        let watermarks = self.supervisor.build_seqno_map(&keyspaces);
++        manager.rotate_journal(&mut writer, watermarks)
++    }
++
++    /// Removes fully flushed journals below the acknowledged cursor.
++    pub fn collect_journals(&self) -> crate::Result<()> {
++        self.supervisor
++            .journal_manager
++            .write()
++            .map_err(|_| crate::Error::Poisoned)?
++            .maintenance()
++    }
++}
++
++impl Feed {
++    /// Returns a stop handle for this reader.
++    pub fn cancellation(&self) -> Cancel {
++        Cancel {
++            signal: self.signal.clone(),
++            stopped: self.stopped.clone(),
++        }
++    }
++
++    /// Waits for a durable batch or cancellation.
++    pub fn wait(&self) -> crate::Result<bool> {
++        let mut head = self
++            .signal
++            .head
++            .lock()
++            .map_err(|_| crate::Error::Poisoned)?;
++        while *head <= self.cursor
++            && !self.stopped.load(Ordering::Acquire)
++            && !self.db.is_poisoned.is_poisoned()
++        {
++            head = self
++                .signal
++                .ready
++                .wait(head)
++                .map_err(|_| crate::Error::Poisoned)?;
++        }
++        if self.db.is_poisoned.is_poisoned() {
++            return Err(crate::Error::Poisoned);
++        }
++        Ok(!self.stopped.load(Ordering::Acquire))
++    }
++
++    /// Returns the in-memory scan position, which is not an acknowledgement.
++    pub fn cursor(&self) -> Option<Cursor> {
++        self.cursor
++    }
++
++    /// Reads original journal bytes through the captured durable boundary.
++    pub fn read(&mut self) -> crate::Result<Vec<Batch>> {
++        if self.db.is_poisoned.is_poisoned() {
++            return Err(crate::Error::Poisoned);
++        }
++        let Some(upper) = *self
++            .signal
++            .head
++            .lock()
++            .map_err(|_| crate::Error::Poisoned)?
++        else {
++            return Ok(Vec::new());
++        };
++        if self.cursor.is_some_and(|cursor| cursor > upper) {
++            return Err(invalid("journal cursor exceeds committed head"));
++        }
++        if self.cursor == Some(upper) {
++            return Ok(Vec::new());
++        }
++        let mut start = self.cursor.map_or(0, |cursor| cursor.journal);
++        let files = {
++            let mut writer = self.db.supervisor.journal.get_writer()?;
++            if self.db.is_poisoned.is_poisoned() {
++                return Err(crate::Error::Poisoned);
++            }
++            let manager = self
++                .db
++                .supervisor
++                .journal_manager
++                .read()
++                .map_err(|_| crate::Error::Poisoned)?;
++            if self.cursor.is_none() {
++                start = manager
++                    .items
++                    .first()
++                    .map(|item| journal_id(&item.path))
++                    .transpose()?
++                    .unwrap_or(journal_id(&writer.path)?);
++            }
++            let mut files = Vec::new();
++            for item in &manager.items {
++                let id = journal_id(&item.path)?;
++                if id >= start && id <= upper.journal {
++                    files.push((id, item.path.clone(), item.end));
++                }
++            }
++            let id = journal_id(&writer.path)?;
++            if id >= start && id <= upper.journal {
++                files.push((id, writer.path.clone(), writer.pos()?));
++            }
++            files
++        };
++        if files.first().is_none_or(|(id, _, _)| *id != start)
++            || files.last().is_none_or(|(id, _, _)| *id != upper.journal)
++        {
++            return Err(invalid("journal cursor is outside retained history"));
++        }
++        let mut batches = Vec::new();
++        let mut expected = start;
++        let mut sequence = self
++            .cursor
++            .filter(|cursor| cursor.offset > 0)
++            .map(|cursor| cursor.sequence);
++        for (id, path, length) in files {
++            if id != expected {
++                return Err(invalid("retained journal segment is missing"));
++            }
++            expected += 1;
++            let offset = self
++                .cursor
++                .filter(|cursor| cursor.journal == id)
++                .map_or(0, |cursor| cursor.offset);
++            let end = if id == upper.journal {
++                upper.offset
++            } else {
++                length
++            };
++            if offset > end {
++                return Err(invalid("journal cursor exceeds segment end"));
++            }
++            let mut reader = JournalBatchReader::new(JournalReader::read_only(&path, offset, end)?);
++            while let Some(batch) = reader.next() {
++                let batch = batch?;
++                if reader.last_valid_pos > end
++                    || sequence.is_some_and(|previous| batch.seqno <= previous)
++                {
++                    return Err(invalid("journal batch position is invalid"));
++                }
++                sequence = Some(batch.seqno);
++                let cursor = Cursor {
++                    journal: id,
++                    offset: reader.last_valid_pos,
++                    sequence: batch.seqno,
++                };
++                let items = batch
++                    .items
++                    .into_iter()
++                    .map(|item| Item {
++                        keyspace: item.keyspace_id,
++                        key: item.key,
++                        value: matches!(item.value_type, lsm_tree::ValueType::Value)
++                            .then_some(item.value),
++                    })
++                    .collect();
++                batches.push(Batch {
++                    cursor,
++                    items,
++                    clears: batch.cleared_keyspaces,
++                });
++            }
++            if offset != end && reader.last_valid_pos != end {
++                return Err(invalid("journal batch did not reach committed end"));
++            }
++        }
++        self.cursor = Some(upper);
++        Ok(batches)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{KeyspaceCreateOptions, Readable, SingleWriterTxDatabase};
++    use std::time::Duration;
++
++    fn database(path: &Path) -> crate::Result<SingleWriterTxDatabase> {
++        SingleWriterTxDatabase::builder(path).journal_cdc().open()
++    }
++
++    #[test]
++    fn empty_reopen_and_first_batch() -> crate::Result<()> {
++        let dir = tempfile::tempdir()?;
++        drop(database(dir.path())?);
++        let db = database(dir.path())?;
++        assert!(db
++            .inner()
++            .journal_feed(Some(Cursor {
++                journal: 0,
++                offset: 8,
++                sequence: 0
++            }))
++            .is_err());
++        let mut feed = db.inner().journal_feed(None)?;
++        assert!(feed.read()?.is_empty());
++        let table = db.keyspace("records", KeyspaceCreateOptions::default)?;
++        table.insert("a", "first")?;
++        let mut future = db.inner().journal_head()?.unwrap();
++        future.offset += 1;
++        assert!(db.inner().journal_feed(Some(future)).is_err());
++        let batches = feed.read()?;
++        assert_eq!(batches.len(), 1);
++        assert_eq!(
++            batches[0].items[0].value.as_deref(),
++            Some(b"first".as_slice())
++        );
++        Ok(())
++    }
++
++    #[test]
++    fn raw_mutations_and_rollback() -> crate::Result<()> {
++        let dir = tempfile::tempdir()?;
++        let db = database(dir.path())?;
++        let table = db.keyspace("records", KeyspaceCreateOptions::default)?;
++        let mut feed = db.inner().journal_feed(None)?;
++        table.insert("a", "old")?;
++        table.insert("a", "new")?;
++        table.remove("a")?;
++        table.as_ref().remove_weak("b")?;
++        table.insert("empty", "")?;
++        table.as_ref().clear()?;
++        let mut aborted = db.write_tx().durability(None);
++        aborted.insert(&table, "rollback", "absent");
++        aborted.rollback();
++        let batches = feed.read()?;
++        assert_eq!(batches.len(), 6);
++        assert!(batches
++            .windows(2)
++            .all(|pair| pair[0].cursor.sequence < pair[1].cursor.sequence));
++        assert_eq!(
++            batches[0].items[0].value.as_deref(),
++            Some(b"old".as_slice())
++        );
++        assert_eq!(
++            batches[1].items[0].value.as_deref(),
++            Some(b"new".as_slice())
++        );
++        assert!(batches[2].items[0].value.is_none());
++        assert!(batches[3].items[0].value.is_none());
++        assert_eq!(batches[4].items[0].value.as_deref(), Some(b"".as_slice()));
++        assert_eq!(batches[5].clears, vec![table.as_ref().id()]);
++        Ok(())
++    }
++
++    #[test]
++    fn unread_rotation_compaction_and_clear_recovery() -> crate::Result<()> {
++        let dir = tempfile::tempdir()?;
++        let db = database(dir.path())?;
++        let table = db.keyspace("records", KeyspaceCreateOptions::default)?;
++        table.insert("a", "old")?;
++        let cursor = db.inner().journal_head()?.unwrap();
++        table.as_ref().flush(true)?;
++        table.as_ref().clear()?;
++        table.insert("a", "new")?;
++        table.as_ref().flush(true)?;
++        db.inner().rotate_journal()?;
++        table.insert("b", "latest")?;
++        table.as_ref().flush(true)?;
++        table.as_ref().major_compact()?;
++        db.inner().collect_journals()?;
++        assert!(dir.path().join(format!("{}.jnl", cursor.journal)).exists());
++        drop(table);
++        drop(db);
++        let db = database(dir.path())?;
++        let table = db.keyspace("records", KeyspaceCreateOptions::default)?;
++        assert_eq!(
++            db.read_tx().get(&table, "a")?.as_deref(),
++            Some(b"new".as_slice())
++        );
++        assert_eq!(
++            db.read_tx().get(&table, "b")?.as_deref(),
++            Some(b"latest".as_slice())
++        );
++        let mut feed = db.inner().journal_feed(Some(cursor))?;
++        let batches = feed.read()?;
++        assert_eq!(batches.len(), 3);
++        assert_eq!(batches[0].clears, vec![table.as_ref().id()]);
++        assert_eq!(
++            batches[1].items[0].value.as_deref(),
++            Some(b"new".as_slice())
++        );
++        assert_eq!(
++            batches[2].items[0].value.as_deref(),
++            Some(b"latest".as_slice())
++        );
++        db.inner().retain_after(batches[2].cursor)?;
++        db.inner().collect_journals()?;
++        assert!(!dir.path().join(format!("{}.jnl", cursor.journal)).exists());
++        assert!(db.inner().journal_feed(Some(cursor))?.read().is_err());
++        Ok(())
++    }
++
++    #[test]
++    fn poison_wakes_blocked_reader() -> crate::Result<()> {
++        let dir = tempfile::tempdir()?;
++        let db = database(dir.path())?;
++        let mut feed = db.inner().journal_feed(None)?;
++        feed.read()?;
++        let cancel = feed.cancellation();
++        let (send, receive) = std::sync::mpsc::channel();
++        let thread = std::thread::spawn(move || send.send(feed.wait().is_err()).unwrap());
++        crate::poison::PoisonDart::new(db.inner().is_poisoned.clone(), &db.inner().config).poison();
++        let result = receive.recv_timeout(Duration::from_secs(5));
++        cancel.stop();
++        thread.join().unwrap();
++        assert!(result.unwrap());
++        Ok(())
++    }
++
++    #[test]
++    fn corrupt_reader_does_not_truncate() -> crate::Result<()> {
++        use std::io::{Seek, SeekFrom, Write};
++        let dir = tempfile::tempdir()?;
++        let db = database(dir.path())?;
++        let table = db.keyspace("records", KeyspaceCreateOptions::default)?;
++        table.insert("a", "value")?;
++        let cursor = db.inner().journal_head()?.unwrap();
++        let path = dir.path().join(format!("{}.jnl", cursor.journal));
++        let length = path.metadata()?.len();
++        let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
++        file.seek(SeekFrom::Start(cursor.offset - 1))?;
++        file.write_all(&[0])?;
++        file.sync_all()?;
++        assert!(db.inner().journal_feed(None)?.read().is_err());
++        assert_eq!(path.metadata()?.len(), length);
++        Ok(())
++    }
++}

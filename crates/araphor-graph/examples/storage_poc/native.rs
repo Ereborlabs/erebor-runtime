@@ -72,11 +72,29 @@ impl Native {
     }
 
     pub fn apply(&mut self, _fixture: &Fixture, step: &Step, commit: bool) -> Result<Timing> {
+        self.apply_saved(step, commit, None)
+    }
+
+    #[cfg(feature = "cdc-poc")]
+    pub fn database(&self) -> &kv::Database {
+        &self.db
+    }
+
+    #[cfg(feature = "cdc-poc")]
+    pub fn apply_checkpoint(&mut self, step: &Step, cursor: &[u8], commit: bool) -> Result<Timing> {
+        self.apply_saved(step, commit, Some(cursor))
+    }
+
+    fn apply_saved(&mut self, step: &Step, commit: bool, cursor: Option<&[u8]>) -> Result<Timing> {
         let started = Instant::now();
         let prepare_s = started.elapsed().as_secs_f64();
-        let (prepared, work, commit_s) = self
-            .db
-            .write_at(step.revision, commit, |tx| Self::stage(tx, step))?;
+        let (prepared, work, commit_s) = self.db.write_at(step.revision, commit, |tx| {
+            let prepared = Self::stage(tx, step)?;
+            if let Some(cursor) = cursor {
+                tx.put(b"cursor/package", cursor)?;
+            }
+            Ok(prepared)
+        })?;
         let mut sample = Timing {
             revision: step.revision,
             prepare_s,

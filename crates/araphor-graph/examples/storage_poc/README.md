@@ -773,3 +773,117 @@ retention deletion. No production storage owner changes. Full workspace CI
 and the complete incident test do not run. Complete DataFusion source
 execution, notification latency, and the complete 100-fold target remain
 **Not done**.
+
+## Original-journal CDC qualification
+
+The earlier versioned benchmark does not walk storage journals. The separate
+[CDC runner](cdc.rs) tests that requirement with the original eight Causal
+package cycles. It supports the provided Fjall clone with an opt-in patch and
+the local append-only prototype. It changes no production storage owner.
+
+Read [cdc::scenario](cdc.rs), [Walker::start](cdc.rs),
+[Native::apply_checkpoint](native.rs), then the retained
+[Fjall patch](cdc-bench/fjall.patch). The isolated
+[Cargo project](cdc-bench/Cargo.toml) pins the shared package dependencies.
+No eBPF or ABI boundary changes.
+
+```text
+The fixture commits input/frontier with its original captured input position
+  -> The storage engine syncs the original transaction journal.
+  -> The engine signals that a durable log boundary is available.
+  -> Walker reads the original bytes from its previous physical cursor.
+  -> Walker selects the input/frontier mutation and wakes the source consumer.
+  -> The consumer runs the existing Causal package with prepared fixture Arrow.
+  -> Native commits Graph edits and cursor/package in one transaction.
+  -> Walker reads that original journal batch.
+  -> Walker selects actual member mutations and wakes the Graph consumer.
+  -> The consumer saves cursor/graph in a later transaction.
+  -> Fjall can release history below the minimum saved consumer cursor.
+
+A transaction rolls back, or changes only an unrelated key
+  -> Walker sends no matching source or Graph event.
+
+The fifth source frontier commits while Walker is stopped
+  -> Fjall flushes, rotates its native journal, and completes major compaction.
+  -> The runner closes and reopens the database.
+  -> Walker resumes after the saved minimum physical cursor.
+  -> The pending source frontier produces exactly one source event.
+```
+
+The input frontier is synthetic source metadata. The runner does not store
+package input or output archives. It does not execute event capture or the
+DataFusion source query. The two watches share one journal walker. A writer
+signals only generic log availability. All matching subscription events come
+from decoded original journal records. There is no polling, hash comparison,
+or second logical change table. The five-second receive timeout detects a
+failed qualification; it does not drive change detection.
+
+Fjall uses its existing journal writer, batch decoder, sequence numbers,
+snapshots, flush, and compaction. The patch forces `SyncAll` in CDC mode,
+publishes a complete batch cursor after native state publication, prevents
+collection below the saved cursor, and wakes readers on native poison paths.
+The read-only decoder cannot repair or truncate a journal. Retained replay
+skips a clear that is already in a persisted keyspace. Feature-off recovery
+behavior stays unchanged. Reopen restores the durable head from actual batches.
+
+Retention uses one caller-managed, monotone floor. Feed creation does not pin
+history. The caller must durably save the minimum cursor of all watches before
+advancing that floor. A new consumer cannot request already released history.
+Fjall bulk ingestion and keyspace catalog changes are outside this CDC contract.
+The local prototype has no rotation, compaction, or reclamation.
+
+| Candidate | Original-journal CDC result |
+| --- | --- |
+| Provided Fjall with retained patch | Qualification runner available |
+| Local append-only prototype | Qualification runner available |
+| Stock Fjall | No public retained journal feed or wake API |
+| redb | Copy-on-write pages; no original WAL feed |
+| DuckDB | No supported retained original-WAL CDC API |
+| SurrealKV 1.2 | Private WAL reader; value-log references also need retention |
+| Existing Neon layer adapter | Writes native layers; produces no PostgreSQL WAL |
+
+The unsupported rows have no CDC timing result. A layer scan or an application
+change table does not establish original-log CDC.
+
+The runner checks exact added and closed counts, Arrow rows, traversal requests,
+frontiers, findings, writer metadata, historical views before and after reopen,
+and an aborted Graph publication with an unchanged package cursor. It checks
+that only eight source and eight Graph events occur in each run. Fjall must
+complete a physical compaction and retain the unread native batch.
+
+The patch applies to Fjall source
+`87006048139bfe1b072bbc29a5a92bf1f97628e3`. Apply it once. The
+[engine-test lock](cdc-bench/fjall-tests.lock) records the separate focused
+Fjall test dependencies.
+
+```sh
+rtk proxy git -C fjall apply --unidiff-zero --check ../crates/araphor-graph/examples/storage_poc/cdc-bench/fjall.patch
+rtk proxy git -C fjall apply --unidiff-zero ../crates/araphor-graph/examples/storage_poc/cdc-bench/fjall.patch
+rtk proxy cp crates/araphor-graph/examples/storage_poc/cdc-bench/fjall-tests.lock fjall/Cargo.lock
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 \
+  cargo test --manifest-path fjall/Cargo.toml --features journal-cdc --lib cdc::tests --locked
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 \
+  cargo test --manifest-path fjall/Cargo.toml --test keyspace_clear --test recover_flushed_journal --locked
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 \
+  cargo test --release --manifest-path crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml \
+  --config /tmp/araphor-storage-release-override.toml --locked
+rtk proxy env CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 \
+  POC_SOURCE_REVISION="$(git rev-parse HEAD)" \
+  cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml \
+  --config /tmp/araphor-storage-release-override.toml --locked
+rtk proxy target/release/storage_cdc /tmp/araphor-cdc-poc/release.json cdc
+rtk proxy python3 -B crates/araphor-graph/examples/storage_poc/summarize_cdc.py /tmp/araphor-cdc-poc/release.json
+```
+
+The cached optimized DuckDB archive override is the same as the earlier
+versioned benchmark. Use a normal optimized bundled build if it is absent.
+Timing starts before the source commit and ends when the Graph consumer
+receives its event. Source and output wake intervals each include their durable
+commit and native log read. Result validation and Graph-consumer acknowledgement
+are outside that interval. The summary separates the fifth sample because its
+timer includes explicit maintenance, shutdown, and reopen. This maintenance
+proves correctness; it does not measure sustained background compaction.
+
+Production DataFusion input, package admission, notification creation and
+delivery, large retained history, power loss, dynamic consumer registration,
+native branches, and the complete incident latency target remain **Not done**.

@@ -42,7 +42,7 @@ members = [
     "crates/mithril-e2e-macros",
     "crates/mithril-node",
 ]
-exclude = ["neon", "vendor/duckdb", "vendor/libduckdb-sys", "vendor/datafusion-physical-optimizer"]
+exclude = ["neon", "fjall", "vendor/duckdb", "vendor/libduckdb-sys", "vendor/datafusion-physical-optimizer"]
 resolver = "2"
 
 [patch.crates-io]

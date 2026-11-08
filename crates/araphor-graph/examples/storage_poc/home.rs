@@ -21,6 +21,8 @@ struct State {
     file: File,
     root: Arc<Index>,
     poisoned: bool,
+    #[cfg(feature = "cdc-poc")]
+    readers: Vec<std::sync::mpsc::Sender<Message>>,
 }
 struct Transaction {
     rows: Index,
@@ -50,25 +52,7 @@ impl Home {
         let length = file.metadata()?.len();
         let mut position = 8;
         let mut rows = Index::new();
-        while position < length {
-            if length - position < 16 {
-                break;
-            }
-            let mut header = [0; 16];
-            file.read_exact(&mut header)?;
-            if crc32c::crc32c(&header[..12]) != u32::from_le_bytes(header[12..].try_into()?) {
-                return Err("home frame header checksum invalid".into());
-            }
-            let size = u64::from_le_bytes(header[..8].try_into()?);
-            if size > length - position - 16 {
-                break;
-            }
-            let mut payload = vec![0; usize::try_from(size)?];
-            file.read_exact(&mut payload)?;
-            if crc32c::crc32c(&payload) != u32::from_le_bytes(header[8..12].try_into()?) {
-                return Err("home frame payload checksum invalid".into());
-            }
-            let edits: Edits = rmp_serde::from_slice(&payload)?;
+        while let Some((edits, next)) = Self::frame(&mut file, position, length)? {
             for (key, value) in edits {
                 if let Some(value) = value {
                     rows.insert(Arc::from(key.into_vec()), Arc::from(value.into_vec()));
@@ -76,7 +60,7 @@ impl Home {
                     rows.remove(key.as_ref());
                 }
             }
-            position += 16 + size;
+            position = next;
         }
         if position != length {
             file.set_len(position)?;
@@ -87,7 +71,34 @@ impl Home {
             file,
             root: Arc::new(rows),
             poisoned: false,
+            #[cfg(feature = "cdc-poc")]
+            readers: Vec::new(),
         })))
+    }
+
+    fn frame(file: &mut File, position: u64, length: u64) -> Result<Option<(Edits, u64)>> {
+        if length - position < 16 {
+            return Ok(None);
+        }
+        file.seek(SeekFrom::Start(position))?;
+        let mut header = [0; 16];
+        file.read_exact(&mut header)?;
+        if crc32c::crc32c(&header[..12]) != u32::from_le_bytes(header[12..].try_into()?) {
+            return Err("home frame header checksum invalid".into());
+        }
+        let size = u64::from_le_bytes(header[..8].try_into()?);
+        if size > length - position - 16 {
+            return Ok(None);
+        }
+        let mut payload = vec![0; usize::try_from(size)?];
+        file.read_exact(&mut payload)?;
+        if crc32c::crc32c(&payload) != u32::from_le_bytes(header[8..12].try_into()?) {
+            return Err("home frame payload checksum invalid".into());
+        }
+        Ok(Some((
+            rmp_serde::from_slice(&payload)?,
+            position + 16 + size,
+        )))
     }
 
     pub fn read<T>(&self, action: impl FnOnce(&dyn Read) -> Result<T>) -> Result<T> {
@@ -123,11 +134,25 @@ impl Home {
             let checksum = crc32c::crc32c(&header[..12]);
             header[12..].copy_from_slice(&checksum.to_le_bytes());
             state.poisoned = true;
-            state.file.write_all(&header)?;
-            state.file.write_all(&payload)?;
-            state.file.sync_all()?;
+            let result = (|| -> std::io::Result<u64> {
+                state.file.write_all(&header)?;
+                state.file.write_all(&payload)?;
+                state.file.sync_all()?;
+                state.file.stream_position()
+            })();
+            #[cfg(feature = "cdc-poc")]
+            if result.is_err() {
+                state
+                    .readers
+                    .retain(|reader| reader.send(Message::Failed).is_ok());
+            }
+            let _end = result?;
             state.root = Arc::new(tx.rows);
             state.poisoned = false;
+            #[cfg(feature = "cdc-poc")]
+            state
+                .readers
+                .retain(|reader| reader.send(Message::End(_end)).is_ok());
         }
         Ok((result, work, synced.elapsed().as_secs_f64()))
     }
@@ -294,5 +319,125 @@ mod tests {
             assert_eq!(view.get(b"second")?, None);
             Ok(())
         })
+    }
+}
+
+#[cfg(feature = "cdc-poc")]
+enum Message {
+    End(u64),
+    Failed,
+    Stop,
+}
+
+#[cfg(feature = "cdc-poc")]
+pub struct Feed {
+    file: File,
+    cursor: super::cdc::Cursor,
+    end: u64,
+    receiver: std::sync::mpsc::Receiver<Message>,
+    sender: std::sync::mpsc::Sender<Message>,
+    stopped: bool,
+}
+
+#[cfg(feature = "cdc-poc")]
+#[derive(Clone)]
+pub struct Cancel(std::sync::mpsc::Sender<Message>);
+
+#[cfg(feature = "cdc-poc")]
+impl Cancel {
+    pub fn stop(&self) {
+        let _ = self.0.send(Message::Stop);
+    }
+}
+
+#[cfg(feature = "cdc-poc")]
+impl Home {
+    pub fn journal_head(&self) -> Result<super::cdc::Cursor> {
+        let state = self.0.try_borrow()?;
+        state.check()?;
+        let offset = state.file.metadata()?.len();
+        Ok(super::cdc::Cursor {
+            journal: 0,
+            offset,
+            sequence: offset,
+        })
+    }
+
+    pub fn journal_feed(&self, path: &Path, cursor: super::cdc::Cursor) -> Result<Feed> {
+        let mut state = self.0.try_borrow_mut()?;
+        state.check()?;
+        let end = state.file.metadata()?.len();
+        if cursor.journal != 0 || cursor.offset < 8 || cursor.offset > end {
+            return Err("home cursor is outside retained history".into());
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        state.readers.push(sender.clone());
+        Ok(Feed {
+            file: File::open(path.join("home.log"))?,
+            cursor,
+            end,
+            receiver,
+            sender,
+            stopped: false,
+        })
+    }
+}
+
+#[cfg(feature = "cdc-poc")]
+impl Feed {
+    pub fn cancellation(&self) -> Cancel {
+        Cancel(self.sender.clone())
+    }
+
+    pub fn wait(&mut self) -> Result<bool> {
+        if self.stopped {
+            return Ok(false);
+        }
+        if self.cursor.offset < self.end {
+            return Ok(true);
+        }
+        match self.receiver.recv()? {
+            Message::End(end) => {
+                self.end = end;
+                Ok(true)
+            }
+            Message::Failed => Err("home journal write failed".into()),
+            Message::Stop => {
+                self.stopped = true;
+                Ok(false)
+            }
+        }
+    }
+
+    pub fn read(&mut self) -> Result<Vec<super::cdc::Batch>> {
+        while let Ok(message) = self.receiver.try_recv() {
+            match message {
+                Message::End(end) => self.end = end,
+                Message::Failed => return Err("home journal write failed".into()),
+                Message::Stop => self.stopped = true,
+            }
+        }
+        let mut batches = Vec::new();
+        while self.cursor.offset < self.end {
+            let (edits, offset) = Home::frame(&mut self.file, self.cursor.offset, self.end)?
+                .ok_or("incomplete committed home frame")?;
+            self.cursor = super::cdc::Cursor {
+                journal: 0,
+                offset,
+                sequence: offset,
+            };
+            let items = edits
+                .into_iter()
+                .map(|(key, value)| super::cdc::Item {
+                    key: key.into_vec(),
+                    value: value.map(ByteBuf::into_vec),
+                })
+                .collect();
+            batches.push(super::cdc::Batch {
+                cursor: self.cursor,
+                items,
+            });
+        }
+        Ok(batches)
     }
 }

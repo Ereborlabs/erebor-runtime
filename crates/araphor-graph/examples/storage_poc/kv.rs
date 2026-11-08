@@ -100,7 +100,10 @@ impl Database {
                 Self::Redb(db)
             }
             "fjall" => {
-                let db = fjall::SingleWriterTxDatabase::builder(path.join("fjall")).open()?;
+                let builder = fjall::SingleWriterTxDatabase::builder(path.join("fjall"));
+                #[cfg(feature = "cdc-poc")]
+                let builder = builder.journal_cdc();
+                let db = builder.open()?;
                 let table = db.keyspace("records", fjall::KeyspaceCreateOptions::default)?;
                 Self::Fjall(db, table)
             }

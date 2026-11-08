@@ -18,7 +18,7 @@ struct Event {
     level: String,
     message: String,
 }
-struct Trace {
+pub struct Trace {
     started: OnceLock<Instant>,
     events: Mutex<Vec<Event>>,
 }
@@ -27,6 +27,20 @@ static TRACE: Trace = Trace {
     events: Mutex::new(Vec::new()),
 };
 impl Trace {
+    pub fn install() -> Result<()> {
+        log::set_logger(&TRACE).map_err(|_| "compaction logger already set")?;
+        log::set_max_level(log::LevelFilter::Trace);
+        Ok(())
+    }
+
+    pub fn completed() -> usize {
+        TRACE
+            .events()
+            .iter()
+            .filter(|event| event.message == "Compaction successful")
+            .count()
+    }
+
     fn elapsed(&self) -> f64 {
         self.started
             .get_or_init(Instant::now)

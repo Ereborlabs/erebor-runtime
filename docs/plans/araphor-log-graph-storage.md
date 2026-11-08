@@ -526,3 +526,29 @@ The bounded benchmark is **Done**. Production replacement, large retained
 history, steady compaction, native branches, power-loss recovery, complete
 DataFusion execution, notification delivery, and the complete incident
 latency target remain **Not done**.
+
+## Original-journal CDC proof, 2026-11-08
+
+The user requires storage-log walking to drive subscription wakes. The earlier
+versioned benchmark reads Graph history; it does not establish this requirement.
+The separate [CDC runner](../../crates/araphor-graph/examples/storage_poc/cdc.rs)
+now reads original Fjall journal batches and local append-only frames. The
+implementer and reviewer agree on this bounded direction before implementation.
+
+A source-frontier mutation wakes the unchanged Causal package only after the
+walker decodes that mutation from the native journal. Graph edits and the
+consumed input cursor share one durable transaction. The same walker decodes
+actual member writes to wake the output consumer. Source and output cursors
+stay separate. Their minimum saved cursor controls Fjall journal retention.
+
+The [review guide and commands](../../crates/araphor-graph/examples/storage_poc/README.md#original-journal-cdc-qualification)
+state the original eight-cycle workload, native engine patch, exact checks,
+and limits. The provided Fjall clone needs the retained opt-in extension.
+Stock Fjall, redb, DuckDB, SurrealKV, and the existing Neon layer adapter have
+no qualified original-log CDC result in this runner. Do not substitute a
+logical change table or a native layer scan for that result.
+
+Implementation and focused pilot: **Done**. Frozen-source measurement:
+**Not done**. Production source input, DataFusion execution, notifications,
+large retained history, dynamic consumer registration, native branches, and
+the complete incident latency target remain **Not done**.
