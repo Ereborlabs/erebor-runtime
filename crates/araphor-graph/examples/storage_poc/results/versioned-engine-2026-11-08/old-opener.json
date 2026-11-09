@@ -1,0 +1,20 @@
+{
+  "fjall_source": "aba9e7651d3b0123ad982d43255a4f364fab908e",
+  "checks": [
+    {
+      "mode": 1,
+      "old_opener_rejected": true,
+      "files_unchanged": true
+    },
+    {
+      "mode": 2,
+      "old_opener_rejected": true,
+      "files_unchanged": true
+    },
+    {
+      "mode": 3,
+      "old_opener_rejected": true,
+      "files_unchanged": true
+    }
+  ]
+}

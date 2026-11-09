@@ -354,7 +354,8 @@ writable forks, distributed storage, or automatic retention policy is included.
 | Exact durable commit receipts | **Done.** Fjall commit `a17f65d` adds core `Revision`, `Cursor`, and `Commit`, batch and single-writer receipts, and `Batch::revision()`. Legacy commit buffering stays unchanged. Reviewer source review passes. |
 | Receipt checks | **Done.** `cargo test --manifest-path fjall/Cargo.toml --features journal-cdc --lib --locked --offline`: 85 passed, one existing ignored. Without the CDC feature, `cargo test --manifest-path fjall/Cargo.toml --lib commit::tests --locked --offline`: three passed. `cargo check --manifest-path fjall/Cargo.toml --no-default-features --lib --locked --offline` and formatting pass. |
 | New local control measurements | **Done.** [Source and binary identity](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/control.json), [combined summary](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/combined-summary.json), and [stable summary](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/stable-summary.json). Combined ordinary median/maximum: 5.605/12.170 ms. Stable eight-cycle median: 28.711 ms. Existing summary assertions pass. These control observations do not prove a change in performance. |
-| Durable mode, catalogue, retention, and branches | **Not done.** Receipt code does not establish durable history or the recovery high-water contract. |
+| Durable mode and private catalogue | **Done.** Fjall commit `9d640ae` persists the mode, restores it before recovery, and restores the journaled catalogue before maintenance starts. The catalogue stays outside public keyspace access and application compaction filters. Native checks: 95 passed with CDC, 81 passed without CDC, one existing ignored in each run. The no-default-features production check passes. The actual pre-change `aba9e76` engine rejects all three new modes without file mutation; see [compatibility evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/old-opener.json). |
+| Durable counters, retention, and branches | **Not done.** The current catalogue schema does not establish the recovery high-water contract or durable history. |
 | Streaming CDC and sealed-segment recovery metadata | **Not done.** |
 | Candidate PoC performance | **Not done.** The new complete engine has not been benchmarked. |
 
@@ -362,6 +363,8 @@ The no-default-features test build fails in the existing
 `keyspace/options.rs:709` test: `with_kv_separation` receives a value instead of
 `Some(value)`. The same line exists in upstream commit `8700604`. The production
 no-default-features build passes; this unrelated test was not changed.
+The focused clippy check fails on the existing explicit loop counter in
+`cdc.rs:303`. Streaming CDC will replace this loop. No clippy pass is claimed.
 
 [tree]: ../../lsm-tree/src/tree/mod.rs
 [versions]: ../../lsm-tree/src/version/super_version.rs
