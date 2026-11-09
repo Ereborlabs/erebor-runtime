@@ -1,0 +1,145 @@
+diff --git a/src/batch/mod.rs b/src/batch/mod.rs
+index 37aba35..84504ed 100644
+--- a/src/batch/mod.rs
++++ b/src/batch/mod.rs
+@@ -211,8 +211,7 @@ impl WriteBatch {
+ 
+             batch_size += item_size;
+ 
+-            // IMPORTANT: Clone the handle, because we don't want to keep the keyspaces lock open
+-            keyspaces_with_possible_stall.insert(item.keyspace.clone());
++            keyspaces_with_possible_stall.insert(item.keyspace);
+         }
+ 
+         #[cfg(feature = "journal-cdc")]
+diff --git a/src/tx/write_set.rs b/src/tx/write_set.rs
+index 126879a..7e4107c 100644
+--- a/src/tx/write_set.rs
++++ b/src/tx/write_set.rs
+@@ -64,20 +64,33 @@ impl WriteSet {
+         let mut batch = OwnedWriteBatch::new(db).durability(durability);
+         for (keyspace, memtable) in self.memtables {
+             let mut previous: Option<UserKey> = None;
+-            for item in memtable.iter() {
++            let mut append = |item: InternalValue| {
+                 if previous
+                     .as_ref()
+                     .is_some_and(|key| *key == item.key.user_key)
+                 {
+-                    continue;
++                    return;
+                 }
++                let key = item.key.user_key.clone();
+                 batch.data.push(Item::new(
+                     keyspace.clone(),
+-                    item.key.user_key.clone(),
+-                    item.value.clone(),
++                    item.key.user_key,
++                    item.value,
+                     item.key.value_type,
+                 ));
+-                previous = Some(item.key.user_key.clone());
++                previous = Some(key);
++            };
++            match Arc::try_unwrap(memtable) {
++                Ok(memtable) => {
++                    for (key, value) in memtable.items {
++                        append(InternalValue { key, value });
++                    }
++                }
++                Err(memtable) => {
++                    for item in memtable.iter() {
++                        append(item);
++                    }
++                }
+             }
+         }
+         batch
+diff --git a/src/tx/write_tx.rs b/src/tx/write_tx.rs
+index 635e28f..4a9d678 100644
+--- a/src/tx/write_tx.rs
++++ b/src/tx/write_tx.rs
+@@ -354,6 +354,83 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[test]
++    fn consume_staging() -> Result<(), Box<dyn std::error::Error>> {
++        use lsm_tree::ValueType;
++        use std::sync::Arc;
++
++        for shared in [false, true] {
++            let env = setup()?;
++            let other = env.db.keyspace("other", KeyspaceCreateOptions::default)?;
++            let tree = env.tree.inner();
++            let mut tx = BaseTransaction::new(
++                env.db.inner.clone(),
++                env.db.inner().supervisor.snapshot_tracker.open(),
++            );
++            for key in ["k/deleted", "k/empty", "k/latest", "k/weak"] {
++                tx.insert(tree, key, "first");
++            }
++            tx.insert(other.inner(), "k/latest", "other-first");
++            let held = shared.then(|| tx.prefix(tree, "k/"));
++            tx.remove(tree, "k/deleted");
++            tx.insert(tree, "k/empty", "");
++            tx.insert(tree, "k/latest", "last");
++            tx.remove_weak(tree, "k/weak");
++            tx.insert(other.inner(), "k/latest", "other-last");
++            let owners = Arc::strong_count(tx.writes.memtables.get(tree).ok_or("missing staging")?);
++            assert_eq!(owners > 1, shared);
++            let batch = tx.into_batch();
++            assert_eq!(batch.data.len(), 5);
++            for (key, kind, value) in [
++                ("k/deleted", ValueType::Tombstone, ""),
++                ("k/empty", ValueType::Value, ""),
++                ("k/latest", ValueType::Value, "last"),
++                ("k/weak", ValueType::WeakTombstone, ""),
++            ] {
++                let item = batch
++                    .data
++                    .iter()
++                    .find(|item| item.keyspace == *tree && &*item.key == key.as_bytes())
++                    .ok_or("missing item")?;
++                assert_eq!(item.value_type, kind);
++                assert_eq!(&*item.value, value.as_bytes());
++            }
++            batch.commit()?;
++            assert_eq!(env.tree.get("k/deleted")?, None);
++            assert_eq!(env.tree.get("k/weak")?, None);
++            assert_eq!(env.tree.get("k/empty")?.as_deref(), Some(b"".as_slice()));
++            assert_eq!(
++                env.tree.get("k/latest")?.as_deref(),
++                Some(b"last".as_slice())
++            );
++            assert_eq!(
++                other.get("k/latest")?.as_deref(),
++                Some(b"other-last".as_slice())
++            );
++            if let Some(held) = held {
++                let rows = held
++                    .map(|row| row.into_inner())
++                    .collect::<crate::Result<Vec<_>>>()?;
++                assert_eq!(rows.len(), 4);
++                assert!(rows.iter().all(|(_, value)| &**value == b"first"));
++            }
++
++            let mut tx = BaseTransaction::new(
++                env.db.inner.clone(),
++                env.db.inner().supervisor.snapshot_tracker.open(),
++            );
++            tx.insert(tree, "k/rollback", "aborted");
++            let mut held = tx.prefix(tree, "k/rollback");
++            tx.remove(tree, "k/rollback");
++            tx.rollback();
++            assert_eq!(env.tree.get("k/rollback")?, None);
++            let (_, value) = held.next().ok_or("missing held row")?.into_inner()?;
++            assert_eq!(&*value, b"aborted");
++            assert!(held.next().is_none());
++        }
++        Ok(())
++    }
++
+     #[test]
+     fn update_fetch() -> Result<(), Box<dyn std::error::Error>> {
+         let env = setup()?;

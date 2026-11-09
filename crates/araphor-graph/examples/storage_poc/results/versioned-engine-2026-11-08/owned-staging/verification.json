@@ -1,0 +1,177 @@
+{
+  "performance": "Not done",
+  "elapsed": [
+    {
+      "side": "before",
+      "pass_number": 1,
+      "samples": 28,
+      "minimum_ms": 3.418478,
+      "median_ms": 4.605918,
+      "p95_ms": 7.048232,
+      "maximum_ms": 7.284093,
+      "stable_ms": {
+        "rounds": [
+          25.484402,
+          25.911006,
+          24.397361,
+          26.125071
+        ],
+        "median": 25.697704,
+        "max": 26.125071
+      }
+    },
+    {
+      "side": "before",
+      "pass_number": 2,
+      "samples": 28,
+      "minimum_ms": 3.500403,
+      "median_ms": 4.808358,
+      "p95_ms": 7.3140540000000005,
+      "maximum_ms": 8.032041999999999,
+      "stable_ms": {
+        "rounds": [
+          26.760084,
+          26.597559999999998,
+          25.387383999999997,
+          28.084451
+        ],
+        "median": 26.678821999999997,
+        "max": 28.084451
+      }
+    },
+    {
+      "side": "after",
+      "pass_number": 1,
+      "samples": 28,
+      "minimum_ms": 3.552228,
+      "median_ms": 4.734255,
+      "p95_ms": 7.321599,
+      "maximum_ms": 7.837251999999999,
+      "stable_ms": {
+        "rounds": [
+          25.908843,
+          26.845442000000002,
+          25.243517,
+          25.848917
+        ],
+        "median": 25.878880000000002,
+        "max": 26.845442000000002
+      }
+    },
+    {
+      "side": "after",
+      "pass_number": 2,
+      "samples": 28,
+      "minimum_ms": 3.451583,
+      "median_ms": 4.773785500000001,
+      "p95_ms": 6.9473069999999995,
+      "maximum_ms": 7.246725,
+      "stable_ms": {
+        "rounds": [
+          25.658517,
+          23.721203,
+          26.061092000000002,
+          26.205386
+        ],
+        "median": 25.859804500000003,
+        "max": 26.205386
+      }
+    }
+  ],
+  "summary_checks": [
+    "consume-before-combined-0.json",
+    "consume-before-stable-0.json",
+    "consume-before-combined-1.json",
+    "consume-before-stable-1.json",
+    "consume-before-apply-combined.json",
+    "consume-after-combined-0.json",
+    "consume-after-stable-0.json",
+    "consume-after-combined-1.json",
+    "consume-after-stable-1.json",
+    "consume-after-apply-combined.json"
+  ],
+  "instructions": {
+    "metric": "Complete native apply instructions for 28 ordinary fixed-key output transactions.",
+    "limits": "All profiled timings excluded. Nested method costs are not additive. No latency gain is implied.",
+    "mapping": "72 actual apply-return dumps per driver; 64 primary and eight rollback calls; residual/worker collection is zero.",
+    "instruction_change_percent": -1.0151013393217223,
+    "sides": {
+      "before": {
+        "source": "d360d960e+checked-handles",
+        "ordinary_samples": 28,
+        "ordinary_instructions": 194219131,
+        "ordinary_median_instructions": 4844924.0,
+        "revision_medians": {
+          "26": 6316950.5,
+          "29": 4844924.0,
+          "44": 3187564.0,
+          "46": 3252178.0,
+          "64": 13322675.0,
+          "85": 3509768.0,
+          "87": 14074823.5
+        },
+        "zero_residual_and_worker_profiles": [
+          "consume-before-apply.out-05",
+          "consume-before-apply.out-02",
+          "consume-before-apply.out-04",
+          "consume-before-apply.out-06",
+          "consume-before-apply.out-03",
+          "consume-before-apply.out-01"
+        ]
+      },
+      "after": {
+        "source": "39879646a+consume-staging",
+        "ordinary_samples": 28,
+        "ordinary_instructions": 192247610,
+        "ordinary_median_instructions": 4823526.0,
+        "revision_medians": {
+          "26": 6199304.5,
+          "29": 4823526.0,
+          "44": 3243904.5,
+          "46": 3268644.5,
+          "64": 13172319.0,
+          "85": 3457460.0,
+          "87": 13916686.0
+        },
+        "zero_residual_and_worker_profiles": [
+          "consume-after-apply.out-02",
+          "consume-after-apply.out-01",
+          "consume-after-apply.out-06",
+          "consume-after-apply.out-03",
+          "consume-after-apply.out-04",
+          "consume-after-apply.out-05"
+        ]
+      }
+    }
+  },
+  "nested_into_batch": {
+    "before": {
+      "calls": 28,
+      "instructions": 4214989
+    },
+    "after": {
+      "calls": 28,
+      "instructions": 2462194
+    }
+  },
+  "source": {
+    "fjall": "bdb1843574f00ed9153233b547d2e2fd055c266a",
+    "lsm-tree": "1918e26205ac54e81311a8f0e10ed255b638ed16"
+  },
+  "archive_members": 202,
+  "archive_bytes": 7933086,
+  "uncompressed_bytes": 378681679,
+  "archive_sha256": "aba3146b23ecbe4b079940488eecde9f045670b88f1b910a0f14f86619a5fb3f",
+  "archive_members_verified": true,
+  "compression_command": [
+    "zstd",
+    "-q",
+    "-T2",
+    "-3",
+    "--long=27",
+    "-o",
+    "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/owned-staging/raw-evidence.tar.zst"
+  ],
+  "p95_method": "Nearest rank; 28 ordinary fixed-key samples; restart excluded.",
+  "limits": "Profiled timings are excluded. Native costs are nested actual entered calls. No repeatable elapsed gain is proved."
+}

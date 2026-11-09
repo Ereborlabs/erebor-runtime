@@ -494,8 +494,21 @@ combined pass exceeds both targets. Native default/LZ4 libraries pass
 draft and excluded method-only profiles remain in the evidence. No repeatable
 elapsed gain is proved.
 
-Current accepted source is Fjall `04c304a` and `lsm-tree` `1918e262`. Use the
-checked point-block record above for the latest comparison. Earlier records
+The [owned staging result](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/owned-staging/README.md)
+is **Done for measured ordinary apply CPU work; Not done for complete performance**.
+Fjall `bdb1843` consumes unique staging through the native owning iterator;
+held iterators keep the existing shared path. Both paths keep native checks
+and latest-key selection. Ordinary output apply instructions decrease by
+1.015% across 28 transactions. All 144 raw dumps conserve counters; profiled
+timings are excluded. The new test checks both ownership paths, latest value
+types, two keyspaces, commit, and rollback. CDC/without CDC pass 128/87 cases;
+other focused gates and the release build pass. All eight untraced summaries
+pass. Combined median/p95/maximum values are 4.734/7.322/7.837 and
+4.774/6.947/7.247 ms. Stable medians are 25.879 and 25.860 ms. Both combined
+medians exceed their target. No repeatable elapsed gain is proved.
+
+Current accepted source is Fjall `bdb1843` and `lsm-tree` `1918e262`. Use the
+owned staging record above for the latest comparison. Earlier records
 describe their recorded source states. The whole-cycle CPU attempt is excluded
 because its reset function was inlined in one executable. Complete performance
 qualification remains **Not done**.
