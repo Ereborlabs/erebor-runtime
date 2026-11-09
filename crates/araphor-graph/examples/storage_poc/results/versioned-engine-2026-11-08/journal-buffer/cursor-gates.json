@@ -1,0 +1,70 @@
+[
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--features",
+      "journal-cdc",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/cursor-buffer-cdc.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/cursor-buffer-default.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/cursor-buffer-no-default.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--features",
+      "journal-cdc",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/cursor-buffer-clippy.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "fmt",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--check"
+    ],
+    "log": "output/storage-engine-baseline-20261108/cursor-buffer-format.log",
+    "exit_code": 0
+  }
+]

@@ -131,10 +131,20 @@ the journal writer's existing byte buffer. The temporary compressed vector
 and its copy are removed. The codec, threshold, and stored bytes remain.
 The `compressed_items_keep_original_bytes` case compares both codecs against
 the previous encoding with empty, repeated, and incompressible values.
-The generic entry encoder keeps its `Write` interface and uses a local vector
-for Item encoding. Production item writes reuse the writer buffer directly.
+The generic entry encoder keeps its `Write` interface and uses a local
+`Cursor<Vec<u8>>` for Item encoding. Production item writes reuse the writer buffer directly.
 That buffer can retain the largest uncompressed compression bound until
 journal rotation. Highly compressible values can increase retained memory.
+
+[Writer::write_buffer](../../fjall/src/journal/writer.rs) writes, hashes, and
+counts only the cursor's logical prefix. The initialized vector length stays
+at its largest Item bound. Position resets replace the previous vector clears
+at the same points. The serializer grows storage only when needed. It fills
+the fixed 21-byte header with the existing encoders on the stack, then writes
+the header once. Native LZ4 uses the same bound. Its actual output end sets
+the logical position. The exact-wire case also checks initialized storage
+through large-to-small reuse and a nonzero prefix. File buffering, error
+handling, marker counts, and durability remain.
 
 [ChecksumRead::read_exact](../../fjall/src/journal/reader.rs) uses bytes already
 in the native `BufReader` when they cover the complete request. It copies and
@@ -311,9 +321,9 @@ The
 records 9.085% fewer native feed instructions for identical work across both
 layouts and all workers.
 
-Current accepted source is Fjall `ee3ea07` and `lsm-tree` `aed3e47a`. The
+The
 [Item header evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/header-group/README.md)
-records another 12.654% reduction for identical feed work. All 127 CDC and 86
+for Fjall `ee3ea07` records another 12.654% reduction for identical feed work. All 127 CDC and 86
 non-CDC library cases pass, with one existing ignored case in each run.
 Production without default features, library clippy, formatting, and the
 release PoC build pass. Combined medians are 4.517 and 4.990 ms; both exceed
@@ -323,6 +333,17 @@ A separate writer diagnostic confirms that the existing buffer combines
 writes. It has no syscall durations; no writer change is added. Earlier
 records describe their recorded source states. The whole-cycle CPU attempt
 is excluded because its reset function was inlined in one executable.
+
+Current accepted source is Fjall `04c304a` and `lsm-tree` `aed3e47a`. The
+[initialized-buffer evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/journal-buffer/README.md)
+records 1.430% fewer complete apply instructions across 72 calls in both
+layouts, including rollback. Compression counters and reported domain work
+match. Both intermediate and final drafts remain in the evidence. Native
+CDC/without CDC: 127/86 passed, one existing ignored each. Production without
+default features, library clippy, formatting, and release builds pass. Final
+combined medians are 4.561 and 4.597 ms; both exceed their target. Stable
+medians are 25.816 and 25.175 ms. Wall-time changes remain mixed. No sustained
+latency gain is proved.
 
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this

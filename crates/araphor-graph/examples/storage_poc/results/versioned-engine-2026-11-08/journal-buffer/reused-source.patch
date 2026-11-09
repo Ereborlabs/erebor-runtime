@@ -1,0 +1,359 @@
+diff --git a/src/journal/entry.rs b/src/journal/entry.rs
+index 0407fce..464e171 100644
+--- a/src/journal/entry.rs
++++ b/src/journal/entry.rs
+@@ -8,7 +8,7 @@ use lsm_tree::{
+     coding::{Decode, Encode},
+     CompressionType, SeqNo, UserKey, UserValue, ValueType,
+ };
+-use std::io::{Read, Write};
++use std::io::{Cursor, Read, Write};
+ 
+ /// Journal entry. Every batch is composed as a Start, followed by N items, followed by an End.
+ ///
+@@ -39,54 +39,63 @@ pub enum Entry {
+ }
+ 
+ pub fn serialize_marker_item(
+-    writer: &mut Vec<u8>,
++    writer: &mut Cursor<Vec<u8>>,
+     keyspace_id: InternalKeyspaceId,
+     key: &[u8],
+     value: &[u8],
+     value_type: ValueType,
+     compression: CompressionType,
+ ) -> Result<(), lsm_tree::Error> {
+-    writer.write_u8(Tag::Item.into())?;
++    let mut header = [0; 21];
++    #[cfg(feature = "lz4")]
++    let header_len = header.len();
++    let mut fields = header.as_mut_slice();
++
++    fields.write_u8(Tag::Item.into())?;
+ 
+-    writer.write_u8(u8::from(value_type))?;
++    fields.write_u8(u8::from(value_type))?;
+ 
+-    compression.encode_into(writer)?;
++    compression.encode_into(&mut fields)?;
+ 
+     // NOTE: Truncation is okay and actually needed
+-    writer.write_u64::<LittleEndian>(keyspace_id)?;
++    fields.write_u64::<LittleEndian>(keyspace_id)?;
+ 
+     // NOTE: Truncation is okay and actually needed
+     #[expect(clippy::cast_possible_truncation)]
+-    writer.write_u16::<LittleEndian>(key.len() as u16)?;
++    fields.write_u16::<LittleEndian>(key.len() as u16)?;
+ 
+     // NOTE: Truncation is okay and actually needed
+     #[expect(clippy::cast_possible_truncation)]
+-    writer.write_u32::<LittleEndian>(value.len() as u32)?;
++    fields.write_u32::<LittleEndian>(value.len() as u32)?;
+ 
+     #[cfg(feature = "lz4")]
+-    let length_at = writer.len();
+     #[expect(clippy::cast_possible_truncation)]
+-    writer.write_u32::<LittleEndian>(value.len() as u32)?;
++    let length_at = writer.position() as usize + header_len - fields.len();
++    #[expect(clippy::cast_possible_truncation)]
++    fields.write_u32::<LittleEndian>(value.len() as u32)?;
+ 
++    writer.write_all(&header)?;
+     writer.write_all(key)?;
+ 
+     match compression {
+-        CompressionType::None => writer.extend_from_slice(value),
++        CompressionType::None => writer.write_all(value)?,
+         #[cfg(feature = "lz4")]
+         CompressionType::Lz4 => {
+-            let payload_at = writer.len();
+-            writer.resize(
+-                payload_at + lz4_flex::block::get_maximum_output_size(value.len()),
+-                0,
+-            );
++            #[expect(clippy::cast_possible_truncation)]
++            let payload_at = writer.position() as usize;
++            let bound = payload_at + lz4_flex::block::get_maximum_output_size(value.len());
++            if writer.get_ref().len() < bound {
++                writer.get_mut().resize(bound, 0);
++            }
+             #[expect(clippy::indexing_slicing, reason = "the payload was just reserved")]
+-            let size = lz4_flex::block::compress_into(value, &mut writer[payload_at..])
+-                .map_err(std::io::Error::other)?;
+-            writer.truncate(payload_at + size);
++            let size =
++                lz4_flex::block::compress_into(value, &mut writer.get_mut()[payload_at..bound])
++                    .map_err(std::io::Error::other)?;
++            writer.set_position((payload_at + size) as u64);
+             #[expect(clippy::cast_possible_truncation)]
+             let size = size as u32;
+             #[expect(clippy::indexing_slicing, reason = "the length field was just written")]
+-            writer[length_at..length_at + 4].copy_from_slice(&size.to_le_bytes());
++            writer.get_mut()[length_at..length_at + 4].copy_from_slice(&size.to_le_bytes());
+         }
+     }
+ 
+@@ -146,7 +155,7 @@ impl Entry {
+                 value_type,
+                 compression,
+             } => {
+-                let mut bytes = Vec::new();
++                let mut bytes = Cursor::new(Vec::new());
+                 serialize_marker_item(
+                     &mut bytes,
+                     *keyspace_id,
+@@ -155,7 +164,8 @@ impl Entry {
+                     *value_type,
+                     *compression,
+                 )?;
+-                writer.write_all(&bytes)?;
++                #[expect(clippy::cast_possible_truncation, clippy::indexing_slicing)]
++                writer.write_all(&bytes.get_ref()[..bytes.position() as usize])?;
+             }
+             End(val) => {
+                 writer.write_u8(Tag::End.into())?;
+@@ -321,7 +331,8 @@ mod tests {
+         ];
+         let key = b"k\0\xff";
+         let prefix = [9, 8];
+-        let mut buffer = Vec::new();
++        let mut buffer = Cursor::new(Vec::new());
++        let mut retained = 0;
+         for value in values {
+             for compression in [CompressionType::None, CompressionType::Lz4] {
+                 let payload = match compression {
+@@ -339,11 +350,14 @@ mod tests {
+                 expected.extend_from_slice(key);
+                 expected.extend_from_slice(&payload);
+ 
+-                buffer.clear();
+-                buffer.extend_from_slice(&prefix);
++                buffer.set_position(0);
++                buffer.write_all(&prefix)?;
+                 serialize_marker_item(&mut buffer, 42, key, &value, ValueType::Value, compression)?;
+-                assert_eq!(buffer, expected);
+-                let mut reader = &buffer[prefix.len()..];
++                let encoded = &buffer.get_ref()[..buffer.position() as usize];
++                assert_eq!(encoded, expected);
++                assert!(buffer.get_ref().len() >= retained);
++                retained = buffer.get_ref().len();
++                let mut reader = &encoded[prefix.len()..];
+                 assert_eq!(
+                     Entry::decode_from(&mut reader)?,
+                     Entry::Item {
+diff --git a/src/journal/writer.rs b/src/journal/writer.rs
+index 9707711..40a4e16 100644
+--- a/src/journal/writer.rs
++++ b/src/journal/writer.rs
+@@ -11,7 +11,7 @@ use lsm_tree::{CompressionType, SeqNo, ValueType};
+ use std::{
+     fs::{File, OpenOptions},
+     hash::Hasher,
+-    io::{BufWriter, Seek, Write},
++    io::{BufWriter, Cursor, Seek, Write},
+     path::{Path, PathBuf},
+ };
+ 
+@@ -27,7 +27,7 @@ pub struct Writer {
+     pub(crate) clock: Option<crate::versioned::clock::Clock>,
+     pub(crate) path: PathBuf,
+     file: BufWriter<File>,
+-    buf: Vec<u8>,
++    buf: Cursor<Vec<u8>>,
+     is_buffer_dirty: bool,
+ 
+     compression: CompressionType,
+@@ -189,7 +189,7 @@ impl Writer {
+             clock: None,
+             path,
+             file: BufWriter::new(file),
+-            buf: Vec::new(),
++            buf: Cursor::new(Vec::new()),
+             is_buffer_dirty: false,
+             compression: CompressionType::None,
+             compression_threshold: 0,
+@@ -226,7 +226,7 @@ impl Writer {
+                 clock: None,
+                 path: path.into(),
+                 file: BufWriter::with_capacity(JOURNAL_BUFFER_BYTES, file),
+-                buf: Vec::new(),
++                buf: Cursor::new(Vec::new()),
+                 is_buffer_dirty: false,
+                 compression: CompressionType::None,
+                 compression_threshold: 0,
+@@ -247,7 +247,7 @@ impl Writer {
+             clock: None,
+             path: path.into(),
+             file: BufWriter::with_capacity(JOURNAL_BUFFER_BYTES, file),
+-            buf: Vec::new(),
++            buf: Cursor::new(Vec::new()),
+             is_buffer_dirty: false,
+             compression: CompressionType::None,
+             compression_threshold: 0,
+@@ -288,9 +288,23 @@ impl Writer {
+         }
+     }
+ 
++    #[expect(clippy::cast_possible_truncation, clippy::indexing_slicing)]
++    fn write_buffer(
++        &mut self,
++        hasher: Option<&mut xxhash_rust::xxh3::Xxh3>,
++    ) -> std::io::Result<usize> {
++        let size = self.buf.position() as usize;
++        let bytes = &self.buf.get_ref()[..size];
++        self.file.write_all(bytes)?;
++        if let Some(hasher) = hasher {
++            hasher.update(bytes);
++        }
++        Ok(size)
++    }
++
+     /// Writes a batch start marker to the journal
+     fn write_start(&mut self, item_count: u32, seqno: SeqNo) -> Result<usize, crate::Error> {
+-        debug_assert!(self.buf.is_empty());
++        debug_assert_eq!(self.buf.position(), 0);
+         #[cfg(feature = "journal-cdc")]
+         if self.segment.as_ref().is_some_and(|segment| segment.sealed) {
+             return Err(crate::Error::Poisoned);
+@@ -300,9 +314,7 @@ impl Writer {
+         let item_count = item_count + u32::from(self.clock.is_some());
+         Entry::Start { item_count, seqno }.encode_into(&mut self.buf)?;
+ 
+-        self.file.write_all(&self.buf)?;
+-
+-        Ok(self.buf.len())
++        self.write_buffer(None).map_err(Into::into)
+     }
+ 
+     /// Writes a batch end marker to the journal
+@@ -311,7 +323,7 @@ impl Writer {
+         hasher: xxhash_rust::xxh3::Xxh3,
+         _seqno: SeqNo,
+     ) -> Result<usize, crate::Error> {
+-        debug_assert!(self.buf.is_empty());
++        debug_assert_eq!(self.buf.position(), 0);
+ 
+         #[cfg(feature = "journal-cdc")]
+         let (hasher, byte_count) = {
+@@ -325,10 +337,8 @@ impl Writer {
+                     ValueType::Value,
+                     CompressionType::None,
+                 )?;
+-                self.file.write_all(&self.buf)?;
+-                hasher.update(&self.buf);
+-                let byte_count = self.buf.len();
+-                self.buf.clear();
++                let byte_count = self.write_buffer(Some(&mut hasher))?;
++                self.buf.set_position(0);
+                 byte_count
+             } else {
+                 0
+@@ -339,7 +349,7 @@ impl Writer {
+         let byte_count = 0;
+         Entry::End(hasher.finish()).encode_into(&mut self.buf)?;
+ 
+-        self.file.write_all(&self.buf)?;
++        let end_bytes = self.write_buffer(None)?;
+ 
+         #[cfg(feature = "journal-cdc")]
+         if let Some(segment) = &mut self.segment {
+@@ -348,7 +358,7 @@ impl Writer {
+             }
+             segment.finish(_seqno);
+         }
+-        Ok(byte_count + self.buf.len())
++        Ok(byte_count + end_bytes)
+     }
+ 
+     #[cfg(feature = "journal-cdc")]
+@@ -375,9 +385,9 @@ impl Writer {
+         let mut hasher = xxhash_rust::xxh3::Xxh3::default();
+         let mut byte_count = 0;
+ 
+-        self.buf.clear();
++        self.buf.set_position(0);
+         byte_count += self.write_start(1, seqno)?;
+-        self.buf.clear();
++        self.buf.set_position(0);
+ 
+         serialize_marker_item(
+             &mut self.buf,
+@@ -392,12 +402,9 @@ impl Writer {
+             },
+         )?;
+ 
+-        self.file.write_all(&self.buf)?;
+-
+-        hasher.update(&self.buf);
+-        byte_count += self.buf.len();
++        byte_count += self.write_buffer(Some(&mut hasher))?;
+ 
+-        self.buf.clear();
++        self.buf.set_position(0);
+         byte_count += self.write_end(hasher, seqno)?;
+         #[cfg(feature = "journal-cdc")]
+         if let Some(segment) = &mut self.segment {
+@@ -417,16 +424,14 @@ impl Writer {
+         let mut hasher = xxhash_rust::xxh3::Xxh3::default();
+         let mut byte_count = 0;
+ 
+-        self.buf.clear();
++        self.buf.set_position(0);
+         byte_count += self.write_start(1, seqno)?;
+-        self.buf.clear();
++        self.buf.set_position(0);
+ 
+         Entry::Clear { keyspace_id }.encode_into(&mut self.buf)?;
+-        self.file.write_all(&self.buf)?;
+-        hasher.update(&self.buf);
+-        byte_count += self.buf.len();
++        byte_count += self.write_buffer(Some(&mut hasher))?;
+ 
+-        self.buf.clear();
++        self.buf.set_position(0);
+         byte_count += self.write_end(hasher, seqno)?;
+         #[cfg(feature = "journal-cdc")]
+         if let Some(segment) = &mut self.segment {
+@@ -448,7 +453,7 @@ impl Writer {
+ 
+         self.is_buffer_dirty = true;
+ 
+-        self.buf.clear();
++        self.buf.set_position(0);
+ 
+         // NOTE: entries.len() is surely never > u32::MAX
+         #[expect(clippy::cast_possible_truncation)]
+@@ -458,10 +463,10 @@ impl Writer {
+         let mut byte_count = 0;
+ 
+         byte_count += self.write_start(item_count, seqno)?;
+-        self.buf.clear();
++        self.buf.set_position(0);
+ 
+         for item in items {
+-            debug_assert!(self.buf.is_empty());
++            debug_assert_eq!(self.buf.position(), 0);
+ 
+             serialize_marker_item(
+                 &mut self.buf,
+@@ -477,16 +482,14 @@ impl Writer {
+                 },
+             )?;
+ 
+-            self.file.write_all(&self.buf)?;
+-
+-            hasher.update(&self.buf);
++            let item_bytes = self.write_buffer(Some(&mut hasher))?;
+             #[cfg(feature = "journal-cdc")]
+             if let Some(segment) = &mut self.segment {
+                 segment.record(item.keyspace.id(), seqno);
+             }
+-            byte_count += self.buf.len();
++            byte_count += item_bytes;
+ 
+-            self.buf.clear();
++            self.buf.set_position(0);
+         }
+ 
+         byte_count += self.write_end(hasher, seqno)?;

@@ -1,0 +1,195 @@
+{
+  "accepted": true,
+  "fjall_commit": "04c304ad3fe8c605c7fe7fd4bcd0c3bc73f555c6",
+  "lsm_tree_commit": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "decision": "Accept measured complete apply CPU reduction only. Complete performance remains Not done.",
+  "summary_checks": [
+    "cursor-before-combined-0.json",
+    "cursor-after-combined-0.json",
+    "cursor-before-combined-1.json",
+    "cursor-after-combined-1.json",
+    "cursor-before-stable-0.json",
+    "cursor-after-stable-0.json",
+    "cursor-before-stable-1.json",
+    "cursor-after-stable-1.json",
+    "reused-before-combined-0.json",
+    "reused-after-combined-0.json",
+    "reused-before-combined-1.json",
+    "reused-after-combined-1.json",
+    "reused-before-stable-0.json",
+    "reused-after-stable-0.json",
+    "reused-before-stable-1.json",
+    "reused-after-stable-1.json",
+    "apply-control-combined.json",
+    "apply-current-combined.json",
+    "apply-cursor-combined.json",
+    "apply-reused-combined.json"
+  ],
+  "ordinary_percentiles_ms": [
+    {
+      "report": "cursor-before-combined-0.json",
+      "samples": 28,
+      "minimum": 2.982135,
+      "median": 4.729036,
+      "p95": 6.947792000000001,
+      "maximum": 7.2548200000000005
+    },
+    {
+      "report": "cursor-after-combined-0.json",
+      "samples": 28,
+      "minimum": 3.505465,
+      "median": 4.523070499999999,
+      "p95": 6.995215,
+      "maximum": 8.582246999999999
+    },
+    {
+      "report": "cursor-before-combined-1.json",
+      "samples": 28,
+      "minimum": 3.2969150000000003,
+      "median": 4.6641865,
+      "p95": 6.708931,
+      "maximum": 7.267321
+    },
+    {
+      "report": "cursor-after-combined-1.json",
+      "samples": 28,
+      "minimum": 2.9307309999999998,
+      "median": 4.644526,
+      "p95": 7.220108000000001,
+      "maximum": 7.225974
+    },
+    {
+      "report": "reused-before-combined-0.json",
+      "samples": 28,
+      "minimum": 3.346708,
+      "median": 4.7658705,
+      "p95": 7.2747139999999995,
+      "maximum": 7.4709010000000005
+    },
+    {
+      "report": "reused-after-combined-0.json",
+      "samples": 28,
+      "minimum": 2.936105,
+      "median": 4.560918,
+      "p95": 7.094312,
+      "maximum": 7.162198
+    },
+    {
+      "report": "reused-before-combined-1.json",
+      "samples": 28,
+      "minimum": 3.102678,
+      "median": 4.41582,
+      "p95": 6.467895,
+      "maximum": 6.487101
+    },
+    {
+      "report": "reused-after-combined-1.json",
+      "samples": 28,
+      "minimum": 3.816398,
+      "median": 4.5974455,
+      "p95": 7.31187,
+      "maximum": 7.3567789999999995
+    }
+  ],
+  "stable_eight_cycle_ms": {
+    "cursor-before-stable-0.json": {
+      "rounds": [
+        25.910242,
+        23.532941,
+        27.317076999999998,
+        24.685971000000002
+      ],
+      "median": 25.298106500000003,
+      "max": 27.317076999999998
+    },
+    "cursor-after-stable-0.json": {
+      "rounds": [
+        26.178855000000002,
+        24.987412,
+        26.934551000000003,
+        25.565427000000003
+      ],
+      "median": 25.872141000000003,
+      "max": 26.934551000000003
+    },
+    "cursor-before-stable-1.json": {
+      "rounds": [
+        26.710425,
+        25.364631999999997,
+        26.093297,
+        25.257561000000003
+      ],
+      "median": 25.728964499999996,
+      "max": 26.710425
+    },
+    "cursor-after-stable-1.json": {
+      "rounds": [
+        26.613482,
+        26.264061,
+        27.170336,
+        24.006402
+      ],
+      "median": 26.4387715,
+      "max": 27.170336
+    },
+    "reused-before-stable-0.json": {
+      "rounds": [
+        26.233711,
+        25.63537,
+        26.964402,
+        25.467749
+      ],
+      "median": 25.9345405,
+      "max": 26.964402
+    },
+    "reused-after-stable-0.json": {
+      "rounds": [
+        25.755081999999998,
+        27.233087,
+        25.87675,
+        25.023690000000002
+      ],
+      "median": 25.815916,
+      "max": 27.233087
+    },
+    "reused-before-stable-1.json": {
+      "rounds": [
+        26.717649,
+        26.966916,
+        27.562882000000002,
+        25.912575
+      ],
+      "median": 26.842282500000003,
+      "max": 27.562882000000002
+    },
+    "reused-after-stable-1.json": {
+      "rounds": [
+        24.530742,
+        24.41285,
+        25.898329,
+        25.818846999999998
+      ],
+      "median": 25.174794499999997,
+      "max": 25.898329
+    }
+  },
+  "non_timing_reports_match": true,
+  "p95_method": "Nearest rank; sample 27 of 28; restart separate.",
+  "full_workspace_ci": "Not run during iteration, as the user requires.",
+  "complete_apply_diagnostic": {
+    "scope": "All 72 actual apply calls across both layouts, including rollback; profiled timings excluded.",
+    "before_instructions": 450974505,
+    "after_instructions": 444525190,
+    "instruction_change_percent": -1.4300841685052634,
+    "cursor_only_instructions": 448453981,
+    "original_control_instructions": 449467444,
+    "equal_reported_domain_work": true,
+    "raw_headers_exclusive_and_target_inclusive_equal": true,
+    "worker_instructions": 0
+  },
+  "all_patch_and_binary_hashes_verified": true,
+  "archive_sha256": "1a00ab17276045ee22849faf95cc3bbb1510d4384e9b557849577c767fd5c48c",
+  "archive_members": 117,
+  "archive_members_verified": true,
+  "review": "Independent source, raw profile and report reviews passed before acceptance."
+}
