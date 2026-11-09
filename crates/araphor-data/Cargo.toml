@@ -7,6 +7,7 @@ repository.workspace = true
 
 [features]
 test-fixtures = []
+native-store = ["dep:fjall", "araphor-graph/native-store"]
 
 [dependencies]
 erebor-telemetry = { path = "../erebor-telemetry" }
@@ -23,6 +24,7 @@ duckdb = { workspace = true, features = ["json", "vtab", "appender-arrow"] }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 futures-core = "0.3"
+fjall = { path = "../../fjall", version = "=3.1.13", features = ["journal-cdc"], optional = true }
 futures-util.workspace = true
 minicbor.workspace = true
 rmp-serde.workspace = true

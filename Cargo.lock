@@ -361,6 +361,7 @@ dependencies = [
  "erebor-interceptor-abi",
  "erebor-runtime-error",
  "erebor-telemetry",
+ "fjall",
  "flatbuffers",
  "futures-core",
  "futures-util",

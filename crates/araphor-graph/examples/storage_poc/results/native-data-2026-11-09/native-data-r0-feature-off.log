@@ -1,0 +1,149 @@
+    Blocking waiting for file lock on build directory
+warning: unused import: `source::DiscoveryRecordIdV1`
+ --> crates/araphor-analysis-builtins/src/causal/io.rs:8:5
+  |
+8 |     source::DiscoveryRecordIdV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `araphor-analysis-builtins` (lib) generated 1 warning (run `cargo fix --lib -p araphor-analysis-builtins` to apply 1 suggestion)
+warning: unused import: `FrozenInput`
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations.rs:16:33
+   |
+16 | pub use frozen::{FrozenContext, FrozenInput, FrozenProof};
+   |                                 ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `MembershipChange`
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations.rs:18:28
+   |
+18 | pub use changes::{Changes, MembershipChange};
+   |                            ^^^^^^^^^^^^^^^^
+
+warning: unused import: `OptionalExt as _`
+ --> crates/araphor-data/src/analysis/managed/schema.rs:3:34
+  |
+3 | use duckdb::{params, Connection, OptionalExt as _};
+  |                                  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `duckdb::OptionalExt as _`
+ --> crates/araphor-data/src/analysis/managed/source/selection.rs:3:5
+  |
+3 | use duckdb::OptionalExt as _;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `control`
+   --> crates/araphor-data/src/analysis/managed/graph.rs:212:9
+    |
+212 |         control: &AnalysisReadControl,
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_control`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variants `Managed` and `Expiry` are never constructed
+  --> crates/araphor-data/src/analysis/graph_rows/mod.rs:35:5
+   |
+34 | pub(in crate::analysis) enum GraphWrite<'a> {
+   |                              ---------- variants in this enum
+35 |     Managed {
+   |     ^^^^^^^
+...
+42 |     Expiry(&'a PackageResultRefV1),
+   |     ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `validate_reason` is never used
+ --> crates/araphor-data/src/analysis/graph_rows/store/findings/reason.rs:3:12
+  |
+2 | impl FindingRows {
+  | ---------------- associated function in this implementation
+3 |     pub fn validate_reason(reason: &FindingReasonV1, package: &str) -> Result<()> {
+  |            ^^^^^^^^^^^^^^^
+
+warning: method `head` is never used
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations.rs:40:12
+   |
+35 | impl<'a> Relations<'a> {
+   | ---------------------- method in this implementation
+...
+40 |     pub fn head(&self, source: &EvidenceIntakeIdentityV1, cut: u64) -> Result<Option<GraphHead>> {
+   |            ^^^^
+
+warning: method `cuts` is never used
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations/changes.rs:25:12
+   |
+24 | impl Relations<'_> {
+   | ------------------ method in this implementation
+25 |     pub fn cuts(&self, result: &str) -> Result<Vec<(String, u64, u64)>> {
+   |            ^^^^
+
+warning: struct `CallSupport` is never constructed
+ --> crates/araphor-data/src/analysis/graph_rows/validation.rs:5:8
+  |
+5 | struct CallSupport {
+  |        ^^^^^^^^^^^
+
+warning: associated function `covers` is never used
+  --> crates/araphor-data/src/analysis/graph_rows/validation.rs:11:8
+   |
+10 | impl CallSupport {
+   | ---------------- associated function in this implementation
+11 |     fn covers(until: Option<u64>, end: Option<u64>) -> bool {
+   |        ^^^^^^
+
+warning: associated function `validate_call_members` is never used
+   --> crates/araphor-data/src/analysis/graph_rows/validation.rs:400:32
+    |
+ 16 | impl GraphRows {
+    | -------------- associated function in this implementation
+...
+400 |     pub(in crate::analysis) fn validate_call_members(
+    |                                ^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `follows_graph` and `contexts` are never used
+   --> crates/araphor-data/src/analysis/managed/model.rs:830:32
+    |
+818 | impl ManagedAttempt {
+    | ------------------- methods in this implementation
+...
+830 |     pub(in crate::analysis) fn follows_graph(&self) -> bool {
+    |                                ^^^^^^^^^^^^^
+...
+846 |     pub(in crate::analysis) fn contexts(&self) -> &[AnalysisContextRefV1] {
+    |                                ^^^^^^^^
+
+warning: fields `evidence_count`, `reference`, `work`, `metadata_rows`, `pin_rows`, and `root_cursors` are never read
+  --> crates/araphor-data/src/analysis/progress/graph.rs:24:5
+   |
+22 | struct GraphResultWrite {
+   |        ---------------- fields in this struct
+23 |     contexts: Vec<AnalysisContextRefV1>,
+24 |     evidence_count: Option<usize>,
+   |     ^^^^^^^^^^^^^^
+25 |     receipt: AnalysisResultReceiptV1,
+26 |     reference: PackageResultRefV1,
+   |     ^^^^^^^^^
+...
+29 |     work: (u64, u64, u64),
+   |     ^^^^
+30 |     metadata_rows: (u64, u64),
+   |     ^^^^^^^^^^^^^
+31 |     pin_rows: u64,
+   |     ^^^^^^^^
+32 |     root_cursors: BTreeMap<u64, (u64, u64)>,
+   |     ^^^^^^^^^^^^
+
+warning: method `record_position` is never used
+    --> crates/araphor-data/src/analysis/raw.rs:1673:19
+     |
+1210 | impl RawJournal {
+     | --------------- method in this implementation
+...
+1673 |     pub(super) fn record_position(
+     |                   ^^^^^^^^^^^^^^^
+
+warning: `araphor-data` (lib) generated 15 warnings (run `cargo fix --lib -p araphor-data` to apply 5 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 28s

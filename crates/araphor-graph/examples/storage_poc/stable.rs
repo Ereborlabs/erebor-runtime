@@ -37,10 +37,10 @@ fn flush(engine: &Engine, compact: bool) -> Result<()> {
         }
     }
     #[cfg(feature = "cdc-poc")]
-    if let super::kv::Database::FjallBranch(db, _) = native(engine).database() {
-        db.inner().flush_memtables()?;
+    if let super::kv::Database::FjallBranch(store) = native(engine).database() {
+        store.database().inner().flush_memtables()?;
         if compact {
-            db.inner().major_compact()?;
+            store.database().inner().major_compact()?;
         }
     }
     Ok(())
@@ -53,7 +53,7 @@ fn keys(engine: &Engine, stable: bool) -> Result<usize> {
             super::kv::Database::FjallBranch(..)
         ) {
             super::live::Live::assert_stable(match native(engine).database() {
-                super::kv::Database::FjallBranch(_, branch) => branch,
+                super::kv::Database::FjallBranch(store) => store,
                 _ => unreachable!(),
             })?;
             return Ok(tx.prefix(b"\0graph/M")?.len());

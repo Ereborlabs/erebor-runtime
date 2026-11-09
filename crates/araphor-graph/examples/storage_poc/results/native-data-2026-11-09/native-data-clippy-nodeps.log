@@ -1,0 +1,1107 @@
+    Checking erebor-runtime-error v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-runtime-error)
+warning: usage of an `unsafe` block
+   --> lsm-tree/src/table/block/mod.rs:111:21
+    |
+111 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> lsm-tree/src/table/block/mod.rs:109:24
+    |
+109 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+   --> lsm-tree/src/table/block/mod.rs:172:21
+    |
+172 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> lsm-tree/src/table/block/mod.rs:170:24
+    |
+170 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+  --> lsm-tree/src/vlog/blob_file/reader.rs:89:35
+   |
+89 |                 let mut builder = unsafe { UserValue::builder_unzeroed(real_val_len as usize) };
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> lsm-tree/src/vlog/blob_file/reader.rs:88:24
+   |
+88 |                 #[warn(unsafe_code)]
+   |                        ^^^^^^^^^^^
+
+warning: field `tree_type` is never read
+  --> lsm-tree/src/manifest.rs:11:9
+   |
+ 9 | pub struct Manifest {
+   |            -------- field in this struct
+10 |     pub version: FormatVersion,
+11 |     pub tree_type: TreeType,
+   |         ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `Indexed` is never constructed
+  --> lsm-tree/src/version/run.rs:15:12
+   |
+15 | pub struct Indexed<T: Ranged> {
+   |            ^^^^^^^
+
+warning: `lsm-tree` (lib) generated 5 warnings
+warning: usage of an `unsafe` block
+   --> fjall/src/journal/entry.rs:238:41
+    |
+238 |                         let mut value = unsafe { Slice::builder_unzeroed(value_len as usize) };
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> fjall/src/journal/entry.rs:237:32
+    |
+237 |                         #[warn(unsafe_code)]
+    |                                ^^^^^^^^^^^
+
+warning: enum `RecoveryMode` is never used
+  --> fjall/src/journal/error.rs:10:10
+   |
+10 | pub enum RecoveryMode {
+   |          ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `backpressure_lock` is never read
+  --> fjall/src/supervisor.rs:35:16
+   |
+16 | pub struct SupervisorInner {
+   |            --------------- field in this struct
+...
+35 |     pub(crate) backpressure_lock: Mutex<()>,
+   |                ^^^^^^^^^^^^^^^^^
+
+warning: `fjall` (lib) generated 3 warnings
+   Compiling erebor-interceptor-abi v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-interceptor-abi)
+   Compiling araphor-data v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data)
+   Compiling araphor-graph v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph)
+    Checking erebor-telemetry v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-telemetry)
+   Compiling araphor-analysis-sdk v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-sdk)
+   Compiling araphor-component-build v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-component-build)
+    Checking araphor-package v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-package)
+   Compiling araphor-analysis-builtins v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins)
+    Checking araphor-discovery-definition v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-discovery-definition)
+    Checking araphor-analysis-types v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-types)
+warning: unused import: `source::DiscoveryRecordIdV1`
+ --> crates/araphor-analysis-builtins/src/causal/io.rs:8:5
+  |
+8 |     source::DiscoveryRecordIdV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `araphor-analysis-builtins` (lib) generated 1 warning (run `cargo clippy --fix --lib -p araphor-analysis-builtins -- --no-deps` to apply 1 suggestion)
+warning: unused import: `FrozenInput`
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations.rs:16:33
+   |
+16 | pub use frozen::{FrozenContext, FrozenInput, FrozenProof};
+   |                                 ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `MembershipChange`
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations.rs:18:28
+   |
+18 | pub use changes::{Changes, MembershipChange};
+   |                            ^^^^^^^^^^^^^^^^
+
+warning: unused import: `OptionalExt as _`
+ --> crates/araphor-data/src/analysis/managed/schema.rs:3:34
+  |
+3 | use duckdb::{params, Connection, OptionalExt as _};
+  |                                  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `duckdb::OptionalExt as _`
+ --> crates/araphor-data/src/analysis/managed/source/selection.rs:3:5
+  |
+3 | use duckdb::OptionalExt as _;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `control`
+   --> crates/araphor-data/src/analysis/managed/graph.rs:212:9
+    |
+212 |         control: &AnalysisReadControl,
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_control`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variants `Managed` and `Expiry` are never constructed
+  --> crates/araphor-data/src/analysis/graph_rows/mod.rs:35:5
+   |
+34 | pub(in crate::analysis) enum GraphWrite<'a> {
+   |                              ---------- variants in this enum
+35 |     Managed {
+   |     ^^^^^^^
+...
+42 |     Expiry(&'a PackageResultRefV1),
+   |     ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `validate_reason` is never used
+ --> crates/araphor-data/src/analysis/graph_rows/store/findings/reason.rs:3:12
+  |
+2 | impl FindingRows {
+  | ---------------- associated function in this implementation
+3 |     pub fn validate_reason(reason: &FindingReasonV1, package: &str) -> Result<()> {
+  |            ^^^^^^^^^^^^^^^
+
+warning: method `head` is never used
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations.rs:40:12
+   |
+35 | impl<'a> Relations<'a> {
+   | ---------------------- method in this implementation
+...
+40 |     pub fn head(&self, source: &EvidenceIntakeIdentityV1, cut: u64) -> Result<Option<GraphHead>> {
+   |            ^^^^
+
+warning: method `cuts` is never used
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations/changes.rs:25:12
+   |
+24 | impl Relations<'_> {
+   | ------------------ method in this implementation
+25 |     pub fn cuts(&self, result: &str) -> Result<Vec<(String, u64, u64)>> {
+   |            ^^^^
+
+warning: struct `CallSupport` is never constructed
+ --> crates/araphor-data/src/analysis/graph_rows/validation.rs:5:8
+  |
+5 | struct CallSupport {
+  |        ^^^^^^^^^^^
+
+warning: associated function `covers` is never used
+  --> crates/araphor-data/src/analysis/graph_rows/validation.rs:11:8
+   |
+10 | impl CallSupport {
+   | ---------------- associated function in this implementation
+11 |     fn covers(until: Option<u64>, end: Option<u64>) -> bool {
+   |        ^^^^^^
+
+warning: associated function `validate_call_members` is never used
+   --> crates/araphor-data/src/analysis/graph_rows/validation.rs:400:32
+    |
+ 16 | impl GraphRows {
+    | -------------- associated function in this implementation
+...
+400 |     pub(in crate::analysis) fn validate_call_members(
+    |                                ^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `follows_graph` and `contexts` are never used
+   --> crates/araphor-data/src/analysis/managed/model.rs:830:32
+    |
+818 | impl ManagedAttempt {
+    | ------------------- methods in this implementation
+...
+830 |     pub(in crate::analysis) fn follows_graph(&self) -> bool {
+    |                                ^^^^^^^^^^^^^
+...
+846 |     pub(in crate::analysis) fn contexts(&self) -> &[AnalysisContextRefV1] {
+    |                                ^^^^^^^^
+
+warning: fields `evidence_count`, `reference`, `work`, `metadata_rows`, `pin_rows`, and `root_cursors` are never read
+  --> crates/araphor-data/src/analysis/progress/graph.rs:24:5
+   |
+22 | struct GraphResultWrite {
+   |        ---------------- fields in this struct
+23 |     contexts: Vec<AnalysisContextRefV1>,
+24 |     evidence_count: Option<usize>,
+   |     ^^^^^^^^^^^^^^
+25 |     receipt: AnalysisResultReceiptV1,
+26 |     reference: PackageResultRefV1,
+   |     ^^^^^^^^^
+...
+29 |     work: (u64, u64, u64),
+   |     ^^^^
+30 |     metadata_rows: (u64, u64),
+   |     ^^^^^^^^^^^^^
+31 |     pin_rows: u64,
+   |     ^^^^^^^^
+32 |     root_cursors: BTreeMap<u64, (u64, u64)>,
+   |     ^^^^^^^^^^^^
+
+warning: method `record_position` is never used
+    --> crates/araphor-data/src/analysis/raw.rs:1673:19
+     |
+1210 | impl RawJournal {
+     | --------------- method in this implementation
+...
+1673 |     pub(super) fn record_position(
+     |                   ^^^^^^^^^^^^^^^
+
+warning: redundant closure
+   --> crates/araphor-data/src/analysis/extraction/append.rs:158:32
+    |
+158 |                     .map_or(0, |events| std::mem::size_of_val(events)),
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the function itself: `std::mem::size_of_val`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_closure
+    = note: `#[warn(clippy::redundant_closure)]` on by default
+
+warning: this function has too many arguments (11/7)
+  --> crates/araphor-data/src/analysis/extraction/graph/native.rs:4:5
+   |
+ 4 | /     pub(super) fn extract_definition_graph(
+ 5 | |         &self,
+ 6 | |         reader: &Connection,
+ 7 | |         scope: &AnalysisSelectionV1,
+...  |
+15 | |         owners: &mut crate::analysis::managed::OwnerRead<'_>,
+16 | |     ) -> Result<()> {
+   | |___________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+   = note: `#[warn(clippy::too_many_arguments)]` on by default
+
+warning: this function has too many arguments (9/7)
+   --> crates/araphor-data/src/analysis/extraction/graph/native.rs:171:5
+    |
+171 | /     pub(super) fn extract_native_graph(
+172 | |         &self,
+173 | |         snapshot: &Connection,
+174 | |         selection: &AnalysisSelectionV1,
+...   |
+180 | |         control: &AnalysisReadControl,
+181 | |     ) -> Result<bool> {
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (9/7)
+   --> crates/araphor-data/src/analysis/extraction/graph.rs:378:5
+    |
+378 | /     pub(super) fn extract_graph_tables(
+379 | |         &self,
+380 | |         snapshot: &Connection,
+381 | |         selection: &AnalysisSelectionV1,
+...   |
+387 | |         owners: &mut crate::analysis::managed::OwnerRead<'_>,
+388 | |     ) -> Result<()> {
+    | |___________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (10/7)
+  --> crates/araphor-data/src/analysis/extraction/notifications/native.rs:30:5
+   |
+30 | /     pub(in crate::analysis::extraction) fn read(
+31 | |         store: &AnalysisStore,
+32 | |         snapshot: &Connection,
+33 | |         selection: &AnalysisSelectionV1,
+...  |
+40 | |         owners: &mut crate::analysis::managed::OwnerRead<'_>,
+41 | |     ) -> Result<Self> {
+   | |_____________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (9/7)
+  --> crates/araphor-data/src/analysis/extraction/notifications/native.rs:83:5
+   |
+83 | /     fn capture(
+84 | |         store: &AnalysisStore,
+85 | |         snapshot: &Connection,
+86 | |         selection: &AnalysisSelectionV1,
+...  |
+92 | |         owners: &mut crate::analysis::managed::OwnerRead<'_>,
+93 | |     ) -> Result<Self> {
+   | |_____________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/extraction/notifications/native.rs:255:71
+    |
+255 |               let (id, revision, stream, first, last, identity, valid): (
+    |  _______________________________________________________________________^
+256 | |                 String,
+257 | |                 Option<u64>,
+258 | |                 Option<Vec<u8>>,
+...   |
+262 | |                 bool,
+263 | |             ) = (|| -> duckdb::Result<_> {
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+    = note: `#[warn(clippy::type_complexity)]` on by default
+
+warning: this function has too many arguments (10/7)
+   --> crates/araphor-data/src/analysis/extraction/notifications/native.rs:319:5
+    |
+319 | /     fn read_members(
+320 | |         &mut self,
+321 | |         store: &AnalysisStore,
+322 | |         snapshot: &Connection,
+...   |
+329 | |         control: &AnalysisReadControl,
+330 | |     ) -> Result<()> {
+    | |___________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (8/7)
+   --> crates/araphor-data/src/analysis/extraction/tables/graph.rs:136:5
+    |
+136 | /     pub(in crate::analysis::extraction) fn native_finding(
+137 | |         &mut self,
+138 | |         result: &str,
+139 | |         revision: u64,
+...   |
+144 | |         budget: &mut ReadBudget<'_>,
+145 | |     ) -> Result<bool> {
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (8/7)
+   --> crates/araphor-data/src/analysis/extraction/tables/graph.rs:178:5
+    |
+178 | /     pub(in crate::analysis::extraction) fn definition_manifest(
+179 | |         &mut self,
+180 | |         tenant: [u8; 16],
+181 | |         result: &str,
+...   |
+186 | |         budget: &mut ReadBudget<'_>,
+187 | |     ) -> Result<bool> {
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (9/7)
+   --> crates/araphor-data/src/analysis/extraction/tables/builder.rs:348:9
+    |
+348 |           $vis fn $append($($args)*) -> crate::Result<bool> {
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/araphor-data/src/analysis/extraction/tables/notification.rs:96:5
+    |
+ 96 | /     table_row! {
+ 97 | |         pub(in crate::analysis::extraction) fn notification(
+ 98 | |             &mut self,
+ 99 | |             obligation: &NotificationObligationV1,
+...   |
+175 | |     }
+    | |_____- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+    = note: this warning originates in the macro `table_row` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: derefed type is same as origin
+    --> crates/araphor-data/src/analysis/extraction.rs:2085:43
+     |
+2085 |                     frozen: None, retain: append.as_deref_mut(),
+     |                                           ^^^^^^^^^^^^^^^^^^^^^ help: try: `append`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_option_as_deref
+     = note: `#[warn(clippy::needless_option_as_deref)]` on by default
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/araphor-data/src/analysis/graph/findings.rs:179:33
+    |
+179 | ...                   &header,
+    |                       ^^^^^^^ help: change this to: `header`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+    = note: `#[warn(clippy::needless_borrow)]` on by default
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+  --> crates/araphor-data/src/analysis/graph/interest.rs:48:10
+   |
+48 |     ) -> Result<(u64,Vec<(EvidenceIntakeIdentityV1,bool,bool)>)> {
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/graph.rs:144:10
+    |
+144 |       ) -> Result<(
+    |  __________^
+145 | |         GraphSourceSummary,
+146 | |         Vec<(AnalysisContextVersionV1, AnalysisContextRefV1)>,
+147 | |         Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+148 | |     )> {
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/graph.rs:167:10
+    |
+167 |       ) -> Result<(
+    |  __________^
+168 | |         GraphSourceSummary,
+169 | |         Vec<(AnalysisContextVersionV1, AnalysisContextRefV1)>,
+170 | |         Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>,
+171 | |     )> {
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: this function has too many arguments (8/7)
+   --> crates/araphor-data/src/analysis/graph.rs:213:5
+    |
+213 | /     fn graph_frozen_input<T>(
+214 | |         &self,
+215 | |         capture: &ManagedCapture,
+216 | |         reference: Option<&ManagedAttempt>,
+...   |
+228 | |         ) -> Result<T>,
+229 | |     ) -> Result<T> {
+    | |__________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+  --> crates/araphor-data/src/analysis/graph_rows/history.rs:50:10
+   |
+50 |     ) -> Result<(Vec<u8>, (u64, u64, u64), (u64, u64))> {
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/history.rs:272:92
+    |
+272 |            crate::analysis::graph_rows::store::Relations::bind_result(writer, graph, producer)
+    |   ____________________________________________________________________________________________^
+    |  |____________________________________________________________________________________________|
+273 | ||             .map_err(Into::into)
+    | ||________________________________^
+274 | |      }
+    | |_____- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+    = note: `#[warn(clippy::useless_conversion)]` on by default
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/history.rs:371:10
+    |
+371 |            )
+    |   __________^
+    |  |__________|
+372 | ||         .map_err(Into::into)
+    | ||____________________________^
+373 | |      }
+    | |_____- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/graph_rows/history.rs:397:10
+    |
+397 |       ) -> Result<(
+    |  __________^
+398 | |         Vec<crate::analysis::graph_rows::store::Replacement>,
+399 | |         u64,
+400 | |         BTreeMap<crate::DiscoveryRecordIdV1, u64>,
+401 | |         BTreeMap<u64, u64>,
+402 | |     )> {
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/history.rs:867:33
+    |
+867 |                .check_union(result)
+    |   _________________________________^
+    |  |_________________________________|
+868 | ||             .map_err(Into::into)
+    | ||________________________________^
+869 | |      }
+    | |_____- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `error::Error`
+  --> crates/araphor-data/src/analysis/graph_rows/intern.rs:11:82
+   |
+11 |            crate::analysis::graph_rows::store::SubjectRows::intern(writer, subjects)
+   |   __________________________________________________________________________________^
+   |  |__________________________________________________________________________________|
+12 | ||             .map_err(Into::into)
+   | ||________________________________^
+13 | |      }
+   | |_____- help: consider removing
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `error::Error`
+  --> crates/araphor-data/src/analysis/graph_rows/intern.rs:23:10
+   |
+23 |            )
+   |   __________^
+   |  |__________|
+24 | ||         .map_err(Into::into)
+   | ||____________________________^
+25 | |      }
+   | |_____- help: consider removing
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `error::Error`
+  --> crates/araphor-data/src/analysis/graph_rows/intern.rs:55:85
+   |
+55 |            crate::analysis::graph_rows::store::FindingRows::intern(writer, &references)
+   |   _____________________________________________________________________________________^
+   |  |_____________________________________________________________________________________|
+56 | ||             .map_err(Into::into)
+   | ||________________________________^
+57 | |      }
+   | |_____- help: consider removing
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/graph_rows/publication.rs:167:10
+    |
+167 |     ) -> Result<BTreeMap<u64, BTreeSet<(u8, Vec<u8>, u64)>>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/graph_rows/publication.rs:180:29
+    |
+180 |         let result = (|| -> Result<BTreeMap<u64, BTreeSet<(u8, Vec<u8>, u64)>>> {
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/graph_rows/publication.rs:254:10
+    |
+254 |     ) -> Result<(bool, u64, BTreeSet<(u8, Vec<u8>, u64)>)> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/publication.rs:740:60
+    |
+740 |                .unchanged(&prior.result_id, metadata, changes)
+    |   ____________________________________________________________^
+    |  |____________________________________________________________|
+741 | ||             .map_err(Into::into)
+    | ||________________________________^
+742 | |      }
+    | |_____- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/graph_rows/publication.rs:749:10
+    |
+749 |     ) -> Result<(Vec<u8>, (u64, u64, u64), (u64, u64), usize)> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/publication.rs:751:81
+    |
+751 |                .apply(&result.result_id, result.commit_revision, metadata, changes)
+    |   _________________________________________________________________________________^
+    |  |_________________________________________________________________________________|
+752 | ||             .map_err(Into::into)
+    | ||________________________________^
+753 | |      }
+    | |_____- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/graph_rows/read.rs:932:10
+    |
+932 |       ) -> Result<(
+    |  __________^
+933 | |         crate::analysis::graph::GraphSourceSummary,
+934 | |         Vec<(crate::AnalysisContextVersionV1, crate::AnalysisContextRefV1)>,
+935 | |         Vec<(DiscoveryRecordIdV1, crate::AnalysisContextRefV1)>,
+936 | |     )> {
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: useless conversion to the same type: `error::Error`
+    --> crates/araphor-data/src/analysis/graph_rows/read.rs:1343:74
+     |
+1343 |           crate::analysis::graph_rows::store::RelationshipRows::decode(row).map_err(Into::into)
+     |  __________________________________________________________________________-^^^^^^^^^^^^^^^^^^^
+1344 | |     }
+     | |____- help: consider removing
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `error::Error`
+  --> crates/araphor-data/src/analysis/graph_rows/schema.rs:13:79
+   |
+13 |           crate::analysis::graph_rows::store::Relations::validate_tables(writer).map_err(Into::into)
+   |  _______________________________________________________________________________-^^^^^^^^^^^^^^^^^^^
+14 | |     }
+   | |____- help: consider removing
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/graph_rows/store/relations/apply.rs:170:10
+    |
+170 |     ) -> Result<(Vec<u8>, (u64, u64, u64), (u64, u64), usize)> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/araphor-data/src/analysis/graph_rows/store/relations/apply.rs:243:35
+    |
+243 |         Self::bind_result(writer, &result, &metadata_id)?;
+    |                                   ^^^^^^^ help: change this to: `result`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/araphor-data/src/analysis/graph_rows/store/relations/apply.rs:245:39
+    |
+245 |             Self::bind_result(writer, &result, producer)?;
+    |                                       ^^^^^^^ help: change this to: `result`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/araphor-data/src/analysis/graph_rows/units.rs:891:22
+    |
+891 |             records: &records,
+    |                      ^^^^^^^^ help: change this to: `records`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/values.rs:149:69
+    |
+149 |           crate::analysis::graph_rows::store::SubjectRows::decode(row).map_err(Into::into)
+    |  _____________________________________________________________________-^^^^^^^^^^^^^^^^^^^
+150 | |     }
+    | |____- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/values.rs:163:89
+    |
+163 |            crate::analysis::graph_rows::store::FindingRows::evidence_references(row, index)
+    |   _________________________________________________________________________________________^
+    |  |_________________________________________________________________________________________|
+164 | ||             .map_err(Into::into)
+    | ||________________________________^
+165 | |      }
+    | |_____- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+  --> crates/araphor-data/src/analysis/inputs/head.rs:86:13
+   |
+86 |             drop(metadata);
+   |             ^^^^^^^^^^^^^^
+   |
+note: argument has type `{closure@crates/araphor-data/src/analysis/inputs/head.rs:15:32: 15:47}`
+  --> crates/araphor-data/src/analysis/inputs/head.rs:86:18
+   |
+86 |             drop(metadata);
+   |                  ^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#drop_non_drop
+   = note: `#[warn(clippy::drop_non_drop)]` on by default
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+  --> crates/araphor-data/src/analysis/inputs/mod.rs:57:14
+   |
+57 |     readers: Arc<Mutex<BTreeMap<[u8; 16], BTreeMap<usize, Arc<InputWatch>>>>>,
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+  --> crates/araphor-data/src/analysis/inputs/mod.rs:67:14
+   |
+67 |     readers: Weak<Mutex<BTreeMap<[u8; 16], BTreeMap<usize, Arc<InputWatch>>>>>,
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: casting to the same type is unnecessary (`u64` -> `u64`)
+   --> crates/araphor-data/src/analysis/managed/commit.rs:297:40
+    |
+297 |                     .map_or(0, |input| input.data.rows() as u64)
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `input.data.rows()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#unnecessary_cast
+    = note: `#[warn(clippy::unnecessary_cast)]` on by default
+
+warning: casting to the same type is unnecessary (`u64` -> `u64`)
+   --> crates/araphor-data/src/analysis/managed/commit.rs:306:71
+    |
+306 |                 output_rows=returned.output.datasets.iter().map(|data|data.rows() as u64).sum::<u64>(),
+    |                                                                       ^^^^^^^^^^^^^^^^^^ help: try: `data.rows()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#unnecessary_cast
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/managed/commit.rs:333:10
+    |
+333 |       ) -> Result<(
+    |  __________^
+334 | |         ManagedReceipt,
+335 | |         Vec<&'static str>,
+336 | |         VerifiedPackages,
+...   |
+344 | |         super::reader::ResultOwners,
+345 | |     )> {
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/managed/graph/commit.rs:446:10
+    |
+446 |       ) -> Result<(
+    |  __________^
+447 | |         Vec<&'static str>,
+448 | |         (u64, u64, u64),
+449 | |         Option<araphor_graph::PendingLayer>,
+450 | |         Vec<super::super::reader::GraphOrigin>,
+451 | |     )> {
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/araphor-data/src/analysis/managed/graph/domain.rs:471:60
+    |
+471 |             let (record, context) = Self::positions(input, &facts, &row.anchor)?;
+    |                                                            ^^^^^^ help: change this to: `facts`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/araphor-data/src/analysis/managed/graph/domain.rs:483:57
+    |
+483 |             let (record, fact) = Self::positions(input, &facts, &row.anchor)?;
+    |                                                         ^^^^^^ help: change this to: `facts`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/araphor-data/src/analysis/managed/graph/domain.rs:535:60
+    |
+535 |             let (record, context) = Self::positions(input, &facts, &row.anchor)?;
+    |                                                            ^^^^^^ help: change this to: `facts`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+warning: this function has too many arguments (9/7)
+   --> crates/araphor-data/src/analysis/managed/graph/domain.rs:576:5
+    |
+576 | /     pub(super) fn check_domain_journal(
+577 | |         &self,
+578 | |         connection: &Connection,
+579 | |         journal: &ManagedGraphJournal,
+...   |
+585 | |         memory: &mut super::super::budget::PreparedMemory<'_>,
+586 | |     ) -> Result<Option<super::super::model::GraphProof>> {
+    | |________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: manual slice size calculation
+   --> crates/araphor-data/src/analysis/managed/graph/domain.rs:677:23
+    |
+677 |                     + missing.len() * std::mem::size_of::<(u64, u64)>())
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `std::mem::size_of_val(missing)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#manual_slice_size_calculation
+    = note: `#[warn(clippy::manual_slice_size_calculation)]` on by default
+
+warning: this function has too many arguments (8/7)
+  --> crates/araphor-data/src/analysis/managed/graph/projection/publish.rs:15:5
+   |
+15 | /     pub(super) fn publish_findings(
+16 | |         &self,
+17 | |         engine: &araphor_graph::GraphStore,
+18 | |         connection: &Transaction<'_>,
+...  |
+23 | |         memory: &super::super::super::budget::PreparedMemory<'_>,
+24 | |     ) -> Result<Vec<(Coordinate, Coordinate)>> {
+   | |______________________________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+error: used `expect()` on a `Result` value
+  --> crates/araphor-data/src/analysis/managed/graph/projection/publish.rs:90:13
+   |
+90 |             write!(sql, "{relation}").expect("String formatting cannot fail");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+   = note: requested on the command line with `-D clippy::expect-used`
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/managed/graph/projection.rs:199:10
+    |
+199 |     ) -> Result<Vec<((u64, u64), (u64, u64))>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: this function has too many arguments (8/7)
+   --> crates/araphor-data/src/analysis/managed/graph/projection.rs:190:5
+    |
+190 | /     pub(super) fn publish(
+191 | |         &self,
+192 | |         engine: &araphor_graph::GraphStore,
+193 | |         connection: &Transaction<'_>,
+...   |
+198 | |         memory: &super::super::budget::PreparedMemory<'_>,
+199 | |     ) -> Result<Vec<((u64, u64), (u64, u64))>> {
+    | |______________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (9/7)
+   --> crates/araphor-data/src/analysis/managed/graph/provenance.rs:121:5
+    |
+121 | /     pub(in crate::analysis) fn finding_basis_on(
+122 | |         engine: &araphor_graph::GraphStore,
+123 | |         reader: &duckdb::Connection,
+124 | |         tenant: [u8; 16],
+...   |
+134 | |         crate::GraphRevisionV1,
+135 | |     )> {
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (10/7)
+    --> crates/araphor-data/src/analysis/managed/read.rs:1154:5
+     |
+1154 | /     pub(super) fn validate_call_header(
+1155 | |         reader: &Connection,
+1156 | |         tenant: [u8; 16],
+1157 | |         id: &str,
+...    |
+1164 | |         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
+1165 | |     ) -> Result<sdk::Package> {
+     | |_____________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/araphor-data/src/analysis/managed/read.rs:1239:13
+     |
+1239 |             &attempt,
+     |             ^^^^^^^^ help: change this to: `attempt`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/araphor-data/src/analysis/managed/read.rs:1262:79
+     |
+1262 |         Self::check_change_record(reader, tenant, record, declaration, model, &attempt)?;
+     |                                                                               ^^^^^^^^ help: change this to: `attempt`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/araphor-data/src/analysis/managed/read.rs:1265:13
+     |
+1265 |             &spec,
+     |             ^^^^^ help: change this to: `spec`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/araphor-data/src/analysis/managed/read.rs:1271:41
+     |
+1271 |         Self::check_graph_proof(reader, &attempt, record, model.graph.is_some(), charge)?;
+     |                                         ^^^^^^^^ help: change this to: `attempt`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrow
+
+error: used `expect()` on an `Option` value
+   --> crates/araphor-data/src/analysis/managed/reader/committed/graph.rs:213:17
+    |
+213 | /                 Arc::get_mut(publication)
+214 | |                     .expect("unpublished Graph owner")
+    | |______________________________________________________^
+    |
+    = note: if this value is `None`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: this function has too many arguments (8/7)
+   --> crates/araphor-data/src/analysis/managed/reader/graph.rs:202:5
+    |
+202 | /     pub(in crate::analysis) fn finding_changed(
+203 | |         &mut self,
+204 | |         engine: &araphor_graph::GraphStore,
+205 | |         reader: &Connection,
+...   |
+210 | |         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
+211 | |     ) -> Result<bool> {
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (8/7)
+   --> crates/araphor-data/src/analysis/managed/source/check.rs:241:5
+    |
+241 | /     pub(in crate::analysis::managed) fn check_derived_refs(
+242 | |         connection: &Connection,
+243 | |         attempt: &Attempt,
+244 | |         references: &[AnalysisContextRefV1],
+...   |
+249 | |         result: &str,
+250 | |     ) -> Result<()> {
+    | |___________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: this function has too many arguments (9/7)
+  --> crates/araphor-data/src/analysis/managed/source/input.rs:87:5
+   |
+87 | /     pub fn select_graph_input(
+88 | |         &self,
+89 | |         capture: &ManagedCapture,
+90 | |         reference: Option<&super::super::model::ManagedAttempt>,
+...  |
+96 | |         lease: Arc<dyn std::any::Any + Send + Sync>,
+97 | |     ) -> Result<Arc<ManagedInputSelection>> {
+   | |___________________________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+ --> crates/araphor-data/src/analysis/managed/source/publication/check.rs:8:21
+  |
+8 |         let stored: Option<(Vec<u8>,u64,u32,u64,u64,u64,Option<String>,String,u64)> = reader.query_row(
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/notification/prepared.rs:168:17
+    |
+168 | /                 crate::NotificationSnafu {
+169 | |                     code: Code::Denied,
+170 | |                     field: "current finding scope",
+...   |
+173 | |                 .into()
+    | |_______________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+help: consider removing `.into()`
+    |
+168 ~                 crate::NotificationSnafu {
+169 +                     code: Code::Denied,
+170 +                     field: "current finding scope",
+171 +                 }
+172 +                 .build()
+    |
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/notification/prepared.rs:223:13
+    |
+223 | /             crate::NotificationSnafu {
+224 | |                 code: Code::Denied,
+225 | |                 field: "prepared finding comparison",
+...   |
+228 | |             .into()
+    | |___________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+help: consider removing `.into()`
+    |
+223 ~             crate::NotificationSnafu {
+224 +                 code: Code::Denied,
+225 +                 field: "prepared finding comparison",
+226 +             }
+227 +             .build()
+    |
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/notification/prepared.rs:267:13
+    |
+267 | /             crate::NotificationSnafu {
+268 | |                 code: Code::Unavailable,
+269 | |                 field: "attempt finding revision",
+...   |
+272 | |             .into()
+    | |___________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+help: consider removing `.into()`
+    |
+267 ~             crate::NotificationSnafu {
+268 +                 code: Code::Unavailable,
+269 +                 field: "attempt finding revision",
+270 +             }
+271 +             .build()
+    |
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/notification/prepared.rs:324:93
+    |
+324 | ...   contexts.iter().map(ApprovedNotificationRouteV1::try_from).map(|value| value.map_err(Into::into)).collect::<Result<Vec<_>>>()
+    |                                                                                   ^^^^^^^^^^^^^^^^^^^^ help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/notification/prepared.rs:371:65
+    |
+371 |                       NotificationObligationV1::try_from(&context).map_err(Into::into)
+    |  _________________________________________________________________-^^^^^^^^^^^^^^^^^^^
+372 | |                 })();
+    | |________________- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: useless conversion to the same type: `error::Error`
+   --> crates/araphor-data/src/analysis/notification/prepared.rs:390:89
+    |
+390 |                           .as_ref().map(ApprovedNotificationRouteV1::try_from).transpose().map_err(Into::into)
+    |  _________________________________________________________________________________________-^^^^^^^^^^^^^^^^^^^
+391 | |                 })();
+    | |________________- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#useless_conversion
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/araphor-data/src/analysis/mod.rs:984:21
+    |
+984 |         let stored: Option<(String, Vec<u8>, u32, u64, u64, u64, u64)> = connection
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+
+warning: this lint expectation is unfulfilled
+   --> crates/araphor-data/src/analysis/context/write.rs:151:9
+    |
+151 |         clippy::too_many_arguments,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: The context write keeps its transaction and package admission proof.
+    = note: `#[warn(unfulfilled_lint_expectations)]` on by default
+
+warning: `araphor-data` (lib) generated 88 warnings
+error: could not compile `araphor-data` (lib) due to 2 previous errors; 88 warnings emitted

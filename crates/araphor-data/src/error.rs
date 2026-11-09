@@ -6,6 +6,21 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[cfg(feature = "native-store")]
+    #[snafu(display("Native Data operation {operation} failed: {source}"))]
+    NativeStorage {
+        operation: &'static str,
+        source: fjall::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[cfg(feature = "native-store")]
+    #[snafu(display("Native Data {field} is invalid"))]
+    NativeState {
+        field: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(transparent)]
     PreparedNotification { source: std::sync::Arc<Error> },
     #[snafu(transparent)]
@@ -417,6 +432,15 @@ impl From<araphor_analysis_types::Error> for Error {
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            #[cfg(feature = "native-store")]
+            Self::NativeStorage {
+                source: fjall::Error::HistoryUnavailable(..),
+                ..
+            } => StatusCode::NotFound,
+            #[cfg(feature = "native-store")]
+            Self::NativeStorage { .. } => StatusCode::External,
+            #[cfg(feature = "native-store")]
+            Self::NativeState { .. } => StatusCode::IllegalState,
             Self::PreparedNotification { source } => source.status_code(),
             Self::GraphFacility { source } => source.status_code(),
             Self::Definition { source } => source.status_code(),

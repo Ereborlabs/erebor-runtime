@@ -1,0 +1,3021 @@
+    Blocking waiting for file lock on build directory
+   Compiling unicode-ident v1.0.24
+   Compiling memchr v2.8.3
+   Compiling serde_core v1.0.228
+   Compiling regex-syntax v0.8.10
+   Compiling num-traits v0.2.19
+   Compiling getrandom v0.3.4
+   Compiling indexmap v2.14.0
+   Compiling rustix v1.1.4
+   Compiling anstyle v1.0.14
+   Compiling log v0.4.29
+   Compiling utf8parse v0.2.2
+   Compiling colorchoice v1.0.5
+   Compiling unicode-segmentation v1.13.3
+   Compiling typenum v1.20.0
+   Compiling proc-macro2 v1.0.106
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle-parse v1.0.0
+   Compiling anstyle-query v1.1.5
+   Compiling linux-raw-sys v0.4.15
+   Compiling unicode-width v0.2.2
+   Compiling konst_macro_rules v0.2.19
+   Compiling anstream v1.0.0
+   Compiling foldhash v0.1.5
+   Compiling either v1.16.0
+   Compiling konst v0.2.20
+   Compiling rustix v0.38.44
+   Compiling allocator-api2 v0.2.21
+   Compiling filetime v0.2.29
+   Compiling aho-corasick v1.1.4
+   Compiling serde_json v1.0.149
+   Compiling clap_builder v4.6.0
+   Compiling tracing-core v0.1.36
+   Compiling quote v1.0.45
+   Compiling num-integer v0.1.47
+   Compiling num-complex v0.4.6
+   Compiling chrono v0.4.45
+   Compiling syn v2.0.117
+   Compiling syn v3.0.3
+   Compiling generic-array v0.14.7
+   Compiling const_format_proc_macros v0.2.34
+   Compiling num-bigint v0.5.1
+   Compiling crossterm v0.28.1
+   Compiling regex-automata v0.4.14
+   Compiling block-buffer v0.10.4
+   Compiling const_format v0.2.36
+   Compiling crypto-common v0.1.7
+   Compiling hashbrown v0.15.5
+   Compiling digest v0.10.7
+   Compiling comfy-table v7.1.4
+   Compiling atoi v2.0.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling sha2 v0.10.9
+   Compiling tempfile v3.27.0
+   Compiling num-bigint v0.4.8
+   Compiling crossbeam-epoch v0.9.21
+   Compiling itertools v0.14.0
+   Compiling flatbuffers v25.12.19
+   Compiling xxhash-rust v0.8.19
+   Compiling lazy_static v1.5.0
+   Compiling quick_cache v0.6.24
+   Compiling sharded-slab v0.1.7
+   Compiling sfa v1.0.0
+   Compiling crossbeam-skiplist v0.1.3
+   Compiling object v0.39.1
+   Compiling num-iter v0.1.46
+   Compiling bytemuck_derive v1.12.1
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling time-core v0.1.9
+   Compiling nu-ansi-term v0.50.3
+   Compiling deranged v0.5.8
+   Compiling powerfmt v0.2.0
+   Compiling num-conv v0.2.2
+   Compiling libduckdb-sys v1.10505.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/vendor/libduckdb-sys)
+   Compiling ref-cast-impl v1.0.26
+   Compiling hashlink v0.10.0
+   Compiling num-rational v0.4.2
+   Compiling regex v1.12.3
+   Compiling matchers v0.2.0
+   Compiling serde_derive_internals v0.30.0
+   Compiling rmp v0.8.15
+   Compiling num v0.4.3
+   Compiling fallible-iterator v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling cast v0.3.0
+   Compiling ref-cast v1.0.26
+   Compiling xattr v1.6.1
+   Compiling stacker v0.1.25
+   Compiling tar v0.4.46
+   Compiling petgraph v0.7.1
+   Compiling bytemuck v1.25.2
+   Compiling chumsky v0.13.0
+   Compiling semver v1.0.28
+   Compiling ordered-float v2.10.1
+   Compiling itertools v0.15.0
+   Compiling darling_core v0.20.11
+   Compiling time v0.3.55
+   Compiling prettyplease v0.2.37
+   Compiling csv-core v0.1.13
+   Compiling schemars_derive v1.2.2
+   Compiling winnow v0.6.26
+   Compiling encoding_rs v0.8.35
+   Compiling yansi v1.0.1
+   Compiling arraydeque v0.5.1
+   Compiling unicode_categories v0.1.1
+   Compiling unicode-width v0.1.14
+   Compiling granit-parser v1.0.1
+   Compiling csv v1.4.0
+   Compiling ariadne v0.5.1
+   Compiling uuid v1.24.0
+   Compiling serde_bytes v0.11.19
+   Compiling object v0.40.0
+   Compiling annotate-snippets v0.12.16
+   Compiling nohash-hasher v0.2.0
+   Compiling futures-task v0.3.32
+   Compiling futures-core v0.3.32
+   Compiling encoding_rs_io v0.1.8
+   Compiling slab v0.4.12
+   Compiling futures-sink v0.3.32
+   Compiling ar_archive_writer v0.5.3
+   Compiling simdutf8 v0.1.5
+   Compiling serde_derive v1.0.228
+   Compiling zerocopy-derive v0.8.48
+   Compiling snafu-derive v0.8.9
+   Compiling strum_macros v0.27.2
+   Compiling thiserror-impl v2.0.18
+   Compiling getset v0.1.7
+   Compiling clap_derive v4.6.1
+   Compiling tracing-attributes v0.1.31
+   Compiling enum_dispatch v0.3.13
+   Compiling prost-derive v0.13.5
+   Compiling psm v0.1.32
+   Compiling strum_macros v0.28.0
+   Compiling darling_macro v0.20.11
+   Compiling darling v0.20.11
+   Compiling derive_builder_core v0.20.2
+   Compiling recursive-proc-macro-impl v0.1.1
+   Compiling enum-as-inner v0.7.0
+   Compiling thiserror v2.0.18
+   Compiling lsm-tree v3.1.10 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree)
+   Compiling sqlformat v0.3.5
+   Compiling recursive v0.1.1
+   Compiling zerocopy v0.8.48
+   Compiling tokio-macros v2.7.0
+warning: usage of an `unsafe` block
+   --> lsm-tree/src/table/block/mod.rs:111:21
+    |
+111 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> lsm-tree/src/table/block/mod.rs:109:24
+    |
+109 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+   --> lsm-tree/src/table/block/mod.rs:172:21
+    |
+172 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> lsm-tree/src/table/block/mod.rs:170:24
+    |
+170 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+  --> lsm-tree/src/vlog/blob_file/reader.rs:89:35
+   |
+89 |                 let mut builder = unsafe { UserValue::builder_unzeroed(real_val_len as usize) };
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> lsm-tree/src/vlog/blob_file/reader.rs:88:24
+   |
+88 |                 #[warn(unsafe_code)]
+   |                        ^^^^^^^^^^^
+
+   Compiling futures-macro v0.3.32
+   Compiling tracing v0.1.44
+   Compiling tracing-subscriber v0.3.23
+   Compiling derive_builder_macro v0.20.2
+   Compiling prost v0.13.5
+   Compiling snafu v0.8.9
+   Compiling tokio v1.52.3
+   Compiling strum v0.27.2
+   Compiling clap v4.6.1
+   Compiling sqlparser v0.61.0
+   Compiling strum v0.28.0
+   Compiling serde-saphyr v1.0.1
+   Compiling minicbor-derive v0.19.5
+   Compiling derive_builder v0.20.2
+   Compiling erebor-runtime-error v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-runtime-error)
+   Compiling prost-types v0.13.5
+   Compiling vergen-lib v9.1.0
+   Compiling vergen-lib v0.1.6
+   Compiling futures-util v0.3.32
+   Compiling vergen v9.1.0
+   Compiling vergen-gitcl v1.0.8
+   Compiling serde v1.0.228
+   Compiling prqlc v0.13.13
+   Compiling arrow-schema v59.2.0
+   Compiling rmp-serde v1.3.1
+   Compiling oci-spec v0.10.0
+   Compiling schemars v1.2.2
+   Compiling sqlparser v0.62.0
+   Compiling prost-build v0.13.5
+warning: field `tree_type` is never read
+  --> lsm-tree/src/manifest.rs:11:9
+   |
+ 9 | pub struct Manifest {
+   |            -------- field in this struct
+10 |     pub version: FormatVersion,
+11 |     pub tree_type: TreeType,
+   |         ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `Indexed` is never constructed
+  --> lsm-tree/src/version/run.rs:15:12
+   |
+15 | pub struct Indexed<T: Ranged> {
+   |            ^^^^^^^
+
+   Compiling wasmparser v0.258.3
+   Compiling erebor-telemetry v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-telemetry)
+   Compiling cbindgen v0.29.4
+   Compiling prqlc-parser v0.13.14
+   Compiling fjall v3.1.13 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall)
+   Compiling serde-value v0.7.0
+warning: usage of an `unsafe` block
+   --> fjall/src/journal/entry.rs:238:41
+    |
+238 |                         let mut value = unsafe { Slice::builder_unzeroed(value_len as usize) };
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> fjall/src/journal/entry.rs:237:32
+    |
+237 |                         #[warn(unsafe_code)]
+    |                                ^^^^^^^^^^^
+
+   Compiling araphor-data v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data)
+   Compiling serde_plain v1.0.2
+   Compiling ahash v0.8.12
+   Compiling half v2.7.1
+   Compiling tokio-util v0.7.19
+   Compiling arrow-buffer v59.2.0
+   Compiling minicbor v2.3.0
+   Compiling arrow-data v59.2.0
+warning: enum `RecoveryMode` is never used
+  --> fjall/src/journal/error.rs:10:10
+   |
+10 | pub enum RecoveryMode {
+   |          ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `backpressure_lock` is never read
+  --> fjall/src/supervisor.rs:35:16
+   |
+16 | pub struct SupervisorInner {
+   |            --------------- field in this struct
+...
+35 |     pub(crate) backpressure_lock: Mutex<()>,
+   |                ^^^^^^^^^^^^^^^^^
+
+   Compiling arrow-array v59.2.0
+   Compiling erebor-interceptor-abi v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-interceptor-abi)
+warning: `lsm-tree` (lib) generated 5 warnings
+   Compiling arrow-select v59.2.0
+   Compiling arrow-row v59.2.0
+   Compiling arrow-arith v59.2.0
+   Compiling marrow v0.3.1
+warning: `fjall` (lib) generated 3 warnings
+   Compiling wasm-encoder v0.258.3
+   Compiling wit-parser v0.258.3
+   Compiling serde_arrow v0.15.1
+   Compiling wasm-metadata v0.258.3
+   Compiling arrow-ord v59.2.0
+   Compiling arrow-string v59.2.0
+   Compiling arrow-ipc v59.2.0
+   Compiling arrow-cast v59.2.0
+   Compiling wit-component v0.258.3
+   Compiling arrow v59.2.0
+   Compiling duckdb v1.10505.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/vendor/duckdb)
+   Compiling araphor-graph v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph)
+   Compiling arrow-json v59.2.0
+   Compiling araphor-analysis-sdk v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-sdk)
+   Compiling araphor-component-build v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-component-build)
+   Compiling araphor-analysis-builtins v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-builtins)
+   Compiling araphor-package v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-package)
+   Compiling araphor-analysis-types v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis-types)
+   Compiling araphor-discovery-definition v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-discovery-definition)
+warning: unused import: `source::DiscoveryRecordIdV1`
+ --> crates/araphor-analysis-builtins/src/causal/io.rs:8:5
+  |
+8 |     source::DiscoveryRecordIdV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `araphor-analysis-builtins` (lib) generated 1 warning (run `cargo fix --lib -p araphor-analysis-builtins` to apply 1 suggestion)
+error: couldn't read `crates/araphor-data/src/analysis/graph_rows/store/contributions/state/../../../../araphor-data/src/analysis/graph_rows/schema.sql`: No such file or directory (os error 2)
+  --> crates/araphor-data/src/analysis/graph_rows/store/contributions/state/tests.rs:10:30
+   |
+10 |           writer.execute_batch(include_str!(
+   |  ______________________________^
+11 | |             "../../../../araphor-data/src/analysis/graph_rows/schema.sql"
+12 | |         ))?;
+   | |_________^
+
+error: couldn't read `crates/araphor-data/src/analysis/graph_rows/store/contributions/state/../../../../araphor-data/src/analysis/graph_rows/tests/graph.json`: No such file or directory (os error 2)
+  --> crates/araphor-data/src/analysis/graph_rows/store/contributions/state/tests.rs:14:63
+   |
+14 |           let fixture: serde_json::Value = serde_json::from_str(include_str!(
+   |  _______________________________________________________________^
+15 | |             "../../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+16 | |         ))?;
+   | |_________^
+   |
+help: there is a file with the same name in a different directory
+   |
+15 |             "../../../../../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+   |                          +++++++++
+
+error: couldn't read `crates/araphor-data/src/analysis/graph_rows/store/contributions/../../../araphor-data/src/analysis/graph_rows/schema.sql`: No such file or directory (os error 2)
+  --> crates/araphor-data/src/analysis/graph_rows/store/contributions/tests.rs:93:30
+   |
+93 |           writer.execute_batch(include_str!(
+   |  ______________________________^
+94 | |             "../../../araphor-data/src/analysis/graph_rows/schema.sql"
+95 | |         ))?;
+   | |_________^
+
+error: couldn't read `crates/araphor-data/src/analysis/graph_rows/store/findings/../../../araphor-data/src/analysis/graph_rows/tests/graph.json`: No such file or directory (os error 2)
+  --> crates/araphor-data/src/analysis/graph_rows/store/findings/tests.rs:50:59
+   |
+50 |       let fixture: serde_json::Value = serde_json::from_str(include_str!(
+   |  ___________________________________________________________^
+51 | |         "../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+52 | |     ))?;
+   | |_____^
+   |
+help: there is a file with the same name in a different directory
+   |
+51 |         "../../../../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+   |                   +++++++++
+
+error: couldn't read `crates/araphor-data/src/analysis/graph_rows/store/findings/../../../araphor-data/src/analysis/graph_rows/tests/graph.json`: No such file or directory (os error 2)
+   --> crates/araphor-data/src/analysis/graph_rows/store/findings/tests.rs:182:59
+    |
+182 |       let fixture: serde_json::Value = serde_json::from_str(include_str!(
+    |  ___________________________________________________________^
+183 | |         "../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+184 | |     ))?;
+    | |_____^
+    |
+help: there is a file with the same name in a different directory
+    |
+183 |         "../../../../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+    |                   +++++++++
+
+error: couldn't read `crates/araphor-data/src/analysis/graph_rows/store/findings/../../../araphor-data/src/analysis/graph_rows/tests/graph.json`: No such file or directory (os error 2)
+   --> crates/araphor-data/src/analysis/graph_rows/store/findings/tests.rs:458:59
+    |
+458 |       let fixture: serde_json::Value = serde_json::from_str(include_str!(
+    |  ___________________________________________________________^
+459 | |         "../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+460 | |     ))?;
+    | |_____^
+    |
+help: there is a file with the same name in a different directory
+    |
+459 |         "../../../../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+    |                   +++++++++
+
+error: couldn't read `crates/araphor-data/src/analysis/graph_rows/store/native/../../../araphor-data/src/analysis/graph_rows/tests/graph.json`: No such file or directory (os error 2)
+  --> crates/araphor-data/src/analysis/graph_rows/store/native/tests.rs:18:61
+   |
+18 |           let value: serde_json::Value = serde_json::from_str(include_str!(
+   |  _____________________________________________________________^
+19 | |             "../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+20 | |         ))?;
+   | |_________^
+   |
+help: there is a file with the same name in a different directory
+   |
+19 |             "../../../../../../araphor-data/src/analysis/graph_rows/tests/graph.json"
+   |                       +++++++++
+
+error[E0432]: unresolved import `super::super::header::HeaderMetadata`
+  --> crates/araphor-data/src/analysis/graph_rows/tests/encoding.rs:1:5
+   |
+ 1 | use super::super::header::HeaderMetadata;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `HeaderMetadata` in `analysis::graph_rows::header`
+   |
+note: struct `crate::analysis::graph_rows::store::header::HeaderMetadata` exists but is inaccessible
+  --> crates/araphor-data/src/analysis/graph_rows/store/header.rs:27:1
+   |
+27 | struct HeaderMetadata {
+   | ^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find value `PROCESS` in module `components`
+   --> crates/araphor-data/src/analysis/context/provenance.rs:242:39
+    |
+242 |         for component in [components::PROCESS, components::CREDENTIALS] {
+    |                                       ^^^^^^^ not found in `components`
+
+error[E0425]: cannot find value `PROCESS` in module `components`
+   --> crates/araphor-data/src/analysis/context/provenance.rs:407:43
+    |
+407 |                     artifact: components::PROCESS.to_vec(),
+    |                                           ^^^^^^^ not found in `components`
+
+error[E0425]: cannot find value `PROCESS` in module `araphor_analysis_builtins::components`
+  --> crates/araphor-data/src/analysis/managed/tests/guards.rs:13:58
+   |
+13 |         artifact: araphor_analysis_builtins::components::PROCESS.to_vec(),
+   |                                                          ^^^^^^^ not found in `araphor_analysis_builtins::components`
+
+error[E0425]: cannot find type `EvidenceIntakeIdentityV1` in this scope
+    --> crates/araphor-data/src/analysis/progress.rs:1098:32
+     |
+1098 |     fn identity(tenant: u8) -> EvidenceIntakeIdentityV1 {
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0422]: cannot find struct, variant or union type `EvidenceIntakeIdentityV1` in this scope
+    --> crates/araphor-data/src/analysis/progress.rs:1099:9
+     |
+1099 |         EvidenceIntakeIdentityV1 {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+warning: unused import: `FrozenInput`
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations.rs:16:33
+   |
+16 | pub use frozen::{FrozenContext, FrozenInput, FrozenProof};
+   |                                 ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `MembershipChange`
+  --> crates/araphor-data/src/analysis/graph_rows/store/relations.rs:18:28
+   |
+18 | pub use changes::{Changes, MembershipChange};
+   |                            ^^^^^^^^^^^^^^^^
+
+warning: unused import: `OptionalExt as _`
+ --> crates/araphor-data/src/analysis/managed/schema.rs:3:34
+  |
+3 | use duckdb::{params, Connection, OptionalExt as _};
+  |                                  ^^^^^^^^^^^^^^^^
+
+warning: unused import: `duckdb::OptionalExt as _`
+ --> crates/araphor-data/src/analysis/managed/source/selection.rs:3:5
+  |
+3 | use duckdb::OptionalExt as _;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0592]: duplicate definitions with name `publish`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:384:5
+    |
+ 65 |       fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |       ------------------------------------------------------------------------------------------------------------------------------- other definition for `publish`
+...
+384 | /     fn publish(
+385 | |         &self,
+386 | |         store: &AnalysisStore,
+387 | |         attempt: &ManagedAttempt,
+388 | |         evaluations: &[sdk::Evaluation],
+389 | |         outputs: &[sdk::Output],
+390 | |     ) -> TestResult<ManagedReceipt> {
+    | |___________________________________^ duplicate definitions for `publish`
+
+error[E0599]: no variant, associated function, or constant named `Process` found for enum `araphor_analysis_builtins::graph::Detector` in the current scope
+   --> crates/araphor-data/src/analysis/context/provenance.rs:247:39
+    |
+247 |                 descriptor: Detector::Process.descriptor(),
+    |                                       ^^^^^^^ variant, associated function, or constant not found in `araphor_analysis_builtins::graph::Detector`
+
+error[E0599]: no variant, associated function, or constant named `Process` found for enum `araphor_analysis_builtins::graph::Detector` in the current scope
+   --> crates/araphor-data/src/analysis/context/provenance.rs:398:40
+    |
+398 |         let mut descriptor = Detector::Process.descriptor();
+    |                                        ^^^^^^^ variant, associated function, or constant not found in `araphor_analysis_builtins::graph::Detector`
+
+error[E0599]: no variant named `Invalid` found for enum `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/store/contributions/tests.rs:452:60
+    |
+452 |             Err(crate::analysis::graph_rows::store::Error::Invalid { .. })
+    |                                                            ^^^^^^^ variant not found in `error::Error`
+    |
+   ::: crates/araphor-data/src/error.rs:8:1
+    |
+  8 | pub enum Error {
+    | -------------- variant `Invalid` not found here
+
+error[E0599]: no variant named `Invalid` found for enum `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/store/findings/tests.rs:441:56
+    |
+441 |         Err(crate::analysis::graph_rows::store::Error::Invalid {
+    |                                                        ^^^^^^^ variant not found in `error::Error`
+    |
+   ::: crates/araphor-data/src/error.rs:8:1
+    |
+  8 | pub enum Error {
+    | -------------- variant `Invalid` not found here
+
+error[E0599]: no variant named `Invalid` found for enum `error::Error`
+   --> crates/araphor-data/src/analysis/graph_rows/store/native/tests.rs:330:64
+    |
+330 |                 Err(crate::analysis::graph_rows::store::Error::Invalid { field: "graph duplicate edge value", .. })
+    |                                                                ^^^^^^^ variant not found in `error::Error`
+    |
+   ::: crates/araphor-data/src/error.rs:8:1
+    |
+  8 | pub enum Error {
+    | -------------- variant `Invalid` not found here
+
+error[E0308]: mismatched types
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1260:14
+     |
+1260 |     rejected(missing_position.validate(), "graph snapshot");
+     |     -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `error::Error`, found `araphor_analysis_types::Error`
+     |     |
+     |     arguments to this function are incorrect
+     |
+     = note: `araphor_analysis_types::Error` and `error::Error` have similar names, but are actually distinct types
+note: `araphor_analysis_types::Error` is defined in crate `araphor_analysis_types`
+    --> crates/araphor-analysis-types/src/error.rs:6:1
+     |
+   6 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: `error::Error` is defined in the current crate
+    --> crates/araphor-data/src/error.rs:8:1
+     |
+   8 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: closure parameter defined here
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1249:21
+     |
+1249 |     let rejected = |result: crate::Result<()>, expected: &'static str| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1268:9
+     |
+1267 |     rejected(
+     |     -------- arguments to this function are incorrect
+1268 |         sorted.input_manifest.validate_finding(&missing_finding),
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `error::Error`, found `araphor_analysis_types::Error`
+     |
+     = note: `araphor_analysis_types::Error` and `error::Error` have similar names, but are actually distinct types
+note: `araphor_analysis_types::Error` is defined in crate `araphor_analysis_types`
+    --> crates/araphor-analysis-types/src/error.rs:6:1
+     |
+   6 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: `error::Error` is defined in the current crate
+    --> crates/araphor-data/src/error.rs:8:1
+     |
+   8 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: closure parameter defined here
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1249:21
+     |
+1249 |     let rejected = |result: crate::Result<()>, expected: &'static str| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1275:9
+     |
+1274 |     rejected(
+     |     -------- arguments to this function are incorrect
+1275 |         sorted.input_manifest.validate_finding(&missing_effect),
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `error::Error`, found `araphor_analysis_types::Error`
+     |
+     = note: `araphor_analysis_types::Error` and `error::Error` have similar names, but are actually distinct types
+note: `araphor_analysis_types::Error` is defined in crate `araphor_analysis_types`
+    --> crates/araphor-analysis-types/src/error.rs:6:1
+     |
+   6 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: `error::Error` is defined in the current crate
+    --> crates/araphor-data/src/error.rs:8:1
+     |
+   8 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: closure parameter defined here
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1249:21
+     |
+1249 |     let rejected = |result: crate::Result<()>, expected: &'static str| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1289:18
+     |
+1289 |         rejected(missing_endpoint.validate(), "graph edge proof");
+     |         -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `error::Error`, found `araphor_analysis_types::Error`
+     |         |
+     |         arguments to this function are incorrect
+     |
+     = note: `araphor_analysis_types::Error` and `error::Error` have similar names, but are actually distinct types
+note: `araphor_analysis_types::Error` is defined in crate `araphor_analysis_types`
+    --> crates/araphor-analysis-types/src/error.rs:6:1
+     |
+   6 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: `error::Error` is defined in the current crate
+    --> crates/araphor-data/src/error.rs:8:1
+     |
+   8 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: closure parameter defined here
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1249:21
+     |
+1249 |     let rejected = |result: crate::Result<()>, expected: &'static str| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1296:14
+     |
+1296 |     rejected(missing_edge_evidence.validate(), "graph edge proof");
+     |     -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `error::Error`, found `araphor_analysis_types::Error`
+     |     |
+     |     arguments to this function are incorrect
+     |
+     = note: `araphor_analysis_types::Error` and `error::Error` have similar names, but are actually distinct types
+note: `araphor_analysis_types::Error` is defined in crate `araphor_analysis_types`
+    --> crates/araphor-analysis-types/src/error.rs:6:1
+     |
+   6 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: `error::Error` is defined in the current crate
+    --> crates/araphor-data/src/error.rs:8:1
+     |
+   8 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: closure parameter defined here
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1249:21
+     |
+1249 |     let rejected = |result: crate::Result<()>, expected: &'static str| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1302:14
+     |
+1302 |     rejected(unsorted_manifest.validate(), "revision manifest");
+     |     -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `error::Error`, found `araphor_analysis_types::Error`
+     |     |
+     |     arguments to this function are incorrect
+     |
+     = note: `araphor_analysis_types::Error` and `error::Error` have similar names, but are actually distinct types
+note: `araphor_analysis_types::Error` is defined in crate `araphor_analysis_types`
+    --> crates/araphor-analysis-types/src/error.rs:6:1
+     |
+   6 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: `error::Error` is defined in the current crate
+    --> crates/araphor-data/src/error.rs:8:1
+     |
+   8 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: closure parameter defined here
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1249:21
+     |
+1249 |     let rejected = |result: crate::Result<()>, expected: &'static str| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1308:9
+     |
+1307 |     rejected(
+     |     -------- arguments to this function are incorrect
+1308 |         sorted.input_manifest.validate_finding(&unsorted_finding),
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `error::Error`, found `araphor_analysis_types::Error`
+     |
+     = note: `araphor_analysis_types::Error` and `error::Error` have similar names, but are actually distinct types
+note: `araphor_analysis_types::Error` is defined in crate `araphor_analysis_types`
+    --> crates/araphor-analysis-types/src/error.rs:6:1
+     |
+   6 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: `error::Error` is defined in the current crate
+    --> crates/araphor-data/src/error.rs:8:1
+     |
+   8 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: closure parameter defined here
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1249:21
+     |
+1249 |     let rejected = |result: crate::Result<()>, expected: &'static str| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1315:9
+     |
+1314 |     rejected(
+     |     -------- arguments to this function are incorrect
+1315 |         invalid_revision.validate(sorted.scope.identity.tenant_id),
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `error::Error`, found `araphor_analysis_types::Error`
+     |
+     = note: `araphor_analysis_types::Error` and `error::Error` have similar names, but are actually distinct types
+note: `araphor_analysis_types::Error` is defined in crate `araphor_analysis_types`
+    --> crates/araphor-analysis-types/src/error.rs:6:1
+     |
+   6 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: `error::Error` is defined in the current crate
+    --> crates/araphor-data/src/error.rs:8:1
+     |
+   8 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: closure parameter defined here
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1249:21
+     |
+1249 |     let rejected = |result: crate::Result<()>, expected: &'static str| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1324:14
+     |
+1324 |     rejected(unsorted_subjects.validate(), "graph snapshot");
+     |     -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `error::Error`, found `araphor_analysis_types::Error`
+     |     |
+     |     arguments to this function are incorrect
+     |
+     = note: `araphor_analysis_types::Error` and `error::Error` have similar names, but are actually distinct types
+note: `araphor_analysis_types::Error` is defined in crate `araphor_analysis_types`
+    --> crates/araphor-analysis-types/src/error.rs:6:1
+     |
+   6 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: `error::Error` is defined in the current crate
+    --> crates/araphor-data/src/error.rs:8:1
+     |
+   8 | pub enum Error {
+     | ^^^^^^^^^^^^^^
+note: closure parameter defined here
+    --> crates/araphor-data/src/analysis/graph_rows/tests.rs:1249:21
+     |
+1249 |     let rejected = |result: crate::Result<()>, expected: &'static str| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no variant, associated function, or constant named `Process` found for enum `araphor_analysis_builtins::graph::Detector` in the current scope
+  --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:83:61
+   |
+83 |             .find(|package| package.package_id == Detector::Process.id())
+   |                                                             ^^^^^^^ variant, associated function, or constant not found in `araphor_analysis_builtins::graph::Detector`
+
+error[E0599]: no variant, associated function, or constant named `Process` found for enum `araphor_analysis_builtins::graph::Detector` in the current scope
+  --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:87:35
+   |
+87 |             package_id: Detector::Process.id().into(),
+   |                                   ^^^^^^^ variant, associated function, or constant not found in `araphor_analysis_builtins::graph::Detector`
+
+error[E0560]: struct `ProducerPin<'_>` has no field named `declaration`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:136:17
+    |
+136 |                 declaration: &self.pin,
+    |                 ^^^^^^^^^^^ `ProducerPin<'_>` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0560]: struct `araphor_analysis_builtins::graph::Unit` has no field named `support`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:149:13
+    |
+149 |             support: vec![UnitSupport {
+    |             ^^^^^^^ `araphor_analysis_builtins::graph::Unit` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0609]: no field `support` on type `araphor_analysis_builtins::graph::Unit`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:244:44
+    |
+244 |                 support: self.unit(*index).support,
+    |                                            ^^^^^^^ unknown field
+    |
+    = note: available fields are: `record`, `window_ns`, `restricted`
+
+error[E0609]: no field `support` on type `araphor_analysis_builtins::graph::Unit`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:507:14
+    |
+507 |     units[1].support[0].facts = vec![key];
+    |              ^^^^^^^ unknown field
+    |
+    = note: available fields are: `record`, `window_ns`, `restricted`
+
+error[E0609]: no field `support` on type `araphor_analysis_builtins::graph::Unit`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:508:28
+    |
+508 |     let support = units[1].support[0].clone();
+    |                            ^^^^^^^ unknown field
+    |
+    = note: available fields are: `record`, `window_ns`, `restricted`
+
+error[E0609]: no field `support` on type `araphor_analysis_builtins::graph::Unit`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:509:14
+    |
+509 |     units[0].support.push(support);
+    |              ^^^^^^^ unknown field
+    |
+    = note: available fields are: `record`, `window_ns`, `restricted`
+
+error[E0609]: no field `support` on type `araphor_analysis_builtins::graph::Unit`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:510:14
+    |
+510 |     units[2].support[0].facts = vec![outside.key.clone()];
+    |              ^^^^^^^ unknown field
+    |
+    = note: available fields are: `record`, `window_ns`, `restricted`
+
+error[E0609]: no field `support` on type `araphor_analysis_builtins::graph::Unit`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:827:25
+    |
+827 |                 rows[0].support[0].proof.temporal_coverage =
+    |                         ^^^^^^^ unknown field
+    |
+    = note: available fields are: `record`, `window_ns`, `restricted`
+
+error[E0609]: no field `support` on type `araphor_analysis_builtins::graph::Unit`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:828:32
+    |
+828 |                     if rows[0].support[0].proof.temporal_coverage == TemporalCoverageV1::Unknown {
+    |                                ^^^^^^^ unknown field
+    |
+    = note: available fields are: `record`, `window_ns`, `restricted`
+
+error[E0609]: no field `support` on type `araphor_analysis_builtins::graph::Unit`
+   --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:915:14
+    |
+915 |     units[0].support[0].facts = vec![key.clone()];
+    |              ^^^^^^^ unknown field
+    |
+    = note: available fields are: `record`, `window_ns`, `restricted`
+
+error[E0609]: no field `support` on type `araphor_analysis_builtins::graph::Unit`
+    --> crates/araphor-data/src/analysis/graph_rows/units/tests.rs:1052:25
+     |
+1052 |                 rows[0].support[0].facts.clear();
+     |                         ^^^^^^^ unknown field
+     |
+     = note: available fields are: `record`, `window_ns`, `restricted`
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/execution.rs:38:27
+   |
+38 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+   |                           ^^^^^^^ this is an associated function, not a method
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 | struct Fixture {
+   | -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+38 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+38 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/execution.rs:156:27
+    |
+156 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+156 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+156 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/execution.rs:195:31
+    |
+195 |         receipts.push(fixture.publish(
+    |                       --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+195 -         receipts.push(fixture.publish(
+196 -             &store,
+197 -             &attempt,
+198 -             &evaluations,
+199 -             &[fixture.output(value)?, fixture.output(value + 1)?],
+200 -         )?);
+195 +         receipts.push(analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(value)?, fixture.output(value + 1)?])?);
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/execution.rs:274:13
+    |
+274 |     fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |             ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+274 -     fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+274 +     analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for reference `&analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/guards.rs:170:31
+    |
+170 |         receipts.push(fixture.publish(
+    |                       --------^^^^^^^ this is an associated function, not a method
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+170 ~         receipts.push(analysis::managed::tests::Fixture::publish(store, &attempt, &[
+171 +                 fixture.evaluation(&input, 10, Some(&captured))?,
+172 +                 fixture.evaluation(&input, 11, Some(&captured))?,
+173 ~             ], &[fixture.output(12)?, fixture.output(13)?])?);
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/guards.rs:255:10
+    |
+254 |       let error = fixture
+    |  _________________-
+255 | |         .publish(&restored, &attempt, &evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+254 -     let error = fixture
+255 -         .publish(&restored, &attempt, &evaluations, &outputs)
+254 +     let error = analysis::managed::tests::Fixture::publish(&restored, &attempt, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/guards.rs:264:27
+    |
+264 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+264 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+264 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/guards.rs:271:27
+    |
+271 |     let receipt = fixture.publish(
+    |                   --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+271 ~     let receipt = analysis::managed::tests::Fixture::publish(&restored, &attempt, &[
+272 +             fixture.evaluation(&input, 10, Some(&fresh))?,
+273 +             fixture.evaluation(&input, 11, Some(&fresh))?,
+274 ~         ], &[fixture.output(32)?, fixture.output(33)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/history.rs:25:31
+   |
+25 |         expected.push(fixture.publish(
+   |                       --------^^^^^^^ this is an associated function, not a method
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 | struct Fixture {
+   | -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+25 -         expected.push(fixture.publish(
+26 -             &store,
+27 -             &attempt,
+28 -             &evaluations,
+29 -             &[fixture.output(2)?, fixture.output(3)?],
+30 -         )?);
+25 +         expected.push(analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])?);
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/history.rs:94:27
+   |
+94 |     let receipt = fixture.publish(
+   |                   --------^^^^^^^ this is an associated function, not a method
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 | struct Fixture {
+   | -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+94 ~     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &[
+95 +             fixture.evaluation(&input, 10, Some(&capture))?,
+96 +             fixture.evaluation(&input, 11, Some(&capture))?,
+97 ~         ], &[fixture.output(2)?, fixture.output(3)?])?;
+   |
+
+error[E0599]: no variant, associated function, or constant named `Process` found for enum `araphor_analysis_builtins::graph::Detector` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/input/current/follow.rs:37:66
+   |
+37 |     let descriptor = araphor_analysis_builtins::graph::Detector::Process.descriptor();
+   |                                                                  ^^^^^^^ variant, associated function, or constant not found in `araphor_analysis_builtins::graph::Detector`
+
+error[E0599]: no variant, associated function, or constant named `Process` found for enum `araphor_analysis_builtins::graph::Detector` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current/follow.rs:157:76
+    |
+157 | ...                   == araphor_analysis_builtins::graph::Detector::Process.id()
+    |                                                                      ^^^^^^^ variant, associated function, or constant not found in `araphor_analysis_builtins::graph::Detector`
+
+error[E0599]: no variant, associated function, or constant named `Process` found for enum `araphor_analysis_builtins::graph::Detector` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current/follow.rs:329:66
+    |
+329 |     let descriptor = araphor_analysis_builtins::graph::Detector::Process.descriptor();
+    |                                                                  ^^^^^^^ variant, associated function, or constant not found in `araphor_analysis_builtins::graph::Detector`
+
+error[E0599]: no variant, associated function, or constant named `Process` found for enum `araphor_analysis_builtins::graph::Detector` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current/follow.rs:369:52
+    |
+369 |     Ok(araphor_analysis_builtins::graph::Detector::Process.evaluate(evaluation)?)
+    |                                                    ^^^^^^^ variant, associated function, or constant not found in `araphor_analysis_builtins::graph::Detector`
+
+error[E0599]: no method named `publish` found for struct `std::sync::Arc<analysis::managed::tests::Fixture>` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current.rs:131:10
+    |
+129 |       let failure = saved
+    |  ___________________-
+130 | |         .fixture
+131 | |         .publish(&saved.store, &attempt, &evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+129 -     let failure = saved
+130 -         .fixture
+131 -         .publish(&saved.store, &attempt, &evaluations, &outputs)
+129 +     let failure = analysis::managed::tests::Fixture::publish(&saved.store, &attempt, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `std::sync::Arc<analysis::managed::tests::Fixture>` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current.rs:162:10
+    |
+160 |       let receipt = saved
+    |  ___________________-
+161 | |         .fixture
+162 | |         .publish(&saved.store, &attempt, &evaluations, &outputs)?;
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+160 -     let receipt = saved
+161 -         .fixture
+162 -         .publish(&saved.store, &attempt, &evaluations, &outputs)?;
+160 +     let receipt = analysis::managed::tests::Fixture::publish(&saved.store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `std::sync::Arc<analysis::managed::tests::Fixture>` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current.rs:193:10
+    |
+191 |       let failure = saved
+    |  ___________________-
+192 | |         .fixture
+193 | |         .publish(&saved.store, &attempt, &evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+191 -     let failure = saved
+192 -         .fixture
+193 -         .publish(&saved.store, &attempt, &evaluations, &outputs)
+191 +     let failure = analysis::managed::tests::Fixture::publish(&saved.store, &attempt, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `std::sync::Arc<analysis::managed::tests::Fixture>` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current.rs:244:10
+    |
+242 |       let publication = saved
+    |  _______________________-
+243 | |         .fixture
+244 | |         .publish(&saved.store, &attempt, &evaluations, &outputs);
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+242 -     let publication = saved
+243 -         .fixture
+244 -         .publish(&saved.store, &attempt, &evaluations, &outputs);
+242 +     let publication = analysis::managed::tests::Fixture::publish(&saved.store, &attempt, &evaluations, &outputs);
+    |
+
+error[E0599]: no method named `publish` found for struct `std::sync::Arc<analysis::managed::tests::Fixture>` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current.rs:264:10
+    |
+262 |       let receipt = saved
+    |  ___________________-
+263 | |         .fixture
+264 | |         .publish(&saved.store, &attempt, &evaluations, &outputs)?;
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+262 -     let receipt = saved
+263 -         .fixture
+264 -         .publish(&saved.store, &attempt, &evaluations, &outputs)?;
+262 +     let receipt = analysis::managed::tests::Fixture::publish(&saved.store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current.rs:342:30
+    |
+342 |         let seeded = fixture.publish(
+    |                      --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+342 ~         let seeded = analysis::managed::tests::Fixture::publish(store, &first_attempt, &[
+343 +                 fixture.evaluation(&first, 10, Some(&initial.state))?,
+344 +                 fixture.evaluation(&first, 11, Some(&initial.state))?,
+345 ~             ], &[fixture.output(2)?, fixture.output(3)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current.rs:374:35
+    |
+374 |             let receipt = fixture.publish(store, &attempt, &evaluations, &outputs)?;
+    |                                   ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+374 -             let receipt = fixture.publish(store, &attempt, &evaluations, &outputs)?;
+374 +             let receipt = analysis::managed::tests::Fixture::publish(store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/input/current.rs:395:14
+    |
+394 |           let failure = fixture
+    |  _______________________-
+395 | |             .publish(store, &attempt, &evaluations, &outputs)
+    | |             -^^^^^^^ this is an associated function, not a method
+    | |_____________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+394 -         let failure = fixture
+395 -             .publish(store, &attempt, &evaluations, &outputs)
+394 +         let failure = analysis::managed::tests::Fixture::publish(store, &attempt, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `std::sync::Arc<analysis::managed::tests::Fixture>` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/input.rs:88:31
+   |
+88 |         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+   |                               ^^^^^^^ this is an associated function, not a method
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+88 -         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+88 +         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/lifecycle.rs:294:27
+    |
+294 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+294 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+294 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/lifecycle.rs:397:10
+    |
+396 |       let error = fixture
+    |  _________________-
+397 | |         .publish(&store, &attempt, &evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+396 -     let error = fixture
+397 -         .publish(&store, &attempt, &evaluations, &outputs)
+396 +     let error = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/lifecycle.rs:410:10
+    |
+409 |       let error = fixture
+    |  _________________-
+410 | |         .publish(&store, &attempt, &evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+409 -     let error = fixture
+410 -         .publish(&store, &attempt, &evaluations, &outputs)
+409 +     let error = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/lifecycle.rs:429:27
+    |
+429 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+429 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+429 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/lifecycle.rs:467:27
+    |
+467 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+467 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+467 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/lifecycle.rs:562:10
+    |
+561 |       let error = fixture
+    |  _________________-
+562 | |         .publish(&store, &recovered, &pending_evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+561 -     let error = fixture
+562 -         .publish(&store, &recovered, &pending_evaluations, &outputs)
+561 +     let error = analysis::managed::tests::Fixture::publish(&store, &recovered, &pending_evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/lifecycle.rs:573:10
+    |
+572 |       let error = fixture
+    |  _________________-
+573 | |         .publish(&store, &pending, &pending_evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+572 -     let error = fixture
+573 -         .publish(&store, &pending, &pending_evaluations, &outputs)
+572 +     let error = analysis::managed::tests::Fixture::publish(&store, &pending, &pending_evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/lifecycle.rs:610:17
+    |
+610 |         fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                 ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+610 -         fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+610 +         analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/metadata.rs:135:31
+    |
+135 |         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                               ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+135 -         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+135 +         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/metadata.rs:261:27
+    |
+261 |     let receipt = fixture.publish(
+    |                   --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+261 -     let receipt = fixture.publish(
+262 -         &store,
+263 -         &attempt,
+264 -         &evaluations,
+265 -         &[fixture.output(2)?, fixture.output(3)?],
+266 -     )?;
+261 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])?;
+    |
+
+error[E0599]: no method named `publish` found for reference `&analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/output.rs:8:14
+   |
+ 8 |         self.publish(
+   |         -----^^^^^^^ this is an associated function, not a method
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+ 8 ~         analysis::managed::tests::Fixture::publish(store, &attempt, &[
+ 9 +                 self.evaluation(&request, 10, Some(&capture))?,
+10 +                 self.evaluation(&request, 11, Some(&capture))?,
+11 +             ], &[self.output(2)?, self.output(3)?])
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/output.rs:371:31
+    |
+371 |         let receipt = fixture.publish(
+    |                       --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+371 ~         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &[
+372 +                 fixture.evaluation(&input, 10, Some(&capture))?,
+373 +                 fixture.evaluation(&input, 11, Some(&capture))?,
+374 ~             ], &[fixture.output(value)?, fixture.output(value + 1)?])?;
+    |
+
+error[E0599]: no method named `publish` found for reference `&analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/removal.rs:12:13
+   |
+12 |     fixture.publish(
+   |     --------^^^^^^^ this is an associated function, not a method
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+12 -     fixture.publish(
+13 -         store,
+14 -         &attempt,
+15 -         &evaluations,
+16 -         &[fixture.output(2)?, fixture.output(3)?],
+17 -     )
+12 +     analysis::managed::tests::Fixture::publish(store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/removal.rs:490:31
+    |
+490 |         let receipt = fixture.publish(
+    |                       --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+490 -         let receipt = fixture.publish(
+491 -             &store,
+492 -             &attempt,
+493 -             &evaluations,
+494 -             &[fixture.output(20)?, fixture.output(30)?],
+495 -         )?;
+490 +         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(20)?, fixture.output(30)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/renewal.rs:95:27
+   |
+95 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+   |                           ^^^^^^^ this is an associated function, not a method
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 | struct Fixture {
+   | -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+95 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+95 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/replay.rs:51:27
+   |
+51 |     let receipt = fixture.publish(
+   |                   --------^^^^^^^ this is an associated function, not a method
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 | struct Fixture {
+   | -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+51 -     let receipt = fixture.publish(
+52 -         &store,
+53 -         &attempt,
+54 -         &evaluations,
+55 -         &[fixture.output(2)?, fixture.output(3)?],
+56 -     )?;
+51 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])?;
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/replay.rs:180:27
+    |
+180 |     let receipt = fixture.publish(
+    |                   --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+180 -     let receipt = fixture.publish(
+181 -         &store,
+182 -         &attempt,
+183 -         &evaluations,
+184 -         &[fixture.output(2)?, fixture.output(3)?],
+185 -     )?;
+180 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/replay.rs:263:31
+    |
+263 |         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                               ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+263 -         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+263 +         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/replay.rs:392:27
+    |
+392 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+392 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+392 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/replay.rs:431:35
+    |
+431 |             receipts.push(fixture.publish(
+    |                           --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+431 -             receipts.push(fixture.publish(
+432 -                 &store,
+433 -                 &attempt,
+434 -                 &evaluations,
+435 -                 &[fixture.output(2)?, fixture.output(3)?],
+436 -             )?);
+431 +             receipts.push(analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])?);
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/retention.rs:140:27
+    |
+140 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+140 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+140 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/source.rs:205:10
+    |
+203 |       let receipt = fixture
+    |  ___________________-
+204 | |         .fixture
+205 | |         .publish(&store, &attempt, &evaluations, &outputs)?;
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+203 -     let receipt = fixture
+204 -         .fixture
+205 -         .publish(&store, &attempt, &evaluations, &outputs)?;
+203 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/source.rs:334:10
+    |
+332 |       let receipt = fixture
+    |  ___________________-
+333 | |         .fixture
+334 | |         .publish(&store, &attempt, &evaluations, &outputs)?;
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+332 -     let receipt = fixture
+333 -         .fixture
+334 -         .publish(&store, &attempt, &evaluations, &outputs)?;
+332 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for reference `&analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/status.rs:20:13
+   |
+20 |     fixture.publish(
+   |     --------^^^^^^^ this is an associated function, not a method
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+20 -     fixture.publish(
+21 -         store,
+22 -         &attempt,
+23 -         &evaluations,
+24 -         &[fixture.output(2)?, fixture.output(3)?],
+25 -     )
+20 +     analysis::managed::tests::Fixture::publish(store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/storage.rs:234:27
+    |
+234 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+234 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+234 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:23:27
+   |
+23 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+   |                           ^^^^^^^ this is an associated function, not a method
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 | struct Fixture {
+   | -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+23 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+23 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:91:10
+   |
+90 |       assert!(fixture
+   |  _____________-
+91 | |         .publish(&store, &attempt, &evaluations, &outputs)
+   | |         -^^^^^^^ this is an associated function, not a method
+   | |_________|
+   |
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 |   struct Fixture {
+   |   -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+90 -     assert!(fixture
+91 -         .publish(&store, &attempt, &evaluations, &outputs)
+90 +     assert!(analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:212:10
+    |
+211 |       let error = fixture
+    |  _________________-
+212 | |         .publish(&store, &original, &evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+211 -     let error = fixture
+212 -         .publish(&store, &original, &evaluations, &outputs)
+211 +     let error = analysis::managed::tests::Fixture::publish(&store, &original, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:428:27
+    |
+428 |     let receipt = fixture.publish(
+    |                   --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+428 -     let receipt = fixture.publish(
+429 -         &store,
+430 -         &attempt,
+431 -         &evaluations,
+432 -         &[fixture.output(2)?, fixture.output(3)?],
+433 -     )?;
+428 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:465:31
+    |
+465 |         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                               ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+465 -         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+465 +         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:683:27
+    |
+683 |     let receipt = fixture.publish(
+    |                   --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+683 -     let receipt = fixture.publish(
+684 -         &store,
+685 -         &attempts[2],
+686 -         &evaluations,
+687 -         &[fixture.output(12)?, fixture.output(103)?],
+688 -     )?;
+683 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempts[2], &evaluations, &[fixture.output(12)?, fixture.output(103)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:810:27
+    |
+810 |     let receipt = fixture.publish(
+    |                   --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+810 -     let receipt = fixture.publish(
+811 -         &store,
+812 -         &promoted,
+813 -         &evaluations,
+814 -         &[fixture.output(2)?, fixture.output(3)?],
+815 -     )?;
+810 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &promoted, &evaluations, &[fixture.output(2)?, fixture.output(3)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:926:27
+    |
+926 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+926 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+926 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:1036:10
+     |
+1035 |       let error = fixture
+     |  _________________-
+1036 | |         .publish(&restored, &pending, &pending_evaluations, &outputs)
+     | |         -^^^^^^^ this is an associated function, not a method
+     | |_________|
+     |
+     |
+    ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+     |
+  59 |   struct Fixture {
+     |   -------------- method `publish` not found for this struct
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1035 -     let error = fixture
+1036 -         .publish(&restored, &pending, &pending_evaluations, &outputs)
+1035 +     let error = analysis::managed::tests::Fixture::publish(&restored, &pending, &pending_evaluations, &outputs)
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests/terminal.rs:1060:29
+     |
+1060 |     let published = fixture.publish(
+     |                     --------^^^^^^^ this is an associated function, not a method
+     |
+    ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+     |
+  59 | struct Fixture {
+     | -------------- method `publish` not found for this struct
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1060 -     let published = fixture.publish(
+1061 -         &store,
+1062 -         &pending,
+1063 -         &pending_evaluations,
+1064 -         &[fixture.output(22)?, fixture.output(33)?],
+1065 -     )?;
+1060 +     let published = analysis::managed::tests::Fixture::publish(&store, &pending, &pending_evaluations, &[fixture.output(22)?, fixture.output(33)?])?;
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/version.rs:60:33
+   |
+60 |     let first_receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+   |                                 ^^^^^^^ this is an associated function, not a method
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 | struct Fixture {
+   | -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+60 -     let first_receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+60 +     let first_receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/version.rs:92:27
+   |
+92 |     let receipt = fixture.publish(&store, &next_attempt, &next_evaluations, &next_outputs)?;
+   |                           ^^^^^^^ this is an associated function, not a method
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 | struct Fixture {
+   | -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+92 -     let receipt = fixture.publish(&store, &next_attempt, &next_evaluations, &next_outputs)?;
+92 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &next_attempt, &next_evaluations, &next_outputs)?;
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/version.rs:137:17
+    |
+137 |         fixture.publish(&store, &rollback_attempt, &rollback_evaluations, &outputs)?;
+    |                 ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+137 -         fixture.publish(&store, &rollback_attempt, &rollback_evaluations, &outputs)?;
+137 +         analysis::managed::tests::Fixture::publish(&store, &rollback_attempt, &rollback_evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/version.rs:213:13
+    |
+213 |     fixture.publish(&store, &old_attempt, &evaluations, &outputs)?;
+    |             ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+213 -     fixture.publish(&store, &old_attempt, &evaluations, &outputs)?;
+213 +     analysis::managed::tests::Fixture::publish(&store, &old_attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/version.rs:240:13
+    |
+240 |     fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |             ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+240 -     fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+240 +     analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/version.rs:283:17
+    |
+283 |         fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                 ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+283 -         fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+283 +         analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/version.rs:322:31
+    |
+322 |         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                               ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+322 -         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+322 +         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/version.rs:365:13
+    |
+365 |     fixture.publish(&store, &old_attempt, &evaluations, &outputs)?;
+    |             ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+365 -     fixture.publish(&store, &old_attempt, &evaluations, &outputs)?;
+365 +     analysis::managed::tests::Fixture::publish(&store, &old_attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests.rs:458:27
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+...
+458 |     let receipt = fixture.publish(
+    |                   --------^^^^^^^ this is an associated function, not a method
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+458 -     let receipt = fixture.publish(
+459 -         &store,
+460 -         &attempt,
+461 -         &evaluations,
+462 -         &[fixture.output(12)?, fixture.output(103)?],
+463 -     )?;
+458 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(12)?, fixture.output(103)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests.rs:550:27
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+...
+550 |     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |                           ^^^^^^^ this is an associated function, not a method
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+550 -     let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+550 +     let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests.rs:555:10
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+...
+554 |       assert!(fixture
+    |  _____________-
+555 | |         .publish(&store, &attempt, &evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+554 -     assert!(fixture
+555 -         .publish(&store, &attempt, &evaluations, &outputs)
+554 +     assert!(analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests.rs:669:34
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+...
+669 |     let second_receipt = fixture.publish(
+    |                          --------^^^^^^^ this is an associated function, not a method
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+669 -     let second_receipt = fixture.publish(
+670 -         &store,
+671 -         &second_attempt,
+672 -         &second_evaluations,
+673 -         &second_outputs,
+674 -     )?;
+669 +     let second_receipt = analysis::managed::tests::Fixture::publish(&store, &second_attempt, &second_evaluations, &second_outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests.rs:813:10
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+...
+812 |       let error = fixture
+    |  _________________-
+813 | |         .publish(&store, &attempt, &changed, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+812 -     let error = fixture
+813 -         .publish(&store, &attempt, &changed, &outputs)
+812 +     let error = analysis::managed::tests::Fixture::publish(&store, &attempt, &changed, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests.rs:827:10
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+...
+826 |       assert!(fixture
+    |  _____________-
+827 | |         .publish(&store, &attempt, &evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+826 -     assert!(fixture
+827 -         .publish(&store, &attempt, &evaluations, &outputs)
+826 +     assert!(analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests.rs:907:26
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+...
+907 |         matches!(fixture.publish(&store, &attempt, &evaluations, &conflicting), Err(error) if matches!(error.downcast_ref::<crate::...
+    |                          ^^^^^^^ this is an associated function, not a method
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+907 -         matches!(fixture.publish(&store, &attempt, &evaluations, &conflicting), Err(error) if matches!(error.downcast_ref::<crate::Error>(), Some(crate::Error::AnalysisConflict { .. })))
+907 +         matches!(analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &conflicting), Err(error) if matches!(error.downcast_ref::<crate::Error>(), Some(crate::Error::AnalysisConflict { .. })))
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests.rs:928:13
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+...
+928 |     fixture.publish(&store, &attempt, &eval, &outputs)?;
+    |             ^^^^^^^ this is an associated function, not a method
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+928 -     fixture.publish(&store, &attempt, &eval, &outputs)?;
+928 +     analysis::managed::tests::Fixture::publish(&store, &attempt, &eval, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests.rs:935:10
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+...
+934 |       assert!(fixture
+    |  _____________-
+935 | |         .publish(&store, &stale, &stale_eval, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+934 -     assert!(fixture
+935 -         .publish(&store, &stale, &stale_eval, &outputs)
+934 +     assert!(analysis::managed::tests::Fixture::publish(&store, &stale, &stale_eval, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests.rs:1051:10
+     |
+  59 |   struct Fixture {
+     |   -------------- method `publish` not found for this struct
+...
+1050 |       assert!(fixture
+     |  _____________-
+1051 | |         .publish(&store, &recovered, &eval, &outputs)
+     | |         -^^^^^^^ this is an associated function, not a method
+     | |_________|
+     |
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1050 -     assert!(fixture
+1051 -         .publish(&store, &recovered, &eval, &outputs)
+1050 +     assert!(analysis::managed::tests::Fixture::publish(&store, &recovered, &eval, &outputs)
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests.rs:1063:14
+     |
+  59 |   struct Fixture {
+     |   -------------- method `publish` not found for this struct
+...
+1062 |           let error = fixture
+     |  _____________________-
+1063 | |             .publish(&store, &attempt, &changed, &outputs)
+     | |             -^^^^^^^ this is an associated function, not a method
+     | |_____________|
+     |
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1062 -         let error = fixture
+1063 -             .publish(&store, &attempt, &changed, &outputs)
+1062 +         let error = analysis::managed::tests::Fixture::publish(&store, &attempt, &changed, &outputs)
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests.rs:1076:13
+     |
+  59 | struct Fixture {
+     | -------------- method `publish` not found for this struct
+...
+1076 |     fixture.publish(&store, &attempt, &eval, &outputs)?;
+     |             ^^^^^^^ this is an associated function, not a method
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1076 -     fixture.publish(&store, &attempt, &eval, &outputs)?;
+1076 +     analysis::managed::tests::Fixture::publish(&store, &attempt, &eval, &outputs)?;
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests.rs:1219:31
+     |
+  59 | struct Fixture {
+     | -------------- method `publish` not found for this struct
+...
+1219 |         let receipt = fixture.publish(
+     |                       --------^^^^^^^ this is an associated function, not a method
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1219 -         let receipt = fixture.publish(
+1220 -             &store,
+1221 -             &attempt,
+1222 -             &eval,
+1223 -             &[fixture.output(2)?, fixture.output(3)?],
+1224 -         )?;
+1219 +         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &eval, &[fixture.output(2)?, fixture.output(3)?])?;
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests.rs:1337:17
+     |
+  59 | struct Fixture {
+     | -------------- method `publish` not found for this struct
+...
+1337 |         fixture.publish(&store, &attempt, &eval, &outputs)?;
+     |                 ^^^^^^^ this is an associated function, not a method
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1337 -         fixture.publish(&store, &attempt, &eval, &outputs)?;
+1337 +         analysis::managed::tests::Fixture::publish(&store, &attempt, &eval, &outputs)?;
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests.rs:1377:30
+     |
+  59 | struct Fixture {
+     | -------------- method `publish` not found for this struct
+...
+1377 |                 Some(fixture.publish(
+     |                      --------^^^^^^^ this is an associated function, not a method
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1377 -                 Some(fixture.publish(
+1378 -                     &store,
+1379 -                     &attempt,
+1380 -                     &eval,
+1381 -                     &[fixture.output(12)?, fixture.output(103)?],
+1382 -                 )?)
+1377 +                 Some(analysis::managed::tests::Fixture::publish(&store, &attempt, &eval, &[fixture.output(12)?, fixture.output(103)?])?)
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests.rs:1616:25
+     |
+  59 | struct Fixture {
+     | -------------- method `publish` not found for this struct
+...
+1616 |                 fixture.publish(&store, &attempt, &eval, &outputs)?;
+     |                         ^^^^^^^ this is an associated function, not a method
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1616 -                 fixture.publish(&store, &attempt, &eval, &outputs)?;
+1616 +                 analysis::managed::tests::Fixture::publish(&store, &attempt, &eval, &outputs)?;
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests.rs:1840:13
+     |
+  59 | struct Fixture {
+     | -------------- method `publish` not found for this struct
+...
+1840 |     fixture.publish(&store, &first, &evaluations, &outputs)?;
+     |             ^^^^^^^ this is an associated function, not a method
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1840 -     fixture.publish(&store, &first, &evaluations, &outputs)?;
+1840 +     analysis::managed::tests::Fixture::publish(&store, &first, &evaluations, &outputs)?;
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+    --> crates/araphor-data/src/analysis/managed/tests.rs:1879:10
+     |
+  59 |   struct Fixture {
+     |   -------------- method `publish` not found for this struct
+...
+1878 |       assert!(fixture
+     |  _____________-
+1879 | |         .publish(&store, &second, &evaluations, &outputs)
+     | |         -^^^^^^^ this is an associated function, not a method
+     | |_________|
+     |
+     |
+     = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+    --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+     |
+  65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+     |
+1878 -     assert!(fixture
+1879 -         .publish(&store, &second, &evaluations, &outputs)
+1878 +     assert!(analysis::managed::tests::Fixture::publish(&store, &second, &evaluations, &outputs)
+     |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/frontier.rs:348:14
+    |
+347 |           let error = fixture
+    |  _____________________-
+348 | |             .publish(&store, stale, &evaluations, &outputs)
+    | |             -^^^^^^^ this is an associated function, not a method
+    | |_____________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+347 -         let error = fixture
+348 -             .publish(&store, stale, &evaluations, &outputs)
+347 +         let error = analysis::managed::tests::Fixture::publish(&store, stale, &evaluations, &outputs)
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/frontier.rs:432:13
+    |
+432 |     fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+    |             ^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+432 -     fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+432 +     analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/frontier.rs:462:13
+    |
+462 |     fixture.publish(
+    |     --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+462 -     fixture.publish(
+463 -         &store,
+464 -         &attempt,
+465 -         &evaluations,
+466 -         &[fixture.output(2)?, fixture.output(3)?],
+467 -     )?;
+462 +     analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/frontier.rs:498:31
+    |
+498 |         let receipt = fixture.publish(
+    |                       --------^^^^^^^ this is an associated function, not a method
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 | struct Fixture {
+    | -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+498 -         let receipt = fixture.publish(
+499 -             &store,
+500 -             &attempt,
+501 -             &evaluations,
+502 -             &[fixture.output(2)?, fixture.output(3)?],
+503 -         )?;
+498 +         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &[fixture.output(2)?, fixture.output(3)?])?;
+    |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+  --> crates/araphor-data/src/analysis/managed/tests/readiness.rs:78:31
+   |
+78 |         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+   |                               ^^^^^^^ this is an associated function, not a method
+   |
+  ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+   |
+59 | struct Fixture {
+   | -------------- method `publish` not found for this struct
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+  --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+   |
+65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+78 -         let receipt = fixture.publish(&store, &attempt, &evaluations, &outputs)?;
+78 +         let receipt = analysis::managed::tests::Fixture::publish(&store, &attempt, &evaluations, &outputs)?;
+   |
+
+error[E0599]: no method named `publish` found for struct `analysis::managed::tests::Fixture` in the current scope
+   --> crates/araphor-data/src/analysis/managed/tests/readiness.rs:211:10
+    |
+210 |       let error = fixture
+    |  _________________-
+211 | |         .publish(&store, &stale, &evaluations, &outputs)
+    | |         -^^^^^^^ this is an associated function, not a method
+    | |_________|
+    |
+    |
+   ::: crates/araphor-data/src/analysis/managed/tests.rs:59:1
+    |
+ 59 |   struct Fixture {
+    |   -------------- method `publish` not found for this struct
+    |
+    = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `analysis::managed::tests::Fixture`
+   --> crates/araphor-data/src/analysis/managed/tests.rs:65:5
+    |
+ 65 |     fn publish(store:&AnalysisStore,input:&ManagedCommit<'_>,check:impl FnOnce()->crate::Result<()>)->crate::Result<ManagedReceipt> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+    |
+210 -     let error = fixture
+211 -         .publish(&store, &stale, &evaluations, &outputs)
+210 +     let error = analysis::managed::tests::Fixture::publish(&store, &stale, &evaluations, &outputs)
+    |
+
+warning: unused variable: `control`
+   --> crates/araphor-data/src/analysis/managed/graph.rs:212:9
+    |
+212 |         control: &AnalysisReadControl,
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_control`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0308, E0422, E0425, E0432, E0560, E0592, E0599, E0609.
+For more information about an error, try `rustc --explain E0308`.
+warning: `araphor-data` (lib test) generated 5 warnings
+error: could not compile `araphor-data` (lib test) due to 131 previous errors; 5 warnings emitted

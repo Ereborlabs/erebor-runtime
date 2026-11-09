@@ -42,7 +42,7 @@ pub enum Database {
     Redb(redb::Database),
     Fjall(fjall::SingleWriterTxDatabase, fjall::SingleWriterTxKeyspace),
     #[cfg(feature = "cdc-poc")]
-    FjallBranch(fjall::SingleWriterTxDatabase, fjall::Branch),
+    FjallBranch(araphor_data::analysis::native::NativeStore),
 }
 
 impl Database {
@@ -56,9 +56,11 @@ impl Database {
             #[cfg(feature = "neon-poc")]
             Self::Neon(db) => db.read_at(revision, action),
             #[cfg(feature = "cdc-poc")]
-            Self::FjallBranch(_, branch) => action(&BranchRead(
-                branch.read_at(fjall::Revision::from_bytes(revision.to_be_bytes()))?,
-            )),
+            Self::FjallBranch(store) => {
+                action(&BranchRead(store.branch().read_at(
+                    fjall::Revision::from_bytes(revision.to_be_bytes()),
+                )?))
+            }
             _ => self.read(action),
         }
     }
@@ -114,20 +116,9 @@ impl Database {
                 Self::Fjall(db, table)
             }
             #[cfg(feature = "cdc-poc")]
-            "fjall-stable" => {
-                let db = fjall::SingleWriterTxDatabase::builder(path.join("fjall"))
-                    .versioned()
-                    .open()?;
-                let branch = match db.branch("records")? {
-                    Some(branch) => branch,
-                    None => {
-                        let branch = db.create_branch("records")?;
-                        branch.retain_history(branch.info()?.head..)?;
-                        branch
-                    }
-                };
-                Self::FjallBranch(db, branch)
-            }
+            "fjall-stable" => Self::FjallBranch(araphor_data::analysis::native::NativeStore::open(
+                &path.join("data"),
+            )?),
             _ => return Err("unknown native engine".into()),
         })
     }
@@ -148,7 +139,7 @@ impl Database {
                 table,
             }),
             #[cfg(feature = "cdc-poc")]
-            Self::FjallBranch(_, branch) => action(&BranchRead(branch.snapshot()?)),
+            Self::FjallBranch(store) => action(&BranchRead(store.view()?.snapshot().clone())),
         }
     }
 
@@ -202,13 +193,13 @@ impl Database {
                 Ok((result, work, synced.elapsed().as_secs_f64()))
             }
             #[cfg(feature = "cdc-poc")]
-            Self::FjallBranch(_, branch) => {
-                let mut tx = branch.write_tx()?;
-                let result = action(&mut BranchWrite(&mut tx))?;
+            Self::FjallBranch(store) => {
+                let mut tx = store.write()?;
+                let result = action(&mut BranchWrite(tx.native()))?;
                 let work = started.elapsed().as_secs_f64();
                 let synced = Instant::now();
                 let receipt = if commit {
-                    tx.commit()?.map(|receipt| receipt.revision.to_bytes())
+                    tx.commit([])?.map(|receipt| receipt.revision.to_bytes())
                 } else {
                     tx.rollback();
                     None

@@ -1,0 +1,426 @@
+//! Native metadata storage used by the package storage PoC.
+//! Production admission and raw publication still use `AnalysisStore`.
+
+use std::{
+    ops::Bound::Included,
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard, RwLock,
+    },
+};
+
+use fjall::{Branch, BranchSnapshot, BranchWriteTransaction, Commit, SingleWriterTxDatabase};
+use snafu::ResultExt as _;
+use uuid::Uuid;
+
+use crate::{NativeStateSnafu, NativeStorageSnafu, Result};
+
+const HEAD: &[u8] = b"\0data/head";
+const IDENTITY: &[u8] = b"\0data/identity";
+const FORMAT: &[u8] = b"\0data/format";
+
+mod context;
+
+pub struct NativeStore {
+    database: SingleWriterTxDatabase,
+    branch: Branch,
+    writer: Mutex<()>,
+    published: RwLock<Arc<DataView>>,
+    ready: AtomicBool,
+    _lease: super::connection::AnalysisLease,
+}
+
+pub struct DataView {
+    pub revision: u64,
+    pub store_uuid: Uuid,
+    snapshot: BranchSnapshot,
+}
+
+pub struct DataWrite<'a> {
+    store: &'a NativeStore,
+    revision: u64,
+    transaction: BranchWriteTransaction<'a>,
+    dirty: bool,
+    _writer: MutexGuard<'a, ()>,
+}
+
+impl DataView {
+    pub fn snapshot(&self) -> &BranchSnapshot {
+        &self.snapshot
+    }
+}
+
+impl NativeStore {
+    pub fn open(root: &Path) -> Result<Self> {
+        let lease = super::connection::AnalysisLease::acquire(root)?;
+        if root.join("analysis.duckdb").exists() {
+            return NativeStateSnafu {
+                field: "store format",
+            }
+            .fail();
+        }
+        let database = SingleWriterTxDatabase::builder(root.join("fjall"))
+            .versioned()
+            .open()
+            .context(NativeStorageSnafu { operation: "open" })?;
+        let branch = match database.branch("data").context(NativeStorageSnafu {
+            operation: "resolve live branch",
+        })? {
+            Some(branch) => branch,
+            None => database.create_branch("data").context(NativeStorageSnafu {
+                operation: "create live branch",
+            })?,
+        };
+        let snapshot = branch.snapshot().context(NativeStorageSnafu {
+            operation: "capture recovered state",
+        })?;
+        if snapshot
+            .get(FORMAT)
+            .context(NativeStorageSnafu {
+                operation: "read format",
+            })?
+            .is_none()
+        {
+            if snapshot
+                .iter()
+                .next()
+                .transpose()
+                .context(NativeStorageSnafu {
+                    operation: "check initial branch",
+                })?
+                .is_some()
+            {
+                return NativeStateSnafu {
+                    field: "unrecognized branch",
+                }
+                .fail();
+            }
+            if !database
+                .history()
+                .context(NativeStorageSnafu {
+                    operation: "read history policies",
+                })?
+                .iter()
+                .any(|policy| {
+                    policy.branch == branch.id()
+                        && policy.first <= snapshot.revision()
+                        && policy.last.to_bytes() == u64::MAX.to_be_bytes()
+                })
+            {
+                branch
+                    .retain_history(snapshot.revision()..)
+                    .context(NativeStorageSnafu {
+                        operation: "retain initial history",
+                    })?;
+            }
+            let mut tx = branch.write_tx().context(NativeStorageSnafu {
+                operation: "initialize",
+            })?;
+            tx.insert(FORMAT, 1u64.to_be_bytes());
+            tx.insert(IDENTITY, Uuid::new_v4().as_bytes().as_slice());
+            tx.insert(HEAD, 0u64.to_be_bytes());
+            tx.commit_stamped([Self::cut(0)])
+                .context(NativeStorageSnafu {
+                    operation: "commit initial state",
+                })?;
+        }
+        let snapshot = branch.snapshot().context(NativeStorageSnafu {
+            operation: "capture initial state",
+        })?;
+        let revision = Self::number(&Self::required(&snapshot, HEAD)?)?;
+        let cut = Self::required(&snapshot, &Self::cut(revision))?;
+        let view = Self::cut_view(&branch, revision, &cut)?;
+        if Self::required(&snapshot, IDENTITY)? != view.store_uuid.as_bytes() {
+            return NativeStateSnafu {
+                field: "recovered store identity",
+            }
+            .fail();
+        }
+        let first = Self::required(&snapshot, &Self::cut(0))?;
+        let first = fjall::Revision::from_bytes(first.as_slice().try_into().map_err(|_| {
+            NativeStateSnafu {
+                field: "initial cut width",
+            }
+            .build()
+        })?);
+        if !database
+            .history()
+            .context(NativeStorageSnafu {
+                operation: "check recovered history",
+            })?
+            .iter()
+            .any(|policy| {
+                policy.branch == branch.id()
+                    && policy.first <= first
+                    && policy.last.to_bytes() == u64::MAX.to_be_bytes()
+            })
+        {
+            return NativeStateSnafu {
+                field: "required history protection",
+            }
+            .fail();
+        }
+        Ok(Self {
+            database,
+            branch,
+            writer: Mutex::new(()),
+            published: RwLock::new(Arc::new(view)),
+            ready: AtomicBool::new(true),
+            _lease: lease,
+        })
+    }
+
+    fn decode_view(snapshot: BranchSnapshot) -> Result<DataView> {
+        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 1 {
+            return NativeStateSnafu {
+                field: "format version",
+            }
+            .fail();
+        }
+        let revision = Self::number(&Self::required(&snapshot, HEAD)?)?;
+        let identity = Self::required(&snapshot, IDENTITY)?;
+        let identity: [u8; 16] = identity.as_slice().try_into().map_err(|_| {
+            NativeStateSnafu {
+                field: "store identity",
+            }
+            .build()
+        })?;
+        let store_uuid = Uuid::from_bytes(identity);
+        if store_uuid.is_nil() {
+            return NativeStateSnafu {
+                field: "store identity",
+            }
+            .fail();
+        }
+        let cut = Self::required(&snapshot, &Self::cut(revision))?;
+        if cut != snapshot.revision().to_bytes() {
+            return NativeStateSnafu {
+                field: "published cut",
+            }
+            .fail();
+        }
+        Ok(DataView {
+            revision,
+            store_uuid,
+            snapshot,
+        })
+    }
+
+    fn cut_view(branch: &Branch, revision: u64, bytes: &[u8]) -> Result<DataView> {
+        let cut = fjall::Revision::from_bytes(bytes.try_into().map_err(|_| {
+            NativeStateSnafu {
+                field: "historical cut width",
+            }
+            .build()
+        })?);
+        let snapshot = branch.read_at(cut).context(NativeStorageSnafu {
+            operation: "capture exact Data cut",
+        })?;
+        let view = Self::decode_view(snapshot)?;
+        if view.revision != revision {
+            return NativeStateSnafu {
+                field: "cut index revision",
+            }
+            .fail();
+        }
+        Ok(view)
+    }
+
+    fn required(snapshot: &BranchSnapshot, key: &[u8]) -> Result<Vec<u8>> {
+        snapshot
+            .get(key)
+            .context(NativeStorageSnafu {
+                operation: "read Data metadata",
+            })?
+            .map(|bytes| bytes.to_vec())
+            .ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "metadata record",
+                }
+                .build()
+            })
+    }
+
+    fn number(bytes: &[u8]) -> Result<u64> {
+        bytes.try_into().map(u64::from_be_bytes).map_err(|_| {
+            NativeStateSnafu {
+                field: "metadata integer",
+            }
+            .build()
+        })
+    }
+
+    fn cut(revision: u64) -> Vec<u8> {
+        [b"\0data/cut/".as_slice(), &revision.to_be_bytes()].concat()
+    }
+
+    fn check(&self) -> Result<()> {
+        if !self.ready.load(Ordering::Acquire) {
+            return NativeStateSnafu {
+                field: "uncertain commit; reopen required",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    pub fn view(&self) -> Result<Arc<DataView>> {
+        self.check()?;
+        let view = self.published.read().map_err(|_| {
+            NativeStateSnafu {
+                field: "publication lock",
+            }
+            .build()
+        })?;
+        self.check()?;
+        Ok(Arc::clone(&view))
+    }
+
+    pub fn read_at(&self, revision: u64) -> Result<DataView> {
+        let current = self.view()?;
+        if revision > current.revision {
+            return NativeStateSnafu {
+                field: "requested revision",
+            }
+            .fail();
+        }
+        let (key, cut) = current
+            .snapshot
+            .range::<Vec<u8>, _>((Included(Self::cut(0)), Included(Self::cut(revision))))
+            .next_back()
+            .ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "historical cut",
+                }
+                .build()
+            })?
+            .context(NativeStorageSnafu {
+                operation: "read historical cut",
+            })?;
+        let selected = Self::number(&key[b"\0data/cut/".len()..])?;
+        let view = Self::cut_view(&self.branch, selected, &cut)?;
+        if view.store_uuid != current.store_uuid {
+            return NativeStateSnafu {
+                field: "historical store identity",
+            }
+            .fail();
+        }
+        Ok(view)
+    }
+
+    pub fn write(&self) -> Result<DataWrite<'_>> {
+        self.check()?;
+        let writer = self.writer.lock().map_err(|_| {
+            NativeStateSnafu {
+                field: "writer lock",
+            }
+            .build()
+        })?;
+        let view = self.view()?;
+        let revision = view.revision.checked_add(1).ok_or_else(|| {
+            NativeStateSnafu {
+                field: "revision exhausted",
+            }
+            .build()
+        })?;
+        let transaction = self.branch.write_tx().context(NativeStorageSnafu {
+            operation: "begin Data write",
+        })?;
+        let stored = transaction
+            .get(HEAD)
+            .context(NativeStorageSnafu {
+                operation: "check Data head",
+            })?
+            .ok_or_else(|| NativeStateSnafu { field: "Data head" }.build())?;
+        if Self::number(&stored)? != view.revision {
+            return NativeStateSnafu {
+                field: "unpublished Data write",
+            }
+            .fail();
+        }
+        Ok(DataWrite {
+            store: self,
+            revision,
+            transaction,
+            dirty: false,
+            _writer: writer,
+        })
+    }
+
+    pub fn database(&self) -> &SingleWriterTxDatabase {
+        &self.database
+    }
+
+    pub fn branch(&self) -> &Branch {
+        &self.branch
+    }
+}
+
+impl<'a> DataWrite<'a> {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn native(&mut self) -> &mut BranchWriteTransaction<'a> {
+        self.dirty = true;
+        &mut self.transaction
+    }
+
+    pub fn rollback(self) {
+        self.transaction.rollback();
+    }
+
+    pub fn commit(mut self, stamps: impl IntoIterator<Item = Vec<u8>>) -> Result<Option<Commit>> {
+        let stamps = stamps.into_iter().collect::<Vec<_>>();
+        if !self.dirty && stamps.is_empty() {
+            return Ok(None);
+        }
+        self.transaction.insert(HEAD, self.revision.to_be_bytes());
+        let stamps = stamps.into_iter().chain([NativeStore::cut(self.revision)]);
+        let committed = self.transaction.commit_stamped(stamps);
+        let receipt = match committed {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => {
+                return NativeStateSnafu {
+                    field: "empty Data commit",
+                }
+                .fail()
+            }
+            Err(source) => {
+                self.store.ready.store(false, Ordering::Release);
+                return Err(source).context(NativeStorageSnafu {
+                    operation: "commit Data write",
+                });
+            }
+        };
+        let published = (|| {
+            let snapshot =
+                self.store
+                    .branch
+                    .read_at(receipt.revision)
+                    .context(NativeStorageSnafu {
+                        operation: "capture committed cut",
+                    })?;
+            let view = NativeStore::decode_view(snapshot)?;
+            if view.revision != self.revision {
+                return NativeStateSnafu {
+                    field: "committed Data revision",
+                }
+                .fail();
+            }
+            *self.store.published.write().map_err(|_| {
+                NativeStateSnafu {
+                    field: "publication lock",
+                }
+                .build()
+            })? = Arc::new(view);
+            Ok(())
+        })();
+        if let Err(error) = published {
+            self.store.ready.store(false, Ordering::Release);
+            return Err(error);
+        }
+        Ok(Some(receipt))
+    }
+}

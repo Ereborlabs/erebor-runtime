@@ -29,6 +29,8 @@ pub(crate) mod graph_rows;
 mod health;
 mod inputs;
 mod managed;
+#[cfg(feature = "native-store")]
+pub mod native;
 mod notification;
 mod packages;
 mod progress;

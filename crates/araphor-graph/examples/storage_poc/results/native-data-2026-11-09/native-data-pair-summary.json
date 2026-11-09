@@ -1,0 +1,83 @@
+{
+  "p95_method": "statistics.quantiles(n=100, method=\"inclusive\"); linear interpolation",
+  "before": {
+    "ordinary_samples": 112,
+    "fields_ms": {
+      "total_s": {
+        "median": 7.3705074999999995,
+        "p95": 12.70167925,
+        "max": 14.583661
+      },
+      "package_s": {
+        "median": 2.4132659999999997,
+        "p95": 4.021803649999999,
+        "max": 4.665824
+      },
+      "output_commit_s": {
+        "median": 2.2335265,
+        "p95": 4.123965549999999,
+        "max": 4.477949
+      },
+      "output_stage_s": {
+        "median": 0.9349109999999999,
+        "p95": 2.3971014,
+        "max": 2.620558
+      },
+      "output_sync_s": {
+        "median": 0.8032585,
+        "p95": 1.1385853,
+        "max": 1.482615
+      },
+      "result_read_s": {
+        "median": 2.2908675,
+        "p95": 4.0392297,
+        "max": 4.7920300000000005
+      },
+      "source_wake_s": {
+        "median": 0.6031945,
+        "p95": 0.69324205,
+        "max": 0.754368
+      }
+    }
+  },
+  "after": {
+    "ordinary_samples": 112,
+    "fields_ms": {
+      "total_s": {
+        "median": 7.2252355,
+        "p95": 13.0493935,
+        "max": 13.258121
+      },
+      "package_s": {
+        "median": 2.3593125,
+        "p95": 4.08924315,
+        "max": 4.413274
+      },
+      "output_commit_s": {
+        "median": 2.2461685,
+        "p95": 4.15844395,
+        "max": 4.3629180000000005
+      },
+      "output_stage_s": {
+        "median": 0.977585,
+        "p95": 2.4516058500000004,
+        "max": 2.7483
+      },
+      "output_sync_s": {
+        "median": 0.8143630000000001,
+        "p95": 1.1743413,
+        "max": 2.106378
+      },
+      "result_read_s": {
+        "median": 2.255771,
+        "p95": 4.2018889999999995,
+        "max": 4.324644
+      },
+      "source_wake_s": {
+        "median": 0.6184895,
+        "p95": 0.73403695,
+        "max": 0.796064
+      }
+    }
+  }
+}

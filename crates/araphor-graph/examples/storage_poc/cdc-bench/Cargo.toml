@@ -15,6 +15,7 @@ name = "storage_cdc"
 path = "../main.rs"
 
 [dependencies]
+araphor-data = { path = "../../../../araphor-data", features = ["native-store"] }
 araphor-graph = { path = "../../..", features = ["store", "native-store"] }
 araphor-analysis-builtins = { path = "../../../../araphor-analysis-builtins" }
 araphor-analysis-sdk = { path = "../../../../araphor-analysis-sdk" }

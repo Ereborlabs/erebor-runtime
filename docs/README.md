@@ -26,6 +26,9 @@ tree contains only named, no-clobber copies selected during triage.
 - [Retained execution state review](guides/araphor-retained-execution-review.md)
   gives the current saved-state reuse flow, commit checks, and remaining input
   work.
+- [Native Data transaction review](guides/araphor-native-data-review.md) gives
+  the optional native metadata owner, exact cut publication, context storage,
+  package PoC caller, and remaining production migration.
 - [Fjall versioned storage review](guides/fjall-versioned-storage-review.md)
   gives the native history, branch, journal, recovery, and collection source
   route. The approved engine scope is complete. The user accepted the current

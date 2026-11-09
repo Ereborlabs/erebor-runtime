@@ -1,0 +1,29 @@
+{
+  "parent": "78e909526f5833cea809fcf4c294eb801912ef9f",
+  "fjall": "cceaa84d371165c2f0d4952650543c27fc8e22d9",
+  "lsm_tree": "2e1b5df34ffc5db3275010f4bd5832518453b121",
+  "files": {
+    "Cargo.lock": "ea8428c4d36b98aabe9157ec8b1f8a4e95d243f456bf9e9f18e5015b7c8e11fb",
+    "crates/araphor-data/Cargo.toml": "cd865cb9f5e1b60d875bda7d065b521a5058bde27dde15ebf5c0b8ac026a6dae",
+    "crates/araphor-data/src/analysis/mod.rs": "e1b078094585bd20bc763c43875c58058ff0efd76c581abf7582c47b2246b20c",
+    "crates/araphor-data/src/analysis/native/context.rs": "c091dca514cef5535b153fd79a27e208f76f658eac7d0987746326e88f948d6d",
+    "crates/araphor-data/src/analysis/native/mod.rs": "59aacc48584c64b150c9cf14046b03e76c62ae6958d9dc1e7f771da599f26015",
+    "crates/araphor-data/src/error.rs": "910b790c678bb9d6cd06ef596845594371b24de8068fae5fde4947370e7890fe",
+    "crates/araphor-data/tests/native_store.rs": "904c71628539ccbb9a7632244feb674218f3aebfc51712a53e71d45a3ef0b546",
+    "crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.lock": "362e135e767b8f932c9e21d0266e09d1b51bc764b5547b8a5f17f0cab32670e5",
+    "crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml": "f68c33481f89a48e1cd52186baed7127744d200904bf48a521a1ca48ecabb4c3",
+    "crates/araphor-graph/examples/storage_poc/cdc.rs": "b078855236698fa093879a9b62310cefdd67984ab0c6d42d85085c9ffeb8dbd9",
+    "crates/araphor-graph/examples/storage_poc/kv.rs": "d48dfeb3b5e567e389dd719602b85d949a22ad1dde31e3c5f7b6b6947e7c9075",
+    "crates/araphor-graph/examples/storage_poc/live.rs": "e2e2b58eb1600d29e8a9483fe31c7080ce23bb6333273f7da2de2d66a334cd7d",
+    "crates/araphor-graph/examples/storage_poc/native.rs": "053f7d76891b6f2447862f44c6fe7beba92a3fbd355764e0b33ead659fd97779",
+    "crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.lock": "4916f7148e0be684625e9cc72dfe46618b1d1b16269367dc6d249f74503efb09",
+    "crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml": "fe8d545ca5d712c62452b77e235a08f7e8609b400a6c30f7adf8f4725091bbbd",
+    "crates/araphor-graph/examples/storage_poc/stable.rs": "59b15c2eb388a594ae2f88f6d4e7d7c90115eecf1c71a5b2fd87a20edf1342a3"
+  },
+  "binary": {
+    "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-poc",
+    "size": 93154192,
+    "sha256": "b071e9b851dc30322c4fc525050e54904cfc3bddac74d24a1c659187b67d4686"
+  },
+  "initial_data_revision": 0
+}

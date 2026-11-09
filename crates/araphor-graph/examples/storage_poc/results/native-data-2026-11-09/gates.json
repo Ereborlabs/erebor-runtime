@@ -1,0 +1,78 @@
+{
+  "source": "native-data-source.json",
+  "checks": [
+    {
+      "command": "cargo test --offline -p araphor-data --features native-store --test native_store --config /tmp/araphor-storage-release-override.toml",
+      "exit_code": 0,
+      "result": "5 passed",
+      "log": "native-data-r0-integration.log"
+    },
+    {
+      "command": "cargo build --release --target-dir target --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --offline --config /tmp/araphor-storage-release-override.toml",
+      "exit_code": 0,
+      "log": "native-data-r0-poc-build.log"
+    },
+    {
+      "command": "cargo check --offline -p araphor-data --no-default-features --lib --config /tmp/araphor-storage-release-override.toml",
+      "exit_code": 0,
+      "log": "native-data-r0-feature-off.log",
+      "result": "existing warnings"
+    },
+    {
+      "command": "rustfmt --check --edition 2021 --config skip_children=true <nine changed Rust files>",
+      "files": [
+        "crates/araphor-data/src/analysis/native/mod.rs",
+        "crates/araphor-data/src/analysis/native/context.rs",
+        "crates/araphor-data/tests/native_store.rs",
+        "crates/araphor-data/src/error.rs",
+        "crates/araphor-graph/examples/storage_poc/live.rs",
+        "crates/araphor-graph/examples/storage_poc/kv.rs",
+        "crates/araphor-graph/examples/storage_poc/native.rs",
+        "crates/araphor-graph/examples/storage_poc/cdc.rs",
+        "crates/araphor-graph/examples/storage_poc/stable.rs"
+      ],
+      "exit_code": 0,
+      "log": "native-data-r0-fmt.log"
+    },
+    {
+      "command": "native-data-poc <report> stable; summarize_stable.py <report>",
+      "exit_code": 0,
+      "result": "128 primary cycles, 640 historical evaluations, 320 retained views",
+      "log": "native-data-r0-stable.log"
+    },
+    {
+      "command": "compare.py; existing combined runner and summarize_cdc.py",
+      "exit_code": 0,
+      "result": "four alternating pairs, eight passing reports, 112 ordinary samples per version"
+    },
+    {
+      "command": "cargo metadata --offline --manifest-path crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml --format-version 1",
+      "exit_code": 0,
+      "result": "full dependency resolution; separate wrapper binary not rebuilt"
+    },
+    {
+      "command": "cargo test --offline -p araphor-data --features native-store --lib analysis::native::tests --config /tmp/araphor-storage-release-override.toml",
+      "exit_code": 101,
+      "log": "native-data-tests.log",
+      "result": "Earlier attempt cannot build unchanged legacy unit fixtures. The five new public cases now use the integration target. No existing assertion is disabled."
+    },
+    {
+      "command": "cargo clippy --offline -p araphor-data --features native-store --lib --config /tmp/araphor-storage-release-override.toml",
+      "exit_code": 101,
+      "log": "native-data-clippy.log",
+      "result": "Earlier attempt stops at unchanged Graph read.rs unwrap_used. It is not a clean current gate."
+    },
+    {
+      "command": "cargo clippy --offline -p araphor-data --features native-store --lib --no-deps --config /tmp/araphor-storage-release-override.toml",
+      "exit_code": 101,
+      "log": "native-data-clippy-nodeps.log",
+      "result": "Earlier attempt stops at unchanged Data projection/publish.rs and reader/committed/graph.rs expect_used; existing warnings. The revision-zero correction does not change these files."
+    },
+    {
+      "command": "bash .github/scripts/verify-rust-ci.sh",
+      "result": "Not run; user excludes full CI during iteration."
+    }
+  ],
+  "format_limit": "analysis/mod.rs retains its existing formatting. Its only change is the two-line feature-gated module declaration.",
+  "log_copies": "Trailing whitespace and terminal blank lines are normalized. Raw logs remain in output/araphor-fjall-migration-20261109/."
+}

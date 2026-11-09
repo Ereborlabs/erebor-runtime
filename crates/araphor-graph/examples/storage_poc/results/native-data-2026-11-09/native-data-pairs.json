@@ -1,0 +1,122 @@
+[
+  {
+    "pair": 0,
+    "label": "before",
+    "command": [
+      "rtk",
+      "proxy",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-graph-poc",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-pair-0-before.json",
+      "combined"
+    ],
+    "start": 1794253002.5016596,
+    "wall_s": 1.6162292957305908,
+    "exit_code": 0,
+    "sha256": "f307cc30a7de1ef4a664f903754e293f0727a5e6f3e78b81dbe16486fcf1a2c3"
+  },
+  {
+    "pair": 0,
+    "label": "after",
+    "command": [
+      "rtk",
+      "proxy",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-poc",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-pair-0-after.json",
+      "combined"
+    ],
+    "start": 1794253004.241811,
+    "wall_s": 1.5761754512786865,
+    "exit_code": 0,
+    "sha256": "b071e9b851dc30322c4fc525050e54904cfc3bddac74d24a1c659187b67d4686"
+  },
+  {
+    "pair": 1,
+    "label": "after",
+    "command": [
+      "rtk",
+      "proxy",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-poc",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-pair-1-after.json",
+      "combined"
+    ],
+    "start": 1794253005.9474277,
+    "wall_s": 1.5588576793670654,
+    "exit_code": 0,
+    "sha256": "b071e9b851dc30322c4fc525050e54904cfc3bddac74d24a1c659187b67d4686"
+  },
+  {
+    "pair": 1,
+    "label": "before",
+    "command": [
+      "rtk",
+      "proxy",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-graph-poc",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-pair-1-before.json",
+      "combined"
+    ],
+    "start": 1794253007.6345835,
+    "wall_s": 1.5401537418365479,
+    "exit_code": 0,
+    "sha256": "f307cc30a7de1ef4a664f903754e293f0727a5e6f3e78b81dbe16486fcf1a2c3"
+  },
+  {
+    "pair": 2,
+    "label": "after",
+    "command": [
+      "rtk",
+      "proxy",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-poc",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-pair-2-after.json",
+      "combined"
+    ],
+    "start": 1794253009.2985244,
+    "wall_s": 1.5652823448181152,
+    "exit_code": 0,
+    "sha256": "b071e9b851dc30322c4fc525050e54904cfc3bddac74d24a1c659187b67d4686"
+  },
+  {
+    "pair": 2,
+    "label": "before",
+    "command": [
+      "rtk",
+      "proxy",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-graph-poc",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-pair-2-before.json",
+      "combined"
+    ],
+    "start": 1794253010.990217,
+    "wall_s": 1.5499317646026611,
+    "exit_code": 0,
+    "sha256": "f307cc30a7de1ef4a664f903754e293f0727a5e6f3e78b81dbe16486fcf1a2c3"
+  },
+  {
+    "pair": 3,
+    "label": "before",
+    "command": [
+      "rtk",
+      "proxy",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-graph-poc",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-pair-3-before.json",
+      "combined"
+    ],
+    "start": 1794253012.664488,
+    "wall_s": 1.5632503032684326,
+    "exit_code": 0,
+    "sha256": "f307cc30a7de1ef4a664f903754e293f0727a5e6f3e78b81dbe16486fcf1a2c3"
+  },
+  {
+    "pair": 3,
+    "label": "after",
+    "command": [
+      "rtk",
+      "proxy",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-poc",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-data-pair-3-after.json",
+      "combined"
+    ],
+    "start": 1794253014.3517394,
+    "wall_s": 1.5882940292358398,
+    "exit_code": 0,
+    "sha256": "b071e9b851dc30322c4fc525050e54904cfc3bddac74d24a1c659187b67d4686"
+  }
+]

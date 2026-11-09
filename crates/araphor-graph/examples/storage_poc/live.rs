@@ -5,6 +5,8 @@ use std::{
     time::Instant,
 };
 
+use araphor_data::analysis::native::{DataView, NativeStore};
+use araphor_data::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
 use araphor_graph::{
     native::{Declaration, Graph, LayerRequest, View},
     Read,
@@ -24,13 +26,15 @@ pub struct Live {
 }
 
 impl Live {
-    pub fn open(branch: &fjall::Branch) -> Result<Self> {
+    pub fn open(store: &NativeStore) -> Result<Self> {
         let graph = Graph::new(1)?;
         let fixture = Fixture::new()?;
-        if branch.snapshot()?.get(b"head")?.is_none() {
-            let mut tx = branch.write_tx()?;
+        if store.view()?.snapshot().get(b"head")?.is_none() {
+            let mut write = store.write()?;
+            let revision = write.revision();
+            let tx = write.native();
             graph.install(
-                &mut tx,
+                tx,
                 &[1, 2],
                 &fixture
                     .shapes
@@ -43,11 +47,13 @@ impl Live {
                     .collect::<Vec<_>>(),
             )?;
             tx.insert(b"head", 1u64.to_be_bytes());
-            tx.commit_stamped([Self::cut(1)])?;
+            tx.insert(Self::cut(1), revision.to_be_bytes());
+            write.commit([])?;
         }
-        let snapshot = branch.snapshot()?;
+        let data = store.view()?;
+        let snapshot = data.snapshot();
         let revision = Key::number(&snapshot.get(b"head")?.ok_or("head absent")?)?;
-        let current = graph.view(snapshot, BTreeMap::new(), &|_, _, _| Ok(None))?;
+        let current = graph.view(snapshot.clone(), BTreeMap::new(), &|_, _, _| Ok(None))?;
         Ok(Self {
             graph,
             current,
@@ -59,26 +65,37 @@ impl Live {
         [b"cut/".as_slice(), &revision.to_be_bytes()].concat()
     }
 
-    fn snapshot(branch: &fjall::Branch, revision: u64) -> Result<fjall::BranchSnapshot> {
-        let (_, cut) = branch
-            .snapshot()?
+    fn data_view(store: &NativeStore, revision: u64) -> Result<DataView> {
+        let current = store.view()?;
+        let (_, cut) = current
+            .snapshot()
             .range::<Vec<u8>, _>((Included(Self::cut(0)), Included(Self::cut(revision))))
             .next_back()
-            .ok_or("Data cut absent")??;
-        Ok(branch.read_at(fjall::Revision::from_bytes(cut.as_ref().try_into()?))?)
+            .ok_or("fixture cut absent")??;
+        Ok(store.read_at(Key::number(&cut)?)?)
     }
 
-    fn view(&self, branch: &fjall::Branch, revision: u64) -> Result<View> {
+    fn view(&self, store: &NativeStore, revision: u64) -> Result<View> {
         Ok(self.graph.view(
-            Self::snapshot(branch, revision)?,
+            Self::data_view(store, revision)?.snapshot().clone(),
             BTreeMap::new(),
             &|_, _, _| Ok(None),
         )?)
     }
 
+    fn context_key(writer: u64, revision: u64) -> AnalysisContextKeyV1 {
+        AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "storage-poc".into(),
+            entity_key: writer.to_be_bytes().to_vec(),
+            lifetime_key: b"state".to_vec(),
+            owner_revision: revision,
+        }
+    }
+
     pub fn apply(
         &mut self,
-        branch: &fjall::Branch,
+        store: &NativeStore,
         step: &Step,
         commit: bool,
         cursor: Option<&[u8]>,
@@ -96,29 +113,40 @@ impl Live {
                 })
             })
             .collect::<araphor_graph::Result<Vec<_>>>()?;
+        let states = step
+            .journals
+            .keys()
+            .map(|writer| -> Result<_> {
+                Ok(AnalysisContextVersionV1 {
+                    key: Self::context_key(*writer, step.revision),
+                    valid_from_utc_ns: None,
+                    valid_until_utc_ns: None,
+                    sensitivity: ContextSensitivityV1::Public,
+                    body: rmp_serde::to_vec(&(step.state(*writer), step.captured))?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let prepare_s = started.elapsed().as_secs_f64();
         let writer = Instant::now();
-        let mut tx = branch.write_tx()?;
+        let mut write = store.write()?;
+        let data_revision = write.revision();
+        let tx = write.native();
         assert_eq!(
             Key::number(&tx.get(b"head")?.ok_or("head absent")?)?,
             step.previous
         );
         let mut pending =
             self.graph
-                .stage(&mut tx, step.revision, &requests, prepared, &|_, _, _| {
-                    Ok(None)
-                })?;
-        for writer in step.journals.keys() {
-            tx.insert(Key::new(b'H', &[*writer]), step.revision.to_be_bytes());
-            tx.insert(Key::new(b'S', &[*writer]), step.state(*writer));
-            tx.insert(Key::new(b'T', &[*writer]), step.captured.to_be_bytes());
-        }
+                .stage(tx, step.revision, &requests, prepared, &|_, _, _| Ok(None))?;
         tx.insert(b"J", rmp_serde::to_vec(&(step.previous, step.captured))?);
         tx.insert(b"head", step.revision.to_be_bytes());
         if let Some(cursor) = cursor {
             tx.insert(b"cursor/package", cursor);
         }
-        pending.stamps.push(Self::cut(step.revision));
+        tx.insert(Self::cut(step.revision), data_revision.to_be_bytes());
+        for state in &states {
+            write.context(state, None)?;
+        }
         let mut sample = Timing {
             revision: step.revision,
             prepare_s,
@@ -131,15 +159,18 @@ impl Live {
         assert_eq!(sample.added, step.added());
         let synced = Instant::now();
         if commit {
-            tx.commit_stamped(std::mem::take(&mut pending.stamps))?
+            write
+                .commit(std::mem::take(&mut pending.stamps))?
                 .ok_or("empty Graph commit")?;
             sample.commit_s = synced.elapsed().as_secs_f64();
-            self.current = self
-                .graph
-                .view(branch.snapshot()?, BTreeMap::new(), &|_, _, _| Ok(None))?;
+            self.current = self.graph.view(
+                store.view()?.snapshot().clone(),
+                BTreeMap::new(),
+                &|_, _, _| Ok(None),
+            )?;
             self.revision = step.revision;
         } else {
-            tx.rollback();
+            write.rollback();
             sample.commit_s = synced.elapsed().as_secs_f64();
         }
         sample.total_s = started.elapsed().as_secs_f64();
@@ -148,7 +179,7 @@ impl Live {
 
     pub fn capture<T>(
         &self,
-        branch: &fjall::Branch,
+        store: &NativeStore,
         revision: u64,
         action: impl FnOnce(&dyn GraphRead, f64) -> Result<T>,
     ) -> Result<T> {
@@ -156,7 +187,7 @@ impl Live {
         if revision >= self.revision {
             action(&self.current, started.elapsed().as_secs_f64())
         } else {
-            let view = self.view(branch, revision)?;
+            let view = self.view(store, revision)?;
             action(&view, started.elapsed().as_secs_f64())
         }
     }
@@ -193,28 +224,31 @@ impl Live {
 
     pub fn inspect(
         &self,
-        branch: &fjall::Branch,
+        store: &NativeStore,
         fixture: &Fixture,
         revision: u64,
     ) -> Result<Readout> {
         let started = Instant::now();
-        let snapshot = Self::snapshot(branch, revision)?;
+        let data = Self::data_view(store, revision)?;
+        let snapshot = data.snapshot();
         let mut states = Vec::new();
         for writer in [1, 2] {
-            for kind in [b'S', b'T'] {
-                states.push(
-                    snapshot
-                        .get(Key::new(kind, &[writer]))?
-                        .map(|value| value.to_vec()),
-                );
-            }
+            let state = data
+                .context_head(&Self::context_key(writer, 1))?
+                .map(|reference| -> Result<_> {
+                    let (version, _) = data.context(&reference.key)?.ok_or("state absent")?;
+                    Ok(rmp_serde::from_slice::<(Vec<u8>, u64)>(&version.body)?)
+                })
+                .transpose()?;
+            states.push(state.as_ref().map(|(state, _)| state.clone()));
+            states.push(state.map(|(_, captured)| captured.to_be_bytes().to_vec()));
         }
         let capture_s = started.elapsed().as_secs_f64();
         let started = Instant::now();
         let rows = if revision >= self.revision {
             Self::rows(&self.current, fixture)?
         } else {
-            Self::rows(&self.view(branch, revision)?, fixture)?
+            Self::rows(&self.view(store, revision)?, fixture)?
         };
         let read_s = started.elapsed().as_secs_f64();
         let started = Instant::now();
@@ -222,7 +256,7 @@ impl Live {
         if snapshot.get(b"head")?.as_deref() == Some(revision.to_be_bytes().as_slice()) {
             if let Some(value) = snapshot.get(b"J")? {
                 let (previous, _): (u64, u64) = rmp_serde::from_slice(&value)?;
-                let before = Self::rows(&self.view(branch, previous)?, fixture)?;
+                let before = Self::rows(&self.view(store, previous)?, fixture)?;
                 let after = rows
                     .iter()
                     .map(|row| (row.identity(), row.opened))
@@ -252,16 +286,23 @@ impl Live {
 
     pub fn verify_metadata(
         &self,
-        branch: &fjall::Branch,
+        store: &NativeStore,
         fixture: &Fixture,
         revision: u64,
         current: u64,
     ) -> Result<()> {
         assert_eq!(
-            Key::number(&branch.snapshot()?.get(b"head")?.ok_or("head absent")?)?,
+            Key::number(
+                &store
+                    .view()?
+                    .snapshot()
+                    .get(b"head")?
+                    .ok_or("head absent")?
+            )?,
             current
         );
-        let snapshot = Self::snapshot(branch, revision)?;
+        let data = Self::data_view(store, revision)?;
+        let snapshot = data.snapshot();
         let last = fixture
             .steps
             .iter()
@@ -269,9 +310,8 @@ impl Live {
             .next_back();
         for writer in [1, 2] {
             assert_eq!(
-                snapshot
-                    .get(Key::new(b'H', &[writer]))?
-                    .map(|value| value.to_vec()),
+                data.context_head(&Self::context_key(writer, 1))?
+                    .map(|reference| reference.key.owner_revision.to_be_bytes().to_vec()),
                 last.map(|step| step.revision.to_be_bytes().to_vec())
             );
         }
@@ -297,13 +337,15 @@ impl Live {
 
     pub fn assert_keys(
         &self,
-        branch: &fjall::Branch,
+        store: &NativeStore,
         changes: &[Change],
         actual: &[Vec<u8>],
     ) -> Result<()> {
-        let view = self
-            .graph
-            .view(branch.snapshot()?, BTreeMap::new(), &|_, _, _| Ok(None))?;
+        let view = self.graph.view(
+            store.view()?.snapshot().clone(),
+            BTreeMap::new(),
+            &|_, _, _| Ok(None),
+        )?;
         let expected = changes
             .iter()
             .map(|change| -> Result<_> {
@@ -318,8 +360,9 @@ impl Live {
         Ok(())
     }
 
-    pub fn assert_stable(branch: &fjall::Branch) -> Result<()> {
-        let snapshot = branch.snapshot()?;
+    pub fn assert_stable(store: &NativeStore) -> Result<()> {
+        let data = store.view()?;
+        let snapshot = data.snapshot();
         for (kind, fields) in [
             (b'M', 4),
             (b'R', 4),
@@ -335,7 +378,7 @@ impl Live {
             }
         }
         assert_eq!(snapshot.prefix(b"\0graph/M").count(), 186);
-        assert_eq!(snapshot.prefix(b"H").count(), 2);
+        assert_eq!(snapshot.prefix(b"\0data/H").count(), 2);
         assert_eq!(snapshot.prefix(b"J").count(), 1);
         assert!(snapshot.get(b"C")?.is_none());
         assert_eq!(snapshot.prefix(b"\0graph/B").count(), 0);

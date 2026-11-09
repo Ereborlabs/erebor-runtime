@@ -71,8 +71,8 @@ impl Native {
         };
         let db = kv::Database::open(kind, path)?;
         #[cfg(feature = "cdc-poc")]
-        if let kv::Database::FjallBranch(_, branch) = &db {
-            let live = super::live::Live::open(branch)?;
+        if let kv::Database::FjallBranch(store) = &db {
+            let live = super::live::Live::open(store)?;
             return Ok(Self {
                 db,
                 properties: BTreeMap::new(),
@@ -145,8 +145,8 @@ impl Native {
 
     #[cfg(feature = "cdc-poc")]
     pub fn assert_member_keys(&self, changes: &[Change], actual: &[Vec<u8>]) -> Result<()> {
-        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&self.live, &self.db) {
-            return live.assert_keys(branch, changes, actual);
+        if let (Some(live), kv::Database::FjallBranch(store)) = (&self.live, &self.db) {
+            return live.assert_keys(store, changes, actual);
         }
         self.db.read(|tx| {
             let mut expected = BTreeSet::new();
@@ -176,8 +176,8 @@ impl Native {
     #[cfg(feature = "cdc-poc")]
     pub fn assert_stable_keys(&self) -> Result<()> {
         assert!(self.stable);
-        if let kv::Database::FjallBranch(_, branch) = &self.db {
-            return super::live::Live::assert_stable(branch);
+        if let kv::Database::FjallBranch(store) = &self.db {
+            return super::live::Live::assert_stable(store);
         }
         self.db.read(|tx| {
             for (kind, fields) in [
@@ -207,8 +207,8 @@ impl Native {
 
     fn apply_saved(&mut self, step: &Step, commit: bool, cursor: Option<&[u8]>) -> Result<Timing> {
         #[cfg(feature = "cdc-poc")]
-        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&mut self.live, &self.db) {
-            return live.apply(branch, step, commit, cursor);
+        if let (Some(live), kv::Database::FjallBranch(store)) = (&mut self.live, &self.db) {
+            return live.apply(store, step, commit, cursor);
         }
         let started = Instant::now();
         let prepare_s = started.elapsed().as_secs_f64();
@@ -467,8 +467,8 @@ impl Native {
         action: impl FnOnce(&dyn GraphRead, f64) -> Result<T>,
     ) -> Result<T> {
         #[cfg(feature = "cdc-poc")]
-        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&self.live, &self.db) {
-            return live.capture(branch, revision, action);
+        if let (Some(live), kv::Database::FjallBranch(store)) = (&self.live, &self.db) {
+            return live.capture(store, revision, action);
         }
         let started = Instant::now();
         self.read_at(revision, |tx| {
@@ -542,8 +542,8 @@ impl Native {
 
     pub fn inspect(&self, fixture: &Fixture, revision: u64, _all: bool) -> Result<Readout> {
         #[cfg(feature = "cdc-poc")]
-        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&self.live, &self.db) {
-            return live.inspect(branch, fixture, revision);
+        if let (Some(live), kv::Database::FjallBranch(store)) = (&self.live, &self.db) {
+            return live.inspect(store, fixture, revision);
         }
         let started = Instant::now();
         self.read_at(revision, |tx| {
@@ -594,8 +594,8 @@ impl Native {
 
     pub fn verify_metadata(&self, fixture: &Fixture, revision: u64, current: u64) -> Result<()> {
         #[cfg(feature = "cdc-poc")]
-        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&self.live, &self.db) {
-            return live.verify_metadata(branch, fixture, revision, current);
+        if let (Some(live), kv::Database::FjallBranch(store)) = (&self.live, &self.db) {
+            return live.verify_metadata(store, fixture, revision, current);
         }
         self.db.read(|tx| {
             assert_eq!(

@@ -7,6 +7,13 @@ source, correctness results, and measured slowdown. Earlier native-adapter
 measurements describe the prior handwritten PoC. Production Data still uses
 DuckDB. The incident performance targets remain not done.
 
+The native branch condition now also uses Data's revision coordinator and
+published metadata view for all source, output, and checkpoint writes.
+Physical context versions replace its separate state records. See the
+[native Data qualification](results/native-data-2026-11-09/README.md).
+The small mixed timing differences establish no repeatable performance gain.
+Production Data remains unchanged.
+
 This proof of concept (PoC) runs the existing causal package against current
 DuckDB GraphStore, redb, Fjall, and a local append-only store. It measures the package's dependent Graph
 traversal and staged changes through one durable commit. The production store

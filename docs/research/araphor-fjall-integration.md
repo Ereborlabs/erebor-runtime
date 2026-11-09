@@ -6,6 +6,12 @@ The optional native Graph participant and its existing package PoC caller are
 now [qualified](../../crates/araphor-graph/examples/storage_poc/results/native-graph-2026-11-09/README.md).
 The comparison records a slowdown. Production Data integration and the incident
 performance targets remain **Not done**.
+The optional native Data metadata owner now commits and publishes the existing
+PoC's source, Graph, context state, and checkpoint writes. Its
+[qualification](../../crates/araphor-graph/examples/storage_poc/results/native-data-2026-11-09/README.md)
+passes five integration cases and the unchanged package workloads. The small
+mixed timing differences establish no repeatable performance gain. The complete
+production transaction and raw-view migration remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and
@@ -195,7 +201,7 @@ receives the exact native revision of this batch. Duplicate keys and collisions
 with staged puts/removes are errors. Stamps are writes; a stamps-only commit is
 nonempty. There is no provisional revision read. Empty or over-width stamp keys
 return an invalid-input error before sequence allocation. This API is **Done**;
-its Data caller and the production migration remain **Not done**.
+its production Data caller and the production migration remain **Not done**.
 
 Data stamps `cut/<Data revision>` and required `layer-cut/<layer ID>` records.
 To open Data revision R, seek the greatest metadata cut-index entry at or before

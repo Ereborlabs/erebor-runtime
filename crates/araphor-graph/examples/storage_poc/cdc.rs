@@ -172,9 +172,9 @@ impl Walker {
                 db.inner().journal_feed(Some(cursor.into()))?,
                 Watch::Keyspace(table.as_ref().id()),
             ),
-            Database::FjallBranch(db, branch) => Feed::Fjall(
-                db.inner().journal_feed(Some(cursor.into()))?,
-                Watch::Branch(branch.id()),
+            Database::FjallBranch(store) => Feed::Fjall(
+                store.database().inner().journal_feed(Some(cursor.into()))?,
+                Watch::Branch(store.branch().id()),
             ),
             Database::Home(db) => Feed::Home(db.journal_feed(path, cursor)?),
             _ => return Err("engine has no supported native journal feed".into()),
@@ -399,7 +399,13 @@ struct Run {
 
 fn head(native: &Native) -> Result<Cursor> {
     match native.database() {
-        Database::Fjall(db, _) | Database::FjallBranch(db, _) => Ok(db
+        Database::Fjall(db, _) => Ok(db
+            .inner()
+            .journal_head()?
+            .ok_or("journal head absent")?
+            .into()),
+        Database::FjallBranch(store) => Ok(store
+            .database()
             .inner()
             .journal_head()?
             .ok_or("journal head absent")?
@@ -414,8 +420,10 @@ fn saved(native: &Native, key: &[u8], default: Cursor) -> Result<Cursor> {
         .read(|view| view.get(key)?.map_or(Ok(default), |v| Cursor::decode(&v)))
 }
 fn acknowledge(native: &Native, cursor: Cursor) -> Result<()> {
-    if let Database::Fjall(db, _) | Database::FjallBranch(db, _) = native.database() {
-        db.inner().retain_after(cursor.into())?;
+    match native.database() {
+        Database::Fjall(db, _) => db.inner().retain_after(cursor.into())?,
+        Database::FjallBranch(store) => store.database().inner().retain_after(cursor.into())?,
+        _ => {}
     }
     Ok(())
 }
@@ -433,7 +441,8 @@ fn maintain(native: &Native, rotate: bool) -> Result<()> {
                 db.inner().collect_journals()?;
             }
         }
-        Database::FjallBranch(db, _) => {
+        Database::FjallBranch(store) => {
+            let db = store.database();
             db.inner().flush_memtables()?;
             if rotate {
                 db.inner().rotate_journal()?;

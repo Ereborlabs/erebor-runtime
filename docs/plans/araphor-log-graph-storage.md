@@ -17,7 +17,7 @@ ordinary values, deletes, and the branch head share one durable batch. The two
 new native tests check exact receipts, an intervening raw native write, original
 journal contents, unchanged state after rejected input, and historical values
 after compaction and reopen. The caller can save Data and Graph layer cut indexes
-without a second commit. Data does not use the API yet.
+without a second commit. The production Data store does not use the API yet.
 
 Focused checks pass: Fjall with CDC 137 tests and one ignored; without CDC 87
 tests and one ignored; 86 documentation tests; formatting; library clippy with
@@ -61,6 +61,27 @@ The production Data caller, complete atomic state replacement, log-reader
 routing, notifications, and incident performance acceptance remain **Not done**.
 The old production store remains the only authority until all Data transaction
 families can switch together. No live dual writes or SQL emulation are used.
+
+The optional native Data metadata owner and its existing package PoC caller are
+now [qualified](../../crates/araphor-graph/examples/storage_poc/results/native-data-2026-11-09/README.md).
+Data owns the engine, private directory lease, revision allocator, exact cut
+index, and published metadata view. All native PoC source, output, and checkpoint
+writes use this owner. Physical immutable context records replace its old
+separate state records. Initialization uses Data revision 0, as the existing
+Data API requires. Graph fixture cuts remain separate from allocated Data
+revisions. Failed commits stop captures and writes until reopen.
+
+Five integration cases and the unchanged package PoCs pass. Four alternating
+pairs contain 112 ordinary target samples per version. Median/p95/maximum
+cycle times change from 7.371/12.702/14.584 ms to 7.225/13.049/13.258 ms.
+These small mixed differences establish no repeatable performance gain.
+The Data unit-test target fails to build unchanged legacy fixtures. Clippy
+stops on unchanged legacy calls. Full CI does not run during iteration.
+
+Result: **Done for the optional native metadata owner and its PoC caller**.
+The complete raw/native view, production admission, remaining Data families,
+log routing, notifications, retention, backup, and incident targets remain
+**Not done**. Read the [source review guide](../guides/araphor-native-data-review.md).
 
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
