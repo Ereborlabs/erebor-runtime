@@ -24,8 +24,9 @@ master plan invented for them.
 - [Fjall durable history, branches, and CDC](fjall-versioned-storage.md) records
   the proposed generic storage APIs and source changes. The performance goal
   is to match or improve the existing Fjall PoC benchmark.
-  Implementation is approved and in progress. Exact commit receipts pass
-  focused checks; durable history, branches, and final performance remain open.
+  Implementation is approved and in progress. Durable history, sparse branches,
+  exact commit receipts, streaming CDC, and retired collection pass focused
+  checks. Complete performance qualification remains open.
 - [Araphor packages and managed jobs](araphor-package-jobs.md) records the
   current native SQL pipeline, reactive execution, new Discovery packages,
   and code reduction criteria. Definition files and running instances are the

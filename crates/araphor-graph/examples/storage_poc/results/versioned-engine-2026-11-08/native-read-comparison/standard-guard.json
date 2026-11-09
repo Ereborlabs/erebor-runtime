@@ -1,0 +1,8 @@
+{
+  "root_commit": "51b4c9d1844390e5c19b17e8566c1e6e6c049a36",
+  "fjall_commit": "b766e3bc8df39f33ed13f42c9211426297d42960",
+  "lsm_tree_commit": "b9f6cfda4152fa3531a8618493f8a15637c8a068",
+  "binary_sha256": "0b5531f5864f48d012ee3bc78db704bfb5fa12353d562e69d489b2adf075097f",
+  "binary": "output/storage-engine-baseline-20261108/versioned-standard-guard",
+  "source_label": "51b4c9d18+standard-guard"
+}

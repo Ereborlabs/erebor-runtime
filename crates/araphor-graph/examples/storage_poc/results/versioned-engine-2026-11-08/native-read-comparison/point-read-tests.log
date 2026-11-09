@@ -1,0 +1,280 @@
+   Compiling libc v0.2.191
+   Compiling cfg-if v1.0.5
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling zerocopy v0.8.63
+   Compiling crossbeam-utils v0.8.23
+   Compiling log v0.4.35
+   Compiling getrandom v0.4.3
+   Compiling rand_core v0.10.1
+   Compiling once_cell v1.21.4
+   Compiling syn v2.0.119
+   Compiling utf8parse v0.2.2
+   Compiling scopeguard v1.2.0
+   Compiling rustix v1.1.6
+   Compiling getrandom v0.2.17
+   Compiling crossbeam-epoch v0.9.21
+   Compiling rand_core v0.6.4
+   Compiling lock_api v0.4.14
+   Compiling anstyle-parse v1.0.0
+   Compiling parking_lot_core v0.9.12
+   Compiling bitflags v2.13.2
+   Compiling anstyle v1.0.14
+   Compiling anstyle-query v1.1.5
+   Compiling colorchoice v1.0.5
+   Compiling linux-raw-sys v0.12.1
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstream v1.0.0
+   Compiling env_filter v2.0.0
+   Compiling twox-hash v2.1.5
+   Compiling test-log-core v0.2.21
+   Compiling byteorder-lite v0.1.0
+   Compiling equivalent v1.0.3
+   Compiling cpufeatures v0.3.1
+   Compiling hashbrown v0.16.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling xxhash-rust v0.8.19
+   Compiling compare v0.0.6
+   Compiling rand_chacha v0.3.1
+   Compiling fastrand v2.5.0
+   Compiling smallvec v1.16.5
+   Compiling interval-heap v0.0.5
+   Compiling enum_dispatch v0.3.13
+   Compiling rand v0.8.8
+   Compiling tempfile v3.27.0
+   Compiling test-log-macros v0.2.21
+   Compiling sfa v1.0.0
+   Compiling quick_cache v0.6.24
+   Compiling chacha20 v0.10.2
+   Compiling lz4_flex v0.13.1
+   Compiling env_logger v0.11.11
+   Compiling crossbeam-skiplist v0.1.3
+   Compiling spin v0.9.9
+   Compiling rustc-hash v2.1.3
+   Compiling self_cell v1.3.0
+   Compiling byteview v0.10.2
+   Compiling varint-rs v2.2.1
+   Compiling hashbrown v0.14.5
+   Compiling flume v0.12.0
+   Compiling test-log v0.2.21
+   Compiling lsm-tree v3.1.10 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree)
+   Compiling rand v0.10.3
+   Compiling nanoid v0.4.0
+warning: usage of an `unsafe` block
+   --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/table/block/mod.rs:111:21
+    |
+111 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/table/block/mod.rs:109:24
+    |
+109 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+   --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/table/block/mod.rs:172:21
+    |
+172 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/table/block/mod.rs:170:24
+    |
+170 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+  --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/vlog/blob_file/reader.rs:89:35
+   |
+89 |                 let mut builder = unsafe { UserValue::builder_unzeroed(real_val_len as usize) };
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/vlog/blob_file/reader.rs:88:24
+   |
+88 |                 #[warn(unsafe_code)]
+   |                        ^^^^^^^^^^^
+
+   Compiling dashmap v6.2.1
+warning: field `tree_type` is never read
+  --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/manifest.rs:11:9
+   |
+ 9 | pub struct Manifest {
+   |            -------- field in this struct
+10 |     pub version: FormatVersion,
+11 |     pub tree_type: TreeType,
+   |         ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `Indexed` is never constructed
+  --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/version/run.rs:15:12
+   |
+15 | pub struct Indexed<T: Ranged> {
+   |            ^^^^^^^
+
+warning: `lsm-tree` (lib) generated 5 warnings
+   Compiling fjall v3.1.13 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall)
+warning: usage of an `unsafe` block
+   --> src/journal/entry.rs:206:41
+    |
+206 |                         let mut value = unsafe { Slice::builder_unzeroed(value_len as usize) };
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> src/journal/entry.rs:205:32
+    |
+205 |                         #[warn(unsafe_code)]
+    |                                ^^^^^^^^^^^
+
+warning: enum `RecoveryMode` is never used
+  --> src/journal/error.rs:10:10
+   |
+10 | pub enum RecoveryMode {
+   |          ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `backpressure_lock` is never read
+  --> src/supervisor.rs:35:16
+   |
+16 | pub struct SupervisorInner {
+   |            --------------- field in this struct
+...
+35 |     pub(crate) backpressure_lock: Mutex<()>,
+   |                ^^^^^^^^^^^^^^^^^
+
+warning: `fjall` (lib test) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.52s
+     Running unittests src/lib.rs (fjall/target/debug/deps/fjall-42dfc19541462393)
+
+running 124 tests
+test cdc::tests::poison_wakes_blocked_reader ... ok
+test commit::tests::empty_and_aborted_receipts ... ok
+test cdc::tests::corrupt_reader_does_not_truncate ... ok
+test journal::entry::tests::test_invalid_deserialize ... ok
+test journal::entry::tests::test_invalid_tag ... ok
+test journal::entry::tests::test_serialize_and_deserialize_success ... ok
+test db_test::recover_sealed_order ... ok
+test commit::tests::legacy_commit_keeps_manual_buffering ... ok
+test cdc::tests::empty_reopen_and_first_batch ... ok
+test cdc::tests::raw_mutations_and_rollback ... ok
+test commit::tests::receipt_syncs_cross_keyspace_state ... ok
+test cdc::tests::one_batch_resume_and_active_extension_cross_empty_segments ... ok
+test db_test::clear_recover_sealed ... ok
+test journal::test::checksum_uses_original_compressed_bytes ... ok
+test commit::tests::receipts_match_concurrent_journal_batches ... ok
+test db_test::recover_sealed_partially_flushed_batch ... ok
+test cdc::tests::unread_rotation_compaction_and_clear_recovery ... ok
+test journal::segment::tests::active_reader_keeps_unlinked_segment_identity_until_drop ... ok
+test db_test::delete_keyspace_1 ... ok
+test db_test::recover_sealed_blob ... ok
+test journal::segment::tests::failed_successor_creation_stops_publication_and_recovers ... ok
+test journal::segment::tests::durable_seal_without_successor_restores_the_next_writer ... ok
+test journal::segment::tests::missing_metadata_rebuilds_and_invalid_metadata_cannot_append ... ok
+test journal::test::journal_recovery_no_active ... ok
+test keyspace::config::block_size::tests::roundtrip_block_size_policy ... ok
+test keyspace::config::compression::tests::roundtrip_compression_policy ... ok
+test keyspace::config::filter::tests::roundtrip_filter_policy ... ok
+test keyspace::config::hash_ratio::tests::roundtrip_hash_ratio_policy ... ok
+test keyspace::config::pinning::tests::roundtrip_pinning_policy ... ok
+test keyspace::config::restart_interval::tests::roundtrip_restart_interval_policy ... ok
+test db_test::recover_sealed_smoke_test ... ok
+test keyspace::test::keyspace_ingest ... ignored, flimsy because of the compaction check, probably race condition... run the compaction synchronously
+test keyspace::options::tests::keyspace_opts_compression_default ... ok
+test locked_file::tests::create_new_acquires_lock_when_file_already_exists ... ok
+test locked_file::tests::try_acquire_acquires_lock_on_existing_file ... ok
+test db_test::recover_sealed_pair_1 ... ok
+test journal::test::journal_rotation ... ok
+test db_test::test_exotic_keyspace_names ... ok
+test journal::writer::tests::failed_sync_publishes_no_receipt ... ok
+test snapshot_tracker::tests::snapshot_tracker_basic ... ok
+test snapshot_tracker::tests::snapshot_tracker_clone_snapshot_behaves_like_second_open ... ok
+test snapshot_tracker::tests::snapshot_tracker_close_never_opened_does_not_underflow_or_panic ... ok
+test snapshot_tracker::tests::snapshot_tracker_concurrent_open_same_seqno_counts_correctly ... ok
+test journal::segment::tests::retained_oldest_segment_does_not_hide_flushable_data ... ok
+test journal::test::journal_truncation_corrupt_bytes ... ok
+test journal::test::journal_truncation_repeating_item_marker ... ok
+test journal::test::journal_recovery_active ... ok
+test journal::test::journal_recovery_active_lz4 ... ok
+test journal::test::journal_truncation_repeating_start_marker ... ok
+test snapshot_tracker::tests::snapshot_tracker_publish_moves_seqno_forward_and_ignores_older ... ok
+test journal::test::journal_truncation_repeating_end_marker ... ok
+test journal::writer::tests::failed_sync_preserves_clock ... ok
+test snapshot_tracker::tests::snapshot_tracker_prevent_watermark ... ok
+test journal::writer::tests::failed_branch_sync_preserves_head_and_progress ... ok
+test journal::segment::tests::persisted_sealed_payload_is_not_decoded_on_reopen ... ok
+test meta_keyspace::tests::meta_keyspace_smoke_test ... ok
+test meta_keyspace::tests::keyspace_delete ... ok
+test meta_keyspace::tests::keyspace_delete_and_reopening_behavior ... ok
+test tx::optimistic::oracle::tests::committing_transaction_closes_only_its_snapshot ... ok
+test meta_keyspace::tests::tx_keyspace_delete ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_aborted_reads ... ok
+test snapshot_tracker::tests::snapshot_tracker_mvcc_watermark_1 ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_anti_dependency_cycles ... ok
+test snapshot_tracker::tests::snapshot_tracker_mvcc_watermark_2 ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_arthur_1 ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_arthur_2 ... ok
+test snapshot_tracker::tests::snapshot_tracker_mvcc_watermark_3 ... ok
+test snapshot_tracker::tests::snapshot_tracker_mvcc_watermark_4 ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_basic ... ok
+test version::tests::failed_marker_replace_keeps_existing_contents ... ok
+test version::tests::version_deserialize_fail ... ok
+test version::tests::version_deserialize_success ... ok
+test version::tests::version_deserialize_success_2 ... ok
+test version::tests::version_len ... ok
+test version::tests::version_serde_round_trip ... ok
+test version::tests::version_serialize ... ok
+test version::tests::version_serialize_2 ... ok
+test version::tests::malformed_mode_is_rejected ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_prefix ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_range ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_size_of_deleted_key ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_swap ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_update_fetch_update ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_ww ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_write_cycles ... ok
+test tx::write_tx::tests::update_fetch ... ok
+test tx::write_tx::tests::staged_point_reads ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_size_of_unrelated_writes ... ok
+test snapshot_tracker::tests::snapshot_tracker_increase_watermark ... ok
+test meta_keyspace::tests::versioned_floor_cannot_reset ... ok
+test tx::optimistic::write_tx::tests::tx_ssi_size_of_write_skew ... ok
+test versioned::branch_tests::catalogue_rejects_missing_trees_and_cleans_unpublished_orphans ... ok
+test versioned::branch_tests::creation_heads_and_progress_share_native_batches ... ok
+test versioned::read::tests::historical_cursor_reports_corruption ... ok
+test versioned::read::tests::historical_cursor_retention ... ok
+test versioned::branch_tests::single_branch_scan_visibility ... ok
+test versioned::tests::catalogue_bypasses_application_filters ... ok
+test versioned::branch_tests::current_fork_keeps_the_precreation_parent_view ... ok
+test versioned::tests::catalogue_recovers_from_original_journal ... ok
+test versioned::branch_tests::history_admission_rejects_gaps_and_future_reads ... ok
+test versioned::tests::flat_mode_stays_unchanged ... ok
+test worker_pool::tests::active_thread_guard_decrements_on_early_return ... ok
+test worker_pool::tests::active_thread_guard_decrements_on_panic ... ok
+test worker_pool::tests::active_thread_guard_decrements_on_scope_exit ... ok
+test worker_pool::tests::claim_and_spawn_claims_one_slot_per_worker ... ok
+test worker_pool::tests::claim_and_spawn_counts_live_workers_only ... ok
+test versioned::tests::established_catalogue_cannot_reset ... ok
+test write_buffer_manager::tests::write_buffer_manager_decrement ... ok
+test write_buffer_manager::tests::write_buffer_manager_increment ... ok
+test versioned::tests::interrupted_initialization_resumes ... ok
+test versioned::tests::versioned_mode_requires_new_storage ... ok
+test versioned::tests::journal_mode_restores_without_flags ... ok
+test versioned::tests::clock_covers_native_writes ... ok
+test versioned::retire::tests::retirement_waits_for_journal ... ok
+test versioned::tests::clock_recovers_without_journal_payload ... ok
+test versioned::tests::deleted_keyspace_id_survives_reclamation ... ok
+test versioned::retire::tests::retirement_respects_history_owners ... ok
+test versioned::branch_tests::fork_and_reader_pins_do_not_retain_unrelated_versions ... ok
+test worker_pool::tests::keyspace_compact_after_startup ... ok
+test versioned::branch_tests::branch_history_and_original_cdc_continue_together ... ok
+test versioned::branch_tests::branch_history_survives_compaction_and_reopen ... ok
+test versioned::retire::tests::retired_orphans_retry_recovery ... ok
+test versioned::tests::journal_mode_promotes_flat_marker ... ok
+test tx::optimistic::oracle::tests::oracle_committed_txns_does_not_leak ... ok
+
+test result: ok. 123 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.70s
+

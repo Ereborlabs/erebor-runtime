@@ -26,6 +26,9 @@ tree contains only named, no-clobber copies selected during triage.
 - [Retained execution state review](guides/araphor-retained-execution-review.md)
   gives the current saved-state reuse flow, commit checks, and remaining input
   work.
+- [Fjall versioned storage review](guides/fjall-versioned-storage-review.md)
+  gives the native history, branch, journal, recovery, and collection source
+  route. Complete performance qualification remains open.
 
 ## Important Status Rule
 
