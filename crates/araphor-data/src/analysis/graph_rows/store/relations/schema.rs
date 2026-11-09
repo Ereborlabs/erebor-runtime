@@ -11,12 +11,13 @@ impl Relations<'_> {
 
     pub fn schema() -> String {
         format!(
-            "{}{}{}{}{}",
+            "{}{}{}{}{}{}",
             Self::SCHEMA,
             crate::analysis::graph_rows::store::SubjectRows::SCHEMA,
             crate::analysis::graph_rows::store::RelationshipRows::SCHEMA,
             crate::analysis::graph_rows::store::FindingRows::SCHEMA,
-            crate::analysis::graph_rows::store::StateRows::SCHEMA
+            crate::analysis::graph_rows::store::StateRows::SCHEMA,
+            araphor_graph::GraphStore::SCHEMA
         )
     }
 

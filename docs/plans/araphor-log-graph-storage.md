@@ -83,6 +83,13 @@ The complete raw/native view, production admission, remaining Data families,
 log routing, notifications, retention, backup, and incident targets remain
 **Not done**. Read the [source review guide](../guides/araphor-native-data-review.md).
 
+Current Data initialization now uses one complete Graph schema factory. The
+previous expected schema omitted seven engine tables and the canonical fact
+index. The public `store_schema` regression passes open and reopen, and still
+rejects an unexpected Graph table. The table definitions and strict comparison
+stay unchanged. Result: **Done for the initialization correction**. This is
+not an engine migration or a measured performance improvement.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

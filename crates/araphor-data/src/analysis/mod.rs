@@ -225,11 +225,7 @@ impl AnalysisStore {
                     PRIMARY KEY (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS context_version_key_idx
-                    ON context_versions(version_key);
-                CREATE TABLE IF NOT EXISTS graph_fact_records (
-                    version_key BLOB PRIMARY KEY,record_key BLOB NOT NULL,stream_key BLOB NOT NULL,source_cursor UBIGINT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS graph_fact_record_idx ON graph_fact_records(record_key,version_key);";
+                    ON context_versions(version_key);";
 
     pub fn register_discovery_owner(&self) {
         if self.discovery_owners.fetch_add(1, Ordering::AcqRel) == 0 {
@@ -513,11 +509,6 @@ impl AnalysisStore {
                 .execute_batch(&graph_rows::GraphRows::schema())
                 .context(AnalysisDatabaseSnafu {
                     operation: "create native graph rows",
-                })?;
-            transaction
-                .execute_batch(araphor_graph::GraphStore::SCHEMA)
-                .context(AnalysisDatabaseSnafu {
-                    operation: "create Graph engine schema",
                 })?;
             transaction
                 .execute_batch(Self::PACKAGE_SCHEMA)

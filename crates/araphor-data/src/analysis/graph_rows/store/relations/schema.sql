@@ -86,3 +86,8 @@ CREATE TABLE graph_fact_values (
     fact_id UBIGINT PRIMARY KEY, tenant_id BLOB NOT NULL, body BLOB NOT NULL
 );
 CREATE INDEX graph_fact_body ON graph_fact_values (body);
+
+CREATE TABLE IF NOT EXISTS graph_fact_records (
+    version_key BLOB PRIMARY KEY,record_key BLOB NOT NULL,stream_key BLOB NOT NULL,source_cursor UBIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS graph_fact_record_idx ON graph_fact_records(record_key,version_key);

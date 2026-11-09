@@ -134,3 +134,19 @@ The earlier Data unit-test target cannot build its unchanged legacy fixtures.
 Clippy stops on unchanged legacy `unwrap` and `expect` calls. These checks
 remain **Not done**. The incident performance test and full workspace CI have
 not run for this change. No incident speedup is established.
+
+## Data schema initialization
+
+[AnalysisStore::open](../../crates/araphor-data/src/analysis/mod.rs) Data creates its current store
+  -> [Relations::schema](../../crates/araphor-data/src/analysis/graph_rows/store/relations/schema.rs) One factory assembles the existing Data and Araphor Graph schemas.
+  -> [Relations::SCHEMA](../../crates/araphor-data/src/analysis/graph_rows/store/relations/schema.sql) The common Graph schema also creates the canonical fact index.
+  -> [Relations::validate_tables](../../crates/araphor-data/src/analysis/graph_rows/store/relations/schema.rs) Validation compares all Graph columns, constraints, and views against that factory.
+
+The previous expected schema omitted seven engine tables and the fact-index
+table. A new Data store failed before raw operations. The correction uses the
+same table definitions and keeps the full comparison. The
+[public regression](../../crates/araphor-data/tests/store_schema.rs) passes
+open, data validation, and reopen. An unexpected Graph table still makes reopen
+fail. The command is `cargo test --offline -p araphor-data --features test-fixtures --test store_schema`.
+The local check also enabled `native-store` and used the recorded link override.
+This correction establishes no performance gain or production engine migration.
