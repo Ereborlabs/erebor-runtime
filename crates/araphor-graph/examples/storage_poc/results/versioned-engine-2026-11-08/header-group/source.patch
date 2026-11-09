@@ -1,0 +1,64 @@
+diff --git a/src/journal/entry.rs b/src/journal/entry.rs
+index ab65536..0407fce 100644
+--- a/src/journal/entry.rs
++++ b/src/journal/entry.rs
+@@ -195,17 +195,21 @@ impl Entry {
+ 
+                 let compression = CompressionType::decode_from(reader)?;
+ 
++                let mut header = [0; 18];
++                reader.read_exact(&mut header)?;
++                let mut header = header.as_slice();
++
+                 // Read keyspace ID
+-                let keyspace_id = reader.read_u64::<LittleEndian>()?;
++                let keyspace_id = header.read_u64::<LittleEndian>()?;
+ 
+                 // Read key len
+-                let key_len = reader.read_u16::<LittleEndian>()?;
++                let key_len = header.read_u16::<LittleEndian>()?;
+ 
+                 // Read real value size
+-                let value_len = reader.read_u32::<LittleEndian>()?;
++                let value_len = header.read_u32::<LittleEndian>()?;
+ 
+                 // Read on-disk value size
+-                let on_disk_value_len = reader.read_u32::<LittleEndian>()?;
++                let on_disk_value_len = header.read_u32::<LittleEndian>()?;
+ 
+                 let key = Slice::from_reader(reader, usize::from(key_len))?;
+ 
+@@ -272,6 +276,33 @@ mod tests {
+     use super::*;
+     use test_log::test;
+ 
++    #[test]
++    #[expect(clippy::indexing_slicing)]
++    fn item_header_truncation() -> crate::Result<()> {
++        let item = Entry::Item {
++            keyspace_id: 0x0102_0304_0506_0708,
++            key: vec![0xab; 257].into(),
++            value: vec![0xcd; 513].into(),
++            value_type: ValueType::Value,
++            compression: CompressionType::None,
++        };
++        let bytes = item.encode_into_vec();
++        let header_end = bytes.len() - 257 - 513;
++        for end in 0..header_end {
++            let error = Entry::decode_from(&mut &bytes[..end]).expect_err("incomplete header");
++            let error = match (end, error) {
++                (2, crate::Error::Storage(lsm_tree::Error::Io(error))) => error,
++                (end, crate::Error::Io(error)) if end != 2 => error,
++                (_, error) => panic!("unexpected header error: {error:?}"),
++            };
++            assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
++        }
++        let mut input = bytes.as_slice();
++        assert_eq!(Entry::decode_from(&mut input)?, item);
++        assert!(input.is_empty());
++        Ok(())
++    }
++
+     #[cfg(feature = "lz4")]
+     #[test]
+     #[expect(clippy::cast_possible_truncation, clippy::indexing_slicing)]

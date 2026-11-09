@@ -144,6 +144,13 @@ This preserves partial-read hashing, interruption retries, and error behavior.
 The `checksum_exact_reads_keep_errors` test also checks empty requests before
 and after errors. The reader lifetime and captured durable boundary remain.
 
+[Entry::decode_body](../../fjall/src/journal/entry.rs) checks the Item tags,
+then reads the four fixed fields in one 18-byte stack buffer. The existing
+native little-endian decoder reads those fields from the buffer. This removes
+three checksum updates per Item. Key and value decoding follow the header.
+The `item_header_truncation` case checks every incomplete prefix and its exact
+existing error wrapper, then checks all fields and complete consumption.
+
 ## Commit and change flow
 
 ```mermaid
@@ -299,16 +306,23 @@ their focused correctness checks and are removed. Metrics library clippy
 fails on the existing eight-argument `Iter::new`; default library clippy passes.
 Accepted engine commits remain unchanged.
 
-Current accepted source is Fjall `f72bd21` and `lsm-tree` `aed3e47a`. The
+The
 [buffered-checksum evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/checksum-buffered/README.md)
 records 9.085% fewer native feed instructions for identical work across both
-layouts and all workers. All 126 CDC and 85 non-CDC library cases pass, with
-one existing ignored case in each run. Production without default features,
-library clippy, formatting, and the release PoC build pass. Combined medians
-are 4.448 and 4.419 ms; both exceed their target. Stable medians are 25.663 and
-25.879 ms. No sustained latency gain is proved. Earlier records above describe
-their recorded source states. The whole-cycle CPU attempt is excluded because
-its reset function was inlined in one executable.
+layouts and all workers.
+
+Current accepted source is Fjall `ee3ea07` and `lsm-tree` `aed3e47a`. The
+[Item header evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/header-group/README.md)
+records another 12.654% reduction for identical feed work. All 127 CDC and 86
+non-CDC library cases pass, with one existing ignored case in each run.
+Production without default features, library clippy, formatting, and the
+release PoC build pass. Combined medians are 4.517 and 4.990 ms; both exceed
+their target and both increase in these comparisons. Stable medians are
+26.194 and 26.502 ms; both also increase. No sustained latency change is proved.
+A separate writer diagnostic confirms that the existing buffer combines
+writes. It has no syscall durations; no writer change is added. Earlier
+records describe their recorded source states. The whole-cycle CPU attempt
+is excluded because its reset function was inlined in one executable.
 
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this

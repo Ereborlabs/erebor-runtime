@@ -1,0 +1,140 @@
+{
+  "accepted": true,
+  "fjall_commit": "ee3ea079f503342959cbad83cdb5b961c26cc42f",
+  "lsm_tree_commit": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "decision": "Accept measured feed CPU reduction only; no latency gain is proved. Complete performance remains Not done.",
+  "summary_checks": [
+    "header-before-combined-0.json",
+    "header-after-combined-0.json",
+    "header-before-combined-1.json",
+    "header-after-combined-1.json",
+    "header-before-stable-0.json",
+    "header-after-stable-0.json",
+    "header-before-stable-1.json",
+    "header-after-stable-1.json",
+    "control-cdc-combined.json",
+    "inline-cdc-combined.json",
+    "checksum-cdc-combined.json",
+    "header-cdc-combined.json",
+    "writer-current-callgrind-combined.json",
+    "writer-current-strace-allowed-combined.json"
+  ],
+  "ordinary_percentiles_ms": [
+    {
+      "report": "header-before-combined-0.json",
+      "source": "e62700a19+checksum-buffered",
+      "samples": 28,
+      "minimum": 3.397882,
+      "median": 4.3956785,
+      "p95": 7.265869,
+      "maximum": 7.317762
+    },
+    {
+      "report": "header-after-combined-0.json",
+      "source": "9d81b03e5+header-group",
+      "samples": 28,
+      "minimum": 3.529254,
+      "median": 4.5173785,
+      "p95": 7.1430169999999995,
+      "maximum": 7.188694
+    },
+    {
+      "report": "header-before-combined-1.json",
+      "source": "e62700a19+checksum-buffered",
+      "samples": 28,
+      "minimum": 3.347805,
+      "median": 4.810994,
+      "p95": 7.392074,
+      "maximum": 7.489364
+    },
+    {
+      "report": "header-after-combined-1.json",
+      "source": "9d81b03e5+header-group",
+      "samples": 28,
+      "minimum": 3.673199,
+      "median": 4.9902435,
+      "p95": 6.787661,
+      "maximum": 7.090147
+    }
+  ],
+  "stable_eight_cycle_ms": {
+    "header-before-stable-0.json": {
+      "rounds": [
+        26.358358,
+        26.066001,
+        24.056997,
+        24.994974
+      ],
+      "median": 25.5304875,
+      "max": 26.358358
+    },
+    "header-after-stable-0.json": {
+      "rounds": [
+        26.876796000000002,
+        26.619078000000002,
+        25.540158,
+        25.769728
+      ],
+      "median": 26.194403,
+      "max": 26.876796000000002
+    },
+    "header-before-stable-1.json": {
+      "rounds": [
+        24.734255,
+        26.412139,
+        26.265748,
+        26.702958
+      ],
+      "median": 26.3389435,
+      "max": 26.702958
+    },
+    "header-after-stable-1.json": {
+      "rounds": [
+        26.626972,
+        27.448314,
+        26.377147,
+        26.282930999999998
+      ],
+      "median": 26.5020595,
+      "max": 27.448314
+    }
+  },
+  "non_timing_reports_match": true,
+  "p95_method": "Nearest rank; sample 27 of 28; restart separate.",
+  "full_workspace_ci": "Not run during iteration, as the user requires.",
+  "native_feed_diagnostic": {
+    "scope": "Complete combined driver, all workers and both layouts; profiled timings excluded.",
+    "before_instructions": 56262749,
+    "after_instructions": 49143165,
+    "instruction_change_percent": -12.6541701686137,
+    "equal_work": {
+      "feed_calls": 216,
+      "native_batches": 216,
+      "native_items": 14264,
+      "journal_bytes": 3046976,
+      "source_wakes": 64,
+      "graph_wakes": 64
+    },
+    "raw_headers_exclusive_and_feed_inclusive_equal": true,
+    "main_thread_instructions": 0
+  },
+  "writer_diagnostic": {
+    "binary": "versioned-checksum-buffered",
+    "instructions": 65363520,
+    "calls": 220,
+    "journal_syscalls": {
+      "fsync": 352,
+      "write": 544,
+      "lseek": 568
+    },
+    "files": 16,
+    "writes_at_least_16k": 56,
+    "limit": "Separate diagnostics of the full driver; no syscall durations or ordinary-cycle latency attribution.",
+    "decision": "The existing buffer combines writes. No transaction-sized writer buffer is added."
+  },
+  "all_patch_and_binary_hashes_verified": true,
+  "archive_sha256": "c23a488d16eaf53064423fc8538eac4eb22610ff212246354190e6c2041b4e83",
+  "archive_members": 103,
+  "archive_members_verified": true,
+  "review": "Independent source and raw evidence review passed before acceptance."
+}
