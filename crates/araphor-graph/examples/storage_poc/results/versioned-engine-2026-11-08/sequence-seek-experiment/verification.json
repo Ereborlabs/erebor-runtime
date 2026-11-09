@@ -1,0 +1,141 @@
+{
+  "applied": false,
+  "decision": "Remove experiment; measured query instructions increase.",
+  "retained_lsm_tree_commit": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "fjall_commit": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "summary_checks": [
+    "sequence-after-combined-0.json",
+    "sequence-after-combined-1.json",
+    "sequence-before-combined-0.json",
+    "sequence-before-combined-1.json",
+    "sequence-after-stable-0.json",
+    "sequence-after-stable-1.json",
+    "sequence-before-stable-0.json",
+    "sequence-before-stable-1.json",
+    "sequence-cycles-combined.json"
+  ],
+  "ordinary_percentiles_ms": [
+    {
+      "report": "sequence-after-combined-0.json",
+      "source": "fce165f62+sequence-seek",
+      "samples": 28,
+      "minimum": 3.478005,
+      "median": 4.4088625,
+      "p95": 7.089268000000001,
+      "maximum": 7.465509
+    },
+    {
+      "report": "sequence-after-combined-1.json",
+      "source": "fce165f62+sequence-seek",
+      "samples": 28,
+      "minimum": 3.9083729999999997,
+      "median": 4.8816945,
+      "p95": 7.151219,
+      "maximum": 7.268484000000001
+    },
+    {
+      "report": "sequence-before-combined-0.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 3.058882,
+      "median": 4.7629280000000005,
+      "p95": 7.0016169999999995,
+      "maximum": 7.174616
+    },
+    {
+      "report": "sequence-before-combined-1.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 3.523822,
+      "median": 4.8400335000000005,
+      "p95": 7.326383,
+      "maximum": 7.336790000000001
+    }
+  ],
+  "p95_method": "nearest rank; sample27 of28",
+  "stable_eight_cycle_ms": {
+    "sequence-after-stable-0.json": {
+      "rounds": [
+        26.165842,
+        25.646845000000003,
+        23.438923,
+        27.184492000000002
+      ],
+      "median": 25.906343500000002,
+      "max": 27.184492000000002
+    },
+    "sequence-after-stable-1.json": {
+      "rounds": [
+        26.619259,
+        28.166334000000003,
+        25.624635,
+        26.129246
+      ],
+      "median": 26.374252499999997,
+      "max": 28.166334000000003
+    },
+    "sequence-before-stable-0.json": {
+      "rounds": [
+        25.563942,
+        25.686864,
+        26.50849,
+        26.708868
+      ],
+      "median": 26.097676999999997,
+      "max": 26.708868
+    },
+    "sequence-before-stable-1.json": {
+      "rounds": [
+        25.913574,
+        26.924398,
+        26.949333999999997,
+        26.265439
+      ],
+      "median": 26.5949185,
+      "max": 26.949333999999997
+    }
+  },
+  "query_instruction_diagnostic": {
+    "inline": {
+      "source": "8fb48dccb+inline-parser",
+      "validated_evaluations": 72,
+      "ordinary_samples": 28,
+      "ordinary_query_calls": 92,
+      "ordinary_instructions": 136189231,
+      "ordinary_median_instructions": 4679004.0,
+      "revision_medians": {
+        "26": 0.0,
+        "29": 2578924.0,
+        "44": 4204271.5,
+        "46": 4679004.0,
+        "64": 5305279.0,
+        "85": 8577459.5,
+        "87": 8699051.0
+      }
+    },
+    "sequence": {
+      "source": "fce165f62+sequence-seek",
+      "validated_evaluations": 72,
+      "ordinary_samples": 28,
+      "ordinary_query_calls": 92,
+      "ordinary_instructions": 138447850,
+      "ordinary_median_instructions": 4772707.5,
+      "revision_medians": {
+        "26": 0.0,
+        "29": 2622264.5,
+        "44": 4283053.5,
+        "46": 4772707.5,
+        "64": 5393397.5,
+        "85": 8705870.5,
+        "87": 8827899.5
+      }
+    }
+  },
+  "archive_sha256": "0bb9f6e7f4e68b44e425299372e671304ece1fb665a8f95286cb99ae5f4784d1",
+  "archive_members": 122,
+  "profile_members": 79,
+  "archive_members_verified": true,
+  "patch_and_both_binary_hashes_verified": true,
+  "review": "Independent reviewer confirms removal; raw profile mapping and counters audited.",
+  "full_workspace_ci": "Not run during iteration, as required by user."
+}

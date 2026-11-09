@@ -1,0 +1,22 @@
+{
+  "root_commit": "fce165f62fdc6dd335df2f6426615ff287dfda8d",
+  "fjall_commit": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "lsm_tree_base": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "lsm_tree_patch": "sequence-seek.patch",
+  "patch_sha256": "8690b9bcf5b16acc496a20b6767c8089b6624d845d567ddfcf5cc6e433d4c47f",
+  "binary": "output/storage-engine-baseline-20261108/versioned-sequence-seek",
+  "binary_sha256": "87c65eb9437debd4e58fc23148a2c943090b75ee0cf7169d14c3c7fcf55c78c6",
+  "source_label": "fce165f62+sequence-seek",
+  "before_binary": "output/storage-engine-baseline-20261108/versioned-inline-parser",
+  "before_binary_sha256": "0cad41c8fba195f62e32f5b9f0833a41592391c7eaaa0e3b43593d1b8bf4fe47",
+  "before_bytes": 88445352,
+  "after_bytes": 88456408,
+  "before_sections": {
+    ".rodata": 2582256,
+    ".text": 50340528
+  },
+  "after_sections": {
+    ".rodata": 2583088,
+    ".text": 50349360
+  }
+}

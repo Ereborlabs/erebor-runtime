@@ -276,6 +276,12 @@ engine commits above. Fresh retained-source combined median/p95/maximum values
 are 4.876/7.041/7.316 and 4.826/7.516/7.720 ms. Both combined medians exceed
 their target. Earlier higher maxima have no established cause.
 
+The [unapplied visibility-aware point-seek experiment](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/sequence-seek-experiment/README.md)
+also retains its exact source and measurements. Query instructions increase
+by 1.66%, with a higher median at every collected revision. All correctness
+checks pass, but the reviewer and implementer agree to remove the experiment.
+Accepted engine commits remain unchanged.
+
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this
 implementation. Full workspace CI was not run during this iteration, as the

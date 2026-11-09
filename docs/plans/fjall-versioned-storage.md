@@ -418,6 +418,15 @@ Fresh retained-source combined median/p95/maximum values are
 4.876/7.041/7.316 and 4.826/7.516/7.720 ms. Each set has 28 ordinary samples;
 restart remains separate. Complete performance qualification remains **Not done**.
 
+The [unapplied visibility-aware point-seek experiment](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/sequence-seek-experiment/README.md)
+uses the same native binary search with an exclusive value cut. All native and
+unchanged PoC checks pass. Complete query instructions increase by 1.66%;
+their median increases by 2.00%. Every collected revision median increases.
+The reviewer and implementer agree to remove the experiment. Its exact patch,
+source and binary identity, nine reproduced summaries, and raw profiles remain.
+Accepted engine commits remain unchanged. Complete performance qualification
+remains **Not done**.
+
 The no-default-features test build fails in the existing
 `keyspace/options.rs:709` test: `with_kv_separation` receives a value instead of
 `Some(value)`. The same line exists in upstream commit `8700604`. The production

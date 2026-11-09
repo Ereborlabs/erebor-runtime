@@ -1,0 +1,159 @@
+diff --git a/src/table/data_block/iter.rs b/src/table/data_block/iter.rs
+index e8c605ba..6f904220 100644
+--- a/src/table/data_block/iter.rs
++++ b/src/table/data_block/iter.rs
+@@ -8,7 +8,7 @@ use crate::{
+         block::{Decoder, ParsedItem},
+         data_block::DataBlockParsedItem,
+     },
+-    InternalValue,
++    InternalValue, SeqNo,
+ };
+ 
+ /// The data block iterator handles double-ended scans over a data block
+@@ -34,6 +34,17 @@ impl<'a> Iter<'a> {
+         true
+     }
+ 
++    pub(super) fn seek_visible(&mut self, needle: &[u8], cut: SeqNo) -> bool {
++        self.decoder.inner_mut().seek(
++            |key, seqno| match key.cmp(needle) {
++                std::cmp::Ordering::Less => true,
++                std::cmp::Ordering::Equal => seqno >= cut,
++                std::cmp::Ordering::Greater => false,
++            },
++            false,
++        )
++    }
++
+     pub fn seek(&mut self, needle: &[u8]) -> bool {
+         // Find the restart interval whose head key is the last one strictly below `needle`.
+         // The decoder then performs a linear scan within that interval; we stop as soon as we
+diff --git a/src/table/data_block/mod.rs b/src/table/data_block/mod.rs
+index de776a53..488da5d4 100644
+--- a/src/table/data_block/mod.rs
++++ b/src/table/data_block/mod.rs
+@@ -422,7 +422,7 @@ impl DataBlock {
+                     // NOTE: Fallback to binary search
+                     let mut iter = self.iter();
+ 
+-                    if !iter.seek(needle) {
++                    if !iter.seek_visible(needle, seqno) {
+                         return None;
+                     }
+ 
+@@ -441,7 +441,7 @@ impl DataBlock {
+             let mut iter = self.iter();
+ 
+             // NOTE: Fallback to binary search
+-            if !iter.seek(needle) {
++            if !iter.seek_visible(needle, seqno) {
+                 return None;
+             }
+ 
+@@ -565,6 +565,105 @@ mod tests {
+     };
+     use test_log::test;
+ 
++    #[test]
++    fn data_block_point_read_retained_cuts() -> crate::Result<()> {
++        use crate::table::block::{hash_index::MARKER_CONFLICT, Trailer};
++        use crate::ValueType::WeakTombstone;
++
++        let make_block = |items: &[InternalValue], restart, ratio| -> crate::Result<DataBlock> {
++            Ok(DataBlock::new(Block {
++                data: DataBlock::encode_into_vec(items, restart, ratio)?.into(),
++                header: Header {
++                    block_type: BlockType::Data,
++                    checksum: Checksum::from_raw(0),
++                    data_length: 0,
++                    uncompressed_length: 0,
++                },
++            }))
++        };
++        let fields = |item: InternalValue| {
++            (
++                item.key.user_key,
++                item.key.seqno,
++                item.key.value_type,
++                item.value,
++            )
++        };
++
++        for value_size in [0, 512] {
++            let mut items = Vec::new();
++            for key in [b"a", b"c", b"e"] {
++                items.push(InternalValue::from_components(
++                    key,
++                    b"max",
++                    SeqNo::MAX,
++                    Value,
++                ));
++                for seqno in (0..64).rev() {
++                    let kind = match seqno {
++                        17 => WeakTombstone,
++                        33 => Tombstone,
++                        _ => Value,
++                    };
++                    let value = if kind.is_tombstone() || seqno % 7 == 0 {
++                        Vec::new()
++                    } else {
++                        vec![42; value_size]
++                    };
++                    items.push(InternalValue::from_components(key, value, seqno, kind));
++                }
++            }
++            for restart in [1, 2, 4, 16] {
++                for ratio in [0.0, 1.33] {
++                    let block = make_block(&items, restart, ratio)?;
++                    assert_eq!(
++                        Trailer::new(&block.inner).as_slice().get(1),
++                        Some(if value_size == 0 { &2 } else { &4 }),
++                    );
++                    if ratio > 0.0 {
++                        assert_eq!(
++                            block.get_hash_index_reader().expect("hash index").get(b"c"),
++                            MARKER_CONFLICT,
++                        );
++                    } else {
++                        assert!(block.get_hash_index_reader().is_none());
++                    }
++                    for cut in (0..=65).chain([SeqNo::MAX]) {
++                        for key in [b"".as_slice(), b"a", b"b", b"c", b"d", b"e", b"f"] {
++                            let expected = items
++                                .iter()
++                                .find(|item| {
++                                    item.key.user_key.as_ref() == key && item.key.seqno < cut
++                                })
++                                .cloned();
++                            assert_eq!(
++                                block.point_read(key, cut).map(fields),
++                                expected.map(fields)
++                            );
++                        }
++                    }
++                }
++            }
++        }
++
++        let items = [
++            InternalValue::from_components(b"a", b"", 3, Value),
++            InternalValue::from_components(b"b", b"", 2, WeakTombstone),
++        ];
++        let block = make_block(&items, 16, 2.0)?;
++        let hash = block.get_hash_index_reader().expect("hash index");
++        for item in &items {
++            assert_eq!(hash.get(&item.key.user_key), 0);
++            for cut in [0, 2, 3, 4, SeqNo::MAX] {
++                assert_eq!(
++                    block.point_read(&item.key.user_key, cut).map(fields),
++                    (item.key.seqno < cut).then(|| item.clone()).map(fields),
++                );
++            }
++        }
++        Ok(())
++    }
++
+     #[test]
+     fn data_block_ping_pong_fuzz_1() -> crate::Result<()> {
+         let items = [
