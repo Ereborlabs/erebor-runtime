@@ -1,0 +1,44 @@
+{
+  "unit": "milliseconds",
+  "engine": "fjall-stable",
+  "selection": "ordinary cycles; restart excluded",
+  "p95_method": "nearest rank: sorted values[ceil(0.95*n)-1]",
+  "reports": [
+    {
+      "report": "inline-after-combined-0.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 3.55667,
+      "median": 4.5503374999999995,
+      "p95": 7.441035,
+      "maximum": 7.679892
+    },
+    {
+      "report": "inline-after-combined-1.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 3.210398,
+      "median": 4.483081,
+      "p95": 6.753938,
+      "maximum": 6.769303
+    },
+    {
+      "report": "inline-before-combined-0.json",
+      "source": "48de79440+direct-compression",
+      "samples": 28,
+      "minimum": 3.6746320000000003,
+      "median": 4.5294550000000005,
+      "p95": 7.221175,
+      "maximum": 7.32887
+    },
+    {
+      "report": "inline-before-combined-1.json",
+      "source": "48de79440+direct-compression",
+      "samples": 28,
+      "minimum": 3.056258,
+      "median": 4.8481425,
+      "p95": 7.294231,
+      "maximum": 7.340046
+    }
+  ]
+}

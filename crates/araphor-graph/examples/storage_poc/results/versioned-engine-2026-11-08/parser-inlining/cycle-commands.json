@@ -1,0 +1,54 @@
+[
+  {
+    "side": "control",
+    "command": [
+      "/tmp/araphor-callgrind/tool/usr/bin/valgrind",
+      "--tool=callgrind",
+      "--enable-debuginfod=no",
+      "--vgdb=no",
+      "--collect-atstart=no",
+      "--toggle-collect=*native*View*query*",
+      "--toggle-collect=*native*View*presence*",
+      "--separate-threads=yes",
+      "--separate-callers=8",
+      "--zero-before=storage_poc::package::evaluate",
+      "--dump-after=storage_poc::package::evaluate",
+      "--callgrind-out-file=/tmp/araphor-callgrind/control-cycles.out",
+      "--log-file=/tmp/araphor-callgrind/control-cycles-valgrind.log",
+      "output/storage-engine-baseline-20261108/control",
+      "/tmp/araphor-callgrind/control-cycles-combined.json",
+      "combined"
+    ],
+    "started_unix_s": 1794205884.48615,
+    "finished_unix_s": 1794205927.0900633,
+    "exit_code": 0,
+    "binary_sha256": "953f7fd0f4189f50779838026de82505346090d2940b36707636dd6583ab99a8",
+    "timing_use": "diagnostic only; excluded from acceptance"
+  },
+  {
+    "side": "current",
+    "command": [
+      "/tmp/araphor-callgrind/tool/usr/bin/valgrind",
+      "--tool=callgrind",
+      "--enable-debuginfod=no",
+      "--vgdb=no",
+      "--collect-atstart=no",
+      "--toggle-collect=*native*View*query*",
+      "--toggle-collect=*native*View*presence*",
+      "--separate-threads=yes",
+      "--separate-callers=8",
+      "--zero-before=storage_poc::package::evaluate",
+      "--dump-after=storage_poc::package::evaluate",
+      "--callgrind-out-file=/tmp/araphor-callgrind/current-cycles.out",
+      "--log-file=/tmp/araphor-callgrind/current-cycles-valgrind.log",
+      "output/storage-engine-baseline-20261108/versioned-direct-compression",
+      "/tmp/araphor-callgrind/current-cycles-combined.json",
+      "combined"
+    ],
+    "started_unix_s": 1794205927.1628144,
+    "finished_unix_s": 1794205971.0428634,
+    "exit_code": 0,
+    "binary_sha256": "77c594162d48bc7d7c747a51f757cbd0dc024244bcaec97a26f6cf329c6c3fb2",
+    "timing_use": "diagnostic only; excluded from acceptance"
+  }
+]

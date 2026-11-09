@@ -1,0 +1,1286 @@
+{
+  "control": [
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 26,
+      "restarted": false,
+      "profile": "control-cycles.out.1-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 29,
+      "restarted": false,
+      "profile": "control-cycles.out.2-01",
+      "instructions": 2952253,
+      "query_calls": 3
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 44,
+      "restarted": false,
+      "profile": "control-cycles.out.3-01",
+      "instructions": 4749572,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 46,
+      "restarted": false,
+      "profile": "control-cycles.out.4-01",
+      "instructions": 5288818,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 62,
+      "restarted": true,
+      "profile": "control-cycles.out.5-01",
+      "instructions": 5909409,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 64,
+      "restarted": false,
+      "profile": "control-cycles.out.6-01",
+      "instructions": 6142098,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 85,
+      "restarted": false,
+      "profile": "control-cycles.out.7-01",
+      "instructions": 9822263,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 87,
+      "restarted": false,
+      "profile": "control-cycles.out.8-01",
+      "instructions": 9953925,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 26,
+      "restarted": false,
+      "profile": "control-cycles.out.10-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 29,
+      "restarted": false,
+      "profile": "control-cycles.out.11-01",
+      "instructions": 1499516,
+      "query_calls": 3
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 44,
+      "restarted": false,
+      "profile": "control-cycles.out.12-01",
+      "instructions": 4501514,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 46,
+      "restarted": false,
+      "profile": "control-cycles.out.13-01",
+      "instructions": 4907557,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 62,
+      "restarted": true,
+      "profile": "control-cycles.out.14-01",
+      "instructions": 5750781,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 64,
+      "restarted": false,
+      "profile": "control-cycles.out.15-01",
+      "instructions": 6003055,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 85,
+      "restarted": false,
+      "profile": "control-cycles.out.16-01",
+      "instructions": 9456695,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 87,
+      "restarted": false,
+      "profile": "control-cycles.out.17-01",
+      "instructions": 9569542,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 26,
+      "restarted": false,
+      "profile": "control-cycles.out.19-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 29,
+      "restarted": false,
+      "profile": "control-cycles.out.20-01",
+      "instructions": 1500089,
+      "query_calls": 3
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 44,
+      "restarted": false,
+      "profile": "control-cycles.out.21-01",
+      "instructions": 4500685,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 46,
+      "restarted": false,
+      "profile": "control-cycles.out.22-01",
+      "instructions": 4900937,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 62,
+      "restarted": true,
+      "profile": "control-cycles.out.23-01",
+      "instructions": 5757672,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 64,
+      "restarted": false,
+      "profile": "control-cycles.out.24-01",
+      "instructions": 6004087,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 85,
+      "restarted": false,
+      "profile": "control-cycles.out.25-01",
+      "instructions": 9461323,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 87,
+      "restarted": false,
+      "profile": "control-cycles.out.26-01",
+      "instructions": 9579053,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 26,
+      "restarted": false,
+      "profile": "control-cycles.out.28-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 29,
+      "restarted": false,
+      "profile": "control-cycles.out.29-01",
+      "instructions": 2940648,
+      "query_calls": 3
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 44,
+      "restarted": false,
+      "profile": "control-cycles.out.30-01",
+      "instructions": 4744298,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 46,
+      "restarted": false,
+      "profile": "control-cycles.out.31-01",
+      "instructions": 5290179,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 62,
+      "restarted": true,
+      "profile": "control-cycles.out.32-01",
+      "instructions": 5905062,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 64,
+      "restarted": false,
+      "profile": "control-cycles.out.33-01",
+      "instructions": 6147276,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 85,
+      "restarted": false,
+      "profile": "control-cycles.out.34-01",
+      "instructions": 9810103,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 87,
+      "restarted": false,
+      "profile": "control-cycles.out.35-01",
+      "instructions": 9923529,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 26,
+      "restarted": false,
+      "profile": "control-cycles.out.37-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 29,
+      "restarted": false,
+      "profile": "control-cycles.out.38-01",
+      "instructions": 1503521,
+      "query_calls": 3
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 44,
+      "restarted": false,
+      "profile": "control-cycles.out.39-01",
+      "instructions": 4498133,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 46,
+      "restarted": false,
+      "profile": "control-cycles.out.40-01",
+      "instructions": 4906811,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 62,
+      "restarted": true,
+      "profile": "control-cycles.out.41-01",
+      "instructions": 5733579,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 64,
+      "restarted": false,
+      "profile": "control-cycles.out.42-01",
+      "instructions": 5996237,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 85,
+      "restarted": false,
+      "profile": "control-cycles.out.43-01",
+      "instructions": 9457082,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 87,
+      "restarted": false,
+      "profile": "control-cycles.out.44-01",
+      "instructions": 9599755,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 26,
+      "restarted": false,
+      "profile": "control-cycles.out.46-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 29,
+      "restarted": false,
+      "profile": "control-cycles.out.47-01",
+      "instructions": 2945202,
+      "query_calls": 3
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 44,
+      "restarted": false,
+      "profile": "control-cycles.out.48-01",
+      "instructions": 4760886,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 46,
+      "restarted": false,
+      "profile": "control-cycles.out.49-01",
+      "instructions": 5301149,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 62,
+      "restarted": true,
+      "profile": "control-cycles.out.50-01",
+      "instructions": 5910321,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 64,
+      "restarted": false,
+      "profile": "control-cycles.out.51-01",
+      "instructions": 6143011,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 85,
+      "restarted": false,
+      "profile": "control-cycles.out.52-01",
+      "instructions": 9803426,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 87,
+      "restarted": false,
+      "profile": "control-cycles.out.53-01",
+      "instructions": 9941695,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 26,
+      "restarted": false,
+      "profile": "control-cycles.out.55-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 29,
+      "restarted": false,
+      "profile": "control-cycles.out.56-01",
+      "instructions": 2951709,
+      "query_calls": 3
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 44,
+      "restarted": false,
+      "profile": "control-cycles.out.57-01",
+      "instructions": 4754191,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 46,
+      "restarted": false,
+      "profile": "control-cycles.out.58-01",
+      "instructions": 5302884,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 62,
+      "restarted": true,
+      "profile": "control-cycles.out.59-01",
+      "instructions": 5895706,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 64,
+      "restarted": false,
+      "profile": "control-cycles.out.60-01",
+      "instructions": 6139772,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 85,
+      "restarted": false,
+      "profile": "control-cycles.out.61-01",
+      "instructions": 9826296,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 87,
+      "restarted": false,
+      "profile": "control-cycles.out.62-01",
+      "instructions": 9949709,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 26,
+      "restarted": false,
+      "profile": "control-cycles.out.64-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 29,
+      "restarted": false,
+      "profile": "control-cycles.out.65-01",
+      "instructions": 1507555,
+      "query_calls": 3
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 44,
+      "restarted": false,
+      "profile": "control-cycles.out.66-01",
+      "instructions": 4504854,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 46,
+      "restarted": false,
+      "profile": "control-cycles.out.67-01",
+      "instructions": 4896184,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 62,
+      "restarted": true,
+      "profile": "control-cycles.out.68-01",
+      "instructions": 5723276,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 64,
+      "restarted": false,
+      "profile": "control-cycles.out.69-01",
+      "instructions": 6006713,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 85,
+      "restarted": false,
+      "profile": "control-cycles.out.70-01",
+      "instructions": 9466371,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 87,
+      "restarted": false,
+      "profile": "control-cycles.out.71-01",
+      "instructions": 9579213,
+      "query_calls": 4
+    }
+  ],
+  "current": [
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 26,
+      "restarted": false,
+      "profile": "current-cycles.out.1-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 29,
+      "restarted": false,
+      "profile": "current-cycles.out.2-01",
+      "instructions": 2888952,
+      "query_calls": 3
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 44,
+      "restarted": false,
+      "profile": "current-cycles.out.3-01",
+      "instructions": 4672574,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 46,
+      "restarted": false,
+      "profile": "current-cycles.out.4-01",
+      "instructions": 5202948,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 62,
+      "restarted": true,
+      "profile": "current-cycles.out.5-01",
+      "instructions": 5667720,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 64,
+      "restarted": false,
+      "profile": "current-cycles.out.6-01",
+      "instructions": 5881924,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 85,
+      "restarted": false,
+      "profile": "current-cycles.out.7-01",
+      "instructions": 9499632,
+      "query_calls": 4
+    },
+    {
+      "run": 0,
+      "engine": "fjall",
+      "round": 0,
+      "revision": 87,
+      "restarted": false,
+      "profile": "current-cycles.out.8-01",
+      "instructions": 9643411,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 26,
+      "restarted": false,
+      "profile": "current-cycles.out.10-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 29,
+      "restarted": false,
+      "profile": "current-cycles.out.11-01",
+      "instructions": 2738101,
+      "query_calls": 3
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 44,
+      "restarted": false,
+      "profile": "current-cycles.out.12-01",
+      "instructions": 4454667,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 46,
+      "restarted": false,
+      "profile": "current-cycles.out.13-01",
+      "instructions": 4948380,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 62,
+      "restarted": true,
+      "profile": "current-cycles.out.14-01",
+      "instructions": 5447073,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 64,
+      "restarted": false,
+      "profile": "current-cycles.out.15-01",
+      "instructions": 5702733,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 85,
+      "restarted": false,
+      "profile": "current-cycles.out.16-01",
+      "instructions": 9066410,
+      "query_calls": 4
+    },
+    {
+      "run": 1,
+      "engine": "fjall-stable",
+      "round": 0,
+      "revision": 87,
+      "restarted": false,
+      "profile": "current-cycles.out.17-01",
+      "instructions": 9199092,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 26,
+      "restarted": false,
+      "profile": "current-cycles.out.19-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 29,
+      "restarted": false,
+      "profile": "current-cycles.out.20-01",
+      "instructions": 2739074,
+      "query_calls": 3
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 44,
+      "restarted": false,
+      "profile": "current-cycles.out.21-01",
+      "instructions": 4455347,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 46,
+      "restarted": false,
+      "profile": "current-cycles.out.22-01",
+      "instructions": 4947472,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 62,
+      "restarted": true,
+      "profile": "current-cycles.out.23-01",
+      "instructions": 5444659,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 64,
+      "restarted": false,
+      "profile": "current-cycles.out.24-01",
+      "instructions": 5713190,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 85,
+      "restarted": false,
+      "profile": "current-cycles.out.25-01",
+      "instructions": 9069383,
+      "query_calls": 4
+    },
+    {
+      "run": 2,
+      "engine": "fjall-stable",
+      "round": 1,
+      "revision": 87,
+      "restarted": false,
+      "profile": "current-cycles.out.26-01",
+      "instructions": 9208040,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 26,
+      "restarted": false,
+      "profile": "current-cycles.out.28-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 29,
+      "restarted": false,
+      "profile": "current-cycles.out.29-01",
+      "instructions": 2879273,
+      "query_calls": 3
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 44,
+      "restarted": false,
+      "profile": "current-cycles.out.30-01",
+      "instructions": 4657917,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 46,
+      "restarted": false,
+      "profile": "current-cycles.out.31-01",
+      "instructions": 5215833,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 62,
+      "restarted": true,
+      "profile": "current-cycles.out.32-01",
+      "instructions": 5683868,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 64,
+      "restarted": false,
+      "profile": "current-cycles.out.33-01",
+      "instructions": 5911561,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 85,
+      "restarted": false,
+      "profile": "current-cycles.out.34-01",
+      "instructions": 9493209,
+      "query_calls": 4
+    },
+    {
+      "run": 3,
+      "engine": "fjall",
+      "round": 1,
+      "revision": 87,
+      "restarted": false,
+      "profile": "current-cycles.out.35-01",
+      "instructions": 9628770,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 26,
+      "restarted": false,
+      "profile": "current-cycles.out.37-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 29,
+      "restarted": false,
+      "profile": "current-cycles.out.38-01",
+      "instructions": 2743504,
+      "query_calls": 3
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 44,
+      "restarted": false,
+      "profile": "current-cycles.out.39-01",
+      "instructions": 4455684,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 46,
+      "restarted": false,
+      "profile": "current-cycles.out.40-01",
+      "instructions": 4948257,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 62,
+      "restarted": true,
+      "profile": "current-cycles.out.41-01",
+      "instructions": 5434341,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 64,
+      "restarted": false,
+      "profile": "current-cycles.out.42-01",
+      "instructions": 5692910,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 85,
+      "restarted": false,
+      "profile": "current-cycles.out.43-01",
+      "instructions": 9066944,
+      "query_calls": 4
+    },
+    {
+      "run": 4,
+      "engine": "fjall-stable",
+      "round": 2,
+      "revision": 87,
+      "restarted": false,
+      "profile": "current-cycles.out.44-01",
+      "instructions": 9177181,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 26,
+      "restarted": false,
+      "profile": "current-cycles.out.46-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 29,
+      "restarted": false,
+      "profile": "current-cycles.out.47-01",
+      "instructions": 2892473,
+      "query_calls": 3
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 44,
+      "restarted": false,
+      "profile": "current-cycles.out.48-01",
+      "instructions": 4662987,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 46,
+      "restarted": false,
+      "profile": "current-cycles.out.49-01",
+      "instructions": 5213057,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 62,
+      "restarted": true,
+      "profile": "current-cycles.out.50-01",
+      "instructions": 5664149,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 64,
+      "restarted": false,
+      "profile": "current-cycles.out.51-01",
+      "instructions": 5897324,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 85,
+      "restarted": false,
+      "profile": "current-cycles.out.52-01",
+      "instructions": 9496859,
+      "query_calls": 4
+    },
+    {
+      "run": 5,
+      "engine": "fjall",
+      "round": 2,
+      "revision": 87,
+      "restarted": false,
+      "profile": "current-cycles.out.53-01",
+      "instructions": 9618549,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 26,
+      "restarted": false,
+      "profile": "current-cycles.out.55-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 29,
+      "restarted": false,
+      "profile": "current-cycles.out.56-01",
+      "instructions": 2878612,
+      "query_calls": 3
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 44,
+      "restarted": false,
+      "profile": "current-cycles.out.57-01",
+      "instructions": 4663994,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 46,
+      "restarted": false,
+      "profile": "current-cycles.out.58-01",
+      "instructions": 5225169,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 62,
+      "restarted": true,
+      "profile": "current-cycles.out.59-01",
+      "instructions": 5677671,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 64,
+      "restarted": false,
+      "profile": "current-cycles.out.60-01",
+      "instructions": 5906831,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 85,
+      "restarted": false,
+      "profile": "current-cycles.out.61-01",
+      "instructions": 9491525,
+      "query_calls": 4
+    },
+    {
+      "run": 6,
+      "engine": "fjall",
+      "round": 3,
+      "revision": 87,
+      "restarted": false,
+      "profile": "current-cycles.out.62-01",
+      "instructions": 9635505,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 26,
+      "restarted": false,
+      "profile": "current-cycles.out.64-01",
+      "instructions": 0,
+      "query_calls": 0
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 29,
+      "restarted": false,
+      "profile": "current-cycles.out.65-01",
+      "instructions": 2740840,
+      "query_calls": 3
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 44,
+      "restarted": false,
+      "profile": "current-cycles.out.66-01",
+      "instructions": 4450412,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 46,
+      "restarted": false,
+      "profile": "current-cycles.out.67-01",
+      "instructions": 4970728,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 62,
+      "restarted": true,
+      "profile": "current-cycles.out.68-01",
+      "instructions": 5447062,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 64,
+      "restarted": false,
+      "profile": "current-cycles.out.69-01",
+      "instructions": 5696834,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 85,
+      "restarted": false,
+      "profile": "current-cycles.out.70-01",
+      "instructions": 9062583,
+      "query_calls": 4
+    },
+    {
+      "run": 7,
+      "engine": "fjall-stable",
+      "round": 3,
+      "revision": 87,
+      "restarted": false,
+      "profile": "current-cycles.out.71-01",
+      "instructions": 9169372,
+      "query_calls": 4
+    }
+  ]
+}

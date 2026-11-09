@@ -1,0 +1,12 @@
+==3== Callgrind, a call-graph generating cache profiler
+==3== Copyright (C) 2002-2017, and GNU GPL'd, by Josef Weidendorfer et al.
+==3== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==3== Command: output/storage-engine-baseline-20261108/versioned-direct-compression /tmp/araphor-callgrind/current-combined.json combined
+==3== Parent PID: 2
+==3== 
+==3== For interactive control, run 'callgrind_control -h'.
+==3== 
+==3== Events    : Ir
+==3== Collected : 439878862
+==3== 
+==3== I   refs:      439,878,862

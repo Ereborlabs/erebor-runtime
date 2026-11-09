@@ -103,6 +103,13 @@ deletion, or terminal miss stops the search. Lazy range iterators retain their
 owned index state. The native table checks cover block boundaries, old cuts,
 empty values, strong and weak deletions, and missing keys.
 
+The [data-block parsers](../../lsm-tree/src/table/data_block/mod.rs) and
+[index-block parsers](../../lsm-tree/src/table/index_block/block_handle.rs)
+expose five existing method bodies to compiler optimization with `#[inline]`.
+Parser logic, interfaces, search rules, and stored bytes remain. The retained
+Callgrind evidence checks complete neighbor-query instruction counts. Parser
+symbol disappearance alone does not establish less work.
+
 [BranchIterator](../../fjall/src/versioned/scan.rs) holds one native scan directly
 when the branch has one source. Multiple sources retain the existing ordered
 merge and lookahead buffers. Both cases keep the snapshot and use the same
@@ -223,7 +230,7 @@ warnings. The earlier broader clippy run at `66d821e`, with `--tests`, fails on
 The existing no-default-features test error remains in `keyspace/options.rs`;
 the production check does not prove that test configuration.
 
-`lsm-tree` `29549fd7` passes 241 default library cases and 244 LZ4 library cases,
+`lsm-tree` `aed3e47a` passes 241 default library cases and 244 LZ4 library cases,
 with two existing ignored cases in each run. Three read-view and three history
 cases pass in each configuration. The [retained result directory](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/)
 records source IDs, locks, frozen comparisons, and raw reports. Local frozen
@@ -251,6 +258,16 @@ and ordinary-cycle percentiles. Current combined medians are 4.836 and
 25.748 ms. Both combined medians exceed their target. Complete performance
 qualification remains **Not done**. The cause of earlier higher maxima is not
 established.
+
+`lsm-tree` `aed3e47a` adds the five parser annotations. All focused native and
+Fjall gates above pass with this commit. The [retained comparison](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/parser-inlining/README.md)
+records 5.70% fewer complete neighbor-query instructions across the same 28
+ordinary fixed-key evaluations and 92 query calls. Presence calls collect no
+instructions in this diagnostic. All profiled timings remain excluded.
+The two unchanged untraced comparisons have combined medians of 4.550 and
+4.483 ms. Stable medians are 25.670 and 26.764 ms. Wall-time changes are mixed;
+no overall latency gain is proved. Both combined medians exceed their target.
+Complete performance qualification remains **Not done**.
 
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this

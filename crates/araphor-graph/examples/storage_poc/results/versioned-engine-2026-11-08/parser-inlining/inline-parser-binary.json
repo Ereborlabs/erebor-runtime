@@ -1,0 +1,21 @@
+{
+  "root_commit": "8fb48dccb6bf4ebe8732e9f21f2169992524f9e2",
+  "fjall_commit": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "lsm_tree_base": "29549fd786f311acdd03f09d1844253e0014739c",
+  "lsm_tree_patch": "inline-parser.patch",
+  "patch_sha256": "30fed6d5f7a7d55d3c1f5ed905f8e542ce54a2bbc92ae7f6e0dcc0e2a49d9cb1",
+  "binary": "output/storage-engine-baseline-20261108/versioned-inline-parser",
+  "binary_sha256": "0cad41c8fba195f62e32f5b9f0833a41592391c7eaaa0e3b43593d1b8bf4fe47",
+  "source_label": "8fb48dccb+inline-parser",
+  "before_bytes": 88447944,
+  "after_bytes": 88445352,
+  "before_sections": {
+    ".rodata": 2582896,
+    ".text": 50342256
+  },
+  "after_sections": {
+    ".rodata": 2582256,
+    ".text": 50340528
+  },
+  "lsm_tree_commit": "aed3e47abec1257a7f3680be669bcee684d7c211"
+}

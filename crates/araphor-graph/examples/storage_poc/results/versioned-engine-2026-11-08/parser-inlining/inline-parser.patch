@@ -1,0 +1,48 @@
+diff --git a/src/table/data_block/mod.rs b/src/table/data_block/mod.rs
+index 7104ccfa..de776a53 100644
+--- a/src/table/data_block/mod.rs
++++ b/src/table/data_block/mod.rs
+@@ -24,6 +24,7 @@ use std::io::Seek;
+ use varint_rs::{VarintReader, VarintWriter};
+ 
+ impl Decodable<DataBlockParsedItem> for InternalValue {
++    #[inline]
+     fn parse_restart_key<'a>(
+         reader: &mut Cursor<&[u8]>,
+         offset: usize,
+@@ -55,6 +56,7 @@ impl Decodable<DataBlockParsedItem> for InternalValue {
+         key.map(|k| (k, seqno))
+     }
+ 
++    #[inline]
+     fn parse_full(reader: &mut Cursor<&[u8]>, offset: usize) -> Option<DataBlockParsedItem> {
+         let value_type = unwrap!(reader.read_u8());
+         if value_type == TRAILER_START_MARKER {
+@@ -117,6 +119,7 @@ impl Decodable<DataBlockParsedItem> for InternalValue {
+         })
+     }
+ 
++    #[inline]
+     fn parse_truncated(
+         reader: &mut Cursor<&[u8]>,
+         offset: usize,
+diff --git a/src/table/index_block/block_handle.rs b/src/table/index_block/block_handle.rs
+index f195b86d..14c720fc 100644
+--- a/src/table/index_block/block_handle.rs
++++ b/src/table/index_block/block_handle.rs
+@@ -172,6 +172,7 @@ impl Encodable<BlockOffset> for KeyedBlockHandle {
+ }
+ 
+ impl Decodable<IndexBlockParsedItem> for KeyedBlockHandle {
++    #[inline]
+     fn parse_full(reader: &mut Cursor<&[u8]>, offset: usize) -> Option<IndexBlockParsedItem> {
+         let marker = unwrap!(reader.read_u8());
+ 
+@@ -205,6 +206,7 @@ impl Decodable<IndexBlockParsedItem> for KeyedBlockHandle {
+         })
+     }
+ 
++    #[inline]
+     fn parse_restart_key<'a>(
+         reader: &mut Cursor<&[u8]>,
+         offset: usize,

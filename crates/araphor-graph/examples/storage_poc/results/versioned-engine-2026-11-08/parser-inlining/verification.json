@@ -1,0 +1,46 @@
+{
+  "fjall_commit": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "lsm_tree_commit": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "cdc_library_passed": 125,
+  "feature_off_library_passed": 84,
+  "fjall_existing_ignored_each": 1,
+  "native_default_library_passed": 241,
+  "native_lz4_library_passed": 244,
+  "native_existing_ignored_each": 2,
+  "read_view_passed_each": 3,
+  "retained_history_passed_each": 3,
+  "no_default_production_check": "passed",
+  "library_clippy": "passed with existing warnings",
+  "format": "passed",
+  "full_workspace_ci": "not run during iteration",
+  "performance": "Not done",
+  "profile_timing_use": "Excluded from acceptance",
+  "profile_files": 251,
+  "profile_archive_sha256": "59e7e2e2c1730412918e483a1ce8e2dc5710dcecbdd99417ff7f658f460ad038",
+  "native_change": "exactly five inline attributes; no body or interface changes",
+  "summaries_reproduced": [
+    "inline-before-combined-0",
+    "inline-before-combined-1",
+    "inline-before-stable-0",
+    "inline-before-stable-1",
+    "inline-after-combined-0",
+    "inline-after-combined-1",
+    "inline-after-stable-0",
+    "inline-after-stable-1",
+    "control-combined",
+    "current-combined",
+    "control-cycles-combined",
+    "current-cycles-combined",
+    "inline-cycles-combined"
+  ],
+  "binary_hashes_verified": [
+    {
+      "binary": "output/storage-engine-baseline-20261108/versioned-direct-compression",
+      "sha256": "77c594162d48bc7d7c747a51f757cbd0dc024244bcaec97a26f6cf329c6c3fb2"
+    },
+    {
+      "binary": "output/storage-engine-baseline-20261108/versioned-inline-parser",
+      "sha256": "0cad41c8fba195f62e32f5b9f0833a41592391c7eaaa0e3b43593d1b8bf4fe47"
+    }
+  ]
+}
