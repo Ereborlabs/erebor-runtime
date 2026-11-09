@@ -488,7 +488,7 @@ impl AnalysisStore {
             }
             Self::validate_context_packages(connection, &value)
                 .map_err(crate::Error::stored_artifact)?;
-            let fact = Self::fact_record(&value)?;
+            let fact = crate::analysis::context::FactRecord::from_context(&value)?;
             let cursor: Option<u64> = row.get(14).context(AnalysisDatabaseSnafu {
                 operation: "decode derived cursor",
             })?;

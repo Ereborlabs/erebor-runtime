@@ -805,7 +805,7 @@ impl AnalysisStore {
                     .saturating_add(4 * size_of::<GraphFactV1>()),
             )?;
             let fact = GraphFactV1::try_from(value)?;
-            let actual = Self::fact_record(value)?
+            let actual = crate::analysis::context::FactRecord::from_context(value)?
                 .ok_or_else(|| Code::Invalid.error("canonical Graph fact classification"))?;
             if (actual.record, actual.stream, actual.cursor) != (record, stream, cursor)
                 || !records.contains(&fact.record_id)

@@ -56,6 +56,7 @@ pub struct DataWrite<'a> {
     raw: RawIndex,
     metadata_revision: u64,
     dirty: bool,
+    verified: super::context::VerifiedPackages,
     _writer: MutexGuard<'a, ()>,
 }
 
@@ -187,6 +188,7 @@ impl NativeStore {
         view.revision = view.revision.max(raw.index.revision);
         view.raw = raw.index.clone();
         view.validate_catalogue()?;
+        view.validate_contexts()?;
         Ok(Self {
             database,
             branch,
@@ -379,6 +381,7 @@ impl NativeStore {
             raw: view.raw.clone(),
             metadata_revision: view.metadata_revision,
             dirty: false,
+            verified: super::context::VerifiedPackages::default(),
             _writer: writer,
         })
     }

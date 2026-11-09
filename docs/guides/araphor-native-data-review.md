@@ -3,7 +3,7 @@
 This guide covers the optional native Data owner, raw source storage, and its
 package storage proof of concept (PoC) caller. The metadata source follows
 Runtime `78e909526`. The combined raw view follows `f05f444e2`. The catalogue
-source follows `b447c7142`.
+source follows `b447c7142`. Qualified context admission follows `66bc190c5`.
 Production Data still uses DuckDB. Read the [integration research](../research/araphor-fjall-integration.md)
 for the complete migration.
 
@@ -27,7 +27,7 @@ consistent view. The complete migration remains **Not done**.
   -> [View::prepare](../../crates/araphor-graph/src/native/prepare.rs) Araphor Graph prepares the package journals.
   -> [NativeStore::write](../../crates/araphor-data/src/analysis/native/mod.rs) Data serializes the writer and proposes the next Data revision.
   -> [Graph::stage](../../crates/araphor-graph/src/native/write.rs) Araphor Graph stages its records in the supplied transaction.
-  -> [DataWrite::context](../../crates/araphor-data/src/analysis/native/context.rs) Data stages physical immutable context records and their heads.
+  -> [DataWrite::context](../../crates/araphor-data/src/analysis/native/context/admission.rs) Data admits and stages immutable context records and their heads.
   -> [Live::apply](../../crates/araphor-graph/examples/storage_poc/live.rs) The PoC stages its synthetic step metadata and consumed cursor.
   -> [DataWrite::commit](../../crates/araphor-data/src/analysis/native/mod.rs) Data commits all records and exact cut stamps in one native batch.
   -> [DataWrite::commit](../../crates/araphor-data/src/analysis/native/mod.rs) Data publishes the matching metadata view after durable commit.
@@ -94,9 +94,9 @@ or managed authority.
 ## Physical context records
 
 The context participant reuses `AnalysisContextVersionV1` and
-`AnalysisContextRefV1`. It checks immutable identity, exact retries, and expected
-heads. It does not replace qualified owner, package provenance, fact, import,
-notification, or lifecycle admission.
+`AnalysisContextRefV1`. Its original qualification covered physical identity,
+exact retries, and expected heads. The qualified admission extension is below.
+Managed lifecycle and complete production admission remain **Not done**.
 
 The `\0data/key/` dictionary interns exact serialized identities. Long keys use
 linked fragments at the engine key width. No content hash selects identity.
@@ -130,9 +130,10 @@ field includes the Data commit and publication call; it does not isolate sync
 time. Stable-key checks cover Graph indexes and context heads. They do not
 assert a fixed count of immutable context versions.
 
-Production raw-prefix publication, read admission and memory budgets, qualified context
-checks, managed source authority, complete result families, production log
-routing, notification batching, retention, and backup remain **Not done**.
+At the original metadata qualification, raw-prefix publication, read admission
+and memory budgets, qualified context checks, managed source authority, complete
+result families, production log routing, notification batching, retention, and
+backup were **Not done**. Later owner qualifications are below.
 The earlier Data unit-test target cannot build its unchanged legacy fixtures.
 Clippy stops on unchanged legacy `unwrap` and `expect` calls. These checks
 remain **Not done**. The incident performance test and full workspace CI have
@@ -275,8 +276,56 @@ definition bytes do not change.
 Manual `install_package` uses the same validator as `AnalysisStore`. Checked
 image admission keeps its existing contract and does not acquire the manual
 name-length limits. Installation and definition admission create no instance
-or subscription. Qualified context admission, lifecycle, collection, uninstall
-reclamation, capacity accounting, and production routing remain **Not done**.
+or subscription. At that qualification, context admission, lifecycle,
+collection, uninstall reclamation, capacity accounting, and production routing
+were **Not done**. The context admission extension is below.
 The [catalogue cases](../../crates/araphor-data/tests/native_packages.rs) cover
 these admission and read boundaries. They do not prove production cutover or
 notification latency.
+
+## Qualified context admission
+
+[NativeStore::commit_contexts_guarded](../../crates/araphor-data/src/analysis/native/context/admission.rs) Data receives context values
+  -> Data checks the existing identity and validity bounds.
+  -> [DataWrite::admit_context](../../crates/araphor-data/src/analysis/native/context/admission.rs) An exact retry checks its canonical fact index and retained proof before returning its original reference.
+  -> [VerifiedPackages::check_context](../../crates/araphor-data/src/analysis/context/provenance.rs) A new or conflicting input checks package provenance against the retained artifact closure.
+  -> [DiscoveryContextRevisionV1::validate_history](../../crates/araphor-data/src/discovery/context.rs) A new imported document checks staged history across lifetimes.
+  -> [DataWrite::record](../../crates/araphor-data/src/analysis/native/context/record.rs) A new value checks the expected head and stages its immutable record.
+  -> Data stages the canonical fact index and required scope pointers in the same transaction.
+  -> The guard callback must succeed before Data commits the batch.
+
+[NativeStore::intern_contexts_guarded](../../crates/araphor-data/src/analysis/native/context/admission.rs) Data interns qualified values
+  -> Data preserves the existing owner allowlist.
+  -> Data compares values in one tenant, owner, and lifetime scope.
+  -> Data selects the first matching entity in byte order.
+  -> Each input sees prior values staged in the same batch.
+  -> Ordinary context commits also update this scope index.
+
+`C` and `H` retain context values and maximum owner-revision heads. `K` stores
+the canonical fact index for a context. `V` stores scoped context IDs, without
+copying bodies into keys. `M` selects the latest imported document across
+lifetimes. Recovery checks these indexes, retained package proof, imported
+history, and native metadata revision bounds before publication.
+
+The native and current owners share `FactRecord::from_context`,
+`PackageRevisionV1::closure`, and `VerifiedPackages::check_context`. These
+helpers use the existing DTOs and private read closures. They add no storage
+trait or SQL adapter. A native context getter preserves the current read
+contract; it does not add a canonical fact lookup to every read.
+
+Notification admission uses the existing obligation and approved-route
+validators. The fixed obligation lifetime permits the existing `H` pointer to
+serve notification CAS and latest-state reads. Finding/concern lookups and the
+notification effect protocol remain separate migration work.
+
+Borrowed `DataWrite::context` and `contexts` stage changes but cannot roll back
+one failed operation in isolation. Discard the transaction after a staging
+error, as required by the existing Graph participant. `NativeStore` wrappers
+discard a failed batch automatically. Empty and unchanged guarded calls still
+run the callback and create no batch.
+
+The [context cases](../../crates/araphor-data/tests/native_context.rs) use the
+public native APIs and a real current-owner caller for the shared validators.
+This admission scope adds no raw-record or witness requirement. Configured
+capacity, managed attempts/results, source-range fact reads, notification
+lookups/effects, collection, and production routing remain **Not done**.

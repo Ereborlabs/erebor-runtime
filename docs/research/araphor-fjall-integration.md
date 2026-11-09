@@ -26,8 +26,15 @@ backup, and cutover remain **Not done**. No incident speedup is established.
 Native package/image and definition admission and reads now pass 24 focused
 cases with the existing storage regressions. Read the
 [catalogue qualification](results/araphor-native-catalogue-2026-11-09.md).
-Collection, uninstall reclamation, capacity accounting, qualified context/fact
-admission, managed lifecycle, and production routing remain **Not done**.
+At that catalogue qualification, collection, uninstall reclamation, capacity
+accounting, qualified context/fact admission, managed lifecycle, and production
+routing were **Not done**.
+The native context owner now admits guarded batches, checked values, and
+qualified interned values with the existing retained proof and fact decoder.
+Thirty-four focused cases pass, including a current-owner shared-helper case.
+Read the [context qualification](results/araphor-native-context-2026-11-09.md).
+Context providers, managed results, notification lookups/effects, configured
+capacity, collection, and production routing remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

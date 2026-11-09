@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
@@ -6,15 +8,15 @@ use crate::{
     AnalysisDatabaseSnafu, AnalysisStore, GraphValidate as _, PackageErrorCodeV1 as Code, Result,
 };
 
-#[derive(Eq, PartialEq)]
+#[derive(Deserialize, Eq, PartialEq, Serialize)]
 pub(in crate::analysis) struct FactRecord {
     pub(in crate::analysis) record: Vec<u8>,
     pub(in crate::analysis) stream: Vec<u8>,
     pub(in crate::analysis) cursor: u64,
 }
 
-impl AnalysisStore {
-    pub(in crate::analysis) fn fact_record(
+impl FactRecord {
+    pub(in crate::analysis) fn from_context(
         input: &AnalysisContextVersionV1,
     ) -> Result<Option<FactRecord>> {
         let Ok(fact) = crate::GraphFactV1::decode_context(&input.body) else {
@@ -37,7 +39,9 @@ impl AnalysisStore {
                 location: snafu::location!(),
             })
     }
+}
 
+impl AnalysisStore {
     pub(in crate::analysis) fn check_fact_index(
         connection: &Connection,
         input: &AnalysisContextVersionV1,
@@ -52,7 +56,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read canonical fact index",
             })?;
-        if actual != Self::fact_record(input)? {
+        if actual != FactRecord::from_context(input)? {
             return Err(Code::Invalid.error("canonical fact index"));
         }
         Ok(())
@@ -62,7 +66,7 @@ impl AnalysisStore {
         connection: &Connection,
         input: &AnalysisContextVersionV1,
     ) -> Result<()> {
-        if let Some(record) = Self::fact_record(input)? {
+        if let Some(record) = FactRecord::from_context(input)? {
             connection
                 .execute(
                     "INSERT INTO graph_fact_records VALUES (?,?,?,?)",

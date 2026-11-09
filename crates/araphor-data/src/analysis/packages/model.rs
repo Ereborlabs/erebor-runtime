@@ -108,6 +108,49 @@ impl PackageRevisionV1 {
         Ok(artifact)
     }
 
+    pub(in crate::analysis) fn closure(
+        tenant: [u8; 16],
+        root: &crate::PackageRefV1,
+        control: &crate::AnalysisReadControl,
+        mut read: impl FnMut([u8; 16], &str, &str) -> crate::Result<Option<Self>>,
+    ) -> crate::Result<(Vec<Self>, Vec<crate::PackageArtifactV1>)> {
+        let mut pending = vec![root.clone()];
+        let mut seen = std::collections::BTreeSet::new();
+        let mut artifacts = Vec::new();
+        let mut rows = Vec::new();
+        while let Some(reference) = pending.pop() {
+            control.check()?;
+            if !seen.insert(reference.clone()) {
+                continue;
+            }
+            let retained =
+                read(tenant, &reference.package_id, &reference.revision)?.ok_or_else(|| {
+                    crate::PackageErrorCodeV1::Missing.error("installed image artifact")
+                })?;
+            artifacts.push(
+                retained
+                    .decode_artifact()
+                    .map_err(crate::Error::stored_artifact)?,
+            );
+            pending.extend(
+                retained
+                    .dependencies
+                    .iter()
+                    .map(|dependency| crate::PackageRefV1 {
+                        package_id: dependency.package_id.clone(),
+                        revision: dependency.revision.clone(),
+                    }),
+            );
+            rows.push(retained);
+        }
+        artifacts.sort_by_key(crate::PackageArtifactV1::reference);
+        rows.sort_by(|left, right| {
+            (&left.package_id, &left.revision).cmp(&(&right.package_id, &right.revision))
+        });
+        control.check()?;
+        Ok((rows, artifacts))
+    }
+
     fn dependency_keys(
         descriptor: &araphor_analysis_sdk::Package,
     ) -> std::collections::BTreeSet<(&str, &str)> {

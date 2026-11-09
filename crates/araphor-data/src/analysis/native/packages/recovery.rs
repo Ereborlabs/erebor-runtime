@@ -197,7 +197,11 @@ impl DataView {
         Ok(())
     }
 
-    fn validate_heads(&self, prefix: &[u8], mut expected: BTreeMap<Vec<u8>, u64>) -> Result<()> {
+    pub(in crate::analysis::native) fn validate_heads(
+        &self,
+        prefix: &[u8],
+        mut expected: BTreeMap<Vec<u8>, u64>,
+    ) -> Result<()> {
         for entry in self.snapshot.prefix(prefix) {
             let (key, value) = entry.context(NativeStorageSnafu {
                 operation: "validate catalogue head",

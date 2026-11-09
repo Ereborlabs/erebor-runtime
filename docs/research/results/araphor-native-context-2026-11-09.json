@@ -1,0 +1,220 @@
+{
+  "date": "2026-11-09",
+  "source_parent": "66bc190c5defbc91b001f15fcf7aadb43f13c75c",
+  "source_sha256": {
+    "crates/araphor-data/src/analysis/context/batch.rs": "14c7ff4ffad3ca15238327ad1a9ed4c31192e07dbf96151d2eb66eea7e78a557",
+    "crates/araphor-data/src/analysis/context/facts.rs": "02703d6a5ea5b3fe3135c7cb16b2b7bf9b894b172b9f51cf17cfdeb3648e7a7a",
+    "crates/araphor-data/src/analysis/context/provenance.rs": "ee41f1ba93aa72a79c359419abc0b3afd7bffb027cc481ea432c14294ced4a93",
+    "crates/araphor-data/src/analysis/managed/graph/domain.rs": "05a96064c763b0b342f8a3f44400a4d41c3553acbdd8db7fbdfd167fdb51486a",
+    "crates/araphor-data/src/analysis/managed/source/check.rs": "d1f346d2a9943d0d602c082b3a4876145a1b46c705a0a954c10d917f7bc8d4b2",
+    "crates/araphor-data/src/analysis/managed/source/publication/frozen.rs": "28ab3d19b1f0175d0cc6fec24b032d39664b40dc9a25d31a15bc0bf8f70dde7a",
+    "crates/araphor-data/src/analysis/native/context/admission.rs": "20e16e99f68821ba047db008cf70f45c430052aa8ae12f41b490cbf5eab939f0",
+    "crates/araphor-data/src/analysis/native/context/facts.rs": "7e9cdeb115b91749902daf8a79165f8ed6d280c9c91ca85c35fd919b0612746c",
+    "crates/araphor-data/src/analysis/native/context/mod.rs": "65345c3f7f14602a52609cbcd983ba4e8432a700199febe6f730d20f416ffa84",
+    "crates/araphor-data/src/analysis/native/context/record.rs": "0d53e0c3d565a1bae53befe5b5eb0cf7352e182bfe2405dc8629ee0b3aa4743b",
+    "crates/araphor-data/src/analysis/native/context/recovery.rs": "7ce60a0720d497b209efd7494692c1ef92b29ca5d0f8843ace971956d3a9e63f",
+    "crates/araphor-data/src/analysis/native/mod.rs": "2757eefe9a313577acbd99afa4f50ba979db8c829a2a3c3f178148cfff3c4abf",
+    "crates/araphor-data/src/analysis/native/packages/image.rs": "c8e4a4587abe472e3b8582856783ff845999aade4e11e8f011dbb39c0e3fc300",
+    "crates/araphor-data/src/analysis/native/packages/mod.rs": "68b1b33f9e1a37dd2d8ee0cfa54c390672ff0ebdb686c7684bacae5a4f6ed525",
+    "crates/araphor-data/src/analysis/native/packages/recovery.rs": "7df59166a6868c2567157c33db3c23cead365bc642ecbbf554f37a8bf732c9b4",
+    "crates/araphor-data/src/analysis/packages/image.rs": "f4a9e052f4714aecbf168f90e7f76a306ca75ec2696afd927dc13334e1b2f40a",
+    "crates/araphor-data/src/analysis/packages/model.rs": "b1273240cc2fc47fbdcfb6cb66c7762717972ade0bb05654058f1e7084380d5f",
+    "crates/araphor-data/tests/native_context.rs": "0d8f7b1ccbef59f02487a8c15435d835380b4bc85b9c652e383aed6232ad1385"
+  },
+  "removed_source": {
+    "crates/araphor-data/src/analysis/native/context.rs": "0f7592ff2d12657d6217093fcc250be853263a8752dfbfa45548b0c0bc51a2d9"
+  },
+  "forks": {
+    "fjall": "cceaa84d371165c2f0d4952650543c27fc8e22d9",
+    "lsm-tree": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+  },
+  "gates": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "-p",
+        "araphor-data",
+        "--features",
+        "native-store,test-fixtures",
+        "--test",
+        "native_context",
+        "--test",
+        "native_packages",
+        "--test",
+        "native_raw",
+        "--test",
+        "native_store",
+        "--test",
+        "raw_index",
+        "--test",
+        "store_schema",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml"
+      ],
+      "exit_code": 0,
+      "log": "output/araphor-fjall-migration-20261109/native-context-final-tests.log",
+      "counts": [
+        10,
+        8,
+        7,
+        5,
+        3,
+        1
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "-p",
+        "araphor-data",
+        "--no-default-features",
+        "--lib",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml"
+      ],
+      "exit_code": 0,
+      "log": "output/araphor-fjall-migration-20261109/native-context-feature-off.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--offline",
+        "-p",
+        "araphor-data",
+        "--features",
+        "native-store,test-fixtures",
+        "--lib",
+        "--no-deps",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml"
+      ],
+      "exit_code": 101,
+      "log": "output/araphor-fjall-migration-20261109/native-context-final-clippy.log",
+      "known_errors": [
+        "analysis/managed/graph/projection/publish.rs:90",
+        "analysis/managed/reader/committed/graph.rs:213"
+      ]
+    },
+    {
+      "command": [
+        "rustfmt",
+        "--edition",
+        "2021",
+        "--config",
+        "skip_children=true",
+        "--check",
+        "crates/araphor-data/src/analysis/context/batch.rs",
+        "crates/araphor-data/src/analysis/context/facts.rs",
+        "crates/araphor-data/src/analysis/context/provenance.rs",
+        "crates/araphor-data/src/analysis/native/context/admission.rs",
+        "crates/araphor-data/src/analysis/native/context/facts.rs",
+        "crates/araphor-data/src/analysis/native/context/mod.rs",
+        "crates/araphor-data/src/analysis/native/context/record.rs",
+        "crates/araphor-data/src/analysis/native/context/recovery.rs",
+        "crates/araphor-data/src/analysis/native/mod.rs",
+        "crates/araphor-data/src/analysis/native/packages/image.rs",
+        "crates/araphor-data/src/analysis/native/packages/mod.rs",
+        "crates/araphor-data/src/analysis/native/packages/recovery.rs",
+        "crates/araphor-data/src/analysis/packages/image.rs",
+        "crates/araphor-data/src/analysis/packages/model.rs",
+        "crates/araphor-data/tests/native_context.rs"
+      ],
+      "exit_code": 0,
+      "log": "output/araphor-fjall-migration-20261109/native-context-final-fmt.log",
+      "excluded_existing_format": [
+        "crates/araphor-data/src/analysis/managed/graph/domain.rs",
+        "crates/araphor-data/src/analysis/managed/source/check.rs",
+        "crates/araphor-data/src/analysis/managed/source/publication/frozen.rs"
+      ]
+    }
+  ],
+  "earlier_failures": [
+    {
+      "log": "output/araphor-fjall-migration-20261109/native-context-check.log",
+      "exit_code": 101,
+      "reason": "Three callers still used the moved fact_record method."
+    },
+    {
+      "log": "output/araphor-fjall-migration-20261109/native-context-tests.log",
+      "exit_code": 101,
+      "reason": "Test fixture omitted DiscoveryRecordIdV1.cpu_id."
+    },
+    {
+      "log": "output/araphor-fjall-migration-20261109/native-context-tests-2.log",
+      "exit_code": 101,
+      "passed_context_cases": 9,
+      "reason": "Imported test fixture used schema 1 instead of current schema 3."
+    }
+  ],
+  "incident_rerun": false,
+  "production_backend": "DuckDB",
+  "performance_gain_established": false,
+  "poc": {
+    "build_command": [
+      "cargo",
+      "build",
+      "--release",
+      "--target-dir",
+      "target",
+      "--manifest-path",
+      "crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml",
+      "--offline",
+      "--config",
+      "/tmp/araphor-storage-release-override.toml"
+    ],
+    "build_exit_code": 0,
+    "build_log": "output/araphor-fjall-migration-20261109/native-context-final-poc-build.log",
+    "binary": {
+      "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-context-poc",
+      "bytes": 98122976,
+      "sha256": "a44eb47a767052c93bcd3306c48fb89e7fdeb1ece29031b748a784ebfeb2bb38"
+    },
+    "runs": [
+      {
+        "command": [
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-context-poc",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-context-combined.json",
+          "combined"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "crates/araphor-graph/examples/storage_poc/summarize_cdc.py",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-context-combined.json"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-context-poc",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-context-stable.json",
+          "stable"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "crates/araphor-graph/examples/storage_poc/summarize_stable.py",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-context-stable.json"
+        ],
+        "exit_code": 0
+      }
+    ],
+    "combined_cycles": 64,
+    "combined_requested_historical_views": 128,
+    "unavailable_views": 0,
+    "stable_primary_cycles": 128,
+    "stable_historical_evaluations": 640,
+    "stable_historical_views": 320,
+    "paired_performance_comparison": false,
+    "report_source_label": "unrecorded; source hashes and frozen binary manifest supply identity"
+  }
+}

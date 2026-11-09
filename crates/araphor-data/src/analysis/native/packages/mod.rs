@@ -91,6 +91,27 @@ impl NativeStore {
 }
 
 impl DataWrite<'_> {
+    pub(super) fn package_revision(
+        &self,
+        tenant: [u8; 16],
+        package: &str,
+        revision: &str,
+    ) -> Result<Option<PackageRevisionV1>> {
+        let row = PackageRecord::read(tenant, package, revision, |key| {
+            Records::staged(key, &self.transaction)
+        })?;
+        if row
+            .as_ref()
+            .is_some_and(|row| row.revision > self.metadata_revision)
+        {
+            return NativeStateSnafu {
+                field: "package record revision",
+            }
+            .fail();
+        }
+        Ok(row.map(|row| row.value))
+    }
+
     fn stage_packages(&mut self, revisions: &[PackageRevisionV1]) -> Result<()> {
         for package in revisions {
             match PackageRecord::read(

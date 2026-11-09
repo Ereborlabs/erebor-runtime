@@ -1,20 +1,20 @@
 use serde::Deserialize;
 use snafu::ResultExt as _;
 
-use super::{records::Records, DataView, DataWrite, NativeStore};
+use super::super::{records::Records, DataView, DataWrite, NativeStore};
 use crate::{
     AnalysisConflictSnafu, AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1,
     ManagedEncodingSnafu, NativeStateSnafu, Result,
 };
 
 #[derive(Deserialize)]
-struct ContextRecord {
-    version: AnalysisContextVersionV1,
-    revision: u64,
+pub(super) struct ContextRecord {
+    pub(super) version: AnalysisContextVersionV1,
+    pub(super) revision: u64,
 }
 
 impl ContextRecord {
-    fn identity(key: &AnalysisContextKeyV1, version: bool) -> Result<Vec<u8>> {
+    pub(super) fn identity(key: &AnalysisContextKeyV1, version: bool) -> Result<Vec<u8>> {
         rmp_serde::to_vec(&(
             key.tenant_id,
             &key.owner_id,
@@ -25,7 +25,7 @@ impl ContextRecord {
         .context(ManagedEncodingSnafu)
     }
 
-    fn check(record: &ContextRecord, key: &AnalysisContextKeyV1) -> Result<()> {
+    pub(super) fn check(record: &ContextRecord, key: &AnalysisContextKeyV1) -> Result<()> {
         if !record.version.valid() || record.version.key != *key || record.revision == 0 {
             return NativeStateSnafu {
                 field: "context record identity",
@@ -37,7 +37,7 @@ impl ContextRecord {
 }
 
 impl DataView {
-    pub fn context(
+    pub(super) fn context_row(
         &self,
         key: &AnalysisContextKeyV1,
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
@@ -53,7 +53,7 @@ impl DataView {
         };
         let record: ContextRecord = Records::decode(&bytes)?;
         ContextRecord::check(&record, key)?;
-        if record.revision > self.revision {
+        if record.revision > self.metadata_revision {
             return NativeStateSnafu {
                 field: "context record revision",
             }
@@ -84,13 +84,17 @@ impl DataView {
         if ContextRecord::identity(&record.version.key, false)? != identity
             || !record.version.valid()
             || record.revision == 0
-            || record.revision > self.revision
+            || record.revision > self.metadata_revision
+            || ContextRecord::id(&record.version.key, |key| {
+                Records::read(key, &self.snapshot)
+            })? != Some(id)
         {
             return NativeStateSnafu {
                 field: "context head identity",
             }
             .fail();
         }
+        self.verify_context(&record.version)?;
         Ok(Some(AnalysisContextRefV1 {
             key: record.version.key,
             commit_revision: record.revision,
@@ -99,34 +103,12 @@ impl DataView {
 }
 
 impl DataWrite<'_> {
-    // This method stores admitted rows. Qualified owner checks stay with Data's domain owner.
-    pub fn context(
+    pub(super) fn record(
         &mut self,
         input: &AnalysisContextVersionV1,
         expected: Option<u64>,
     ) -> Result<AnalysisContextRefV1> {
-        if !input.valid() {
-            return NativeStateSnafu {
-                field: "context input",
-            }
-            .fail();
-        }
         let identity = ContextRecord::identity(&input.key, true)?;
-        if let Some(id) = Records::find(&identity, |key| Records::staged(key, &self.transaction))? {
-            if let Some(bytes) = Records::payload(&Records::key(b'C', id), |key| {
-                Records::staged(key, &self.transaction)
-            })? {
-                let stored: ContextRecord = Records::decode(&bytes)?;
-                ContextRecord::check(&stored, &input.key)?;
-                if stored.version != *input {
-                    return AnalysisConflictSnafu.fail();
-                }
-                return Ok(AnalysisContextRefV1 {
-                    key: input.key.clone(),
-                    commit_revision: stored.revision,
-                });
-            }
-        }
         let base = ContextRecord::identity(&input.key, false)?;
         let found = Records::find(&base, |key| Records::staged(key, &self.transaction))?;
         let previous = found

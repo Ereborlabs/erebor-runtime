@@ -189,7 +189,7 @@ impl AnalysisStore {
                     let indexed = (|| -> duckdb::Result<_> {
                         Ok(crate::analysis::context::FactRecord { record:row.get(12)?,stream:row.get(13)?,cursor:row.get(14)? })
                     })().context(AnalysisDatabaseSnafu { operation:"decode frozen source fact index" })?;
-                    if Self::fact_record(&context)?.as_ref()!=Some(&indexed) {
+                    if crate::analysis::context::FactRecord::from_context(&context)?.as_ref()!=Some(&indexed) {
                         return Err(Code::Conflict.error("frozen source fact index"));
                     }
                     let fact = crate::GraphFactV1::try_from(&context)?;

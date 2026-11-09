@@ -22,6 +22,60 @@ struct PackageProof {
 }
 
 impl VerifiedPackages {
+    pub(in crate::analysis) fn check_context(
+        &mut self,
+        context: &AnalysisContextVersionV1,
+        mut read: impl FnMut([u8; 16], &str, &str) -> Result<Option<crate::analysis::PackageRevisionV1>>,
+    ) -> Result<()> {
+        let Some(reference) = context.package_provenance()? else {
+            return Ok(());
+        };
+        let key = (context.key.tenant_id, reference.root.clone());
+        if let Some(proof) = self.roots.get(&key) {
+            let mut current = true;
+            for row in &proof.rows {
+                if read(key.0, &row.package_id, &row.revision)?.as_ref() != Some(row) {
+                    current = false;
+                    break;
+                }
+            }
+            if current {
+                reference.check_bundle(&proof.bundle)?;
+                self.revisions.extend(proof.rows.iter().map(|row| {
+                    (
+                        key.0,
+                        PackageRefV1 {
+                            package_id: row.package_id.clone(),
+                            revision: row.revision.clone(),
+                        },
+                    )
+                }));
+                self.used.insert(key);
+                return Ok(());
+            }
+        }
+        let (rows, artifacts) = crate::analysis::PackageRevisionV1::closure(
+            key.0,
+            &reference.root,
+            &crate::AnalysisReadControl::default(),
+            &mut read,
+        )?;
+        let bundle = reference.validate(artifacts)?;
+        self.revisions.extend(rows.iter().map(|row| {
+            (
+                key.0,
+                PackageRefV1 {
+                    package_id: row.package_id.clone(),
+                    revision: row.revision.clone(),
+                },
+            )
+        }));
+        self.roots
+            .insert(key.clone(), Arc::new(PackageProof { rows, bundle }));
+        self.used.insert(key);
+        Ok(())
+    }
+
     pub(in crate::analysis) fn recheck(&mut self, reader: &Connection) -> Result<bool> {
         self.revisions.clear();
         let mut current = true;
@@ -157,56 +211,9 @@ impl AnalysisStore {
         context: &AnalysisContextVersionV1,
         verified: &mut VerifiedPackages,
     ) -> Result<()> {
-        let Some(reference) = context.package_provenance()? else {
-            return Ok(());
-        };
-        let key = (context.key.tenant_id, reference.root.clone());
-        if let Some(proof) = verified.roots.get(&key) {
-            let mut current = true;
-            for row in &proof.rows {
-                if Self::package_from(reader, key.0, &row.package_id, &row.revision)?.as_ref()
-                    != Some(row)
-                {
-                    current = false;
-                    break;
-                }
-            }
-            if current {
-                reference.check_bundle(&proof.bundle)?;
-                verified.revisions.extend(proof.rows.iter().map(|row| {
-                    (
-                        key.0,
-                        PackageRefV1 {
-                            package_id: row.package_id.clone(),
-                            revision: row.revision.clone(),
-                        },
-                    )
-                }));
-                verified.used.insert(key);
-                return Ok(());
-            }
-        }
-        let (rows, artifacts) = Self::package_closure_from(
-            reader,
-            key.0,
-            &reference.root,
-            &crate::AnalysisReadControl::default(),
-        )?;
-        let bundle = reference.validate(artifacts)?;
-        verified.revisions.extend(rows.iter().map(|row| {
-            (
-                key.0,
-                PackageRefV1 {
-                    package_id: row.package_id.clone(),
-                    revision: row.revision.clone(),
-                },
-            )
-        }));
-        verified
-            .roots
-            .insert(key.clone(), Arc::new(PackageProof { rows, bundle }));
-        verified.used.insert(key);
-        Ok(())
+        verified.check_context(context, |tenant, package, revision| {
+            Self::package_from(reader, tenant, package, revision)
+        })
     }
 
     pub(super) fn validate_stored_context_packages(

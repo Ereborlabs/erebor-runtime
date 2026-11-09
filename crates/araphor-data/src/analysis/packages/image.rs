@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
@@ -270,34 +268,8 @@ impl AnalysisStore {
         root: &PackageRefV1,
         control: &AnalysisReadControl,
     ) -> Result<(Vec<super::PackageRevisionV1>, Vec<crate::PackageArtifactV1>)> {
-        let mut pending = vec![root.clone()];
-        let mut seen = BTreeSet::new();
-        let mut artifacts = Vec::new();
-        let mut rows = Vec::new();
-        while let Some(reference) = pending.pop() {
-            control.check()?;
-            if !seen.insert(reference.clone()) {
-                continue;
-            }
-            let retained =
-                Self::package_from(reader, tenant, &reference.package_id, &reference.revision)?
-                    .ok_or_else(|| Code::Missing.error("installed image artifact"))?;
-            artifacts.push(
-                retained
-                    .decode_artifact()
-                    .map_err(crate::Error::stored_artifact)?,
-            );
-            pending.extend(retained.dependencies.iter().map(|dependency| PackageRefV1 {
-                package_id: dependency.package_id.clone(),
-                revision: dependency.revision.clone(),
-            }));
-            rows.push(retained);
-        }
-        artifacts.sort_by_key(crate::PackageArtifactV1::reference);
-        rows.sort_by(|left, right| {
-            (&left.package_id, &left.revision).cmp(&(&right.package_id, &right.revision))
-        });
-        control.check()?;
-        Ok((rows, artifacts))
+        PackageRevisionV1::closure(tenant, root, control, |tenant, package, revision| {
+            Self::package_from(reader, tenant, package, revision)
+        })
     }
 }

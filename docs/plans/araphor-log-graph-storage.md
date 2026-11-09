@@ -131,6 +131,17 @@ uninstall reclamation, capacity accounting, qualified context/fact admission,
 managed lifecycle, and production routing remain **Not done**. Production
 still uses DuckDB. No incident performance gain is established.
 
+The native context owner now stages qualified contexts and canonical fact
+indexes in its existing transaction. It preserves guarded callbacks, exact
+retry references, checked heads, scoped interning, retained package proof,
+imported history, and notification DTO admission. Thirty-four focused cases
+and the feature-off build pass. Read the
+[context qualification](../research/results/araphor-native-context-2026-11-09.md).
+Result: **Done for default-limit native context admission and fact-index
+staging**. Context providers, managed attempts/results, notification lookups
+and effects, configured capacity, collection, and production routing remain
+**Not done**. Production still uses DuckDB. No incident gain is established.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

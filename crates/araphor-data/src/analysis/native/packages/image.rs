@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use araphor_discovery_definition::ImagePin;
 use serde::Deserialize;
 
@@ -200,29 +198,9 @@ impl DataView {
         root: &PackageRefV1,
         control: &AnalysisReadControl,
     ) -> Result<Vec<crate::PackageArtifactV1>> {
-        let mut pending = vec![root.clone()];
-        let mut seen = BTreeSet::new();
-        let mut artifacts = Vec::new();
-        while let Some(reference) = pending.pop() {
-            control.check()?;
-            if !seen.insert(reference.clone()) {
-                continue;
-            }
-            let retained = self
-                .package_revision(tenant, &reference.package_id, &reference.revision, control)?
-                .ok_or_else(|| Code::Missing.error("installed image artifact"))?;
-            artifacts.push(
-                retained
-                    .decode_artifact()
-                    .map_err(crate::Error::stored_artifact)?,
-            );
-            pending.extend(retained.dependencies.iter().map(|dependency| PackageRefV1 {
-                package_id: dependency.package_id.clone(),
-                revision: dependency.revision.clone(),
-            }));
-        }
-        artifacts.sort_by_key(crate::PackageArtifactV1::reference);
-        control.check()?;
-        Ok(artifacts)
+        PackageRevisionV1::closure(tenant, root, control, |tenant, package, revision| {
+            self.package_revision(tenant, package, revision, control)
+        })
+        .map(|(_, artifacts)| artifacts)
     }
 }

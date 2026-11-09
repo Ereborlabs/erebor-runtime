@@ -45,7 +45,7 @@ impl PreparedFact {
         if !value.valid() {
             return Err(Code::Invalid.error("derived context identity"));
         }
-        let record = AnalysisStore::fact_record(value)?
+        let record = super::facts::FactRecord::from_context(value)?
             .ok_or_else(|| Code::Invalid.error("derived fact context"))?;
         let version = version_key(&value.key)?;
         Ok(Self {
