@@ -455,8 +455,22 @@ compiler attribute changes no standalone native or query-method code bytes.
 The reviewer and implementer agree to remove both drafts. Accepted engine
 commits remain unchanged. Complete performance qualification remains **Not done**.
 
+The [ordinary execution comparison](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/ordinary-gap/README.md)
+retains a fresh balanced original-control/current pair and three exact CPU
+diagnostics. All eight untraced and six profiled summaries pass. Current
+combined median/p95/maximum values are 4.590/7.112/7.269 and
+4.839/7.214/7.535 ms. Stable medians are 25.989 and 26.386 ms. Both combined
+medians exceed their target. The selected 28 ordinary fixed-key samples use
+3.519% fewer neighbor-query instructions, 8.115% fewer result-inspection
+instructions, and 1.725% fewer complete-package instructions than the
+original control. The query count is nested inside the package count.
+Profiled timings are excluded. Extra package elapsed time remains unexplained.
+The hardware counter probe is blocked by `perf_event_paranoid=4`; host
+settings remain unchanged. No production edit is justified by these counts
+alone. Complete performance remains **Not done**.
+
 Current accepted source is Fjall `04c304a` and `lsm-tree` `5c005a47`. Use the
-direct native point-read record above for the latest comparison. Earlier records
+ordinary execution record above for the latest comparison. Earlier records
 describe their recorded source states. The whole-cycle CPU attempt is excluded
 because its reset function was inlined in one executable. Complete performance
 qualification remains **Not done**.

@@ -369,6 +369,16 @@ median/p95/maximum values are 4.751/7.066/7.091 and 4.709/7.130/7.805 ms.
 Both medians increase in these calls and exceed their target. Stable medians
 are 26.278 and 25.630 ms. No sustained latency change is established.
 
+The [ordinary execution comparison](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/ordinary-gap/README.md)
+compares that accepted source with the original frozen control. Current
+combined median/p95/maximum values are 4.590/7.112/7.269 and
+4.839/7.214/7.535 ms; stable medians are 25.989 and 26.386 ms. All eight
+untraced summaries pass. Exact ordinary neighbor-query, result-inspection,
+and complete-package instructions decrease by 3.519%, 8.115%, and 1.725%.
+Those counts overlap; they are not additive. All six profiled summaries pass.
+Profiled timings are excluded. The elapsed package gap remains unexplained.
+No native source changes follow from these counts alone.
+
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this
 implementation. Full workspace CI was not run during this iteration, as the

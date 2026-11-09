@@ -1,0 +1,58 @@
+[
+  {
+    "side": "package-control",
+    "command": [
+      "/tmp/araphor-callgrind/tool/usr/bin/valgrind",
+      "--tool=callgrind",
+      "--enable-debuginfod=no",
+      "--vgdb=no",
+      "--collect-atstart=no",
+      "--toggle-collect=storage_poc::package::evaluate",
+      "--zero-before=storage_poc::package::evaluate",
+      "--dump-after=storage_poc::package::evaluate",
+      "--separate-threads=yes",
+      "--separate-callers=12",
+      "--callgrind-out-file=/tmp/araphor-callgrind/package-control-evaluate.out",
+      "--log-file=/tmp/araphor-callgrind/package-control-evaluate-valgrind.log",
+      "output/storage-engine-baseline-20261108/control",
+      "/tmp/araphor-callgrind/package-control-evaluate-combined.json",
+      "combined"
+    ],
+    "started_unix_s": 1794221273.1056855,
+    "binary_sha256": "953f7fd0f4189f50779838026de82505346090d2940b36707636dd6583ab99a8",
+    "environment": {
+      "VALGRIND_LIB": "/tmp/araphor-callgrind/tool/usr/libexec/valgrind"
+    },
+    "timing_use": "Diagnostic only. All profiled timing fields excluded from acceptance.",
+    "finished_unix_s": 1794221338.4214945,
+    "exit_code": 0
+  },
+  {
+    "side": "package-current",
+    "command": [
+      "/tmp/araphor-callgrind/tool/usr/bin/valgrind",
+      "--tool=callgrind",
+      "--enable-debuginfod=no",
+      "--vgdb=no",
+      "--collect-atstart=no",
+      "--toggle-collect=storage_poc::package::evaluate",
+      "--zero-before=storage_poc::package::evaluate",
+      "--dump-after=storage_poc::package::evaluate",
+      "--separate-threads=yes",
+      "--separate-callers=12",
+      "--callgrind-out-file=/tmp/araphor-callgrind/package-current-evaluate.out",
+      "--log-file=/tmp/araphor-callgrind/package-current-evaluate-valgrind.log",
+      "output/storage-engine-baseline-20261108/versioned-direct-decoder",
+      "/tmp/araphor-callgrind/package-current-evaluate-combined.json",
+      "combined"
+    ],
+    "started_unix_s": 1794221338.514843,
+    "binary_sha256": "d4f84259d53519011f19775802991b72f750723614be9ef4a795e86a9963d31a",
+    "environment": {
+      "VALGRIND_LIB": "/tmp/araphor-callgrind/tool/usr/libexec/valgrind"
+    },
+    "timing_use": "Diagnostic only. All profiled timing fields excluded from acceptance.",
+    "finished_unix_s": 1794221404.8289883,
+    "exit_code": 0
+  }
+]
