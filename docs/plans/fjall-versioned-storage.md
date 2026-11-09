@@ -9,6 +9,9 @@ The user accepted the current benchmark on 2026-11-09. See
 [final verification](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/finalization/README.md).
 The original combined median target is not proved. Earlier measurements and
 their qualification results remain below.
+The four approved follow-up simplifications are complete at Fjall `a042865`
+and `lsm-tree` `2e1b5df3`. Their [verification record](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/simplification/README.md)
+includes the unchanged PoC comparisons and all focused checks.
 
 ## Intended end state
 
@@ -368,6 +371,40 @@ writable forks, distributed storage, or automatic retention policy is included.
 
 ## Implementation status
 
+### Approved follow-up simplification: 2026-11-09
+
+Result: **Done for the four approved changes on the observed PoC workload**.
+The user requests all four review findings without performance loss. The
+implementer and reviewer agree on each direction before code changes and
+review each committed result. Public APIs, formats, `SyncAll`, workloads,
+assertions, and native storage ownership remain.
+
+| Change | Implementation and proof |
+| --- | --- |
+| Ordered journal bookkeeping | Fjall `13b04ae` uses numeric segment IDs, binary search, and `VecDeque` front removal. `retained_segment_order` checks empty rotations, collection/append, exact resume, expiry, and reopen. Historical sequence-bound lookup stays linear because empty seals have no ordered sequence bound. |
+| Shared pin publication | Fjall `6b62b16` publishes only when an active range first appears or its final owner leaves. Admission runs on every pin. `shared_pins_preserve_cuts` checks duplicate point/future pins, head advancement, release, and expired admission. |
+| Affected ancestry updates | Fjall `d8a4613` replaces anonymous durable intervals with policy/fork contributions at each existing per-tree History owner. Runtime changes visit that source's ancestry. Recovery derives the full maps from durable records before maintenance. Tests check overlapping owners and successful metadata changes while unrelated history remains locked. |
+| Capture outside writer I/O | Fjall `a042865` releases catalogue protection before ordinary branch sync and backpressure. The existing signal boundary captures a committed revision and optional exact cursor. One private publication callback advances the existing History head before visibility and wake. `Clock.published` is removed. Tests cover capture during pending SyncAll, buffered feed routing, raw writer receipts, failed publication, and nonzero retained state without journal payload. |
+
+All 11 final focused commands pass: native default/LZ4 libraries 244/247;
+eight selected integrations 19 in each configuration; Fjall CDC/without CDC
+135/87; native/Fjall documentation 23/86. Production without default features,
+library clippy, and formatting pass. Existing ignored cases and clippy warnings
+remain. Full workspace CI is not run, as the user requires.
+
+The [complete comparison](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/simplification/README.md)
+retains four unchanged combined and four unchanged stable calls per binary.
+All 16 summaries pass. Each complete before/after report matches after removal
+of only its top-level source label and timing fields. Physical cursors match.
+The pooled 112 ordinary samples per side have median/p95/maximum values
+4.672/8.056/11.852 before and 4.655/7.668/8.171 ms after. The median of
+16 stable eight-cycle runs per side is 28.413 before and 28.321 ms after.
+Individual comparisons are mixed. No consistent regression is observed;
+no repeatable latency gain or universal performance guarantee is established.
+The previous completion record and its measured target misses remain below.
+
+### Recorded implementation results
+
 The entries below preserve results for their recorded source states. The final
 acceptance record follows the latest source comparison.
 
@@ -533,12 +570,12 @@ summaries pass. Combined median/p95/maximum values are 4.653/7.187/8.332 and
 medians exceed their target and their fresh controls. No repeatable elapsed
 gain or sustained regression is established.
 
-Current accepted source is Fjall `bdb1843` and `lsm-tree` `2e1b5df3`. Use the
-borrowed point-lookup record above for the latest comparison. Earlier records
+Source at the original acceptance was Fjall `bdb1843` and `lsm-tree` `2e1b5df3`.
+Use the borrowed point-lookup record above for that comparison. Earlier records
 describe their recorded source states. The whole-cycle CPU attempt is excluded
 because its reset function was inlined in one executable.
 
-### Final acceptance: 2026-11-09
+### Original acceptance: 2026-11-09
 
 Result: **Done for the approved engine scope**. The implementer and reviewer
 read the complete plan and found no missing API or required lifecycle proof.

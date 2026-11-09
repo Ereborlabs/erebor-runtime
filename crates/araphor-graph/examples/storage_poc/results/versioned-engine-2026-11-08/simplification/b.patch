@@ -1,0 +1,57 @@
+diff --git a/src/versioned/history.rs b/src/versioned/history.rs
+index e2d67b5..1eeeecf 100644
+--- a/src/versioned/history.rs
++++ b/src/versioned/history.rs
+@@ -107,8 +107,11 @@ impl History {
+         if first <= through && !self.native.covers(first, last.min(through)) {
+             return Ok(None);
+         }
+-        *state.active.entry((first, last)).or_default() += 1;
+-        self.publish(&state);
++        let count = state.active.entry((first, last)).or_default();
++        *count += 1;
++        if *count == 1 {
++            self.publish(&state);
++        }
+         Ok(Some(Pin {
+             history: self.clone(),
+             range: (first, last),
+@@ -136,8 +139,37 @@ impl Drop for Pin {
+             *count -= 1;
+             if *count == 0 {
+                 state.active.remove(&self.range);
++                self.history.publish(&state);
+             }
+         }
+-        self.history.publish(&state);
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn shared_pins_preserve_cuts() -> crate::Result<()> {
++        let native = Arc::new(Retention::default());
++        let history = History::new(native.clone(), Revision(10));
++        let first = history.pin(10, 10, 10)?.expect("current cut");
++        let second = history.pin(10, 10, 10)?.expect("shared cut");
++        history.advance(Revision(20))?;
++        drop(first);
++        assert!(native.covers(10, 10));
++        assert!(history.pin(11, 11, 20)?.is_none());
++        drop(second);
++        assert!(!native.covers(10, 10));
++
++        let first = history.pin(20, u64::MAX, 20)?.expect("future range");
++        let second = history.pin(20, u64::MAX, 20)?.expect("shared range");
++        history.advance(Revision(30))?;
++        drop(first);
++        assert!(native.covers(20, u64::MAX));
++        drop(second);
++        assert!(!native.covers(20, 20));
++        assert!(native.covers(30, u64::MAX));
++        Ok(())
+     }
+ }

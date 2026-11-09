@@ -29,7 +29,9 @@ tree contains only named, no-clobber copies selected during triage.
 - [Fjall versioned storage review](guides/fjall-versioned-storage-review.md)
   gives the native history, branch, journal, recovery, and collection source
   route. The approved engine scope is complete. The user accepted the current
-  benchmark; the original combined median target remains unproved.
+  benchmark. The four approved journal/history simplifications pass focused
+  checks and unchanged PoC comparisons. The original combined median target
+  remains unproved.
 
 ## Important Status Rule
 

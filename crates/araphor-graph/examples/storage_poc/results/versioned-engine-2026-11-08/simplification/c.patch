@@ -1,0 +1,276 @@
+diff --git a/src/versioned/catalogue.rs b/src/versioned/catalogue.rs
+index 702d2e2..7c606b4 100644
+--- a/src/versioned/catalogue.rs
++++ b/src/versioned/catalogue.rs
+@@ -3,7 +3,10 @@
+ // (found in the LICENSE-* files in the repository)
+ 
+ use super::{
+-    clock, entry::Entry, history::Pin, Branch, BranchId, BranchInfo, HistoryPolicy, RetentionId,
++    clock,
++    entry::Entry,
++    history::{Pin, Protection},
++    Branch, BranchId, BranchInfo, HistoryPolicy, RetentionId,
+ };
+ use crate::{
+     version::Mode, Database, Keyspace, KeyspaceCreateOptions, Revision, SingleWriterTxDatabase,
+@@ -327,10 +330,13 @@ impl Catalogue {
+     }
+ 
+     pub(super) fn protect(&self) -> crate::Result<()> {
+-        let mut ranges: BTreeMap<BranchId, Vec<(u64, u64)>> = BTreeMap::new();
++        let mut ranges: BTreeMap<BranchId, BTreeMap<Protection, (u64, u64)>> = BTreeMap::new();
+         for policy in self.policies.values() {
+             for (id, first, last) in self.project(policy.branch, policy.first.0, policy.last.0)? {
+-                ranges.entry(id).or_default().push((first, last));
++                ranges
++                    .entry(id)
++                    .or_default()
++                    .insert(Protection::Policy(policy.id), (first, last));
+             }
+         }
+         for entry in self.entries.values() {
+@@ -341,7 +347,10 @@ impl Catalogue {
+                     .ok_or(crate::Error::Unrecoverable)?
+                     .0;
+                 for (id, first, last) in self.project(parent, cut, cut)? {
+-                    ranges.entry(id).or_default().push((first, last));
++                    ranges
++                        .entry(id)
++                        .or_default()
++                        .insert(Protection::Fork(entry.info.id), (first, last));
+                 }
+             }
+         }
+@@ -353,6 +362,21 @@ impl Catalogue {
+         Ok(())
+     }
+ 
++    pub(super) fn update_history(
++        &self,
++        owner: Protection,
++        branch: BranchId,
++        range: (u64, u64),
++        retain: bool,
++    ) -> crate::Result<()> {
++        for (id, first, last) in self.project(branch, range.0, range.1)? {
++            self.entry(id)?
++                .history
++                .set_range(owner, retain.then_some((first, last)))?;
++        }
++        Ok(())
++    }
++
+     pub(super) fn create(
+         &mut self,
+         db: &SingleWriterTxDatabase,
+@@ -408,9 +432,12 @@ impl Catalogue {
+         let commit = batch.commit_receipt()?.ok_or(crate::Error::Unrecoverable)?;
+         entry.info.head = commit.revision;
+         entry.created = commit.revision;
++        entry.history.advance(commit.revision)?;
+         self.names.insert(name.to_owned(), id);
+         self.entries.insert(id, entry);
+-        self.protect()?;
++        if let Some((parent, cut)) = parent {
++            self.update_history(Protection::Fork(id), parent, (cut.0, cut.0), true)?;
++        }
+         drop(pins);
+         Ok(Branch { db: db.clone(), id })
+     }
+@@ -455,20 +482,27 @@ impl Catalogue {
+                 last: Revision(last),
+             },
+         );
+-        self.protect()?;
++        self.update_history(Protection::Policy(id), branch, (first, last), true)?;
+         drop(pins);
+         Ok(id)
+     }
+ 
+     pub(super) fn release(&mut self, db: &Database, id: RetentionId) -> crate::Result<()> {
+-        if !self.policies.contains_key(&id) {
+-            return Err(crate::Error::RetentionMissing(id));
+-        }
++        let policy = self
++            .policies
++            .get(&id)
++            .cloned()
++            .ok_or(crate::Error::RetentionMissing(id))?;
+         let mut batch = db.batch();
+         batch.remove(&self.keyspace, Entry::key(b'r', id.0));
+         batch.commit_receipt()?;
+         self.policies.remove(&id);
+-        self.protect()
++        self.update_history(
++            Protection::Policy(id),
++            policy.branch,
++            (policy.first.0, policy.last.0),
++            false,
++        )
+     }
+ 
+     pub(super) fn delete(&mut self, db: &Database, id: BranchId) -> crate::Result<()> {
+diff --git a/src/versioned/history.rs b/src/versioned/history.rs
+index 1eeeecf..6f230c8 100644
+--- a/src/versioned/history.rs
++++ b/src/versioned/history.rs
+@@ -58,9 +58,15 @@ pub(super) struct History {
+     state: Mutex<State>,
+ }
+ 
++#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
++pub(super) enum Protection {
++    Policy(RetentionId),
++    Fork(super::BranchId),
++}
++
+ struct State {
+     head: u64,
+-    durable: Vec<(u64, u64)>,
++    durable: BTreeMap<Protection, (u64, u64)>,
+     active: BTreeMap<(u64, u64), usize>,
+ }
+ 
+@@ -76,13 +82,17 @@ impl History {
+             native,
+             state: Mutex::new(State {
+                 head: head.0,
+-                durable: Vec::new(),
++                durable: BTreeMap::new(),
+                 active: BTreeMap::new(),
+             }),
+         })
+     }
+ 
+-    pub(super) fn replace(&self, head: Revision, ranges: Vec<(u64, u64)>) -> crate::Result<()> {
++    pub(super) fn replace(
++        &self,
++        head: Revision,
++        ranges: BTreeMap<Protection, (u64, u64)>,
++    ) -> crate::Result<()> {
+         let mut state = self.state.lock().map_err(|_| crate::Error::Poisoned)?;
+         state.head = head.0;
+         state.durable = ranges;
+@@ -90,6 +100,22 @@ impl History {
+         Ok(())
+     }
+ 
++    pub(super) fn set_range(
++        &self,
++        owner: Protection,
++        range: Option<(u64, u64)>,
++    ) -> crate::Result<()> {
++        let mut state = self.state.lock().map_err(|_| crate::Error::Poisoned)?;
++        let changed = match range {
++            Some(range) => state.durable.insert(owner, range) != Some(range),
++            None => state.durable.remove(&owner).is_some(),
++        };
++        if changed {
++            self.publish(&state);
++        }
++        Ok(())
++    }
++
+     pub(super) fn advance(&self, head: Revision) -> crate::Result<()> {
+         let mut state = self.state.lock().map_err(|_| crate::Error::Poisoned)?;
+         state.head = head.0;
+@@ -121,7 +147,7 @@ impl History {
+     fn publish(&self, state: &State) {
+         self.native.replace(
+             std::iter::once((state.head, u64::MAX))
+-                .chain(state.durable.iter().copied())
++                .chain(state.durable.values().copied())
+                 .chain(state.active.keys().copied())
+                 .map(|(first, last)| first..=last),
+         );
+@@ -172,4 +198,60 @@ mod tests {
+         assert!(native.covers(30, u64::MAX));
+         Ok(())
+     }
++
++    #[test]
++    fn contributions_keep_their_owners() -> crate::Result<()> {
++        let native = Arc::new(Retention::default());
++        let history = History::new(native.clone(), Revision(30));
++        let policy = Protection::Policy(RetentionId(1));
++        let fork = Protection::Fork(super::super::BranchId(1));
++        history.set_range(policy, Some((10, 20)))?;
++        history.set_range(fork, Some((15, 15)))?;
++        assert!(native.covers(10, 20));
++        history.set_range(policy, None)?;
++        assert!(!native.covers(10, 10));
++        assert!(native.covers(15, 15));
++        history.set_range(fork, None)?;
++        assert!(!native.covers(15, 15));
++        assert!(native.covers(30, u64::MAX));
++        Ok(())
++    }
++
++    #[test]
++    fn changes_skip_other_branches() -> crate::Result<()> {
++        use crate::SingleWriterTxDatabase;
++        let dir = tempfile::tempdir()?;
++        let db = SingleWriterTxDatabase::builder(&dir).versioned().open()?;
++        let main = db.create_branch("main")?;
++        let other = db.create_branch("other")?;
++        let history = db.catalogue(|catalogue| Ok(catalogue.entry(other.id())?.history.clone()))?;
++        let guard = history.state.lock().map_err(|_| crate::Error::Poisoned)?;
++        let (send, receive) = std::sync::mpsc::channel();
++        let worker = std::thread::spawn(move || {
++            let result = (|| -> crate::Result<()> {
++                let cut = main.info()?.head;
++                let policy = main.retain_history(cut..)?;
++                let child = main.fork("child", cut)?;
++                let child_policy = child.retain_history(child.info()?.head..)?;
++                db.release_history(policy)?;
++                db.delete_branch(child.id())?;
++                db.release_history(child_policy)?;
++                db.inner().flush_memtables()?;
++                db.inner().rotate_journal()?;
++                let mut tx = main.write_tx()?;
++                tx.insert("key", "after fork");
++                let commit = tx.commit()?.ok_or(crate::Error::Unrecoverable)?;
++                db.inner().retain_after(commit.cursor)?;
++                db.inner().collect_journals()?;
++                assert!(db.branch_by_id(child.id())?.is_none());
++                Ok(())
++            })();
++            send.send(result).is_ok()
++        });
++        let result = receive.recv_timeout(std::time::Duration::from_secs(5));
++        drop(guard);
++        assert!(worker.join().map_err(|_| crate::Error::Poisoned)?);
++        result.map_err(|_| crate::Error::Poisoned)??;
++        Ok(())
++    }
+ }
+diff --git a/src/versioned/retire.rs b/src/versioned/retire.rs
+index aa3f4b7..3fa2cca 100644
+--- a/src/versioned/retire.rs
++++ b/src/versioned/retire.rs
+@@ -1,4 +1,4 @@
+-use super::{entry::Entry, BranchId, Catalogue};
++use super::{entry::Entry, history::Protection, BranchId, Catalogue};
+ use crate::Database;
+ use std::{collections::BTreeSet, sync::Arc};
+ 
+@@ -61,9 +61,17 @@ impl Catalogue {
+             }
+             batch.commit_receipt()?;
+             for id in retired {
++                let entry = self.entry(id)?;
++                if let Some(parent) = entry.info.parent {
++                    let cut = entry
++                        .info
++                        .fork_revision
++                        .ok_or(crate::Error::Unrecoverable)?
++                        .0;
++                    self.update_history(Protection::Fork(id), parent, (cut, cut), false)?;
++                }
+                 self.entries.remove(&id);
+             }
+-            self.protect()?;
+         }
+         self.remove_orphans(db)
+     }

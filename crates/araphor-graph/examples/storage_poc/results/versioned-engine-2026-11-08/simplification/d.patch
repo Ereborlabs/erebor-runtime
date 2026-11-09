@@ -1,0 +1,1007 @@
+diff --git a/src/batch/mod.rs b/src/batch/mod.rs
+index 84504ed..1cb1f3b 100644
+--- a/src/batch/mod.rs
++++ b/src/batch/mod.rs
+@@ -112,7 +112,7 @@ impl WriteBatch {
+     /// Will return `Err` if an IO error occurs.
+     #[allow(clippy::missing_panics_doc)]
+     pub fn commit(self) -> crate::Result<()> {
+-        self.commit_inner(false).map(|_| ())
++        self.commit_inner(false, |_| Ok(())).map(|_| ())
+     }
+ 
+     /// Commits with `SyncAll` and returns the exact revision and journal cursor.
+@@ -121,11 +121,23 @@ impl WriteBatch {
+     /// # Errors
+     /// Returns an error if the journal write or durable sync fails.
+     pub fn commit_receipt(self) -> crate::Result<Option<crate::Commit>> {
+-        self.commit_inner(true)
++        self.commit_inner(true, |_| Ok(()))
++    }
++
++    #[cfg(feature = "journal-cdc")]
++    pub(crate) fn commit_publish(
++        self,
++        publish: impl FnOnce(crate::Revision) -> crate::Result<()>,
++    ) -> crate::Result<Option<crate::Commit>> {
++        self.commit_inner(true, publish)
+     }
+ 
+     #[allow(clippy::missing_panics_doc)]
+-    fn commit_inner(mut self, receipt: bool) -> crate::Result<Option<crate::Commit>> {
++    fn commit_inner(
++        mut self,
++        receipt: bool,
++        publish: impl FnOnce(crate::Revision) -> crate::Result<()>,
++    ) -> crate::Result<Option<crate::Commit>> {
+         if self.is_empty() {
+             return Ok(None);
+         }
+@@ -218,10 +230,13 @@ impl WriteBatch {
+         let clock_write = journal_writer
+             .apply_clock(batch_seqno)
+             .inspect_err(|_| self.db.config.poison_cdc(&self.db.is_poisoned))?;
+-        self.db.supervisor.snapshot_tracker.publish(batch_seqno);
+         self.db
+             .config
+-            .publish_cdc(&mut journal_writer, batch_seqno)
++            .publish_commit(&mut journal_writer, batch_seqno, |revision| {
++                publish(revision)?;
++                self.db.supervisor.snapshot_tracker.publish(batch_seqno);
++                Ok(())
++            })
+             .inspect_err(|_| self.db.config.poison_cdc(&self.db.is_poisoned))?;
+ 
+         drop(journal_writer);
+diff --git a/src/cdc.rs b/src/cdc.rs
+index a3094f3..e985bbc 100644
+--- a/src/cdc.rs
++++ b/src/cdc.rs
+@@ -41,11 +41,26 @@ impl Batch {
+ 
+ #[derive(Debug, Default)]
+ pub(crate) struct Signal {
+-    head: Mutex<Option<Cursor>>,
++    head: Mutex<Publication>,
+     ready: Condvar,
+     ack: AtomicU64,
+ }
+ 
++#[derive(Clone, Copy, Debug)]
++pub(crate) struct Publication {
++    pub(crate) revision: crate::Revision,
++    pub(crate) cursor: Option<Cursor>,
++}
++
++impl Default for Publication {
++    fn default() -> Self {
++        Self {
++            revision: crate::Revision(0),
++            cursor: None,
++        }
++    }
++}
++
+ fn invalid(message: &str) -> crate::Error {
+     Error::new(ErrorKind::InvalidData, message).into()
+ }
+@@ -58,18 +73,32 @@ fn journal_id(path: &Path) -> crate::Result<u64> {
+ }
+ 
+ impl Signal {
+-    pub(crate) fn publish(&self, writer: &mut Writer, sequence: u64) -> crate::Result<()> {
+-        let offset = writer.pos()?;
+-        self.restore(writer, offset, sequence)
++    pub(crate) fn capture(&self) -> crate::Result<std::sync::MutexGuard<'_, Publication>> {
++        self.head.lock().map_err(|_| crate::Error::Poisoned)
++    }
++
++    pub(crate) fn restore_cut(&self, revision: crate::Revision) -> crate::Result<()> {
++        let mut head = self.capture()?;
++        head.revision = revision;
++        head.cursor = head.cursor.filter(|cursor| cursor.revision() == revision);
++        Ok(())
+     }
+ 
+-    pub(crate) fn restore(
++    pub(crate) fn publish(
+         &self,
+         writer: &mut Writer,
+-        offset: u64,
+         sequence: u64,
++        publish: impl FnOnce(crate::Revision) -> crate::Result<()>,
+     ) -> crate::Result<()> {
+-        self.recover(&writer.path, offset, sequence)
++        let cursor = writer.cursor(sequence)?;
++        let mut head = self.capture()?;
++        publish(cursor.revision())?;
++        *head = Publication {
++            revision: cursor.revision(),
++            cursor: Some(cursor),
++        };
++        self.ready.notify_all();
++        Ok(())
+     }
+ 
+     pub(crate) fn recover(&self, path: &Path, offset: u64, sequence: u64) -> crate::Result<()> {
+@@ -78,16 +107,19 @@ impl Signal {
+             offset,
+             sequence,
+         };
+-        *self.head.lock().map_err(|_| crate::Error::Poisoned)? = Some(cursor);
++        *self.capture()? = Publication {
++            revision: cursor.revision(),
++            cursor: Some(cursor),
++        };
+         self.ready.notify_all();
+         Ok(())
+     }
+ 
+     pub(crate) fn last_sequence(&self, path: &Path) -> Option<u64> {
+         let id = journal_id(path).ok()?;
+-        self.head
+-            .lock()
++        self.capture()
+             .ok()?
++            .cursor
+             .filter(|cursor| cursor.journal == id && cursor.offset > 0)
+             .map(|cursor| cursor.sequence)
+     }
+@@ -147,7 +179,7 @@ impl Database {
+             .cdc
+             .clone()
+             .ok_or_else(|| invalid("journal CDC is disabled"))?;
+-        let head = *signal.head.lock().map_err(|_| crate::Error::Poisoned)?;
++        let head = signal.capture()?.cursor;
+         if cursor.is_some_and(|cursor| head.is_none_or(|head| cursor > head)) {
+             return Err(invalid("journal cursor exceeds committed head"));
+         }
+@@ -163,12 +195,16 @@ impl Database {
+ 
+     /// Returns the complete durable journal boundary.
+     pub fn journal_head(&self) -> crate::Result<Option<Cursor>> {
++        Ok(self.publication()?.cursor)
++    }
++
++    pub(crate) fn publication(&self) -> crate::Result<std::sync::MutexGuard<'_, Publication>> {
+         let signal = self
+             .config
+             .cdc
+             .as_ref()
+             .ok_or_else(|| invalid("journal CDC is disabled"))?;
+-        Ok(*signal.head.lock().map_err(|_| crate::Error::Poisoned)?)
++        signal.capture()
+     }
+ 
+     pub(crate) fn journal_cursor(
+@@ -307,7 +343,7 @@ impl Feed {
+             .head
+             .lock()
+             .map_err(|_| crate::Error::Poisoned)?;
+-        while *head <= self.cursor
++        while head.cursor <= self.cursor
+             && !self.stopped.load(Ordering::Acquire)
+             && !self.db.is_poisoned.is_poisoned()
+         {
+@@ -397,12 +433,7 @@ impl Feed {
+             if self.db.is_poisoned.is_poisoned() {
+                 return Err(crate::Error::Poisoned);
+             }
+-            let Some(upper) = *self
+-                .signal
+-                .head
+-                .lock()
+-                .map_err(|_| crate::Error::Poisoned)?
+-            else {
++            let Some(upper) = self.signal.capture()?.cursor else {
+                 return Ok(false);
+             };
+             if self.cursor.is_some_and(|cursor| cursor > upper) {
+diff --git a/src/commit.rs b/src/commit.rs
+index 8a1f71c..e736424 100644
+--- a/src/commit.rs
++++ b/src/commit.rs
+@@ -163,6 +163,34 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[cfg(feature = "journal-cdc")]
++    #[test]
++    fn publication_failure_stays_invisible() -> crate::Result<()> {
++        let dir = tempfile::tempdir()?;
++        let db = crate::Database::builder(&dir).versioned().open()?;
++        let table = db.keyspace("records", KeyspaceCreateOptions::default)?;
++        let before = *db.publication()?;
++        let visible = db.visible_seqno();
++        assert_eq!(
++            db.batch().commit_publish(|_| panic!("empty publication"))?,
++            None
++        );
++        let mut batch = db.batch();
++        batch.insert(&table, "output", "pending");
++        batch.insert(&table, "progress", "pending");
++        assert!(matches!(
++            batch.commit_publish(|_| Err(crate::Error::Unrecoverable)),
++            Err(crate::Error::Unrecoverable)
++        ));
++        assert!(db.is_poisoned.is_poisoned());
++        assert_eq!(db.visible_seqno(), visible);
++        assert_eq!(db.publication()?.revision, before.revision);
++        assert_eq!(db.journal_head()?, before.cursor);
++        assert_eq!(db.snapshot().get(&table, "output")?, None);
++        assert_eq!(db.snapshot().get(&table, "progress")?, None);
++        Ok(())
++    }
++
+     #[cfg(feature = "journal-cdc")]
+     #[test]
+     fn receipts_match_concurrent_journal_batches() -> crate::Result<()> {
+diff --git a/src/db_config.rs b/src/db_config.rs
+index 648c938..6de5ceb 100644
+--- a/src/db_config.rs
++++ b/src/db_config.rs
+@@ -130,12 +130,21 @@ impl Config {
+         &self,
+         _writer: &mut crate::journal::writer::Writer,
+         _seqno: u64,
++    ) -> crate::Result<()> {
++        self.publish_commit(_writer, _seqno, |_| Ok(()))
++    }
++
++    pub(crate) fn publish_commit(
++        &self,
++        _writer: &mut crate::journal::writer::Writer,
++        _seqno: u64,
++        publish: impl FnOnce(crate::Revision) -> crate::Result<()>,
+     ) -> crate::Result<()> {
+         #[cfg(feature = "journal-cdc")]
+         if let Some(signal) = &self.cdc {
+-            signal.publish(_writer, _seqno)?;
++            return signal.publish(_writer, _seqno, publish);
+         }
+-        Ok(())
++        publish(crate::Revision(_seqno + 1))
+     }
+ }
+ 
+diff --git a/src/journal/writer.rs b/src/journal/writer.rs
+index 40a4e16..5de9073 100644
+--- a/src/journal/writer.rs
++++ b/src/journal/writer.rs
+@@ -29,6 +29,11 @@ pub struct Writer {
+     file: BufWriter<File>,
+     buf: Cursor<Vec<u8>>,
+     is_buffer_dirty: bool,
++    #[cfg(test)]
++    before_sync: Option<(
++        std::sync::mpsc::SyncSender<()>,
++        std::sync::mpsc::Receiver<()>,
++    )>,
+ 
+     compression: CompressionType,
+     compression_threshold: usize,
+@@ -191,6 +196,8 @@ impl Writer {
+             file: BufWriter::new(file),
+             buf: Cursor::new(Vec::new()),
+             is_buffer_dirty: false,
++            #[cfg(test)]
++            before_sync: None,
+             compression: CompressionType::None,
+             compression_threshold: 0,
+         })
+@@ -228,6 +235,8 @@ impl Writer {
+                 file: BufWriter::with_capacity(JOURNAL_BUFFER_BYTES, file),
+                 buf: Cursor::new(Vec::new()),
+                 is_buffer_dirty: false,
++                #[cfg(test)]
++                before_sync: None,
+                 compression: CompressionType::None,
+                 compression_threshold: 0,
+             });
+@@ -249,6 +258,8 @@ impl Writer {
+             file: BufWriter::with_capacity(JOURNAL_BUFFER_BYTES, file),
+             buf: Cursor::new(Vec::new()),
+             is_buffer_dirty: false,
++            #[cfg(test)]
++            before_sync: None,
+             compression: CompressionType::None,
+             compression_threshold: 0,
+         })
+@@ -271,6 +282,13 @@ impl Writer {
+             self.is_buffer_dirty = false;
+         }
+ 
++        #[cfg(test)]
++        if let Some((ready, resume)) = self.before_sync.take() {
++            assert!(matches!(mode, PersistMode::SyncAll));
++            ready.send(()).expect("sync pause reached");
++            resume.recv().expect("sync pause released");
++        }
++
+         match mode {
+             PersistMode::SyncAll => self.file.get_mut().sync_all().inspect_err(|e| {
+                 log::error!(
+@@ -513,6 +531,95 @@ mod tests {
+         sync_failure(true)
+     }
+ 
++    #[test]
++    fn captures_skip_pending_sync() -> crate::Result<()> {
++        let dir = tempfile::tempdir()?;
++        let db = crate::SingleWriterTxDatabase::builder(&dir)
++            .versioned()
++            .open()?;
++        let main = db.create_branch("main")?;
++        let other = db.create_branch("other")?;
++        let records = db.keyspace("raw", KeyspaceCreateOptions::default)?;
++        let start = db.inner().journal_head()?;
++        let mut tx = main.write_tx()?;
++        tx.insert("output", "first");
++        tx.insert("progress", "first");
++        let first = tx.commit()?.ok_or(crate::Error::Unrecoverable)?;
++        let mut tx = main.write_tx()?;
++        tx.insert("output", "before");
++        tx.insert("progress", "before");
++        let before = tx.commit()?.ok_or(crate::Error::Unrecoverable)?;
++        let mut feed = db.inner().journal_feed(start)?;
++        assert_eq!(
++            feed.next_batch()?.expect("first batch").cursor,
++            first.cursor
++        );
++        let (ready, paused) = std::sync::mpsc::sync_channel(0);
++        let (resume, continue_sync) = std::sync::mpsc::channel();
++        db.inner().supervisor.journal.get_writer()?.before_sync = Some((ready, continue_sync));
++        let writer = {
++            let main = main.clone();
++            std::thread::spawn(move || -> crate::Result<_> {
++                let mut tx = main.write_tx()?;
++                tx.insert("output", "after");
++                tx.insert("progress", "after");
++                tx.commit()?.ok_or(crate::Error::Unrecoverable)
++            })
++        };
++        paused
++            .recv_timeout(std::time::Duration::from_secs(5))
++            .map_err(|_| crate::Error::Poisoned)?;
++        let (send, receive) = std::sync::mpsc::channel();
++        let reader = {
++            let main = main.clone();
++            std::thread::spawn(move || {
++                let result = (|| -> crate::Result<_> {
++                    let view = main.snapshot()?;
++                    assert_eq!(view.revision(), before.revision);
++                    assert_eq!(view.cursor()?, Some(before.cursor));
++                    assert_eq!(main.info()?.head, before.revision);
++                    assert_eq!(other.info()?.name, "other");
++                    assert_eq!(view.get("output")?.as_deref(), Some(b"before".as_slice()));
++                    assert_eq!(view.get("progress")?.as_deref(), Some(b"before".as_slice()));
++                    let batch = feed.next_batch()?.expect("previous durable batch");
++                    assert_eq!(batch.cursor, before.cursor);
++                    assert!(batch.items.iter().any(
++                        |item| item.branch == Some(main.id()) && item.key.as_ref() == b"output"
++                    ));
++                    Ok(view)
++                })();
++                send.send(result).is_ok()
++            })
++        };
++        let raw = {
++            let db = db.clone();
++            std::thread::spawn(move || -> crate::Result<_> {
++                let mut batch = db.inner().batch();
++                batch.insert(records.as_ref(), "raw", "committed");
++                batch.commit_receipt()?.ok_or(crate::Error::Unrecoverable)
++            })
++        };
++        let result = receive.recv_timeout(std::time::Duration::from_secs(5));
++        resume.send(()).map_err(|_| crate::Error::Poisoned)?;
++        let committed = writer.join().map_err(|_| crate::Error::Poisoned)??;
++        let raw = raw.join().map_err(|_| crate::Error::Poisoned)??;
++        assert!(reader.join().map_err(|_| crate::Error::Poisoned)?);
++        let held = result.map_err(|_| crate::Error::Poisoned)??;
++        assert!(before.revision < committed.revision && committed.revision < raw.revision);
++        assert_eq!(main.info()?.head, committed.revision);
++        assert_eq!(held.get("output")?.as_deref(), Some(b"before".as_slice()));
++        let view = main.snapshot()?;
++        assert_eq!(view.revision(), raw.revision);
++        assert_eq!(view.cursor()?, Some(raw.cursor));
++        assert_eq!(view.get("output")?.as_deref(), Some(b"after".as_slice()));
++        assert_eq!(view.get("progress")?.as_deref(), Some(b"after".as_slice()));
++        let batches = db.inner().journal_feed(Some(before.cursor))?.read()?;
++        assert_eq!(batches.len(), 2);
++        assert_eq!(batches[0].cursor, committed.cursor);
++        assert_eq!(batches[1].cursor, raw.cursor);
++        Ok(())
++    }
++
+     #[test]
+     fn failed_branch_sync_preserves_head_and_progress() -> crate::Result<()> {
+         let dir = tempfile::tempdir()?;
+@@ -566,13 +673,7 @@ mod tests {
+         let (send, receive) = std::sync::mpsc::channel();
+         let waiter = std::thread::spawn(move || send.send(feed.wait()).is_ok());
+         let visible = db.visible_seqno();
+-        let clock = db
+-            .supervisor
+-            .journal
+-            .get_writer()?
+-            .clock
+-            .as_ref()
+-            .map(|clock| clock.published);
++        let published = db.publication()?.revision;
+         {
+             let mut writer = db.supervisor.journal.get_writer()?;
+             writer.file = BufWriter::new(OpenOptions::new().write(true).open("/dev/null")?);
+@@ -588,15 +689,7 @@ mod tests {
+         assert!(db.is_poisoned.is_poisoned());
+         assert_eq!(db.visible_seqno(), visible);
+         assert_eq!(db.journal_head()?, head);
+-        assert_eq!(
+-            db.supervisor
+-                .journal
+-                .get_writer()?
+-                .clock
+-                .as_ref()
+-                .map(|clock| clock.published),
+-            clock
+-        );
++        assert_eq!(db.publication()?.revision, published);
+         assert_eq!(db.snapshot().get(&records, "failed")?, None);
+         Ok(())
+     }
+diff --git a/src/versioned/branch.rs b/src/versioned/branch.rs
+index c8919f6..217701d 100644
+--- a/src/versioned/branch.rs
++++ b/src/versioned/branch.rs
+@@ -56,8 +56,10 @@ impl Branch {
+     /// # Errors
+     /// Returns an error if the catalogue is unavailable.
+     pub fn info(&self) -> crate::Result<BranchInfo> {
+-        self.db
+-            .catalogue(|catalogue| Ok(catalogue.entry(self.id)?.info.clone()))
++        self.db.catalogue(|catalogue| {
++            let _published = self.db.inner.publication()?;
++            catalogue.entry(self.id)?.info()
++        })
+     }
+ 
+     /// Forks a retained current or historical view without copying parent rows.
+@@ -181,12 +183,13 @@ impl SingleWriterTxDatabase {
+     /// Returns an error if versioned mode is disabled or the catalogue is unavailable.
+     pub fn branches(&self) -> crate::Result<Vec<BranchInfo>> {
+         self.catalogue(|catalogue| {
+-            Ok(catalogue
++            let _published = self.inner.publication()?;
++            catalogue
+                 .entries
+                 .values()
+-                .filter(|entry| !entry.info.deleted)
+-                .map(|entry| entry.info.clone())
+-                .collect())
++                .filter(|entry| !entry.deleted)
++                .map(|entry| entry.info())
++                .collect()
+         })
+     }
+ 
+diff --git a/src/versioned/catalogue.rs b/src/versioned/catalogue.rs
+index 7c606b4..953a0fe 100644
+--- a/src/versioned/catalogue.rs
++++ b/src/versioned/catalogue.rs
+@@ -88,8 +88,12 @@ impl Catalogue {
+         db.supervisor
+             .snapshot_tracker
+             .set(db.supervisor.seqno.get());
+-        db.supervisor.journal.get_writer()?.clock =
+-            Some(clock::Clock::new(&catalogue.keyspace, cut));
++        db.supervisor.journal.get_writer()?.clock = Some(clock::Clock::new(&catalogue.keyspace));
++        db.config
++            .cdc
++            .as_ref()
++            .ok_or(crate::Error::Unrecoverable)?
++            .restore_cut(cut)?;
+         if initialize {
+             let mut batch = db.batch();
+             batch.insert(&catalogue.keyspace, Self::SCHEMA, [1]);
+@@ -154,23 +158,15 @@ impl Catalogue {
+             }
+             let created = Revision(Entry::number(&mut created.as_ref())?);
+             let entry = Entry::decode(id, &value, head, created, tree)?;
+-            if !entry.info.deleted && self.names.insert(entry.info.name.clone(), id).is_some() {
++            if !entry.deleted && self.names.insert(entry.name.clone(), id).is_some() {
+                 return Err(crate::Error::Unrecoverable);
+             }
+             self.entries.insert(id, entry);
+         }
+-        let published = db
+-            .supervisor
+-            .journal
+-            .get_writer()?
+-            .clock
+-            .as_ref()
+-            .ok_or(crate::Error::Unrecoverable)?
+-            .published;
++        let published = db.publication()?.revision;
+         for entry in self.entries.values() {
+-            if entry.info.head > published
++            if entry.history.head()? > published
+                 || entry
+-                    .info
+                     .parent
+                     .is_some_and(|parent| !self.entries.contains_key(&parent))
+             {
+@@ -218,7 +214,7 @@ impl Catalogue {
+ 
+     pub(super) fn writable(&self, id: BranchId) -> crate::Result<&Entry> {
+         let entry = self.entry(id)?;
+-        if entry.info.deleted {
++        if entry.deleted {
+             return Err(crate::Error::BranchDeleted(id));
+         }
+         Ok(entry)
+@@ -230,47 +226,39 @@ impl Catalogue {
+         branch: BranchId,
+         requested: Option<Revision>,
+     ) -> crate::Result<super::BranchSnapshot> {
+-        let writer = db.supervisor.journal.get_writer()?;
++        let publication = db.publication()?;
+         if db.is_poisoned.is_poisoned() {
+             return Err(crate::Error::Poisoned);
+         }
+-        let published = writer
+-            .clock
+-            .as_ref()
+-            .ok_or(crate::Error::Unrecoverable)?
+-            .published;
++        let published = publication.revision;
+         let cut = requested.unwrap_or(published);
+         if cut > published {
+             return Err(crate::Error::HistoryUnavailable(branch, cut));
+         }
+         let pins = self.pins(branch, cut.0, cut.0, published)?;
++        let cursor = if cut == published {
++            publication.cursor
++        } else {
++            None
++        };
++        drop(publication);
+         let mut views = Vec::new();
+         let mut id = branch;
+         let mut local = cut;
+         loop {
+             let entry = self.entry(id)?;
+             views.push(entry.tree.tree.read_view(local.0));
+-            let Some(parent) = entry.info.parent else {
++            let Some(parent) = entry.parent else {
+                 break;
+             };
+-            local = local.min(
+-                entry
+-                    .info
+-                    .fork_revision
+-                    .ok_or(crate::Error::Unrecoverable)?,
+-            );
++            local = local.min(entry.fork_revision.ok_or(crate::Error::Unrecoverable)?);
+             id = parent;
+         }
+-        let cursor = if cut == published {
+-            db.journal_head()?
+-        } else {
+-            None
+-        };
+         let entry = self.entry(branch)?;
+         Ok(super::BranchSnapshot(Arc::new(super::read::Scope {
+             db: db.clone(),
+             _pins: pins,
+-            _identity: entry.history.clone(),
++            history: entry.history.clone(),
+             revision: cut,
+             cursor,
+             views,
+@@ -289,20 +277,16 @@ impl Catalogue {
+         let mut ranges = Vec::new();
+         loop {
+             let entry = self.entry(id)?;
+-            if entry.info.parent.is_none() && first < entry.created.0 {
++            if entry.parent.is_none() && first < entry.created.0 {
+                 return Err(crate::Error::HistoryUnavailable(id, Revision(first)));
+             }
+             if last >= entry.created.0 {
+                 ranges.push((id, first.max(entry.created.0), last));
+             }
+-            let Some(parent) = entry.info.parent else {
++            let Some(parent) = entry.parent else {
+                 break;
+             };
+-            let fork = entry
+-                .info
+-                .fork_revision
+-                .ok_or(crate::Error::Unrecoverable)?
+-                .0;
++            let fork = entry.fork_revision.ok_or(crate::Error::Unrecoverable)?.0;
+             first = first.min(fork);
+             last = last.min(fork);
+             id = parent;
+@@ -340,24 +324,20 @@ impl Catalogue {
+             }
+         }
+         for entry in self.entries.values() {
+-            if let Some(parent) = entry.info.parent {
+-                let cut = entry
+-                    .info
+-                    .fork_revision
+-                    .ok_or(crate::Error::Unrecoverable)?
+-                    .0;
++            if let Some(parent) = entry.parent {
++                let cut = entry.fork_revision.ok_or(crate::Error::Unrecoverable)?.0;
+                 for (id, first, last) in self.project(parent, cut, cut)? {
+                     ranges
+                         .entry(id)
+                         .or_default()
+-                        .insert(Protection::Fork(entry.info.id), (first, last));
++                        .insert(Protection::Fork(entry.id), (first, last));
+                 }
+             }
+         }
+         for (id, entry) in &self.entries {
+             entry
+                 .history
+-                .replace(entry.info.head, ranges.remove(id).unwrap_or_default())?;
++                .replace(ranges.remove(id).unwrap_or_default())?;
+         }
+         Ok(())
+     }
+@@ -393,15 +373,7 @@ impl Catalogue {
+         if self.names.contains_key(name) {
+             return Err(crate::Error::BranchNameExists(name.to_owned()));
+         }
+-        let published = db
+-            .inner
+-            .supervisor
+-            .journal
+-            .get_writer()?
+-            .clock
+-            .as_ref()
+-            .ok_or(crate::Error::Unrecoverable)?
+-            .published;
++        let published = db.inner.publication()?.revision;
+         let pins = if let Some((parent, cut)) = parent {
+             self.writable(parent)?;
+             if cut > published {
+@@ -430,7 +402,6 @@ impl Catalogue {
+         batch.stamp(&self.keyspace, Entry::key(b'h', id.0));
+         batch.stamp(&self.keyspace, Entry::key(b'c', id.0));
+         let commit = batch.commit_receipt()?.ok_or(crate::Error::Unrecoverable)?;
+-        entry.info.head = commit.revision;
+         entry.created = commit.revision;
+         entry.history.advance(commit.revision)?;
+         self.names.insert(name.to_owned(), id);
+@@ -450,14 +421,7 @@ impl Catalogue {
+     ) -> crate::Result<RetentionId> {
+         let (first, last) =
+             HistoryPolicy::bounds(range).ok_or(crate::Error::InvalidHistoryRange)?;
+-        let published = db
+-            .supervisor
+-            .journal
+-            .get_writer()?
+-            .clock
+-            .as_ref()
+-            .ok_or(crate::Error::Unrecoverable)?
+-            .published;
++        let published = db.publication()?.revision;
+         let pins = self.pins(branch, first, last, published)?;
+         let id = RetentionId(self.next_policy);
+         let next = self
+@@ -515,8 +479,8 @@ impl Catalogue {
+             .entries
+             .get_mut(&id)
+             .ok_or(crate::Error::BranchMissing(id))?;
+-        entry.info.deleted = true;
+-        self.names.remove(&entry.info.name);
++        entry.deleted = true;
++        self.names.remove(&entry.name);
+         Ok(())
+     }
+ }
+diff --git a/src/versioned/clock.rs b/src/versioned/clock.rs
+index 2c27286..dbb4544 100644
+--- a/src/versioned/clock.rs
++++ b/src/versioned/clock.rs
+@@ -6,7 +6,6 @@ use std::sync::{Arc, Weak};
+ pub(crate) struct Clock {
+     keyspace: Weak<KeyspaceInner>,
+     pub(crate) id: u64,
+-    pub(crate) published: Revision,
+ }
+ 
+ pub(crate) struct ClockWrite {
+@@ -15,11 +14,10 @@ pub(crate) struct ClockWrite {
+ }
+ 
+ impl Clock {
+-    pub(crate) fn new(keyspace: &Keyspace, published: Revision) -> Self {
++    pub(crate) fn new(keyspace: &Keyspace) -> Self {
+         Self {
+             keyspace: Arc::downgrade(&keyspace.0),
+             id: keyspace.id(),
+-            published,
+         }
+     }
+ 
+@@ -29,7 +27,6 @@ impl Clock {
+         let (size, _) = keyspace
+             .tree
+             .insert(Catalogue::CLOCK, revision.to_bytes(), sequence);
+-        self.published = revision;
+         Ok(ClockWrite { keyspace, size })
+     }
+ }
+diff --git a/src/versioned/entry.rs b/src/versioned/entry.rs
+index 9599e4f..717cfd2 100644
+--- a/src/versioned/entry.rs
++++ b/src/versioned/entry.rs
+@@ -4,7 +4,11 @@ use lsm_tree::AbstractTree;
+ use std::sync::Arc;
+ 
+ pub(super) struct Entry {
+-    pub(super) info: BranchInfo,
++    pub(super) id: BranchId,
++    pub(super) name: String,
++    pub(super) parent: Option<BranchId>,
++    pub(super) fork_revision: Option<Revision>,
++    pub(super) deleted: bool,
+     pub(super) created: Revision,
+     pub(super) tree: Keyspace,
+     pub(super) history: Arc<History>,
+@@ -20,14 +24,25 @@ impl Entry {
+     }
+ 
+     pub(super) fn encode(&self, deleted: bool) -> Vec<u8> {
+-        let mut value = Vec::with_capacity(17 + self.info.name.len());
++        let mut value = Vec::with_capacity(17 + self.name.len());
+         value.push(u8::from(deleted));
+-        value.extend(self.info.parent.map_or(0, |id| id.0).to_be_bytes());
+-        value.extend(self.info.fork_revision.map_or(0, |cut| cut.0).to_be_bytes());
+-        value.extend(self.info.name.as_bytes());
++        value.extend(self.parent.map_or(0, |id| id.0).to_be_bytes());
++        value.extend(self.fork_revision.map_or(0, |cut| cut.0).to_be_bytes());
++        value.extend(self.name.as_bytes());
+         value
+     }
+ 
++    pub(super) fn info(&self) -> crate::Result<BranchInfo> {
++        Ok(BranchInfo {
++            id: self.id,
++            name: self.name.clone(),
++            parent: self.parent,
++            fork_revision: self.fork_revision,
++            head: self.history.head()?,
++            deleted: self.deleted,
++        })
++    }
++
+     pub(super) fn decode(
+         id: BranchId,
+         value: &[u8],
+@@ -74,7 +89,11 @@ impl Entry {
+             .ok_or(crate::Error::Unrecoverable)?;
+         let history = History::new(native, info.head);
+         Ok(Self {
+-            info,
++            id: info.id,
++            name: info.name,
++            parent: info.parent,
++            fork_revision: info.fork_revision,
++            deleted: info.deleted,
+             created,
+             tree,
+             history,
+diff --git a/src/versioned/history.rs b/src/versioned/history.rs
+index 6f230c8..a72977c 100644
+--- a/src/versioned/history.rs
++++ b/src/versioned/history.rs
+@@ -88,18 +88,18 @@ impl History {
+         })
+     }
+ 
+-    pub(super) fn replace(
+-        &self,
+-        head: Revision,
+-        ranges: BTreeMap<Protection, (u64, u64)>,
+-    ) -> crate::Result<()> {
++    pub(super) fn replace(&self, ranges: BTreeMap<Protection, (u64, u64)>) -> crate::Result<()> {
+         let mut state = self.state.lock().map_err(|_| crate::Error::Poisoned)?;
+-        state.head = head.0;
+         state.durable = ranges;
+         self.publish(&state);
+         Ok(())
+     }
+ 
++    pub(super) fn head(&self) -> crate::Result<Revision> {
++        let state = self.state.lock().map_err(|_| crate::Error::Poisoned)?;
++        Ok(Revision(state.head))
++    }
++
+     pub(super) fn set_range(
+         &self,
+         owner: Protection,
+diff --git a/src/versioned/read.rs b/src/versioned/read.rs
+index 4722932..409ebb9 100644
+--- a/src/versioned/read.rs
++++ b/src/versioned/read.rs
+@@ -6,7 +6,7 @@ use std::{ops::RangeBounds, sync::Arc};
+ pub(super) struct Scope {
+     pub(super) db: Database,
+     pub(super) _pins: Vec<Pin>,
+-    pub(super) _identity: Arc<super::history::History>,
++    pub(super) history: Arc<super::history::History>,
+     pub(super) revision: Revision,
+     pub(super) cursor: Option<Cursor>,
+     pub(super) views: Vec<ReadView>,
+diff --git a/src/versioned/retire.rs b/src/versioned/retire.rs
+index 3fa2cca..20bc550 100644
+--- a/src/versioned/retire.rs
++++ b/src/versioned/retire.rs
+@@ -42,12 +42,15 @@ impl Catalogue {
+         let mut retired = Vec::new();
+         // Parent IDs are smaller, so each retained child protects its ancestors.
+         for (id, entry) in self.entries.iter().rev() {
+-            if !entry.info.deleted
++            if !entry.deleted
+                 || protected.contains(id)
+                 || Arc::strong_count(&entry.history) > 1
+-                || first.is_some_and(|first| first < entry.info.head.0)
++                || match first {
++                    Some(first) => first < entry.history.head()?.0,
++                    None => false,
++                }
+             {
+-                protected.extend(entry.info.parent);
++                protected.extend(entry.parent);
+             } else {
+                 retired.push(*id);
+             }
+@@ -62,12 +65,8 @@ impl Catalogue {
+             batch.commit_receipt()?;
+             for id in retired {
+                 let entry = self.entry(id)?;
+-                if let Some(parent) = entry.info.parent {
+-                    let cut = entry
+-                        .info
+-                        .fork_revision
+-                        .ok_or(crate::Error::Unrecoverable)?
+-                        .0;
++                if let Some(parent) = entry.parent {
++                    let cut = entry.fork_revision.ok_or(crate::Error::Unrecoverable)?.0;
+                     self.update_history(Protection::Fork(id), parent, (cut, cut), false)?;
+                 }
+                 self.entries.remove(&id);
+diff --git a/src/versioned/tests.rs b/src/versioned/tests.rs
+index b9cf714..0f4ac7c 100644
+--- a/src/versioned/tests.rs
++++ b/src/versioned/tests.rs
+@@ -269,31 +269,13 @@ fn clock_covers_native_writes() -> crate::Result<()> {
+     table.flush(true)?;
+     table.major_compact()?;
+     assert!(db.seqno() > commit.revision.0);
+-    assert_eq!(
+-        db.supervisor
+-            .journal
+-            .get_writer()?
+-            .clock
+-            .as_ref()
+-            .ok_or(crate::Error::Unrecoverable)?
+-            .published,
+-        commit.revision
+-    );
++    assert_eq!(db.publication()?.revision, commit.revision);
+     assert_eq!(db.journal_head()?, Some(commit.cursor));
+     drop(catalogue);
+     drop(table);
+     drop(db);
+     let db = Database::builder(&dir).open()?;
+-    assert_eq!(
+-        db.supervisor
+-            .journal
+-            .get_writer()?
+-            .clock
+-            .as_ref()
+-            .ok_or(crate::Error::Unrecoverable)?
+-            .published,
+-        commit.revision
+-    );
++    assert_eq!(db.publication()?.revision, commit.revision);
+     let table = db.keyspace("records", KeyspaceCreateOptions::default)?;
+     let mut batch = db.batch();
+     batch.insert(&table, "after", "reopen");
+@@ -394,16 +376,7 @@ fn clock_recovers_without_journal_payload() -> crate::Result<()> {
+     };
+     let db = Database::builder(&dir).open()?;
+     assert_eq!(db.journal_head()?, None);
+-    assert_eq!(
+-        db.supervisor
+-            .journal
+-            .get_writer()?
+-            .clock
+-            .as_ref()
+-            .ok_or(crate::Error::Unrecoverable)?
+-            .published,
+-        revision
+-    );
++    assert_eq!(db.publication()?.revision, revision);
+     let table = db.keyspace("records", KeyspaceCreateOptions::default)?;
+     assert_eq!(db.snapshot().get(&table, "key")?, None);
+     let mut batch = db.batch();
+@@ -417,3 +390,49 @@ fn clock_recovers_without_journal_payload() -> crate::Result<()> {
+     );
+     Ok(())
+ }
++
++#[test]
++fn cut_survives_empty_journal() -> crate::Result<()> {
++    use crate::SingleWriterTxDatabase;
++    let dir = tempfile::tempdir()?;
++    let (id, commit) = {
++        let db = SingleWriterTxDatabase::builder(&dir).versioned().open()?;
++        let branch = db.create_branch("main")?;
++        let mut tx = branch.write_tx()?;
++        tx.insert("key", "retained");
++        let commit = tx.commit()?.ok_or(crate::Error::Unrecoverable)?;
++        db.inner().flush_memtables()?;
++        db.inner().major_compact()?;
++        db.inner().rotate_journal()?;
++        {
++            let mut manager = db
++                .inner()
++                .supervisor
++                .journal_manager
++                .write()
++                .map_err(|_| crate::Error::Poisoned)?;
++            let signal = manager.cdc.take();
++            let result = manager.maintenance();
++            manager.cdc = signal;
++            result?;
++            assert!(manager.items.is_empty());
++        }
++        (branch.id(), commit)
++    };
++    let db = SingleWriterTxDatabase::builder(&dir).open()?;
++    let branch = db.branch_by_id(id)?.ok_or(crate::Error::Unrecoverable)?;
++    assert_eq!(db.inner().journal_head()?, None);
++    assert_eq!(branch.info()?.head, commit.revision);
++    let view = branch.snapshot()?;
++    assert_eq!(view.revision(), commit.revision);
++    assert_eq!(view.cursor()?, None);
++    assert_eq!(view.get("key")?.as_deref(), Some(b"retained".as_slice()));
++    assert_eq!(branch.read_at(commit.revision)?.cursor()?, None);
++    let mut tx = branch.write_tx()?;
++    tx.insert("key", "continued");
++    let next = tx.commit()?.ok_or(crate::Error::Unrecoverable)?;
++    assert!(next.revision > commit.revision);
++    assert_eq!(branch.snapshot()?.cursor()?, Some(next.cursor));
++    assert_eq!(view.get("key")?.as_deref(), Some(b"retained".as_slice()));
++    Ok(())
++}
+diff --git a/src/versioned/write.rs b/src/versioned/write.rs
+index 7e18c06..4577cb7 100644
+--- a/src/versioned/write.rs
++++ b/src/versioned/write.rs
+@@ -89,15 +89,9 @@ impl<'a> BranchWriteTransaction<'a> {
+         let mut batch = self.writes.into_batch(self.branch.db.inner.clone(), None);
+         self.branch.db.catalogue(|catalogue| {
+             batch.stamp(&catalogue.keyspace, Entry::key(b'h', self.branch.id.0));
+-            let commit = batch.commit_receipt()?.ok_or(crate::Error::Unrecoverable)?;
+-            let entry = catalogue
+-                .entries
+-                .get_mut(&self.branch.id)
+-                .ok_or(crate::Error::BranchMissing(self.branch.id))?;
+-            entry.info.head = commit.revision;
+-            entry.history.advance(commit.revision)?;
+-            Ok(Some(commit))
+-        })
++            Ok(())
++        })?;
++        batch.commit_publish(|revision| self.snapshot.0.history.advance(revision))
+     }
+ 
+     /// Discards all staged changes.

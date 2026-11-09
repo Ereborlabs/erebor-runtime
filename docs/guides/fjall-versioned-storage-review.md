@@ -12,9 +12,11 @@ compaction and restart. Writable forks share fixed ancestor state without
 copying parent records. Durable commits return an exact revision and cursor.
 Consumers resume the original journal and save progress with resulting writes.
 
-The approved engine implementation is **Done** at Fjall `bdb1843` and
-`lsm-tree` `2e1b5df3`. The user accepted the current benchmark on 2026-11-09;
-see [final verification](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/finalization/README.md).
+The original engine implementation is **Done** at Fjall `bdb1843` and
+`lsm-tree` `2e1b5df3`. The user accepted that benchmark on 2026-11-09;
+see [its final verification](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/finalization/README.md).
+The approved simplifications use Fjall `a042865` with the same native tree.
+See the [follow-up verification](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/simplification/README.md).
 The original 4.370 ms combined median target and a repeatable latency gain
 are not proved. These PoCs do not measure production DataFusion input or
 notification delivery.
@@ -22,7 +24,7 @@ notification delivery.
 ## Implementation review flow
 
 [Branch::retain_history and Branch::fork](../../fjall/src/versioned/branch.rs) Caller retains a revision range or forks a retained revision
-  -> [Catalogue::pins and Catalogue::protect](../../fjall/src/versioned/catalogue.rs) Fjall protects the required cuts against concurrent maintenance.
+  -> [Catalogue::pins and Catalogue::update_history](../../fjall/src/versioned/catalogue.rs) Fjall protects the required cuts against concurrent maintenance.
   -> [Catalogue::retain and Catalogue::create](../../fjall/src/versioned/catalogue.rs) One journaled transaction saves the policy or branch descriptor.
   -> [Catalogue::retain and Catalogue::create](../../fjall/src/versioned/catalogue.rs) Fjall publishes the new handle after durable completion.
 
@@ -68,8 +70,10 @@ progress before it advances the floor.
 
 | Owner | State, inputs, outputs, and lifetime | Proof |
 | --- | --- | --- |
-| [Catalogue](../../fjall/src/versioned/catalogue.rs) | Database recovery creates the private journaled catalogue. Branch descriptors, names, heads, and policies use native records. The single writer and catalogue mutex serialize mutations. Database shutdown closes the owner. | `catalogue_recovers_from_original_journal`; `creation_heads_and_progress_share_native_batches` |
+| [Catalogue](../../fjall/src/versioned/catalogue.rs) | Database recovery creates the private journaled catalogue. Branch descriptors, names, heads, and policies use native records. The single writer and catalogue mutex serialize structural mutations. Ordinary data commits release the catalogue before I/O. Database shutdown closes the owner. | `catalogue_recovers_from_original_journal`; `creation_heads_and_progress_share_native_batches` |
 | [History and Pin](../../fjall/src/versioned/history.rs) | Each branch entry creates one per-tree history owner. Policies, fork bases, current head, and active views protect native cuts. Scope destruction releases pins. Policy release does not remove a live reader's protection. | `fork_and_reader_pins_do_not_retain_unrelated_versions`; `history_admission_rejects_gaps_and_future_reads` |
+| [Protection](../../fjall/src/versioned/history.rs) | Each policy or fork owns its projected interval in each affected tree. Recovery derives these maps from the durable catalogue. Runtime updates visit only that source's ancestry. A pin count change publishes protection only when the range first appears or its final owner leaves. | `contributions_keep_their_owners`; `changes_skip_other_branches`; `shared_pins_preserve_cuts` |
+| [Signal and Publication](../../fjall/src/cdc.rs) | One mutex protects the committed revision and optional exact cursor. Branch capture installs its pins under this boundary. Commit updates the existing History head and native visibility before publishing the matching cursor. Recovery restores the durable CLOCK cut even when no journal cursor remains. | `captures_skip_pending_sync`; `publication_failure_stays_invisible`; `cut_survives_empty_journal` |
 | [Retention](../../lsm-tree/src/retention.rs) | Fjall replaces normalized native cut intervals. Flush and compaction capture immutable interval state. Native collection retains each interval's required versions and predecessor. Released versions remain subject to collection. | `retained_cuts_survive_native_maintenance`; `policy_snapshot_survives_merge`; `retention_stays_per_tree` |
 | [ReadView and RecordGuard](../../lsm-tree/src/read_view.rs) | A captured native structure carries a separate exclusive value cut. Point reads distinguish missing, value, and deletion. Standard scan guards own decoded slices. Blob guards retain the tree and disk version until resolution or drop. | `pinned_records_keep_deletion_and_blob_state`; `overlay_cut_stays_with_each_read` |
 | [BranchSnapshot and BranchIterator](../../fjall/src/versioned/read.rs) | A snapshot owns its fixed lineage, native views, and pins. An iterator holds the snapshot until drop. Nearest child values and deletions override ancestors. Both scan directions use the same captured state. | `branch_history_survives_compaction_and_reopen`; `single_branch_scan_visibility` |
@@ -83,6 +87,14 @@ Read the linked tests in [branch tests](../../fjall/src/versioned/branch_tests.r
 [native history tests](../../lsm-tree/tests/retained_history.rs),
 [seal tests](../../fjall/src/journal/segment/tests.rs), and
 [retirement tests](../../fjall/src/versioned/retire/tests.rs).
+
+[JournalManager](../../fjall/src/journal/manager.rs) stores sealed segments in
+an ordered native queue. Feed transitions use binary search on the numeric
+segment ID. Collection removes the front without shifting the remaining
+segments. `retained_segment_order` checks replay after collection, append,
+empty rotations, expiry, and reopen. Historical cursor lookup still selects
+sequence bounds with one linear search. Empty segment bounds are not ordered
+by sequence; no second index is added.
 
 [TreeIter::create_filtered](../../lsm-tree/src/range.rs) sends the single active
 memtable iterator through the existing MVCC stream without a merge heap.
@@ -195,13 +207,18 @@ sequenceDiagram
     participant Batch as WriteBatch
     participant Writer
     participant Config
+    participant Signal
+    participant History
     participant Feed
     Caller->>Tx: commit()
-    Tx->>Batch: commit_receipt()
+    Tx->>Batch: commit_publish(update history)
     Batch->>Writer: write_batch()
     Batch->>Writer: persist(SyncAll)
     Batch->>Writer: cursor(sequence)
-    Batch->>Config: publish_cdc()
+    Batch->>Config: publish_commit()
+    Config->>Signal: publish()
+    Signal->>History: advance(revision)
+    Signal->>Signal: Publish native visibility and exact cursor
     Batch-->>Tx: Commit
     Tx-->>Caller: Commit
     Caller->>Feed: wait()
@@ -209,13 +226,23 @@ sequenceDiagram
     Feed-->>Caller: Batch
 ```
 
-`publish_cdc` is the database configuration call inside the batch owner.
-It runs after the native memtables and published revision become visible.
+`publish_commit` is the database configuration call inside the batch owner.
+After durable sync and native application, its private callback advances the
+branch History head and native visibility under the signal boundary. The signal
+then publishes the matching revision and cursor and wakes readers. A callback
+error leaves visibility and the signal unchanged, then poisons the database.
 The receipt identifies this exact batch, even with concurrent raw writers.
 The branch commit adds its head stamp to the same batch as caller data.
 Caller progress is an ordinary key in that batch.
 
-The lock order for branch writes is database writer, catalogue, then journal.
+Branch writes hold the existing database writer lock. Preparation briefly
+takes the catalogue lock, then releases it before journal I/O and backpressure.
+Publication takes journal, signal, then per-tree History protection. Capture
+and branch-info reads take catalogue, signal, then History protection. Capture
+releases the signal after installing pins and before native view construction.
+No signal-owned operation acquires the journal or catalogue. A capture during
+sync can return the prior complete revision. Structural metadata operations
+retain their catalogue serialization.
 Journal file selection uses journal then journal-manager protection. The feed
 opens its file under that protection and decodes outside those locks.
 `collect_journals` releases the manager lock before it acquires the catalogue.
@@ -260,15 +287,19 @@ physical-ID counter survives deletion and prevents relabeling old journal items.
 
 ## Verification and limits
 
-All 11 final focused commands pass on these exact engine commits. Native
+All 11 final focused commands pass on Fjall `a042865` and native `2e1b5df3`. Native
 default/LZ4 libraries pass 244/247 cases, and eight selected integrations pass
-19 cases in each configuration. Fjall CDC/without CDC libraries pass 128/87
+19 cases in each configuration. Fjall CDC/without CDC libraries pass 135/87
 cases. Documentation tests pass 23 native and 86 Fjall cases. Production
 without default features, library clippy, and formatting pass. Existing ignored
-cases and clippy warnings remain. All ten saved PoC summaries reproduce.
-The [final record](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/finalization/README.md)
-contains commands and logs. No new benchmark was run. Full workspace CI was
-not run, as the user requires.
+cases and clippy warnings remain. All 16 follow-up PoC summaries reproduce.
+The [follow-up record](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/simplification/README.md)
+contains commands and logs. The existing workloads run unchanged. Pooled
+combined median/p95/maximum values are 4.672/8.056/11.852 before and
+4.655/7.668/8.171 ms after. Stable medians are 28.413 before and 28.321 ms
+after. Individual passes are mixed; no consistent regression is observed.
+No repeatable latency gain is proved. Full workspace CI is not run, as the
+user requires.
 
 The records below preserve earlier verification and performance decisions.
 
@@ -452,7 +483,7 @@ stable medians are 25.879 and 25.860 ms. Profiled timings are excluded.
 Wall results remain mixed. Both combined medians exceed their target.
 Complete performance qualification remains **Not done**.
 
-Current accepted source is Fjall `bdb1843` and `lsm-tree` `2e1b5df3`. The
+Source at the original acceptance was Fjall `bdb1843` and `lsm-tree` `2e1b5df3`. The
 [borrowed point-lookup evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/README.md)
 records 1.289% fewer complete ordinary package instructions across 28 exact
 evaluations. Added query dispatch is included; some revision medians increase.
@@ -465,3 +496,10 @@ timings are excluded. Both combined medians exceed their target and their
 fresh controls. The user accepted these measured results on 2026-11-09.
 Final implementation acceptance is **Done**; the original combined median
 target and a repeatable elapsed gain remain unproved.
+
+Current source is Fjall `a042865` and `lsm-tree` `2e1b5df3`. The four approved
+journal/history changes and their verification are described above. The
+[complete follow-up record](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/simplification/README.md)
+preserves every comparison and the exact source patches. Observed pooled
+PoC timings do not regress. Individual comparisons remain mixed; no repeatable
+latency gain or universal performance guarantee is established.

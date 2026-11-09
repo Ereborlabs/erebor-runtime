@@ -1,0 +1,84 @@
+{
+  "result": "Done for the four approved simplifications on the observed PoC workload",
+  "source": {
+    "fjall": "a0428657063727739e2b1688984b690e96046674",
+    "lsm-tree": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+  },
+  "commits": {
+    "a": {
+      "commit": "13b04aeb76862f1cb63f55de42bc08f95d3950d1",
+      "patch_sha256": "41c4d731df0bac67b38796643cb96d813ae70e2d8f2c3b50ba4141fc0a932b00"
+    },
+    "b": {
+      "commit": "6b62b16e3f02413a1aa05465907c082038bde240",
+      "patch_sha256": "0c65e1ff40eca9bc6108b21ff5473f4d2fa2429a0a6bd225628984e8e93b3284"
+    },
+    "c": {
+      "commit": "d8a4613dd2b5d839eebdfd2bdb1e53cb4394c93b",
+      "patch_sha256": "28968ad6072e28c26156cbdffa8f823ada9b5f20ec593f91bad33696f1c63d9a"
+    },
+    "d": {
+      "commit": "a0428657063727739e2b1688984b690e96046674",
+      "patch_sha256": "70dc17357297c7d14cdb2c25fa3409cfa9fc9743992d3afa9a547ff93638cfd2"
+    }
+  },
+  "summary_checks": [
+    "before-combined-0.json",
+    "after-combined-0.json",
+    "before-combined-1.json",
+    "after-combined-1.json",
+    "before-combined-2.json",
+    "after-combined-2.json",
+    "before-combined-3.json",
+    "after-combined-3.json",
+    "before-stable-0.json",
+    "after-stable-0.json",
+    "before-stable-1.json",
+    "after-stable-1.json",
+    "before-stable-2.json",
+    "after-stable-2.json",
+    "before-stable-3.json",
+    "after-stable-3.json"
+  ],
+  "gates_passed": 11,
+  "full_non_time_reports_equal": true,
+  "physical_cursors_equal": true,
+  "pooled": {
+    "combined": {
+      "before": {
+        "samples": 112,
+        "median_ms": 4.6715875,
+        "p95_ms": 8.055779000000001,
+        "maximum_ms": 11.852456
+      },
+      "after": {
+        "samples": 112,
+        "median_ms": 4.654650999999999,
+        "p95_ms": 7.668366000000001,
+        "maximum_ms": 8.170808
+      }
+    },
+    "stable": {
+      "before": {
+        "samples": 16,
+        "median_ms": 28.413412,
+        "p95_ms": 39.656326,
+        "maximum_ms": 39.656326
+      },
+      "after": {
+        "samples": 16,
+        "median_ms": 28.321082500000003,
+        "p95_ms": 35.189723,
+        "maximum_ms": 35.189723
+      }
+    }
+  },
+  "p95_method": "Nearest rank; ordinary fixed-key combined samples; restart excluded.",
+  "performance": "Pooled median/p95/maximum and stable median do not regress. Individual comparisons are mixed. No repeatable latency gain or universal no-regression guarantee is proved.",
+  "limits": "Large branch depths and long retained backlogs are not performance-benchmarked. Existing correctness tests cover selective updates and retained-segment replay. Full workspace CI is not run, as requested.",
+  "archive_members": 96,
+  "archive_bytes": 796569,
+  "archive_uncompressed_bytes": 13096715,
+  "archive_sha256": "4402808dfe8061ec2c4a3bcf21830215e1360b51e474bb5e9948df73f0f99ccc",
+  "archive_members_verified": true
+}

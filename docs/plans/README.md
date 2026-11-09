@@ -26,7 +26,9 @@ master plan invented for them.
   sparse branches, exact commit receipts, streaming CDC, and retired collection
   pass final focused checks. The approved engine scope is complete. The user
   accepted the current benchmark on 2026-11-09; the original combined median
-  target and a repeatable elapsed gain remain unproved.
+  target and a repeatable elapsed gain remain unproved. The four approved
+  journal/history simplifications are complete. Pooled PoC timings do not
+  regress; individual comparisons remain mixed.
 - [Araphor packages and managed jobs](araphor-package-jobs.md) records the
   current native SQL pipeline, reactive execution, new Discovery packages,
   and code reduction criteria. Definition files and running instances are the

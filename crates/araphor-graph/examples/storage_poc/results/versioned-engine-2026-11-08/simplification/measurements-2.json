@@ -1,0 +1,130 @@
+[
+  {
+    "side": "before",
+    "mode": "combined",
+    "pass_number": 3,
+    "samples": 28,
+    "median_ms": 4.6566415,
+    "p95_ms": 8.055779000000001,
+    "maximum_ms": 11.852456
+  },
+  {
+    "side": "after",
+    "mode": "combined",
+    "pass_number": 3,
+    "samples": 28,
+    "median_ms": 4.528482,
+    "p95_ms": 7.280532999999999,
+    "maximum_ms": 8.170808
+  },
+  {
+    "side": "after",
+    "mode": "stable",
+    "pass_number": 3,
+    "eight_cycles_ms": {
+      "rounds": [
+        28.88013,
+        28.137433,
+        29.321253000000002,
+        35.189723
+      ],
+      "median": 29.100691500000003,
+      "max": 35.189723
+    },
+    "historical_16_ms": {
+      "after-compaction": 32.123209,
+      "after-reopen": 32.1200305,
+      "after-writes": 32.924121
+    },
+    "reopen_ms": 5.963035,
+    "member_keys": 186,
+    "unsupported_requests_after_reopen": 0
+  },
+  {
+    "side": "before",
+    "mode": "stable",
+    "pass_number": 3,
+    "eight_cycles_ms": {
+      "rounds": [
+        27.508295999999998,
+        28.291154,
+        28.53567,
+        39.656326
+      ],
+      "median": 28.413412,
+      "max": 39.656326
+    },
+    "historical_16_ms": {
+      "after-compaction": 32.190394500000004,
+      "after-reopen": 32.8432065,
+      "after-writes": 36.5989945
+    },
+    "reopen_ms": 7.237476,
+    "member_keys": 186,
+    "unsupported_requests_after_reopen": 0
+  },
+  {
+    "side": "after",
+    "mode": "combined",
+    "pass_number": 4,
+    "samples": 28,
+    "median_ms": 4.258892,
+    "p95_ms": 7.668366000000001,
+    "maximum_ms": 7.814056
+  },
+  {
+    "side": "before",
+    "mode": "combined",
+    "pass_number": 4,
+    "samples": 28,
+    "median_ms": 4.6062155,
+    "p95_ms": 7.586511,
+    "maximum_ms": 8.245051
+  },
+  {
+    "side": "before",
+    "mode": "stable",
+    "pass_number": 4,
+    "eight_cycles_ms": {
+      "rounds": [
+        29.602018,
+        29.235349,
+        30.31252,
+        27.785079
+      ],
+      "median": 29.4186835,
+      "max": 30.31252
+    },
+    "historical_16_ms": {
+      "after-compaction": 32.8608765,
+      "after-reopen": 32.518756,
+      "after-writes": 33.910985
+    },
+    "reopen_ms": 6.124335,
+    "member_keys": 186,
+    "unsupported_requests_after_reopen": 0
+  },
+  {
+    "side": "after",
+    "mode": "stable",
+    "pass_number": 4,
+    "eight_cycles_ms": {
+      "rounds": [
+        28.316087,
+        27.693518,
+        27.82573,
+        28.326078000000003
+      ],
+      "median": 28.0709085,
+      "max": 28.326078000000003
+    },
+    "historical_16_ms": {
+      "after-compaction": 31.571943499999996,
+      "after-reopen": 32.4806595,
+      "after-writes": 33.608501
+    },
+    "reopen_ms": 6.095943999999999,
+    "member_keys": 186,
+    "unsupported_requests_after_reopen": 0
+  }
+]

@@ -1,0 +1,6 @@
+{
+  "summaries_passed": 8,
+  "full_non_time_reports_equal": true,
+  "physical_cursors_equal": true,
+  "excluded_fields": "Only the top-level source label and timing fields ending in _s."
+}

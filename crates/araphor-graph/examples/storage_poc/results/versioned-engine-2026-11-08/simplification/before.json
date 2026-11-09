@@ -1,0 +1,8 @@
+{
+  "source": {
+    "fjall": "bdb1843574f00ed9153233b547d2e2fd055c266a",
+    "lsm-tree": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+  },
+  "binary": "output/storage-engine-baseline-20261108/versioned-borrow-keys",
+  "binary_sha256": "205f4273c986c4e3523734f7dc4fe3a2c8e0760e3c9fea744f3804c21a1d6401"
+}

@@ -1,0 +1,215 @@
+[
+  {
+    "name": "native",
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "lsm-tree/Cargo.toml",
+      "--lib",
+      "--test",
+      "read_view",
+      "--test",
+      "retained_history",
+      "--test",
+      "table_point_reads",
+      "--test",
+      "snapshot_point_read",
+      "--test",
+      "tree_l0_point_read",
+      "--test",
+      "tree_non_disjoint_point_read",
+      "--test",
+      "tree_disjoint_point_read",
+      "--test",
+      "expect_point_read_hits",
+      "--locked",
+      "--offline"
+    ],
+    "exit_code": 0,
+    "start": 1794234171.3071017,
+    "end": 1794234175.920577,
+    "log": "final-native.log"
+  },
+  {
+    "name": "native-lz4",
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "lsm-tree/Cargo.toml",
+      "--features",
+      "lz4",
+      "--lib",
+      "--test",
+      "read_view",
+      "--test",
+      "retained_history",
+      "--test",
+      "table_point_reads",
+      "--test",
+      "snapshot_point_read",
+      "--test",
+      "tree_l0_point_read",
+      "--test",
+      "tree_non_disjoint_point_read",
+      "--test",
+      "tree_disjoint_point_read",
+      "--test",
+      "expect_point_read_hits",
+      "--locked",
+      "--offline"
+    ],
+    "exit_code": 0,
+    "start": 1794234175.9209628,
+    "end": 1794234180.6647158,
+    "log": "final-native-lz4.log"
+  },
+  {
+    "name": "native-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--manifest-path",
+      "lsm-tree/Cargo.toml",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "exit_code": 0,
+    "start": 1794234180.6649826,
+    "end": 1794234180.7895029,
+    "log": "final-native-clippy.log"
+  },
+  {
+    "name": "native-format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--manifest-path",
+      "lsm-tree/Cargo.toml",
+      "--check"
+    ],
+    "exit_code": 0,
+    "start": 1794234180.7898455,
+    "end": 1794234181.147159,
+    "log": "final-native-format.log"
+  },
+  {
+    "name": "cdc",
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--features",
+      "journal-cdc",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "exit_code": 0,
+    "start": 1794234181.147526,
+    "end": 1794234186.7595026,
+    "log": "final-cdc.log"
+  },
+  {
+    "name": "default",
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "exit_code": 0,
+    "start": 1794234186.7598286,
+    "end": 1794234192.2522361,
+    "log": "final-default.log"
+  },
+  {
+    "name": "no-default",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "exit_code": 0,
+    "start": 1794234192.2526722,
+    "end": 1794234192.61358,
+    "log": "final-no-default.log"
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--features",
+      "journal-cdc",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "exit_code": 0,
+    "start": 1794234192.613892,
+    "end": 1794234194.4257667,
+    "log": "final-clippy.log"
+  },
+  {
+    "name": "format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--check"
+    ],
+    "exit_code": 0,
+    "start": 1794234194.4261017,
+    "end": 1794234194.6480439,
+    "log": "final-format.log"
+  },
+  {
+    "name": "native-doc",
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "lsm-tree/Cargo.toml",
+      "--doc",
+      "--locked",
+      "--offline"
+    ],
+    "exit_code": 0,
+    "start": 1794234194.6483853,
+    "end": 1794234195.8766646,
+    "log": "final-native-doc.log"
+  },
+  {
+    "name": "fjall-doc",
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--features",
+      "journal-cdc",
+      "--doc",
+      "--locked",
+      "--offline"
+    ],
+    "exit_code": 0,
+    "start": 1794234195.8770125,
+    "end": 1794234204.3439667,
+    "log": "final-fjall-doc.log"
+  }
+]

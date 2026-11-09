@@ -1,0 +1,180 @@
+diff --git a/src/cdc.rs b/src/cdc.rs
+index 77aa8ae..a3094f3 100644
+--- a/src/cdc.rs
++++ b/src/cdc.rs
+@@ -423,7 +423,7 @@ impl Feed {
+                 None => (
+                     manager
+                         .items
+-                        .first()
++                        .front()
+                         .map(|item| journal_id(&item.path))
+                         .transpose()?
+                         .unwrap_or(active),
+@@ -444,8 +444,11 @@ impl Feed {
+             } else {
+                 let item = manager
+                     .items
+-                    .iter()
+-                    .find(|item| journal_id(&item.path).ok() == Some(id))
++                    .binary_search_by_key(&Some(id), |item| {
++                        item.segment.as_ref().map(|segment| segment.id)
++                    })
++                    .ok()
++                    .and_then(|index| manager.items.get(index))
+                     .ok_or_else(|| invalid("journal cursor is outside retained history"))?;
+                 (
+                     &item.path,
+@@ -559,6 +562,81 @@ mod tests {
+     }
+     use std::time::Duration;
+ 
++    #[test]
++    fn retained_segment_order() -> crate::Result<()> {
++        let dir = tempfile::tempdir()?;
++        let (saved, expected, expired) = {
++            let db = SingleWriterTxDatabase::builder(&dir).journal_cdc().open()?;
++            let table = db.keyspace("records", KeyspaceCreateOptions::default)?;
++            let mut receipts = Vec::new();
++            for index in 0u64..16 {
++                let mut tx = db.write_tx();
++                tx.insert(&table, index.to_be_bytes(), index.to_be_bytes());
++                receipts.push(tx.commit_receipt()?.ok_or(crate::Error::Unrecoverable)?);
++                db.inner().rotate_journal()?;
++                if index % 4 == 0 {
++                    db.inner().rotate_journal()?;
++                }
++            }
++            table.as_ref().flush(true)?;
++            let saved = receipts[8].cursor;
++            db.inner().retain_after(saved)?;
++            db.inner().collect_journals()?;
++            for index in 16u64..20 {
++                let mut tx = db.write_tx();
++                tx.insert(&table, index.to_be_bytes(), index.to_be_bytes());
++                receipts.push(tx.commit_receipt()?.ok_or(crate::Error::Unrecoverable)?);
++                db.inner().rotate_journal()?;
++            }
++            {
++                let manager = db
++                    .inner()
++                    .supervisor
++                    .journal_manager
++                    .read()
++                    .map_err(|_| crate::Error::Poisoned)?;
++                let ids: Vec<_> = manager
++                    .items
++                    .iter()
++                    .map(|item| item.segment.as_ref().expect("sealed segment").id)
++                    .collect();
++                assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
++            }
++            let expected: Vec<_> = receipts[9..].iter().map(|commit| commit.cursor).collect();
++            let mut feed = db.inner().journal_feed(Some(saved))?;
++            assert_eq!(
++                feed.read()?
++                    .iter()
++                    .map(|batch| batch.cursor)
++                    .collect::<Vec<_>>(),
++                expected
++            );
++            let expired = receipts[0].cursor;
++            assert!(db
++                .inner()
++                .journal_feed(Some(expired))?
++                .next_batch()
++                .is_err());
++            (saved, expected, expired)
++        };
++        let db = SingleWriterTxDatabase::builder(&dir).open()?;
++        assert_eq!(
++            db.inner()
++                .journal_feed(Some(saved))?
++                .read()?
++                .iter()
++                .map(|batch| batch.cursor)
++                .collect::<Vec<_>>(),
++            expected
++        );
++        assert!(db
++            .inner()
++            .journal_feed(Some(expired))?
++            .next_batch()
++            .is_err());
++        Ok(())
++    }
++
+     fn database(path: &Path) -> crate::Result<SingleWriterTxDatabase> {
+         SingleWriterTxDatabase::builder(path).journal_cdc().open()
+     }
+diff --git a/src/journal/manager.rs b/src/journal/manager.rs
+index 00377cd..f297236 100644
+--- a/src/journal/manager.rs
++++ b/src/journal/manager.rs
+@@ -5,7 +5,7 @@
+ use super::writer::Writer;
+ use crate::Keyspace;
+ use lsm_tree::{AbstractTree, SeqNo};
+-use std::{path::PathBuf, sync::MutexGuard};
++use std::{collections::VecDeque, path::PathBuf, sync::MutexGuard};
+ 
+ /// Stores the highest seqno of a keyspace found in a journal.
+ #[derive(Clone)]
+@@ -82,7 +82,7 @@ impl Item {
+ #[expect(clippy::module_name_repetitions)]
+ #[derive(Debug)]
+ pub struct JournalManager {
+-    pub(crate) items: Vec<Item>,
++    pub(crate) items: VecDeque<Item>,
+     #[cfg(feature = "journal-cdc")]
+     pub(crate) cdc: Option<std::sync::Arc<crate::cdc::Signal>>,
+     #[cfg(feature = "journal-cdc")]
+@@ -105,7 +105,7 @@ impl JournalManager {
+         crate::drop::increment_drop_counter();
+ 
+         Self {
+-            items: Vec::with_capacity(10),
++            items: VecDeque::with_capacity(10),
+             #[cfg(feature = "journal-cdc")]
+             cdc: None,
+             #[cfg(feature = "journal-cdc")]
+@@ -122,7 +122,7 @@ impl JournalManager {
+ 
+     pub(crate) fn enqueue(&mut self, item: Item) {
+         self.disk_space_in_bytes = self.disk_space_in_bytes.saturating_add(item.size_in_bytes);
+-        self.items.push(item);
++        self.items.push_back(item);
+     }
+ 
+     /// Returns the number of journals
+@@ -173,7 +173,7 @@ impl JournalManager {
+             .retain(|segment| std::sync::Arc::strong_count(&segment.lease) > 1);
+ 
+         loop {
+-            let Some(item) = self.items.first() else {
++            let Some(item) = self.items.front() else {
+                 return Ok(());
+             };
+ 
+@@ -211,7 +211,7 @@ impl JournalManager {
+             })?;
+ 
+             self.disk_space_in_bytes = self.disk_space_in_bytes.saturating_sub(item.size_in_bytes);
+-            let item = self.items.remove(0);
++            let item = self.items.pop_front().ok_or(crate::Error::Unrecoverable)?;
+             #[cfg(feature = "journal-cdc")]
+             if let Some(segment) = item
+                 .segment
+diff --git a/src/journal/segment/tests.rs b/src/journal/segment/tests.rs
+index fc72e38..3845d4a 100644
+--- a/src/journal/segment/tests.rs
++++ b/src/journal/segment/tests.rs
+@@ -118,7 +118,7 @@ fn missing_metadata_rebuilds_and_invalid_metadata_cannot_append() -> crate::Resu
+                 .read()
+                 .map_err(|_| crate::Error::Poisoned)?
+                 .items
+-                .first()
++                .front()
+                 .ok_or(crate::Error::Unrecoverable)?
+                 .size_in_bytes,
+             path.metadata()?.len()
