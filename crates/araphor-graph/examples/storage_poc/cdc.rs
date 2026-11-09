@@ -65,8 +65,12 @@ pub struct Batch {
     pub items: Vec<Item>,
 }
 enum Feed {
-    Fjall(fjall::cdc::Feed, u64),
+    Fjall(fjall::cdc::Feed, Watch),
     Home(super::home::Feed),
+}
+enum Watch {
+    Keyspace(u64),
+    Branch(fjall::BranchId),
 }
 enum Cancel {
     Fjall(fjall::cdc::Cancel),
@@ -83,20 +87,25 @@ impl Cancel {
 impl Feed {
     fn read(&mut self) -> Result<Vec<Batch>> {
         Ok(match self {
-            Self::Fjall(feed, id) => feed
+            Self::Fjall(feed, watch) => feed
                 .next_batch()?
                 .into_iter()
                 .map(|batch| {
-                    assert!(
-                        !batch.clears.contains(id),
-                        "source keyspace cleared outside this fixture"
-                    );
+                    if let Watch::Keyspace(id) = watch {
+                        assert!(
+                            !batch.clears.contains(id),
+                            "source keyspace cleared outside this fixture"
+                        );
+                    }
                     Batch {
                         cursor: batch.cursor.into(),
                         items: batch
                             .items
                             .into_iter()
-                            .filter(|i| i.keyspace == *id)
+                            .filter(|item| match watch {
+                                Watch::Keyspace(id) => item.keyspace == *id,
+                                Watch::Branch(id) => item.branch == Some(*id),
+                            })
                             .map(|i| Item {
                                 key: i.key.to_vec(),
                                 value: i.value.map(|v| v.to_vec()),
@@ -161,7 +170,11 @@ impl Walker {
         let mut feed = match native.database() {
             Database::Fjall(db, table) => Feed::Fjall(
                 db.inner().journal_feed(Some(cursor.into()))?,
-                table.as_ref().id(),
+                Watch::Keyspace(table.as_ref().id()),
+            ),
+            Database::FjallBranch(db, branch) => Feed::Fjall(
+                db.inner().journal_feed(Some(cursor.into()))?,
+                Watch::Branch(branch.id()),
             ),
             Database::Home(db) => Feed::Home(db.journal_feed(path, cursor)?),
             _ => return Err("engine has no supported native journal feed".into()),
@@ -382,7 +395,7 @@ struct Run {
 
 fn head(native: &Native) -> Result<Cursor> {
     match native.database() {
-        Database::Fjall(db, _) => Ok(db
+        Database::Fjall(db, _) | Database::FjallBranch(db, _) => Ok(db
             .inner()
             .journal_head()?
             .ok_or("journal head absent")?
@@ -397,7 +410,7 @@ fn saved(native: &Native, key: &[u8], default: Cursor) -> Result<Cursor> {
         .read(|view| view.get(key)?.map_or(Ok(default), |v| Cursor::decode(&v)))
 }
 fn acknowledge(native: &Native, cursor: Cursor) -> Result<()> {
-    if let Database::Fjall(db, _) = native.database() {
+    if let Database::Fjall(db, _) | Database::FjallBranch(db, _) = native.database() {
         db.inner().retain_after(cursor.into())?;
     }
     Ok(())
@@ -407,44 +420,37 @@ fn write(native: &Native, key: &[u8], value: &[u8], commit: bool) -> Result<()> 
     Ok(())
 }
 fn maintain(native: &Native, rotate: bool) -> Result<()> {
-    if let Database::Fjall(db, table) = native.database() {
-        table.as_ref().flush(true)?;
-        if rotate {
-            db.inner().rotate_journal()?;
-            table.as_ref().major_compact()?;
-            db.inner().collect_journals()?;
+    match native.database() {
+        Database::Fjall(db, table) => {
+            table.as_ref().flush(true)?;
+            if rotate {
+                db.inner().rotate_journal()?;
+                table.as_ref().major_compact()?;
+                db.inner().collect_journals()?;
+            }
         }
+        Database::FjallBranch(db, _) => {
+            db.inner().flush_memtables()?;
+            if rotate {
+                db.inner().rotate_journal()?;
+                db.inner().major_compact()?;
+                db.inner().collect_journals()?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
 
-fn history_views(
-    native: &Native,
-    fixture: &Fixture,
-    oracle: &Oracle,
-    unavailable: &[u64],
-    stage: &'static str,
-    run: &mut Run,
-) -> Result<()> {
+fn history_views(native: &Native, fixture: &Fixture, oracle: &Oracle, run: &mut Run) -> Result<()> {
     for spec in &fixture.steps {
-        let result = native.inspect(fixture, spec.revision, true);
-        if unavailable.contains(&spec.revision) {
-            assert_eq!(
-                result
-                    .err()
-                    .ok_or("unexpected historical Fjall handle")?
-                    .to_string(),
-                "Fjall historical snapshot is not open"
-            );
-            run.unavailable.push(Unavailable {
-                stage,
-                revision: spec.revision,
-            });
-        } else {
-            oracle.check(&mut result?, fixture, spec.revision)?;
-            native.verify_metadata(fixture, spec.revision, 87)?;
-            run.historical_views += 1;
-        }
+        oracle.check(
+            &mut native.inspect(fixture, spec.revision, true)?,
+            fixture,
+            spec.revision,
+        )?;
+        native.verify_metadata(fixture, spec.revision, 87)?;
+        run.historical_views += 1;
     }
     Ok(())
 }
@@ -502,15 +508,20 @@ fn scenario(
         let mut first_scan = None;
         if restarted {
             maintain(&native, true)?;
-            run.rotation = matches!(native.database(), Database::Fjall(..));
+            run.rotation = matches!(
+                native.database(),
+                Database::Fjall(..) | Database::FjallBranch(..)
+            );
             let package_cursor = saved(&native, PACKAGE_ACK, initial)?;
             let graph_cursor = saved(&native, GRAPH_ACK, initial)?;
             acknowledge(&native, package_cursor.min(graph_cursor))?;
+            let revisions = native.take_revisions();
             native.shutdown()?;
             drop(native);
             let reopened = Instant::now();
             native = Native::open(kind, directory.path())?;
             run.reopen_s = reopened.elapsed().as_secs_f64();
+            native.restore_revisions(revisions);
             assert_eq!(saved(&native, PACKAGE_ACK, initial)?, package_cursor);
             assert_eq!(saved(&native, GRAPH_ACK, initial)?, graph_cursor);
             let resumed = Instant::now();
@@ -726,38 +737,21 @@ fn scenario(
     if kind == "fjall-stable" {
         native.assert_stable_keys()?;
     }
-    history_views(
-        &native,
-        &fixture,
-        &oracle,
-        if kind == "fjall-stable" {
-            &[26, 29, 44]
-        } else {
-            &[]
-        },
-        "after-continue",
-        &mut run,
-    )?;
+    history_views(&native, &fixture, &oracle, &mut run)?;
+    let revisions = native.take_revisions();
     native.shutdown()?;
     drop(native);
     native = Native::open(kind, directory.path())?;
-    history_views(
-        &native,
-        &fixture,
-        &oracle,
-        if kind == "fjall-stable" {
-            &[26, 29, 44, 46, 62, 64, 85]
-        } else {
-            &[]
-        },
-        "after-final-reopen",
-        &mut run,
-    )?;
+    native.restore_revisions(revisions);
+    history_views(&native, &fixture, &oracle, &mut run)?;
     if kind == "fjall-stable" {
         native.assert_stable_keys()?;
     }
     run.compactions = super::compaction::Trace::completed() - before;
-    if matches!(native.database(), Database::Fjall(..)) {
+    if matches!(
+        native.database(),
+        Database::Fjall(..) | Database::FjallBranch(..)
+    ) {
         assert!(run.compactions > 0, "no physical compaction completed");
     }
     assert_eq!(run.walks.iter().map(|w| w.source_wakes).sum::<usize>(), 8);
@@ -831,11 +825,12 @@ pub fn combined(output: &Path) -> Result<()> {
     }
     let report = serde_json::json!({
         "mode": "combined", "source": option_env!("POC_SOURCE_REVISION").unwrap_or("unrecorded"),
+        "versioned_fjall": true,
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
         "workload": "original eight Causal cycles; fixed application keys versus revision-key control; native journal source wake, package Graph reads, atomic Graph/cursor write, journal Graph wake, result read, resume and continued appends",
         "target": "fjall-stable", "control": "fjall",
         "unsupported": { "neon-layers": "present adapter has no original-WAL CDC feed; native layer enumeration is not substituted" },
-        "limits": ["prepared source Arrow and synthetic source-frontier metadata; no production DataFusion input", "no production notification delivery", "forward continuation after reopen reads current Graph head46 at captured cut48; arbitrary old native snapshots are not restored", "native reader returns decoded batches as a vector; first_decoded measures first walker dispatch after that read, not first-byte decode", "single caller-managed minimum consumer cursor; no dynamic consumer registration behind released history", "explicit maintenance and restart separated from ordinary samples; no sustained compaction, native branches or power-loss proof"],
+        "limits": ["prepared source Arrow and synthetic source-frontier metadata; no production DataFusion input", "no production notification delivery", "caller-owned opaque Graph revision references survive close and reopen with the Oracle", "native reader returns one decoded batch per read; first_decoded measures walker dispatch", "single caller-managed minimum consumer cursor; no dynamic consumer registration behind released history", "explicit maintenance and restart separated from ordinary samples; no sustained compaction, branch scale or power-loss proof"],
         "runs": runs
     });
     if let Some(parent) = output.parent() {

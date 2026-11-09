@@ -7,6 +7,7 @@ import sys
 
 def summarize(report):
     runs = report["runs"]
+    versioned = report.get("versioned_fjall", False)
     engines = ["fjall", "fjall-stable", "neon-layers", "neon-stable"]
     assert len(runs) == 16
     revisions = [26, 29, 44, 46, 62, 64, 85, 87]
@@ -19,8 +20,9 @@ def summarize(report):
         stable = run["engine"].endswith("stable")
         assert len(run["samples"]) == 8
         assert run["member_keys"] == (186 if stable else 194)
-        assert run["historical_views"] == (24 if run["engine"] == "fjall" else 16)
-        assert run["unsupported_after_reopen"] == (15 if run["engine"] == "fjall-stable" else 0)
+        candidate = versioned and run["engine"] == "fjall-stable"
+        assert run["historical_views"] == (24 if run["engine"] == "fjall" or candidate else 16)
+        assert run["unsupported_after_reopen"] == (15 if run["engine"] == "fjall-stable" and not candidate else 0)
         for i, sample in enumerate(run["samples"]):
             assert sample["write"]["revision"] == revisions[i]
             assert (sample["write"]["added"], sample["write"]["closed"]) == expected[i]
@@ -30,7 +32,7 @@ def summarize(report):
             stages.append("after-compaction")
         else:
             assert run["compactions"] == 0
-        if run["engine"] != "fjall-stable":
+        if run["engine"] != "fjall-stable" or candidate:
             stages.append("after-reopen")
         assert len(run["history"]) == 16*len(stages)
         for stage in stages:

@@ -1,0 +1,20 @@
+{
+  "root_commit": "57d1efc8a248652f72790124b4cb4f4a2fd8daeb",
+  "fjall_commit": "a25c464415251984a808bf992002a303235c0ea1",
+  "lsm_tree_commit": "b555031f5089ba7ca6f4e5a6bd5456b7f9494f76",
+  "patch_sha256": "261c1a47f6362e5b7f78a49b6a7204b5be93b86f409ccc73eecf9dddff6fcc80",
+  "binary_sha256": "756bc16076e92d77a81e1cb2b85b6767a27f155893487ce29ca893052430f27f",
+  "binary": "output/storage-engine-baseline-20261108/versioned-before-scan",
+  "source_label": "57d1efc8a+versioned-adapter-v2",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6",
+  "build_command": "rtk proxy env CARGO_TARGET_DIR=target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 POC_SOURCE_REVISION=57d1efc8a+versioned-adapter-v2 cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --config /tmp/araphor-storage-release-override.toml --offline",
+  "modes": [
+    "combined",
+    "stable"
+  ],
+  "summary_scripts": [
+    "summarize_cdc.py",
+    "summarize_stable.py"
+  ],
+  "binary_independent_copy": true
+}

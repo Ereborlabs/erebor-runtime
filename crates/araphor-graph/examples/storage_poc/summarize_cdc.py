@@ -57,6 +57,7 @@ def summarize(report):
 
 def combined(report):
     runs = report["runs"]
+    versioned = report.get("versioned_fjall", False)
     orders = [["fjall", "fjall-stable"], ["fjall-stable", "fjall"], ["fjall-stable", "fjall"], ["fjall", "fjall-stable"]]
     revisions = [26, 29, 44, 46, 62, 64, 85, 87]
     captured = [24, 27, 36, 44, 48, 62, 71, 85]
@@ -70,8 +71,8 @@ def combined(report):
         stable = run["engine"] == "fjall-stable"
         assert len(run["samples"]) == 8
         assert run["compactions"] > 0 and run["rotation"]
-        assert run["historical_views"] == (6 if stable else 16)
-        assert [(v["stage"], v["revision"]) for v in run["unavailable"]] == ([("after-continue", r) for r in [26, 29, 44]] + [("after-final-reopen", r) for r in revisions[:-1]] if stable else [])
+        assert run["historical_views"] == (6 if stable and not versioned else 16)
+        assert [(v["stage"], v["revision"]) for v in run["unavailable"]] == ([("after-continue", r) for r in [26, 29, 44]] + [("after-final-reopen", r) for r in revisions[:-1]] if stable and not versioned else [])
         assert sum(w["source_wakes"] for w in run["walks"]) == 8
         assert sum(w["graph_wakes"] for w in run["walks"]) == 8
         assert sum(w["batches"] for w in run["walks"]) == 27

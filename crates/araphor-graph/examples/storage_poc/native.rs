@@ -16,6 +16,7 @@ pub struct Native {
     properties: BTreeMap<u64, Arc<RecordBatch>>,
     stable: bool,
     snapshots: BTreeMap<u64, fjall::Snapshot>,
+    revisions: BTreeMap<u64, [u8; 8]>,
 }
 
 struct Prepared {
@@ -61,16 +62,21 @@ impl Native {
     pub fn open(kind: &str, path: &Path) -> Result<Self> {
         let stable = matches!(kind, "fjall-stable" | "neon-stable");
         let kind = match kind {
+            #[cfg(not(feature = "cdc-poc"))]
             "fjall-stable" => "fjall",
             "neon-stable" => "neon-layers",
             other => other,
         };
         let db = kv::Database::open(kind, path)?;
+        let mut revisions = BTreeMap::new();
         if db.read(|r| r.get(b"head"))?.is_none() {
-            db.write(true, |tx| {
+            let (_, _, _, receipt) = db.write_at(1, true, |tx| {
                 tx.put(b"head", &1u64.to_be_bytes())?;
                 tx.put(b"next", &1u64.to_be_bytes())
             })?;
+            if let Some(revision) = receipt {
+                revisions.insert(1, revision);
+            }
         }
         let properties = db.read(|tx| {
             let mut values = BTreeMap::new();
@@ -95,7 +101,16 @@ impl Native {
             properties,
             stable,
             snapshots,
+            revisions,
         })
+    }
+
+    pub(super) fn take_revisions(&mut self) -> BTreeMap<u64, [u8; 8]> {
+        std::mem::take(&mut self.revisions)
+    }
+
+    pub(super) fn restore_revisions(&mut self, revisions: BTreeMap<u64, [u8; 8]>) {
+        self.revisions = revisions;
     }
 
     pub fn apply(&mut self, _fixture: &Fixture, step: &Step, commit: bool) -> Result<Timing> {
@@ -171,13 +186,14 @@ impl Native {
     fn apply_saved(&mut self, step: &Step, commit: bool, cursor: Option<&[u8]>) -> Result<Timing> {
         let started = Instant::now();
         let prepare_s = started.elapsed().as_secs_f64();
-        let (prepared, work, commit_s) = self.db.write_at(step.revision, commit, |tx| {
-            let prepared = Self::stage(tx, step, self.stable)?;
-            if let Some(cursor) = cursor {
-                tx.put(b"cursor/package", cursor)?;
-            }
-            Ok(prepared)
-        })?;
+        let (prepared, work, commit_s, receipt) =
+            self.db.write_at(step.revision, commit, |tx| {
+                let prepared = Self::stage(tx, step, self.stable)?;
+                if let Some(cursor) = cursor {
+                    tx.put(b"cursor/package", cursor)?;
+                }
+                Ok(prepared)
+            })?;
         let mut sample = Timing {
             revision: step.revision,
             prepare_s,
@@ -191,6 +207,9 @@ impl Native {
         assert_eq!(sample.added, step.added());
         if commit {
             self.properties.extend(prepared.properties);
+            if let Some(revision) = receipt {
+                self.revisions.insert(step.revision, revision);
+            }
             if self.stable {
                 if let kv::Database::Fjall(db, _) = &self.db {
                     self.snapshots.insert(step.revision, db.read_tx());
@@ -438,6 +457,15 @@ impl Native {
     }
 
     fn read_at<T>(&self, revision: u64, action: impl FnOnce(&dyn Read) -> Result<T>) -> Result<T> {
+        #[cfg(feature = "cdc-poc")]
+        if let kv::Database::FjallBranch(..) = &self.db {
+            let (_, revision) = self
+                .revisions
+                .range(..=revision)
+                .next_back()
+                .ok_or("Fjall Graph revision receipt is absent")?;
+            return self.db.read_at(u64::from_be_bytes(*revision), action);
+        }
         if self.stable {
             if let kv::Database::Fjall(_, table) = &self.db {
                 let (_, snapshot) = self

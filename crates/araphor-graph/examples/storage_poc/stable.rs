@@ -36,6 +36,13 @@ fn flush(engine: &Engine, compact: bool) -> Result<()> {
             table.as_ref().major_compact()?;
         }
     }
+    #[cfg(feature = "cdc-poc")]
+    if let super::kv::Database::FjallBranch(db, _) = native(engine).database() {
+        db.inner().flush_memtables()?;
+        if compact {
+            db.inner().major_compact()?;
+        }
+    }
     Ok(())
 }
 
@@ -225,13 +232,23 @@ fn scenario(
     engine.apply(&fixture, &prepared.step, false)?;
     engine.verify_metadata(&fixture, 88, 87)?;
     oracle.check(&mut engine.inspect(&fixture, 88)?, &fixture, 88)?;
+    let Engine::Native(db) = &mut engine else {
+        unreachable!()
+    };
+    let revisions = db.take_revisions();
     engine.close()?;
     drop(engine);
     let reopened = Instant::now();
     engine = Engine::open(kind, directory.path(), &fixture)?;
     run.reopen_s = reopened.elapsed().as_secs_f64();
+    let Engine::Native(db) = &mut engine else {
+        unreachable!()
+    };
+    db.restore_revisions(revisions);
     if kind == "fjall-stable" {
         flush(&engine, true)?;
+    }
+    if kind == "fjall-stable" && !cfg!(feature = "cdc-poc") {
         for revision in fixture
             .steps
             .iter()
@@ -250,7 +267,6 @@ fn scenario(
         }
         oracle.check(&mut engine.inspect(&fixture, 87)?, &fixture, 87)?;
         engine.verify_metadata(&fixture, 87, 87)?;
-        engine.verify_metadata(&fixture, 88, 87)?;
     } else {
         run.historical_views += views(&engine, &oracle, &fixture)?;
         run.history.extend(history.replay(
@@ -262,6 +278,9 @@ fn scenario(
             round,
             "after-reopen",
         )?);
+    }
+    if kind == "fjall-stable" {
+        engine.verify_metadata(&fixture, 88, 87)?;
     }
     assert_eq!(keys(&engine, stable)?, run.member_keys);
     engine.close()?;
@@ -287,9 +306,10 @@ pub fn run(output: &Path) -> Result<()> {
     let report = serde_json::json!({
         "source": option_env!("POC_SOURCE_REVISION").unwrap_or("unrecorded"),
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "versioned_fjall": cfg!(feature = "cdc-poc"),
         "workload": "original eight Causal Graph cycles; revision-key controls versus stable mutable keys; exact package and retained-view comparisons",
-        "native_history": { "fjall-stable": "live public Snapshot handles; old handles after reopen Unsupported", "neon-stable": "stable native keys with separate layer LSN; history after reopen" },
-        "limits": ["Fjall held snapshots and logical-to-handle map are in RAM only", "Neon adapter has no original WAL CDC, native branches or background compaction", "immutable property chunks and dictionary IDs remain; no property reclamation", "prepared source Arrow; no production DataFusion input or notification path", "no steady compaction, large-history, cold-cache or power-loss qualification"],
+        "native_history": { "fjall-stable": if cfg!(feature = "cdc-poc") { "durable retained native branch history; caller-owned exact commit revision references" } else { "live public Snapshot handles; old handles after reopen Unsupported" }, "neon-stable": "stable native keys with separate layer LSN; history after reopen" },
+        "limits": ["Graph revision references remain caller-owned across reopen", "Neon adapter has no original WAL CDC, native branches or background compaction", "immutable property chunks and dictionary IDs remain; no property reclamation", "prepared source Arrow; no production DataFusion input or notification path", "no steady compaction, large-history, cold-cache or power-loss qualification"],
         "runs": runs
     });
     if let Some(parent) = output.parent() {
@@ -297,7 +317,7 @@ pub fn run(output: &Path) -> Result<()> {
     }
     std::fs::write(output, serde_json::to_vec_pretty(&report)?)?;
     println!(
-        "128 package cycles passed; Fjall durable native history after reopen is Unsupported: {}",
+        "128 package cycles and exact historical replay checks passed: {}",
         output.display()
     );
     Ok(())

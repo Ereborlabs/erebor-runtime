@@ -1452,3 +1452,25 @@ This bounded adapter comparison is **Done**. Timing parity with Fjall remains
 event-to-notification timing do not run. Native Neon original-WAL CDC,
 branches, compaction, garbage collection, and large-history scaling remain
 unqualified.
+
+## Versioned Fjall candidate
+
+The `cdc-poc` build now selects the local versioned Fjall fork for
+`fjall-stable`. It creates a records branch and retains future history before
+the initial application write. Graph publications save their exact native
+commit revision in the caller's opaque reference map. Source and acknowledgement
+writes do not change that map. The drivers carry only these references across
+close and reopen; historical values come from the native indexes.
+
+The existing `combined` and `stable` commands, workload order, application keys,
+durability, and timing calculations remain. Native maintenance includes the
+private catalogue. CDC matches the permanent branch ID. Earlier unavailable
+candidate history requests now require the same exact Graph and package results
+after compaction and reopen. The summary scripts retain the old control checks
+and select the stronger candidate checks from `versioned_fjall`.
+
+The [first candidate evidence](results/versioned-engine-2026-11-08/before-scan.json)
+records the source patch, native commits, binary hash, dependency lock, and
+existing raw reports. Both complete drivers pass. Performance parity is
+**Not done**. The [storage plan](../../../../docs/plans/fjall-versioned-storage.md)
+owns the remaining engine work and final qualification.
