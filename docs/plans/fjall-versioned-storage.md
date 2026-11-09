@@ -479,8 +479,23 @@ prove an ordinary latency change or unbiased worker CPU coverage. All four
 unchanged summaries pass. All profiled timings are excluded. No engine source
 changes follow from this evidence. Complete performance remains **Not done**.
 
-Current accepted source is Fjall `04c304a` and `lsm-tree` `5c005a47`. Use the
-ordinary execution record above for the latest comparison. Earlier records
+The [checked point-block result](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/checked-handles/README.md)
+is **Done for measured native CPU work; Not done for complete performance**.
+`lsm-tree` `1918e262` borrows checked block handles at three point-read loads.
+Bounds checks precede loading; the terminal comparison uses checked bytes.
+Complete package instructions decrease by 0.316%; nested entered native
+lookup instructions decrease by 2.099% across the same 14,096 calls in 28
+ordinary evaluations. All 144 profile dumps conserve root and native counts.
+Profiled timings are excluded. All 16 untraced summaries pass. Corrected
+combined median/p95/maximum values are 4.211/6.674/7.126 and
+4.950/6.800/9.635 ms. Stable medians are 25.509 and 25.764 ms. The second
+combined pass exceeds both targets. Native default/LZ4 libraries pass
+243/246 cases; the other focused checks pass. The superseded unchecked
+draft and excluded method-only profiles remain in the evidence. No repeatable
+elapsed gain is proved.
+
+Current accepted source is Fjall `04c304a` and `lsm-tree` `1918e262`. Use the
+checked point-block record above for the latest comparison. Earlier records
 describe their recorded source states. The whole-cycle CPU attempt is excluded
 because its reset function was inlined in one executable. Complete performance
 qualification remains **Not done**.

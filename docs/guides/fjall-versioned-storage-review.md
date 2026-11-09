@@ -103,6 +103,14 @@ deletion, or terminal miss stops the search. Lazy range iterators retain their
 owned index state. The native table checks cover block boundaries, old cuts,
 empty values, strong and weak deletions, and missing keys.
 
+`IndexBlockParsedItem::handle` checks the optional prefix first and the suffix
+next, then returns the existing block offset and size. Three point-read loads
+use it before I/O or cache access. They no longer materialize unused owned
+end keys. The terminal-miss comparison uses checked borrowed bytes.
+`borrowed_handles_keep_bounds` checks valid prefix/no-prefix parity and six
+malformed ranges against legacy materialization. Data-record materialization
+and public range iterators remain.
+
 [DataBlock::point_read](../../lsm-tree/src/table/data_block/mod.rs) constructs
 the native decoder directly. A hash free marker returns before construction.
 A direct hash hit sets the same native restart offset. A conflict or absent
@@ -355,7 +363,7 @@ combined medians are 4.561 and 4.597 ms; both exceed their target. Stable
 medians are 25.816 and 25.175 ms. Wall-time changes remain mixed. No sustained
 latency gain is proved.
 
-Current accepted source is Fjall `04c304a` and `lsm-tree` `5c005a47`. The
+The preceding accepted source is Fjall `04c304a` and `lsm-tree` `5c005a47`. The
 [direct point-read evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/point-decoder/README.md)
 records 6.041% fewer complete native point-read instructions across the same
 105,692 calls. This scope includes both layouts and all verification, history,
@@ -391,3 +399,17 @@ This guide covers those engine commits. The engine API is generic. Araphor produ
 storage, branch merge, and production notification latency remain outside this
 implementation. Full workspace CI was not run during this iteration, as the
 user requires. Complete performance qualification remains **Not done**.
+
+Current accepted source is Fjall `04c304a` and `lsm-tree` `1918e262`. The
+[checked point-block evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/checked-handles/README.md)
+retains both drafts and all elapsed results. The corrected source uses
+0.316% fewer complete-package instructions and 2.099% fewer nested native
+lookup instructions across 28 ordinary evaluations and 14,096 actual calls.
+All 144 dumps conserve counters; residual and worker counts are zero.
+Native default/LZ4 libraries pass 243/246 cases; all other selected gates pass.
+All 16 untraced summaries pass. Current combined median/p95/maximum values
+are 4.211/6.674/7.126 and 4.950/6.800/9.635 ms. Stable medians are 25.509 and
+25.764 ms. The longer source commit in the second pass has no established
+cause. Profiled timings and the method-only counter mismatch are excluded.
+The initial unchecked draft is superseded. No repeatable elapsed gain is
+proved. Complete performance qualification remains **Not done**.

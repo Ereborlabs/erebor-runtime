@@ -1,0 +1,51 @@
+diff --git a/src/table/mod.rs b/src/table/mod.rs
+index 083d851e..0f506652 100644
+--- a/src/table/mod.rs
++++ b/src/table/mod.rs
+@@ -249,10 +249,8 @@ impl Table {
+             iter.seek(key, seqno);
+ 
+             if let Some(filter_block_handle) = iter.next() {
+-                let filter_block_handle = filter_block_handle.materialize(filter_idx.as_slice());
+-
+                 let block = self.load_block(
+-                    &filter_block_handle.into_inner(),
++                    &BlockHandle::new(filter_block_handle.offset, filter_block_handle.size),
+                     BlockType::Filter,
+                     CompressionType::None, // NOTE: We never write a filter block with compression
+                 )?;
+@@ -327,9 +325,11 @@ impl Table {
+                     return Ok(None);
+                 }
+                 for handle in iter {
+-                    let handle = handle.materialize(index.top_level_index.as_slice());
+-                    let block =
+-                        self.load_block(handle.as_ref(), BlockType::Index, index.compression)?;
++                    let block = self.load_block(
++                        &BlockHandle::new(handle.offset, handle.size),
++                        BlockType::Index,
++                        index.compression,
++                    )?;
+                     if let ControlFlow::Break(item) =
+                         self.read_index(&IndexBlock::new(block), key, seqno)?
+                     {
+@@ -354,8 +354,8 @@ impl Table {
+         }
+ 
+         for block_handle in iter {
+-            let block_handle = block_handle.materialize(index.as_slice());
+-            let block = self.load_data_block(block_handle.as_ref())?;
++            let block =
++                self.load_data_block(&BlockHandle::new(block_handle.offset, block_handle.size))?;
+ 
+             if let Some(mut item) = block.point_read(key, seqno) {
+                 item.key.seqno += self.global_seqno();
+@@ -364,7 +364,7 @@ impl Table {
+ 
+             // NOTE: If the last block key is higher than ours,
+             // our key cannot be in the next block
+-            if block_handle.end_key() > &key {
++            if block_handle.compare_key(key, index.as_slice()).is_gt() {
+                 return Ok(ControlFlow::Break(None));
+             }
+         }

@@ -1,0 +1,346 @@
+{
+  "performance": "Not done",
+  "summary_checks": [
+    "checked-handle-after-combined-0.json",
+    "checked-handle-after-combined-1.json",
+    "checked-handle-after-stable-0.json",
+    "checked-handle-after-stable-1.json",
+    "checked-handle-before-combined-0.json",
+    "checked-handle-before-combined-1.json",
+    "checked-handle-before-stable-0.json",
+    "checked-handle-before-stable-1.json",
+    "handle-after-combined-0.json",
+    "handle-after-combined-1.json",
+    "handle-after-stable-0.json",
+    "handle-after-stable-1.json",
+    "handle-before-combined-0.json",
+    "handle-before-combined-1.json",
+    "handle-before-stable-0.json",
+    "handle-before-stable-1.json",
+    "handle-before-package-combined.json",
+    "handle-after-package-combined.json",
+    "checked-handle-before-package-combined.json",
+    "checked-handle-after-package-combined.json",
+    "handle-before-table-combined.json",
+    "handle-after-table-combined.json"
+  ],
+  "elapsed": [
+    {
+      "report": "checked-handle-after-combined-0.json",
+      "mode": "combined",
+      "source": "d360d960e+checked-handles",
+      "samples": 28,
+      "minimum_ms": 2.875197,
+      "median_ms": 4.211384499999999,
+      "p95_ms": 6.6740580000000005,
+      "maximum_ms": 7.126426
+    },
+    {
+      "report": "checked-handle-after-combined-1.json",
+      "mode": "combined",
+      "source": "d360d960e+checked-handles",
+      "samples": 28,
+      "minimum_ms": 3.7791650000000003,
+      "median_ms": 4.950246,
+      "p95_ms": 6.799564999999999,
+      "maximum_ms": 9.634602000000001
+    },
+    {
+      "report": "checked-handle-after-stable-0.json",
+      "mode": "stable",
+      "source": "d360d960e+checked-handles",
+      "eight_cycles_ms": {
+        "rounds": [
+          25.935789,
+          25.082665000000002,
+          25.062273,
+          26.107601000000003
+        ],
+        "median": 25.509227000000003,
+        "max": 26.107601000000003
+      }
+    },
+    {
+      "report": "checked-handle-after-stable-1.json",
+      "mode": "stable",
+      "source": "d360d960e+checked-handles",
+      "eight_cycles_ms": {
+        "rounds": [
+          26.313636000000002,
+          24.599773999999996,
+          26.483982,
+          25.214462
+        ],
+        "median": 25.764049,
+        "max": 26.483982
+      }
+    },
+    {
+      "report": "checked-handle-before-combined-0.json",
+      "mode": "combined",
+      "source": "e099bf787+direct-decoder",
+      "samples": 28,
+      "minimum_ms": 3.359832,
+      "median_ms": 4.380927,
+      "p95_ms": 6.515865,
+      "maximum_ms": 6.904119000000001
+    },
+    {
+      "report": "checked-handle-before-combined-1.json",
+      "mode": "combined",
+      "source": "e099bf787+direct-decoder",
+      "samples": 28,
+      "minimum_ms": 3.6216019999999998,
+      "median_ms": 4.582491,
+      "p95_ms": 7.464532999999999,
+      "maximum_ms": 7.876113
+    },
+    {
+      "report": "checked-handle-before-stable-0.json",
+      "mode": "stable",
+      "source": "e099bf787+direct-decoder",
+      "eight_cycles_ms": {
+        "rounds": [
+          26.905618999999998,
+          26.053405,
+          26.291985,
+          26.398287
+        ],
+        "median": 26.345136,
+        "max": 26.905618999999998
+      }
+    },
+    {
+      "report": "checked-handle-before-stable-1.json",
+      "mode": "stable",
+      "source": "e099bf787+direct-decoder",
+      "eight_cycles_ms": {
+        "rounds": [
+          25.312936,
+          27.464917,
+          25.965754,
+          25.119263999999998
+        ],
+        "median": 25.639345,
+        "max": 27.464917
+      }
+    },
+    {
+      "report": "handle-after-combined-0.json",
+      "mode": "combined",
+      "source": "d360d960e+borrowed-handles",
+      "samples": 28,
+      "minimum_ms": 3.23293,
+      "median_ms": 4.546837999999999,
+      "p95_ms": 7.1654,
+      "maximum_ms": 7.195573
+    },
+    {
+      "report": "handle-after-combined-1.json",
+      "mode": "combined",
+      "source": "d360d960e+borrowed-handles",
+      "samples": 28,
+      "minimum_ms": 3.7707859999999997,
+      "median_ms": 4.7947785,
+      "p95_ms": 6.681882,
+      "maximum_ms": 6.990584999999999
+    },
+    {
+      "report": "handle-after-stable-0.json",
+      "mode": "stable",
+      "source": "d360d960e+borrowed-handles",
+      "eight_cycles_ms": {
+        "rounds": [
+          27.276002000000002,
+          26.490135,
+          25.50117,
+          29.089738
+        ],
+        "median": 26.8830685,
+        "max": 29.089738
+      }
+    },
+    {
+      "report": "handle-after-stable-1.json",
+      "mode": "stable",
+      "source": "d360d960e+borrowed-handles",
+      "eight_cycles_ms": {
+        "rounds": [
+          27.239545,
+          25.994325999999997,
+          27.062773,
+          26.341233
+        ],
+        "median": 26.702002999999998,
+        "max": 27.239545
+      }
+    },
+    {
+      "report": "handle-before-combined-0.json",
+      "mode": "combined",
+      "source": "e099bf787+direct-decoder",
+      "samples": 28,
+      "minimum_ms": 3.148561,
+      "median_ms": 4.667316,
+      "p95_ms": 6.72714,
+      "maximum_ms": 7.229935
+    },
+    {
+      "report": "handle-before-combined-1.json",
+      "mode": "combined",
+      "source": "e099bf787+direct-decoder",
+      "samples": 28,
+      "minimum_ms": 3.0303169999999997,
+      "median_ms": 4.657084,
+      "p95_ms": 7.178182,
+      "maximum_ms": 7.240271000000001
+    },
+    {
+      "report": "handle-before-stable-0.json",
+      "mode": "stable",
+      "source": "e099bf787+direct-decoder",
+      "eight_cycles_ms": {
+        "rounds": [
+          27.646234999999997,
+          25.897872000000003,
+          26.98378,
+          25.794646
+        ],
+        "median": 26.440826,
+        "max": 27.646234999999997
+      }
+    },
+    {
+      "report": "handle-before-stable-1.json",
+      "mode": "stable",
+      "source": "e099bf787+direct-decoder",
+      "eight_cycles_ms": {
+        "rounds": [
+          27.109636,
+          25.569892,
+          26.803378,
+          25.067725999999997
+        ],
+        "median": 26.186635,
+        "max": 27.109636
+      }
+    }
+  ],
+  "binaries": {
+    "versioned-direct-decoder": {
+      "bytes": 88464176,
+      "sha256": "d4f84259d53519011f19775802991b72f750723614be9ef4a795e86a9963d31a"
+    },
+    "versioned-borrowed-handles": {
+      "bytes": 88464144,
+      "sha256": "8f89cccbdb14ac6a1e5cc28cb67797be021d66024019fb7da7223fb1cdccbad2"
+    },
+    "versioned-checked-handles": {
+      "bytes": 88462232,
+      "sha256": "c1e3e602b7758b5945fbd4ac4f6b58c6c7616dd369e78792874a5f2bd34a45e3"
+    }
+  },
+  "handle_instructions": {
+    "metric": "Complete package instructions for 28 ordinary fixed-key evaluations, with nested actual Table::get costs.",
+    "limits": "All profiled timings excluded. Method costs are nested, not additive. No ordinary latency gain is implied.",
+    "mapping": "72 actual evaluation-return dumps per driver; actual table-call counts match at every dump; residual/worker collection is zero.",
+    "instruction_change_percent": -0.5819316315714973,
+    "table_instruction_change_percent": -3.0041352550273404,
+    "sides": {
+      "before": {
+        "source": "e099bf787+direct-decoder",
+        "ordinary_samples": 28,
+        "ordinary_calls": 14096,
+        "ordinary_table_instructions": 64337749,
+        "ordinary_instructions": 360848575,
+        "ordinary_median_instructions": 11137141.5,
+        "zero_residual_and_worker_profiles": [
+          "handle-before-package.out-01",
+          "handle-before-package.out-05",
+          "handle-before-package.out-06",
+          "handle-before-package.out-04",
+          "handle-before-package.out-03",
+          "handle-before-package.out-02"
+        ]
+      },
+      "after": {
+        "source": "d360d960e+borrowed-handles",
+        "ordinary_samples": 28,
+        "ordinary_calls": 14096,
+        "ordinary_table_instructions": 62404956,
+        "ordinary_instructions": 358748683,
+        "ordinary_median_instructions": 11103325.0,
+        "zero_residual_and_worker_profiles": [
+          "handle-after-package.out-06",
+          "handle-after-package.out-03",
+          "handle-after-package.out-02",
+          "handle-after-package.out-05",
+          "handle-after-package.out-04",
+          "handle-after-package.out-01"
+        ]
+      }
+    }
+  },
+  "checked-handle_instructions": {
+    "metric": "Complete package instructions for 28 ordinary fixed-key evaluations, with nested actual Table::get costs.",
+    "limits": "All profiled timings excluded. Method costs are nested, not additive. No ordinary latency gain is implied.",
+    "mapping": "72 actual evaluation-return dumps per driver; actual table-call counts match at every dump; residual/worker collection is zero.",
+    "instruction_change_percent": -0.3161464408834247,
+    "table_instruction_change_percent": -2.0991823903193763,
+    "sides": {
+      "before": {
+        "source": "e099bf787+direct-decoder",
+        "ordinary_samples": 28,
+        "ordinary_calls": 14096,
+        "ordinary_table_instructions": 64328617,
+        "ordinary_instructions": 360645844,
+        "ordinary_median_instructions": 11137933.0,
+        "zero_residual_and_worker_profiles": [
+          "checked-handle-before-package.out-01",
+          "checked-handle-before-package.out-04",
+          "checked-handle-before-package.out-02",
+          "checked-handle-before-package.out-05",
+          "checked-handle-before-package.out-03",
+          "checked-handle-before-package.out-06"
+        ]
+      },
+      "after": {
+        "source": "d360d960e+checked-handles",
+        "ordinary_samples": 28,
+        "ordinary_calls": 14096,
+        "ordinary_table_instructions": 62978242,
+        "ordinary_instructions": 359505675,
+        "ordinary_median_instructions": 11120675.5,
+        "zero_residual_and_worker_profiles": [
+          "checked-handle-after-package.out-02",
+          "checked-handle-after-package.out-06",
+          "checked-handle-after-package.out-05",
+          "checked-handle-after-package.out-01",
+          "checked-handle-after-package.out-03",
+          "checked-handle-after-package.out-04"
+        ]
+      }
+    }
+  },
+  "source": {
+    "fjall": "04c304ad3fe8c605c7fe7fd4bcd0c3bc73f555c6",
+    "lsm-tree": "1918e26205ac54e81311a8f0e10ed255b638ed16"
+  },
+  "archive_members": 578,
+  "archive_bytes": 92151541,
+  "uncompressed_bytes": 4766496374,
+  "archive_sha256": "aec64971658dc71faa2bf3a615e8a4dbd2c0a38f44427e9ca74e51dcf1510bf6",
+  "archive_members_verified": true,
+  "compression_command": [
+    "zstd",
+    "-q",
+    "-T2",
+    "-3",
+    "--long=27",
+    "-o",
+    "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/checked-handles/raw-evidence.tar.zst"
+  ],
+  "p95_method": "Nearest rank; 28 ordinary fixed-key samples; restart excluded.",
+  "excluded": "The initial method-only collector has a six-instruction conservation mismatch in before part 11. Both method-only profiles are excluded.",
+  "limits": "Profiled timings are excluded. Native costs are nested actual entered calls. Initial unchecked draft is superseded. No repeatable elapsed gain is proved."
+}
