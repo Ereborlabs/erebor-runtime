@@ -36,6 +36,28 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[cfg(feature = "native-store")]
+    #[snafu(display("Graph native operation {operation} failed: {source}"))]
+    Native {
+        operation: &'static str,
+        source: fjall::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[cfg(feature = "native-store")]
+    #[snafu(display("Graph storage encoding failed: {source}"))]
+    Encode {
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[cfg(feature = "native-store")]
+    #[snafu(display("Graph storage decoding failed: {source}"))]
+    Decode {
+        source: rmp_serde::decode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -76,6 +98,8 @@ impl ErrorExt for Error {
             Self::Conflict { .. } => StatusCode::IllegalState,
             #[cfg(feature = "store")]
             Self::Database { .. } => StatusCode::External,
+            #[cfg(feature = "native-store")]
+            Self::Native { .. } | Self::Encode { .. } | Self::Decode { .. } => StatusCode::External,
         }
     }
     fn retry_hint(&self) -> RetryHint {

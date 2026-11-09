@@ -17,6 +17,8 @@ pub struct Native {
     stable: bool,
     snapshots: BTreeMap<u64, fjall::Snapshot>,
     revisions: BTreeMap<u64, [u8; 8]>,
+    #[cfg(feature = "cdc-poc")]
+    live: Option<super::live::Live>,
 }
 
 struct Prepared {
@@ -38,7 +40,7 @@ impl Key {
     fn dictionary(kind: u64, scope: u64, key: &[u8]) -> Vec<u8> {
         [Self::new(b'D', &[kind, scope]), key.to_vec()].concat()
     }
-    fn number(bytes: &[u8]) -> Result<u64> {
+    pub(super) fn number(bytes: &[u8]) -> Result<u64> {
         Ok(u64::from_be_bytes(bytes.try_into()?))
     }
     fn at(kind: u8, fields: &[u64], revision: u64, stable: bool) -> Vec<u8> {
@@ -68,6 +70,18 @@ impl Native {
             other => other,
         };
         let db = kv::Database::open(kind, path)?;
+        #[cfg(feature = "cdc-poc")]
+        if let kv::Database::FjallBranch(_, branch) = &db {
+            let live = super::live::Live::open(branch)?;
+            return Ok(Self {
+                db,
+                properties: BTreeMap::new(),
+                stable,
+                snapshots: BTreeMap::new(),
+                revisions: BTreeMap::new(),
+                live: Some(live),
+            });
+        }
         let mut revisions = BTreeMap::new();
         if db.read(|r| r.get(b"head"))?.is_none() {
             let (_, _, _, receipt) = db.write_at(1, true, |tx| {
@@ -102,6 +116,8 @@ impl Native {
             stable,
             snapshots,
             revisions,
+            #[cfg(feature = "cdc-poc")]
+            live: None,
         })
     }
 
@@ -129,6 +145,9 @@ impl Native {
 
     #[cfg(feature = "cdc-poc")]
     pub fn assert_member_keys(&self, changes: &[Change], actual: &[Vec<u8>]) -> Result<()> {
+        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&self.live, &self.db) {
+            return live.assert_keys(branch, changes, actual);
+        }
         self.db.read(|tx| {
             let mut expected = BTreeSet::new();
             for change in changes {
@@ -157,6 +176,9 @@ impl Native {
     #[cfg(feature = "cdc-poc")]
     pub fn assert_stable_keys(&self) -> Result<()> {
         assert!(self.stable);
+        if let kv::Database::FjallBranch(_, branch) = &self.db {
+            return super::live::Live::assert_stable(branch);
+        }
         self.db.read(|tx| {
             for (kind, fields) in [
                 (b'M', 4),
@@ -184,6 +206,10 @@ impl Native {
     }
 
     fn apply_saved(&mut self, step: &Step, commit: bool, cursor: Option<&[u8]>) -> Result<Timing> {
+        #[cfg(feature = "cdc-poc")]
+        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&mut self.live, &self.db) {
+            return live.apply(branch, step, commit, cursor);
+        }
         let started = Instant::now();
         let prepare_s = started.elapsed().as_secs_f64();
         let (prepared, work, commit_s, receipt) =
@@ -440,6 +466,10 @@ impl Native {
         revision: u64,
         action: impl FnOnce(&dyn GraphRead, f64) -> Result<T>,
     ) -> Result<T> {
+        #[cfg(feature = "cdc-poc")]
+        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&self.live, &self.db) {
+            return live.capture(branch, revision, action);
+        }
         let started = Instant::now();
         self.read_at(revision, |tx| {
             for writer in [1, 2] {
@@ -457,15 +487,6 @@ impl Native {
     }
 
     fn read_at<T>(&self, revision: u64, action: impl FnOnce(&dyn Read) -> Result<T>) -> Result<T> {
-        #[cfg(feature = "cdc-poc")]
-        if let kv::Database::FjallBranch(..) = &self.db {
-            let (_, revision) = self
-                .revisions
-                .range(..=revision)
-                .next_back()
-                .ok_or("Fjall Graph revision receipt is absent")?;
-            return self.db.read_at(u64::from_be_bytes(*revision), action);
-        }
         if self.stable {
             if let kv::Database::Fjall(_, table) = &self.db {
                 let (_, snapshot) = self
@@ -520,6 +541,10 @@ impl Native {
     }
 
     pub fn inspect(&self, fixture: &Fixture, revision: u64, _all: bool) -> Result<Readout> {
+        #[cfg(feature = "cdc-poc")]
+        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&self.live, &self.db) {
+            return live.inspect(branch, fixture, revision);
+        }
         let started = Instant::now();
         self.read_at(revision, |tx| {
             for writer in [1, 2] {
@@ -568,6 +593,10 @@ impl Native {
     }
 
     pub fn verify_metadata(&self, fixture: &Fixture, revision: u64, current: u64) -> Result<()> {
+        #[cfg(feature = "cdc-poc")]
+        if let (Some(live), kv::Database::FjallBranch(_, branch)) = (&self.live, &self.db) {
+            return live.verify_metadata(branch, fixture, revision, current);
+        }
         self.db.read(|tx| {
             assert_eq!(
                 Key::number(&tx.get(b"head")?.ok_or("head absent")?)?,

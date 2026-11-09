@@ -36,15 +36,31 @@ boundary. The raw log, command, binary identity, and checked boundary report
 remain in that output directory. This is one pre-migration qualification run,
 not a performance comparison or a speedup result.
 
-The agreed next change promotes the concrete native Graph owner into the
-existing package PoC. Graph borrows the caller's native snapshot and transaction;
-only the caller commits and publishes. Preserve the SDK, journals, expected
-writer heads, endpoint validity, provenance, and resource accounting. Remove
-the PoC's duplicate staging and traversal code when the production owner covers
-that behavior. Do not copy its fixture-specific assumptions, active-member
-pointer duplicate, in-memory revision catalogue, or copied change log. The old
-production store remains the only authority until all Data transaction families
-can switch together. No live dual writes or SQL emulation are proposed.
+The agreed native Graph participant and its first package PoC caller are
+implemented. The optional owner borrows native snapshots and a transaction.
+The caller alone commits and publishes. Native historical views replace manual
+membership intervals. Scoped dictionaries, property chunks, layer parents,
+member and adjacency indexes, endpoint validation, and memory leases stay in
+Araphor Graph. The Fjall branch condition now uses that owner. Other benchmark
+conditions keep their existing control adapters. The native target has no
+active-member pointer duplicate, in-memory revision authority, or copied change
+log. Source and output wakes still walk original journals.
+
+The [native Graph qualification](../../crates/araphor-graph/examples/storage_poc/results/native-graph-2026-11-09/README.md)
+records six passing owner tests, clippy, feature-off and changed-file format
+checks, the unchanged combined cases, and the unchanged stable/history cases.
+Four alternating pairs have 112 ordinary target samples per version.
+Median/p95/maximum cycle times change from 4.445/7.323/7.766 ms to
+7.669/13.697/15.413 ms. This is a slowdown, not a performance improvement.
+The new participant performs production Graph checks and reconstructs the
+PoC's semantic change assertions from two native historical views.
+The complete measured interval retains that result-read work.
+
+Result: **Done for the optional native participant and its PoC caller**.
+The production Data caller, complete atomic state replacement, log-reader
+routing, notifications, and incident performance acceptance remain **Not done**.
+The old production store remains the only authority until all Data transaction
+families can switch together. No live dual writes or SQL emulation are used.
 
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
@@ -54,7 +70,8 @@ This design supports the
 
 Architecture direction and implementer/reviewer agreement: **Done**.
 Production replacement and performance qualification: **Not done**.
-Source review: `87862faa`, 2026-11-05. No new storage code is implemented.
+Historical source review: `87862faa`, 2026-11-05. No new storage code was
+implemented at that source state. The current participant result is above.
 
 ## Intended end state
 

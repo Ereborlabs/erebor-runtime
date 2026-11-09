@@ -16,7 +16,7 @@ name = "storage_poc"
 path = "../main.rs"
 
 [dependencies]
-araphor-graph = { path = "../../..", features = ["store"] }
+araphor-graph = { path = "../../..", features = ["store", "native-store"] }
 araphor-analysis-builtins = { path = "../../../../araphor-analysis-builtins" }
 araphor-analysis-sdk = { path = "../../../../araphor-analysis-sdk" }
 araphor-analysis-types = { path = "../../../../araphor-analysis-types" }

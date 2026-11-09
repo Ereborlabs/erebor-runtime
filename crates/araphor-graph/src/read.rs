@@ -2,17 +2,11 @@ use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, BinaryArray, RecordBatch, StructArray, UInt64Array};
 use arrow_schema::DataType;
-use duckdb::{Connection, params};
+use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
 use crate::error::{DatabaseSnafu, InvalidSnafu};
-use crate::{EntityKind, GraphStore, Read, Relation, Result};
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct ReadOrigin {
-    pub writer: u64,
-    pub revision: u64,
-}
+use crate::{EntityKind, GraphStore, Read, ReadOrigin, Relation, Result};
 
 mod view;
 pub use view::GraphReadView;

@@ -227,11 +227,15 @@ version = "0.1.0"
 dependencies = [
  "arrow-array",
  "arrow-cast",
+ "arrow-ipc",
  "arrow-schema",
  "arrow-select",
  "duckdb",
  "erebor-runtime-error",
  "erebor-telemetry",
+ "fjall",
+ "rmp-serde",
+ "serde",
  "snafu",
 ]
 
@@ -1698,8 +1702,6 @@ dependencies = [
 [[package]]
 name = "lsm-tree"
 version = "3.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5498808f4d41cf785079d3ef3f28716f1b4364af1b512f3097bfb651bded1b3e"
 dependencies = [
  "byteorder-lite",
  "byteview",

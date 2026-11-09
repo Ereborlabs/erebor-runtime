@@ -9,6 +9,8 @@ mod history;
 mod home;
 mod incident;
 mod kv;
+#[cfg(feature = "cdc-poc")]
+mod live;
 mod native;
 #[cfg(feature = "neon-poc")]
 mod neon;
@@ -513,7 +515,7 @@ fn main() -> Result<()> {
 }
 
 fn check_findings(rows: &[Row], expected: usize) -> Result<()> {
-    use araphor_analysis_types::{FindingMember, values::FindingStateV1};
+    use araphor_analysis_types::{values::FindingStateV1, FindingMember};
     let findings = rows.iter().filter(|r| r.relation == 1).collect::<Vec<_>>();
     assert_eq!(findings.len(), expected);
     for row in findings {

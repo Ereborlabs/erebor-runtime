@@ -2,6 +2,10 @@
 
 Research date: 2026-11-09. Result: **Research complete; production migration not done**.
 This record proposes the production integration of the completed engine forks.
+The optional native Graph participant and its existing package PoC caller are
+now [qualified](../../crates/araphor-graph/examples/storage_poc/results/native-graph-2026-11-09/README.md).
+The comparison records a slowdown. Production Data integration and the incident
+performance targets remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

@@ -59,3 +59,9 @@ impl Relation {
         Schema::new(vec![Field::new("owner", DataType::Binary, true)])
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ReadOrigin {
+    pub writer: u64,
+    pub revision: u64,
+}

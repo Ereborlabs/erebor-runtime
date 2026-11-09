@@ -1,19 +1,19 @@
 mod base;
 mod keys;
 mod prepared;
-mod scratch;
+use crate::scratch;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow_array::{Array, BinaryArray, RecordBatch, StructArray, UInt64Array};
 use arrow_schema::DataType;
-use duckdb::{Connection, OptionalExt as _, params};
+use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use crate::error::{ConflictSnafu, DatabaseSnafu, InvalidSnafu};
 use crate::{
-    EntityKind, GraphStore, Journal, PendingGraph, Relation, Result, Staged, transaction::Commands,
+    transaction::Commands, EntityKind, GraphStore, Journal, PendingGraph, Relation, Result, Staged,
 };
 
 use base::BaseRows;

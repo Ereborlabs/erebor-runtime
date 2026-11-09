@@ -1,0 +1,10 @@
+   Compiling libc v0.2.186
+    Checking once_cell v1.21.4
+    Checking getrandom v0.3.4
+    Checking ahash v0.8.12
+    Checking arrow-array v59.2.0
+    Checking arrow-select v59.2.0
+    Checking arrow-ord v59.2.0
+    Checking arrow-cast v59.2.0
+    Checking araphor-graph v0.1.0 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.30s

@@ -1,0 +1,277 @@
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/cdc.rs:4:
+ use std::time::{Duration, Instant};
+
+ use super::{
+-    Oracle, Result, fixture::Fixture, incident::Incident, kv::Database, native::Native, package,
++    fixture::Fixture, incident::Incident, kv::Database, native::Native, package, Oracle, Result,
+ };
+ use serde::{Deserialize, Serialize};
+
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/compaction.rs:8:
+ use super::fixture::{Fixture, Spec};
+ use super::incident::Incident;
+ use super::native::Native;
+-use super::{Oracle, Reference, Result, Sample, check_findings, materialize, package, usage};
++use super::{check_findings, materialize, package, usage, Oracle, Reference, Result, Sample};
+
+ #[derive(Clone, Serialize)]
+ struct Event {
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/duck.rs:5:
+
+ use araphor_graph::{GraphStore, LayerRequest, Read, WriterCut};
+ use arrow_array::RecordBatch;
+-use duckdb::{Connection, OptionalExt, params};
++use duckdb::{params, Connection, OptionalExt};
+
+ use super::fixture::{Fixture, Step};
+ use super::{Change, GraphRead, Readout, Result, Timing};
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/history.rs:5:
+ use arrow_array::RecordBatch;
+ use serde::Serialize;
+
+-use super::{Engine, Result, fixture::Fixture, incident::Incident, package};
++use super::{fixture::Fixture, incident::Incident, package, Engine, Result};
+
+ #[derive(Default)]
+ pub struct History(BTreeMap<u64, Reference>);
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/home.rs:9:
+
+ use serde_bytes::ByteBuf;
+
+-use super::Result;
+ use super::kv::{Entries, Read, Write};
++use super::Result;
+
+ const MAGIC: &[u8; 8] = b"ARPHKV01";
+ type Index = BTreeMap<Arc<[u8]>, Arc<[u8]>>;
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/home.rs:250:
+         })?;
+         let bytes = std::fs::metadata(dir.path().join("home.log"))?.len();
+         db.write(false, |tx| tx.remove(&a))?;
+-        assert!(
+-            db.write(true, |tx| -> Result<()> {
++        assert!(db
++            .write(true, |tx| -> Result<()> {
+                 tx.remove(&a)?;
+                 Err("abort action".into())
+             })
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/home.rs:258:
+-            .is_err()
+-        );
++            .is_err());
+         assert_eq!(std::fs::metadata(dir.path().join("home.log"))?.len(), bytes);
+         drop(db);
+         let db = Home::open(dir.path())?;
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/incident.rs:1:
+ use std::collections::BTreeSet;
+
+-use araphor_analysis_builtins::causal::{Causal, model::*};
++use araphor_analysis_builtins::causal::{model::*, Causal};
+ use araphor_analysis_sdk as sdk;
+ use araphor_analysis_types::{
+     arrow::views::{ContextKeyRow, RecordIdRow, SourceRow},
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/incident.rs:13:
+ use serde::{Deserialize, Serialize};
+ use serde_bytes::ByteBuf;
+
+-use super::{Result, fixture::Spec};
++use super::{fixture::Spec, Result};
+
+ #[derive(Clone, Serialize)]
+ struct Context {
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/incident.rs:230:
+                 action,
+             };
+             let version = if serial == 1 {
+-                if index == 5 { 27 } else { 24 }
++                if index == 5 {
++                    27
++                } else {
++                    24
++                }
+             } else if serial == 2 {
+                 62
+             } else {
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/live.rs:6:
+ };
+
+ use araphor_graph::{
+-    Read,
+     native::{Declaration, Graph, LayerRequest, View},
++    Read,
+ };
+ use arrow_array::RecordBatch;
+
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/live.rs:14:
+ use super::{
+-    Change, GraphRead, Readout, Result, Timing,
+     fixture::{Fixture, Row, Step},
+     native::Key,
++    Change, GraphRead, Readout, Result, Timing,
+ };
+
+ pub struct Live {
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/main.rs:515:
+ }
+
+ fn check_findings(rows: &[Row], expected: usize) -> Result<()> {
+-    use araphor_analysis_types::{FindingMember, values::FindingStateV1};
++    use araphor_analysis_types::{values::FindingStateV1, FindingMember};
+     let findings = rows.iter().filter(|r| r.relation == 1).collect::<Vec<_>>();
+     assert_eq!(findings.len(), expected);
+     for row in findings {
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/neon.rs:23:
+ use tokio_util::sync::CancellationToken;
+ use wal_decoder::models::value::Value;
+
++use super::kv::{prefix_end, Entries, Read, Write};
+ use super::Result;
+-use super::kv::{Entries, Read, Write, prefix_end};
+
+ type Catalog = BTreeMap<Vec<u8>, Entry>;
+ #[derive(Clone)]
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/neon.rs:117:
+             }));
+         }
+         layers.sort_by_key(|layer| layer.revision);
+-        assert!(
+-            layers
+-                .windows(2)
+-                .all(|pair| pair[0].revision < pair[1].revision)
+-        );
++        assert!(layers
++            .windows(2)
++            .all(|pair| pair[0].revision < pair[1].revision));
+         let mut catalog = Catalog::new();
+         let mut revisions = BTreeMap::<u64, Vec<u64>>::new();
+         for layer in &layers {
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/neon.rs:239:
+         if commit {
+             let mut state = self.state.try_borrow_mut()?;
+             state.check()?;
+-            assert!(
+-                state
+-                    .layers
+-                    .last()
+-                    .is_none_or(|last| last.revision < revision)
+-            );
++            assert!(state
++                .layers
++                .last()
++                .is_none_or(|last| last.revision < revision));
+             state.poisoned = true;
+             let (desc, temporary) = self
+                 .runtime
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/package.rs:9:
+ use serde::Serialize;
+
+ use super::{
+-    GraphRead, Result,
+     fixture::{Fixture, Spec, Step},
+     incident::Incident,
++    GraphRead, Result,
+ };
+
+ #[derive(Serialize)]
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/stable.rs:5:
+ use serde::Serialize;
+
+ use super::{
+-    Engine, Oracle, Reference, Result, fixture::Fixture, history::History, incident::Incident,
+-    package,
++    fixture::Fixture, history::History, incident::Incident, package, Engine, Oracle, Reference,
++    Result,
+ };
+
+ #[derive(Serialize)]
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/surreal.rs:4:
+ use surrealkv::{Durability, HistoryOptions, LSMIterator, Mode, Tree, TreeBuilder, WriteOptions};
+ use tokio::runtime::Runtime;
+
++use super::kv::{prefix_end, Entries, Read, Write};
+ use super::Result;
+-use super::kv::{Entries, Read, Write, prefix_end};
+
+ pub struct Surreal {
+     tree: Tree,
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/src/committed.rs:3:
+
+ use arrow_array::{Array, BinaryArray, RecordBatch, StructArray, UInt64Array};
+ use arrow_schema::Schema;
+-use duckdb::{Connection, params};
++use duckdb::{params, Connection};
+ use snafu::ResultExt as _;
+
+ use crate::error::{ConflictSnafu, DatabaseSnafu, InvalidSnafu};
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/src/layers/base.rs:4:
+ use duckdb::params;
+ use snafu::ResultExt as _;
+
+-use super::WriterCut;
+ use super::scratch::Scratch;
++use super::WriterCut;
+ use crate::error::{DatabaseSnafu, InvalidSnafu};
+ use crate::{GraphReadView, Journal, Member, PendingGraph, Result};
+
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/src/layers/base.rs:165:
+             for (relation, owner, key, expected) in journal.touched_keys() {
+                 scratch.check(journal.writer())?;
+                 if let Some(expected) = expected {
+-                    let present =
+-                        self.rows
+-                            .binary_search_by(|entry| {
+-                                (entry.0.0, entry.0.1, entry.0.2.as_ref(), entry.0.3.as_ref())
+-                                    .cmp(&(journal.writer(), relation, owner, key))
+-                            })
+-                            .is_ok();
++                    let present = self
++                        .rows
++                        .binary_search_by(|entry| {
++                            (
++                                entry.0 .0,
++                                entry.0 .1,
++                                entry.0 .2.as_ref(),
++                                entry.0 .3.as_ref(),
++                            )
++                                .cmp(&(
++                                    journal.writer(),
++                                    relation,
++                                    owner,
++                                    key,
++                                ))
++                        })
++                        .is_ok();
+                     if present != expected {
+                         return InvalidSnafu {
+                             field: "Graph journal base state",
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/src/presence.rs:1:
+ use arrow_array::{Array, BinaryArray, RecordBatch};
+-use duckdb::{Connection, OptionalExt as _, params};
++use duckdb::{params, Connection, OptionalExt as _};
+ use snafu::ResultExt as _;
+
+ use crate::error::{DatabaseSnafu, InvalidSnafu};
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/src/properties.rs:249:
+         mut visit: impl FnMut(RecordBatch) -> Result<()>,
+     ) -> Result<()> {
+         let mut query = connection
+-            .prepare(&format!("SELECT property_ref,properties FROM graph_properties_{relation}"))
++            .prepare(&format!(
++                "SELECT property_ref,properties FROM graph_properties_{relation}"
++            ))
+             .context(DatabaseSnafu {
+                 operation: "prepare Graph property rows",
+             })?;
+Diff in /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/src/transaction.rs:44:
+     }
+
+     pub fn owned(&self, relation: &str) -> Result<Vec<RecordBatch>> {
+-        self.transport.read("owned",relation,RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty())))
++        self.transport.read(
++            "owned",
++            relation,
++            RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty())),
++        )
+     }
+
+     pub fn neighbors(

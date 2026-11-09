@@ -3,17 +3,17 @@ use std::collections::BTreeMap;
 
 use crate::{error::InvalidSnafu, Result};
 
-pub(super) type Lease = Box<dyn Any + Send + Sync>;
-pub(super) type Reserve<'a> = dyn Fn(u64, usize, usize) -> Result<Option<Lease>> + 'a;
+pub type Lease = Box<dyn Any + Send + Sync>;
+pub type Reserve<'a> = dyn Fn(u64, usize, usize) -> Result<Option<Lease>> + 'a;
 
-pub(super) struct Scratch<'a> {
+pub(crate) struct Scratch<'a> {
     reserve: &'a Reserve<'a>,
     bytes: BTreeMap<u64, usize>,
     leases: Vec<Lease>,
 }
 
 impl<'a> Scratch<'a> {
-    pub(super) fn new(reserve: &'a Reserve<'a>) -> Self {
+    pub(crate) fn new(reserve: &'a Reserve<'a>) -> Self {
         Self {
             reserve,
             bytes: BTreeMap::new(),
@@ -21,7 +21,7 @@ impl<'a> Scratch<'a> {
         }
     }
 
-    pub(super) fn charge(&mut self, writer: u64, bytes: usize) -> Result<()> {
+    pub(crate) fn charge(&mut self, writer: u64, bytes: usize) -> Result<()> {
         let bytes = bytes
             .checked_add(std::mem::size_of::<Lease>() * 2)
             .ok_or_else(|| {
@@ -49,11 +49,11 @@ impl<'a> Scratch<'a> {
         Ok(())
     }
 
-    pub(super) fn into_leases(self) -> Vec<Lease> {
+    pub(crate) fn into_leases(self) -> Vec<Lease> {
         self.leases
     }
 
-    pub(super) fn check(&self, writer: u64) -> Result<()> {
+    pub(crate) fn check(&self, writer: u64) -> Result<()> {
         (self.reserve)(
             writer,
             0,

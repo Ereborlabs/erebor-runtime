@@ -1,5 +1,117 @@
 # Araphor Graph Commit Review
 
+## Native Fjall participant, 2026-11-09
+
+The optional `native-store` feature adds a Graph participant for the approved
+[storage migration](../research/araphor-fjall-integration.md). The existing
+package storage PoC is its first caller. Data still uses DuckDB in production.
+This section covers the working tree based on Runtime `e0351b994`, Fjall
+`cceaa84`, and the native tree `2e1b5df34ffc`.
+
+### Native intended end state
+
+Data supplies a native snapshot and a write transaction. Araphor Graph owns
+relation declarations, writer layers, dictionaries, membership, properties,
+and adjacency. Packages select Graph operations. Data commits all outputs and
+consumed input progress together. The production Data integration is **Not done**.
+
+### Native review flow
+
+[Graph::install](../../crates/araphor-graph/src/native/mod.rs) The caller installs opaque writers and relation declarations
+  -> [StoredRelation](../../crates/araphor-graph/src/native/record.rs) Graph checks node and edge relations and stores the Arrow schema.
+  -> [Graph::view](../../crates/araphor-graph/src/native/mod.rs) the caller supplies a committed common snapshot and optional older writer snapshots.
+  -> [View](../../crates/araphor-graph/src/native/view.rs) Graph binds each writer's reads to its selected snapshot.
+
+[package::evaluate](../../crates/araphor-graph/examples/storage_poc/package.rs) A package reads Graph state and stages its selected changes
+  -> [View::read](../../crates/araphor-graph/src/native/view.rs) Graph selects membership or adjacency through indexed prefixes.
+  -> [Journal::overlay](../../crates/araphor-graph/src/journal.rs) the package sees its staged changes through the existing SDK.
+  -> [View::prepare](../../crates/araphor-graph/src/native/prepare.rs) Graph checks captured base presence and prepares final property chunks before the writer scope.
+
+[Live::apply](../../crates/araphor-graph/examples/storage_poc/live.rs) The caller opens one native transaction
+  -> [Graph::stage](../../crates/araphor-graph/src/native/write.rs) Graph checks writer parents and declarations, then stages the complete delta.
+  -> [Graph::stage](../../crates/araphor-graph/src/native/write.rs) Graph checks affected edge endpoints after all removals and additions.
+  -> [Live::apply](../../crates/araphor-graph/examples/storage_poc/live.rs) the caller stages package state and consumed CDC progress in that transaction.
+  -> [BranchWriteTransaction::commit_stamped](../../fjall/src/versioned/write.rs) the caller commits and records exact native cuts in the same durable batch.
+  -> [Live::apply](../../crates/araphor-graph/examples/storage_poc/live.rs) the caller constructs a committed Graph view after successful commit.
+
+[Graph::stage](../../crates/araphor-graph/src/native/write.rs) Staging fails
+  -> [Live::apply](../../crates/araphor-graph/examples/storage_poc/live.rs) the caller discards the transaction and publishes no view or progress.
+  -> [View::prepare](../../crates/araphor-graph/src/native/prepare.rs) a retry requires a valid captured view and matching writer parents.
+
+```mermaid
+sequenceDiagram
+    participant Package
+    participant Graph
+    participant Caller
+    participant Fjall
+    Package->>Graph: Read selected state and stage Journal
+    Caller->>Graph: Prepare final Journal changes
+    Caller->>Fjall: Open write transaction
+    Caller->>Graph: Stage prepared Graph delta
+    Graph->>Fjall: Membership, properties, adjacency, layers
+    Caller->>Fjall: Package state and consumed position
+    Caller->>Fjall: Commit and stamp exact cuts
+    Fjall-->>Caller: Durable receipt
+    Caller->>Graph: Open committed snapshot view
+```
+
+### Native storage and lifetime
+
+Graph reserves the byte prefix `\0graph/`. Integer key fields use big-endian
+encoding. Membership uses `(writer, owner, relation, entity)`. Relation and
+entity indexes select members. Outgoing and incoming indexes select adjacent
+edges. An endpoint index finds existing edges affected by node removal.
+The engine retains earlier values of stable keys. Graph does not add revision
+suffixes to these mutable keys. Layer IDs remain globally unique.
+
+Dictionary keys use writer, relation, or Graph scope. Long keys use linked
+fragments at the engine's key width. Reverse reads check scope, parent order,
+and the matching forward index. There is no hash or caller key-length limit.
+Properties use Arrow IPC chunks. A property-reference index maps immutable
+property IDs to a chunk and row. Large chunks use engine-width value fragments.
+
+The caller owns the database, transaction, commit, and published view. Graph
+never opens or commits the database. `Prepared` owns preparation leases.
+`Pending` keeps those leases and staging leases through the caller's commit.
+A committed `View` owns a lazy property cache. `Member` keeps its selected
+chunk alive. `ReadBatch` owns output memory leases. Consumers retain the
+`ReadBatch` while they use its Arrow buffers. Dropping a view does not remove
+stored records or release engine history policies.
+
+The native branch PoC resolves `cut/<Data revision>` from durable storage.
+It no longer needs a process-local revision map after reopen. Its original
+journal reader still selects source and output wakes from saved cursors.
+The PoC derives semantic change assertions from two historical Graph views;
+`inspect.cdc_s` measures that check. It does not write a copied change log.
+`output_stage_s` includes preparation plus transaction work. Complete cycle
+time still ends after result inspection.
+
+### Native verification
+
+The focused tests in [native/tests.rs](../../crates/araphor-graph/src/native/tests.rs)
+cover rollback with state/progress, selected writer history, shared endpoint
+removal, full-delta validation, long and empty dictionary keys, corruption,
+lexical read order, lease destruction, property references, unique layers,
+and fork isolation. The existing combined and stable PoCs check the real
+Causal package, exact rows, calls, frontiers, states, CDC keys, resume,
+continued input, compaction, and reopen. No workload or timeout is changed.
+
+Result: **Done for the optional participant and its PoC caller**. Six focused
+native tests, library clippy with warnings denied, the feature-off check, and
+the changed-file format check pass. The final stable run passes 128 primary
+cycles, 640 historical package evaluations, and 320 retained views. Four
+alternating combined pairs pass all existing assertions. Their 112 ordinary
+samples per version have median/p95/maximum values of 4.445/7.323/7.766 ms
+before and 7.669/13.697/15.413 ms after. This is a measured slowdown.
+
+The [qualification record](../../crates/araphor-graph/examples/storage_poc/results/native-graph-2026-11-09/README.md)
+contains source and binary identity, exact reports, summaries, and gate logs.
+The package-wide format check retains existing source and mixed-edition
+example differences; the explicit changed-file format check passes.
+Production integration, notification latency, and the 100-fold result remain
+**Not done**. The unchanged production incident and full CI are not run for
+this optional participant. No production performance gain is established.
+
 The [current package reading route](araphor-retained-execution-review.md#current-package-path-2026-11-05)
 covers default Definition startup, package-owned Graph processing, Data commit,
 and notification delivery in the current working tree. The exact replacement

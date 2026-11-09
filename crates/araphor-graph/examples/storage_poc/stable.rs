@@ -5,8 +5,8 @@ use std::time::Instant;
 use serde::Serialize;
 
 use super::{
-    Engine, Oracle, Reference, Result, fixture::Fixture, history::History, incident::Incident,
-    package,
+    fixture::Fixture, history::History, incident::Incident, package, Engine, Oracle, Reference,
+    Result,
 };
 
 #[derive(Serialize)]
@@ -48,6 +48,16 @@ fn flush(engine: &Engine, compact: bool) -> Result<()> {
 
 fn keys(engine: &Engine, stable: bool) -> Result<usize> {
     native(engine).database().read(|tx| {
+        if matches!(
+            native(engine).database(),
+            super::kv::Database::FjallBranch(..)
+        ) {
+            super::live::Live::assert_stable(match native(engine).database() {
+                super::kv::Database::FjallBranch(_, branch) => branch,
+                _ => unreachable!(),
+            })?;
+            return Ok(tx.prefix(b"\0graph/M")?.len());
+        }
         let members = tx.prefix(b"M")?;
         if stable {
             for (kind, fields) in [
@@ -307,9 +317,10 @@ pub fn run(output: &Path) -> Result<()> {
         "source": option_env!("POC_SOURCE_REVISION").unwrap_or("unrecorded"),
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
         "versioned_fjall": cfg!(feature = "cdc-poc"),
+        "change_verification": "native Graph target reconstructs semantic changes from before/after native views; no copied change log",
         "workload": "original eight Causal Graph cycles; revision-key controls versus stable mutable keys; exact package and retained-view comparisons",
-        "native_history": { "fjall-stable": if cfg!(feature = "cdc-poc") { "durable retained native branch history; caller-owned exact commit revision references" } else { "live public Snapshot handles; old handles after reopen Unsupported" }, "neon-stable": "stable native keys with separate layer LSN; history after reopen" },
-        "limits": ["Graph revision references remain caller-owned across reopen", "Neon adapter has no original WAL CDC, native branches or background compaction", "immutable property chunks and dictionary IDs remain; no property reclamation", "prepared source Arrow; no production DataFusion input or notification path", "no steady compaction, large-history, cold-cache or power-loss qualification"],
+        "native_history": { "fjall-stable": if cfg!(feature = "cdc-poc") { "araphor_graph::native; durable retained branch history and stamped Data cut index" } else { "live public Snapshot handles; old handles after reopen Unsupported" }, "neon-stable": "stable native keys with separate layer LSN; history after reopen" },
+        "limits": ["Fjall branch reads durable stamped Data cuts; Neon controls keep caller-owned Graph revision references", "Neon adapter has no original WAL CDC, native branches or background compaction", "immutable property chunks and dictionary IDs remain; no property reclamation", "prepared source Arrow; no production DataFusion input or notification path", "no steady compaction, large-history, cold-cache or power-loss qualification"],
         "runs": runs
     });
     if let Some(parent) = output.parent() {

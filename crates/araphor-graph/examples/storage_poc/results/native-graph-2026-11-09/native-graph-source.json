@@ -1,0 +1,41 @@
+{
+  "runtime_parent": "e0351b99403cb6d6cd6aa003e6b061eb7f7486cb",
+  "fjall": "cceaa84d371165c2f0d4952650543c27fc8e22d9",
+  "lsm_tree": "2e1b5df34ffc5db3275010f4bd5832518453b121",
+  "sources": {
+    "Cargo.lock": "77904e0f2e4af8adc9f99ad454477c292183e5c6a506b0e64a24bade1879f66a",
+    "crates/araphor-graph/Cargo.toml": "6ce057161cfd6edad026087fd51c241fe870be99de75aefe481955def0d011c8",
+    "crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml": "dbd4a57b25d8ee42b45e8b77ab85472d0e10a3df67aa131c3b7e8c9a76194948",
+    "crates/araphor-graph/examples/storage_poc/cdc.rs": "3888fa84b1b010d15029fc7a64ad05592c8ac7c8ec81e4607a3239b234525b5e",
+    "crates/araphor-graph/examples/storage_poc/live.rs": "8b3130d39b3d1408f3713744d565307933b187323686983178f153218ea7c7b1",
+    "crates/araphor-graph/examples/storage_poc/main.rs": "d679c0e62bbd265b3052e45051052dd9ddd883e781c5e083fabd2ff2a60b11c1",
+    "crates/araphor-graph/examples/storage_poc/native.rs": "8f69db8f52733e86d009bb12eb985a178c1865373a3c4079512747ea284b0a94",
+    "crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.lock": "20cead13c5afd8e94480a7bcc61cb2fd1395335fd2cb100e4625aed8fd00fa84",
+    "crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml": "abc38618a5ef48340550b0330275144a051fe414716994e202b0bbadc015fc82",
+    "crates/araphor-graph/examples/storage_poc/stable.rs": "73205f0a9372b9a2285c5147298fddbe0d83468d336afbbeecc92519c81987e1",
+    "crates/araphor-graph/src/error.rs": "8c2e87a21ba38f35e036a0e4c11f6c02aca7a482846c378e5d7190db908dc550",
+    "crates/araphor-graph/src/journal.rs": "446bb86d57956f5a0576b0f731416b9ab53cddeaac3566770f3e5e859b665a72",
+    "crates/araphor-graph/src/layers.rs": "da669670fee4262a2798a093a711aa4313b9a94a63747ee1b664d919630d0425",
+    "crates/araphor-graph/src/lib.rs": "666feab69fcb53acd4730c59526b12d3bc55bc2f4c4197d003eac30738bdeb85",
+    "crates/araphor-graph/src/native/mod.rs": "9c5bcdc490c3190e3a5b4cb8861c8fd230c2c6f3ebe9abf3501bd3d7faf2b3a2",
+    "crates/araphor-graph/src/native/prepare.rs": "55f257e320a8ce15da348370818bb34c04edf227d5aaff0aee3198bff8ef26e4",
+    "crates/araphor-graph/src/native/record.rs": "642d2e69f20dfc374cee9b155ba3a1349e19fdf43264baf5cf78362c3df03f2e",
+    "crates/araphor-graph/src/native/tests.rs": "f1f8f5de6780ac4c384858336d54a1d7909140d7eee9d18eb91d660e9c67f289",
+    "crates/araphor-graph/src/native/view.rs": "16c85d18bf32a0c9a386e32a8b0c8923062003946c4e0811444bb8931dd5cde9",
+    "crates/araphor-graph/src/native/write.rs": "ccbb25c9b59fb0b43acec4966f18347ae7cb8fda5c06a7d134d214f7a39aa1a0",
+    "crates/araphor-graph/src/read.rs": "08ce3fc2abbf77801086bdb31447c26d0daba499e722f37f5b25343d1d9889cb",
+    "crates/araphor-graph/src/relation.rs": "b2181f3cb84616d8d82341ee2a51301d5680beddaf9e83491d15784b9ed0a506",
+    "crates/araphor-graph/src/scratch.rs": "8224b49728b4db09702002f5b75847634ba78ab006ac8b8507fa064c45812e1f",
+    "crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.lock": "a9a476ddc741a219f8435814e5f7072b189a03c46ac5a22a3abfab1f87a6c78c"
+  },
+  "binaries": {
+    "before": {
+      "bytes": 88514288,
+      "sha256": "125ee085a8aa8c3d2deedbc530e8c3092ea7160d4f71a2e2eb48669dd749449f"
+    },
+    "after": {
+      "bytes": 89408000,
+      "sha256": "f307cc30a7de1ef4a664f903754e293f0727a5e6f3e78b81dbe16486fcf1a2c3"
+    }
+  }
+}

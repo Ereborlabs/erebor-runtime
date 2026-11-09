@@ -1,0 +1,114 @@
+{
+  "source": "native-graph-source.json",
+  "checks": [
+    {
+      "command": "cargo test --offline -p araphor-graph --features native-store --lib",
+      "exit_code": 0,
+      "result": "6 passed",
+      "log": "native-graph-tests-final.log"
+    },
+    {
+      "command": "cargo clippy --offline -p araphor-graph --features native-store --lib -- -D warnings",
+      "exit_code": 0,
+      "log": "native-graph-clippy-final.log"
+    },
+    {
+      "command": "cargo check --offline -p araphor-graph --no-default-features",
+      "exit_code": 0,
+      "log": "native-graph-feature-off.log"
+    },
+    {
+      "command": [
+        "rtk",
+        "proxy",
+        "rustfmt",
+        "--check",
+        "--edition",
+        "2021",
+        "--config",
+        "skip_children=true",
+        "crates/araphor-graph/examples/storage_poc/cdc.rs",
+        "crates/araphor-graph/examples/storage_poc/live.rs",
+        "crates/araphor-graph/examples/storage_poc/main.rs",
+        "crates/araphor-graph/examples/storage_poc/native.rs",
+        "crates/araphor-graph/examples/storage_poc/stable.rs",
+        "crates/araphor-graph/src/error.rs",
+        "crates/araphor-graph/src/journal.rs",
+        "crates/araphor-graph/src/layers.rs",
+        "crates/araphor-graph/src/lib.rs",
+        "crates/araphor-graph/src/native/mod.rs",
+        "crates/araphor-graph/src/native/prepare.rs",
+        "crates/araphor-graph/src/native/record.rs",
+        "crates/araphor-graph/src/native/tests.rs",
+        "crates/araphor-graph/src/native/view.rs",
+        "crates/araphor-graph/src/native/write.rs",
+        "crates/araphor-graph/src/read.rs",
+        "crates/araphor-graph/src/relation.rs",
+        "crates/araphor-graph/src/scratch.rs"
+      ],
+      "exit_code": 0,
+      "log": "native-graph-fmt-final.log",
+      "files": [
+        "crates/araphor-graph/examples/storage_poc/cdc.rs",
+        "crates/araphor-graph/examples/storage_poc/live.rs",
+        "crates/araphor-graph/examples/storage_poc/main.rs",
+        "crates/araphor-graph/examples/storage_poc/native.rs",
+        "crates/araphor-graph/examples/storage_poc/stable.rs",
+        "crates/araphor-graph/src/error.rs",
+        "crates/araphor-graph/src/journal.rs",
+        "crates/araphor-graph/src/layers.rs",
+        "crates/araphor-graph/src/lib.rs",
+        "crates/araphor-graph/src/native/mod.rs",
+        "crates/araphor-graph/src/native/prepare.rs",
+        "crates/araphor-graph/src/native/record.rs",
+        "crates/araphor-graph/src/native/tests.rs",
+        "crates/araphor-graph/src/native/view.rs",
+        "crates/araphor-graph/src/native/write.rs",
+        "crates/araphor-graph/src/read.rs",
+        "crates/araphor-graph/src/relation.rs",
+        "crates/araphor-graph/src/scratch.rs"
+      ]
+    },
+    {
+      "command": "cargo fmt -p araphor-graph -- --check",
+      "exit_code": 1,
+      "log": "native-graph-fmt.log",
+      "result": "Earlier package check reports existing source and mixed-edition example formatting. Final changed-file check passes."
+    },
+    {
+      "command": "cargo build --release --manifest-path crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml --config /tmp/araphor-storage-release-override.toml --offline",
+      "exit_code": 0,
+      "log": "native-graph-poc-build-final.log"
+    },
+    {
+      "command": "native-graph-poc <report> stable; summarize_stable.py <report>",
+      "exit_code": 0,
+      "result": "128 primary cycles, 640 historical evaluations, 320 historical views"
+    },
+    {
+      "command": "compare.py; existing combined PoC and summarize_cdc.py per run",
+      "exit_code": 0,
+      "result": "4 alternating pairs; 112 ordinary target samples per version"
+    },
+    {
+      "command": "bash .github/scripts/verify-rust-ci.sh",
+      "result": "Not run; user excludes full CI during iteration."
+    },
+    {
+      "command": [
+        "rtk",
+        "proxy",
+        "cargo",
+        "metadata",
+        "--offline",
+        "--manifest-path",
+        "crates/araphor-graph/examples/storage_poc/cdc-bench/Cargo.toml",
+        "--format-version",
+        "1"
+      ],
+      "exit_code": 0,
+      "result": "Standalone CDC lock resolves the same local engine forks. Its binary is not rebuilt separately."
+    }
+  ],
+  "log_copies": "Retained log copies remove trailing whitespace and terminal blank lines. Raw output remains under output/araphor-fjall-migration-20261109/."
+}

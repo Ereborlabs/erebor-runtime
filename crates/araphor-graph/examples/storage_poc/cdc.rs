@@ -4,7 +4,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::{
-    Oracle, Result, fixture::Fixture, incident::Incident, kv::Database, native::Native, package,
+    fixture::Fixture, incident::Incident, kv::Database, native::Native, package, Oracle, Result,
 };
 use serde::{Deserialize, Serialize};
 
@@ -209,7 +209,9 @@ impl Walker {
                         let members = batch
                             .items
                             .iter()
-                            .filter(|i| i.key.first() == Some(&b'M'))
+                            .filter(|i| {
+                                i.key.first() == Some(&b'M') || i.key.starts_with(b"\0graph/M")
+                            })
                             .count();
                         for item in &batch.items {
                             if item.key == SOURCE && batch.cursor > source {
@@ -234,7 +236,9 @@ impl Walker {
                             let keys = batch
                                 .items
                                 .into_iter()
-                                .filter(|i| i.key.first() == Some(&b'M'))
+                                .filter(|i| {
+                                    i.key.first() == Some(&b'M') || i.key.starts_with(b"\0graph/M")
+                                })
                                 .map(|i| i.key)
                                 .collect();
                             graph_tx.send(Event {
@@ -688,7 +692,7 @@ fn scenario(
             graph_read_s: prepared.calls.iter().map(|c| c.elapsed_s).sum(),
             graph_read_rows: prepared.calls.iter().map(|c| c.rows).sum(),
             graph_read_keys: prepared.calls.iter().map(|c| c.key_count).sum(),
-            output_stage_s: applied.work_s,
+            output_stage_s: applied.prepare_s + applied.work_s,
             output_sync_s: applied.commit_s,
             output_bytes: applied.encoded_bytes,
             result_read_s,
@@ -829,8 +833,10 @@ pub fn combined(output: &Path) -> Result<()> {
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
         "workload": "original eight Causal cycles; fixed application keys versus revision-key control; native journal source wake, package Graph reads, atomic Graph/cursor write, journal Graph wake, result read, resume and continued appends",
         "target": "fjall-stable", "control": "fjall",
+        "graph_adapter": "araphor_graph::native; borrowed branch transaction and retained native snapshots",
+        "change_verification": "target inspect.cdc_s reconstructs semantic changes from before/after native Graph views; source and output wakes still walk original journals",
         "unsupported": { "neon-layers": "present adapter has no original-WAL CDC feed; native layer enumeration is not substituted" },
-        "limits": ["prepared source Arrow and synthetic source-frontier metadata; no production DataFusion input", "no production notification delivery", "caller-owned opaque Graph revision references survive close and reopen with the Oracle", "native reader returns one decoded batch per read; first_decoded measures walker dispatch", "single caller-managed minimum consumer cursor; no dynamic consumer registration behind released history", "explicit maintenance and restart separated from ordinary samples; no sustained compaction, branch scale or power-loss proof"],
+        "limits": ["prepared source Arrow and synthetic source-frontier metadata; no production DataFusion input", "no production notification delivery", "native Graph uses durable stamped Data cuts across reopen; the revision-key control remains unchanged", "native reader returns one decoded batch per read; first_decoded measures walker dispatch", "single caller-managed minimum consumer cursor; no dynamic consumer registration behind released history", "explicit maintenance and restart separated from ordinary samples; no sustained compaction, branch scale or power-loss proof"],
         "runs": runs
     });
     if let Some(parent) = output.parent() {

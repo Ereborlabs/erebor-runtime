@@ -471,7 +471,7 @@ impl Journal {
         self.writer
     }
 
-    #[cfg(feature = "store")]
+    #[cfg(any(feature = "store", feature = "native-store"))]
     pub(crate) fn touched_keys(&self) -> impl Iterator<Item = (u64, &[u8], &[u8], Option<bool>)> {
         self.edits.iter().map(|(identity, edit)| {
             (
@@ -483,7 +483,7 @@ impl Journal {
         })
     }
 
-    #[cfg(feature = "store")]
+    #[cfg(any(feature = "store", feature = "native-store"))]
     pub(crate) fn final_rows(&self) -> impl Iterator<Item = (u64, &Arc<RecordBatch>, usize)> {
         self.edits.iter().filter_map(|(identity, edit)| {
             (edit.sequence > self.barrier(&identity.owner) && edit.action != Write::Remove)
@@ -491,7 +491,7 @@ impl Journal {
         })
     }
 
-    #[cfg(feature = "store")]
+    #[cfg(any(feature = "store", feature = "native-store"))]
     pub(crate) fn clear_owners(&self) -> impl Iterator<Item = Option<&[u8]>> {
         (self.cleared != 0).then_some(None).into_iter().chain(
             self.owners

@@ -1,5 +1,12 @@
 # Causal package Graph scenario comparison
 
+The current versioned Fjall branch condition uses the shared
+`araphor_graph::native` owner. See the
+[2026-11-09 qualification](results/native-graph-2026-11-09/README.md) for its
+source, correctness results, and measured slowdown. Earlier native-adapter
+measurements describe the prior handwritten PoC. Production Data still uses
+DuckDB. The incident performance targets remain not done.
+
 This proof of concept (PoC) runs the existing causal package against current
 DuckDB GraphStore, redb, Fjall, and a local append-only store. It measures the package's dependent Graph
 traversal and staged changes through one durable commit. The production store
