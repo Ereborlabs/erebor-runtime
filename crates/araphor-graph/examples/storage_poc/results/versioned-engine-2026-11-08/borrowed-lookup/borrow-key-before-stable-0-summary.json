@@ -1,0 +1,86 @@
+{
+  "source": "39879646a+consume-staging",
+  "engines": {
+    "fjall": {
+      "eight_cycles_ms": {
+        "rounds": [
+          26.739832,
+          23.4052,
+          24.409186,
+          28.020673
+        ],
+        "median": 25.574509,
+        "max": 28.020673
+      },
+      "historical_16_ms": {
+        "after-compaction": 27.226213,
+        "after-reopen": 27.09222,
+        "after-writes": 29.31199
+      },
+      "reopen_ms": 4.965033999999999,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "fjall-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          26.499715,
+          26.300660999999998,
+          24.839485,
+          25.763711
+        ],
+        "median": 26.032186,
+        "max": 26.499715
+      },
+      "historical_16_ms": {
+        "after-compaction": 24.4810895,
+        "after-reopen": 24.38729,
+        "after-writes": 24.8684
+      },
+      "reopen_ms": 5.00652,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-layers": {
+      "eight_cycles_ms": {
+        "rounds": [
+          50.884871999999994,
+          51.249102,
+          49.931802000000005,
+          50.45583
+        ],
+        "median": 50.670351,
+        "max": 51.249102
+      },
+      "historical_16_ms": {
+        "after-reopen": 61.367849,
+        "after-writes": 61.5928445
+      },
+      "reopen_ms": 14.582591,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          50.387245,
+          49.863077,
+          49.86503,
+          49.891991000000004
+        ],
+        "median": 49.878510500000004,
+        "max": 50.387245
+      },
+      "historical_16_ms": {
+        "after-reopen": 61.063404,
+        "after-writes": 61.642711500000004
+      },
+      "reopen_ms": 13.138981,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    }
+  },
+  "primary_cycles": 128,
+  "historical_evaluations": 640,
+  "historical_views": 320
+}

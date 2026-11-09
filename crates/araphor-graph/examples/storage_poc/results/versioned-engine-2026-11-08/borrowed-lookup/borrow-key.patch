@@ -1,0 +1,177 @@
+diff --git a/src/memtable/mod.rs b/src/memtable/mod.rs
+index 9efc6e9f..b7ac88b1 100644
+--- a/src/memtable/mod.rs
++++ b/src/memtable/mod.rs
+@@ -3,16 +3,59 @@
+ // (found in the LICENSE-* files in the repository)
+ 
+ use crate::key::InternalKey;
+-use crate::{
+-    value::{InternalValue, SeqNo, UserValue},
+-    ValueType,
+-};
++use crate::value::{InternalValue, SeqNo, UserValue};
+ use crossbeam_skiplist::SkipMap;
++use std::borrow::Borrow;
++use std::cmp::Ordering;
+ use std::ops::{Bound, RangeBounds};
+ use std::sync::atomic::{AtomicBool, AtomicU64};
+ 
+ pub use crate::tree::inner::MemtableId;
+ 
++trait LookupKey {
++    fn parts(&self) -> (&[u8], SeqNo);
++}
++
++impl LookupKey for InternalKey {
++    fn parts(&self) -> (&[u8], SeqNo) {
++        (&self.user_key, self.seqno)
++    }
++}
++
++impl LookupKey for (&[u8], SeqNo) {
++    fn parts(&self) -> (&[u8], SeqNo) {
++        *self
++    }
++}
++
++impl<'a> Borrow<dyn LookupKey + 'a> for InternalKey {
++    fn borrow(&self) -> &(dyn LookupKey + 'a) {
++        self
++    }
++}
++
++impl PartialEq for dyn LookupKey + '_ {
++    fn eq(&self, other: &Self) -> bool {
++        self.cmp(other).is_eq()
++    }
++}
++
++impl Eq for dyn LookupKey + '_ {}
++
++impl PartialOrd for dyn LookupKey + '_ {
++    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
++        Some(self.cmp(other))
++    }
++}
++
++impl Ord for dyn LookupKey + '_ {
++    fn cmp(&self, other: &Self) -> Ordering {
++        let (key, seqno) = self.parts();
++        let (other_key, other_seqno) = other.parts();
++        (key, other_seqno).cmp(&(other_key, seqno))
++    }
++}
++
+ /// The memtable serves as an intermediary, ephemeral, sorted storage for new items
+ ///
+ /// When the Memtable exceeds some size, it should be flushed to a table.
+@@ -109,10 +152,14 @@ impl Memtable {
+         // abcdef -> 6
+         // abcdef -> 5
+         //
+-        let lower_bound = InternalKey::new(key, seqno - 1, ValueType::Value);
++        assert!(
++            u16::try_from(key.len()).is_ok(),
++            "keys can be 65535 bytes in length",
++        );
++        let lower_bound: &dyn LookupKey = &(key, seqno - 1);
+ 
+         self.items
+-            .lower_bound(Bound::Included(&lower_bound))
++            .lower_bound(Bound::Included(lower_bound))
+             .filter(|entry| &*entry.key().user_key == key)
+             .map(|entry| InternalValue {
+                 key: entry.key().clone(),
+@@ -181,6 +228,91 @@ mod tests {
+     use crate::ValueType;
+     use test_log::test;
+ 
++    #[test]
++    fn borrowed_point_queries() {
++        let memtable = Memtable::new(0);
++        let keys = vec![
++            vec![0],
++            b"a".to_vec(),
++            b"a\0".to_vec(),
++            b"aa".to_vec(),
++            vec![b'a'; 20],
++            vec![b'a'; 21],
++            vec![b'a'; 256],
++            vec![b'z'; usize::from(u16::MAX)],
++        ];
++        let mut values = Vec::new();
++        for key in &keys {
++            for (index, seqno) in [0, 1, 3, 7, SeqNo::MAX - 1, SeqNo::MAX]
++                .into_iter()
++                .enumerate()
++            {
++                let kind = match index {
++                    1 => ValueType::Tombstone,
++                    2 => ValueType::WeakTombstone,
++                    _ => ValueType::Value,
++                };
++                let value = if kind == ValueType::Value && index != 3 {
++                    seqno.to_be_bytes().to_vec()
++                } else {
++                    Vec::new()
++                };
++                let item = InternalValue::from_components(key.as_slice(), value, seqno, kind);
++                memtable.insert(item.clone());
++                values.push(item);
++            }
++        }
++        for left in &values {
++            let stored: &dyn LookupKey = left.key.borrow();
++            for right in &values {
++                let tuple = (&*right.key.user_key, right.key.seqno);
++                let borrowed: &dyn LookupKey = &tuple;
++                assert_eq!(stored.cmp(borrowed), left.key.cmp(&right.key));
++                assert_eq!(stored == borrowed, left.key == right.key);
++            }
++            let mut deletion = left.key.clone();
++            deletion.value_type = ValueType::Tombstone;
++            let deletion: &dyn LookupKey = &deletion;
++            assert_eq!(stored.cmp(deletion), Ordering::Equal);
++            assert!(stored == deletion);
++        }
++        let mut queries = keys;
++        queries.extend([
++            Vec::new(),
++            b"a\0\0".to_vec(),
++            b"missing".to_vec(),
++            vec![b'a'; 19],
++            vec![b'a'; 22],
++            vec![255],
++        ]);
++        for key in queries {
++            for cut in [0, 1, 2, 3, 4, 7, 8, SeqNo::MAX - 1, SeqNo::MAX] {
++                let expected = values
++                    .iter()
++                    .filter(|item| &*item.key.user_key == key && item.key.seqno < cut)
++                    .max_by_key(|item| item.key.seqno);
++                let actual = memtable.get(&key, cut);
++                assert_eq!(actual.is_some(), expected.is_some());
++                if let (Some(actual), Some(expected)) = (actual, expected) {
++                    assert_eq!(actual.key.user_key, expected.key.user_key);
++                    assert_eq!(actual.key.seqno, expected.key.seqno);
++                    assert_eq!(actual.key.value_type, expected.key.value_type);
++                    assert_eq!(actual.value, expected.value);
++                }
++            }
++        }
++        let oversized = vec![0; usize::from(u16::MAX) + 1];
++        assert!(memtable.get(&oversized, 0).is_none());
++        assert!(std::panic::catch_unwind(|| {
++            InternalKey::new(oversized.as_slice(), 0, ValueType::Value)
++        })
++        .is_err());
++        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            memtable.get(&oversized, 1)
++        }))
++        .is_err());
++    }
++
+     #[test]
+     #[expect(clippy::unwrap_used)]
+     fn memtable_mvcc_point_read() {

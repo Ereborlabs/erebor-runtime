@@ -91,9 +91,14 @@ values, strong and weak deletions, and mixed scan directions for standard and
 blob trees.
 
 [Memtable::get](../../lsm-tree/src/memtable/mod.rs) uses Crossbeam's native
-`lower_bound` for point lookup. The owned search key and exclusive cut remain.
-The method rejects a different user key before it clones the selected entry.
-It no longer creates a range iterator for that single entry.
+`lower_bound` with a borrowed tuple of caller bytes and `cut - 1`. A private
+comparison interface preserves byte-ascending and sequence-descending order;
+stored `InternalKey` ordering remains. Cut zero returns before validation.
+Other cuts keep the existing key-length assertion. The method rejects a
+different user key before it clones the selected entry. It creates neither
+an owned search key nor a range iterator. `borrowed_point_queries` compares
+ordering with the stored key and checks all four result fields against a
+linear version oracle, including length limits and deletion types.
 
 [Table::point_read and Table::read_index](../../lsm-tree/src/table/mod.rs)
 borrow native index blocks during point reads. Full, volatile, and two-level
@@ -422,7 +427,7 @@ The owned keyspace handle moves into the set used for maintenance after publicat
 `consume_staging` checks both ownership paths, latest strong and weak deletes,
 empty values, two keyspaces, held rows after commit, and held rollback rows.
 
-Current accepted source is Fjall `bdb1843` and `lsm-tree` `1918e262`. The
+The owned staging source is Fjall `bdb1843` and `lsm-tree` `1918e262`. The
 [owned staging evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/owned-staging/README.md)
 records 1.015% fewer complete ordinary apply instructions across 28 exact
 transactions. All 144 dumps conserve counters. Non-time reports and physical
@@ -432,3 +437,15 @@ median/p95/maximum values are 4.734/7.322/7.837 and 4.774/6.947/7.247 ms;
 stable medians are 25.879 and 25.860 ms. Profiled timings are excluded.
 Wall results remain mixed. Both combined medians exceed their target.
 Complete performance qualification remains **Not done**.
+
+Current accepted source is Fjall `bdb1843` and `lsm-tree` `2e1b5df3`. The
+[borrowed point-lookup evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/README.md)
+records 1.289% fewer complete ordinary package instructions across 28 exact
+evaluations. Added query dispatch is included; some revision medians increase.
+All 144 dumps conserve counters. Non-time reports and physical cursors match.
+Native default/LZ4 libraries pass 244/247 cases; Fjall CDC/without CDC pass
+128/87. Other focused gates and the release build pass. All eight untraced
+summaries pass. Combined median/p95/maximum values are 4.653/7.187/8.332 and
+4.568/7.080/7.223 ms; stable medians are 25.042 and 25.939 ms. Profiled
+timings are excluded. Both combined medians exceed their target and their
+fresh controls. Complete performance qualification remains **Not done**.

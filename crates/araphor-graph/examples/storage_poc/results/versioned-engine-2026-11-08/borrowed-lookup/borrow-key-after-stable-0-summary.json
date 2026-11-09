@@ -1,0 +1,86 @@
+{
+  "source": "b197824fa+borrow-key",
+  "engines": {
+    "fjall": {
+      "eight_cycles_ms": {
+        "rounds": [
+          26.623542,
+          25.582259,
+          23.807284,
+          23.562906
+        ],
+        "median": 24.6947715,
+        "max": 26.623542
+      },
+      "historical_16_ms": {
+        "after-compaction": 26.922363500000003,
+        "after-reopen": 26.930501,
+        "after-writes": 28.8641255
+      },
+      "reopen_ms": 4.964231,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "fjall-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          26.61628,
+          27.038477,
+          23.467851000000003,
+          23.391160000000003
+        ],
+        "median": 25.0420655,
+        "max": 27.038477
+      },
+      "historical_16_ms": {
+        "after-compaction": 24.755429,
+        "after-reopen": 24.3663725,
+        "after-writes": 24.736959
+      },
+      "reopen_ms": 5.1113885,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-layers": {
+      "eight_cycles_ms": {
+        "rounds": [
+          50.974132,
+          50.476366,
+          51.346602,
+          52.124789
+        ],
+        "median": 51.160366999999994,
+        "max": 52.124789
+      },
+      "historical_16_ms": {
+        "after-reopen": 61.021430499999994,
+        "after-writes": 61.255926
+      },
+      "reopen_ms": 15.4792985,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          52.085743,
+          49.774795,
+          49.975663,
+          49.60047
+        ],
+        "median": 49.875229,
+        "max": 52.085743
+      },
+      "historical_16_ms": {
+        "after-reopen": 61.576676500000005,
+        "after-writes": 61.4333255
+      },
+      "reopen_ms": 13.090859,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    }
+  },
+  "primary_cycles": 128,
+  "historical_evaluations": 640,
+  "historical_views": 320
+}

@@ -1,0 +1,187 @@
+{
+  "performance": "Not done",
+  "elapsed": [
+    {
+      "side": "before",
+      "pass_number": 1,
+      "samples": 28,
+      "minimum_ms": 3.012866,
+      "median_ms": 4.616414499999999,
+      "p95_ms": 6.539563,
+      "maximum_ms": 7.105497,
+      "stable_ms": {
+        "rounds": [
+          26.499715,
+          26.300660999999998,
+          24.839485,
+          25.763711
+        ],
+        "median": 26.032186,
+        "max": 26.499715
+      }
+    },
+    {
+      "side": "before",
+      "pass_number": 2,
+      "samples": 28,
+      "minimum_ms": 3.3937860000000004,
+      "median_ms": 4.5173784999999995,
+      "p95_ms": 7.1230970000000005,
+      "maximum_ms": 7.338351,
+      "stable_ms": {
+        "rounds": [
+          27.203024,
+          26.650990999999998,
+          25.786338999999998,
+          25.021216
+        ],
+        "median": 26.218664999999998,
+        "max": 27.203024
+      }
+    },
+    {
+      "side": "after",
+      "pass_number": 1,
+      "samples": 28,
+      "minimum_ms": 3.300198,
+      "median_ms": 4.652732500000001,
+      "p95_ms": 7.186934,
+      "maximum_ms": 8.33221,
+      "stable_ms": {
+        "rounds": [
+          26.61628,
+          27.038477,
+          23.467851000000003,
+          23.391160000000003
+        ],
+        "median": 25.0420655,
+        "max": 27.038477
+      }
+    },
+    {
+      "side": "after",
+      "pass_number": 2,
+      "samples": 28,
+      "minimum_ms": 3.292306,
+      "median_ms": 4.567874,
+      "p95_ms": 7.079864,
+      "maximum_ms": 7.22346,
+      "stable_ms": {
+        "rounds": [
+          26.140092,
+          25.576044,
+          28.008871000000003,
+          25.737799
+        ],
+        "median": 25.9389455,
+        "max": 28.008871000000003
+      }
+    }
+  ],
+  "summary_checks": [
+    "borrow-key-before-combined-0.json",
+    "borrow-key-before-stable-0.json",
+    "borrow-key-before-combined-1.json",
+    "borrow-key-before-stable-1.json",
+    "borrow-key-before-package-combined.json",
+    "borrow-key-after-combined-0.json",
+    "borrow-key-after-stable-0.json",
+    "borrow-key-after-combined-1.json",
+    "borrow-key-after-stable-1.json",
+    "borrow-key-after-package-combined.json"
+  ],
+  "instructions": {
+    "metric": "Complete package instructions for 28 ordinary fixed-key evaluations.",
+    "limits": "All profiled timings excluded. Nested method costs are not additive. No latency gain is implied.",
+    "mapping": "72 actual package evaluation-return dumps per driver; 64 primary and eight rollback calls; residual/worker collection is zero.",
+    "instruction_change_percent": -1.2892870913696175,
+    "sides": {
+      "before": {
+        "source": "39879646a+consume-staging",
+        "ordinary_samples": 28,
+        "ordinary_instructions": 359859804,
+        "ordinary_median_instructions": 11120685.5,
+        "revision_medians": {
+          "26": 4218504.0,
+          "29": 9033795.0,
+          "44": 10608293.0,
+          "46": 11120685.5,
+          "64": 15874149.0,
+          "85": 17373482.0,
+          "87": 21743798.0
+        },
+        "zero_residual_and_worker_profiles": [
+          "borrow-key-before-package.out-05",
+          "borrow-key-before-package.out-02",
+          "borrow-key-before-package.out-03",
+          "borrow-key-before-package.out-04",
+          "borrow-key-before-package.out-06",
+          "borrow-key-before-package.out-01"
+        ]
+      },
+      "after": {
+        "source": "b197824fa+borrow-key",
+        "ordinary_samples": 28,
+        "ordinary_instructions": 355220178,
+        "ordinary_median_instructions": 11129406.5,
+        "revision_medians": {
+          "26": 4122385.5,
+          "29": 8942785.0,
+          "44": 10592904.5,
+          "46": 11129406.5,
+          "64": 15828878.5,
+          "85": 16914239.0,
+          "87": 21232665.5
+        },
+        "zero_residual_and_worker_profiles": [
+          "borrow-key-after-package.out-06",
+          "borrow-key-after-package.out-03",
+          "borrow-key-after-package.out-04",
+          "borrow-key-after-package.out-01",
+          "borrow-key-after-package.out-02",
+          "borrow-key-after-package.out-05"
+        ]
+      }
+    }
+  },
+  "nested_entered_memtable_get": {
+    "before": {
+      "calls": 12980,
+      "instructions": 17836479,
+      "query_seam_calls": {},
+      "query_seam_exclusive": {}
+    },
+    "after": {
+      "calls": 12980,
+      "instructions": 12955155,
+      "query_seam_calls": {
+        "<(&[u8], u64) as lsm_tree::memtable::LookupKey>::parts": 129076,
+        "crossbeam_skiplist::base::try_pin_loop::<<crossbeam_skiplist::map::SkipMap<lsm_tree::key::InternalKey, lsm_tree::slice::slice_default::Slice>>::lower_bound<dyn lsm_tree::memtable::LookupKey>::{closure#0}, lsm_tree::key::InternalKey, lsm_tree::slice::slice_default::Slice>": 12980
+      },
+      "query_seam_exclusive": {
+        "crossbeam_skiplist::base::try_pin_loop::<<crossbeam_skiplist::map::SkipMap<lsm_tree::key::InternalKey, lsm_tree::slice::slice_default::Slice>>::lower_bound<dyn lsm_tree::memtable::LookupKey>::{closure#0}, lsm_tree::key::InternalKey, lsm_tree::slice::slice_default::Slice>": 7628704,
+        "<(&[u8], u64) as lsm_tree::memtable::LookupKey>::parts": 774456
+      }
+    }
+  },
+  "source": {
+    "fjall": "bdb1843574f00ed9153233b547d2e2fd055c266a",
+    "lsm-tree": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+  },
+  "archive_members": 206,
+  "archive_bytes": 46110049,
+  "uncompressed_bytes": 2373398844,
+  "archive_sha256": "f677c638985eb7f65b100c7fbe9c9522d8f593d3664f6103365a6ca18effcdc6",
+  "archive_members_verified": true,
+  "compression_command": [
+    "zstd",
+    "-q",
+    "-T2",
+    "-3",
+    "--long=27",
+    "-o",
+    "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/raw-evidence.tar.zst"
+  ],
+  "p95_method": "Nearest rank; 28 ordinary fixed-key samples; restart excluded.",
+  "limits": "Profiled timings are excluded. Native costs are nested actual entered calls. No repeatable elapsed gain is proved."
+}
