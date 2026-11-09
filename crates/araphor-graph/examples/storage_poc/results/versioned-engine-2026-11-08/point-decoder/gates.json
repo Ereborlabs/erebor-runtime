@@ -1,0 +1,154 @@
+[
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "lsm-tree/Cargo.toml",
+      "--lib",
+      "--test",
+      "read_view",
+      "--test",
+      "retained_history",
+      "--test",
+      "table_point_reads",
+      "--test",
+      "snapshot_point_read",
+      "--test",
+      "tree_l0_point_read",
+      "--test",
+      "tree_non_disjoint_point_read",
+      "--test",
+      "tree_disjoint_point_read",
+      "--test",
+      "expect_point_read_hits",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/decoder-native.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "lsm-tree/Cargo.toml",
+      "--features",
+      "lz4",
+      "--lib",
+      "--test",
+      "read_view",
+      "--test",
+      "retained_history",
+      "--test",
+      "table_point_reads",
+      "--test",
+      "snapshot_point_read",
+      "--test",
+      "tree_l0_point_read",
+      "--test",
+      "tree_non_disjoint_point_read",
+      "--test",
+      "tree_disjoint_point_read",
+      "--test",
+      "expect_point_read_hits",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/decoder-native-lz4.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "--manifest-path",
+      "lsm-tree/Cargo.toml",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/decoder-native-clippy.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "fmt",
+      "--manifest-path",
+      "lsm-tree/Cargo.toml",
+      "--check"
+    ],
+    "log": "output/storage-engine-baseline-20261108/decoder-native-format.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--features",
+      "journal-cdc",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/decoder-cdc.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/decoder-default.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/decoder-no-default.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--features",
+      "journal-cdc",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "log": "output/storage-engine-baseline-20261108/decoder-clippy.log",
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "cargo",
+      "fmt",
+      "--manifest-path",
+      "fjall/Cargo.toml",
+      "--check"
+    ],
+    "log": "output/storage-engine-baseline-20261108/decoder-format.log",
+    "exit_code": 0
+  }
+]

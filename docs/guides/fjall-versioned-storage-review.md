@@ -103,6 +103,16 @@ deletion, or terminal miss stops the search. Lazy range iterators retain their
 owned index state. The native table checks cover block boundaries, old cuts,
 empty values, strong and weak deletions, and missing keys.
 
+[DataBlock::point_read](../../lsm-tree/src/table/data_block/mod.rs) constructs
+the native decoder directly. A hash free marker returns before construction.
+A direct hash hit sets the same native restart offset. A conflict or absent
+hash index uses the existing restart search. The existing loop checks the
+user key and exclusive value cut, then materializes only the selected record.
+This removes the point-read iterator wrapper and its positioning loop.
+Public range iterators remain. The committed `point_read_matches_oracle`
+case compares all four fields with an independent linear search. It requires
+all hash outcomes, both native offset widths, and exact cut boundaries.
+
 The [data-block parsers](../../lsm-tree/src/table/data_block/mod.rs) and
 [index-block parsers](../../lsm-tree/src/table/index_block/block_handle.rs)
 expose five existing method bodies to compiler optimization with `#[inline]`.
@@ -334,7 +344,7 @@ writes. It has no syscall durations; no writer change is added. Earlier
 records describe their recorded source states. The whole-cycle CPU attempt
 is excluded because its reset function was inlined in one executable.
 
-Current accepted source is Fjall `04c304a` and `lsm-tree` `aed3e47a`. The
+Fjall `04c304a` uses the initialized journal buffer. The
 [initialized-buffer evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/journal-buffer/README.md)
 records 1.430% fewer complete apply instructions across 72 calls in both
 layouts, including rollback. Compression counters and reported domain work
@@ -344,6 +354,20 @@ default features, library clippy, formatting, and release builds pass. Final
 combined medians are 4.561 and 4.597 ms; both exceed their target. Stable
 medians are 25.816 and 25.175 ms. Wall-time changes remain mixed. No sustained
 latency gain is proved.
+
+Current accepted source is Fjall `04c304a` and `lsm-tree` `5c005a47`. The
+[direct point-read evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/point-decoder/README.md)
+records 6.041% fewer complete native point-read instructions across the same
+105,692 calls. This scope includes both layouts and all verification, history,
+and maintenance stages. It does not establish ordinary-cycle CPU or latency.
+Native default/LZ4 libraries pass 242/245 cases, with two existing ignored
+cases each. Eight selected integrations pass 19 cases, with one existing
+ignored case, per configuration. Fjall CDC/without CDC pass 127/86 cases,
+with one existing ignored case each. Other focused gates and the release
+build pass. All eight unchanged PoC summaries pass. Current combined
+median/p95/maximum values are 4.751/7.066/7.091 and 4.709/7.130/7.805 ms.
+Both medians increase in these calls and exceed their target. Stable medians
+are 26.278 and 25.630 ms. No sustained latency change is established.
 
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this

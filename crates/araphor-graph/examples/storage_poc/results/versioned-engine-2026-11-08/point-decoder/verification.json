@@ -1,0 +1,120 @@
+{
+  "summary_checks": [
+    "decoder-before-combined-0.json",
+    "decoder-after-combined-0.json",
+    "decoder-before-combined-1.json",
+    "decoder-after-combined-1.json",
+    "decoder-before-stable-0.json",
+    "decoder-after-stable-0.json",
+    "decoder-before-stable-1.json",
+    "decoder-after-stable-1.json",
+    "point-native-before-combined.json",
+    "point-native-after-combined.json"
+  ],
+  "ordinary_percentiles_ms": [
+    {
+      "report": "decoder-before-combined-0.json",
+      "samples": 28,
+      "minimum": 3.273507,
+      "median": 4.66693,
+      "p95": 7.20374,
+      "maximum": 7.654711
+    },
+    {
+      "report": "decoder-after-combined-0.json",
+      "samples": 28,
+      "minimum": 3.729227,
+      "median": 4.7511600000000005,
+      "p95": 7.0656620000000006,
+      "maximum": 7.091224
+    },
+    {
+      "report": "decoder-before-combined-1.json",
+      "samples": 28,
+      "minimum": 3.62209,
+      "median": 4.679606,
+      "p95": 7.0401,
+      "maximum": 7.2797979999999995
+    },
+    {
+      "report": "decoder-after-combined-1.json",
+      "samples": 28,
+      "minimum": 3.817228,
+      "median": 4.7091840000000005,
+      "p95": 7.130196,
+      "maximum": 7.805082
+    }
+  ],
+  "stable_eight_cycle_ms": {
+    "decoder-before-stable-0.json": {
+      "rounds": [
+        26.486700000000003,
+        24.217664,
+        24.574765,
+        26.082871
+      ],
+      "median": 25.328818,
+      "max": 26.486700000000003
+    },
+    "decoder-after-stable-0.json": {
+      "rounds": [
+        27.116115999999998,
+        25.849806,
+        24.863075000000002,
+        26.706981000000003
+      ],
+      "median": 26.2783935,
+      "max": 27.116115999999998
+    },
+    "decoder-before-stable-1.json": {
+      "rounds": [
+        26.002482,
+        23.784434,
+        25.412664000000003,
+        26.840031
+      ],
+      "median": 25.707573000000004,
+      "max": 26.840031
+    },
+    "decoder-after-stable-1.json": {
+      "rounds": [
+        27.813212,
+        24.97301,
+        25.211938,
+        26.048091
+      ],
+      "median": 25.6300145,
+      "max": 27.813212
+    }
+  },
+  "p95_method": "Nearest rank; sample 27 of 28; restart separate.",
+  "full_workspace_ci": "Not run during iteration, as the user requires.",
+  "non_timing_reports_match": true,
+  "native_point_diagnostic": {
+    "scope": "All actual data-block point reads across both layouts and all stages; profiled timings excluded.",
+    "calls": 105692,
+    "before_instructions": 341999812,
+    "after_instructions": 321338731,
+    "instruction_change_percent": -6.041255075309804,
+    "equal_reported_domain_work": true,
+    "raw_headers_exclusive_and_target_inclusive_equal": true,
+    "worker_instructions": 0
+  },
+  "all_patch_and_binary_hashes_verified": true,
+  "accepted": true,
+  "fjall_commit": "04c304ad3fe8c605c7fe7fd4bcd0c3bc73f555c6",
+  "lsm_tree_commit": "5c005a47b4e823983ef5c0c95e656b4d07074c2b",
+  "decision": "Accept measured native point-read CPU reduction only. Complete performance remains Not done.",
+  "native_default_library_passed": 242,
+  "native_lz4_library_passed": 245,
+  "native_library_existing_ignored_each": 2,
+  "native_integration_passed_each": 19,
+  "native_integration_existing_ignored_each": 1,
+  "cdc_library_passed": 127,
+  "feature_off_library_passed": 86,
+  "fjall_existing_ignored_each": 1,
+  "review": "Independent source, raw profile, report, gate and binary hash reviews passed before acceptance.",
+  "archive_sha256": "7a0e7a9ab3ff14b547cec1e8c652867d519810a66b0ef0116a9a6bb5b9ff766a",
+  "archive_members": 64,
+  "archive_members_verified": true
+}

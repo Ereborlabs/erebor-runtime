@@ -411,6 +411,23 @@ writable forks, distributed storage, or automatic retention policy is included.
 | Native Item header reads | **Done for measured feed CPU work; Not done for complete performance.** Fjall `ee3ea07` reads the four fixed fields in one 18-byte stack buffer, then uses the existing decoder. Tags are checked first; stored bytes, checksums, and APIs remain. [The retained evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/header-group/README.md) checks identical work across both layouts and all workers. Feed instructions decrease from 56,262,749 to 49,143,165, or 12.654%. All profiled timings are excluded. CDC/without CDC: 127/86 passed, one existing ignored each. Production without default features, library clippy, formatting, and release build pass. Both unchanged PoCs pass. Combined median/p95/maximum values are 4.517/7.143/7.189 and 4.990/6.788/7.090 ms. Stable medians are 26.194 and 26.502 ms. Both combined medians and both stable medians increase in these comparisons. No sustained latency change is proved; both combined medians exceed their target. A separate writer diagnostic confirms that the existing buffer combines writes; no writer change is added. |
 | Initialized native encoding buffer | **Done for measured apply CPU work; Not done for complete performance.** Fjall `04c304a` uses a private standard cursor to retain initialized storage and a stack Item header built with the existing encoders. Writes, hashes, and counts use only the logical prefix. Stored bytes, per-Item bounds, errors, and durability remain. [Both draft comparisons and profiles](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/journal-buffer/README.md) are retained. Complete apply instructions decrease from 450,974,505 to 444,525,190, or 1.430%, across the same 72 calls in both layouts, including rollback. Compression counters and reported domain work match. All profiled timings are excluded. CDC/without CDC: 127/86 passed, one existing ignored each. Production without default features, library clippy, formatting, and release builds pass. Both unchanged PoCs pass. Final combined median/p95/maximum values are 4.561/7.094/7.162 and 4.597/7.312/7.357 ms. Stable medians are 25.816 and 25.175 ms. Both combined medians exceed their target; wall-time changes remain mixed. No sustained latency gain is proved. |
 
+The [direct native point-read result](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/point-decoder/README.md)
+is **Done for measured point-read CPU work; Not done for complete performance**.
+`lsm-tree` `5c005a47` uses the existing decoder directly and removes the
+point-read iterator positioning loop. Complete native point-read instructions
+decrease from 341,999,812 to 321,338,731, or 6.041%, across the same 105,692
+calls in both layouts and all stages. This scope includes verification and
+history; it is not ordinary-cycle CPU. All profiled timings are excluded.
+Native default/LZ4 libraries pass 242/245 cases, with two existing ignored
+cases each. Eight selected native integration suites pass 19 cases, with one
+existing ignored case, per configuration. Fjall CDC/without CDC pass 127/86
+cases, with one existing ignored case each. Production without default
+features, library clippy, formatting, and the release build pass. All eight
+unchanged PoC summaries pass. Combined median/p95/maximum values are
+4.751/7.066/7.091 and 4.709/7.130/7.805 ms. Stable medians are 26.278 and
+25.630 ms. Both combined medians increase in these calls and exceed their
+target. No ordinary latency gain or sustained regression is established.
+
 The [unapplied index-seek experiment](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/index-end-experiment/README.md)
 retains its patch, all raw reports, reproduced summaries, and profiles.
 The reviewer and implementer agree to remove it. Query instructions decrease
@@ -438,8 +455,8 @@ compiler attribute changes no standalone native or query-method code bytes.
 The reviewer and implementer agree to remove both drafts. Accepted engine
 commits remain unchanged. Complete performance qualification remains **Not done**.
 
-Current accepted source is Fjall `04c304a` and `lsm-tree` `aed3e47a`. Use the
-initialized encoding buffer record above for the latest comparison. Earlier records
+Current accepted source is Fjall `04c304a` and `lsm-tree` `5c005a47`. Use the
+direct native point-read record above for the latest comparison. Earlier records
 describe their recorded source states. The whole-cycle CPU attempt is excluded
 because its reset function was inlined in one executable. Complete performance
 qualification remains **Not done**.

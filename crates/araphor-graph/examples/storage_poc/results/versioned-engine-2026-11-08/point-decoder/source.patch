@@ -1,0 +1,178 @@
+diff --git a/src/table/data_block/mod.rs b/src/table/data_block/mod.rs
+index de776a53..08d16eec 100644
+--- a/src/table/data_block/mod.rs
++++ b/src/table/data_block/mod.rs
+@@ -413,43 +413,27 @@ impl DataBlock {
+     // TODO: handle seqno more nicely (make Key generic, so we can do binary search over (key, seqno))
+     #[must_use]
+     pub fn point_read(&self, needle: &[u8], seqno: SeqNo) -> Option<InternalValue> {
+-        let iter = if let Some(hash_index_reader) = self.get_hash_index_reader() {
++        let offset = if let Some(hash_index_reader) = self.get_hash_index_reader() {
+             match hash_index_reader.get(needle) {
+                 MARKER_FREE => {
+                     return None;
+                 }
+-                MARKER_CONFLICT => {
+-                    // NOTE: Fallback to binary search
+-                    let mut iter = self.iter();
+-
+-                    if !iter.seek(needle) {
+-                        return None;
+-                    }
+-
+-                    iter
+-                }
+-                idx => {
+-                    let offset: usize = self.get_binary_index_reader().get(usize::from(idx));
+-
+-                    let mut iter = self.iter();
+-                    iter.seek_to_offset(offset);
+-
+-                    iter
+-                }
++                MARKER_CONFLICT => None,
++                idx => Some(self.get_binary_index_reader().get(usize::from(idx))),
+             }
+         } else {
+-            let mut iter = self.iter();
+-
+-            // NOTE: Fallback to binary search
+-            if !iter.seek(needle) {
+-                return None;
+-            }
+-
+-            iter
++            None
+         };
+ 
++        let mut decoder = Decoder::<InternalValue, DataBlockParsedItem>::new(&self.inner);
++        if let Some(offset) = offset {
++            decoder.set_lo_offset(offset);
++        } else if !decoder.seek(|head_key, _| head_key < needle, false) {
++            return None;
++        }
++
+         // Linear scan
+-        for item in iter {
++        for item in decoder {
+             match item.compare_key(needle, &self.inner.data) {
+                 std::cmp::Ordering::Greater => {
+                     // We are before our searched key/seqno
+@@ -565,6 +549,117 @@ mod tests {
+     };
+     use test_log::test;
+ 
++    #[test]
++    fn point_read_matches_oracle() -> crate::Result<()> {
++        use crate::table::block::hash_index::{MARKER_CONFLICT, MARKER_FREE};
++
++        let mut keys = vec![vec![0], vec![255]];
++        keys.extend((0..32).map(|idx| format!("key/{idx:02}").into_bytes()));
++        keys.sort_unstable();
++        let mut items = Vec::new();
++        for key in &keys {
++            items.push(InternalValue::from_components(
++                key.as_slice(),
++                b"current".as_slice(),
++                257,
++                Value,
++            ));
++            items.push(InternalValue::from_components(
++                key.as_slice(),
++                b"".as_slice(),
++                128,
++                Tombstone,
++            ));
++            items.push(InternalValue::from_components(
++                key.as_slice(),
++                b"".as_slice(),
++                0,
++                Value,
++            ));
++        }
++        let mut needles = keys;
++        needles.extend([
++            Vec::new(),
++            b"a".to_vec(),
++            b"key/".to_vec(),
++            b"key/16\0".to_vec(),
++            b"zz".to_vec(),
++            vec![255, 0],
++        ]);
++        let mut outcomes = [false; 4];
++        let mut widths = [false; 2];
++        for value_len in [7, 4096] {
++            for item in &mut items {
++                if item.key.seqno == 257 {
++                    item.value = vec![b'x'; value_len].into();
++                }
++            }
++            for restart in (1..=16).chain([255]) {
++                for ratio in [0.0, 0.25, 1.33, 8.0] {
++                    let bytes = DataBlock::encode_into_vec(&items, restart, ratio)?;
++                    let block = DataBlock::new(Block {
++                        data: bytes.into(),
++                        header: Header {
++                            block_type: BlockType::Data,
++                            checksum: Checksum::from_raw(0),
++                            data_length: 0,
++                            uncompressed_length: 0,
++                        },
++                    });
++                    let width = super::Trailer::new(&block.inner)
++                        .as_slice()
++                        .get(1)
++                        .copied()
++                        .expect("index width is present");
++                    match width {
++                        2 => widths[0] = true,
++                        4 => {
++                            widths[1] = true;
++                            let index = block.get_binary_index_reader();
++                            assert!(index.get(index.len() - 1) > usize::from(u16::MAX));
++                        }
++                        _ => panic!("invalid index width"),
++                    }
++                    for needle in &needles {
++                        let outcome = match block.get_hash_index_reader() {
++                            None => 0,
++                            Some(index) => match index.get(needle) {
++                                MARKER_FREE => 1,
++                                MARKER_CONFLICT => 2,
++                                _ => 3,
++                            },
++                        };
++                        outcomes[outcome] = true;
++                        for cut in [0, 1, 128, 129, 257, 258, SeqNo::MAX] {
++                            let expected = items
++                                .iter()
++                                .find(|item| &*item.key.user_key == needle && item.key.seqno < cut);
++                            let actual = block.point_read(needle, cut);
++                            assert_eq!(
++                                expected.map(|item| (
++                                    &*item.key.user_key,
++                                    item.key.seqno,
++                                    item.key.value_type,
++                                    &*item.value,
++                                )),
++                                actual.as_ref().map(|item| (
++                                    &*item.key.user_key,
++                                    item.key.seqno,
++                                    item.key.value_type,
++                                    &*item.value,
++                                )),
++                                "restart={restart} ratio={ratio} needle={needle:?} cut={cut}",
++                            );
++                        }
++                    }
++                }
++            }
++        }
++        assert!(outcomes.into_iter().all(|seen| seen));
++        assert!(widths.into_iter().all(|seen| seen));
++        Ok(())
++    }
++
+     #[test]
+     fn data_block_ping_pong_fuzz_1() -> crate::Result<()> {
+         let items = [
