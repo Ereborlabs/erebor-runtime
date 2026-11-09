@@ -84,7 +84,7 @@ impl Feed {
     fn read(&mut self) -> Result<Vec<Batch>> {
         Ok(match self {
             Self::Fjall(feed, id) => feed
-                .read()?
+                .next_batch()?
                 .into_iter()
                 .map(|batch| {
                     assert!(
