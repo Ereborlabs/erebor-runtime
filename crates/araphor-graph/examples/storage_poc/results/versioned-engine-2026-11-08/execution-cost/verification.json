@@ -1,0 +1,178 @@
+{
+  "performance": "Not done",
+  "source_changes": false,
+  "summary_checks": [
+    "cache-control-package-combined.json",
+    "cache-current-package-combined.json",
+    "control-combined.json",
+    "current-combined.json"
+  ],
+  "ordinary_package": {
+    "scope": "28 complete ordinary fixed-key package evaluations; 72 actual entries per driver.",
+    "limits": "Ge counts operations, not contention/cycles. Cache/predictor misses are simulated, not hardware measurements. Profile timings excluded.",
+    "cache_model": [
+      "desc: I1 cache: 32768 B, 64 B, 8-way associative",
+      "desc: D1 cache: 32768 B, 64 B, 8-way associative",
+      "desc: LL cache: 16777216 B, 64 B, direct-mapped"
+    ],
+    "change_percent": {
+      "Ir": -1.7539972654474267,
+      "Dr": -2.839840971884111,
+      "Dw": -3.9910665241704057,
+      "I1mr": -10.781391033134824,
+      "D1mr": 0.1145451538383524,
+      "D1mw": 0.29259908706300575,
+      "ILmr": 13.398183479335724,
+      "DLmr": 20.493237867939527,
+      "DLmw": -2.1578076674099167,
+      "Bc": 1.9344877836302121,
+      "Bcm": 0.38546587676522304,
+      "Bi": -6.314129170771254,
+      "Bim": -9.638537006245318,
+      "Ge": -36.877658203889204
+    },
+    "sides": {
+      "cache-control": {
+        "samples": 28,
+        "totals": {
+          "Ir": 367523378,
+          "Dr": 98571752,
+          "Dw": 70419623,
+          "I1mr": 3483224,
+          "D1mr": 1874370,
+          "D1mw": 1149696,
+          "ILmr": 37214,
+          "DLmr": 18855,
+          "DLmw": 27806,
+          "Bc": 42442191,
+          "Bcm": 2519808,
+          "Bi": 6749561,
+          "Bim": 1050066,
+          "Ge": 628714
+        },
+        "zero_residual_and_worker_profiles": [
+          "cache-control-package.out-03",
+          "cache-control-package.out-01",
+          "cache-control-package.out-06",
+          "cache-control-package.out-02",
+          "cache-control-package.out-05",
+          "cache-control-package.out-04"
+        ]
+      },
+      "cache-current": {
+        "samples": 28,
+        "totals": {
+          "Ir": 361077028,
+          "Dr": 95772471,
+          "Dw": 67609129,
+          "I1mr": 3107684,
+          "D1mr": 1876517,
+          "D1mw": 1153060,
+          "ILmr": 42200,
+          "DLmr": 22719,
+          "DLmw": 27206,
+          "Bc": 43263230,
+          "Bcm": 2529521,
+          "Bi": 6323385,
+          "Bim": 948855,
+          "Ge": 396859
+        },
+        "zero_residual_and_worker_profiles": [
+          "cache-current-package.out-04",
+          "cache-current-package.out-05",
+          "cache-current-package.out-02",
+          "cache-current-package.out-06",
+          "cache-current-package.out-01",
+          "cache-current-package.out-03"
+        ]
+      }
+    }
+  },
+  "whole_driver_cpu": {
+    "scope": "Complete combined driver; all layouts, verification, history, maintenance, and reopen.",
+    "limits": "Process timer, no thread-labelled or unbiased worker CPU attribution. Control historical support differs. Totals are not equal-work performance comparisons. All profiled timings excluded.",
+    "truncation": "Legacy records have no truncation flag. Maximum observed depths are reported; a truncated-sample count is not established.",
+    "sides": {
+      "control": {
+        "total_samples": 787,
+        "maximum_depth": 48,
+        "unknown_leaf_samples": 15,
+        "samples_with_unknown_frames": 15,
+        "multi_frame_samples": 787
+      },
+      "current": {
+        "total_samples": 824,
+        "maximum_depth": 57,
+        "unknown_leaf_samples": 15,
+        "samples_with_unknown_frames": 15,
+        "multi_frame_samples": 824
+      }
+    }
+  },
+  "host_cache_geometry": {
+    "index2": {
+      "level": "2",
+      "type": "Unified",
+      "size": "512K",
+      "coherency_line_size": "64",
+      "ways_of_associativity": "8",
+      "number_of_sets": "1024"
+    },
+    "index0": {
+      "level": "1",
+      "type": "Data",
+      "size": "32K",
+      "coherency_line_size": "64",
+      "ways_of_associativity": "8",
+      "number_of_sets": "64"
+    },
+    "index3": {
+      "level": "3",
+      "type": "Unified",
+      "size": "16384K",
+      "coherency_line_size": "64",
+      "ways_of_associativity": "16",
+      "number_of_sets": "16384"
+    },
+    "index1": {
+      "level": "1",
+      "type": "Instruction",
+      "size": "32K",
+      "coherency_line_size": "64",
+      "ways_of_associativity": "8",
+      "number_of_sets": "64"
+    }
+  },
+  "profiler_tool": {
+    "packages": {
+      "google-perftools_2.15-3build1_all.deb": "21e7e49301ee7cdb02927b0640002fcb20087e1c94125cb749b604387b0d5b69",
+      "libgoogle-perftools4t64_2.15-3build1_amd64.deb": "d62a4ee056baa2cb1336e857a78aa4d6f6fcc207021ec81fc18ba3f02de796d1"
+    },
+    "library_sha256": "4de292cb738a2daebd150b7b16f0e0a69a906152118a5f5d475573074408803f",
+    "reader_sha256": "06701b2ecf31f6a981be56537c7fee91f97e9e35d97ca82cdbacc7126b667c36",
+    "linked_libraries": "\tlinux-vdso.so.1 (0x00007ffe743e3000)\n\tlibunwind.so.8 => /lib/x86_64-linux-gnu/libunwind.so.8 (0x00007119da97a000)\n\tlibstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007119da600000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007119da200000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007119da94c000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007119da9cc000)\n\tliblzma.so.5 => /lib/x86_64-linux-gnu/liblzma.so.5 (0x00007119da91a000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007119da517000)\n",
+    "dependency_sha256": {
+      "/lib/x86_64-linux-gnu/libunwind.so.8": "28e77a498f2f17f8cb883c91303f9901343ea0d8e34959d138dd462fcc9b201f",
+      "/lib/x86_64-linux-gnu/libstdc++.so.6": "1fd75fe70354a416d75aef22bcae68c47bd25d20e2d0568c30b1a9838cf62f11",
+      "/lib/x86_64-linux-gnu/libc.so.6": "3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf",
+      "/lib/x86_64-linux-gnu/libgcc_s.so.1": "d93224d2b0dab4247598be683adca02f5cf00586f99c187579cd7e92058fb7cb",
+      "/lib/x86_64-linux-gnu/liblzma.so.5": "26b37d25f7ca2a2d348de8ecabacda12e921cd933b21fa069a179760db77219d",
+      "/lib/x86_64-linux-gnu/libm.so.6": "fce00b6f25f459cf4ae0b7fae4257909a1a8a86f9149e7c029a5d617baf1ccd0"
+    },
+    "go_version": "go version go1.21.6 linux/amd64",
+    "sampling": "Default process-wide ITIMER_PROF; 1000 Hz. Only libprofiler is preloaded."
+  },
+  "archive_members": 225,
+  "archive_bytes": 92168202,
+  "archive_sha256": "8d3add08773e2bf44155cc79a80938f83ecedaf8a700686fd08d6fe09e187570",
+  "archive_members_verified": true,
+  "compression_command": [
+    "zstd",
+    "-q",
+    "-T2",
+    "-3",
+    "--long=27",
+    "-o",
+    "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/execution-cost/raw-evidence.tar.zst"
+  ]
+}

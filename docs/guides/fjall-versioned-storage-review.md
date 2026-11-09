@@ -379,6 +379,14 @@ Those counts overlap; they are not additive. All six profiled summaries pass.
 Profiled timings are excluded. The elapsed package gap remains unexplained.
 No native source changes follow from these counts alone.
 
+The [native execution cost diagnostic](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/execution-cost/README.md)
+adds conserved cache, branch, and atomic-operation counters for the same 28
+ordinary evaluations. Atomic and indirect-branch operations decrease. Cache
+misses remain simulated. The separate whole-driver stack samples retain full
+Rust names and unresolved-frame counts. They have no thread labels; their
+historical work differs. Four unchanged summaries pass. All profiled timings
+are excluded. No engine source changes follow from this evidence.
+
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this
 implementation. Full workspace CI was not run during this iteration, as the

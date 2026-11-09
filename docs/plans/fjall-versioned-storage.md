@@ -469,6 +469,16 @@ The hardware counter probe is blocked by `perf_event_paranoid=4`; host
 settings remain unchanged. No production edit is justified by these counts
 alone. Complete performance remains **Not done**.
 
+The [native execution cost diagnostic](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/execution-cost/README.md)
+checks the same 28 ordinary package evaluations. Instructions decrease by
+1.754%, atomic operations by 36.878%, and indirect branches by 6.314% against
+the original control. Simulated cache events do not establish hardware
+penalties. A separate standard CPU sampler records 787 and 824 whole-driver
+stack samples. That scope includes unequal historical support and does not
+prove an ordinary latency change or unbiased worker CPU coverage. All four
+unchanged summaries pass. All profiled timings are excluded. No engine source
+changes follow from this evidence. Complete performance remains **Not done**.
+
 Current accepted source is Fjall `04c304a` and `lsm-tree` `5c005a47`. Use the
 ordinary execution record above for the latest comparison. Earlier records
 describe their recorded source states. The whole-cycle CPU attempt is excluded

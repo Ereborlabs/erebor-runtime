@@ -1,0 +1,86 @@
+[
+  {
+    "side": "control",
+    "command": [
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/control",
+      "/tmp/araphor-gperftools/control-combined.json",
+      "combined"
+    ],
+    "environment": {
+      "LD_PRELOAD": "/tmp/araphor-gperftools/tool/usr/lib/x86_64-linux-gnu/libprofiler.so.0.5.11",
+      "CPUPROFILE": "/tmp/araphor-gperftools/control.cpu",
+      "CPUPROFILE_FREQUENCY": "1000"
+    },
+    "binary_sha256": "953f7fd0f4189f50779838026de82505346090d2940b36707636dd6583ab99a8",
+    "library_sha256": "4de292cb738a2daebd150b7b16f0e0a69a906152118a5f5d475573074408803f",
+    "started_unix_s": 1794223491.8699722,
+    "scope": "Complete unchanged combined driver, including all layouts and stages.",
+    "limits": "Process-wide CPU timer; no thread labels or unbiased per-thread coverage. All profiled timings excluded.",
+    "finished_unix_s": 1794223493.018275,
+    "exit_code": 0,
+    "raw_command": [
+      "go",
+      "tool",
+      "pprof",
+      "-raw",
+      "-symbolize=local",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/control",
+      "/tmp/araphor-gperftools/control.cpu"
+    ],
+    "top_command": [
+      "go",
+      "tool",
+      "pprof",
+      "-top",
+      "-symbolize=local",
+      "-nodecount=80",
+      "-unit=ms",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/control",
+      "/tmp/araphor-gperftools/control.cpu"
+    ],
+    "profiler_interrupts": 787,
+    "profile_bytes": 159592
+  },
+  {
+    "side": "current",
+    "command": [
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/versioned-direct-decoder",
+      "/tmp/araphor-gperftools/current-combined.json",
+      "combined"
+    ],
+    "environment": {
+      "LD_PRELOAD": "/tmp/araphor-gperftools/tool/usr/lib/x86_64-linux-gnu/libprofiler.so.0.5.11",
+      "CPUPROFILE": "/tmp/araphor-gperftools/current.cpu",
+      "CPUPROFILE_FREQUENCY": "1000"
+    },
+    "binary_sha256": "d4f84259d53519011f19775802991b72f750723614be9ef4a795e86a9963d31a",
+    "library_sha256": "4de292cb738a2daebd150b7b16f0e0a69a906152118a5f5d475573074408803f",
+    "started_unix_s": 1794223493.5566392,
+    "scope": "Complete unchanged combined driver, including all layouts and stages.",
+    "limits": "Process-wide CPU timer; no thread labels or unbiased per-thread coverage. All profiled timings excluded.",
+    "finished_unix_s": 1794223494.858473,
+    "exit_code": 0,
+    "raw_command": [
+      "go",
+      "tool",
+      "pprof",
+      "-raw",
+      "-symbolize=local",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/versioned-direct-decoder",
+      "/tmp/araphor-gperftools/current.cpu"
+    ],
+    "top_command": [
+      "go",
+      "tool",
+      "pprof",
+      "-top",
+      "-symbolize=local",
+      "-nodecount=80",
+      "-unit=ms",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/versioned-direct-decoder",
+      "/tmp/araphor-gperftools/current.cpu"
+    ],
+    "profiler_interrupts": 824,
+    "profile_bytes": 163812
+  }
+]

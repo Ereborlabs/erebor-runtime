@@ -1,0 +1,70 @@
+[
+  {
+    "side": "cache-control",
+    "command": [
+      "/tmp/araphor-callgrind/tool/usr/bin/valgrind",
+      "--tool=callgrind",
+      "--enable-debuginfod=no",
+      "--vgdb=no",
+      "--instr-atstart=yes",
+      "--collect-atstart=no",
+      "--cache-sim=yes",
+      "--branch-sim=yes",
+      "--collect-bus=yes",
+      "--toggle-collect=storage_poc::package::evaluate",
+      "--zero-before=storage_poc::package::evaluate",
+      "--dump-after=storage_poc::package::evaluate",
+      "--separate-threads=yes",
+      "--separate-callers=8",
+      "--callgrind-out-file=/tmp/araphor-callgrind/cache-control-package.out",
+      "--log-file=/tmp/araphor-callgrind/cache-control-package-valgrind.log",
+      "output/storage-engine-baseline-20261108/control",
+      "/tmp/araphor-callgrind/cache-control-package-combined.json",
+      "combined"
+    ],
+    "started_unix_s": 1794222395.5371935,
+    "binary_sha256": "953f7fd0f4189f50779838026de82505346090d2940b36707636dd6583ab99a8",
+    "environment": {
+      "VALGRIND_LIB": "/tmp/araphor-callgrind/tool/usr/libexec/valgrind"
+    },
+    "timing_use": "Diagnostic only. All profiled timing fields excluded from acceptance.",
+    "model_limit": "Simulated cache and branch events; Ge counts operations, not contention or cycles.",
+    "cache_warming": "Instrumentation remains enabled for the complete driver. Entry clears counters only.",
+    "finished_unix_s": 1794222497.7093196,
+    "exit_code": 0
+  },
+  {
+    "side": "cache-current",
+    "command": [
+      "/tmp/araphor-callgrind/tool/usr/bin/valgrind",
+      "--tool=callgrind",
+      "--enable-debuginfod=no",
+      "--vgdb=no",
+      "--instr-atstart=yes",
+      "--collect-atstart=no",
+      "--cache-sim=yes",
+      "--branch-sim=yes",
+      "--collect-bus=yes",
+      "--toggle-collect=storage_poc::package::evaluate",
+      "--zero-before=storage_poc::package::evaluate",
+      "--dump-after=storage_poc::package::evaluate",
+      "--separate-threads=yes",
+      "--separate-callers=8",
+      "--callgrind-out-file=/tmp/araphor-callgrind/cache-current-package.out",
+      "--log-file=/tmp/araphor-callgrind/cache-current-package-valgrind.log",
+      "output/storage-engine-baseline-20261108/versioned-direct-decoder",
+      "/tmp/araphor-callgrind/cache-current-package-combined.json",
+      "combined"
+    ],
+    "started_unix_s": 1794222497.801999,
+    "binary_sha256": "d4f84259d53519011f19775802991b72f750723614be9ef4a795e86a9963d31a",
+    "environment": {
+      "VALGRIND_LIB": "/tmp/araphor-callgrind/tool/usr/libexec/valgrind"
+    },
+    "timing_use": "Diagnostic only. All profiled timing fields excluded from acceptance.",
+    "model_limit": "Simulated cache and branch events; Ge counts operations, not contention or cycles.",
+    "cache_warming": "Instrumentation remains enabled for the complete driver. Entry clears counters only.",
+    "finished_unix_s": 1794222602.2230368,
+    "exit_code": 0
+  }
+]

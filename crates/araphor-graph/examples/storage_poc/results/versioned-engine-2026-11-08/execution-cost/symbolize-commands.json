@@ -1,0 +1,48 @@
+[
+  {
+    "command": [
+      "/tmp/araphor-gperftools/tool/usr/bin/google-pprof",
+      "--raw",
+      "--no_strip_temp",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/control",
+      "/tmp/araphor-gperftools/control.cpu"
+    ],
+    "environment": {
+      "PPROF_TMPDIR": "/tmp/araphor-gperftools/reader-tmp"
+    },
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/tmp/araphor-gperftools/tool/usr/bin/google-pprof",
+      "--text",
+      "--no_strip_temp",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/control",
+      "/tmp/araphor-gperftools/control.cpu"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/tmp/araphor-gperftools/tool/usr/bin/google-pprof",
+      "--raw",
+      "--no_strip_temp",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/versioned-direct-decoder",
+      "/tmp/araphor-gperftools/current.cpu"
+    ],
+    "environment": {
+      "PPROF_TMPDIR": "/tmp/araphor-gperftools/reader-tmp"
+    },
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/tmp/araphor-gperftools/tool/usr/bin/google-pprof",
+      "--text",
+      "--no_strip_temp",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/storage-engine-baseline-20261108/versioned-direct-decoder",
+      "/tmp/araphor-gperftools/current.cpu"
+    ],
+    "exit_code": 0
+  }
+]
