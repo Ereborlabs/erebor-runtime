@@ -1,0 +1,24 @@
+{
+  "applied": false,
+  "decision": "Remove the experiment; complete evidence does not establish a general improvement.",
+  "retained_lsm_tree_commit": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "retained_fjall_commit": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "summary_checks": [
+    "end-after-combined-0.json",
+    "end-after-combined-1.json",
+    "end-before-combined-0.json",
+    "end-before-combined-1.json",
+    "end-after-stable-0.json",
+    "end-after-stable-1.json",
+    "end-before-stable-0.json",
+    "end-before-stable-1.json",
+    "end-cycles-combined.json"
+  ],
+  "binary_sha256_verified": "5fb74bf69cf04f9f61553ed0a9162ef7287e1f5e536c5778ec800742ea4ce046",
+  "patch_sha256_verified": "b1d6511d5ecca9f2178f1fc8ad1d1a03e07308157c5d993b56b0e378f038fc57",
+  "profile_archive_sha256": "bfc6bdd60b025b333fe13ed61b381771e2b2c3d8c899f851ddd3a4e58a2d5cfb",
+  "profile_members": 79,
+  "profile_members_verified": true,
+  "review": "Independent read-only reviewer agrees to remove experiment; native search behavior and evidence checked.",
+  "full_workspace_ci": "Not run during iteration, as required by the user."
+}

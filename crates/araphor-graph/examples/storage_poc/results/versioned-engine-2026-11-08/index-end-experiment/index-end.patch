@@ -1,0 +1,119 @@
+diff --git a/src/table/block/decoder.rs b/src/table/block/decoder.rs
+index 1b4e3e01..f5878451 100644
+--- a/src/table/block/decoder.rs
++++ b/src/table/block/decoder.rs
+@@ -207,7 +207,7 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
+     }
+ 
+     // TODO:
+-    fn partition_point_2<F>(&self, pred: F) -> Option<(/* offset */ usize, /* idx */ usize)>
++    fn partition_point_2<F>(&self, pred: F) -> Option<(usize, usize, bool)>
+     where
+         F: Fn(&[u8], SeqNo) -> bool,
+     {
+@@ -247,12 +247,12 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
+         if left == binary_index.len() {
+             let idx = binary_index.len() - 1;
+             let offset = binary_index.get(idx);
+-            return Some((offset, idx));
++            return Some((offset, idx, true));
+         }
+ 
+         let offset = binary_index.get(left);
+ 
+-        Some((offset, left))
++        Some((offset, left, false))
+     }
+ 
+     pub fn set_lo_offset(&mut self, offset: usize) {
+@@ -268,17 +268,15 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
+             self.partition_point_2(&pred)
+         } else {
+             self.partition_point(&pred)
++                .map(|(offset, idx)| (offset, idx, false))
+         };
+ 
+         // Binary index lookup
+-        let Some((offset, _)) = result else {
++        let Some((offset, _, past_end)) = result else {
+             return false;
+         };
+ 
+-        if second_partition && self.restart_interval == 1 && {
+-            let (key, seqno) = self.get_key_at(offset);
+-            pred(key, seqno)
+-        } {
++        if second_partition && self.restart_interval == 1 && past_end {
+             // `second_partition == true` means we ran the "look one restart ahead" search used by
+             // index blocks. When the predicate is still true at the chosen restart head it means
+             // the caller asked us to seek strictly beyond the last entry. In that case we skip any
+@@ -315,10 +313,11 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
+             self.partition_point_2(&pred)
+         } else {
+             self.partition_point(&pred)
++                .map(|(offset, idx)| (offset, idx, false))
+         };
+ 
+         // Binary index lookup
+-        let Some((offset, idx)) = result else {
++        let Some((offset, idx, _)) = result else {
+             return false;
+         };
+ 
+diff --git a/src/table/index_block/iter.rs b/src/table/index_block/iter.rs
+index ad85bfad..9ca7d7c5 100644
+--- a/src/table/index_block/iter.rs
++++ b/src/table/index_block/iter.rs
+@@ -65,6 +65,52 @@ mod tests {
+     };
+     use test_log::test;
+ 
++    #[test]
++    fn single_entry_sequence_bounds() -> crate::Result<()> {
++        let item = KeyedBlockHandle::new(b"key".into(), 5, BlockHandle::new(BlockOffset(0), 6_000));
++        let block = IndexBlock::new(Block {
++            data: IndexBlock::encode_into_vec(&[item])?.into(),
++            header: Header {
++                block_type: BlockType::Index,
++                checksum: Checksum::from_raw(0),
++                data_length: 0,
++                uncompressed_length: 0,
++            },
++        });
++
++        for cut in [0, 4, 5, 6] {
++            let mut iter = block.iter();
++            assert_eq!(iter.seek(b"key", cut), cut > 5);
++            if cut > 5 {
++                let entry = iter
++                    .next()
++                    .expect("one entry")
++                    .materialize(block.as_slice());
++                assert_eq!(entry.end_key().as_ref(), b"key");
++                assert_eq!(entry.seqno(), 5);
++            }
++            assert!(iter.next().is_none());
++            assert!(iter.next_back().is_none());
++        }
++
++        let mut iter = block.iter();
++        assert!(!iter.seek(b"later", 6));
++        assert!(iter.next().is_none());
++        assert!(iter.next_back().is_none());
++
++        let mut iter = block.iter();
++        assert!(iter.seek_upper(b"later", 6));
++        let entry = iter
++            .next_back()
++            .expect("one entry")
++            .materialize(block.as_slice());
++        assert_eq!(entry.end_key().as_ref(), b"key");
++        assert_eq!(entry.seqno(), 5);
++        assert!(iter.next().is_none());
++        assert!(iter.next_back().is_none());
++        Ok(())
++    }
++
+     #[test]
+     fn index_block_iter_seek_before_start() -> crate::Result<()> {
+         let items = [

@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/tmp/araphor-callgrind/tool/usr/bin/valgrind",
+    "--tool=callgrind",
+    "--enable-debuginfod=no",
+    "--vgdb=no",
+    "--collect-atstart=no",
+    "--toggle-collect=*native*View*query*",
+    "--toggle-collect=*native*View*presence*",
+    "--separate-threads=yes",
+    "--separate-callers=8",
+    "--zero-before=storage_poc::package::evaluate",
+    "--dump-after=storage_poc::package::evaluate",
+    "--callgrind-out-file=/tmp/araphor-callgrind/end-cycles.out",
+    "--log-file=/tmp/araphor-callgrind/end-cycles-valgrind.log",
+    "output/storage-engine-baseline-20261108/versioned-index-end",
+    "/tmp/araphor-callgrind/end-cycles-combined.json",
+    "combined"
+  ],
+  "started_unix_s": 1794207667.2485805,
+  "finished_unix_s": 1794207710.91241,
+  "exit_code": 0,
+  "binary_sha256": "5fb74bf69cf04f9f61553ed0a9162ef7287e1f5e536c5778ec800742ea4ce046",
+  "timing_use": "diagnostic only; excluded from acceptance"
+}

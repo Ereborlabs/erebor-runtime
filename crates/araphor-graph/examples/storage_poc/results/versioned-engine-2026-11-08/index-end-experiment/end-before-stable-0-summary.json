@@ -1,0 +1,86 @@
+{
+  "source": "8fb48dccb+inline-parser",
+  "engines": {
+    "fjall": {
+      "eight_cycles_ms": {
+        "rounds": [
+          27.126289,
+          24.11197,
+          24.998058,
+          25.530047
+        ],
+        "median": 25.2640525,
+        "max": 27.126289
+      },
+      "historical_16_ms": {
+        "after-compaction": 27.264297499999998,
+        "after-reopen": 27.3936815,
+        "after-writes": 28.9383105
+      },
+      "reopen_ms": 4.968748,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "fjall-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          26.406215,
+          26.052047,
+          25.155203,
+          26.203186
+        ],
+        "median": 26.127616500000002,
+        "max": 26.406215
+      },
+      "historical_16_ms": {
+        "after-compaction": 24.833648,
+        "after-reopen": 24.685025,
+        "after-writes": 24.8875995
+      },
+      "reopen_ms": 5.1208645,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-layers": {
+      "eight_cycles_ms": {
+        "rounds": [
+          50.492415,
+          50.896241,
+          50.695935,
+          52.06554
+        ],
+        "median": 50.796088,
+        "max": 52.06554
+      },
+      "historical_16_ms": {
+        "after-reopen": 61.3763785,
+        "after-writes": 61.8687285
+      },
+      "reopen_ms": 14.5676155,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          51.386952,
+          49.995837,
+          49.914121,
+          50.209554000000004
+        ],
+        "median": 50.1026955,
+        "max": 51.386952
+      },
+      "historical_16_ms": {
+        "after-reopen": 61.1597975,
+        "after-writes": 61.917968
+      },
+      "reopen_ms": 13.068802,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    }
+  },
+  "primary_cycles": 128,
+  "historical_evaluations": 640,
+  "historical_views": 320
+}

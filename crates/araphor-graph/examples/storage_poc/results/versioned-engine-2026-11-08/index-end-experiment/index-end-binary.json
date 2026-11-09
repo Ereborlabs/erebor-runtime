@@ -1,0 +1,20 @@
+{
+  "root_commit": "56f5065d516aab78f2590936a63c91ff177639a8",
+  "fjall_commit": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "lsm_tree_base": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "lsm_tree_patch": "index-end.patch",
+  "patch_sha256": "b1d6511d5ecca9f2178f1fc8ad1d1a03e07308157c5d993b56b0e378f038fc57",
+  "binary": "output/storage-engine-baseline-20261108/versioned-index-end",
+  "binary_sha256": "5fb74bf69cf04f9f61553ed0a9162ef7287e1f5e536c5778ec800742ea4ce046",
+  "source_label": "56f5065d5+index-end",
+  "before_bytes": 88445352,
+  "after_bytes": 88463216,
+  "before_sections": {
+    ".rodata": 2582256,
+    ".text": 50340528
+  },
+  "after_sections": {
+    ".rodata": 2583024,
+    ".text": 50348784
+  }
+}

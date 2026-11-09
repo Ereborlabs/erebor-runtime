@@ -269,6 +269,13 @@ The two unchanged untraced comparisons have combined medians of 4.550 and
 no overall latency gain is proved. Both combined medians exceed their target.
 Complete performance qualification remains **Not done**.
 
+The [unapplied index-seek experiment](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/index-end-experiment/README.md)
+retains the rejected patch and all measurements. Its instruction results and
+wall-time results are mixed; the code section grows. Source remains at the
+engine commits above. Fresh retained-source combined median/p95/maximum values
+are 4.876/7.041/7.316 and 4.826/7.516/7.720 ms. Both combined medians exceed
+their target. Earlier higher maxima have no established cause.
+
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this
 implementation. Full workspace CI was not run during this iteration, as the

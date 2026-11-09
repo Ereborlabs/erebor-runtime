@@ -408,6 +408,16 @@ writable forks, distributed storage, or automatic retention policy is included.
 | Current accumulated comparison | **Not done for performance.** [All 24 raw reports and reproduced summaries](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/native-index-compression/README.md) remain available with exact source patches and verified binary hashes. Current candidate combined medians/maxima are 4.836/7.039 and 4.551/7.869 ms. Stable medians are 26.240 and 25.748 ms. Both maxima and stable medians reach the recorded targets; both combined medians exceed their target. Ordinary p95 values are 6.969 and 7.416 ms, versus 8.600 ms in the original recorded PoC. Each percentile uses 28 samples and the nearest-rank method; restart remains separate. Earlier higher maxima have no established cause. No sustained latency bound or complete gain is proved. |
 | Native parser compiler visibility | **Done for measured query CPU work; Not done for complete performance.** `lsm-tree` `aed3e47a` adds five `#[inline]` attributes to existing parser methods. Bodies, interfaces, search rules, and stored bytes remain. [The retained evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/parser-inlining/README.md) checks 28 ordinary fixed-key evaluations and 92 neighbor calls. Complete query instructions decrease from 144,417,138 to 136,189,231, or 5.70%. Presence collects no instructions; all profiled timings are excluded. The code section decreases by 1,728 bytes. Native default/LZ4: 241/244 passed, two existing ignored each; three read-view and three history cases pass in each configuration. Fjall CDC/without CDC: 125/84 passed, one existing ignored each. Production without default features, library clippy, and formatting pass. All unchanged PoC assertions pass. Current combined medians/maxima are 4.550/7.680 and 4.483/6.769 ms; stable medians are 25.670 and 26.764 ms. Wall-time changes remain mixed. Both combined medians exceed their target; no overall latency gain is proved. |
 
+The [unapplied index-seek experiment](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/index-end-experiment/README.md)
+retains its patch, all raw reports, reproduced summaries, and profiles.
+The reviewer and implementer agree to remove it. Query instructions decrease
+by 0.593%, but their median increases and the code section grows by 8,256 bytes.
+Combined medians decrease; both stable medians increase. No general gain is
+proved. Source remains at `lsm-tree` `aed3e47a` and Fjall `42be11f`.
+Fresh retained-source combined median/p95/maximum values are
+4.876/7.041/7.316 and 4.826/7.516/7.720 ms. Each set has 28 ordinary samples;
+restart remains separate. Complete performance qualification remains **Not done**.
+
 The no-default-features test build fails in the existing
 `keyspace/options.rs:709` test: `with_kv_separation` receives a value instead of
 `Some(value)`. The same line exists in upstream commit `8700604`. The production

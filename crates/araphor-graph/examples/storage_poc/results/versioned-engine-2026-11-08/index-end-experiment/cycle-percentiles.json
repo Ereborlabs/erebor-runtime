@@ -1,0 +1,52 @@
+{
+  "unit": "milliseconds",
+  "selection": "fjall-stable ordinary cycles; restart excluded",
+  "p95_method": "nearest rank: sorted values[ceil(0.95*n)-1]",
+  "reports": [
+    {
+      "report": "crates/araphor-graph/examples/storage_poc/results/combined-2026-11-08/release.json",
+      "source": "beea72d9d08acaf16a6c5df26a930c1e6eb29519",
+      "samples": 28,
+      "minimum": 3.4252179999999997,
+      "median": 4.370082,
+      "p95": 8.600200000000001,
+      "maximum": 8.717326
+    },
+    {
+      "report": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/index-end-experiment/end-after-combined-0.json",
+      "source": "56f5065d5+index-end",
+      "samples": 28,
+      "minimum": 3.597641,
+      "median": 4.6174420000000005,
+      "p95": 7.393494,
+      "maximum": 8.394613
+    },
+    {
+      "report": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/index-end-experiment/end-after-combined-1.json",
+      "source": "56f5065d5+index-end",
+      "samples": 28,
+      "minimum": 3.199541,
+      "median": 4.6715695,
+      "p95": 6.981985,
+      "maximum": 7.127745
+    },
+    {
+      "report": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/index-end-experiment/end-before-combined-0.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 3.042815,
+      "median": 4.8764520000000005,
+      "p95": 7.0409310000000005,
+      "maximum": 7.31583
+    },
+    {
+      "report": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/index-end-experiment/end-before-combined-1.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 3.079342,
+      "median": 4.826026000000001,
+      "p95": 7.515719,
+      "maximum": 7.720426
+    }
+  ]
+}
