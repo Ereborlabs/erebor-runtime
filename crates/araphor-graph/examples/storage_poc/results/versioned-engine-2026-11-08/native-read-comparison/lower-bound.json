@@ -1,0 +1,8 @@
+{
+  "root_commit": "0041dfd64d3e88b01a72e2c1a7a48b21cd48cf05",
+  "fjall_commit": "e2c23cbf54b103f4b813e482515223ed3d5ff931",
+  "lsm_tree_commit": "4aeaf8d44e480dd9abeb853530c960ada919d8f5",
+  "binary_sha256": "e5ea17a8780b07a8bbcb2559ced06feade12dd1f06c79711b7289b71338c4b57",
+  "binary": "output/storage-engine-baseline-20261108/versioned-lower-bound",
+  "source_label": "0041dfd64+lower-bound"
+}

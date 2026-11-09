@@ -1,0 +1,13 @@
+{
+  "fjall": "3f684ab9f893910fcf6e29f4428c85bf725e5676",
+  "lsm_tree": "4aeaf8d44e480dd9abeb853530c960ada919d8f5",
+  "fjall_cdc_passed": 123,
+  "fjall_feature_off_passed": 83,
+  "fjall_existing_ignored_each": 1,
+  "production_no_default": "passed",
+  "fjall_library_clippy": "passed with existing warnings",
+  "format": "passed",
+  "native_verification": "native-verification.json",
+  "performance": "Not done: combined and stable medians exceed recorded targets",
+  "full_workspace_ci": "not run during iteration"
+}

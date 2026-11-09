@@ -82,6 +82,25 @@ Read the linked tests in [branch tests](../../fjall/src/versioned/branch_tests.r
 [seal tests](../../fjall/src/journal/segment/tests.rs), and
 [retirement tests](../../fjall/src/versioned/retire/tests.rs).
 
+[TreeIter::create_filtered](../../lsm-tree/src/range.rs) sends the single active
+memtable iterator through the existing MVCC stream without a merge heap.
+The active-only iterator cannot return an I/O error. Table, sealed-memtable,
+and transaction-overlay cases keep the existing native merge path. The
+`active_records_keep_mvcc_visibility` test checks old and current cuts, empty
+values, strong and weak deletions, and mixed scan directions for standard and
+blob trees.
+
+[Memtable::get](../../lsm-tree/src/memtable/mod.rs) uses Crossbeam's native
+`lower_bound` for point lookup. The owned search key and exclusive cut remain.
+The method rejects a different user key before it clones the selected entry.
+It no longer creates a range iterator for that single entry.
+
+[BranchIterator](../../fjall/src/versioned/scan.rs) holds one native scan directly
+when the branch has one source. Multiple sources retain the existing ordered
+merge and lookahead buffers. Both cases keep the snapshot and use the same
+deletion filter and record resolution. The single-branch check also covers an
+empty root, an empty parent/child view, and native error forwarding.
+
 ## Commit and change flow
 
 ```mermaid
@@ -168,22 +187,23 @@ cargo test --manifest-path lsm-tree/Cargo.toml --lib --test read_view --test ret
 cargo test --manifest-path lsm-tree/Cargo.toml --features lz4 --lib --test read_view --test retained_history --locked --offline
 ```
 
-Fjall `66d821e` passes 123 CDC library cases and 83 cases without CDC, with one
+Fjall `3f684ab` passes 123 CDC library cases and 83 cases without CDC, with one
 existing ignored case in each run. The production check without default
 features, library clippy, and formatting pass. Library clippy reports existing
-warnings. A broader clippy run with `--tests` fails on existing test lints.
+warnings. The earlier broader clippy run at `66d821e`, with `--tests`, fails on
+65 existing test lints. That command was not repeated at `3f684ab`.
 The existing no-default-features test error remains in `keyspace/options.rs`;
 the production check does not prove that test configuration.
 
-`lsm-tree` `b9f6cfda` passes 241 default library cases and 244 LZ4 library cases,
-with two existing ignored cases in each run. Two read-view and three history
+`lsm-tree` `4aeaf8d4` passes 241 default library cases and 244 LZ4 library cases,
+with two existing ignored cases in each run. Three read-view and three history
 cases pass in each configuration. The [retained result directory](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/)
 records source IDs, locks, frozen comparisons, and raw reports. Local frozen
 binaries remain under `output/storage-engine-baseline-20261108/`.
 
 Fjall `e2c23cb` adds the concurrent bootstrap and floor-advancement proof to the
 combined lifecycle case. The focused case, full 123-case CDC library suite, and
-formatting pass. The engine source is unchanged from `66d821e`.
+formatting pass. Fjall `3f684ab` also removes single-source lookahead buffers.
 
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this

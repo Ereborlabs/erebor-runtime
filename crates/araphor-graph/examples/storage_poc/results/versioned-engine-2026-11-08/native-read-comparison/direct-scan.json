@@ -1,0 +1,8 @@
+{
+  "root_commit": "0041dfd64d3e88b01a72e2c1a7a48b21cd48cf05",
+  "fjall_commit": "3f684ab9f893910fcf6e29f4428c85bf725e5676",
+  "lsm_tree_commit": "4aeaf8d44e480dd9abeb853530c960ada919d8f5",
+  "binary_sha256": "e1dfab6822e2449ad82739a1c06e817599e887ab621852f7e1622e43720be4f4",
+  "binary": "output/storage-engine-baseline-20261108/versioned-direct-scan",
+  "source_label": "0041dfd64+direct-scan"
+}

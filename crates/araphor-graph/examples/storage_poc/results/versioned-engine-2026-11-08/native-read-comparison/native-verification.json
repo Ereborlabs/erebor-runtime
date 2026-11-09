@@ -1,0 +1,17 @@
+{
+  "fjall": "e2c23cbf54b103f4b813e482515223ed3d5ff931",
+  "lsm_tree": "4aeaf8d44e480dd9abeb853530c960ada919d8f5",
+  "native_default_passed": 241,
+  "native_lz4_passed": 244,
+  "native_existing_ignored_each": 2,
+  "read_view_passed_each": 3,
+  "retained_history_passed_each": 3,
+  "fjall_cdc_passed": 123,
+  "fjall_feature_off_passed": 83,
+  "fjall_existing_ignored_each": 1,
+  "production_no_default": "passed",
+  "native_library_clippy": "passed with existing warnings",
+  "format": "passed",
+  "performance": "Not done: one complete comparison meets targets, another does not",
+  "full_workspace_ci": "not run during iteration"
+}

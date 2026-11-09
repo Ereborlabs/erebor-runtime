@@ -1,0 +1,86 @@
+{
+  "source": "0041dfd64+direct-scan",
+  "engines": {
+    "fjall": {
+      "eight_cycles_ms": {
+        "rounds": [
+          30.577630000000003,
+          31.108569,
+          28.904136,
+          28.042351
+        ],
+        "median": 29.740883000000004,
+        "max": 31.108569
+      },
+      "historical_16_ms": {
+        "after-compaction": 36.052644,
+        "after-reopen": 36.088754,
+        "after-writes": 38.110829
+      },
+      "reopen_ms": 6.8661015,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "fjall-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          29.382486999999998,
+          29.287081,
+          28.554507,
+          28.145787
+        ],
+        "median": 28.920794,
+        "max": 29.382486999999998
+      },
+      "historical_16_ms": {
+        "after-compaction": 32.202582,
+        "after-reopen": 32.158266999999995,
+        "after-writes": 31.7570935
+      },
+      "reopen_ms": 7.0730085,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-layers": {
+      "eight_cycles_ms": {
+        "rounds": [
+          53.334167,
+          53.648666,
+          53.373211,
+          52.890108
+        ],
+        "median": 53.353689,
+        "max": 53.648666
+      },
+      "historical_16_ms": {
+        "after-reopen": 64.854495,
+        "after-writes": 64.6097315
+      },
+      "reopen_ms": 16.0202035,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          53.555288,
+          53.427475,
+          53.43404,
+          52.612348000000004
+        ],
+        "median": 53.4307575,
+        "max": 53.555288
+      },
+      "historical_16_ms": {
+        "after-reopen": 64.3557855,
+        "after-writes": 64.2982015
+      },
+      "reopen_ms": 13.671963000000002,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    }
+  },
+  "primary_cycles": 128,
+  "historical_evaluations": 640,
+  "historical_views": 320
+}
