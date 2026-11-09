@@ -108,3 +108,7 @@ Profile scripts require the recorded Valgrind installation under
 scripts. The comparison script overwrites local reports; the archive preserves
 the original measurements. The writer script records the original failed
 trace; the successful retry command is in the archive.
+
+The later [timestamped sync and wait diagnostic](waits.md) matches all saved
+cursors to their exact journal commits. Its traced timings remain separate
+from the untraced results above.

@@ -443,6 +443,14 @@ describe their recorded source states. The whole-cycle CPU attempt is excluded
 because its reset function was inlined in one executable. Complete performance
 qualification remains **Not done**.
 
+The [timestamped journal diagnostic](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/header-group/waits.md)
+matches all 128 saved source and output cursors to unique journal commits.
+For the 28 ordinary fixed-key samples, source/output `fsync` medians are
+0.567/0.666 ms and maxima are 2.718/1.692 ms. Each matched commit has one
+journal sync. All traced timings are excluded from performance acceptance.
+Syscall duration includes tracing and scheduling. This diagnostic does not
+explain the earlier 13.984 ms maximum or establish a safe sync removal.
+
 The no-default-features test build fails in the existing
 `keyspace/options.rs:709` test: `with_kv_separation` receives a value instead of
 `Some(value)`. The same line exists in upstream commit `8700604`. The production
