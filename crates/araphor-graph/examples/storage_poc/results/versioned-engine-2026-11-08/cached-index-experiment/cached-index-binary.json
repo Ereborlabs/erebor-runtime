@@ -1,0 +1,22 @@
+{
+  "root_commit": "fce165f62fdc6dd335df2f6426615ff287dfda8d",
+  "fjall_commit": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "lsm_tree_base": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "lsm_tree_patch": "cached-index.patch",
+  "patch_sha256": "4715bc48e3b73d50fe80b05b4a13fd9c4c551c6254962160f19da3611d2a640a",
+  "binary": "output/storage-engine-baseline-20261108/versioned-cached-index",
+  "binary_sha256": "efe42ece4ec107532e1840098a6917dc44afad9f9a0b20286020d1c3a5d748d2",
+  "source_label": "fce165f62+cached-index",
+  "before_binary": "output/storage-engine-baseline-20261108/versioned-inline-parser",
+  "before_binary_sha256": "0cad41c8fba195f62e32f5b9f0833a41592391c7eaaa0e3b43593d1b8bf4fe47",
+  "before_bytes": 88445352,
+  "after_bytes": 88444072,
+  "before_sections": {
+    ".rodata": 2582256,
+    ".text": 50340528
+  },
+  "after_sections": {
+    ".rodata": 2583216,
+    ".text": 50369904
+  }
+}

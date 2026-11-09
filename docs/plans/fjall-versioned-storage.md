@@ -427,6 +427,14 @@ source and binary identity, nine reproduced summaries, and raw profiles remain.
 Accepted engine commits remain unchanged. Complete performance qualification
 remains **Not done**.
 
+The [unapplied cached-index experiments](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/cached-index-experiment/README.md)
+retain both exact patches, all 17 reproduced summaries, and raw profiles.
+Complete query instructions change by +0.00444%; wall-time changes are mixed.
+The draft adds metadata memory and cold construction work. One additional
+compiler attribute changes no standalone native or query-method code bytes.
+The reviewer and implementer agree to remove both drafts. Accepted engine
+commits remain unchanged. Complete performance qualification remains **Not done**.
+
 The no-default-features test build fails in the existing
 `keyspace/options.rs:709` test: `with_kv_separation` receives a value instead of
 `Some(value)`. The same line exists in upstream commit `8700604`. The production

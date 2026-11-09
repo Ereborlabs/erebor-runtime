@@ -1,0 +1,391 @@
+{
+  "applied": false,
+  "decision": "Remove both experiments; no measured net query savings and mixed wall-time results.",
+  "retained_lsm_tree_commit": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "fjall_commit": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "summary_checks": [
+    "cached-after-combined-0.json",
+    "cached-after-combined-1.json",
+    "cached-before-combined-0.json",
+    "cached-before-combined-1.json",
+    "cached-inline-after-combined-0.json",
+    "cached-inline-after-combined-1.json",
+    "cached-inline-before-combined-0.json",
+    "cached-inline-before-combined-1.json",
+    "cached-after-stable-0.json",
+    "cached-after-stable-1.json",
+    "cached-before-stable-0.json",
+    "cached-before-stable-1.json",
+    "cached-inline-after-stable-0.json",
+    "cached-inline-after-stable-1.json",
+    "cached-inline-before-stable-0.json",
+    "cached-inline-before-stable-1.json",
+    "cached-cycles-combined.json"
+  ],
+  "ordinary_percentiles_ms": [
+    {
+      "report": "cached-after-combined-0.json",
+      "source": "fce165f62+cached-index",
+      "samples": 28,
+      "minimum": 3.063758,
+      "median": 4.5206610000000005,
+      "p95": 7.487442000000001,
+      "maximum": 7.7145030000000006
+    },
+    {
+      "report": "cached-after-combined-1.json",
+      "source": "fce165f62+cached-index",
+      "samples": 28,
+      "minimum": 3.0397309999999997,
+      "median": 4.3754545,
+      "p95": 7.211836,
+      "maximum": 7.296347
+    },
+    {
+      "report": "cached-before-combined-0.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 2.9601800000000003,
+      "median": 4.460630500000001,
+      "p95": 6.6629380000000005,
+      "maximum": 7.007547000000001
+    },
+    {
+      "report": "cached-before-combined-1.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 3.201559,
+      "median": 4.760293,
+      "p95": 7.148768,
+      "maximum": 7.451819
+    },
+    {
+      "report": "cached-inline-after-combined-0.json",
+      "source": "7650340d1+cached-inline",
+      "samples": 28,
+      "minimum": 3.10228,
+      "median": 4.8465705,
+      "p95": 7.101552,
+      "maximum": 7.3364329999999995
+    },
+    {
+      "report": "cached-inline-after-combined-1.json",
+      "source": "7650340d1+cached-inline",
+      "samples": 28,
+      "minimum": 3.783038,
+      "median": 4.8201695,
+      "p95": 7.026191,
+      "maximum": 7.139824
+    },
+    {
+      "report": "cached-inline-before-combined-0.json",
+      "source": "fce165f62+cached-index",
+      "samples": 28,
+      "minimum": 3.392547,
+      "median": 4.6754555,
+      "p95": 7.429743,
+      "maximum": 13.984006
+    },
+    {
+      "report": "cached-inline-before-combined-1.json",
+      "source": "fce165f62+cached-index",
+      "samples": 28,
+      "minimum": 3.488092,
+      "median": 4.9794805,
+      "p95": 7.173,
+      "maximum": 7.315479
+    }
+  ],
+  "p95_method": "nearest rank; sample27 of28",
+  "stable_eight_cycle_ms": {
+    "cached-after-stable-0.json": {
+      "rounds": [
+        23.96941,
+        24.319044,
+        26.029792999999998,
+        24.815701
+      ],
+      "median": 24.5673725,
+      "max": 26.029792999999998
+    },
+    "cached-after-stable-1.json": {
+      "rounds": [
+        25.935703,
+        26.65139,
+        26.035366,
+        26.439621
+      ],
+      "median": 26.2374935,
+      "max": 26.65139
+    },
+    "cached-before-stable-0.json": {
+      "rounds": [
+        26.083012,
+        25.774861,
+        26.624717,
+        26.702312
+      ],
+      "median": 26.3538645,
+      "max": 26.702312
+    },
+    "cached-before-stable-1.json": {
+      "rounds": [
+        27.22453,
+        26.534544,
+        26.494313,
+        28.232228
+      ],
+      "median": 26.879537,
+      "max": 28.232228
+    },
+    "cached-inline-after-stable-0.json": {
+      "rounds": [
+        27.483025,
+        25.882853,
+        26.489368,
+        26.580234
+      ],
+      "median": 26.534801,
+      "max": 27.483025
+    },
+    "cached-inline-after-stable-1.json": {
+      "rounds": [
+        26.727948,
+        26.765803000000002,
+        27.367427,
+        25.786464000000002
+      ],
+      "median": 26.7468755,
+      "max": 27.367427
+    },
+    "cached-inline-before-stable-0.json": {
+      "rounds": [
+        26.160756,
+        24.938787,
+        25.820341,
+        26.576042
+      ],
+      "median": 25.9905485,
+      "max": 26.576042
+    },
+    "cached-inline-before-stable-1.json": {
+      "rounds": [
+        28.333913999999996,
+        28.241933,
+        26.537837000000003,
+        26.329282
+      ],
+      "median": 27.389885,
+      "max": 28.333913999999996
+    }
+  },
+  "combined_reopen_ms": {
+    "cached-after-combined-0.json": {
+      "reopen_median_ms": 3.8010279999999996,
+      "restart_total_median_ms": 25.237002500000003
+    },
+    "cached-after-combined-1.json": {
+      "reopen_median_ms": 3.7824829999999996,
+      "restart_total_median_ms": 24.6786635
+    },
+    "cached-before-combined-0.json": {
+      "reopen_median_ms": 3.5729884999999997,
+      "restart_total_median_ms": 23.1446635
+    },
+    "cached-before-combined-1.json": {
+      "reopen_median_ms": 3.694375,
+      "restart_total_median_ms": 24.2504865
+    },
+    "cached-inline-after-combined-0.json": {
+      "reopen_median_ms": 3.7302020000000002,
+      "restart_total_median_ms": 24.7844005
+    },
+    "cached-inline-after-combined-1.json": {
+      "reopen_median_ms": 3.2213265,
+      "restart_total_median_ms": 23.0199925
+    },
+    "cached-inline-before-combined-0.json": {
+      "reopen_median_ms": 3.6867595,
+      "restart_total_median_ms": 24.739772
+    },
+    "cached-inline-before-combined-1.json": {
+      "reopen_median_ms": 3.7799645,
+      "restart_total_median_ms": 24.873272500000002
+    }
+  },
+  "slowest_ordinary_samples": [
+    {
+      "report": "cached-after-combined-0.json",
+      "revision": 87,
+      "milliseconds": {
+        "source_commit_s": 0.5782349999999999,
+        "source_wake_s": 1.001976,
+        "source_ready_s": 1.016783,
+        "package_s": 2.8078510000000003,
+        "output_stage_s": 0.970057,
+        "output_sync_s": 1.718432,
+        "output_wake_s": 3.0287669999999998,
+        "output_ready_s": 3.0425959999999996,
+        "result_read_s": 0.8389610000000001,
+        "total_s": 7.7145030000000006
+      }
+    },
+    {
+      "report": "cached-after-combined-1.json",
+      "revision": 64,
+      "milliseconds": {
+        "source_commit_s": 0.617347,
+        "source_wake_s": 0.6762950000000001,
+        "source_ready_s": 0.691032,
+        "package_s": 2.8536680000000003,
+        "output_stage_s": 1.380947,
+        "output_sync_s": 1.1519300000000001,
+        "output_wake_s": 3.0366579999999996,
+        "output_ready_s": 3.048182,
+        "result_read_s": 0.695781,
+        "total_s": 7.296347
+      }
+    },
+    {
+      "report": "cached-before-combined-0.json",
+      "revision": 64,
+      "milliseconds": {
+        "source_commit_s": 0.609315,
+        "source_wake_s": 0.640046,
+        "source_ready_s": 0.6538750000000001,
+        "package_s": 2.781102,
+        "output_stage_s": 1.3051670000000002,
+        "output_sync_s": 1.093681,
+        "output_wake_s": 2.882794,
+        "output_ready_s": 2.894667,
+        "result_read_s": 0.670289,
+        "total_s": 7.007547000000001
+      }
+    },
+    {
+      "report": "cached-before-combined-1.json",
+      "revision": 64,
+      "milliseconds": {
+        "source_commit_s": 0.6001650000000001,
+        "source_wake_s": 0.6589039999999999,
+        "source_ready_s": 0.673431,
+        "package_s": 2.975056,
+        "output_stage_s": 1.40595,
+        "output_sync_s": 1.167016,
+        "output_wake_s": 3.115721,
+        "output_ready_s": 3.1272460000000004,
+        "result_read_s": 0.668543,
+        "total_s": 7.451819
+      }
+    },
+    {
+      "report": "cached-inline-after-combined-0.json",
+      "revision": 64,
+      "milliseconds": {
+        "source_commit_s": 0.6220899999999999,
+        "source_wake_s": 0.6845300000000001,
+        "source_ready_s": 0.699266,
+        "package_s": 2.8673990000000003,
+        "output_stage_s": 1.379187,
+        "output_sync_s": 1.1213270000000002,
+        "output_wake_s": 3.0297140000000002,
+        "output_ready_s": 3.042495,
+        "result_read_s": 0.719311,
+        "total_s": 7.3364329999999995
+      }
+    },
+    {
+      "report": "cached-inline-after-combined-1.json",
+      "revision": 64,
+      "milliseconds": {
+        "source_commit_s": 0.60854,
+        "source_wake_s": 0.642903,
+        "source_ready_s": 0.667627,
+        "package_s": 2.8201150000000004,
+        "output_stage_s": 1.3271540000000002,
+        "output_sync_s": 1.150032,
+        "output_wake_s": 2.930885,
+        "output_ready_s": 2.9419210000000002,
+        "result_read_s": 0.701991,
+        "total_s": 7.139824
+      }
+    },
+    {
+      "report": "cached-inline-before-combined-0.json",
+      "revision": 87,
+      "milliseconds": {
+        "source_commit_s": 2.772761,
+        "source_wake_s": 2.8041210000000003,
+        "source_ready_s": 2.815715,
+        "package_s": 2.8759900000000003,
+        "output_stage_s": 1.032627,
+        "output_sync_s": 6.01794,
+        "output_wake_s": 7.433306,
+        "output_ready_s": 7.446436,
+        "result_read_s": 0.8386030000000001,
+        "total_s": 13.984006
+      }
+    },
+    {
+      "report": "cached-inline-before-combined-1.json",
+      "revision": 64,
+      "milliseconds": {
+        "source_commit_s": 0.6036509999999999,
+        "source_wake_s": 0.662319,
+        "source_ready_s": 0.677545,
+        "package_s": 2.8713789999999997,
+        "output_stage_s": 1.405657,
+        "output_sync_s": 1.125168,
+        "output_wake_s": 3.059396,
+        "output_ready_s": 3.072107,
+        "result_read_s": 0.687393,
+        "total_s": 7.315479
+      }
+    }
+  ],
+  "query_instruction_diagnostic": {
+    "inline": {
+      "source": "8fb48dccb+inline-parser",
+      "validated_evaluations": 72,
+      "ordinary_samples": 28,
+      "ordinary_query_calls": 92,
+      "ordinary_instructions": 136189231,
+      "ordinary_median_instructions": 4679004.0,
+      "revision_medians": {
+        "26": 0.0,
+        "29": 2578924.0,
+        "44": 4204271.5,
+        "46": 4679004.0,
+        "64": 5305279.0,
+        "85": 8577459.5,
+        "87": 8699051.0
+      }
+    },
+    "cached": {
+      "source": "fce165f62+cached-index",
+      "validated_evaluations": 72,
+      "ordinary_samples": 28,
+      "ordinary_query_calls": 92,
+      "ordinary_instructions": 136195283,
+      "ordinary_median_instructions": 4667065.5,
+      "revision_medians": {
+        "26": 0.0,
+        "29": 2559487.5,
+        "44": 4187717.5,
+        "46": 4667065.5,
+        "64": 5308580.0,
+        "85": 8600848.0,
+        "87": 8721022.0
+      }
+    }
+  },
+  "hint_profile": "Not run; all changed text bytes are in five named reporting wrappers, and no standalone native/query method text changes.",
+  "archive_sha256": "f7004a62d342e7bf358026823026d464704f919a9ac260befb1af135ac04655d",
+  "archive_members": 163,
+  "profile_members": 79,
+  "archive_members_verified": true,
+  "all_patch_and_binary_hashes_verified": true,
+  "review": "Independent reviewer agrees to remove both experiments; counters, complete reports and all changed text bytes checked.",
+  "metrics_clippy": "Default passes. With metrics: existing too_many_arguments denial at src/table/iter.rs:122 (8/7).",
+  "full_workspace_ci": "Not run during iteration, as required by user."
+}

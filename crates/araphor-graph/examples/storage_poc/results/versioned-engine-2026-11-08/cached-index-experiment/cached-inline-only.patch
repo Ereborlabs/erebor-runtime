@@ -1,0 +1,10 @@
+--- a/src/table/block/decoder.rs
++++ b/src/table/block/decoder.rs
+@@ -151,6 +151,7 @@
+         clippy::indexing_slicing,
+         reason = "cached keys use the native restart order and byte ranges from this block"
+     )]
++    #[inline]
+     fn get_key_at(&self, pos: usize, idx: usize) -> (&[u8], SeqNo) {
+         if let Some(keys) = &self.restart_keys {
+             let head = &keys[idx];

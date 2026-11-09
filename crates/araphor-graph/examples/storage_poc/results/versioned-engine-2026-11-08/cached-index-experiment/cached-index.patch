@@ -1,0 +1,810 @@
+diff --git a/src/cache.rs b/src/cache.rs
+index 2879ac7c..f1381aec 100644
+--- a/src/cache.rs
++++ b/src/cache.rs
+@@ -3,7 +3,7 @@
+ // (found in the LICENSE-* files in the repository)
+ 
+ use crate::table::block::Header;
+-use crate::table::{Block, BlockOffset};
++use crate::table::{Block, BlockOffset, CachedIndexBlock};
+ use crate::{GlobalTableId, UserValue};
+ use quick_cache::sync::Cache as QuickCache;
+ use quick_cache::Weighter;
+@@ -14,6 +14,7 @@ const TAG_BLOB: u8 = 1;
+ #[derive(Clone)]
+ enum Item {
+     Block(Block),
++    Index(CachedIndexBlock),
+     Blob(UserValue),
+ }
+ 
+@@ -31,10 +32,15 @@ struct BlockWeighter;
+ 
+ impl Weighter<CacheKey, Item> for BlockWeighter {
+     fn weight(&self, _: &CacheKey, item: &Item) -> u64 {
+-        use Item::{Blob, Block};
++        use Item::{Blob, Block, Index};
+ 
+         match item {
+             Block(b) => (Header::serialized_len() as u64) + u64::from(b.header.uncompressed_length),
++            Index(b) => {
++                (Header::serialized_len() as u64)
++                    + u64::from(b.block.inner.header.uncompressed_length)
++                    + b.metadata_size() as u64
++            }
+             Blob(b) => b.len() as u64,
+         }
+     }
+@@ -124,6 +130,7 @@ impl Cache {
+ 
+         Some(match self.data.get(&key)? {
+             Item::Block(block) => block,
++            Item::Index(block) => block.block.inner,
+             Item::Blob(_) => unreachable!("invalid cache item"),
+         })
+     }
+@@ -136,6 +143,31 @@ impl Cache {
+         );
+     }
+ 
++    pub(crate) fn get_index_block(
++        &self,
++        id: GlobalTableId,
++        offset: BlockOffset,
++    ) -> Option<CachedIndexBlock> {
++        let key: CacheKey = (TAG_BLOCK, id.tree_id(), id.table_id(), *offset).into();
++        match self.data.get(&key)? {
++            Item::Index(block) => Some(block),
++            Item::Block(_) => None,
++            Item::Blob(_) => unreachable!("invalid cache item"),
++        }
++    }
++
++    pub(crate) fn insert_index_block(
++        &self,
++        id: GlobalTableId,
++        offset: BlockOffset,
++        block: CachedIndexBlock,
++    ) {
++        self.data.insert(
++            (TAG_BLOCK, id.tree_id(), id.table_id(), *offset).into(),
++            Item::Index(block),
++        );
++    }
++
+     #[doc(hidden)]
+     pub fn insert_blob(
+         &self,
+@@ -160,7 +192,85 @@ impl Cache {
+ 
+         Some(match self.data.get(&key)? {
+             Item::Blob(blob) => blob,
+-            Item::Block(_) => unreachable!("invalid cache item"),
++            Item::Block(_) | Item::Index(_) => unreachable!("invalid cache item"),
+         })
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{
++        table::{
++            block::BlockType,
++            block_index::{iter::OwnedIndexBlockIter, FullBlockIndex},
++            BlockHandle, IndexBlock, KeyedBlockHandle,
++        },
++        Checksum,
++    };
++    use std::sync::Arc;
++
++    #[test]
++    fn index_metadata_weight_replacement_and_lifetime() -> crate::Result<()> {
++        let item = KeyedBlockHandle::new(b"key".into(), 5, BlockHandle::new(BlockOffset(0), 6_000));
++        let data: crate::Slice = IndexBlock::encode_into_vec(&[item])?.into();
++        let raw = Block {
++            header: Header {
++                block_type: BlockType::Index,
++                checksum: Checksum::from_raw(0),
++                data_length: data.len() as u32,
++                uncompressed_length: data.len() as u32,
++            },
++            data,
++        };
++        let index = CachedIndexBlock::new(IndexBlock::new(raw.clone()));
++        let raw_weight =
++            Header::serialized_len() as u64 + u64::from(raw.header.uncompressed_length);
++        let weight = raw_weight + index.metadata_size() as u64;
++        let pinned = FullBlockIndex::new(index.block.clone());
++        assert_eq!(pinned.cached().size(), raw.size() + index.metadata_size());
++        assert!(pinned.cached().size() > pinned.inner().inner.size());
++        let disabled = Cache::with_capacity_bytes(0);
++        disabled.insert_index_block((9, 17).into(), BlockOffset(123), pinned.cached().clone());
++        assert_eq!(disabled.size(), 0);
++        assert!(disabled
++            .get_index_block((9, 17).into(), BlockOffset(123))
++            .is_none());
++        drop(disabled);
++        drop(pinned);
++
++        let cache = Cache::with_capacity_bytes(1_000_000);
++        let id: GlobalTableId = (9, 17).into();
++        let offset = BlockOffset(123);
++        cache.insert_block(id, offset, raw.clone());
++        assert_eq!(cache.size(), raw_weight);
++        assert!(cache.get_index_block(id, offset).is_none());
++        cache.insert_index_block(id, offset, index.clone());
++        assert_eq!(cache.size(), weight);
++        assert_eq!(
++            cache.get_block(id, offset).expect("raw block").data,
++            raw.data
++        );
++        let weak = Arc::downgrade(&index.restart_keys);
++        let mut iter = OwnedIndexBlockIter::from_cached(
++            cache.get_index_block(id, offset).expect("cached index"),
++        );
++        drop(index);
++        cache.insert_block(id, offset, raw.clone());
++        assert_eq!(cache.size(), raw_weight);
++        assert!(cache.get_index_block(id, offset).is_none());
++        assert!(weak.upgrade().is_some());
++        drop(cache);
++        drop(raw);
++        assert!(iter.seek_lower(b"key", 6));
++        let item = iter.next().expect("owned entry");
++        assert_eq!(item.end_key().as_ref(), b"key");
++        assert_eq!(item.seqno(), 5);
++        assert_eq!(item.size(), 6_000);
++        assert!(iter.next_back().is_none());
++        drop(iter);
++        assert!(weak.upgrade().is_none());
++
++        Ok(())
++    }
++}
+diff --git a/src/table/block/decoder.rs b/src/table/block/decoder.rs
+index 1b4e3e01..17d71e0f 100644
+--- a/src/table/block/decoder.rs
++++ b/src/table/block/decoder.rs
+@@ -4,11 +4,16 @@
+ 
+ use super::binary_index::Reader as BinaryIndexReader;
+ use crate::{
+-    table::{block::Trailer, Block},
++    table::{block::Trailer, util::SliceIndexes, Block},
+     SeqNo, Slice,
+ };
+ use byteorder::{LittleEndian, ReadBytesExt};
+-use std::{io::Cursor, marker::PhantomData};
++use std::{io::Cursor, marker::PhantomData, sync::Arc};
++
++pub(crate) struct RestartKey {
++    pub(crate) key: SliceIndexes,
++    pub(crate) seqno: SeqNo,
++}
+ 
+ /// Represents an object that was parsed from a byte array
+ ///
+@@ -80,6 +85,7 @@ pub struct Decoder<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> {
+     binary_index_step_size: u8,
+     binary_index_offset: u32,
+     binary_index_len: u32,
++    restart_keys: Option<Arc<[RestartKey]>>,
+ }
+ 
+ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Parsed> {
+@@ -122,9 +128,16 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
+             binary_index_step_size,
+             binary_index_offset,
+             binary_index_len,
++            restart_keys: None,
+         }
+     }
+ 
++    pub(crate) fn with_restart_keys(mut self, keys: Arc<[RestartKey]>) -> Self {
++        debug_assert_eq!(keys.len(), self.binary_index_len as usize);
++        self.restart_keys = Some(keys);
++        self
++    }
++
+     fn get_binary_index_reader(&self) -> BinaryIndexReader<'_> {
+         BinaryIndexReader::new(
+             &self.block.data,
+@@ -134,7 +147,15 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
+         )
+     }
+ 
+-    fn get_key_at(&self, pos: usize) -> (&[u8], SeqNo) {
++    #[expect(
++        clippy::indexing_slicing,
++        reason = "cached keys use the native restart order and byte ranges from this block"
++    )]
++    fn get_key_at(&self, pos: usize, idx: usize) -> (&[u8], SeqNo) {
++        if let Some(keys) = &self.restart_keys {
++            let head = &keys[idx];
++            return (&self.block.data[head.key.0..head.key.1], head.seqno);
++        }
+         let bytes = &self.block.data;
+ 
+         #[expect(
+@@ -182,7 +203,7 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
+ 
+             let offset = binary_index.get(mid);
+ 
+-            let (head_key, head_seqno) = self.get_key_at(offset);
++            let (head_key, head_seqno) = self.get_key_at(offset, mid);
+ 
+             if pred(head_key, head_seqno) {
+                 left = mid + 1;
+@@ -235,7 +256,7 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
+ 
+             let offset = binary_index.get(mid);
+ 
+-            let (head_key, head_seqno) = self.get_key_at(offset);
++            let (head_key, head_seqno) = self.get_key_at(offset, mid);
+ 
+             if pred(head_key, head_seqno) {
+                 left = mid + 1;
+@@ -271,12 +292,12 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
+         };
+ 
+         // Binary index lookup
+-        let Some((offset, _)) = result else {
++        let Some((offset, idx)) = result else {
+             return false;
+         };
+ 
+         if second_partition && self.restart_interval == 1 && {
+-            let (key, seqno) = self.get_key_at(offset);
++            let (key, seqno) = self.get_key_at(offset, idx);
+             pred(key, seqno)
+         } {
+             // `second_partition == true` means we ran the "look one restart ahead" search used by
+diff --git a/src/table/block_index/full.rs b/src/table/block_index/full.rs
+index 7ad01807..061ae906 100644
+--- a/src/table/block_index/full.rs
++++ b/src/table/block_index/full.rs
+@@ -3,25 +3,29 @@
+ // (found in the LICENSE-* files in the repository)
+ 
+ use crate::table::block_index::{iter::OwnedIndexBlockIter, BlockIndexIter};
+-use crate::table::{IndexBlock, KeyedBlockHandle};
++use crate::table::{CachedIndexBlock, IndexBlock, KeyedBlockHandle};
+ use crate::SeqNo;
+ 
+ /// Index that translates item keys to data block handles
+ ///
+ /// The index is fully loaded into memory.
+-pub struct FullBlockIndex(IndexBlock);
++pub struct FullBlockIndex(CachedIndexBlock);
+ 
+ impl FullBlockIndex {
+     pub fn new(block: IndexBlock) -> Self {
+-        Self(block)
++        Self(CachedIndexBlock::new(block))
+     }
+ 
+     pub fn inner(&self) -> &IndexBlock {
++        &self.0.block
++    }
++
++    pub(crate) fn cached(&self) -> &CachedIndexBlock {
+         &self.0
+     }
+ 
+     pub fn iter(&self) -> Iter {
+-        Iter(OwnedIndexBlockIter::new(self.0.clone(), IndexBlock::iter))
++        Iter(OwnedIndexBlockIter::from_cached(self.0.clone()))
+     }
+ }
+ 
+diff --git a/src/table/block_index/iter.rs b/src/table/block_index/iter.rs
+index 33c03c65..00e68075 100644
+--- a/src/table/block_index/iter.rs
++++ b/src/table/block_index/iter.rs
+@@ -3,7 +3,10 @@
+ // (found in the LICENSE-* files in the repository)
+ 
+ use crate::{
+-    table::{block::ParsedItem, index_block::Iter as IndexBlockIter, IndexBlock, KeyedBlockHandle},
++    table::{
++        block::ParsedItem, index_block::Iter as IndexBlockIter, CachedIndexBlock, IndexBlock,
++        KeyedBlockHandle,
++    },
+     SeqNo,
+ };
+ use self_cell::self_cell;
+@@ -18,6 +21,14 @@ self_cell!(
+ );
+ 
+ impl OwnedIndexBlockIter {
++    pub(crate) fn from_cached(block: CachedIndexBlock) -> Self {
++        let CachedIndexBlock {
++            block,
++            restart_keys,
++        } = block;
++        Self::new(block, move |block| block.iter_with_keys(restart_keys))
++    }
++
+     pub fn seek_lower(&mut self, needle: &[u8], seqno: SeqNo) -> bool {
+         self.with_dependent_mut(|_, m| m.seek(needle, seqno))
+     }
+diff --git a/src/table/block_index/two_level.rs b/src/table/block_index/two_level.rs
+index ff13ecb4..716346a7 100644
+--- a/src/table/block_index/two_level.rs
++++ b/src/table/block_index/two_level.rs
+@@ -3,13 +3,12 @@
+ // (found in the LICENSE-* files in the repository)
+ 
+ use crate::file_accessor::FileAccessor;
+-use crate::table::{IndexBlock, KeyedBlockHandle};
++use crate::table::{CachedIndexBlock, KeyedBlockHandle};
+ use crate::SeqNo;
+ use crate::{
+     table::{
+-        block::BlockType,
+         block_index::{iter::OwnedIndexBlockIter, BlockIndexIter},
+-        util::load_block,
++        util::load_index_block,
+     },
+     Cache, CompressionType, GlobalTableId, UserKey,
+ };
+@@ -22,7 +21,7 @@ use crate::Metrics;
+ ///
+ /// Only the top-level index is loaded into memory.
+ pub struct TwoLevelBlockIndex {
+-    pub(crate) top_level_index: IndexBlock,
++    pub(crate) top_level_index: CachedIndexBlock,
+     pub(crate) table_id: GlobalTableId,
+     pub(crate) path: Arc<PathBuf>,
+     pub(crate) file_accessor: FileAccessor,
+@@ -55,7 +54,7 @@ impl TwoLevelBlockIndex {
+ }
+ 
+ pub struct Iter {
+-    tli_block: IndexBlock,
++    tli_block: CachedIndexBlock,
+     tli: Option<OwnedIndexBlockIter>,
+ 
+     lo_consumer: Option<OwnedIndexBlockIter>,
+@@ -76,7 +75,7 @@ pub struct Iter {
+ 
+ impl Iter {
+     fn init_tli(&mut self) -> bool {
+-        let mut iter = OwnedIndexBlockIter::new(self.tli_block.clone(), IndexBlock::iter);
++        let mut iter = OwnedIndexBlockIter::from_cached(self.tli_block.clone());
+ 
+         if let Some((lo_key, lo_seqno)) = &self.lo {
+             if !iter.seek_lower(lo_key, *lo_seqno) {
+@@ -125,20 +124,17 @@ impl Iterator for Iter {
+             let next_lowest_block = tli.next();
+ 
+             if let Some(handle) = next_lowest_block {
+-                let block = fail_iter!(load_block(
++                let block = fail_iter!(load_index_block(
+                     self.table_id,
+                     &self.path,
+                     &self.file_accessor,
+                     &self.cache,
+                     &handle.into_inner(),
+-                    BlockType::Index,
+                     self.compression,
+                     #[cfg(feature = "metrics")]
+                     &self.metrics,
+                 ));
+-                let index_block = IndexBlock::new(block);
+-
+-                let mut iter = OwnedIndexBlockIter::new(index_block, IndexBlock::iter);
++                let mut iter = OwnedIndexBlockIter::from_cached(block);
+ 
+                 if let Some((lo_key, lo_seqno)) = &self.lo {
+                     if !iter.seek_lower(lo_key, *lo_seqno) {
+@@ -188,20 +184,17 @@ impl DoubleEndedIterator for Iter {
+             let next_highest_block = tli.next_back();
+ 
+             if let Some(handle) = next_highest_block {
+-                let block = fail_iter!(load_block(
++                let block = fail_iter!(load_index_block(
+                     self.table_id,
+                     &self.path,
+                     &self.file_accessor,
+                     &self.cache,
+                     &handle.into_inner(),
+-                    BlockType::Index,
+                     self.compression,
+                     #[cfg(feature = "metrics")]
+                     &self.metrics,
+                 ));
+-                let index_block = IndexBlock::new(block);
+-
+-                let mut iter = OwnedIndexBlockIter::new(index_block, IndexBlock::iter);
++                let mut iter = OwnedIndexBlockIter::from_cached(block);
+ 
+                 if let Some((lo_key, lo_seqno)) = &self.lo {
+                     if !iter.seek_lower(lo_key, *lo_seqno) {
+diff --git a/src/table/block_index/volatile.rs b/src/table/block_index/volatile.rs
+index 538ba555..77d7200d 100644
+--- a/src/table/block_index/volatile.rs
++++ b/src/table/block_index/volatile.rs
+@@ -6,10 +6,9 @@ use super::KeyedBlockHandle;
+ use crate::{
+     file_accessor::FileAccessor,
+     table::{
+-        block::BlockType,
+         block_index::{iter::OwnedIndexBlockIter, BlockIndexIter},
+-        util::load_block,
+-        BlockHandle, IndexBlock,
++        util::load_index_block,
++        BlockHandle,
+     },
+     Cache, CompressionType, GlobalTableId, SeqNo, UserKey,
+ };
+@@ -94,20 +93,17 @@ impl Iterator for Iter {
+         if let Some(inner) = &mut self.inner {
+             inner.next().map(Ok)
+         } else {
+-            let block = fail_iter!(load_block(
++            let block = fail_iter!(load_index_block(
+                 self.table_id,
+                 &self.path,
+                 &self.file_accessor,
+                 &self.cache,
+                 &self.handle,
+-                BlockType::Index,
+                 self.compression,
+                 #[cfg(feature = "metrics")]
+                 &self.metrics,
+             ));
+-            let index_block = IndexBlock::new(block);
+-
+-            let mut iter = OwnedIndexBlockIter::new(index_block, IndexBlock::iter);
++            let mut iter = OwnedIndexBlockIter::from_cached(block);
+ 
+             if let Some((lo_key, lo_seqno)) = &self.lo {
+                 if !iter.seek_lower(lo_key, *lo_seqno) {
+@@ -134,20 +130,17 @@ impl DoubleEndedIterator for Iter {
+         if let Some(inner) = &mut self.inner {
+             inner.next_back().map(Ok)
+         } else {
+-            let block = fail_iter!(load_block(
++            let block = fail_iter!(load_index_block(
+                 self.table_id,
+                 &self.path,
+                 &self.file_accessor,
+                 &self.cache,
+                 &self.handle,
+-                BlockType::Index,
+                 self.compression,
+                 #[cfg(feature = "metrics")]
+                 &self.metrics,
+             ));
+-            let index_block = IndexBlock::new(block);
+-
+-            let mut iter = OwnedIndexBlockIter::new(index_block, IndexBlock::iter);
++            let mut iter = OwnedIndexBlockIter::from_cached(block);
+ 
+             if let Some((lo_key, lo_seqno)) = &self.lo {
+                 if !iter.seek_lower(lo_key, *lo_seqno) {
+diff --git a/src/table/index_block/mod.rs b/src/table/index_block/mod.rs
+index 3e892f66..31c09dec 100644
+--- a/src/table/index_block/mod.rs
++++ b/src/table/index_block/mod.rs
+@@ -15,11 +15,12 @@ use super::{
+ use crate::Slice;
+ use crate::{
+     table::{
+-        block::{Decoder, ParsedItem},
++        block::{decoder::RestartKey, Decoder, ParsedItem},
+         util::{compare_prefixed_slice, SliceIndexes},
+     },
+     SeqNo,
+ };
++use std::sync::Arc;
+ 
+ #[derive(Debug)]
+ pub struct IndexBlockParsedItem {
+@@ -67,6 +68,44 @@ pub struct IndexBlock {
+     pub inner: Block,
+ }
+ 
++#[derive(Clone)]
++pub struct CachedIndexBlock {
++    pub(crate) block: IndexBlock,
++    pub(crate) restart_keys: Arc<[RestartKey]>,
++}
++
++impl CachedIndexBlock {
++    pub(crate) fn new(block: IndexBlock) -> Self {
++        let restart_keys = block
++            .iter()
++            .map(|item| RestartKey {
++                key: item.end_key,
++                seqno: item.seqno,
++            })
++            .collect();
++        Self {
++            block,
++            restart_keys,
++        }
++    }
++
++    pub(crate) fn metadata_size(&self) -> usize {
++        std::mem::size_of_val(self.restart_keys.as_ref()) + 2 * std::mem::size_of::<usize>()
++    }
++
++    pub(crate) fn size(&self) -> usize {
++        self.block.inner.size() + self.metadata_size()
++    }
++
++    pub(crate) fn as_slice(&self) -> &Slice {
++        self.block.as_slice()
++    }
++
++    pub(crate) fn iter(&self) -> Iter<'_> {
++        self.block.iter_with_keys(self.restart_keys.clone())
++    }
++}
++
+ impl IndexBlock {
+     #[must_use]
+     pub fn new(inner: Block) -> Self {
+@@ -94,6 +133,13 @@ impl IndexBlock {
+         ))
+     }
+ 
++    pub(crate) fn iter_with_keys(&self, keys: Arc<[RestartKey]>) -> Iter<'_> {
++        Iter::new(
++            Decoder::<KeyedBlockHandle, IndexBlockParsedItem>::new(&self.inner)
++                .with_restart_keys(keys),
++        )
++    }
++
+     pub fn encode_into_vec(items: &[KeyedBlockHandle]) -> crate::Result<Vec<u8>> {
+         let mut buf = vec![];
+ 
+@@ -126,3 +172,96 @@ impl IndexBlock {
+         serializer.finish()
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{table::block::Header, Checksum};
++
++    #[test]
++    fn cached_restart_keys_match_raw_seeks() -> crate::Result<()> {
++        for key_size in [1, 512] {
++            let mut items = Vec::new();
++            for first in [b'a', b'c', b'e'] {
++                let mut key = vec![first];
++                key.resize(key_size, b'x');
++                for seqno in [SeqNo::MAX].into_iter().chain((0..64).rev()) {
++                    let offset = BlockOffset(items.len() as u64 * 70_000);
++                    items.push(KeyedBlockHandle::new(
++                        key.clone().into(),
++                        seqno,
++                        BlockHandle::new(offset, 6_000),
++                    ));
++                }
++            }
++            let data: Slice = IndexBlock::encode_into_vec(&items)?.into();
++            let raw = IndexBlock::new(Block {
++                header: Header {
++                    block_type: super::super::block::BlockType::Index,
++                    checksum: Checksum::from_raw(0),
++                    data_length: data.len() as u32,
++                    uncompressed_length: data.len() as u32,
++                },
++                data,
++            });
++            assert_eq!(
++                Trailer::new(&raw.inner).as_slice().get(1),
++                Some(if key_size == 1 { &2 } else { &4 }),
++            );
++            let cached = CachedIndexBlock::new(raw.clone());
++            let fields = |item: IndexBlockParsedItem| {
++                let item = item.materialize(raw.as_slice());
++                (
++                    item.end_key().clone(),
++                    item.seqno(),
++                    item.offset(),
++                    item.size(),
++                )
++            };
++            let first = items.first().expect("first key").end_key();
++            let last = items.last().expect("last key").end_key();
++            for needle in [b"".as_slice(), first.as_ref(), b"b", last.as_ref(), b"z"] {
++                for cut in [0, 1, 17, 33, 63, 64, 65, SeqNo::MAX] {
++                    let mut plain = raw.iter();
++                    let mut prepared = cached.iter();
++                    assert_eq!(plain.seek(needle, cut), prepared.seek(needle, cut));
++                    assert_eq!(
++                        plain.map(fields).collect::<Vec<_>>(),
++                        prepared.map(fields).collect::<Vec<_>>(),
++                    );
++
++                    let mut plain = raw.iter();
++                    let mut prepared = cached.iter();
++                    assert_eq!(
++                        plain.seek_upper(needle, cut),
++                        prepared.seek_upper(needle, cut)
++                    );
++                    let mut reverse = false;
++                    loop {
++                        let (a, b) = if reverse {
++                            (plain.next_back(), prepared.next_back())
++                        } else {
++                            (plain.next(), prepared.next())
++                        };
++                        let finished = a.is_none();
++                        assert_eq!(a.map(fields), b.map(fields));
++                        if finished {
++                            assert_eq!(plain.next().map(fields), prepared.next().map(fields));
++                            assert_eq!(
++                                plain.next_back().map(fields),
++                                prepared.next_back().map(fields)
++                            );
++                            break;
++                        }
++                        reverse = !reverse;
++                    }
++                    assert_eq!(
++                        raw.iter().rev().map(fields).collect::<Vec<_>>(),
++                        cached.iter().rev().map(fields).collect::<Vec<_>>(),
++                    );
++                }
++            }
++        }
++        Ok(())
++    }
++}
+diff --git a/src/table/mod.rs b/src/table/mod.rs
+index 083d851e..c4c84d63 100644
+--- a/src/table/mod.rs
++++ b/src/table/mod.rs
+@@ -23,6 +23,7 @@ mod tests;
+ pub use block::{Block, BlockOffset};
+ pub use data_block::DataBlock;
+ pub use id::{GlobalTableId, TableId};
++pub(crate) use index_block::CachedIndexBlock;
+ pub use index_block::{BlockHandle, IndexBlock, KeyedBlockHandle};
+ pub use scanner::Scanner;
+ pub use writer::Writer;
+@@ -176,10 +177,10 @@ impl Table {
+     #[must_use]
+     pub fn pinned_block_index_size(&self) -> usize {
+         match &*self.block_index {
+-            BlockIndexImpl::Full(full_block_index) => full_block_index.inner().inner.size(),
++            BlockIndexImpl::Full(full_block_index) => full_block_index.cached().size(),
+             BlockIndexImpl::VolatileFull(_) => 0,
+             BlockIndexImpl::TwoLevel(two_level_block_index) => {
+-                two_level_block_index.top_level_index.inner.size()
++                two_level_block_index.top_level_index.size()
+             }
+         }
+     }
+@@ -221,6 +222,23 @@ impl Table {
+         .map(DataBlock::new)
+     }
+ 
++    fn load_index_block(
++        &self,
++        handle: &BlockHandle,
++        compression: CompressionType,
++    ) -> crate::Result<CachedIndexBlock> {
++        util::load_index_block(
++            self.global_id(),
++            &self.path,
++            &self.file_accessor,
++            &self.cache,
++            handle,
++            compression,
++            #[cfg(feature = "metrics")]
++            &self.metrics,
++        )
++    }
++
+     /// Returns the (possibly compressed) file size.
+     pub(crate) fn file_size(&self) -> u64 {
+         self.metadata.file_size
+@@ -316,10 +334,10 @@ impl Table {
+     // TODO: so the caller can decide whether to return the value or not
+     fn point_read(&self, key: &[u8], seqno: SeqNo) -> crate::Result<Option<InternalValue>> {
+         let result = match self.block_index.as_ref() {
+-            BlockIndexImpl::Full(index) => self.read_index(index.inner(), key, seqno)?,
++            BlockIndexImpl::Full(index) => self.read_index(index.cached(), key, seqno)?,
+             BlockIndexImpl::VolatileFull(index) => {
+-                let block = self.load_block(&index.handle, BlockType::Index, index.compression)?;
+-                self.read_index(&IndexBlock::new(block), key, seqno)?
++                let block = self.load_index_block(&index.handle, index.compression)?;
++                self.read_index(&block, key, seqno)?
+             }
+             BlockIndexImpl::TwoLevel(index) => {
+                 let mut iter = index.top_level_index.iter();
+@@ -328,11 +346,8 @@ impl Table {
+                 }
+                 for handle in iter {
+                     let handle = handle.materialize(index.top_level_index.as_slice());
+-                    let block =
+-                        self.load_block(handle.as_ref(), BlockType::Index, index.compression)?;
+-                    if let ControlFlow::Break(item) =
+-                        self.read_index(&IndexBlock::new(block), key, seqno)?
+-                    {
++                    let block = self.load_index_block(handle.as_ref(), index.compression)?;
++                    if let ControlFlow::Break(item) = self.read_index(&block, key, seqno)? {
+                         return Ok(item);
+                     }
+                 }
+@@ -344,7 +359,7 @@ impl Table {
+ 
+     fn read_index(
+         &self,
+-        index: &IndexBlock,
++        index: &CachedIndexBlock,
+         key: &[u8],
+         seqno: SeqNo,
+     ) -> crate::Result<ControlFlow<Option<InternalValue>>> {
+@@ -524,7 +539,7 @@ impl Table {
+             let block = Self::read_tli(&regions, &file, metadata.index_block_compression)?;
+ 
+             BlockIndexImpl::TwoLevel(TwoLevelBlockIndex {
+-                top_level_index: block,
++                top_level_index: CachedIndexBlock::new(block),
+                 cache: cache.clone(),
+                 compression: metadata.index_block_compression,
+                 path: Arc::clone(&file_path),
+diff --git a/src/table/util.rs b/src/table/util.rs
+index 45862d15..bb691ab6 100644
+--- a/src/table/util.rs
++++ b/src/table/util.rs
+@@ -2,7 +2,7 @@
+ // This source code is licensed under both the Apache 2.0 and MIT License
+ // (found in the LICENSE-* files in the repository)
+ 
+-use super::{Block, BlockHandle, GlobalTableId};
++use super::{Block, BlockHandle, CachedIndexBlock, GlobalTableId, IndexBlock};
+ use crate::{
+     file_accessor::FileAccessor, table::block::BlockType, version::run::Ranged, Cache,
+     CompressionType, KeyRange, Table,
+@@ -121,6 +121,39 @@ pub fn load_block(
+     Ok(block)
+ }
+ 
++#[warn(clippy::too_many_arguments)]
++pub(crate) fn load_index_block(
++    table_id: GlobalTableId,
++    path: &Path,
++    file_accessor: &FileAccessor,
++    cache: &Cache,
++    handle: &BlockHandle,
++    compression: CompressionType,
++    #[cfg(feature = "metrics")] metrics: &Metrics,
++) -> crate::Result<CachedIndexBlock> {
++    if let Some(block) = cache.get_index_block(table_id, handle.offset()) {
++        #[cfg(feature = "metrics")]
++        metrics
++            .index_block_load_cached
++            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        return Ok(block);
++    }
++    let block = load_block(
++        table_id,
++        path,
++        file_accessor,
++        cache,
++        handle,
++        BlockType::Index,
++        compression,
++        #[cfg(feature = "metrics")]
++        metrics,
++    )?;
++    let block = CachedIndexBlock::new(IndexBlock::new(block));
++    cache.insert_index_block(table_id, handle.offset(), block.clone());
++    Ok(block)
++}
++
+ #[must_use]
+ pub fn longest_shared_prefix_length(s1: &[u8], s2: &[u8]) -> usize {
+     s1.iter()

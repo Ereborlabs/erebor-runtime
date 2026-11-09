@@ -282,6 +282,15 @@ by 1.66%, with a higher median at every collected revision. All correctness
 checks pass, but the reviewer and implementer agree to remove the experiment.
 Accepted engine commits remain unchanged.
 
+The [unapplied cached-index experiments](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/cached-index-experiment/README.md)
+retain both source patches, 17 reproduced summaries, and raw profiles.
+Complete query instructions change by +0.00444%; the draft adds metadata
+memory without measured net query savings. The additional compiler attribute
+changes no standalone native or query-method code bytes. Both drafts pass
+their focused correctness checks and are removed. Metrics library clippy
+fails on the existing eight-argument `Iter::new`; default library clippy passes.
+Accepted engine commits remain unchanged.
+
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this
 implementation. Full workspace CI was not run during this iteration, as the

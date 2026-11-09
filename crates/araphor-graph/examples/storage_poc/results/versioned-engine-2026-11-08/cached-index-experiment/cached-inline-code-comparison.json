@@ -1,0 +1,22 @@
+{
+  ".rodata": {
+    "before_sha256": "025653c8bd13520d302dccaea3be3d1ea76c6c9a2a156ea4fd0d0b074957faef",
+    "after_sha256": "c283cfa49caa55b67bbb3be07c88dab1a5cd5e3e7b4e7863646caa1e04514fd1",
+    "bytes": 2583216,
+    "changed_bytes": 3011
+  },
+  ".text": {
+    "before_sha256": "941e89bb065d61d23f7ac6381f084aa7470b5132bac565c7906311ec1cdf3a2c",
+    "after_sha256": "06834f0f3239e27e609109708da8a187cc40af48e4e94cd89e6dd202e625f7a5",
+    "bytes": 50369904,
+    "changed_bytes": 111,
+    "all_changed_text_bytes_covered": true,
+    "changed_functions": {
+      "storage_poc::stable::run": 51,
+      "storage_poc::compaction::run": 41,
+      "storage_poc::compaction::pass": 4,
+      "storage_poc::main": 14,
+      "<storage_poc::history::History>::orders": 1
+    }
+  }
+}
