@@ -860,6 +860,7 @@ fn source_history_keeps_headers() -> TestResult {
         .raw
         .lock()
         .map_err(|_| "raw source lock")?
+        .index
         .entries
         .is_empty());
     fixture.execution.clear();

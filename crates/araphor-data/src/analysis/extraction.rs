@@ -1954,7 +1954,8 @@ impl AnalysisStore {
                 recovery, retired, coverage: coverage_report } in source_headers.values {
                 control.check()?;
                 let mut header = std::time::Instant::now();
-                let state = self.raw.until(control)?.source_state(&receipt,output.meta.commit_revision,&expired,&retired,control,(output.input_bytes,output.limits.input_bytes))?;
+                let index = self.raw.until(control)?.index.clone();
+                let state = index.source_state(&self.root,&receipt,output.meta.commit_revision,&expired,&retired,control,(output.input_bytes,output.limits.input_bytes))?;
                 self.check_selected_source(&receipt,state.covered)?;
                 let retired_bytes = retired.capacity() * size_of::<AnalysisGapV1>();
                 drop(retired);
@@ -3680,7 +3681,7 @@ mod tests {
                             .raw
                             .until(control)
                             .and_then(|raw| {
-                                raw.source_state(&receipt, 1, &[], &[], control, (0, usize::MAX))
+                                raw.index.source_state(&store.root, &receipt, 1, &[], &[], control, (0, usize::MAX))
                             })
                             .and_then(|state| store.check_selected_source(&receipt, state.covered)),
                         _ => store.read_coordinator(control).map(|_| ()),
@@ -3740,6 +3741,7 @@ mod tests {
                 .raw
                 .lock()
                 .map_err(|_| "raw lock poisoned")?
+                .index
                 .entries
                 .values()
                 .filter(|entry| entry.identity == identity && entry.commit.intake == 20)
@@ -4231,6 +4233,7 @@ mod tests {
                 .raw
                 .lock()
                 .map_err(|_| "raw lock poisoned")?
+                .index
                 .entries
                 .values()
                 .map(|entry| entry.frame_bytes)
@@ -4386,6 +4389,7 @@ mod tests {
                 .raw
                 .lock()
                 .map_err(|_| "raw lock poisoned")?
+                .index
                 .entries
                 .values()
                 .filter(|entry| entry.commit.intake == 20 || entry.commit.intake == 100)
@@ -4411,8 +4415,9 @@ mod tests {
             .raw
             .lock()
             .map_err(|_| "raw lock poisoned")?
+            .index
             .ranges
-            .remove(&(identity.key(), 2));
+            .remove_mut(&(identity.key(), 2));
         assert!(read(
             &store,
             &selection,
@@ -4630,6 +4635,7 @@ mod tests {
                 .raw
                 .lock()
                 .map_err(|_| "raw lock poisoned")?
+                .index
                 .entries
                 .values()
                 .map(|entry| entry.frame_bytes)
@@ -4779,6 +4785,7 @@ mod tests {
                 .raw
                 .lock()
                 .map_err(|_| "raw lock poisoned")?
+                .index
                 .entries
                 .values()
                 .filter(|entry| entry.commit.intake == 20)
@@ -4802,6 +4809,7 @@ mod tests {
                 .raw
                 .lock()
                 .map_err(|_| "raw lock poisoned")?
+                .index
                 .entries
                 .values()
                 .map(|entry| entry.frame_bytes)

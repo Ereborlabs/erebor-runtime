@@ -128,6 +128,7 @@ impl AnalysisStore {
             let source = self
                 .raw
                 .until(control)?
+                .index
                 .sources
                 .get(&key)
                 .and_then(|source| source.receipt.evidence())

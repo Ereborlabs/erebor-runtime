@@ -369,6 +369,7 @@ dependencies = [
  "prost",
  "prost-build",
  "rmp-serde",
+ "rpds",
  "rustix 1.1.4",
  "schemars 1.2.2",
  "serde",
@@ -562,6 +563,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
 dependencies = [
  "rustversion",
+]
+
+[[package]]
+name = "archery"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6cd774058b1b415c4855d8b86436c04bf050c003156fe24bc326fb3fe75c343"
+dependencies = [
+ "static_assertions",
 ]
 
 [[package]]
@@ -6827,6 +6837,15 @@ checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
 dependencies = [
  "rmp",
  "serde",
+]
+
+[[package]]
+name = "rpds"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bd6ce569b15c331b1e5fd8cf6adb0bf240678b5f0cdc4d0f41e11683f6feba9"
+dependencies = [
+ "archery",
 ]
 
 [[package]]

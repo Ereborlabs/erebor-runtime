@@ -303,6 +303,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                         )
                     };
                     let before = raw
+                        .index
                         .sources
                         .get(&key)
                         .ok_or_else(|| self.store.state_error("the retention source is absent"))?
@@ -358,7 +359,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                     operation: "commit segment deletion",
                 })?;
                 for (key, floor) in changed {
-                    if let Some(source) = raw.sources.get_mut(&key) {
+                    if let Some(source) = raw.index.sources.get_mut(&key) {
                         source.receipt.set_floor(floor);
                     }
                 }
@@ -366,7 +367,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                 self.store.crash_at("retention.after");
                 let cleanup =
                     AnalysisStore::remove_segments(writer, &self.store.root, &raw, &selected);
-                for entry in raw.entries.values().filter(|entry| selected.contains(&entry.reference.id)) {
+                for entry in raw.index.entries.values().filter(|entry| selected.contains(&entry.reference.id)) {
                     for span in &entry.commit.spans {
                         self.store.inputs.metadata(revision, super::inputs::InputChange::Removal {
                             identity: &entry.identity,
@@ -401,6 +402,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             target.commit_revision = step.read_revision;
             let key = identity.key();
             let receipt = raw
+                .index
                 .sources
                 .get(&key)
                 .filter(|source| source.receipt.matches(identity))

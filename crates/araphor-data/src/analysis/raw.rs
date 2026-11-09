@@ -3,6 +3,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
+mod index;
+
+pub(super) use index::RawIndex;
+
 use prost::Message as _;
 use snafu::ResultExt as _;
 
@@ -321,6 +325,7 @@ impl AnalysisStore {
         let raw = self.raw.until(control)?;
         let key = identity.key();
         let source = raw
+            .index
             .sources
             .get(&key)
             .filter(|source| source.receipt.matches(identity))
@@ -356,17 +361,18 @@ impl AnalysisStore {
         let mut bounded = false;
         if first_cursor <= page_end {
             let start = raw
+                .index
                 .ranges
                 .range((key.clone(), 0)..=(key.clone(), first_cursor))
                 .next_back()
                 .filter(|(_, (revision, index))| {
-                    raw.entries[revision].commit.spans[*index].last >= first_cursor
+                    raw.index.entries[revision].commit.spans[*index].last >= first_cursor
                 })
                 .map_or(first_cursor, |((_, first), _)| *first);
-            for (_, &(revision, index)) in raw.ranges.range((key.clone(), start)..=(key, page_end))
+            for (_, &(revision, index)) in raw.index.ranges.range((key.clone(), start)..=(key, page_end))
             {
                 control.check()?;
-                let entry = &raw.entries[&revision];
+                let entry = &raw.index.entries[&revision];
                 let span = &entry.commit.spans[index];
                 let first = span.first.max(first_cursor);
                 if first_cursor.checked_add(count as u64) != Some(first) {
@@ -475,6 +481,7 @@ impl AnalysisStore {
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
         let source = RawIdentity::Diagnostic(identity.clone());
         Ok(raw
+            .index
             .sources
             .get(&source.key())
             .and_then(|source| match &source.receipt {
@@ -589,6 +596,7 @@ impl AnalysisStore {
                     None,
                 )?;
                 let floor = raw
+                    .index
                     .sources
                     .get(&source.key())
                     .map_or(0, |source| source.receipt.floor());
@@ -600,7 +608,7 @@ impl AnalysisStore {
         let key = identity.key();
         let tenant = identity.tenant();
         if let RawIdentity::Diagnostic(trace) = &identity {
-            if raw.sources.get(&key).is_none_or(|source| !source.written) {
+            if raw.index.sources.get(&key).is_none_or(|source| !source.written) {
                 let (_, intent) = Self::read_trace_intent(
                     writer.get()?,
                     &self.root,
@@ -622,7 +630,7 @@ impl AnalysisStore {
                 }
             }
         }
-        if let Some(source) = raw.sources.get(&key) {
+        if let Some(source) = raw.index.sources.get(&key) {
             if source.receipt.cpu() != batch.kind.cpu() || !source.receipt.matches(&identity) {
                 if matches!(identity, RawIdentity::Diagnostic(_)) {
                     return crate::AnalysisConflictSnafu.fail();
@@ -656,7 +664,7 @@ impl AnalysisStore {
             if *first <= batch.first_cursor && *last >= batch.last_cursor {
                 return Ok((
                     EvidenceStoreOutcomeV1::AlreadyAcceptedExpired,
-                    raw.sources[&key].receipt.clone(),
+                    raw.index.sources[&key].receipt.clone(),
                 ));
             }
             if matches!(identity, RawIdentity::Diagnostic(_)) {
@@ -678,17 +686,17 @@ impl AnalysisStore {
         } else {
             self.storage.source_entries.is_some()
         };
-        if source_limit && !raw.sources.contains_key(&key) {
-            let matching = raw
+        if source_limit && !raw.index.sources.contains_key(&key) {
+            let matching = || raw
+                .index
                 .sources
                 .values()
                 .filter(|source| source.receipt.evidence().is_none() == diagnostic);
-            let total = matching
-                .clone()
+            let total = matching()
                 .count()
                 .checked_add(1)
                 .ok_or_else(|| self.state_error("the source count overflows"))?;
-            let scoped = matching
+            let scoped = matching()
                 .filter(|source| match &source.receipt {
                     RawReceipt::Evidence(receipt) => receipt.identity.tenant_id == tenant,
                     RawReceipt::Diagnostic(receipt) => receipt.identity.tenant_id == tenant,
@@ -702,7 +710,7 @@ impl AnalysisStore {
         if commit.spans.is_empty() {
             return Ok((
                 raw.outcome(&identity, batch.last_cursor),
-                raw.sources[&key].receipt.clone(),
+                raw.index.sources[&key].receipt.clone(),
             ));
         }
         let append = raw.prepare_append(&identity, commit)?;
@@ -792,7 +800,7 @@ impl AnalysisStore {
         } else {
             self.storage.check_append(usage, projected)?;
         }
-        let _rotation = if created && raw.sources.get(&key).is_some_and(|source| source.written) {
+        let _rotation = if created && raw.index.sources.get(&key).is_some_and(|source| source.written) {
             drop(raw);
             #[cfg(any(test, feature = "test-fixtures"))]
             self.run_commit_hook(super::AnalysisCommitStage::BeforeRotation)?;
@@ -814,8 +822,9 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("evidence.before");
         let body_bytes = commit.body.len() as u64;
-        let created = !raw.sources.contains_key(&key);
+        let created = !raw.index.sources.contains_key(&key);
         let prior_cursor = raw
+            .index
             .sources
             .get(&key)
             .map_or(0, |source| source.receipt.cursor());
@@ -831,16 +840,16 @@ impl AnalysisStore {
                 *raw.budget.protected.entry(tenant).or_default() += body_bytes;
             }
             let floor = raw.budget.required[&key];
-            let contiguous = raw.sources[&key].receipt.cursor();
+            let contiguous = raw.index.sources[&key].receipt.cursor();
             let oldest = self.retention.raw_max_age_ns.and_then(|_| {
                 prior_cursor
                     .max(floor)
                     .checked_add(1)
                     .filter(|first| *first <= contiguous)
                     .and_then(|first| {
-                        raw.ranges
+                        raw.index.ranges
                             .range((key.clone(), first)..=(key.clone(), contiguous))
-                            .map(|(_, (revision, _))| raw.entries[revision].commit.intake)
+                            .map(|(_, (revision, _))| raw.index.entries[revision].commit.intake)
                             .min()
                     })
             });
@@ -855,7 +864,7 @@ impl AnalysisStore {
         self.write_ready.store(true, Ordering::Release);
         self.raw_pending.store(true, Ordering::Release);
         self.revision.send_replace(revision);
-        let entry = &raw.entries[&revision];
+        let entry = &raw.index.entries[&revision];
         for span in &entry.commit.spans {
             let ordinal = span.ordinal + (span.last - span.first) as u32;
             self.inputs.publish(super::StorePositionV1 { commit_revision: revision, ordinal },
@@ -865,7 +874,7 @@ impl AnalysisStore {
         if created { self.activations.send_replace(revision); }
         Ok((
             raw.outcome(&identity, batch.last_cursor),
-            raw.sources[&key].receipt.clone(),
+            raw.index.sources[&key].receipt.clone(),
         ))
     }
 }
@@ -1067,6 +1076,7 @@ pub(super) struct RawEntry {
     pub frame_bytes: usize,
 }
 
+#[derive(Clone)]
 pub(super) struct RawSource {
     pub receipt: RawReceipt,
     pub written: bool,
@@ -1200,10 +1210,7 @@ pub(super) struct RawJournal {
     pub usage: StorageUsageV1,
     pub diagnostics: usize,
     pub directory: Cell<Option<DirectoryStamp>>,
-    pub sources: BTreeMap<Vec<u8>, RawSource>,
-    pub entries: BTreeMap<u64, RawEntry>,
-    pub ranges: BTreeMap<(Vec<u8>, u64), (u64, usize)>,
-    pub revision: u64,
+    pub index: RawIndex,
     pub budget: super::raw_catalog::RawBudget,
 }
 
@@ -1216,6 +1223,7 @@ impl RawJournal {
             return Ok(());
         }
         let saved = self
+            .index
             .sources
             .get(&RawIdentity::Diagnostic(identity.clone()).key())
             .and_then(|source| match &source.receipt {
@@ -1350,7 +1358,7 @@ impl RawJournal {
                     return Err(self.invalid("the recovered diagnostic progress is invalid"));
                 }
                 let saved =
-                    self.sources.get(&entry.identity.key()).and_then(|source| {
+                    self.index.sources.get(&entry.identity.key()).and_then(|source| {
                         match &source.receipt {
                             RawReceipt::Diagnostic(receipt) => Some(receipt),
                             RawReceipt::Evidence(_) => None,
@@ -1373,6 +1381,7 @@ impl RawJournal {
                     );
                 }
                 let retained_floor = self
+                    .index
                     .sources
                     .get(&entry.identity.key())
                     .map_or(0, |source| source.receipt.floor());
@@ -1389,47 +1398,6 @@ impl RawJournal {
         }
     }
 
-    pub(super) fn selection_revision(
-        &self,
-        selection: &super::AnalysisSelectionV1,
-        revision: u64,
-        control: &super::AnalysisReadControl,
-    ) -> Result<u64> {
-        let mut latest = 0;
-        for identity in selection.sources.as_slice() {
-            control.check()?;
-            let key = identity.key();
-            for (_, &(id, _)) in self.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
-                control.check()?;
-                if id > revision || id <= latest {
-                    continue;
-                }
-                let entry = &self.entries[&id];
-                if &entry.identity == identity
-                    && selection.time_range().is_some_and(|(from, until)| {
-                        entry.commit.intake >= from && entry.commit.intake <= until
-                    })
-                {
-                    latest = id;
-                }
-            }
-        }
-        for identity in selection.traces.as_slice() {
-            control.check()?;
-            let key = RawIdentity::Diagnostic(identity.clone()).key();
-            for (_, &(id, _)) in self.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
-                control.check()?;
-                if id <= revision
-                    && id > latest
-                    && self.entries[&id].identity == RawIdentity::Diagnostic(identity.clone())
-                {
-                    latest = id;
-                }
-            }
-        }
-        Ok(latest)
-    }
-
     pub(super) fn select_position(
         &self,
         selection: &super::AnalysisSelectionV1,
@@ -1444,7 +1412,7 @@ impl RawJournal {
             return Ok(None);
         }
         let first = after.map_or(0, |position| position.commit_revision);
-        for (&id, entry) in self.entries.range(first..=revision) {
+        for (&id, entry) in self.index.entries.range(first..=revision) {
             control.check()?;
             let selected = match &entry.identity {
                 RawIdentity::Evidence(identity) => {
@@ -1505,85 +1473,6 @@ impl RawJournal {
         Ok(None)
     }
 
-    pub(super) fn source_state(
-        &self,
-        receipt: &AnalysisSourceReceiptV1,
-        revision: u64,
-        expired: &[super::AnalysisGapV1],
-        retired: &[super::AnalysisGapV1],
-        control: &super::AnalysisReadControl,
-        budget: (usize, usize),
-    ) -> Result<RawSourceState> {
-        let key = receipt.identity.key();
-        let live = self
-            .ranges
-            .range((key.clone(), 0)..=(key, u64::MAX))
-            .filter_map(|(_, &(id, index))| {
-                let span = &self.entries[&id].commit.spans[index];
-                (id <= revision).then_some((span.first, span.last))
-            });
-        let expired = expired
-            .iter()
-            .map(|span| (span.first_cursor, span.last_cursor));
-        let retired = retired
-            .iter()
-            .map(|span| (span.first_cursor, span.last_cursor));
-        let ranges = Self::merge_ranges(Self::merge_ranges(live, expired), retired);
-        let mut state = RawSourceState {
-            covered: 0,
-            pending: Vec::new(),
-        };
-        let mut previous = 0;
-        let mut next = receipt.contiguous_cursor.checked_add(1);
-        let mut allocated = 0;
-        for (first, last) in ranges {
-            control.check()?;
-            if first == 0 || last < first || first <= previous {
-                return Err(self.invalid("the accepted source ranges overlap or are invalid"));
-            }
-            previous = last;
-            if first <= receipt.contiguous_cursor {
-                state.covered = state
-                    .covered
-                    .checked_add(last.min(receipt.contiguous_cursor) - first + 1)
-                    .ok_or_else(|| self.invalid("the accepted source count overflows"))?;
-            }
-            if let Some(begin) = next.filter(|_| last > receipt.contiguous_cursor) {
-                if first > begin {
-                    allocated += super::AnalysisExtractionV1::grow(
-                        &mut state.pending,
-                        budget.0.saturating_add(allocated),
-                        budget.1,
-                    )?;
-                    state.pending.push(super::AnalysisGapV1 {
-                        first_cursor: begin,
-                        last_cursor: first - 1,
-                        commit_revision: revision,
-                    });
-                }
-                next = last.checked_add(1);
-            }
-        }
-        Ok(state)
-    }
-
-    fn merge_ranges(
-        left: impl Iterator<Item = (u64, u64)>,
-        right: impl Iterator<Item = (u64, u64)>,
-    ) -> impl Iterator<Item = (u64, u64)> {
-        let (mut left, mut right) = (left.peekable(), right.peekable());
-        std::iter::from_fn(move || {
-            if left
-                .peek()
-                .is_some_and(|value| right.peek().is_none_or(|other| value <= other))
-            {
-                left.next()
-            } else {
-                right.next()
-            }
-        })
-    }
-
     pub(super) fn segment_entries(
         &self,
         id: u64,
@@ -1600,14 +1489,15 @@ impl RawJournal {
             .get(&id)
             .ok_or_else(|| self.invalid("the retention segment is absent"))?;
         let revisions: std::collections::BTreeSet<_> = self
+            .index
             .ranges
             .range((segment.source.clone(), first)..=(segment.source.clone(), last))
             .map(|(_, (revision, _))| *revision)
-            .filter(|revision| self.entries[revision].reference.id == id)
+            .filter(|revision| self.index.entries[revision].reference.id == id)
             .collect();
         let entries: Vec<_> = revisions
             .iter()
-            .map(|revision| &self.entries[revision])
+            .map(|revision| &self.index.entries[revision])
             .collect();
         let identity = &entries
             .first()
@@ -1636,10 +1526,17 @@ impl RawJournal {
         for id in &ids {
             self.forget_segment(*id)?;
         }
-        self.entries
-            .retain(|_, entry| !ids.contains(&entry.reference.id));
-        self.ranges
-            .retain(|_, (revision, _)| self.entries.contains_key(revision));
+        let revisions: Vec<_> = self.index.entries.iter()
+            .filter(|(_, entry)| ids.contains(&entry.reference.id))
+            .map(|(revision, _)| *revision).collect();
+        for revision in revisions {
+            let entry = &self.index.entries[&revision];
+            let key = entry.identity.key();
+            for span in &entry.commit.spans {
+                self.index.ranges.remove_mut(&(key.clone(), span.first));
+            }
+            self.index.entries.remove_mut(&revision);
+        }
         Ok(())
     }
 
@@ -1660,10 +1557,11 @@ impl RawJournal {
         revision: u64,
     ) -> Option<(&RawEntry, usize)> {
         let (_, &(id, index)) = self
+            .index
             .ranges
             .range((key.to_vec(), 0)..=(key.to_vec(), cursor))
             .next_back()?;
-        let entry = &self.entries[&id];
+        let entry = &self.index.entries[&id];
         if id > revision || cursor > entry.commit.spans[index].last {
             return None;
         }
@@ -1700,14 +1598,15 @@ impl RawJournal {
         }
         let key = identity.key();
         let start = self
+            .index
             .ranges
             .range((key.clone(), 0)..=(key.clone(), first))
             .next_back()
-            .filter(|(_, (id, index))| self.entries[id].commit.spans[*index].last >= first)
+            .filter(|(_, (id, index))| self.index.entries[id].commit.spans[*index].last >= first)
             .map_or(first, |((_, start), _)| *start);
         let mut ranges = Vec::new();
-        for (_, &(id, index)) in self.ranges.range((key.clone(), start)..=(key, last)) {
-            let entry = &self.entries[&id];
+        for (_, &(id, index)) in self.index.ranges.range((key.clone(), start)..=(key, last)) {
+            let entry = &self.index.entries[&id];
             if &entry.identity != identity
                 || id > revision
                 || time.is_some_and(|(from, until)| {
@@ -1738,15 +1637,16 @@ impl RawJournal {
             return 0;
         }
         let start = self
+            .index
             .ranges
             .range((key.to_vec(), 0)..=(key.to_vec(), first))
             .next_back()
-            .filter(|(_, (id, index))| self.entries[id].commit.spans[*index].last >= first)
+            .filter(|(_, (id, index))| self.index.entries[id].commit.spans[*index].last >= first)
             .map_or(first, |((_, start), _)| *start);
-        self.ranges
+        self.index.ranges
             .range((key.to_vec(), start)..=(key.to_vec(), last))
             .filter_map(|(_, &(id, index))| {
-                let span = &self.entries[&id].commit.spans[index];
+                let span = &self.index.entries[&id].commit.spans[index];
                 (id <= revision).then(|| span.last.min(last) - span.first.max(first) + 1)
             })
             .sum()
@@ -1779,7 +1679,7 @@ impl RawJournal {
         revision: u64,
     ) -> Result<RawCommit> {
         let key = identity.key();
-        let source = self.sources.get(&key);
+        let source = self.index.sources.get(&key);
         if let Some(source) = source {
             if !source.receipt.matches(identity) || source.receipt.cpu() != batch.kind.cpu() {
                 if matches!(identity, RawIdentity::Diagnostic(_)) {
@@ -1789,7 +1689,7 @@ impl RawJournal {
             }
         } else {
             if identity.evidence().is_some_and(|identity| {
-                self.sources
+                self.index.sources
                     .values()
                     .filter_map(|source| source.receipt.evidence())
                     .any(|source| {
@@ -1812,11 +1712,12 @@ impl RawJournal {
             .fail();
         }
         let overlap = self
+            .index
             .ranges
             .range((key.clone(), 0)..=(key.clone(), batch.last_cursor))
             .next_back()
             .is_some_and(|(_, &(id, index))| {
-                self.entries[&id].commit.spans[index].last >= batch.first_cursor
+                self.index.entries[&id].commit.spans[index].last >= batch.first_cursor
             });
         if !overlap && batch.first_cursor > contiguous {
             let mut commit = RawCommit {
@@ -1845,11 +1746,12 @@ impl RawJournal {
         }
         let mut retained = vec![false; batch.frame_ends.len()];
         for (_, &(stored_revision, index)) in self
+            .index
             .ranges
             .range((key.clone(), 0)..=(key, batch.last_cursor))
             .rev()
         {
-            let entry = &self.entries[&stored_revision];
+            let entry = &self.index.entries[&stored_revision];
             let span = &entry.commit.spans[index];
             if span.last < batch.first_cursor {
                 break;
@@ -1939,124 +1841,19 @@ impl RawJournal {
         Ok(commit)
     }
 
-    pub(super) fn publish(&mut self, entry: RawEntry, commit: &RawCommit) -> Result<()> {
-        if !entry.identity.valid() {
-            return Err(self.invalid("the raw source identity is invalid"));
-        }
-        let key = entry.identity.key();
-        let revision = entry.commit.revision;
-        if self.entries.contains_key(&revision) {
-            return Err(self.invalid("the raw revision is duplicated"));
-        }
-        if !self.sources.contains_key(&key)
-            && entry.identity.evidence().is_some_and(|identity| {
-                self.sources
-                    .values()
-                    .filter_map(|source| source.receipt.evidence())
-                    .any(|source| {
-                        let saved = &source.identity;
-                        saved.tenant_id == identity.tenant_id
-                            && saved.node_id == identity.node_id
-                            && saved.source_id == identity.source_id
-                            && saved.source_epoch == identity.source_epoch
-                            && saved != identity
-                    })
-            })
-        {
-            return Err(self.invalid("one raw source epoch changed its boot or label"));
-        }
-        for span in &entry.commit.spans {
-            if self
-                .ranges
-                .range((key.clone(), 0)..=(key.clone(), span.last))
-                .next_back()
-                .is_some_and(|(_, &(prior, offset))| {
-                    self.entries[&prior].commit.spans[offset].last >= span.first
-                })
-            {
-                return Err(self.invalid("raw cursor ranges overlap"));
-            }
-        }
+    pub(super) fn prepare_index(&self, entry: RawEntry, commit: &RawCommit) -> Result<RawIndex> {
         let receipt = self.commit_receipt(&entry, commit)?;
-        let source = self
-            .sources
-            .entry(key.clone())
-            .or_insert_with(|| RawSource {
-                receipt: receipt.clone(),
-                written: true,
-                active: None,
-            });
-        if !source.receipt.matches(&entry.identity)
-            || source.receipt.cpu() != entry.commit.kind.cpu()
-        {
-            return Err(self.invalid("the recovered raw source binding conflicts"));
-        }
-        if let RawReceipt::Diagnostic(next) = receipt {
-            let RawReceipt::Diagnostic(saved) = &source.receipt else {
-                return Err(crate::AnalysisStateSnafu {
-                    path: &self.root,
-                    reason: "the raw source kind changed",
-                }
-                .build());
-            };
-            if next.last_sequence < saved.last_sequence
-                || next.output_bytes < saved.output_bytes
-                || saved
-                    .terminal
-                    .as_ref()
-                    .is_some_and(|terminal| next.terminal.as_ref() != Some(terminal))
-            {
-                return Err(crate::AnalysisStateSnafu {
-                    path: &self.root,
-                    reason: "the raw diagnostic receipt regressed",
-                }
-                .build());
-            }
-            source.receipt = RawReceipt::Diagnostic(next);
-        }
-        source.written = true;
-        self.revision = self.revision.max(revision);
-        for (index, span) in entry.commit.spans.iter().enumerate() {
-            self.ranges
-                .insert((key.clone(), span.first), (revision, index));
-        }
-        self.entries.insert(revision, entry);
-        Ok(())
+        self.index.prepare(entry, receipt, &self.root)
     }
 
-    pub(super) fn refresh_source(&mut self, key: &[u8]) -> Result<()> {
-        let mut contiguous = self
-            .sources
-            .get(key)
-            .map_or(0, |source| source.receipt.cursor());
-        for (_, &(revision, index)) in self
-            .ranges
-            .range((key.to_vec(), contiguous.saturating_add(1))..=(key.to_vec(), u64::MAX))
-        {
-            let span = &self.entries[&revision].commit.spans[index];
-            if span.first > contiguous.saturating_add(1) {
-                break;
-            }
-            contiguous = contiguous.max(span.last);
-        }
-        if let Some(source) = self.sources.get_mut(key) {
-            if let RawReceipt::Evidence(receipt) = &mut source.receipt {
-                receipt.contiguous_cursor = contiguous;
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn refresh_receipts(&mut self) -> Result<()> {
-        let keys: Vec<_> = self.sources.keys().cloned().collect();
-        for key in keys {
-            self.refresh_source(&key)?;
-        }
+    pub(super) fn publish(&mut self, entry: RawEntry, commit: &RawCommit) -> Result<()> {
+        self.index = self.prepare_index(entry, commit)?;
         Ok(())
     }
 
     pub(super) fn outcome(&self, identity: &RawIdentity, last: u64) -> EvidenceStoreOutcomeV1 {
         if self
+            .index
             .sources
             .get(&identity.key())
             .is_some_and(|source| source.receipt.cursor() >= last)
@@ -2578,8 +2375,8 @@ pub(super) mod tests {
         {
             let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
             assert_ne!(
-                raw.entries[&page.positions[0].commit_revision].reference.id,
-                raw.entries[&page
+                raw.index.entries[&page.positions[0].commit_revision].reference.id,
+                raw.index.entries[&page
                     .terminal_position
                     .ok_or("terminal position absent")?
                     .commit_revision]
@@ -2724,7 +2521,7 @@ pub(super) mod tests {
         {
             let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
             let source = RawIdentity::Diagnostic(identity.clone());
-            assert!(!raw.entries.values().any(|entry| entry.identity == source));
+            assert!(!raw.index.entries.values().any(|entry| entry.identity == source));
         }
         {
             let mut writer = store.writer()?;
@@ -2788,10 +2585,10 @@ pub(super) mod tests {
         {
             let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
             assert_ne!(
-                raw.entries[&first.positions[0].commit_revision]
+                raw.index.entries[&first.positions[0].commit_revision]
                     .reference
                     .id,
-                raw.entries[&last.positions[0].commit_revision].reference.id
+                raw.index.entries[&last.positions[0].commit_revision].reference.id
             );
         }
         assert_eq!(last.frames, batch.frames);
@@ -2948,8 +2745,8 @@ pub(super) mod tests {
         assert_eq!(std::fs::read(&file)?, saved);
         let journal = RawJournal::open(root, &BTreeMap::new())?;
         assert_eq!(std::fs::metadata(&file)?.len(), length);
-        assert_eq!(journal.sources[&identity.key()].receipt.cursor(), 3);
-        assert_eq!(journal.revision, 2);
+        assert_eq!(journal.index.sources[&identity.key()].receipt.cursor(), 3);
+        assert_eq!(journal.index.revision, 2);
         assert!(journal
             .prepare(&raw, &batch.clone().into(), 3)?
             .spans
@@ -2960,13 +2757,13 @@ pub(super) mod tests {
         conflict = batch;
         conflict.cpu_id = 1;
         assert!(journal.prepare(&raw, &conflict.into(), 3).is_err());
-        let entry = &journal.entries[&2];
+        let entry = &journal.index.entries[&2];
         let body = journal.read_entry(entry)?.body;
         let stored =
             super::super::SegmentFile::reader(&file)?.read(entry.body_start, entry.body_bytes)?;
         assert_eq!(stored.as_slice(), body.as_ref());
         assert!(!root.join("analysis.duckdb").exists());
-        let first_end = journal.entries[&1].reference.offset;
+        let first_end = journal.index.entries[&1].reference.offset;
         let mut journal = journal;
         journal.seal_all()?;
         let file = journal.segment_path(1)?.to_path_buf();
@@ -2981,8 +2778,8 @@ pub(super) mod tests {
         assert_eq!(std::fs::read(&file)?, shortened);
         std::fs::write(&file, &sealed)?;
         let journal = RawJournal::read_sealed(root, &BTreeMap::new())?;
-        assert_eq!(journal.sources[&identity.key()].receipt.cursor(), 3);
-        assert_eq!(journal.read_entry(&journal.entries[&2])?.body, body);
+        assert_eq!(journal.index.sources[&identity.key()].receipt.cursor(), 3);
+        assert_eq!(journal.read_entry(&journal.index.entries[&2])?.body, body);
         assert!(!root.join("analysis.duckdb").exists());
         drop(journal);
         let file = std::fs::OpenOptions::new()

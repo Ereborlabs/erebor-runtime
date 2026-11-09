@@ -46,6 +46,8 @@ mod segment_file;
 mod segments;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod test_support;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use test_support::RawIndexFixture;
 mod trace;
 
 pub use backup::{AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisRecoveryStatusV1};
@@ -713,6 +715,7 @@ impl AnalysisStore {
             .lock()
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
         Ok(raw
+            .index
             .sources
             .get(&identity.key())
             .and_then(|source| source.receipt.evidence())
@@ -881,16 +884,18 @@ impl AnalysisStore {
                 .raw
                 .lock()
                 .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
-            let source = raw.sources.entry(key).or_insert_with(|| {
-                AnalysisSourceReceiptV1 {
+            if !raw.index.sources.contains_key(&key) {
+                raw.index.sources.insert_mut(key.clone(), AnalysisSourceReceiptV1 {
                     identity: identity.clone(),
                     cpu_id: input.cpu_id,
                     contiguous_cursor: 0,
                     coverage_revision: input.revision,
                     retained_floor: 0,
-                }
-                .into()
-            });
+                }.into());
+            }
+            let source = raw.index.sources.get_mut(&key).ok_or_else(|| {
+                self.state_error("the covered raw source is absent")
+            })?;
             if let raw::RawReceipt::Evidence(receipt) = &mut source.receipt {
                 receipt.coverage_revision = input.revision;
             }
@@ -1401,6 +1406,7 @@ pub(crate) mod tests {
                 .raw
                 .lock()
                 .map_err(|_| "raw lock poisoned")?
+                .index
                 .ranges
                 .keys()
                 .filter(|(key, _)| key == &identity.key())

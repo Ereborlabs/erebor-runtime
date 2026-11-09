@@ -572,7 +572,7 @@ impl AnalysisStore {
         }
         let committed = files.iter().map(|(id, bytes, _)| (*id, *bytes)).collect();
         let mut raw = super::raw::RawJournal::read_sealed(root, &committed)?;
-        if raw.revision > meta.commit_revision {
+        if raw.index.revision > meta.commit_revision {
             return Self::reject_path(root, "the backup contains an unprojected raw commit");
         }
         raw.restore_receipts(&writer)?;

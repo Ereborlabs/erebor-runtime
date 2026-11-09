@@ -150,3 +150,40 @@ open, data validation, and reopen. An unexpected Graph table still makes reopen
 fail. The command is `cargo test --offline -p araphor-data --features test-fixtures --test store_schema`.
 The local check also enabled `native-store` and used the recorded link override.
 This correction establishes no performance gain or production engine migration.
+
+## Shared raw metadata
+
+[RawJournal::append](../../crates/araphor-data/src/analysis/raw_segments.rs) Data accepts a raw append
+  -> [RawJournal::prepare_index](../../crates/araphor-data/src/analysis/raw.rs) Data builds the next metadata root before file I/O.
+  -> [RawIndex::prepare](../../crates/araphor-data/src/analysis/raw/index.rs) The next root shares unchanged ordered tree paths.
+  -> [RawJournal::append](../../crates/araphor-data/src/analysis/raw_segments.rs) The existing segment append and sync complete.
+  -> [RawJournal::append](../../crates/araphor-data/src/analysis/raw_segments.rs) Data publishes the prepared root after the durable checks.
+
+[AnalysisStore::read_tables_inner](../../crates/araphor-data/src/analysis/extraction.rs) A reader needs source range metadata
+  -> [RawIndex::source_state](../../crates/araphor-data/src/analysis/raw/index.rs) The reader clones the root under the raw lock, releases the lock, and scans the captured ranges.
+  -> [RawIndex::selection_revision](../../crates/araphor-data/src/analysis/raw/index.rs) Dependency reads use the same capture rule.
+
+`RawJournal` owns one `RawIndex` for sources, entries, ranges, and the latest raw
+revision. The three maps use `rpds` ordered trees with shared ownership.
+Segments, current paths, file usage, allocation, directory stamps, and admission
+budgets remain in `RawJournal`. A captured root contains metadata, not payloads
+or open files. File selection still resolves segment IDs through the live owner
+and takes the existing finite read lease. Captured metadata does not prevent
+retention from deleting raw files.
+
+The existing raw format, append/sync boundary, SQL projection, recovery, and
+admission remain in use. The Arrow inputs and DataFusion interfaces do not
+change. No extra journal, payload archive, or Fjall write is added for an append.
+The complete raw/native Data view and CDC routing remain **Not done**.
+
+The [raw integration cases](../../crates/araphor-data/tests/raw_index.rs) use the
+actual shared roots through a `test-fixtures` helper. Public Data operations
+check out-of-order input, retries, conflicts, receipt changes, selection,
+positions, rotation, retention, reopen, and failed-append recovery. The helper
+is absent from the normal production API. No raw latency gain is established.
+
+The [qualification](../research/results/araphor-raw-index-2026-11-09.md) records
+nine passing integration cases, the feature-off build, and the unchanged
+incident. Its single timing run does not establish a gain. Production remains
+on DuckDB. Clippy stops on two unchanged legacy calls; full CI does not run
+during iteration.

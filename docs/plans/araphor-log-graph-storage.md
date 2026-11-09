@@ -90,6 +90,18 @@ rejects an unexpected Graph table. The table definitions and strict comparison
 stay unchanged. Result: **Done for the initialization correction**. This is
 not an engine migration or a measured performance improvement.
 
+The shared raw metadata root is now qualified. `RawJournal` uses persistent
+ordered maps and publishes a prepared root after the existing durable append.
+Source-range reads scan captured roots outside the raw lock. Three public raw
+cases, five native cases, and the strict schema case pass. The feature-off build
+also passes. The unchanged incident passes in 23.90 harness seconds. Collector
+receipt to durable creation takes 683.475, 1,161.203, and 1,432.475 milliseconds.
+This single run uses a different DuckDB link override from the older control;
+no performance gain is established. See the
+[qualification](../research/results/araphor-raw-index-2026-11-09.md).
+Result: **Done for shared raw metadata**. The combined raw/native Data view,
+production replacement, CDC routing, and incident targets remain **Not done**.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

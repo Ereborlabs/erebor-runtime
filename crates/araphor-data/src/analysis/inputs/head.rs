@@ -21,7 +21,7 @@ impl InputInterest {
             };
             {
                 let raw = store.raw.until(control)?;
-                for (key, source) in &raw.sources {
+                for (key, source) in &raw.index.sources {
                     control.check()?;
                     let tenant = match &source.receipt {
                         raw::RawReceipt::Evidence(receipt) => receipt.identity.tenant_id,
@@ -85,7 +85,7 @@ impl InputInterest {
             metadata(self.trace_head(connection, meta.commit_revision, control, memory, &store.root)?);
             drop(metadata);
             let raw = store.raw.until(control)?;
-            for (&revision, entry) in raw.entries.range(..=meta.commit_revision).rev() {
+            for (&revision, entry) in raw.index.entries.range(..=meta.commit_revision).rev() {
                 control.check()?;
                 if revision < position.commit_revision { break; }
                 for span in &entry.commit.spans {
@@ -254,6 +254,7 @@ impl InputInterest {
                 };
                 let raw = store.raw.until(control)?;
                 let Some(source) = raw
+                    .index
                     .sources
                     .get(&key)
                     .and_then(|source| source.receipt.evidence())
@@ -307,6 +308,7 @@ impl InputInterest {
         };
         let raw = store.raw.until(control)?;
         let Some(source) = raw
+            .index
             .sources
             .get(key)
             .and_then(|source| source.receipt.evidence())

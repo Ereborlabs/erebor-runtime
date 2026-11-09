@@ -4,7 +4,42 @@ use snafu::ResultExt as _;
 use super::AnalysisStore;
 use crate::{AnalysisDatabaseSnafu, Result};
 
+pub struct RawIndexFixture {
+    index: super::raw::RawIndex,
+}
+
+impl RawIndexFixture {
+    pub fn counts(&self) -> (u64, usize, usize) {
+        (
+            self.index.revision,
+            self.index.entries.size(),
+            self.index.ranges.size(),
+        )
+    }
+
+    pub fn receipt(
+        &self,
+        identity: &crate::EvidenceIntakeIdentityV1,
+    ) -> Option<super::AnalysisSourceReceiptV1> {
+        self.index
+            .sources
+            .get(&identity.key())
+            .and_then(|source| source.receipt.evidence())
+            .cloned()
+    }
+}
+
 impl AnalysisStore {
+    pub fn raw_index_fixture(&self) -> Result<RawIndexFixture> {
+        let index = self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
+            .index
+            .clone();
+        Ok(RawIndexFixture { index })
+    }
+
     pub fn fault_write(&self, query: &str, values: &[&dyn duckdb::ToSql]) -> Result<()> {
         let mut writer = self.writer_access()?;
         let writer = writer.get_mut()?;

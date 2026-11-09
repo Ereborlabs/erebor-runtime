@@ -693,6 +693,7 @@ impl AnalysisStore {
             .lock()
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
         Ok(raw
+            .index
             .sources
             .values()
             .filter_map(|source| source.receipt.evidence().map(|receipt| &receipt.identity))

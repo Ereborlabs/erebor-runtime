@@ -505,9 +505,8 @@ impl AnalysisStore {
         revision: u64,
         control: &AnalysisReadControl,
     ) -> Result<u64> {
-        self.raw
-            .until(control)?
-            .selection_revision(selection, revision, control)
+        let index = self.raw.until(control)?.index.clone();
+        index.selection_revision(selection, revision, control)
     }
 }
 

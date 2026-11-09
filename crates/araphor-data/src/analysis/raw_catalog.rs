@@ -106,7 +106,7 @@ mod tests {
                     .contiguous_cursor,
                 64
             );
-            assert_eq!(raw.sources[&identity.key()].receipt.cursor(), 65);
+            assert_eq!(raw.index.sources[&identity.key()].receipt.cursor(), 65);
             let versions = writer.prepare(
                 "SELECT commit_revision, contiguous_cursor FROM source_versions ORDER BY commit_revision",
             )?.query_map([], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)))?
@@ -153,7 +153,7 @@ mod tests {
         let mut guard = store.writer.lock().map_err(|_| "writer lock poisoned")?;
         let writer = guard.as_mut().ok_or("writer closed")?;
         let mut raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
-        assert!(raw.entries.is_empty());
+        assert!(raw.index.entries.is_empty());
         writer.execute("UPDATE store_meta SET store_uuid = 'invalid'", [])?;
         assert!(matches!(
             raw.project(writer, None),
@@ -308,7 +308,7 @@ impl RawJournal {
                     operation: "read raw segment catalogue check",
                 })?;
             let mut projected = BTreeMap::new();
-            for entry in self.entries.range(..=revision).map(|(_, entry)| entry) {
+            for entry in self.index.entries.range(..=revision).map(|(_, entry)| entry) {
                 let summary =
                     projected
                         .entry(entry.reference.id)
@@ -571,12 +571,12 @@ impl RawJournal {
             .collect();
         self.forget_segments(removed)?;
         if !budget.required.is_empty() {
-            for entry in self.entries.values() {
+            for entry in self.index.entries.values() {
                 let key = entry.identity.key();
                 let Some(&floor) = budget.required.get(&key) else {
                     continue;
                 };
-                let contiguous = self.sources[&key].receipt.cursor();
+                let contiguous = self.index.sources[&key].receipt.cursor();
                 for (index, span) in entry.commit.spans.iter().enumerate() {
                     if span.last <= floor {
                         continue;
@@ -626,6 +626,7 @@ impl RawJournal {
 
     fn project_group(&mut self, writer: &mut Connection, revision: u64) -> Result<Option<u64>> {
         let pending: Vec<_> = self
+            .index
             .entries
             .range((
                 std::ops::Bound::Excluded(revision),
@@ -723,9 +724,10 @@ impl RawJournal {
             }
         }
         for (key, first_revision) in sources {
-            let source = &self.sources[&key];
+            let source = &self.index.sources[&key];
             let RawReceipt::Evidence(receipt) = &source.receipt else {
                 let entry = self
+                    .index
                     .entries
                     .range(..=group_revision)
                     .rev()
@@ -763,11 +765,11 @@ impl RawJournal {
                 retained_floor: 0,
             });
             let mut contiguous = projected.contiguous_cursor;
-            for (_, &(revision, index)) in self.ranges.range((
+            for (_, &(revision, index)) in self.index.ranges.range((
                 std::ops::Bound::Excluded((key.clone(), contiguous)),
                 std::ops::Bound::Included((key.clone(), u64::MAX)),
             )) {
-                let span = &self.entries[&revision].commit.spans[index];
+                let span = &self.index.entries[&revision].commit.spans[index];
                 if revision > group_revision || span.first > contiguous.saturating_add(1) {
                     break;
                 }
@@ -849,7 +851,7 @@ impl RawJournal {
                 })?,
             };
             let key = receipt.identity.key();
-            if let Some(source) = self.sources.get_mut(&key) {
+            if let Some(source) = self.index.sources.get_mut(&key) {
                 let RawReceipt::Evidence(saved) = &mut source.receipt else {
                     return AnalysisStore::reject_path(
                         &self.root,
@@ -866,7 +868,7 @@ impl RawJournal {
                 saved.coverage_revision = receipt.coverage_revision;
                 saved.retained_floor = receipt.retained_floor;
             } else {
-                self.sources.insert(key, receipt.into());
+                self.index.sources.insert_mut(key, receipt.into());
             }
         }
         let mut statement = writer.prepare("SELECT identity_json, last_sequence, output_bytes, terminal, retained_floor, commit_revision FROM trace_receipts")
@@ -906,7 +908,7 @@ impl RawJournal {
                 })?,
             };
             let key = RawIdentity::Diagnostic(identity).key();
-            if let Some(source) = self.sources.get_mut(&key) {
+            if let Some(source) = self.index.sources.get_mut(&key) {
                 let RawReceipt::Diagnostic(saved) = &mut source.receipt else {
                     return AnalysisStore::reject_path(
                         &self.root,
@@ -930,7 +932,7 @@ impl RawJournal {
                     saved.retained_floor = receipt.retained_floor;
                 }
             } else {
-                self.sources.insert(
+                self.index.sources.insert_mut(
                     key,
                     RawSource {
                         receipt: RawReceipt::Diagnostic(receipt),
@@ -940,6 +942,6 @@ impl RawJournal {
                 );
             }
         }
-        self.refresh_receipts()
+        self.index.refresh_receipts()
     }
 }

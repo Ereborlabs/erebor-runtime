@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use prost::Message as _;
 use snafu::ResultExt as _;
 
-use super::raw::{RawCommit, RawEntry, RawIdentity, RawJournal, RawKind, RawLocation, RawMeta};
+use super::raw::{
+    RawCommit, RawEntry, RawIdentity, RawIndex, RawJournal, RawKind, RawLocation, RawMeta,
+};
 use super::{AnalysisStore, SegmentFile, StorageUsageV1, EVIDENCE_SEGMENT_BYTES};
 use crate::{AnalysisStateSnafu, IoSnafu, Result};
 
@@ -124,7 +126,7 @@ impl RawJournal {
             path: &segment.path,
         })?;
         segment.path = path;
-        if let Some(source) = self.sources.get_mut(&segment.source) {
+        if let Some(source) = self.index.sources.get_mut(&segment.source) {
             source.active = None;
         }
         Ok(())
@@ -133,6 +135,7 @@ impl RawJournal {
     pub(super) fn seal_all(&mut self) -> Result<()> {
         let current = self.directory_current()?;
         let active = self
+            .index
             .sources
             .values()
             .filter_map(|source| source.active)
@@ -156,7 +159,7 @@ impl RawJournal {
                     .checked_sub(1)
                     .ok_or_else(|| self.invalid("the diagnostic segment count underflows"))?;
             }
-            if let Some(source) = self.sources.get_mut(&segment.source) {
+            if let Some(source) = self.index.sources.get_mut(&segment.source) {
                 if source.active == Some(id) {
                     source.active = None;
                 }
@@ -185,6 +188,7 @@ impl RawJournal {
         let terminal = matches!(&commit.kind, Some(RawKind::Diagnostic(progress))
             if progress.terminal && commit.spans.len() == 1 && commit.spans[0].first == progress.last_sequence + 1);
         if let Some((id, segment)) = self
+            .index
             .sources
             .get(&identity.key())
             .and_then(|source| source.active)
@@ -228,9 +232,34 @@ impl RawJournal {
     }
 
     pub(super) fn append(&mut self, identity: &RawIdentity, append: RawAppend) -> Result<()> {
+        let end = append
+            .offset
+            .checked_add(append.frame.len() as u64)
+            .ok_or_else(|| self.invalid("the raw append end overflows"))?;
+        let mut index = self.prepare_index(
+            RawEntry {
+                identity: identity.clone(),
+                commit: RawMeta::try_from(&append.commit)?,
+                reference: RawLocation {
+                    id: append.id,
+                    offset: end,
+                },
+                body_start: end - 4 - append.commit.body.len() as u64,
+                body_bytes: append.commit.body.len(),
+                frame_bytes: append.frame.len(),
+            },
+            &append.commit,
+        )?;
+        index
+            .sources
+            .get_mut(&identity.key())
+            .ok_or_else(|| self.invalid("the appended raw source is absent"))?
+            .active = Some(append.id);
+        index.refresh_source(&identity.key())?;
         let current = self.directory_current()?;
         let path = if let Some(header) = &append.header {
             if let Some(id) = self
+                .index
                 .sources
                 .get(&identity.key())
                 .and_then(|source| source.active)
@@ -263,6 +292,7 @@ impl RawJournal {
             if segment.source != identity.key()
                 || segment.end != append.offset
                 || self
+                    .index
                     .sources
                     .get(&segment.source)
                     .is_none_or(|source| source.active != Some(append.id))
@@ -289,7 +319,6 @@ impl RawJournal {
             self.diagnostics += 1;
         }
         self.usage.add(usage, &self.root)?;
-        let end = append.offset + append.frame.len() as u64;
         self.segments.insert(
             append.id,
             RawSegment {
@@ -302,31 +331,8 @@ impl RawJournal {
         self.directory_changed(current)?;
         #[cfg(test)]
         AnalysisStore::crash_path(&self.root, "segment.synced");
-        self.publish(
-            RawEntry {
-                identity: identity.clone(),
-                commit: RawMeta::try_from(&append.commit)?,
-                reference: RawLocation {
-                    id: append.id,
-                    offset: end,
-                },
-                body_start: end - 4 - append.commit.body.len() as u64,
-                body_bytes: append.commit.body.len(),
-                frame_bytes: append.frame.len(),
-            },
-            &append.commit,
-        )?;
-        self.sources
-            .get_mut(&identity.key())
-            .ok_or_else(|| {
-                AnalysisStateSnafu {
-                    path: &self.root,
-                    reason: "the appended raw source is absent",
-                }
-                .build()
-            })?
-            .active = Some(append.id);
-        self.refresh_source(&identity.key())
+        self.index = index;
+        Ok(())
     }
 
     pub(super) fn open(root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
@@ -345,10 +351,7 @@ impl RawJournal {
     ) -> Result<Self> {
         let mut journal = Self {
             root: root.to_path_buf(),
-            sources: BTreeMap::new(),
-            entries: BTreeMap::new(),
-            ranges: BTreeMap::new(),
-            revision: 0,
+            index: RawIndex::default(),
             budget: Default::default(),
             segments: BTreeMap::new(),
             next_segment: 1,
@@ -465,13 +468,17 @@ impl RawJournal {
                 continue;
             }
             if active {
-                let source = journal.sources.get_mut(&identity.key()).ok_or_else(|| {
-                    AnalysisStateSnafu {
-                        path: root,
-                        reason: "the raw source is absent",
-                    }
-                    .build()
-                })?;
+                let source = journal
+                    .index
+                    .sources
+                    .get_mut(&identity.key())
+                    .ok_or_else(|| {
+                        AnalysisStateSnafu {
+                            path: root,
+                            reason: "the raw source is absent",
+                        }
+                        .build()
+                    })?;
                 if source.active.replace(id).is_some() {
                     return Err(journal.invalid("one evidence stream has multiple active segments"));
                 }
@@ -495,7 +502,7 @@ impl RawJournal {
                 .context(IoSnafu { path: &directory })?;
         }
         journal.directory.set(Some(journal.directory_stamp()?));
-        journal.refresh_receipts()?;
+        journal.index.refresh_receipts()?;
         Ok(journal)
     }
 }
