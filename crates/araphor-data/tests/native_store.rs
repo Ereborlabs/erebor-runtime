@@ -35,12 +35,12 @@ fn context_retry_history_and_rollback() -> TestResult {
     let root = dir.path().join("data");
     let store = NativeStore::open(&root)?;
     let initial = store.view()?;
-    assert_eq!(initial.revision, 0);
-    assert_eq!(store.read_at(0)?.revision, 0);
+    assert_eq!(initial.revision(), 0);
+    assert_eq!(store.read_at(0)?.revision(), 0);
     let mut aborted = store.write()?;
     aborted.context(&context(1), Some(0))?;
     aborted.rollback();
-    assert_eq!(store.view()?.revision, 0);
+    assert_eq!(store.view()?.revision(), 0);
     assert!(store.write()?.commit([])?.is_none());
     assert!(NativeStore::open(&root).is_err());
     let first = context(1);
@@ -60,7 +60,7 @@ fn context_retry_history_and_rollback() -> TestResult {
     let mut retry = store.write()?;
     assert_eq!(retry.context(&first, Some(0))?, reference);
     assert!(retry.commit([])?.is_none());
-    assert_eq!(store.view()?.revision, before.revision);
+    assert_eq!(store.view()?.revision(), before.revision());
     assert_eq!(
         store.database().inner().journal_head()?,
         Some(receipt.cursor)
@@ -92,19 +92,19 @@ fn context_retry_history_and_rollback() -> TestResult {
     assert_eq!(before.context_head(&first.key)?, Some(reference));
     assert_eq!(
         store
-            .read_at(before.revision)?
+            .read_at(before.revision())?
             .context(&first.key)?
             .map(|row| row.0),
         Some(first.clone())
     );
     store.database().inner().flush_memtables()?;
     store.database().inner().major_compact()?;
-    let uuid = store.view()?.store_uuid;
+    let uuid = store.view()?.store_uuid();
     drop(before);
     drop(initial);
     drop(store);
     let reopened = NativeStore::open(&root)?;
-    assert_eq!(reopened.view()?.store_uuid, uuid);
+    assert_eq!(reopened.view()?.store_uuid(), uuid);
     assert_eq!(
         reopened
             .read_at(first_revision)?
@@ -178,7 +178,7 @@ fn graph_context_progress_share_one_batch() -> TestResult {
         assert!(batch.items.iter().any(|item| item.key.as_ref() == key));
     }
     let view = store.view()?;
-    assert_eq!(view.revision, revision);
+    assert_eq!(view.revision(), revision);
     assert_eq!(
         view.snapshot().get(b"layer-cut")?.as_deref(),
         Some(receipt.revision.to_bytes().as_slice())
@@ -212,7 +212,7 @@ fn readers_do_not_wait_for_writer() -> TestResult {
     tx.commit([])?;
     handle.join().map_err(|_| "reader panicked")?;
     let captured = captured??;
-    assert_eq!(captured.revision, initial.revision);
+    assert_eq!(captured.revision(), initial.revision());
     assert!(captured.snapshot().get(b"value")?.is_none());
     assert_eq!(
         store.view()?.snapshot().get(b"value")?.as_deref(),
@@ -262,7 +262,7 @@ fn long_context_keys_and_invalid_stamps() -> TestResult {
         store.view()?.snapshot().prefix(b"\0data/key/").count(),
         count
     );
-    let revision = store.view()?.revision;
+    let revision = store.view()?.revision();
     let cursor = store.database().inner().journal_head()?;
     let mut tx = store.write()?;
     tx.native().insert(b"lost", b"absent");
@@ -273,7 +273,7 @@ fn long_context_keys_and_invalid_stamps() -> TestResult {
     assert!(store.write().is_err());
     drop(store);
     let store = NativeStore::open(&root)?;
-    assert_eq!(store.view()?.revision, revision);
+    assert_eq!(store.view()?.revision(), revision);
     assert_eq!(store.database().inner().journal_head()?, cursor);
     assert!(store.view()?.snapshot().get(b"lost")?.is_none());
     assert!(store.write()?.commit([])?.is_none());
@@ -292,7 +292,7 @@ fn initialization_and_cut_recovery() -> TestResult {
     db.create_branch("data")?;
     drop(db);
     let store = NativeStore::open(&root)?;
-    assert_eq!(store.view()?.revision, 0);
+    assert_eq!(store.view()?.revision(), 0);
     assert_eq!(store.database().history()?.len(), 1);
     let initial_cut = store
         .view()?
@@ -316,10 +316,10 @@ fn initialization_and_cut_recovery() -> TestResult {
     let replacement = store
         .branch()
         .retain_history(store.view()?.snapshot().revision()..)?;
-    let revision = store.view()?.revision;
+    let revision = store.view()?.revision();
     drop(store);
     let store = NativeStore::open(&root)?;
-    assert_eq!(store.view()?.revision, revision);
+    assert_eq!(store.view()?.revision(), revision);
     assert!(store.read_at(1).is_err());
     for policy in store.database().history()? {
         if policy.id != replacement {

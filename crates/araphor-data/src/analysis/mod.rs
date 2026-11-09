@@ -194,6 +194,39 @@ pub struct ValidatedEvidenceBatchV1 {
     pub frame_ends: Vec<usize>,
 }
 
+impl ValidatedEvidenceBatchV1 {
+    pub(super) fn validate_identity(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        root: &Path,
+    ) -> Result<()> {
+        if !identity.valid()
+            || self.first_cursor == 0
+            || self.frame_ends.is_empty()
+            || self.frame_ends.last().copied() != Some(self.framed_records.len())
+            || self
+                .frame_ends
+                .iter()
+                .scan(0, |prior, end| {
+                    let increasing = *end > *prior;
+                    *prior = *end;
+                    Some(increasing)
+                })
+                .any(|increasing| !increasing)
+            || self
+                .first_cursor
+                .checked_add(self.frame_ends.len() as u64 - 1)
+                != Some(self.last_cursor)
+        {
+            return AnalysisStore::reject_path(
+                root,
+                "the validated evidence identity or bounds are invalid",
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedCoverageV1 {
     pub identity: EvidenceIntakeIdentityV1,
@@ -907,34 +940,6 @@ impl AnalysisStore {
             identity: &AnalysisStreamIdentityV1::Evidence(identity.clone()), range: None,
         });
         Ok(input.revision)
-    }
-
-    fn validate_batch(
-        &self,
-        identity: &EvidenceIntakeIdentityV1,
-        batch: &ValidatedEvidenceBatchV1,
-    ) -> Result<()> {
-        if !identity.valid()
-            || batch.first_cursor == 0
-            || batch.frame_ends.is_empty()
-            || batch.frame_ends.last().copied() != Some(batch.framed_records.len())
-            || batch
-                .frame_ends
-                .iter()
-                .scan(0, |prior, end| {
-                    let increasing = *end > *prior;
-                    *prior = *end;
-                    Some(increasing)
-                })
-                .any(|increasing| !increasing)
-            || batch
-                .first_cursor
-                .checked_add(batch.frame_ends.len() as u64 - 1)
-                != Some(batch.last_cursor)
-        {
-            return self.reject("the validated evidence identity or bounds are invalid");
-        }
-        Ok(())
     }
 
     fn record_source(

@@ -16,7 +16,13 @@ The existing raw owner now publishes a shared persistent metadata root after
 its durable append. Nine focused integration cases and the unchanged incident
 pass. The [qualification](results/araphor-raw-index-2026-11-09.md) records the
 source and limits. This does not establish a speedup. The combined raw/native
-Data view and production cutover remain **Not done**.
+production Data view and cutover remain **Not done**.
+The default-limit native owner now combines its exact raw prefix and native
+snapshot. Actual Evidence and coverage storage passes 16 focused cases with
+the existing transaction and schema regressions. Read the
+[native raw qualification](results/araphor-native-raw-2026-11-09.md).
+Production admission, routing, remaining transaction families, retention,
+backup, and cutover remain **Not done**. No incident speedup is established.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

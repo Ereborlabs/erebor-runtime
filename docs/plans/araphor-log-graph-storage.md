@@ -102,6 +102,24 @@ no performance gain is established. See the
 Result: **Done for shared raw metadata**. The combined raw/native Data view,
 production replacement, CDC routing, and incident targets remain **Not done**.
 
+The default-limit native Data owner now publishes a combined raw/native view.
+Raw-only input advances the public revision without a Fjall commit. Metadata
+writes validate the previous metadata head and save pending raw controls in the
+same native batch. Historical reads preserve their requested revision and use
+source ranges at that bound. Sixteen focused integration cases and the
+feature-off build pass. See the
+[native raw qualification](../research/results/araphor-native-raw-2026-11-09.md).
+Result: **Done for the default-limit native raw view and Evidence/coverage
+storage**. Configured capacity, required-input and witness accounting,
+diagnostics, managed admission, lifecycle, routing, retention, backup, and
+production cutover remain **Not done**. The incident performance target is
+unchanged.
+The unchanged incident also passes in 15.70 harness seconds. Its three
+collector-receipt-to-creation intervals are 552.131, 821.473, and 1,030.054
+milliseconds. This single shared-paging qualification establishes no speedup.
+Production still uses DuckDB, and both incident latency targets remain
+**Not done**.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

@@ -14,7 +14,7 @@ struct ContextRecord {
     revision: u64,
 }
 
-struct Records;
+pub(super) struct Records;
 
 impl Records {
     const DICTIONARY: &'static [u8] = b"\0data/key/";
@@ -115,7 +115,7 @@ impl Records {
         [key, &(slot as u64).to_be_bytes()].concat()
     }
 
-    fn payload(
+    pub(super) fn payload(
         key: &[u8],
         mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
     ) -> Result<Option<Vec<u8>>> {
@@ -162,7 +162,7 @@ impl Records {
         }
     }
 
-    fn stage(tx: &mut BranchWriteTransaction<'_>, key: Vec<u8>, bytes: Vec<u8>) {
+    pub(super) fn stage(tx: &mut BranchWriteTransaction<'_>, key: Vec<u8>, bytes: Vec<u8>) {
         if bytes.len() <= u32::MAX as usize {
             tx.insert(key, bytes);
         } else {
@@ -175,7 +175,7 @@ impl Records {
         }
     }
 
-    fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
+    pub(super) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
         let mut bytes = vec![0];
         value
             .serialize(&mut rmp_serde::Serializer::new(&mut bytes))
@@ -183,7 +183,7 @@ impl Records {
         Ok(bytes)
     }
 
-    fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
+    pub(super) fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
         let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
         let value = T::deserialize(&mut decoder).context(ManagedDecodingSnafu)?;
         if decoder.position() != bytes.len() as u64 {

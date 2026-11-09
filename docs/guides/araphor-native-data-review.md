@@ -1,7 +1,8 @@
 # Native Data transaction review
 
-This guide covers the optional native metadata owner and its package storage
-proof of concept (PoC) caller. The source follows Runtime `78e909526`.
+This guide covers the optional native Data owner, raw source storage, and its
+package storage proof of concept (PoC) caller. The metadata source follows
+Runtime `78e909526`. The combined raw view follows `f05f444e2`.
 Production Data still uses DuckDB. Read the [integration research](../research/araphor-fjall-integration.md)
 for the complete migration.
 
@@ -18,7 +19,8 @@ consistent view. The complete migration remains **Not done**.
   -> [AnalysisLease::acquire](../../crates/araphor-data/src/analysis/connection.rs) Data takes the existing private-directory lease.
   -> [NativeStore::open](../../crates/araphor-data/src/analysis/native/mod.rs) Data restores the branch and checks durable history protection.
   -> [NativeStore::cut_view](../../crates/araphor-data/src/analysis/native/mod.rs) Data opens the exact stamped cut and checks its Data revision and store identity.
-  -> [NativeStore::view](../../crates/araphor-data/src/analysis/native/mod.rs) Data exposes the published immutable metadata view.
+  -> [NativeStore::recover_raw](../../crates/araphor-data/src/analysis/native/source/raw.rs) Data recovers the original segments and their metadata controls.
+  -> [NativeStore::view](../../crates/araphor-data/src/analysis/native/mod.rs) Data exposes the published immutable raw and metadata view.
 
 [Live::apply](../../crates/araphor-graph/examples/storage_poc/live.rs) The existing package PoC prepares a step
   -> [View::prepare](../../crates/araphor-graph/src/native/prepare.rs) Araphor Graph prepares the package journals.
@@ -127,7 +129,7 @@ field includes the Data commit and publication call; it does not isolate sync
 time. Stable-key checks cover Graph indexes and context heads. They do not
 assert a fixed count of immutable context versions.
 
-Raw-prefix publication, read admission and memory budgets, qualified context
+Production raw-prefix publication, read admission and memory budgets, qualified context
 checks, managed source authority, complete result families, production log
 routing, notification batching, retention, and backup remain **Not done**.
 The earlier Data unit-test target cannot build its unchanged legacy fixtures.
@@ -174,7 +176,7 @@ retention from deleting raw files.
 The existing raw format, append/sync boundary, SQL projection, recovery, and
 admission remain in use. The Arrow inputs and DataFusion interfaces do not
 change. No extra journal, payload archive, or Fjall write is added for an append.
-The complete raw/native Data view and CDC routing remain **Not done**.
+The complete production raw/native Data view and CDC routing remain **Not done**.
 
 The [raw integration cases](../../crates/araphor-data/tests/raw_index.rs) use the
 actual shared roots through a `test-fixtures` helper. Public Data operations
@@ -187,3 +189,53 @@ nine passing integration cases, the feature-off build, and the unchanged
 incident. Its single timing run does not establish a gain. Production remains
 on DuckDB. Clippy stops on two unchanged legacy calls; full CI does not run
 during iteration.
+
+## Combined native and raw view
+
+[NativeStore::accept_validated_batch](../../crates/araphor-data/src/analysis/native/source/raw.rs) Data receives an Evidence batch
+  -> [ValidatedEvidenceBatchV1::validate_identity](../../crates/araphor-data/src/analysis/mod.rs) The shared validator checks identity and frame bounds.
+  -> [RawJournal::prepare](../../crates/araphor-data/src/analysis/raw.rs) The existing owner checks source binding, overlap, and exact retry bytes.
+  -> [RawJournal::append](../../crates/araphor-data/src/analysis/raw_segments.rs) The existing segment append and durable sync finish.
+  -> [NativeStore::accept_validated_batch](../../crates/araphor-data/src/analysis/native/source/raw.rs) Data publishes the new global revision and raw root with the previous native snapshot.
+
+[NativeStore::accept_validated_coverage](../../crates/araphor-data/src/analysis/native/source/coverage.rs) Data receives a coverage report
+  -> [DataWrite::coverage](../../crates/araphor-data/src/analysis/native/source/coverage.rs) Data checks the bound CPU, source epoch, report revision, and exact retry bytes.
+  -> [DataWrite::coverage](../../crates/araphor-data/src/analysis/native/source/coverage.rs) Data stages the report, receipt, binding, and history index.
+  -> [DataWrite::stage_raw](../../crates/araphor-data/src/analysis/native/source/raw.rs) Data stages changed raw receipt baselines, protected ends, and the allocator floor when raw input is pending.
+  -> [DataWrite::commit](../../crates/araphor-data/src/analysis/native/mod.rs) One native batch commits these records and the exact Data cut.
+  -> [DataWrite::commit](../../crates/araphor-data/src/analysis/native/mod.rs) Data publishes the matching raw root and native snapshot.
+
+[NativeStore::read_at](../../crates/araphor-data/src/analysis/native/mod.rs) A reader selects global revision R
+  -> [NativeStore::cut_view](../../crates/araphor-data/src/analysis/native/mod.rs) Data opens the last metadata cut M at or before R.
+  -> [NativeStore::read_at](../../crates/araphor-data/src/analysis/native/mod.rs) The view retains the shared raw root and the immutable bound R.
+  -> [DataView::source_receipt](../../crates/araphor-data/src/analysis/native/source/mod.rs) The reader combines the baseline at M with source ranges visible through R.
+  -> [RawJournal::freeze_page](../../crates/araphor-data/src/analysis/raw/page.rs) The raw owner validates and freezes the selected ranges under a finite maintenance lease.
+  -> [RawPage::read](../../crates/araphor-data/src/analysis/raw/page.rs) The shared page reader returns original records and positions with the existing page limits and cancellation.
+
+[NativeStore::open](../../crates/araphor-data/src/analysis/native/mod.rs) Data reopens the store
+  -> [NativeStore::recover_raw](../../crates/araphor-data/src/analysis/native/source/raw.rs) Data checks protected segment ends against decoded entries through the metadata head.
+  -> [NativeStore::recover_raw](../../crates/araphor-data/src/analysis/native/source/raw.rs) Data restores receipt baselines and the nonzero allocator floor.
+  -> [NativeStore::open](../../crates/araphor-data/src/analysis/native/mod.rs) Data publishes the greater of the recovered raw and metadata revisions.
+
+The native metadata head can be less than the global Data revision. A metadata
+write allocates global revision plus one but validates the previous metadata
+head. Raw-only input adds no Fjall batch. Historical capture shares the raw
+index; it does not rebuild a prefix map. Historical source receipts use visible
+ranges and their selected native baseline. They do not clamp the latest cursor.
+The captured revision and store identity have read-only accessors.
+
+The source API includes source binding, receipt, status, and exact coverage
+reads. The coverage history index supports the existing read contract. The
+index is not a subscription change log. Production log-reader routing remains
+**Not done**. `AnalysisStore` and `NativeStore` use the same page owner and
+finite `RawRead` leases. Captured views contain no raw file handles.
+
+The [native raw cases](../../crates/araphor-data/tests/native_raw.rs) check raw,
+metadata, and raw revision order; exact original positions; no native batch for
+raw-only input; joint coverage and raw-control publication; historical pending
+ranges; exact retries; CPU and epoch conflicts; same-batch coverage bounds;
+malformed history records; append and commit failure; compaction; and reopen.
+Configured limits, required-input and witness accounting, diagnostics, lifecycle,
+retention, backup, and production cutover remain **Not done**. The native owner
+supports its current default-limit mode only. No incident gain follows from
+this integration.

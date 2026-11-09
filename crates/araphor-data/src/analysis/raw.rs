@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 mod index;
+mod page;
 
 pub(super) use index::RawIndex;
 
@@ -118,7 +119,7 @@ impl RawIdentity {
     }
 }
 
-struct RawBatch {
+pub(super) struct RawBatch {
     kind: RawKind,
     first_cursor: u64,
     last_cursor: u64,
@@ -331,104 +332,21 @@ impl AnalysisStore {
             .filter(|source| source.receipt.matches(identity))
             .ok_or_else(|| self.state_error("the raw source is absent"))?;
         let receipt = &source.receipt;
-        if first_cursor == 0 || first_cursor > receipt.cursor().saturating_add(1) {
-            return self.reject("the evidence read cursor is outside the accepted range");
-        }
-        let expired = raw
-            .budget
-            .expired
-            .range((key.clone(), 0)..=(key.clone(), first_cursor))
-            .next_back()
-            .map(|(_, &last)| last)
-            .filter(|last| *last >= first_cursor);
-        if first_cursor <= receipt.floor() || expired.is_some() {
-            return crate::RetainedRangeExpiredSnafu {
-                first_cursor,
-                last_cursor: expired.unwrap_or(receipt.floor()),
-            }
-            .fail();
-        }
-        let expiry = raw
-            .budget
-            .expired
-            .range((key.clone(), first_cursor)..=(key.clone(), u64::MAX))
-            .next()
-            .map(|((_, first), _)| *first)
-            .filter(|first| *first <= receipt.cursor());
-        let page_end = expiry.map_or(receipt.cursor(), |first| first - 1);
-        let mut frozen = Vec::new();
-        let mut count = 0;
-        let mut bounded = false;
-        if first_cursor <= page_end {
-            let start = raw
-                .index
-                .ranges
-                .range((key.clone(), 0)..=(key.clone(), first_cursor))
-                .next_back()
-                .filter(|(_, (revision, index))| {
-                    raw.index.entries[revision].commit.spans[*index].last >= first_cursor
-                })
-                .map_or(first_cursor, |((_, first), _)| *first);
-            for (_, &(revision, index)) in raw.index.ranges.range((key.clone(), start)..=(key, page_end))
-            {
-                control.check()?;
-                let entry = &raw.index.entries[&revision];
-                let span = &entry.commit.spans[index];
-                let first = span.first.max(first_cursor);
-                if first_cursor.checked_add(count as u64) != Some(first) {
-                    return self.reject("the accepted evidence range has a missing record");
-                }
-                let available = max_records - count;
-                let last = span
-                    .last
-                    .min(page_end)
-                    .min(first.saturating_add(available as u64 - 1));
-                count += (last - first + 1) as usize;
-                frozen.push(raw.freeze(entry, index, first, last)?);
-                bounded = count == max_records;
-                if bounded {
-                    break;
-                }
-            }
-        }
-        let next_cursor = first_cursor.checked_add(count as u64);
-        if next_cursor.is_some_and(|next| next <= page_end) && !bounded {
-            return self.reject("the accepted evidence range has a missing record");
-        }
-        let accepted = receipt.cursor();
-        let read_revision = *self.revision.borrow();
+        let page = raw.freeze_page(
+            &raw.index,
+            receipt,
+            first_cursor,
+            *self.revision.borrow(),
+            control,
+            max_records,
+        )?;
         drop(raw);
         drop(coordinator);
         #[cfg(any(test, feature = "test-fixtures"))]
         if matches!(identity, RawIdentity::Diagnostic(_)) {
             self.run_commit_hook(super::AnalysisCommitStage::AfterTraceFreeze)?;
         }
-        let mut records = Vec::with_capacity(count);
-        let mut encoded_bytes = 0_usize;
-        'pages: for range in frozen {
-            control.check()?;
-            for record in range.read(&self.root)?.0 {
-                let next_bytes = encoded_bytes
-                    .checked_add(record.framed_record.len())
-                    .ok_or_else(|| self.state_error("the evidence read page size overflowed"))?;
-                if !records.is_empty() && next_bytes > max_bytes {
-                    break 'pages;
-                }
-                encoded_bytes = next_bytes;
-                records.push(record);
-            }
-        }
-        let next_cursor = first_cursor
-            .checked_add(records.len() as u64)
-            .filter(|next| *next <= accepted);
-        control.check()?;
-        Ok(super::AnalysisReadPageV1 {
-            first_cursor,
-            records,
-            encoded_bytes,
-            next_cursor,
-            read_revision,
-        })
+        page.read(&self.root, control, max_bytes)
     }
 
     pub fn append_trace(
@@ -556,7 +474,7 @@ impl AnalysisStore {
         identity: EvidenceIntakeIdentityV1,
         batch: ValidatedEvidenceBatchV1,
     ) -> Result<EvidenceStoreOutcomeV1> {
-        self.validate_batch(&identity, &batch)?;
+        batch.validate_identity(&identity, &self.root)?;
         self.commit_raw(identity.into(), batch.into())
             .map(|(outcome, _)| outcome)
     }
@@ -1672,7 +1590,7 @@ impl RawJournal {
             available_last: last,
         })
     }
-    fn prepare(
+    pub(super) fn prepare(
         &self,
         identity: &RawIdentity,
         batch: &RawBatch,

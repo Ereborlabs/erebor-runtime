@@ -1,9 +1,9 @@
-//! Native metadata storage used by the package storage PoC.
-//! Production admission and raw publication still use `AnalysisStore`.
+//! Native Data storage used during the production storage replacement.
+//! Production admission still uses `AnalysisStore` until all owners move.
 
 use std::{
     ops::Bound::Included,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, MutexGuard, RwLock,
@@ -14,6 +14,10 @@ use fjall::{Branch, BranchSnapshot, BranchWriteTransaction, Commit, SingleWriter
 use snafu::ResultExt as _;
 use uuid::Uuid;
 
+use super::{
+    raw::{RawIndex, RawJournal},
+    read::locks::{Mutex as RawMutex, RwLock as Maintenance},
+};
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result};
 
 const HEAD: &[u8] = b"\0data/head";
@@ -21,31 +25,47 @@ const IDENTITY: &[u8] = b"\0data/identity";
 const FORMAT: &[u8] = b"\0data/format";
 
 mod context;
+mod source;
 
 pub struct NativeStore {
     database: SingleWriterTxDatabase,
     branch: Branch,
     writer: Mutex<()>,
     published: RwLock<Arc<DataView>>,
+    root: PathBuf,
+    raw: RawMutex<RawJournal>,
+    maintenance: Maintenance<()>,
     ready: AtomicBool,
     _lease: super::connection::AnalysisLease,
 }
 
 pub struct DataView {
-    pub revision: u64,
-    pub store_uuid: Uuid,
+    revision: u64,
+    store_uuid: Uuid,
     snapshot: BranchSnapshot,
+    metadata_revision: u64,
+    raw: RawIndex,
 }
 
 pub struct DataWrite<'a> {
     store: &'a NativeStore,
     revision: u64,
     transaction: BranchWriteTransaction<'a>,
+    raw: RawIndex,
+    metadata_revision: u64,
     dirty: bool,
     _writer: MutexGuard<'a, ()>,
 }
 
 impl DataView {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn store_uuid(&self) -> Uuid {
+        self.store_uuid
+    }
+
     pub fn snapshot(&self) -> &BranchSnapshot {
         &self.snapshot
     }
@@ -130,7 +150,7 @@ impl NativeStore {
         })?;
         let revision = Self::number(&Self::required(&snapshot, HEAD)?)?;
         let cut = Self::required(&snapshot, &Self::cut(revision))?;
-        let view = Self::cut_view(&branch, revision, &cut)?;
+        let mut view = Self::cut_view(&branch, revision, &cut)?;
         if Self::required(&snapshot, IDENTITY)? != view.store_uuid.as_bytes() {
             return NativeStateSnafu {
                 field: "recovered store identity",
@@ -161,11 +181,17 @@ impl NativeStore {
             }
             .fail();
         }
+        let raw = Self::recover_raw(root, &view.snapshot)?;
+        view.revision = view.revision.max(raw.index.revision);
+        view.raw = raw.index.clone();
         Ok(Self {
             database,
             branch,
             writer: Mutex::new(()),
             published: RwLock::new(Arc::new(view)),
+            root: root.to_path_buf(),
+            raw: RawMutex::new(raw),
+            maintenance: Maintenance::new(()),
             ready: AtomicBool::new(true),
             _lease: lease,
         })
@@ -204,6 +230,8 @@ impl NativeStore {
             revision,
             store_uuid,
             snapshot,
+            metadata_revision: revision,
+            raw: RawIndex::default(),
         })
     }
 
@@ -299,13 +327,15 @@ impl NativeStore {
                 operation: "read historical cut",
             })?;
         let selected = Self::number(&key[b"\0data/cut/".len()..])?;
-        let view = Self::cut_view(&self.branch, selected, &cut)?;
+        let mut view = Self::cut_view(&self.branch, selected, &cut)?;
         if view.store_uuid != current.store_uuid {
             return NativeStateSnafu {
                 field: "historical store identity",
             }
             .fail();
         }
+        view.revision = revision;
+        view.raw = current.raw.clone();
         Ok(view)
     }
 
@@ -333,7 +363,7 @@ impl NativeStore {
                 operation: "check Data head",
             })?
             .ok_or_else(|| NativeStateSnafu { field: "Data head" }.build())?;
-        if Self::number(&stored)? != view.revision {
+        if Self::number(&stored)? != view.metadata_revision {
             return NativeStateSnafu {
                 field: "unpublished Data write",
             }
@@ -343,6 +373,8 @@ impl NativeStore {
             store: self,
             revision,
             transaction,
+            raw: view.raw.clone(),
+            metadata_revision: view.metadata_revision,
             dirty: false,
             _writer: writer,
         })
@@ -376,6 +408,7 @@ impl<'a> DataWrite<'a> {
         if !self.dirty && stamps.is_empty() {
             return Ok(None);
         }
+        self.stage_raw()?;
         self.transaction.insert(HEAD, self.revision.to_be_bytes());
         let stamps = stamps.into_iter().chain([NativeStore::cut(self.revision)]);
         let committed = self.transaction.commit_stamped(stamps);
@@ -402,13 +435,24 @@ impl<'a> DataWrite<'a> {
                     .context(NativeStorageSnafu {
                         operation: "capture committed cut",
                     })?;
-            let view = NativeStore::decode_view(snapshot)?;
+            let mut view = NativeStore::decode_view(snapshot)?;
             if view.revision != self.revision {
                 return NativeStateSnafu {
                     field: "committed Data revision",
                 }
                 .fail();
             }
+            view.raw = self.raw;
+            self.store
+                .raw
+                .lock()
+                .map_err(|_| {
+                    NativeStateSnafu {
+                        field: "raw owner lock",
+                    }
+                    .build()
+                })?
+                .index = view.raw.clone();
             *self.store.published.write().map_err(|_| {
                 NativeStateSnafu {
                     field: "publication lock",
