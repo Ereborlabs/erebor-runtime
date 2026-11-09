@@ -36,14 +36,14 @@ struct AppendTrace {
     selected: bool,
 }
 
-pub(super) struct AppendRange {
+pub(in crate::analysis) struct AppendRange {
     identity: RawIdentity,
     cpu: Option<u32>,
     range: SegmentRange,
     after: Option<StorePositionV1>,
 }
 
-pub(super) struct AppendCapture<'a> {
+pub(in crate::analysis) struct AppendCapture<'a> {
     input: &'a AnalysisSelectionV1,
     header: Option<Arc<AppendHeader>>,
     pub(super) range: Option<AppendRange>,

@@ -148,6 +148,15 @@ Graph mappings, declarations, immutable versions, authority, and call heads
 share one Data transaction. Read the
 [managed qualification](../research/results/araphor-native-managed-2026-11-09.md).
 Result: **Done for native managed admission and ordinary start/stop**.
+Native Arrow extraction now reads actual Evidence, coverage, and admitted
+contexts from one captured native/raw view. The context owner stages body-free
+tenant and owner headers with immutable values. Exact native ranges bound change
+reads; existing builders preserve Arrow rows, consumed positions, witnesses,
+and references. Read the
+[extraction qualification](../research/results/araphor-native-extraction-2026-11-09.md).
+Result: **Done for native Arrow source extraction**. Managed sealing, attempts,
+results/checkpoints, atomic consumed progress, production provider binding,
+original-log routing, and indexed source-header maintenance remain **Not done**.
 Captured attempts, results, checkpoints, references, consumed progress,
 attempt-dependent lifecycle, production activation, CDC routing, notification
 batching, retention, backup, and cutover remain **Not done**. No incident

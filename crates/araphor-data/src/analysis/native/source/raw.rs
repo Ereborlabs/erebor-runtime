@@ -204,6 +204,8 @@ impl NativeStore {
             store_uuid: view.store_uuid,
             snapshot: view.snapshot.clone(),
             metadata_revision: view.metadata_revision,
+            schema_version: view.schema_version,
+            recovery_epoch: view.recovery_epoch,
             raw: raw.index.clone(),
         };
         let mut published = self.published.write().map_err(|_| {

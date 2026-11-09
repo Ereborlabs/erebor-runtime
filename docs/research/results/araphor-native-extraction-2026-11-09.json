@@ -1,0 +1,382 @@
+{
+  "source_parent": "cc35d1c672a9c295e1d73ee836a553c531e84186",
+  "source_files": {
+    "crates/araphor-data/src/analysis/extraction.rs": "17c8703e5a2bd835c39faabe895e18be58f770a4c7ed8d51c4e9608b2085b795",
+    "crates/araphor-data/src/analysis/extraction/append.rs": "400a9ac61d354ed1cfcef8d7a8d92a5ef3eeaaf175f842e603f1341ea148b83b",
+    "crates/araphor-data/src/analysis/extraction/changes.rs": "98db22b1eebff8ee5a8e8d96e4298122f7d8c9b369ddf0dbcf52f2a8479d160a",
+    "crates/araphor-data/src/analysis/extraction/raw.rs": "c566f6649ce91d90202455101a2b0f7afda8d8d516a4601814a0531113a2515b",
+    "crates/araphor-data/src/analysis/extraction/tables/context.rs": "c9204ee021e45c1385aab81c29523d1c6a3e44e0c14e91f8dfada81a209d0051",
+    "crates/araphor-data/src/analysis/extraction/tables/mod.rs": "56b2754661b53c10957ac0c5f8099ef87aed36564110f3b5c9a6680f17703773",
+    "crates/araphor-data/src/analysis/native/context/index.rs": "79094028d122e8127e6adc7b65d6289587f2dbcd682f969d33e7bae3529419d1",
+    "crates/araphor-data/src/analysis/native/context/mod.rs": "1edc07950734f77b438fee1a6216c759ca21297f9e08d27f2c022a7c86d350e0",
+    "crates/araphor-data/src/analysis/native/context/record.rs": "519c4dbd8988baad16aef3b2820693e126bb611c1115aec7ccec48f600bf14bc",
+    "crates/araphor-data/src/analysis/native/context/recovery.rs": "24d0746805ce3547e1db49f7b8b7905321ebea18c3d73f6168dca3d467fca014",
+    "crates/araphor-data/src/analysis/native/extraction/context.rs": "4a08dde72ae9de7eaf890a1163d2171d5dfd9cc87d2d3df149382241759fe59b",
+    "crates/araphor-data/src/analysis/native/extraction/mod.rs": "83b9e055589002038836243d934240b1f342abdbc0f49b7ac4c6d4ee02e28a82",
+    "crates/araphor-data/src/analysis/native/extraction/source.rs": "392cc44c98d1f6aba58f6efa76488fac501e820b6dc340111b7ce5d52344c8b8",
+    "crates/araphor-data/src/analysis/native/mod.rs": "f3d5f4685faf7687b7a24aa4b112dd6a9af0c7f7f0d860ccca4fcdb09ce3a31a",
+    "crates/araphor-data/src/analysis/native/records.rs": "99c957f48eb3c550ddf37c647f4e9cbaeebc36b4507fd7a1e06f9c96feb9c979",
+    "crates/araphor-data/src/analysis/native/source/mod.rs": "588542a6f2f623715fb5f91076b9ae4811285dc742c2f8ab88a3139dbd0e436f",
+    "crates/araphor-data/src/analysis/native/source/raw.rs": "8ed25dab4648785f6a14ab1ac84e9615c9bb839c1c3e5b89a456591986561c1c",
+    "crates/araphor-data/src/analysis/raw.rs": "521b91c70e914e96e0b0cc9c3c150563310c875b30dacee600a73cb8e9c719c5",
+    "crates/araphor-data/tests/native_extraction.rs": "65026aea7c5efd3f29e71fc4a2298af8f4e4efd99496536fb85aa7d96ae200fa"
+  },
+  "forks": {
+    "fjall": "cceaa84d371165c2f0d4952650543c27fc8e22d9",
+    "lsm-tree": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+  },
+  "fork_worktrees_clean": {
+    "fjall": true,
+    "lsm-tree": true
+  },
+  "gates": [
+    {
+      "name": "final_tests",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "-p",
+        "araphor-data",
+        "--features",
+        "native-store,test-fixtures",
+        "--test",
+        "native_extraction",
+        "--test",
+        "native_context",
+        "--test",
+        "native_managed",
+        "--test",
+        "native_packages",
+        "--test",
+        "native_raw",
+        "--test",
+        "native_store",
+        "--test",
+        "raw_index",
+        "--test",
+        "store_schema",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml"
+      ],
+      "exit_code": 0,
+      "seconds": 64.4902132130228,
+      "log": "output/araphor-fjall-migration-20261109/native-extraction-final_tests.log"
+    },
+    {
+      "name": "feature_off",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "-p",
+        "araphor-data",
+        "--no-default-features",
+        "--lib",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml"
+      ],
+      "exit_code": 0,
+      "seconds": 3.0966765259508975,
+      "log": "output/araphor-fjall-migration-20261109/native-extraction-feature_off.log"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--offline",
+        "-p",
+        "araphor-data",
+        "--features",
+        "native-store,test-fixtures",
+        "--lib",
+        "--no-deps",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml"
+      ],
+      "exit_code": 101,
+      "seconds": 18.076088660978712,
+      "log": "output/araphor-fjall-migration-20261109/native-extraction-clippy.log"
+    },
+    {
+      "command": [
+        "rustfmt",
+        "--edition",
+        "2021",
+        "--config",
+        "skip_children=true",
+        "--check",
+        "crates/araphor-data/src/analysis/extraction/raw.rs",
+        "crates/araphor-data/src/analysis/native/mod.rs",
+        "crates/araphor-data/src/analysis/native/records.rs",
+        "crates/araphor-data/src/analysis/native/context/mod.rs",
+        "crates/araphor-data/src/analysis/native/context/index.rs",
+        "crates/araphor-data/src/analysis/native/context/record.rs",
+        "crates/araphor-data/src/analysis/native/context/recovery.rs",
+        "crates/araphor-data/src/analysis/native/source/mod.rs",
+        "crates/araphor-data/src/analysis/native/source/raw.rs",
+        "crates/araphor-data/src/analysis/native/extraction/mod.rs",
+        "crates/araphor-data/src/analysis/native/extraction/context.rs",
+        "crates/araphor-data/src/analysis/native/extraction/source.rs",
+        "crates/araphor-data/tests/native_extraction.rs"
+      ],
+      "exit_code": 0,
+      "excluded_existing_format": [
+        "crates/araphor-data/src/analysis/extraction.rs",
+        "crates/araphor-data/src/analysis/extraction/append.rs",
+        "crates/araphor-data/src/analysis/extraction/changes.rs",
+        "crates/araphor-data/src/analysis/extraction/tables/context.rs",
+        "crates/araphor-data/src/analysis/extraction/tables/mod.rs",
+        "crates/araphor-data/src/analysis/raw.rs"
+      ]
+    }
+  ],
+  "data_test_counts": [
+    10,
+    8,
+    9,
+    8,
+    7,
+    5,
+    3,
+    1
+  ],
+  "known_clippy_errors": [
+    "crates/araphor-data/src/analysis/managed/graph/projection/publish.rs:90",
+    "crates/araphor-data/src/analysis/managed/reader/committed/graph.rs:213"
+  ],
+  "initial_tests": {
+    "log": "output/araphor-fjall-migration-20261109/native-extraction-tests.log",
+    "passed": 5,
+    "failed": 1,
+    "cause": "New comparison assumed source admission revision equals legacy grouped SQL projection revision. Exact native revisions and bounded legacy group revisions replace only that invalid new-test assumption."
+  },
+  "whole_library_test": {
+    "log": "output/araphor-fjall-migration-20261109/native-extraction-budget.log",
+    "result": "Not done; unchanged Graph fixture paths and APIs fail to compile; focused integration checks cover both budget regressions.",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "araphor-data",
+      "--features",
+      "native-store,test-fixtures",
+      "--lib",
+      "analysis::native::records::tests",
+      "--config",
+      "/tmp/araphor-storage-release-override.toml"
+    ],
+    "examples": [
+      "crates/araphor-data/src/analysis/graph_rows/store/contributions/state/../../../../araphor-data/src/analysis/graph_rows/schema.sql: missing include path",
+      "crates/araphor-data/src/analysis/graph_rows/units/tests.rs:915: Unit.support field is absent"
+    ]
+  },
+  "unchanged_workload": {
+    "crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs": {
+      "sha256": "9d2ba0f5c12c5040e23313497d02e74bc84c426767222b5e6f7ff00ac17c0f12",
+      "matches_parent": true
+    },
+    "packages/default-definitions/causal.yaml": {
+      "sha256": "ecf71b7b1897f4c3e2739f239db989369316eea5fc2def9acc0de24b952b3cef",
+      "matches_parent": true
+    }
+  },
+  "date": "2026-11-09",
+  "production_backend": "DuckDB",
+  "performance_gain_established": false,
+  "limits": [
+    "No production cutover, managed sealing/attempt/result publication, provider binding, or original-log routing.",
+    "Source header and gap validation still scan raw source range metadata.",
+    "No native retention mutation, configured capacity, backup, or complete Graph recovery parity.",
+    "No full workspace CI during iteration, as requested."
+  ],
+  "poc": {
+    "build": {
+      "name": "poc_build",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--target-dir",
+        "target",
+        "--manifest-path",
+        "crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml",
+        "--offline",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml"
+      ],
+      "environment": {},
+      "exit_code": 0,
+      "seconds": 105.44257918302901,
+      "log": "output/araphor-fjall-migration-20261109/native-extraction-poc_build.log"
+    },
+    "binary": {
+      "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-extraction-poc",
+      "bytes": 99898008,
+      "sha256": "b62b1e8aee04880b8660f6f2ecaa3490016e26d704db16f65aa3c485b7f74b86"
+    },
+    "commands": [
+      {
+        "command": [
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-extraction-poc",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-extraction-combined.json",
+          "combined"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/summarize_cdc.py",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-extraction-combined.json"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-extraction-poc",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-extraction-stable.json",
+          "stable"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-graph/examples/storage_poc/summarize_stable.py",
+          "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-extraction-stable.json"
+        ],
+        "exit_code": 0
+      }
+    ],
+    "combined_cycles": 64,
+    "combined_requested_historical_views": 128,
+    "combined_unavailable_views": 0,
+    "stable_primary_cycles": 128,
+    "stable_historical_evaluations": 640,
+    "stable_historical_views": 320,
+    "stable_unsupported_after_reopen": 0,
+    "paired_performance_comparison": false,
+    "report_source_label": "unrecorded; external source hashes and frozen binary supply identity",
+    "reports": {
+      "output/araphor-fjall-migration-20261109/native-extraction-combined.json": "b58c15eb6a13d26d871264fec41adeaac40af03e752d92fa01388d91c7d874f5",
+      "output/araphor-fjall-migration-20261109/native-extraction-combined-summary.json": "54efd616574d1bd6ac9dbffbc6d8f86e0fef374b0d44d7d8d1cc89b934a09eaa",
+      "output/araphor-fjall-migration-20261109/native-extraction-stable.json": "588a095212002b61cbaa773db53894a99e3d6a2fcfb88c53674e1358f3dd8f1b",
+      "output/araphor-fjall-migration-20261109/native-extraction-stable-summary.json": "e6a0348eab9e1e271e661bb69b550f01e044d1d6aca14a1001c76d496ba190bc"
+    }
+  },
+  "incident": {
+    "build": {
+      "name": "incident_build",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "-p",
+        "mithril-e2e",
+        "--lib",
+        "discovery::packages::required::incident::incremental::follows_incremental_sources",
+        "--no-run",
+        "--message-format=json",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml"
+      ],
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "6"
+      },
+      "exit_code": 0,
+      "seconds": 378.79714750201674,
+      "log": "output/araphor-fjall-migration-20261109/native-extraction-incident_build.log"
+    },
+    "binary": {
+      "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/deps/mithril_e2e-97408fba3d2638e8",
+      "bytes": 2932983728,
+      "sha256": "9f02f0c0c1479eaa7d4fc160d9d58333d1f7f0b84e73f1ec8667898e04c4b986",
+      "profile": {
+        "opt_level": "0",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "retained_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/araphor-notice-comparison-20261109/native-extraction"
+    },
+    "run": {
+      "command": [
+        "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/deps/mithril_e2e-97408fba3d2638e8",
+        "--exact",
+        "discovery::packages::required::incident::incremental::follows_incremental_sources",
+        "--nocapture"
+      ],
+      "pid": 3651489,
+      "start_monotonic": 324499.07901396,
+      "RUST_LOG": "mithril_e2e=info,mithril_control=debug,araphor_analysis=debug,araphor_data=debug,araphor_query=debug",
+      "exit_code": 0,
+      "elapsed_s": 17.635149732988793,
+      "kind": "one shared extraction correctness qualification; production remains on DuckDB; no paired speedup claim"
+    },
+    "boundary_command": [
+      "python3",
+      "/tmp/araphor-summarize-recorded-notification-boundary-20261105.py",
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/output/araphor-fjall-migration-20261109/native-extraction-incident-native.log"
+    ],
+    "boundary_exit_code": 0,
+    "input_rows": 18,
+    "created_rows": 3,
+    "creation": [
+      {
+        "cut_revision": 27.0,
+        "input_revision": 27.0,
+        "result_id": "managed-29-selected",
+        "notification_id": "21cdf685-54dd-4f9f-a96d-74a5ad89d0d0",
+        "last_input_entry_to_creation_s": 0.5683711477614746,
+        "input_commit_to_creation_s": 0.5532240867614746,
+        "input_submit_s": 0.015147061,
+        "input_commit_s": 0.01504544,
+        "graph_publication_to_creation_s": 0.1053459644317627,
+        "first_save_s": 0.007584251,
+        "managed_commit_s": 0.268189554
+      },
+      {
+        "cut_revision": 62.0,
+        "input_revision": 61.0,
+        "result_id": "managed-64-selected",
+        "notification_id": "70fd2a0f-45c6-402c-89e7-301f7d434a87",
+        "last_input_entry_to_creation_s": 1.0552289988978272,
+        "input_commit_to_creation_s": 1.0400159358978271,
+        "input_submit_s": 0.015213063,
+        "input_commit_s": 0.015106273,
+        "graph_publication_to_creation_s": 0.17833685874938965,
+        "first_save_s": 0.007820109,
+        "managed_commit_s": 0.316989596
+      },
+      {
+        "cut_revision": 85.0,
+        "input_revision": 84.0,
+        "result_id": "managed-87-selected",
+        "notification_id": "536528a9-5f39-4b06-9122-461485860277",
+        "last_input_entry_to_creation_s": 1.0487034619891358,
+        "input_commit_to_creation_s": 1.0428531169891357,
+        "input_submit_s": 0.005850345,
+        "input_commit_s": 0.005709753,
+        "graph_publication_to_creation_s": 0.1573641300201416,
+        "first_save_s": 0.007353352,
+        "managed_commit_s": 0.28515496
+      }
+    ],
+    "log": "output/araphor-fjall-migration-20261109/native-extraction-incident-native.log",
+    "boundary_report": "output/araphor-fjall-migration-20261109/native-extraction-incident-boundary.json",
+    "performance_comparison": false,
+    "production_backend": "DuckDB",
+    "public_receipt_s": [
+      0.612875277,
+      1.125395815,
+      1.150900987
+    ],
+    "bulk_completion_s": 2.443701043,
+    "harness_s": 17.59
+  }
+}

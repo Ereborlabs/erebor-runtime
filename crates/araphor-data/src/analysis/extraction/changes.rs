@@ -5,7 +5,7 @@ mod context;
 #[cfg(test)]
 mod tests;
 
-pub(super) struct RemovedRange {
+pub(in crate::analysis) struct RemovedRange {
     pub(super) identity: RawIdentity,
     pub(super) first: u64,
     pub(super) last: u64,

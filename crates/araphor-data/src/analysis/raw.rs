@@ -1324,13 +1324,25 @@ impl RawJournal {
         limit: usize,
         control: &super::AnalysisReadControl,
     ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::SegmentRange)>> {
+        self.select_position_at(&self.index, selection, after, revision, limit, control)
+    }
+
+    pub(in crate::analysis) fn select_position_at(
+        &self,
+        captured: &RawIndex,
+        selection: &super::AnalysisSelectionV1,
+        after: Option<super::StorePositionV1>,
+        revision: u64,
+        limit: usize,
+        control: &super::AnalysisReadControl,
+    ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::SegmentRange)>> {
         if (selection.sources.as_slice().is_empty() && selection.traces.as_slice().is_empty())
             || limit == 0
         {
             return Ok(None);
         }
         let first = after.map_or(0, |position| position.commit_revision);
-        for (&id, entry) in self.index.entries.range(first..=revision) {
+        for (&id, entry) in captured.entries.range(first..=revision) {
             control.check()?;
             let selected = match &entry.identity {
                 RawIdentity::Evidence(identity) => {

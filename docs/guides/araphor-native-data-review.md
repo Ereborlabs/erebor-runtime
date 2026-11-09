@@ -4,7 +4,7 @@ This guide covers the optional native Data owner, raw source storage, and its
 package storage proof of concept (PoC) caller. The metadata source follows
 Runtime `78e909526`. The combined raw view follows `f05f444e2`. The catalogue
 source follows `b447c7142`. Qualified context admission follows `66bc190c5`. Managed admission and ordinary
-start/stop follow `6087cbe9f`.
+start/stop follow `6087cbe9f`. Arrow source extraction follows `cc35d1c67`.
 Production Data still uses DuckDB. Read the [integration research](../research/araphor-fjall-integration.md)
 for the complete migration.
 
@@ -395,3 +395,53 @@ placeholder pending-attempt check. Production activation, CDC routing, package
 execution, notification batching, and the incident latency targets remain
 **Not done**. Graph installation checks do not qualify complete layer/member
 recovery. Configured capacity, retention, and backup also remain **Not done**.
+
+## Native Arrow source extraction
+
+[NativeStore::read_tables_at](../../crates/araphor-data/src/analysis/native/extraction/mod.rs) A caller supplies one captured Data view
+  -> Data checks the selection, projection, limits, store identity, and requested table owners.
+  -> Data holds the existing finite maintenance lease for the read.
+  -> [NativeStore::select_sources](../../crates/araphor-data/src/analysis/native/extraction/source.rs) Data selects Evidence sources from the captured raw index and native receipts.
+  -> [DataView::source_header](../../crates/araphor-data/src/analysis/native/source/mod.rs) Data reads the actual receipt, coverage report, and pending gaps through the captured Data revision.
+  -> [RawScan::read](../../crates/araphor-data/src/analysis/extraction/raw.rs) The shared scanner reads original raw ranges and builds the requested Arrow columns.
+  -> [ContextRead::capture](../../crates/araphor-data/src/analysis/native/extraction/context.rs) Data reads selected context headers, verifies retained package proofs, and builds context Arrow columns.
+  -> [Capture::finish](../../crates/araphor-data/src/analysis/extraction/tables/mod.rs) The existing builder returns actual rows, positions, witnesses, references, and source metadata.
+
+[DataWrite::index_context](../../crates/araphor-data/src/analysis/native/context/index.rs) Data admits a new immutable context
+  -> One transaction stages the context, its head, a tenant header, and an owner header.
+  -> Header keys contain the admission Data revision and context ID as a tie breaker.
+  -> An exact retry stages no new headers.
+  -> Recovery checks every context/header pair and both exact index sets.
+
+The header values contain context references and no context bodies. Owner
+identities use the existing scoped dictionary and long-key fragments. A change
+read uses native revision bounds. An owner filter uses its own index prefix.
+Complete reads sort semantic context keys; change reads sort admission revision
+and then semantic key. Dictionary allocation order does not set row order.
+Exact context keys use direct lookups. The retained package proof cache avoids
+repeated artifact checks. Generic context reads add no fact-index lookup.
+
+[Records::charged_payload](../../crates/araphor-data/src/analysis/native/records.rs)
+admits the assembled payload size before allocation. The read releases temporary
+prefix, header, and decoded-record charges after their storage is dropped.
+Arrow buffers, references, coverage reports, and pending gaps remain charged.
+Cancellation and existing key, input, scan, and page limits stay active.
+
+Native physical format 2 persists logical schema 41 and recovery epoch 1.
+`DataView::meta` returns these saved values and the captured global Data revision.
+Ordinary reopen preserves the recovery epoch. Older prototype native formats
+are rejected. This does not convert a DuckDB directory.
+
+Source header revisions identify the source's last visible raw or coverage
+commit. The current DuckDB projection can stamp several sources with one later
+group revision. The native owner does not copy that projection artifact.
+The [extraction tests](../../crates/araphor-data/tests/native_extraction.rs)
+compare actual Arrow rows, ordinals, receipts, gaps, reports, witnesses, and
+references. They check exact native source revisions separately.
+
+This API currently reads Evidence, coverage, and the admitted context table
+families. A requested unported result, trace, Graph-state, or notification
+family returns `Unsupported`. Native retention has no mutation API yet, so
+this read does not qualify expired or removed raw ranges. Managed capture
+sealing, prior result restore, attempts, atomic results/progress, production
+provider binding, and original-log subscription routing remain **Not done**.

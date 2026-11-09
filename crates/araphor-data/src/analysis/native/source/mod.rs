@@ -245,3 +245,89 @@ impl DataView {
         }))
     }
 }
+
+impl DataView {
+    pub(in crate::analysis::native) fn source_header(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        root: &std::path::Path,
+        output: &mut crate::AnalysisExtractionV1,
+        control: &crate::AnalysisReadControl,
+    ) -> Result<crate::AnalysisSourceSnapshotV1> {
+        control.check()?;
+        let receipt = self.source_receipt(identity)?.ok_or_else(|| {
+            NativeStateSnafu {
+                field: "selected source receipt",
+            }
+            .build()
+        })?;
+        let key = identity.key();
+        let mut revision = 0;
+        for (_, &(id, _)) in self.raw.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
+            control.check()?;
+            if id <= self.revision {
+                revision = revision.max(id);
+            }
+        }
+        let coverage_report = if receipt.coverage_revision == 0 {
+            None
+        } else {
+            let saved = output.input_bytes;
+            let bytes = Records::charged_payload(
+                &Sources::report(identity, receipt.coverage_revision),
+                |key| Records::read(key, &self.snapshot),
+                &mut |bytes| output.charge(bytes),
+            )?
+            .ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "source coverage report",
+                }
+                .build()
+            })?;
+            let report: Report = Records::decode(&bytes)?;
+            if report.reference.source != *identity
+                || report.reference.revision != receipt.coverage_revision
+                || report.reference.position.commit_revision > self.metadata_revision
+                || report.encoded_report.is_empty()
+            {
+                return NativeStateSnafu {
+                    field: "source coverage identity",
+                }
+                .fail();
+            }
+            revision = revision.max(report.reference.position.commit_revision);
+            drop(bytes);
+            output.input_bytes = saved;
+            output.charge(report.encoded_report.capacity())?;
+            Some(report.encoded_report)
+        };
+        let state = self.raw.source_state(
+            root,
+            &receipt,
+            self.revision,
+            &[],
+            &[],
+            control,
+            (output.input_bytes, output.limits.input_bytes),
+        )?;
+        if state.covered != receipt.contiguous_cursor {
+            return crate::AnalysisStore::reject_path(
+                root,
+                "the selected source has an unrecorded input gap",
+            );
+        }
+        output.charge(
+            state.pending.capacity() * std::mem::size_of::<crate::AnalysisGapV1>()
+                + receipt.identity.node_id.capacity(),
+        )?;
+        Ok(crate::AnalysisSourceSnapshotV1 {
+            receipt,
+            commit_revision: revision,
+            expired: Vec::new(),
+            recovery: Vec::new(),
+            pending: state.pending,
+            coverage_report,
+            typed_report: None,
+        })
+    }
+}

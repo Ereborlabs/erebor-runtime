@@ -41,13 +41,23 @@ impl DataView {
         &self,
         key: &AnalysisContextKeyV1,
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
+        self.context_charged(key, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis::native) fn context_charged(
+        &self,
+        key: &AnalysisContextKeyV1,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         let identity = ContextRecord::identity(key, true)?;
         let Some(id) = Records::find(&identity, |key| Records::read(key, &self.snapshot))? else {
             return Ok(None);
         };
-        let Some(bytes) = Records::payload(&Records::key(b'C', id), |key| {
-            Records::read(key, &self.snapshot)
-        })?
+        let Some(bytes) = Records::charged_payload(
+            &Records::key(b'C', id),
+            |key| Records::read(key, &self.snapshot),
+            charge,
+        )?
         else {
             return Ok(None);
         };
@@ -162,6 +172,7 @@ impl DataWrite<'_> {
             key: input.key.clone(),
             commit_revision: self.revision,
         };
+        self.index_context(id, &reference)?;
         if previous
             .as_ref()
             .is_none_or(|prior| prior.version.key.owner_revision < input.key.owner_revision)

@@ -1,0 +1,261 @@
+use std::{
+    collections::BTreeSet,
+    ops::Bound::{Excluded, Included},
+};
+
+use snafu::ResultExt as _;
+
+use super::{DataView, DataWrite, NativeStore, Records};
+use crate::{
+    AnalysisContextRefV1, AnalysisExtractionV1, AnalysisReadControl, AnalysisSelectionV1,
+    NativeStateSnafu, NativeStorageSnafu, Result, Selection,
+};
+
+struct ContextIndex;
+
+impl ContextIndex {
+    const TENANT: &'static [u8] = b"\0data/context/tenant/";
+    const OWNER: &'static [u8] = b"\0data/context/owner/";
+
+    fn owner(tenant: [u8; 16], owner: &str) -> Result<Vec<u8>> {
+        rmp_serde::to_vec(&(b'O', tenant, owner)).context(crate::ManagedEncodingSnafu)
+    }
+
+    fn key(prefix: &[u8], revision: u64, id: u64) -> Vec<u8> {
+        [prefix, &revision.to_be_bytes(), &id.to_be_bytes()].concat()
+    }
+
+    fn tenant(tenant: &[u8; 16]) -> Vec<u8> {
+        [Self::TENANT, tenant].concat()
+    }
+    fn owned(owner: u64) -> Vec<u8> {
+        [Self::OWNER, &owner.to_be_bytes()].concat()
+    }
+}
+
+impl DataWrite<'_> {
+    pub(super) fn index_context(
+        &mut self,
+        id: u64,
+        reference: &AnalysisContextRefV1,
+    ) -> Result<()> {
+        let owner = Records::intern(
+            &mut self.transaction,
+            &ContextIndex::owner(reference.key.tenant_id, &reference.key.owner_id)?,
+        )?;
+        let bytes = Records::encode(reference)?;
+        for prefix in [
+            ContextIndex::tenant(&reference.key.tenant_id),
+            ContextIndex::owned(owner),
+        ] {
+            Records::stage(
+                &mut self.transaction,
+                ContextIndex::key(&prefix, reference.commit_revision, id),
+                bytes.clone(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl DataView {
+    pub(super) fn check_context_index(
+        &self,
+        id: u64,
+        reference: &AnalysisContextRefV1,
+    ) -> Result<()> {
+        let owner = Records::find(
+            &ContextIndex::owner(reference.key.tenant_id, &reference.key.owner_id)?,
+            |key| Records::read(key, &self.snapshot),
+        )?
+        .ok_or_else(|| {
+            NativeStateSnafu {
+                field: "context owner index",
+            }
+            .build()
+        })?;
+        for prefix in [
+            ContextIndex::tenant(&reference.key.tenant_id),
+            ContextIndex::owned(owner),
+        ] {
+            let bytes = Records::payload(
+                &ContextIndex::key(&prefix, reference.commit_revision, id),
+                |key| Records::read(key, &self.snapshot),
+            )?
+            .ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "context header index",
+                }
+                .build()
+            })?;
+            let saved: AnalysisContextRefV1 = Records::decode(&bytes)?;
+            if saved != *reference {
+                return NativeStateSnafu {
+                    field: "context header index",
+                }
+                .fail();
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_context_indexes(&self, count: usize) -> Result<()> {
+        for (prefix, width) in [(ContextIndex::TENANT, 32), (ContextIndex::OWNER, 24)] {
+            let mut found = 0;
+            for entry in self.snapshot.prefix(prefix) {
+                let (key, _) = entry.context(NativeStorageSnafu {
+                    operation: "validate context header indexes",
+                })?;
+                if key.len() == prefix.len() + width + 8 {
+                    continue;
+                }
+                if key.len() != prefix.len() + width {
+                    return NativeStateSnafu {
+                        field: "context header key",
+                    }
+                    .fail();
+                }
+                found += 1;
+            }
+            if found != count {
+                return NativeStateSnafu {
+                    field: "context header set",
+                }
+                .fail();
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::analysis::native) fn context_headers(
+        &self,
+        selection: &AnalysisSelectionV1,
+        owners: Option<&BTreeSet<String>>,
+        after: Option<u64>,
+        output: &mut AnalysisExtractionV1,
+        control: &AnalysisReadControl,
+    ) -> Result<Vec<AnalysisContextRefV1>> {
+        let mut headers = Vec::new();
+        if selection.contexts.is_empty() || owners.is_some_and(BTreeSet::is_empty) {
+            return Ok(headers);
+        }
+        let mut prefixes = Vec::new();
+        if let Some(owners) = owners {
+            for owner in owners {
+                control.check()?;
+                if let Some(id) =
+                    Records::find(&ContextIndex::owner(selection.tenant_id, owner)?, |key| {
+                        Records::read(key, &self.snapshot)
+                    })?
+                {
+                    let added = AnalysisExtractionV1::grow(
+                        &mut prefixes,
+                        output.input_bytes,
+                        output.limits.input_bytes,
+                    )?;
+                    output.charge(added)?;
+                    output.charge(ContextIndex::OWNER.len() + 8)?;
+                    prefixes.push(ContextIndex::owned(id));
+                }
+            }
+        } else {
+            output.charge(AnalysisExtractionV1::grow(
+                &mut prefixes,
+                output.input_bytes,
+                output.limits.input_bytes,
+            )?)?;
+            output.charge(ContextIndex::TENANT.len() + 16)?;
+            prefixes.push(ContextIndex::tenant(&selection.tenant_id));
+        }
+        let prefix_bytes = prefixes.capacity() * std::mem::size_of::<Vec<u8>>()
+            + prefixes.iter().map(Vec::capacity).sum::<usize>();
+        let mut count = selection
+            .key_count()
+            .saturating_sub(selection.contexts.as_slice().len());
+        for prefix in &prefixes {
+            let first = ContextIndex::key(prefix, after.unwrap_or(0), u64::MAX);
+            let last = [
+                ContextIndex::key(prefix, self.revision, u64::MAX),
+                vec![u8::MAX; 8],
+            ]
+            .concat();
+            let lower = if after.is_some() {
+                Excluded(first)
+            } else {
+                Included(ContextIndex::key(prefix, 0, 0))
+            };
+            for entry in self.snapshot.range::<Vec<u8>, _>((lower, Included(last))) {
+                control.check()?;
+                let (key, _) = entry.context(NativeStorageSnafu {
+                    operation: "read context headers",
+                })?;
+                if key.len() == prefix.len() + 24 {
+                    continue;
+                }
+                if key.len() != prefix.len() + 16 {
+                    return NativeStateSnafu {
+                        field: "context header key",
+                    }
+                    .fail();
+                }
+                let saved = output.input_bytes;
+                let bytes = Records::charged_payload(
+                    &key,
+                    |key| Records::read(key, &self.snapshot),
+                    &mut |bytes| output.charge(bytes),
+                )?
+                .ok_or_else(|| {
+                    NativeStateSnafu {
+                        field: "context header value",
+                    }
+                    .build()
+                })?;
+                let header: AnalysisContextRefV1 = Records::decode(&bytes)?;
+                drop(bytes);
+                output.input_bytes = saved;
+                if header.key.tenant_id != selection.tenant_id
+                    || !header.key.valid()
+                    || header.commit_revision == 0
+                    || header.commit_revision > self.metadata_revision
+                    || NativeStore::number(&key[prefix.len()..prefix.len() + 8])?
+                        != header.commit_revision
+                {
+                    return NativeStateSnafu {
+                        field: "context header identity",
+                    }
+                    .fail();
+                }
+                if selection.targets_only && header.key.owner_id != "mithril-control/target"
+                    || owners.is_some_and(|owners| !owners.contains(&header.key.owner_id))
+                    || matches!(&selection.contexts, Selection::Exact(keys) if !keys.contains(&header.key))
+                {
+                    continue;
+                }
+                if output.limits.keys.is_some_and(|limit| count >= limit) {
+                    return crate::AnalysisInputTooLargeSnafu {
+                        resource: "selected input keys",
+                    }
+                    .fail();
+                }
+                output.charge(AnalysisExtractionV1::grow(
+                    &mut headers,
+                    output.input_bytes,
+                    output.limits.input_bytes,
+                )?)?;
+                output.charge(header.key.allocated_bytes())?;
+                headers.push(header);
+                count += 1;
+            }
+        }
+        drop(prefixes);
+        output.input_bytes -= prefix_bytes;
+        headers.sort_by(|left, right| {
+            if after.is_some() {
+                (left.commit_revision, &left.key).cmp(&(right.commit_revision, &right.key))
+            } else {
+                left.key.cmp(&right.key)
+            }
+        });
+        Ok(headers)
+    }
+}

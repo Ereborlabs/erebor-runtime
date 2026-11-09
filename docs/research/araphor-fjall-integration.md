@@ -41,6 +41,13 @@ share the admission transaction. Exact retries stage no writes. Read the
 [managed qualification](results/araphor-native-managed-2026-11-09.md).
 Attempt-dependent lifecycle, capture, result publication, consumed progress,
 production activation, CDC routing, and notification batching remain **Not done**.
+Native Arrow extraction now reads actual Evidence, coverage, and context rows
+from one captured native/raw view. Body-free context indexes bound change and
+owner reads. The shared raw scanner and Arrow builders preserve existing rows,
+positions, witnesses, and references. Read the
+[extraction qualification](results/araphor-native-extraction-2026-11-09.md).
+Managed sealing, attempts, result publication, production providers, routing,
+and indexed source-header maintenance remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

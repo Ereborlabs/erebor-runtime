@@ -101,13 +101,24 @@ impl Records {
 
     pub(super) fn payload(
         key: &[u8],
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+    ) -> Result<Option<Vec<u8>>> {
+        Self::charged_payload(key, get, &mut |_| Ok(()))
+    }
+
+    pub(super) fn charged_payload(
+        key: &[u8],
         mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<Option<Vec<u8>>> {
         let Some(value) = get(key)? else {
             return Ok(None);
         };
         match value.first() {
-            Some(0) => Ok(Some(value[1..].to_vec())),
+            Some(0) => {
+                charge(value.len().saturating_mul(2))?;
+                Ok(Some(value[1..].to_vec()))
+            }
             Some(1) => {
                 let len = usize::try_from(NativeStore::number(&value[1..])?).map_err(|_| {
                     NativeStateSnafu {
@@ -115,6 +126,7 @@ impl Records {
                     }
                     .build()
                 })?;
+                charge(len.saturating_mul(2))?;
                 let mut bytes = Vec::new();
                 bytes.try_reserve_exact(len).map_err(|_| {
                     crate::AnalysisInputTooLargeSnafu {

@@ -1,19 +1,19 @@
 use super::*;
 
-pub(super) type JournalWork = (u64, u64, u64, u64, u64, std::time::Duration);
+pub(in crate::analysis) type JournalWork = (u64, u64, u64, u64, u64, std::time::Duration);
 
-pub(super) struct RawScan<'a, 'c> {
-    pub(super) selection: &'a AnalysisSelectionV1,
-    pub(super) read: &'a AnalysisTableRead<'a>,
-    pub(super) traces: &'a [SelectedTrace<'a>],
-    pub(super) mode: AnalysisReadModeV1,
-    pub(super) end: StorePositionV1,
-    pub(super) after: Option<StorePositionV1>,
-    pub(super) decode_events: bool,
-    pub(super) checked_catalog: bool,
-    pub(super) instance: Option<&'a str>,
-    pub(super) frozen: Option<&'a super::append::AppendRange>,
-    pub(super) retain: Option<&'a mut super::append::AppendCapture<'c>>,
+pub(in crate::analysis) struct RawScan<'a, 'c> {
+    pub(in crate::analysis) selection: &'a AnalysisSelectionV1,
+    pub(in crate::analysis) read: &'a AnalysisTableRead<'a>,
+    pub(in crate::analysis) traces: &'a [SelectedTrace<'a>],
+    pub(in crate::analysis) mode: AnalysisReadModeV1,
+    pub(in crate::analysis) end: StorePositionV1,
+    pub(in crate::analysis) after: Option<StorePositionV1>,
+    pub(in crate::analysis) decode_events: bool,
+    pub(in crate::analysis) checked_catalog: bool,
+    pub(in crate::analysis) instance: Option<&'a str>,
+    pub(in crate::analysis) frozen: Option<&'a super::append::AppendRange>,
+    pub(in crate::analysis) retain: Option<&'a mut super::append::AppendCapture<'c>>,
 }
 
 impl AnalysisStore {
@@ -26,62 +26,92 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         journal_work: &mut JournalWork,
     ) -> Result<(Option<StorePositionV1>, bool)> {
-        let mut after = scan.after;
+        scan.read(
+            &self.root,
+            |selection, after, revision, limit, control| {
+                self.selected_position(selection, after, revision, limit, control)
+            },
+            &mut output.sink(control),
+            capture,
+            removals,
+            journal_work,
+        )
+    }
+}
+
+impl RawScan<'_, '_> {
+    pub(in crate::analysis) fn read(
+        &mut self,
+        root: &std::path::Path,
+        mut select: impl FnMut(
+            &AnalysisSelectionV1,
+            Option<StorePositionV1>,
+            u64,
+            usize,
+            &AnalysisReadControl,
+        ) -> Result<Option<(RawIdentity, Option<u32>, SegmentRange)>>,
+        budget: &mut ReadBudget<'_>,
+        capture: &mut tables::Capture<'_>,
+        removals: &mut std::iter::Peekable<std::vec::IntoIter<changes::RemovedRange>>,
+        journal_work: &mut JournalWork,
+    ) -> Result<(Option<StorePositionV1>, bool)> {
+        let control = budget.control;
+        let output = &mut *budget.output;
+        let mut after = self.after;
         let mut scanned = 0;
         let mut row_bytes = 0_usize;
         let mut exhausted = false;
         'scan: loop {
             control.check()?;
-            if matches!(scan.mode, AnalysisReadModeV1::Metadata) {
-                after = Some(scan.end);
+            if matches!(self.mode, AnalysisReadModeV1::Metadata) {
+                after = Some(self.end);
                 exhausted = true;
                 break;
             }
-            let limit = match scan.mode {
+            let limit = match self.mode {
                 AnalysisReadModeV1::Complete
                 | AnalysisReadModeV1::Metadata
                 | AnalysisReadModeV1::Changes(_) => usize::MAX,
                 AnalysisReadModeV1::Page(_) => output.limits.page_rows - scanned,
             };
             if limit == 0 {
-                exhausted = self
-                    .selected_position(scan.selection, after, scan.end.commit_revision, 1, control)?
-                    .is_none();
+                exhausted =
+                    select(self.selection, after, self.end.commit_revision, 1, control)?.is_none();
                 if exhausted {
-                    after = Some(scan.end);
+                    after = Some(self.end);
                 }
                 break;
             }
-            let selected = match scan.frozen {
+            let selected = match self.frozen {
                 Some(range) => range.window(after, limit),
-                None => self.selected_position(
-                    scan.selection,
+                None => select(
+                    self.selection,
                     after,
-                    scan.end.commit_revision,
+                    self.end.commit_revision,
                     limit,
                     control,
                 )?,
             };
             let Some((identity, cpu, range)) = selected else {
-                after = Some(scan.end);
+                after = Some(self.end);
                 exhausted = true;
                 break;
             };
-            if matches!(scan.mode, AnalysisReadModeV1::Page(_))
+            if matches!(self.mode, AnalysisReadModeV1::Page(_))
                 && output.scanned_bytes != 0
                 && output.scanned_bytes.saturating_add(range.scan_bytes) > output.limits.scan_bytes
             {
                 break;
             }
             output.scan(range.scan_bytes)?;
-            if let Some(retain) = &mut scan.retain {
+            if let Some(retain) = &mut self.retain {
                 retain.retain(
-                    scan.selection,
-                    scan.read,
-                    scan.traces,
+                    self.selection,
+                    self.read,
+                    self.traces,
                     output,
-                    scan.decode_events,
-                    scan.checked_catalog,
+                    self.decode_events,
+                    self.checked_catalog,
                     &range,
                     identity.clone(),
                     cpu,
@@ -89,7 +119,7 @@ impl AnalysisStore {
                 )?;
             }
             let read_at = std::time::Instant::now();
-            let (records, frame_rows, body_bytes) = range.read(&self.root)?;
+            let (records, frame_rows, body_bytes) = range.read(root)?;
             let read_time = read_at.elapsed();
             journal_work.5 += read_time;
             journal_work.0 = journal_work.0.saturating_add(1);
@@ -98,7 +128,7 @@ impl AnalysisStore {
             journal_work.3 = journal_work.3.saturating_add(frame_rows as u64);
             journal_work.4 = journal_work.4.saturating_add(body_bytes as u64);
             erebor_telemetry::debug!(stage="capture",operation="journal_read",
-                instance_id=%scan.instance.unwrap_or(""),
+                instance_id=%self.instance.unwrap_or(""),
                 cut_revision=output.meta.commit_revision,
                 source_name=match identity {RawIdentity::Evidence(_)=>"events",RawIdentity::Diagnostic(_)=>"trace_output"},
                 rows=records.len(),bytes=range.scan_bytes,
@@ -114,19 +144,19 @@ impl AnalysisStore {
                     output.remove_raw(capture, &removal, control)?;
                 }
                 let page_bytes =
-                    matches!(scan.mode, AnalysisReadModeV1::Page(_)).then_some(&mut row_bytes);
+                    matches!(self.mode, AnalysisReadModeV1::Page(_)).then_some(&mut row_bytes);
                 let consumed = match &identity {
                     RawIdentity::Evidence(identity) => {
-                        let decoded = scan
+                        let decoded = self
                             .decode_events
                             .then(|| EvidenceRecord::try_from(record.framed_record.as_slice()))
                             .transpose()?;
-                        let selected = scan.selection.binding_ids.is_empty()
+                        let selected = self.selection.binding_ids.is_empty()
                             || decoded
                                 .as_ref()
                                 .and_then(|record| record.decision_context.as_ref())
                                 .is_some_and(|context| {
-                                    scan.selection
+                                    self.selection
                                         .binding_ids
                                         .iter()
                                         .any(|id| id.as_slice() == context.binding_id.as_slice())
@@ -135,12 +165,16 @@ impl AnalysisStore {
                             capture.event(
                                 identity,
                                 cpu.ok_or_else(|| {
-                                    self.state_error("the selected evidence CPU is absent")
+                                    crate::AnalysisStateSnafu {
+                                        path: root,
+                                        reason: "the selected evidence CPU is absent",
+                                    }
+                                    .build()
                                 })?,
                                 range.intake,
                                 &record,
                                 decoded.as_ref(),
-                                scan.checked_catalog,
+                                self.checked_catalog,
                                 &mut output.row_budget(control, page_bytes),
                             )?
                         } else {
@@ -148,30 +182,36 @@ impl AnalysisStore {
                         }
                     }
                     RawIdentity::Diagnostic(identity) => {
-                        let trace = scan
+                        let trace = self
                             .traces
                             .iter()
                             .find(|trace| trace.identity == identity)
                             .ok_or_else(|| {
-                                self.state_error("the selected trace identity is absent")
+                                crate::AnalysisStateSnafu {
+                                    path: root,
+                                    reason: "the selected trace identity is absent",
+                                }
+                                .build()
                             })?;
                         if !trace.selected {
                             scanned += 1;
                             after = Some(record.position);
                             continue;
                         }
-                        let payload = TraceRecord::read(&record.framed_record, &self.root)?;
+                        let payload = TraceRecord::read(&record.framed_record, root)?;
                         let (kind, bytes) = match &payload {
                             TracePayload::Metadata(bytes) => ("metadata", bytes),
                             TracePayload::Data(bytes) => ("data", bytes),
                             TracePayload::Diagnostic(bytes) => ("diagnostic", bytes),
                             TracePayload::Terminal(bytes) => {
-                                let terminal = TraceRecord::terminal(bytes, &self.root)?;
+                                let terminal = TraceRecord::terminal(bytes, root)?;
                                 if terminal.execution_id != identity.execution_id
                                     || terminal.last_sequence + 1 != record.cursor
                                 {
-                                    return self
-                                        .reject("the selected trace terminal identity changed");
+                                    return AnalysisStore::reject_path(
+                                        root,
+                                        "the selected trace terminal identity changed",
+                                    );
                                 }
                                 ("terminal", bytes)
                             }
@@ -196,12 +236,11 @@ impl AnalysisStore {
                 after = Some(record.position);
             }
 
-            if scan.frozen.is_some() {
-                exhausted = self
-                    .selected_position(scan.selection, after, scan.end.commit_revision, 1, control)?
-                    .is_none();
+            if self.frozen.is_some() {
+                exhausted =
+                    select(self.selection, after, self.end.commit_revision, 1, control)?.is_none();
                 if exhausted {
-                    after = Some(scan.end);
+                    after = Some(self.end);
                 }
                 break;
             }

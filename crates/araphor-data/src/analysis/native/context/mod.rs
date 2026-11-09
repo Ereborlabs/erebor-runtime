@@ -3,6 +3,7 @@ use crate::{AnalysisContextKeyV1, AnalysisContextVersionV1, Result};
 
 mod admission;
 mod facts;
+mod index;
 mod record;
 mod recovery;
 

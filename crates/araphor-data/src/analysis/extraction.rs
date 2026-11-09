@@ -31,10 +31,10 @@ mod discovery;
 mod graph;
 mod notifications;
 mod package;
-mod raw;
+pub(in crate::analysis) mod raw;
 mod selection;
 mod source;
-mod tables;
+pub(in crate::analysis) mod tables;
 
 #[cfg(test)]
 const MAX_SCAN_BYTES: usize = 256 * 1024 * 1024;
@@ -63,7 +63,7 @@ impl Default for AnalysisExtractLimits {
 }
 
 impl AnalysisExtractLimits {
-    fn check_keys(&self, selection: &AnalysisSelectionV1) -> Result<()> {
+    pub(in crate::analysis) fn check_keys(&self, selection: &AnalysisSelectionV1) -> Result<()> {
         if self
             .keys
             .is_some_and(|keys| selection.key_count() > keys || selection.nodes.len() > keys)
@@ -362,7 +362,7 @@ impl AnalysisSelectionV1 {
                 == self.traces.as_slice().len()
     }
 
-    fn key_count(&self) -> usize {
+    pub(in crate::analysis) fn key_count(&self) -> usize {
         self.sources.as_slice().len()
             + self.contexts.as_slice().len()
             + self.results.len()
@@ -483,7 +483,52 @@ pub struct AnalysisTableRead<'a> {
 }
 
 impl AnalysisTableRead<'_> {
-    fn check_scope(
+    pub(in crate::analysis) fn check_inputs(
+        &self,
+        selection: &AnalysisSelectionV1,
+        limits: AnalysisExtractLimits,
+        root: &std::path::Path,
+    ) -> Result<()> {
+        if matches!(self.mode, AnalysisReadModeV1::Changes(after) if after.ordinal != u32::MAX) {
+            return AnalysisStore::reject_path(root, "the raw change frontier is not a complete commit");
+        }
+        for (name, columns) in self.requests {
+            let Some(columns) = columns else {
+                continue;
+            };
+            let Some(schema) = AnalysisStore::table_schemas().get(name) else {
+                return AnalysisStore::reject_path(root, "the selected table has no Arrow schema");
+            };
+            if columns.iter().any(|index| *index >= schema.fields().len()) {
+                return AnalysisStore::reject_path(root, "the selected table columns are invalid");
+            }
+        }
+        if self
+            .event_ranges
+            .is_some_and(|ranges| ranges.iter().any(|(first, last)| first > last))
+        {
+            return AnalysisStore::reject_path(root, "the event input range is invalid");
+        }
+        if !selection.valid() {
+            return AnalysisStore::reject_path(root, "the extraction selection has invalid, duplicate, or foreign keys");
+        }
+        if (self.requests.contains_key("discovery_state")
+            || self.requests.contains_key("graph_state"))
+            && !selection.binding_ids.is_empty()
+        {
+            return Err(crate::PackageErrorCodeV1::Denied.error("complete processor source scope"));
+        }
+        if limits.scan_bytes == 0
+            || limits.input_bytes == 0
+            || limits.page_bytes == 0
+            || limits.page_rows == 0
+        {
+            return AnalysisStore::reject_path(root, "the extraction limits must be positive");
+        }
+        Ok(())
+    }
+
+    pub(in crate::analysis) fn check_scope(
         &self,
         selected: &AnalysisSelectionV1,
         scope: &AnalysisSelectionV1,
@@ -521,7 +566,7 @@ impl AnalysisTableRead<'_> {
         )
     }
 
-    fn reads_raw(&self) -> bool {
+    pub(in crate::analysis) fn reads_raw(&self) -> bool {
         self.requests.iter().any(|(name, columns)| {
             columns.is_some()
                 && matches!(
@@ -557,11 +602,11 @@ impl AnalysisTableRead<'_> {
         Ok(())
     }
 
-    fn projected(&self, name: &str) -> Option<&BTreeSet<usize>> {
+    pub(in crate::analysis) fn projected(&self, name: &str) -> Option<&BTreeSet<usize>> {
         self.requests.get(name).and_then(Option::as_ref)
     }
 
-    fn projects_field(&self, relation: &str, field: &str) -> bool {
+    pub(in crate::analysis) fn projects_field(&self, relation: &str, field: &str) -> bool {
         let schema = &AnalysisStore::table_schemas()[relation];
         self.projected(relation).is_some_and(|columns| {
             columns
@@ -570,7 +615,7 @@ impl AnalysisTableRead<'_> {
         })
     }
 
-    fn needs_event_decode(&self) -> bool {
+    pub(in crate::analysis) fn needs_event_decode(&self) -> bool {
         let Some(columns) = self.projected("events") else {
             return false;
         };
@@ -596,7 +641,7 @@ impl AnalysisTableRead<'_> {
     }
 }
 
-pub(super) struct ReadBudget<'a> {
+pub(in crate::analysis) struct ReadBudget<'a> {
     output: &'a mut AnalysisExtractionV1,
     control: &'a AnalysisReadControl,
     row_bytes: Option<&'a mut usize>,
@@ -760,6 +805,28 @@ pub enum AnalysisReadModeV1 {
 }
 
 impl AnalysisExtractionV1 {
+    pub(in crate::analysis) fn new(meta: AnalysisStoreMetaV1, limits: AnalysisExtractLimits) -> Self {
+        Self {
+            discovery_enabled: false,
+            graph_enabled: false,
+            notification_enabled: false,
+            meta,
+            sources: Vec::new(),
+            missing_contexts: Vec::new(),
+            missing_results: Vec::new(),
+            references: Vec::new(),
+            witnesses: Vec::new(),
+            replay_floor: None,
+            scanned_bytes: 0,
+            projected_bytes: 0,
+            input_bytes: 0,
+            trace_reads: Vec::new(),
+            graph_traversal: None,
+            graph_coverage: Vec::new(),
+            limits,
+        }
+    }
+
     pub fn allocation_bytes(&self) -> usize {
         let mut bytes = size_of::<Self>()
             .saturating_add(
@@ -855,14 +922,14 @@ impl AnalysisExtractionV1 {
     }
 }
 
-struct SelectedTrace<'a> {
+pub(in crate::analysis) struct SelectedTrace<'a> {
     identity: &'a TraceIdentityV1,
     target_index: u32,
     selected: bool,
 }
 
 impl AnalysisExtractionV1 {
-    fn reference_context(
+    pub(in crate::analysis) fn reference_context(
         &mut self,
         key: &AnalysisContextKeyV1,
         revision: u64,
@@ -910,7 +977,7 @@ impl AnalysisExtractionV1 {
         self.reference_origin(index, origin)
     }
 
-    fn reference_result(
+    pub(in crate::analysis) fn reference_result(
         &mut self,
         id: &str,
         revision: u64,
@@ -1014,11 +1081,11 @@ impl AnalysisExtractionV1 {
             .ok()
             .map(|index| &self.graph_coverage[index].1)
     }
-    fn sink<'a>(&'a mut self, control: &'a AnalysisReadControl) -> ReadBudget<'a> {
+    pub(in crate::analysis) fn sink<'a>(&'a mut self, control: &'a AnalysisReadControl) -> ReadBudget<'a> {
         self.row_budget(control, None)
     }
 
-    fn row_budget<'a>(
+    pub(in crate::analysis) fn row_budget<'a>(
         &'a mut self,
         control: &'a AnalysisReadControl,
         row_bytes: Option<&'a mut usize>,
@@ -1086,7 +1153,7 @@ impl AnalysisExtractionV1 {
         Ok(())
     }
 
-    fn scan(&mut self, bytes: usize) -> Result<()> {
+    pub(in crate::analysis) fn scan(&mut self, bytes: usize) -> Result<()> {
         self.scanned_bytes = self
             .scanned_bytes
             .checked_add(bytes)
@@ -1804,42 +1871,7 @@ impl AnalysisStore {
             }
             mode => mode,
         };
-        if matches!(mode, AnalysisReadModeV1::Changes(after) if after.ordinal != u32::MAX) {
-            return self.reject("the raw change frontier is not a complete commit");
-        }
-        for (name, columns) in read.requests {
-            let Some(columns) = columns else {
-                continue;
-            };
-            let Some(schema) = Self::table_schemas().get(name) else {
-                return self.reject("the selected table has no Arrow schema");
-            };
-            if columns.iter().any(|index| *index >= schema.fields().len()) {
-                return self.reject("the selected table columns are invalid");
-            }
-        }
-        if read
-            .event_ranges
-            .is_some_and(|ranges| ranges.iter().any(|(first, last)| first > last))
-        {
-            return self.reject("the event input range is invalid");
-        }
-        if !selection.valid() {
-            return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
-        }
-        if (read.requests.contains_key("discovery_state")
-            || read.requests.contains_key("graph_state"))
-            && !selection.binding_ids.is_empty()
-        {
-            return Err(crate::PackageErrorCodeV1::Denied.error("complete processor source scope"));
-        }
-        if limits.scan_bytes == 0
-            || limits.input_bytes == 0
-            || limits.page_bytes == 0
-            || limits.page_rows == 0
-        {
-            return self.reject("the extraction limits must be positive");
-        }
+        read.check_inputs(selection, limits, &self.root)?;
         let decode_events = !selection.binding_ids.is_empty() || read.needs_event_decode();
         let checked_catalog = read.projected("events").is_some_and(|columns| {
             let schema = &Self::table_schemas()["events"];
@@ -1907,25 +1939,11 @@ impl AnalysisStore {
             if after.is_some_and(|position| position > end) {
                 return self.reject("the position read starts beyond the captured revision");
             }
-            let mut output = AnalysisExtractionV1 {
-                discovery_enabled: self.discovery_enabled(),
-                graph_enabled: self.graph_enabled(),
-                notification_enabled: self.notification_owner.load(std::sync::atomic::Ordering::Acquire),
-                meta,
-                sources: Vec::new(),
-                missing_contexts: Vec::new(),
-                missing_results: Vec::new(),
-                references: Vec::new(),
-                witnesses: Vec::new(),
-                scanned_bytes: 0,
-                projected_bytes: 0,
-                input_bytes: 0,
-                trace_reads: Vec::new(),
-                graph_traversal: None,
-                graph_coverage: Vec::new(),
-                limits,
-                replay_floor: Self::replay_floor_from(snapshot, selection.tenant_id)?,
-            };
+            let mut output = AnalysisExtractionV1::new(meta, limits);
+            output.discovery_enabled = self.discovery_enabled();
+            output.graph_enabled = self.graph_enabled();
+            output.notification_enabled = self.notification_owner.load(std::sync::atomic::Ordering::Acquire);
+            output.replay_floor = Self::replay_floor_from(snapshot, selection.tenant_id)?;
             output.charge(size_of::<AnalysisExtractionV1>())?;
             output.charge(key_bytes)?;
             output.charge(envelope.unwrap_or(0))?;

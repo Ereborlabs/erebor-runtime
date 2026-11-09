@@ -30,7 +30,7 @@ mod trace;
 
 use builder::{table_row, Table};
 
-pub(super) struct Capture<'a> {
+pub(in crate::analysis) struct Capture<'a> {
     pub(super) read: &'a AnalysisTableRead<'a>,
     scope: &'a AnalysisSelectionV1,
     tables: BTreeMap<String, Table>,
@@ -47,7 +47,7 @@ pub(super) struct Capture<'a> {
 }
 
 impl<'a> Capture<'a> {
-    pub(super) fn new(read: &'a AnalysisTableRead<'a>, scope: &'a AnalysisSelectionV1) -> Self {
+    pub(in crate::analysis) fn new(read: &'a AnalysisTableRead<'a>, scope: &'a AnalysisSelectionV1) -> Self {
         Self {
             read,
             scope,
@@ -160,7 +160,7 @@ impl<'a> Capture<'a> {
         Ok(())
     }
 
-    pub(super) fn finish(
+    pub(in crate::analysis) fn finish(
         mut self,
         mut extraction: AnalysisExtractionV1,
         scanned_through: StorePositionV1,

@@ -41,6 +41,13 @@ impl DataView {
                 .fail();
             }
             contexts.insert(id);
+            self.check_context_index(
+                id,
+                &crate::AnalysisContextRefV1 {
+                    key: row.version.key.clone(),
+                    commit_revision: row.revision,
+                },
+            )?;
             let input = &row.version;
             Self::check_fact(id, input, |key| Records::read(key, &self.snapshot))?;
             verified
@@ -157,6 +164,7 @@ impl DataView {
             heads.into_iter().map(|(key, (_, id))| (key, id)).collect(),
         )?;
         self.validate_heads(b"\0data/M", imported)?;
+        self.check_context_indexes(contexts.len())?;
         Ok(())
     }
 }

@@ -5,7 +5,7 @@ use crate::{
 };
 
 impl Capture<'_> {
-    pub(in crate::analysis::extraction) fn context(
+    pub(in crate::analysis) fn context(
         &mut self,
         context: &AnalysisContextVersionV1,
         revision: u64,

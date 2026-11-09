@@ -23,8 +23,11 @@ use crate::{NativeStateSnafu, NativeStorageSnafu, Result};
 const HEAD: &[u8] = b"\0data/head";
 const IDENTITY: &[u8] = b"\0data/identity";
 const FORMAT: &[u8] = b"\0data/format";
+const SCHEMA: &[u8] = b"\0data/schema";
+const RECOVERY: &[u8] = b"\0data/recovery";
 
 mod context;
+mod extraction;
 mod managed;
 mod packages;
 mod records;
@@ -50,6 +53,8 @@ pub struct DataView {
     store_uuid: Uuid,
     snapshot: BranchSnapshot,
     metadata_revision: u64,
+    schema_version: u32,
+    recovery_epoch: u64,
     raw: RawIndex,
 }
 
@@ -65,6 +70,15 @@ pub struct DataWrite<'a> {
 }
 
 impl DataView {
+    pub fn meta(&self) -> crate::AnalysisStoreMetaV1 {
+        crate::AnalysisStoreMetaV1 {
+            store_uuid: self.store_uuid,
+            schema_version: self.schema_version,
+            recovery_epoch: self.recovery_epoch,
+            commit_revision: self.revision,
+        }
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -144,7 +158,12 @@ impl NativeStore {
             let mut tx = branch.write_tx().context(NativeStorageSnafu {
                 operation: "initialize",
             })?;
-            tx.insert(FORMAT, 1u64.to_be_bytes());
+            tx.insert(FORMAT, 2u64.to_be_bytes());
+            tx.insert(
+                SCHEMA,
+                (super::ANALYSIS_SCHEMA_VERSION as u64).to_be_bytes(),
+            );
+            tx.insert(RECOVERY, 1u64.to_be_bytes());
             tx.insert(IDENTITY, Uuid::new_v4().as_bytes().as_slice());
             tx.insert(HEAD, 0u64.to_be_bytes());
             tx.commit_stamped([Self::cut(0)])
@@ -209,9 +228,17 @@ impl NativeStore {
     }
 
     fn decode_view(snapshot: BranchSnapshot) -> Result<DataView> {
-        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 1 {
+        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 2 {
             return NativeStateSnafu {
                 field: "format version",
+            }
+            .fail();
+        }
+        let schema = Self::number(&Self::required(&snapshot, SCHEMA)?)?;
+        let recovery_epoch = Self::number(&Self::required(&snapshot, RECOVERY)?)?;
+        if schema != super::ANALYSIS_SCHEMA_VERSION as u64 || recovery_epoch == 0 {
+            return NativeStateSnafu {
+                field: "logical Data metadata",
             }
             .fail();
         }
@@ -242,6 +269,8 @@ impl NativeStore {
             store_uuid,
             snapshot,
             metadata_revision: revision,
+            schema_version: schema as u32,
+            recovery_epoch,
             raw: RawIndex::default(),
         })
     }
