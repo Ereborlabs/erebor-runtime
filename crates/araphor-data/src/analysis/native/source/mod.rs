@@ -1,4 +1,4 @@
-use super::{context::Records, DataView};
+use super::{records::Records, DataView};
 use crate::analysis::raw::RawIdentity;
 use crate::{
     AnalysisSourceReceiptV1, AnalysisSourceStatusV1, CoverageReportRef, EvidenceIntakeIdentityV1,

@@ -23,6 +23,11 @@ the existing transaction and schema regressions. Read the
 [native raw qualification](results/araphor-native-raw-2026-11-09.md).
 Production admission, routing, remaining transaction families, retention,
 backup, and cutover remain **Not done**. No incident speedup is established.
+Native package/image and definition admission and reads now pass 24 focused
+cases with the existing storage regressions. Read the
+[catalogue qualification](results/araphor-native-catalogue-2026-11-09.md).
+Collection, uninstall reclamation, capacity accounting, qualified context/fact
+admission, managed lifecycle, and production routing remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

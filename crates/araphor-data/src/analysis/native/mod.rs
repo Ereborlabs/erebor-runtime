@@ -25,6 +25,8 @@ const IDENTITY: &[u8] = b"\0data/identity";
 const FORMAT: &[u8] = b"\0data/format";
 
 mod context;
+mod packages;
+mod records;
 mod source;
 
 pub struct NativeStore {
@@ -184,6 +186,7 @@ impl NativeStore {
         let raw = Self::recover_raw(root, &view.snapshot)?;
         view.revision = view.revision.max(raw.index.revision);
         view.raw = raw.index.clone();
+        view.validate_catalogue()?;
         Ok(Self {
             database,
             branch,

@@ -120,6 +120,17 @@ milliseconds. This single shared-paging qualification establishes no speedup.
 Production still uses DuckDB, and both incident latency targets remain
 **Not done**.
 
+Native package/image and definition admission and reads now use the existing
+artifact types, callbacks, exact pins, and canonical definition bytes. Latest
+retries use a point read; older retries scan one definition name. Recovery
+checks immutable records and the exact latest pointer sets. Twenty-four
+focused cases and the feature-off build pass. Read the
+[catalogue qualification](../research/results/araphor-native-catalogue-2026-11-09.md).
+Result: **Done for native catalogue admission and reads**. Collection,
+uninstall reclamation, capacity accounting, qualified context/fact admission,
+managed lifecycle, and production routing remain **Not done**. Production
+still uses DuckDB. No incident performance gain is established.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

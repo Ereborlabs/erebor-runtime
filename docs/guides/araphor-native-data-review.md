@@ -2,7 +2,8 @@
 
 This guide covers the optional native Data owner, raw source storage, and its
 package storage proof of concept (PoC) caller. The metadata source follows
-Runtime `78e909526`. The combined raw view follows `f05f444e2`.
+Runtime `78e909526`. The combined raw view follows `f05f444e2`. The catalogue
+source follows `b447c7142`.
 Production Data still uses DuckDB. Read the [integration research](../research/araphor-fjall-integration.md)
 for the complete migration.
 
@@ -239,3 +240,43 @@ Configured limits, required-input and witness accounting, diagnostics, lifecycle
 retention, backup, and production cutover remain **Not done**. The native owner
 supports its current default-limit mode only. No incident gain follows from
 this integration.
+
+## Package and definition catalogue
+
+[NativeStore::install_package_image](../../crates/araphor-data/src/analysis/native/packages/image.rs) Data receives a checked image
+  -> [PackageRevisionV1::from_bundle](../../crates/araphor-data/src/analysis/packages/model.rs) Data obtains the existing immutable artifact rows.
+  -> [NativeStore::install_package_image](../../crates/araphor-data/src/analysis/native/packages/image.rs) Data checks the retained image digest.
+  -> [DataWrite::stage_packages](../../crates/araphor-data/src/analysis/native/packages/mod.rs) Data stages missing rows and checks dependencies with indexed reads.
+  -> [NativeStore::install_package_image](../../crates/araphor-data/src/analysis/native/packages/image.rs) Data stages the installed image and latest pointer.
+  -> The admission callback must succeed before Data commits.
+  -> An unchanged retry returns its original revision without a new batch.
+
+[NativeStore::admit_definition](../../crates/araphor-data/src/analysis/native/packages/definitions.rs) Data receives a resolved definition
+  -> Data validates the definition and its exact installed image pins.
+  -> [DefinitionRecord::find](../../crates/araphor-data/src/analysis/native/packages/definitions.rs) Data compares the latest value first and scans one name's history only for an older retry.
+  -> Data stages the canonical definition bytes and latest pointer.
+  -> The admission callback must succeed before Data commits.
+  -> An older exact retry returns its original revision and leaves the latest pointer unchanged.
+
+[DataView::validate_catalogue](../../crates/araphor-data/src/analysis/native/packages/recovery.rs) Data reopens the store
+  -> Data checks artifact contracts, dependency closures, image digests, and definition pins.
+  -> Data checks record revisions against the native metadata head.
+  -> Data rejects duplicate canonical definitions for one tenant and name.
+  -> Data checks latest pointers against the retained records before publication.
+
+`DataView` supplies exact package revisions, installed or pinned images, and
+latest or exact definition revisions. Native snapshots retain historical values.
+The shared `Records` owner interns semantic identities and fragments long keys
+at the engine key width. Definition names have no added size limit. Package
+artifacts use the existing binary MessagePack setting. The decoder also accepts
+the previous integer-array byte encoding. Identity encoding and canonical
+definition bytes do not change.
+
+Manual `install_package` uses the same validator as `AnalysisStore`. Checked
+image admission keeps its existing contract and does not acquire the manual
+name-length limits. Installation and definition admission create no instance
+or subscription. Qualified context admission, lifecycle, collection, uninstall
+reclamation, capacity accounting, and production routing remain **Not done**.
+The [catalogue cases](../../crates/araphor-data/tests/native_packages.rs) cover
+these admission and read boundaries. They do not prove production cutover or
+notification latency.

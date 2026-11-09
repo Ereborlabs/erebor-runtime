@@ -17,6 +17,34 @@ pub struct PackageRevisionV1 {
 }
 
 impl PackageRevisionV1 {
+    pub(in crate::analysis) fn validate_installation(
+        revisions: &[Self],
+        root: &std::path::Path,
+    ) -> crate::Result<()> {
+        if revisions.is_empty() {
+            return crate::AnalysisStore::reject_path(root, "the package closure is empty");
+        }
+        let tenant = revisions[0].tenant_id;
+        let mut keys = std::collections::BTreeSet::new();
+        for package in revisions {
+            if package.tenant_id != tenant
+                || package.package_id.is_empty()
+                || package.package_id.len() > 256
+                || package.revision.is_empty()
+                || package.revision.len() > 4096
+                || package.descriptor.is_empty()
+                || package.artifact.is_empty()
+                || !keys.insert((&package.package_id, &package.revision))
+            {
+                return crate::AnalysisStore::reject_path(root, "the package closure is invalid");
+            }
+        }
+        for package in revisions {
+            package.decode_artifact()?;
+        }
+        Ok(())
+    }
+
     pub fn from_artifact(
         artifact: &crate::PackageArtifactV1,
         tenant_id: [u8; 16],

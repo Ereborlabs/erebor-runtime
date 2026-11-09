@@ -10,27 +10,8 @@ impl AnalysisStore {
         revisions: &[PackageRevisionV1],
         check: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        if revisions.is_empty() {
-            return self.reject("the package closure is empty");
-        }
+        PackageRevisionV1::validate_installation(revisions, &self.root)?;
         let tenant = revisions[0].tenant_id;
-        let mut keys = std::collections::BTreeSet::new();
-        for package in revisions {
-            if package.tenant_id != tenant
-                || package.package_id.is_empty()
-                || package.package_id.len() > 256
-                || package.revision.is_empty()
-                || package.revision.len() > 4096
-                || package.descriptor.is_empty()
-                || package.artifact.is_empty()
-                || !keys.insert((&package.package_id, &package.revision))
-            {
-                return self.reject("the package closure is invalid");
-            }
-        }
-        for package in revisions {
-            package.decode_artifact()?;
-        }
         let mut guard = self.writer()?;
         let transaction = guard
             .get_mut()?
