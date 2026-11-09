@@ -4,8 +4,11 @@ Extend the Fjall fork with generic versioned storage. Applications decide what
 keys mean, which history to retain, and how to use journal changes. The engine
 has no Araphor Graph, package, finding, SQL, or DataFusion dependency.
 
-Status: **Approved; implementation in progress**. Source review: 2026-11-09.
-Complete implementation and performance qualification: **Not done**.
+Status: **Done for the approved engine scope**. Final review: 2026-11-09.
+The user accepted the current benchmark on 2026-11-09. See
+[final verification](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/finalization/README.md).
+The original combined median target is not proved. Earlier measurements and
+their qualification results remain below.
 
 ## Intended end state
 
@@ -30,10 +33,10 @@ production storage migration are separate work.
 Implementation goal: deliver these two engine forks
 with durable history policies, indexed historical reads, writable branches,
 and resumable original-journal CDC on stable user keys. Completion requires
-the public API and combined lifecycle proof below, plus performance that
-matches or improves the existing Fjall PoC benchmark. Use the same workloads,
-timing fields, and measurement conditions. The active user goal authorizes
-implementation and the existing PoC comparison.
+the public API and combined lifecycle proof below. The original performance
+criterion was to match or improve the existing Fjall PoC benchmark with the
+same workloads, timing fields, and measurement conditions. The user accepted
+the current measured benchmark in place of that remaining criterion.
 
 ## Implementation flow
 
@@ -76,7 +79,7 @@ Process restarts, or an operation fails
   -> Aborted and empty writes publish no change; uncertain I/O stops publication.
 ```
 
-## Current APIs and source findings
+## Original APIs and source findings
 
 Reviewed Fjall 3.1.13 at `87006048139bfe1b072bbc29a5a92bf1f97628e3`, with
 the existing [CDC patch](../../crates/araphor-graph/examples/storage_poc/cdc-bench/fjall.patch).
@@ -90,7 +93,10 @@ Fjall now uses the local dependency at `../lsm-tree`. The frozen control uses
 Fjall `aba9e7651d3b0123ad982d43255a4f364fab908e` and this `lsm-tree` commit.
 Keep the fresh control separate from the earlier recorded source states.
 
-| Current API or owner | Present behavior and required change |
+The table records the source before this implementation. The public contract
+below describes the implemented APIs.
+
+| Original API or owner | Original behavior and required change |
 | --- | --- |
 | [`Database::snapshot`, `SingleWriterTxDatabase::read_tx`](../../fjall/src/tx/single_writer/mod.rs) | Current views only; no durable historical opener or writable fork. |
 | [`Readable::{get, prefix, range, iter}`](../../fjall/src/readable.rs), [`Snapshot`](../../fjall/src/snapshot.rs) | Indexed reads and snapshot-owning iterators; reuse their native access paths. |
@@ -176,8 +182,8 @@ restart; name reuse must not redirect an old CDC batch to the new branch.
 
 ## API examples
 
-These examples are proposed API pseudocode, not executable Rust. Error handling
-is omitted. Each nonempty commit below returns a receipt.
+These examples use pseudocode for the implemented APIs. They are not executable
+Rust. Error handling is omitted. Each nonempty commit below returns a receipt.
 
 Create a branch and retain history before writing. Fork an old revision, then
 change the child without changing its parent:
@@ -279,9 +285,11 @@ retained journal items.
 
 Use the existing [PoC workloads, commands, and timing definitions](../../crates/araphor-graph/examples/storage_poc/README.md).
 Keep their fixtures, cycle counts, engine orders, durability, and measurement
-boundaries. The completed engine must match or improve the recorded Fjall PoC
-performance while passing the required functional checks. Report measured
-values using the existing report fields and summary calculations.
+boundaries. The original criterion required the completed engine to match or
+improve the recorded Fjall PoC performance and pass the functional checks.
+The user accepted the current benchmark on 2026-11-09. The measurements below
+remain the original comparison targets. Report measured values with the
+existing report fields and summary calculations.
 
 The [combined driver](../../crates/araphor-graph/examples/storage_poc/cdc.rs)
 and [summary checks](../../crates/araphor-graph/examples/storage_poc/summarize_cdc.py)
@@ -359,6 +367,9 @@ No production migration, Graph processing changes, branch merge, shared-SST
 writable forks, distributed storage, or automatic retention policy is included.
 
 ## Implementation status
+
+The entries below preserve results for their recorded source states. The final
+acceptance record follows the latest source comparison.
 
 | Work | Result and evidence |
 | --- | --- |
@@ -525,8 +536,32 @@ gain or sustained regression is established.
 Current accepted source is Fjall `bdb1843` and `lsm-tree` `2e1b5df3`. Use the
 borrowed point-lookup record above for the latest comparison. Earlier records
 describe their recorded source states. The whole-cycle CPU attempt is excluded
-because its reset function was inlined in one executable. Complete performance
-qualification remains **Not done**.
+because its reset function was inlined in one executable.
+
+### Final acceptance: 2026-11-09
+
+Result: **Done for the approved engine scope**. The implementer and reviewer
+read the complete plan and found no missing API or required lifecycle proof.
+No further engine change was required. The user accepted the current benchmark
+and requested completion. This acceptance replaces the remaining numeric
+performance gate; it does not prove the original combined median target or
+a repeatable latency gain.
+
+Final source is Fjall `bdb1843574f00ed9153233b547d2e2fd055c266a` and
+`lsm-tree` `2e1b5df34ffc5db3275010f4bd5832518453b121`. Both trees were clean.
+All 11 [final focused commands and their logs](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/finalization/README.md)
+pass. Native default/LZ4 libraries pass 244/247 cases; eight selected integration
+suites pass 19 cases in each configuration. Fjall CDC/without CDC libraries
+pass 128/87 cases. Documentation tests pass 23 native and 86 Fjall cases.
+The production check without default features, library clippy, and formatting
+pass. Existing ignored cases and clippy warnings remain. All ten saved PoC
+summaries reproduce exactly; no new benchmark was run.
+
+Accepted combined median/p95/maximum values are 4.653/7.187/8.332 and
+4.568/7.080/7.223 ms. Stable eight-cycle medians are 25.042 and 25.939 ms.
+The source links, API proof map, commands, and limits are in the final record.
+Full workspace CI was not run, as the user requires. Production Araphor
+migration and notification latency remain outside this engine implementation.
 
 The [timestamped journal diagnostic](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/header-group/waits.md)
 matches all 128 saved source and output cursors to unique journal commits.

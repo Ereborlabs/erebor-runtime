@@ -12,10 +12,12 @@ compaction and restart. Writable forks share fixed ancestor state without
 copying parent records. Durable commits return an exact revision and cursor.
 Consumers resume the original journal and save progress with resulting writes.
 
-The existing PoCs must reach 4.370 ms median and 8.717 ms maximum for the
-combined ordinary cycle, and 26.985 ms median for the stable eight-cycle run.
-Performance qualification remains **Not done**. These PoCs do not measure
-production DataFusion input or notification delivery.
+The approved engine implementation is **Done** at Fjall `bdb1843` and
+`lsm-tree` `2e1b5df3`. The user accepted the current benchmark on 2026-11-09;
+see [final verification](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/finalization/README.md).
+The original 4.370 ms combined median target and a repeatable latency gain
+are not proved. These PoCs do not measure production DataFusion input or
+notification delivery.
 
 ## Implementation review flow
 
@@ -258,6 +260,18 @@ physical-ID counter survives deletion and prevents relabeling old journal items.
 
 ## Verification and limits
 
+All 11 final focused commands pass on these exact engine commits. Native
+default/LZ4 libraries pass 244/247 cases, and eight selected integrations pass
+19 cases in each configuration. Fjall CDC/without CDC libraries pass 128/87
+cases. Documentation tests pass 23 native and 86 Fjall cases. Production
+without default features, library clippy, and formatting pass. Existing ignored
+cases and clippy warnings remain. All ten saved PoC summaries reproduce.
+The [final record](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/finalization/README.md)
+contains commands and logs. No new benchmark was run. Full workspace CI was
+not run, as the user requires.
+
+The records below preserve earlier verification and performance decisions.
+
 The focused commands use the native crate owners:
 
 ```sh
@@ -448,4 +462,6 @@ Native default/LZ4 libraries pass 244/247 cases; Fjall CDC/without CDC pass
 summaries pass. Combined median/p95/maximum values are 4.653/7.187/8.332 and
 4.568/7.080/7.223 ms; stable medians are 25.042 and 25.939 ms. Profiled
 timings are excluded. Both combined medians exceed their target and their
-fresh controls. Complete performance qualification remains **Not done**.
+fresh controls. The user accepted these measured results on 2026-11-09.
+Final implementation acceptance is **Done**; the original combined median
+target and a repeatable elapsed gain remain unproved.

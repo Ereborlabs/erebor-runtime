@@ -1,0 +1,84 @@
+{
+  "summary_checks": [
+    {
+      "report": "output/storage-engine-baseline-20261108/borrow-key-before-combined-0.json",
+      "sha256": "dd83d378075bb6e2bf1a9e852ff858d822ce10e859ac81417000884024e29cff",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-before-combined-0-summary.json",
+      "summary_sha256": "c4c2194442d405fff72e98fd313eb2f8f9687db4d038bb83aca680942a38e4cf"
+    },
+    {
+      "report": "output/storage-engine-baseline-20261108/borrow-key-before-stable-0.json",
+      "sha256": "074626b91d52e23e3eb48c51cf7b2a2708df8dde372c82d60c6bbc71a3c8f372",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-before-stable-0-summary.json",
+      "summary_sha256": "4c0ad42e433c160303ab2cfa0f9115d6081c1f3c2741c2d8e445f23bad8657f6"
+    },
+    {
+      "report": "output/storage-engine-baseline-20261108/borrow-key-before-combined-1.json",
+      "sha256": "b997ae6c6a967e4b059a3ffe6a5792ce9dcebfdd330b6842f6f2b2b5c2057d00",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-before-combined-1-summary.json",
+      "summary_sha256": "c9cd321c87645662af204a6c819750b34cfdc523bc2d18e9be8d19e6a52dc1d6"
+    },
+    {
+      "report": "output/storage-engine-baseline-20261108/borrow-key-before-stable-1.json",
+      "sha256": "f58fb2953c71a235891bd9dc8bee13c780699d9a2dfcf75940974ee821af6208",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-before-stable-1-summary.json",
+      "summary_sha256": "d445b142c794277bd2182d0cbadd1a2de498472472e0a74ae0bbb25706388542"
+    },
+    {
+      "report": "/tmp/araphor-callgrind/borrow-key-before-package-combined.json",
+      "sha256": "acb764610c44edc5822b35627f7c211bc11da49b2e7725b2a387f0bd9e78e7ca",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-before-package-summary.json",
+      "summary_sha256": "e6cc2b4e59218b912f2d798ea22f6d05f010adb155c4be0f30a35728661a47ce",
+      "limits": "Profiled timings excluded"
+    },
+    {
+      "report": "output/storage-engine-baseline-20261108/borrow-key-after-combined-0.json",
+      "sha256": "f67eb4bb6c07be680e56b0e71710be39e6d74e1f4cbac0fa764c1ebf096d487c",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-after-combined-0-summary.json",
+      "summary_sha256": "babfba9e8cb4e86f084d8f9398c9cc14c3c74cbdaee00b4518fde79eea0ebcad"
+    },
+    {
+      "report": "output/storage-engine-baseline-20261108/borrow-key-after-stable-0.json",
+      "sha256": "fe314f7c640fbb1e53cb4fbf71822be71040e5b3b063845b6c9ba21ec0687fef",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-after-stable-0-summary.json",
+      "summary_sha256": "7cf95d10f32642bd9fb7ac1af5bfa597c94e14be6a33cf3ac50f03b90d318cf2"
+    },
+    {
+      "report": "output/storage-engine-baseline-20261108/borrow-key-after-combined-1.json",
+      "sha256": "96d9da1ac6d3d61c2c480567ace04ff2a077fdf8736effd133684f620f32fb50",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-after-combined-1-summary.json",
+      "summary_sha256": "9c107ec826f9d0c457e6d4b36639eaf29b263ff0736b3717baf528405a8c7913"
+    },
+    {
+      "report": "output/storage-engine-baseline-20261108/borrow-key-after-stable-1.json",
+      "sha256": "fbff9692619436bae3b7e5d044fa5909bc3b660e353b6c7185ad6df99c1cff0a",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-after-stable-1-summary.json",
+      "summary_sha256": "89b89253624d4f0ec6dd1f48c7768e7191ff00ad1b9afa4e60e89b201569beb7"
+    },
+    {
+      "report": "/tmp/araphor-callgrind/borrow-key-after-package-combined.json",
+      "sha256": "cc7c110737a53a5e46bb11b2603e3d24792a16ac51ad6727f2c27800636aae28",
+      "summary": "crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/borrowed-lookup/borrow-key-after-package-summary.json",
+      "summary_sha256": "d933d4ee0917a91e4f30924631b753a3ff28332798f28a329df2fc48488edacd",
+      "limits": "Profiled timings excluded"
+    }
+  ],
+  "accepted_combined": [
+    {
+      "pass_number": 1,
+      "samples": 28,
+      "median_ms": 4.652732500000001,
+      "p95_ms": 7.186934,
+      "maximum_ms": 8.33221
+    },
+    {
+      "pass_number": 2,
+      "samples": 28,
+      "median_ms": 4.567874,
+      "p95_ms": 7.079864,
+      "maximum_ms": 7.22346
+    }
+  ],
+  "performance_acceptance": "User accepts existing current benchmark on 2026-11-09. Original combined median target is not proved. No new benchmark run.",
+  "p95_method": "Nearest rank, 27th ordered value of 28 ordinary fixed-key samples; restart excluded."
+}

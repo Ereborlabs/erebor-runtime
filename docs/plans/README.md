@@ -22,11 +22,11 @@ master plan invented for them.
 ## Proposed Master Plans
 
 - [Fjall durable history, branches, and CDC](fjall-versioned-storage.md) records
-  the proposed generic storage APIs and source changes. The performance goal
-  is to match or improve the existing Fjall PoC benchmark.
-  Implementation is approved and in progress. Durable history, sparse branches,
-  exact commit receipts, streaming CDC, and retired collection pass focused
-  checks. Complete performance qualification remains open.
+  the implemented generic storage APIs and source changes. Durable history,
+  sparse branches, exact commit receipts, streaming CDC, and retired collection
+  pass final focused checks. The approved engine scope is complete. The user
+  accepted the current benchmark on 2026-11-09; the original combined median
+  target and a repeatable elapsed gain remain unproved.
 - [Araphor packages and managed jobs](araphor-package-jobs.md) records the
   current native SQL pipeline, reactive execution, new Discovery packages,
   and code reduction criteria. Definition files and running instances are the

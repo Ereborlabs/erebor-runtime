@@ -1,0 +1,27 @@
+{
+  "recorded_at_utc": "2026-11-09T13:16:39.179676+00:00",
+  "result": "Done for approved engine scope",
+  "performance_acceptance": "User accepted existing current benchmark on 2026-11-09; original combined median target and repeatable elapsed gain remain unproved.",
+  "review": "Implementer and independent reviewer read full plan; no missing planned API or required lifecycle proof found. No engine source edits.",
+  "source": [
+    {
+      "tree": "fjall",
+      "commit": "bdb1843574f00ed9153233b547d2e2fd055c266a"
+    },
+    {
+      "tree": "lsm-tree",
+      "commit": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+    }
+  ],
+  "gate_commands": 11,
+  "saved_summaries_reproduced": 10,
+  "raw_benchmark_archive": "../borrowed-lookup/raw-evidence.tar.zst",
+  "raw_benchmark_archive_sha256": "f677c638985eb7f65b100c7fbe9c9522d8f593d3664f6103365a6ca18effcdc6",
+  "full_workspace_ci": "Not run, as requested by user",
+  "new_benchmark": "Not run; existing accepted measurements retained",
+  "limits": [
+    "Existing ignored cases and clippy warnings remain.",
+    "The known upstream no-default-features test error was not changed or rerun; the production check passes.",
+    "Araphor production integration, DataFusion input, notification latency, branch merge, shared-SST writable forks, and distributed storage are outside scope."
+  ]
+}

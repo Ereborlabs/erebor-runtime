@@ -28,7 +28,8 @@ tree contains only named, no-clobber copies selected during triage.
   work.
 - [Fjall versioned storage review](guides/fjall-versioned-storage-review.md)
   gives the native history, branch, journal, recovery, and collection source
-  route. Complete performance qualification remains open.
+  route. The approved engine scope is complete. The user accepted the current
+  benchmark; the original combined median target remains unproved.
 
 ## Important Status Rule
 
