@@ -503,3 +503,60 @@ fn duplicate_layers_and_fork_isolation() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn installation_checks_are_read_only_and_exact() -> TestResult {
+    let records = [
+        (b'f', vec![11]),
+        (b'f', vec![12]),
+        (b'f', vec![13]),
+        (b'g', vec![71, 11]),
+        (b'g', vec![71, 12]),
+        (b'g', vec![71, 13]),
+        (b'w', vec![17]),
+        (b'w', vec![19]),
+        (b'v', vec![71, 17]),
+        (b'v', vec![71, 19]),
+        (b'g', vec![71, 999]),
+        (b'v', vec![71, 999]),
+    ];
+    for (kind, fields) in records {
+        for remove in [true, false] {
+            if remove && fields.last() == Some(&999) {
+                continue;
+            }
+            let fixture = Fixture::new()?;
+            let declarations = fixture
+                .shapes
+                .iter()
+                .map(|(id, shape)| Declaration {
+                    relation: *id,
+                    shape: shape.clone(),
+                    endpoints: (*id == 13).then_some((11, 12)),
+                })
+                .collect::<Vec<_>>();
+            let before = fixture.branch.snapshot()?;
+            fixture
+                .graph
+                .check_installation(&before, &[17, 19], &declarations)?;
+            let mut tx = fixture.branch.write_tx()?;
+            let key = Key::record(kind, &fields);
+            if remove {
+                tx.remove(key);
+            } else {
+                tx.insert(key, 999u64.to_be_bytes());
+            }
+            tx.commit()?;
+            let cursor = fixture.db.inner().journal_head()?;
+            assert!(fixture
+                .graph
+                .check_installation(&fixture.branch.snapshot()?, &[17, 19], &declarations)
+                .is_err());
+            assert_eq!(fixture.db.inner().journal_head()?, cursor);
+            fixture
+                .graph
+                .check_installation(&before, &[17, 19], &declarations)?;
+        }
+    }
+    Ok(())
+}

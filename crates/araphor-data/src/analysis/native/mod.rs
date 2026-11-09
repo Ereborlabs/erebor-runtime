@@ -25,9 +25,12 @@ const IDENTITY: &[u8] = b"\0data/identity";
 const FORMAT: &[u8] = b"\0data/format";
 
 mod context;
+mod managed;
 mod packages;
 mod records;
 mod source;
+
+pub use managed::{ManagedGraph, ManagedLease};
 
 pub struct NativeStore {
     database: SingleWriterTxDatabase,
@@ -38,6 +41,7 @@ pub struct NativeStore {
     raw: RawMutex<RawJournal>,
     maintenance: Maintenance<()>,
     ready: AtomicBool,
+    managed_owner: AtomicBool,
     _lease: super::connection::AnalysisLease,
 }
 
@@ -189,6 +193,7 @@ impl NativeStore {
         view.raw = raw.index.clone();
         view.validate_catalogue()?;
         view.validate_contexts()?;
+        view.validate_managed()?;
         Ok(Self {
             database,
             branch,
@@ -198,6 +203,7 @@ impl NativeStore {
             raw: RawMutex::new(raw),
             maintenance: Maintenance::new(()),
             ready: AtomicBool::new(true),
+            managed_owner: AtomicBool::new(false),
             _lease: lease,
         })
     }

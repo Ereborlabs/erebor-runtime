@@ -170,6 +170,18 @@ impl Records {
         Ok(bytes)
     }
 
+    pub(super) fn named(value: &impl Serialize) -> Result<Vec<u8>> {
+        let mut bytes = vec![0];
+        value
+            .serialize(
+                &mut rmp_serde::Serializer::new(&mut bytes)
+                    .with_struct_map()
+                    .with_bytes(rmp_serde::config::BytesMode::ForceIterables),
+            )
+            .context(ManagedEncodingSnafu)?;
+        Ok(bytes)
+    }
+
     pub(super) fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
         let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
         let value = T::deserialize(&mut decoder).context(ManagedDecodingSnafu)?;

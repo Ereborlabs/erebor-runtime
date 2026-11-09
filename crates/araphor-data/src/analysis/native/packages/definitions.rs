@@ -4,7 +4,7 @@ use snafu::ResultExt as _;
 
 use super::{image::ImageRecord, Records};
 use crate::{
-    analysis::native::{DataView, NativeStore},
+    analysis::native::{DataView, DataWrite, NativeStore},
     AnalysisReadControl, ManagedEncodingSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code,
     Result,
 };
@@ -180,17 +180,13 @@ impl DataView {
             };
             NativeStore::number(&bytes)?
         };
-        let Some(bytes) = Records::payload(&DefinitionRecord::key(id, revision), |key| {
-            Records::read(key, &self.snapshot)
-        })?
+        let Some(definition) =
+            DefinitionRecord::read(id, tenant, name, revision, self.metadata_revision, |key| {
+                Records::read(key, &self.snapshot)
+            })?
         else {
             return Ok(None);
         };
-        let row: DefinitionRecord = Records::decode(&bytes)?;
-        let definition = row.definition(self.metadata_revision)?;
-        if row.tenant != tenant || row.revision != revision || definition.definition.name != name {
-            return Err(Code::Invalid.error("retained definition identity"));
-        }
         self.definition_images(tenant, &definition)?;
         control.check()?;
         Ok(Some((definition, revision)))
@@ -243,5 +239,44 @@ impl DataView {
             }
         }
         Ok(())
+    }
+}
+
+impl DefinitionRecord {
+    fn read(
+        id: u64,
+        tenant: [u8; 16],
+        name: &str,
+        revision: u64,
+        head: u64,
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+    ) -> Result<Option<ResolvedDefinition>> {
+        let Some(bytes) = Records::payload(&Self::key(id, revision), get)? else {
+            return Ok(None);
+        };
+        let row: Self = Records::decode(&bytes)?;
+        let definition = row.definition(head)?;
+        if row.tenant != tenant || row.revision != revision || definition.definition.name != name {
+            return Err(Code::Invalid.error("retained definition identity"));
+        }
+        Ok(Some(definition))
+    }
+}
+
+impl DataWrite<'_> {
+    pub(in crate::analysis::native) fn definition(
+        &self,
+        tenant: [u8; 16],
+        name: &str,
+        revision: u64,
+    ) -> Result<Option<ResolvedDefinition>> {
+        let identity = DefinitionRecord::identity(tenant, name)?;
+        let Some(id) = Records::find(&identity, |key| Records::staged(key, &self.transaction))?
+        else {
+            return Ok(None);
+        };
+        DefinitionRecord::read(id, tenant, name, revision, self.metadata_revision, |key| {
+            Records::staged(key, &self.transaction)
+        })
     }
 }

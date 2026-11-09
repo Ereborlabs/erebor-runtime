@@ -142,6 +142,17 @@ staging**. Context providers, managed attempts/results, notification lookups
 and effects, configured capacity, collection, and production routing remain
 **Not done**. Production still uses DuckDB. No incident gain is established.
 
+Native managed admission and ordinary start/stop now preserve the current
+specification, grant, pins, lifecycle CAS, no-op callbacks, and host lease.
+Graph mappings, declarations, immutable versions, authority, and call heads
+share one Data transaction. Read the
+[managed qualification](../research/results/araphor-native-managed-2026-11-09.md).
+Result: **Done for native managed admission and ordinary start/stop**.
+Captured attempts, results, checkpoints, references, consumed progress,
+attempt-dependent lifecycle, production activation, CDC routing, notification
+batching, retention, backup, and cutover remain **Not done**. No incident
+performance gain is established.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

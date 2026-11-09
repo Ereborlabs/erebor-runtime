@@ -3,7 +3,8 @@
 This guide covers the optional native Data owner, raw source storage, and its
 package storage proof of concept (PoC) caller. The metadata source follows
 Runtime `78e909526`. The combined raw view follows `f05f444e2`. The catalogue
-source follows `b447c7142`. Qualified context admission follows `66bc190c5`.
+source follows `b447c7142`. Qualified context admission follows `66bc190c5`. Managed admission and ordinary
+start/stop follow `6087cbe9f`.
 Production Data still uses DuckDB. Read the [integration research](../research/araphor-fjall-integration.md)
 for the complete migration.
 
@@ -329,3 +330,68 @@ public native APIs and a real current-owner caller for the shared validators.
 This admission scope adds no raw-record or witness requirement. Configured
 capacity, managed attempts/results, source-range fact reads, notification
 lookups/effects, collection, and production routing remain **Not done**.
+
+## Managed admission and start/stop
+
+[NativeStore::admit_managed](../../crates/araphor-data/src/analysis/native/managed/admission.rs) Data receives a managed specification and grant
+  -> [ManagedSpec::validate](../../crates/araphor-data/src/analysis/managed/model.rs) Data checks the actual manifest and destination contract.
+  -> [ManagedSpec::check_images](../../crates/araphor-data/src/analysis/managed/contract.rs) Data checks the exact retained definition, image, export, and implementation pins.
+  -> [ManagedSpec::graph_declarations](../../crates/araphor-data/src/analysis/managed/graph/admission.rs) Data reads the Graph declarations from the called package models.
+  -> [DataWrite::admit_managed_graph](../../crates/araphor-data/src/analysis/native/managed/graph.rs) Data stages new opaque Graph mappings and calls the generic Graph installer in the same transaction.
+  -> [DataWrite::admit_managed](../../crates/araphor-data/src/analysis/native/managed/admission.rs) A new instance requires its exact images to remain installed.
+  -> Data stages an immutable specification and admission scope, the current authority and lifecycle, and empty call heads.
+  -> The callback must succeed before Data commits.
+  -> An exact retry checks retained pins, returns the current instance, and stages no writes.
+
+[NativeStore::set_managed_running](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) The execution owner starts or stops an admitted instance
+  -> [DataWrite::change_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) Data checks the expected lifecycle and rejects a removed instance.
+  -> Data updates the running state and active index in the same transaction.
+  -> The callback must succeed before Data commits.
+  -> A current no-op runs the callback and creates no batch.
+  -> A stale lifecycle conflicts, including a stale no-op.
+
+[NativeStore::stop_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) The execution owner fences a captured instance
+  -> Data checks the specification, grant, generation, and lifecycle.
+  -> Data preserves the existing rule that stop does not require equal captured progress or running state.
+  -> Data advances the lifecycle for an instance that has never started.
+
+[NativeStore::lease_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) One execution owner takes the host lease
+  -> The lease retains the store and its directory lease.
+  -> Dropping the host lease releases the host claim.
+  -> Another host cannot take the claim while the lease is held.
+
+[DataView::validate_managed](../../crates/araphor-data/src/analysis/native/managed/recovery.rs) Data reopens managed records
+  -> Data checks immutable versions, admission scopes, current authority, revision bounds, call heads, and the exact active index.
+  -> Data compares Graph mappings with the union of retained manifests.
+  -> [Graph::check_installation](../../crates/araphor-graph/src/native/installation.rs) Araphor Graph checks declarations, endpoints, writer ownership, and the exact installation indexes without writes.
+  -> Data rejects absent or inconsistent records before it publishes the recovered view.
+
+`Z` holds immutable managed versions. Named MessagePack fields preserve the
+actual definition source enum. `J` holds mutable instance fields without a
+second specification. `Q` holds stable call heads. `B` indexes active instances.
+`G` holds Data's package-call Graph mappings. The existing semantic dictionary
+allocates these identities and fragments long instance names. No branch per
+instance is added. Generic Graph records retain no package or lifecycle data.
+
+`DataView` reads exact instances and immutable versions. `active_managed` reads
+the active index and returns the captured global Data revision. Native metadata
+bounds remain separate from a later raw-only revision. The start/stop APIs keep
+the existing lifecycle rules and add no pending-attempt condition.
+
+Borrowed `DataWrite::admit_managed` has the same discard-on-error rule as context
+and Graph staging. A wrapper drops a failed batch. The
+[managed tests](../../crates/araphor-data/tests/native_managed.rs) cover actual
+package and definition DTOs, guarded rollback, same-transaction retries, joint
+Graph/context journal contents, retained pins when the image is no longer installed, lifecycle
+CAS, long names, tenant isolation, host leases, raw interleaving, historical
+reads, compaction, reopen, and missing-record rejection. One case uses the
+current DuckDB owner to check the shared validation helpers.
+
+Result: **Done for native managed admission and ordinary start/stop**.
+Renewal, candidate version admission, removal, failure/resume, captured attempts,
+results, checkpoints, references, and consumed progress remain **Not done**.
+These APIs require the real attempt and result owners. This change supplies no
+placeholder pending-attempt check. Production activation, CDC routing, package
+execution, notification batching, and the incident latency targets remain
+**Not done**. Graph installation checks do not qualify complete layer/member
+recovery. Configured capacity, retention, and backup also remain **Not done**.

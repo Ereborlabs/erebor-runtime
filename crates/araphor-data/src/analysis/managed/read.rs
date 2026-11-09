@@ -246,48 +246,17 @@ impl AnalysisStore {
     }
 
     pub(super) fn check_managed_images(reader: &Connection, spec: &ManagedSpec) -> Result<()> {
-        let definition = spec.definition.encode()?;
         let saved: Option<Vec<u8>> = reader.query_row("SELECT definition FROM discovery_definitions WHERE tenant_id = ? AND name = ? AND commit_revision = ?",
             params![spec.tenant.as_slice(), spec.definition.definition.name, spec.manifest.definition], |row| row.get(0))
             .optional().context(AnalysisDatabaseSnafu { operation: "read managed definition pin" })?;
-        if saved.as_deref() != Some(definition.as_slice()) {
-            return Err(Code::Missing.error("managed definition pin"));
-        }
-        for pin in &spec.definition.images {
-            let bundle = Self::retained_package_image_from(
+        spec.check_images(saved.as_deref(), |pin| {
+            Self::retained_package_image_from(
                 reader,
                 spec.tenant,
                 pin,
                 &AnalysisReadControl::default(),
-            )?
-            .ok_or_else(|| Code::Missing.error("managed image"))?;
-            if bundle.digest() != pin.digest {
-                return Err(Code::Conflict.error("managed image digest"));
-            }
-            for call in spec
-                .manifest
-                .calls
-                .values()
-                .filter(|call| call.image == *pin)
-            {
-                let artifact = bundle.bundle().artifact(&call.package)?;
-                if !artifact
-                    .descriptor
-                    .exports
-                    .iter()
-                    .any(|model| model.name == call.export)
-                {
-                    return Err(Code::Missing.error("managed export"));
-                }
-                let implementation = artifact.implementation(&call.export)?;
-                if call.target != implementation.target()
-                    || call.artifact != implementation.identity()?
-                {
-                    return Err(Code::Invalid.error("managed implementation pin"));
-                }
-            }
-        }
-        Ok(())
+            )
+        })
     }
 
     pub(super) fn check_managed_addressable(reader: &Connection, spec: &ManagedSpec) -> Result<()> {
@@ -313,13 +282,7 @@ impl AnalysisStore {
             params![tenant.as_slice(), call.package.package_id, call.package.revision], |row| row.get(0))
             .optional().context(AnalysisDatabaseSnafu { operation: "read managed SDK descriptor" })?
             .ok_or_else(|| Code::Missing.error("managed SDK descriptor"))?;
-        let descriptor: sdk::Package =
-            serde_json::from_slice(&bytes).context(crate::PackageEncodingSnafu)?;
-        if descriptor.id != call.package.package_id || descriptor.revision != call.package.revision
-        {
-            return Err(Code::Invalid.error("managed SDK descriptor pin"));
-        }
-        Ok(descriptor)
+        call.contract(&bytes)
     }
 
     pub fn managed_resume(

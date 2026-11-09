@@ -1,5 +1,6 @@
 mod budget;
 mod capture;
+mod contract;
 mod changes;
 mod codec;
 mod commit;

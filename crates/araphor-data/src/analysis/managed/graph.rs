@@ -22,6 +22,7 @@ pub(super) struct ManagedGraphCall {
     pub(super) relations: BTreeMap<String, u64>,
 }
 
+mod admission;
 mod authority;
 mod commit;
 pub(in crate::analysis::managed) use commit::PreparedGraph;
@@ -41,28 +42,9 @@ impl AnalysisStore {
         connection: &Transaction<'_>,
         spec: &ManagedSpec,
     ) -> Result<()> {
-        let mut declarations = BTreeMap::new();
-        let mut calls = Vec::new();
-        for (id, call) in &spec.manifest.calls {
-            let package = Self::managed_contract(connection, spec.tenant, call)?;
-            let model = package
-                .exports
-                .iter()
-                .find(|model| model.name == call.export)
-                .ok_or_else(|| Code::Invalid.error("Graph admitted export"))?;
-            let Some(graph) = &model.graph else {
-                continue;
-            };
-            for relation in &graph.relations {
-                if declarations
-                    .insert(relation.name.clone(), relation.clone())
-                    .is_some_and(|prior| prior != *relation)
-                {
-                    return Err(Code::Invalid.error("Graph relation contract conflict"));
-                }
-            }
-            calls.push(*id);
-        }
+        let admission = spec.graph_declarations(|call| Self::managed_contract(connection, spec.tenant, call))?;
+        let declarations = admission.relations;
+        let calls = admission.calls;
         if calls.is_empty() {
             return Ok(());
         }

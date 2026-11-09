@@ -225,7 +225,7 @@ impl ManagedSpec {
         })
     }
 
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(in crate::analysis) fn validate(&self) -> Result<()> {
         if self.tenant == [0; 16] || self.id.is_empty() || self.id.chars().any(char::is_control) {
             return Err(Code::Invalid.error("managed instance"));
         }
@@ -316,7 +316,7 @@ impl ManagedInstance {
             )
     }
 
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(in crate::analysis) fn validate(&self) -> Result<()> {
         self.spec.validate()?;
         self.grant.validate()?;
         if self.grant.selection.tenant_id != self.spec.tenant || self.removed && self.running {

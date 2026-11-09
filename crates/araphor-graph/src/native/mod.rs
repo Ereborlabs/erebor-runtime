@@ -1,3 +1,4 @@
+mod installation;
 mod prepare;
 mod record;
 mod view;

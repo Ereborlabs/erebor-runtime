@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 use super::{PackageRecord, PackageRevisionV1, Records};
 use crate::{
-    analysis::native::{DataView, NativeStore},
+    analysis::native::{DataView, DataWrite, NativeStore},
     AnalysisConflictSnafu, AnalysisReadControl, NativeStateSnafu, PackageBundle, PackageBundleV1,
     PackageErrorCodeV1 as Code, PackageRefV1, Result,
 };
@@ -168,26 +168,9 @@ impl DataView {
         row: ImageRecord,
         control: &AnalysisReadControl,
     ) -> Result<PackageBundle> {
-        if row.revision == 0 || row.revision > self.metadata_revision {
-            return NativeStateSnafu {
-                field: "image record revision",
-            }
-            .fail();
-        }
+        row.check_revision(self.metadata_revision)?;
         let artifacts = self.package_closure(row.tenant, &row.root, control)?;
-        let bundle = PackageBundleV1 {
-            schema_version: 1,
-            root: row.root,
-            artifacts,
-        };
-        let bundle = PackageBundle::checked(bundle, &row.digest)
-            .map_err(crate::Error::from)
-            .map_err(crate::Error::stored_artifact)?
-            .ok_or_else(|| {
-                Code::Invalid
-                    .error("retained image digest")
-                    .stored_artifact()
-            })?;
+        let bundle = row.bundle(artifacts)?;
         control.check()?;
         Ok(bundle)
     }
@@ -202,5 +185,72 @@ impl DataView {
             self.package_revision(tenant, package, revision, control)
         })
         .map(|(_, artifacts)| artifacts)
+    }
+}
+
+impl ImageRecord {
+    fn check_revision(&self, head: u64) -> Result<()> {
+        if self.revision == 0 || self.revision > head {
+            return NativeStateSnafu {
+                field: "image record revision",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    fn bundle(self, artifacts: Vec<crate::PackageArtifactV1>) -> Result<PackageBundle> {
+        let bundle = PackageBundleV1 {
+            schema_version: 1,
+            root: self.root,
+            artifacts,
+        };
+        PackageBundle::checked(bundle, &self.digest)
+            .map_err(crate::Error::from)
+            .map_err(crate::Error::stored_artifact)?
+            .ok_or_else(|| {
+                Code::Invalid
+                    .error("retained image digest")
+                    .stored_artifact()
+            })
+    }
+}
+
+impl DataWrite<'_> {
+    pub(in crate::analysis::native) fn retained_package_image(
+        &self,
+        tenant: [u8; 16],
+        pin: &ImagePin,
+    ) -> Result<Option<PackageBundle>> {
+        pin.validate()?;
+        let Some(row) =
+            ImageRecord::read(tenant, &pin.image.package_id, &pin.image.revision, |key| {
+                Records::staged(key, &self.transaction)
+            })?
+        else {
+            return Ok(None);
+        };
+        if !row.matches(pin, false) {
+            return Err(Code::Conflict.error("retained image pin"));
+        }
+        row.check_revision(self.metadata_revision)?;
+        let (_, artifacts) = PackageRevisionV1::closure(
+            tenant,
+            &row.root,
+            &AnalysisReadControl::default(),
+            |tenant, package, revision| self.package_revision(tenant, package, revision),
+        )?;
+        row.bundle(artifacts).map(Some)
+    }
+
+    pub(in crate::analysis::native) fn installed_image(
+        &self,
+        tenant: [u8; 16],
+        pin: &ImagePin,
+    ) -> Result<bool> {
+        let row = ImageRecord::read(tenant, &pin.image.package_id, &pin.image.revision, |key| {
+            Records::staged(key, &self.transaction)
+        })?;
+        Ok(row.is_some_and(|row| row.matches(pin, true)))
     }
 }
