@@ -1,0 +1,8 @@
+{
+  "root_commit": "48de7944054d6b6deb024e2b7e28374a6f429a47",
+  "fjall_commit": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "lsm_tree_commit": "29549fd786f311acdd03f09d1844253e0014739c",
+  "binary_sha256": "77c594162d48bc7d7c747a51f757cbd0dc024244bcaec97a26f6cf329c6c3fb2",
+  "binary": "output/storage-engine-baseline-20261108/versioned-direct-compression",
+  "source_label": "48de79440+direct-compression"
+}

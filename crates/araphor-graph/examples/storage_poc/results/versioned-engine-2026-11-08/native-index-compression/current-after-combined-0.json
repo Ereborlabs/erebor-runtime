@@ -1,0 +1,7006 @@
+{
+  "control": "fjall",
+  "limits": [
+    "prepared source Arrow and synthetic source-frontier metadata; no production DataFusion input",
+    "no production notification delivery",
+    "caller-owned opaque Graph revision references survive close and reopen with the Oracle",
+    "native reader returns one decoded batch per read; first_decoded measures walker dispatch",
+    "single caller-managed minimum consumer cursor; no dynamic consumer registration behind released history",
+    "explicit maintenance and restart separated from ordinary samples; no sustained compaction, branch scale or power-loss proof"
+  ],
+  "mode": "combined",
+  "profile": "release",
+  "runs": [
+    {
+      "compactions": 1,
+      "engine": "fjall",
+      "historical_views": 16,
+      "reopen_s": 0.002437871,
+      "resume": {
+        "batches": 3,
+        "caught_up": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "caught_up_s": 0.000359831,
+        "feed_open_s": 0.000025283,
+        "first_decoded": {
+          "journal": 0,
+          "offset": 149294,
+          "sequence": 16
+        },
+        "first_decoded_s": 0.000337341,
+        "first_match": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "first_match_s": 0.000353545,
+        "items": 21,
+        "journal_bytes": 18434,
+        "pending_head": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "read_s": 0.000252901,
+        "saved_graph": {
+          "journal": 0,
+          "offset": 149294,
+          "sequence": 16
+        },
+        "saved_source": {
+          "journal": 0,
+          "offset": 131012,
+          "sequence": 15
+        },
+        "started_after": {
+          "journal": 0,
+          "offset": 131012,
+          "sequence": 15
+        }
+      },
+      "rotation": true,
+      "round": 0,
+      "samples": [
+        {
+          "added": 50,
+          "calls": [
+            {
+              "elapsed_s": 0.000023537,
+              "key_count": 28,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000016763,
+              "key_count": 22,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            }
+          ],
+          "capture_s": 6.635e-6,
+          "captured": 24,
+          "closed": 0,
+          "detect_s": 0.000237117,
+          "engine": "fjall",
+          "findings": 0,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 75686,
+            "sequence": 4
+          },
+          "graph_read_keys": 50,
+          "graph_read_rows": 0,
+          "graph_read_s": 0.0000403,
+          "index_s": 0.000628727,
+          "members": 50,
+          "normalize_s": 0.000030591,
+          "output_bytes": 12496,
+          "output_cdc_read_s": 0.000357037,
+          "output_commit_s": 0.001505956,
+          "output_ready_s": 0.001893095,
+          "output_stage_s": 0.000581444,
+          "output_sync_s": 0.000915363,
+          "output_wake_s": 0.001879616,
+          "package_s": 0.001078935,
+          "phase": "initial",
+          "resolve_s": 0.000140664,
+          "restarted": false,
+          "result_read_s": 0.000223777,
+          "result_rows": 50,
+          "revision": 26,
+          "round": 0,
+          "source_cdc_read_s": 0.000493511,
+          "source_commit_s": 0.000554414,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 161,
+            "sequence": 3
+          },
+          "source_ready_s": 0.000641997,
+          "source_wake_s": 0.000627051,
+          "total_s": 0.003845767
+        },
+        {
+          "added": 12,
+          "calls": [
+            {
+              "elapsed_s": 0.000170277,
+              "key_count": 9,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 9,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000205199,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 18,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000081088,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000010476,
+              "key_count": 6,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.657e-6,
+              "key_count": 5,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 3.422e-6,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 0,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000026331,
+          "captured": 27,
+          "closed": 0,
+          "detect_s": 0.000819259,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 112426,
+            "sequence": 8
+          },
+          "graph_read_keys": 30,
+          "graph_read_rows": 34,
+          "graph_read_s": 0.000476119,
+          "index_s": 0.000774001,
+          "members": 12,
+          "normalize_s": 5.239e-6,
+          "output_bytes": 101400,
+          "output_cdc_read_s": 0.000279442,
+          "output_commit_s": 0.001356002,
+          "output_ready_s": 0.001654791,
+          "output_stage_s": 0.000528083,
+          "output_sync_s": 0.000820237,
+          "output_wake_s": 0.001645082,
+          "package_s": 0.001746146,
+          "phase": "initial",
+          "resolve_s": 0.000098339,
+          "restarted": false,
+          "result_read_s": 0.000339856,
+          "result_rows": 62,
+          "revision": 29,
+          "round": 0,
+          "source_cdc_read_s": 0.000016204,
+          "source_commit_s": 0.000575297,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 75838,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000610778,
+          "source_wake_s": 0.000599533,
+          "total_s": 0.004360091
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.00012907,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000221403,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000228736,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000097501,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000017181,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000027658,
+          "captured": 36,
+          "closed": 1,
+          "detect_s": 0.000614129,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 130860,
+            "sequence": 12
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0006938910000000001,
+          "index_s": 0.000945954,
+          "members": 2,
+          "normalize_s": 3.353e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000069074,
+          "output_commit_s": 0.001109526,
+          "output_ready_s": 0.001199693,
+          "output_stage_s": 0.000386861,
+          "output_sync_s": 0.000714075,
+          "output_wake_s": 0.001190474,
+          "package_s": 0.001695161,
+          "phase": "initial",
+          "resolve_s": 0.000081996,
+          "restarted": false,
+          "result_read_s": 0.000334199,
+          "result_rows": 62,
+          "revision": 44,
+          "round": 0,
+          "source_cdc_read_s": 0.000010197,
+          "source_commit_s": 0.000561189,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 112578,
+            "sequence": 11
+          },
+          "source_ready_s": 0.000590244,
+          "source_wake_s": 0.000578929,
+          "total_s": 0.00382698
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000134588,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000223218,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000250736,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000105812,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000024933,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000044421,
+          "captured": 44,
+          "closed": 1,
+          "detect_s": 0.000656525,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 149294,
+            "sequence": 16
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0007392869999999999,
+          "index_s": 0.0010188,
+          "members": 2,
+          "normalize_s": 3.632e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000090097,
+          "output_commit_s": 0.001124333,
+          "output_ready_s": 0.001251238,
+          "output_stage_s": 0.000393496,
+          "output_sync_s": 0.000719732,
+          "output_wake_s": 0.001237689,
+          "package_s": 0.001831494,
+          "phase": "initial",
+          "resolve_s": 0.000083323,
+          "restarted": false,
+          "result_read_s": 0.000350123,
+          "result_rows": 62,
+          "revision": 46,
+          "round": 0,
+          "source_cdc_read_s": 0.000010965,
+          "source_commit_s": 0.000561328,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 131012,
+            "sequence": 15
+          },
+          "source_ready_s": 0.00060051,
+          "source_wake_s": 0.00058263,
+          "total_s": 0.004041536
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000142271,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000201567,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000367305,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000127324,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000028147,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000019137,
+          "captured": 48,
+          "closed": 1,
+          "detect_s": 0.000684601,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18282,
+            "sequence": 20
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000866614,
+          "index_s": 0.001127965,
+          "members": 2,
+          "normalize_s": 3.283e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000136403,
+          "output_commit_s": 0.001080472,
+          "output_ready_s": 0.001240343,
+          "output_stage_s": 0.000296064,
+          "output_sync_s": 0.000774978,
+          "output_wake_s": 0.001226444,
+          "package_s": 0.001968736,
+          "phase": "resume",
+          "resolve_s": 0.000108536,
+          "restarted": true,
+          "result_read_s": 0.000446786,
+          "result_rows": 62,
+          "revision": 62,
+          "round": 0,
+          "source_cdc_read_s": 1.955e-6,
+          "source_commit_s": 0.000570618,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 149446,
+            "sequence": 19
+          },
+          "source_ready_s": 0.012313187,
+          "source_wake_s": 0.012299847,
+          "total_s": 0.015980086
+        },
+        {
+          "added": 63,
+          "calls": [
+            {
+              "elapsed_s": 0.000123972,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000186131,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000227479,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000113145,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000051545,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000026261,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000026889,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000015924,
+          "captured": 62,
+          "closed": 1,
+          "detect_s": 0.000892803,
+          "engine": "fjall",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 128884,
+            "sequence": 23
+          },
+          "graph_read_keys": 95,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000755422,
+          "index_s": 0.001381006,
+          "members": 64,
+          "normalize_s": 0.000028077,
+          "output_bytes": 126104,
+          "output_cdc_read_s": 0.000521518,
+          "output_commit_s": 0.002560236,
+          "output_ready_s": 0.003109412,
+          "output_stage_s": 0.00129936,
+          "output_sync_s": 0.00125047,
+          "output_wake_s": 0.003098866,
+          "package_s": 0.002494933,
+          "phase": "continued",
+          "resolve_s": 0.000150581,
+          "restarted": false,
+          "result_read_s": 0.000725669,
+          "result_rows": 124,
+          "revision": 64,
+          "round": 0,
+          "source_cdc_read_s": 0.000015645,
+          "source_commit_s": 0.000580675,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18434,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000616434,
+          "source_wake_s": 0.000605818,
+          "total_s": 0.00695448
+        },
+        {
+          "added": 2,
+          "calls": [
+            {
+              "elapsed_s": 0.000168182,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000322046,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000360949,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000155052,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000029054,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000013549,
+          "captured": 71,
+          "closed": 2,
+          "detect_s": 0.000759333,
+          "engine": "fjall",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 149287,
+            "sequence": 26
+          },
+          "graph_read_keys": 34,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.001035283,
+          "index_s": 0.001334491,
+          "members": 4,
+          "normalize_s": 2.864e-6,
+          "output_bytes": 111816,
+          "output_cdc_read_s": 0.000076478,
+          "output_commit_s": 0.001179509,
+          "output_ready_s": 0.001277988,
+          "output_stage_s": 0.000423529,
+          "output_sync_s": 0.000747391,
+          "output_wake_s": 0.001267511,
+          "package_s": 0.002241891,
+          "phase": "continued",
+          "resolve_s": 0.000108047,
+          "restarted": false,
+          "result_read_s": 0.000638505,
+          "result_rows": 124,
+          "revision": 85,
+          "round": 0,
+          "source_cdc_read_s": 0.000010058,
+          "source_commit_s": 0.000562516,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 129036,
+            "sequence": 25
+          },
+          "source_ready_s": 0.000594434,
+          "source_wake_s": 0.000584167,
+          "total_s": 0.004760431
+        },
+        {
+          "added": 64,
+          "calls": [
+            {
+              "elapsed_s": 0.000165598,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000346561,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000368632,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000155959,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.0000447,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000034852,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000031988,
+              "key_count": 3,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000011873,
+          "captured": 85,
+          "closed": 2,
+          "detect_s": 0.000957478,
+          "engine": "fjall",
+          "findings": 3,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 262088,
+            "sequence": 29
+          },
+          "graph_read_keys": 110,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.0011482899999999997,
+          "index_s": 0.001664778,
+          "members": 66,
+          "normalize_s": 0.000010756,
+          "output_bytes": 144856,
+          "output_cdc_read_s": 0.000431071,
+          "output_commit_s": 0.002382835,
+          "output_ready_s": 0.002865101,
+          "output_stage_s": 0.001291817,
+          "output_sync_s": 0.00108096,
+          "output_wake_s": 0.002850853,
+          "package_s": 0.0027632,
+          "phase": "continued",
+          "resolve_s": 0.000097152,
+          "restarted": false,
+          "result_read_s": 0.000931637,
+          "result_rows": 186,
+          "revision": 87,
+          "round": 0,
+          "source_cdc_read_s": 2.444e-6,
+          "source_commit_s": 0.000563214,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 149439,
+            "sequence": 28
+          },
+          "source_ready_s": 0.000623768,
+          "source_wake_s": 0.00061385,
+          "total_s": 0.007191317
+        }
+      ],
+      "unavailable": [],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 149285,
+          "read_s": 0.012775965,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 280676,
+          "read_s": 0.002146205,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 2,
+      "engine": "fjall-stable",
+      "historical_views": 16,
+      "reopen_s": 0.003736951,
+      "resume": {
+        "batches": 3,
+        "caught_up": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "caught_up_s": 0.000505943,
+        "feed_open_s": 0.000032896,
+        "first_decoded": {
+          "journal": 0,
+          "offset": 118411,
+          "sequence": 23
+        },
+        "first_decoded_s": 0.000478495,
+        "first_match": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "first_match_s": 0.000500635,
+        "items": 19,
+        "journal_bytes": 18422,
+        "pending_head": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "read_s": 0.00034160299999999995,
+        "saved_graph": {
+          "journal": 0,
+          "offset": 118411,
+          "sequence": 23
+        },
+        "saved_source": {
+          "journal": 0,
+          "offset": 100287,
+          "sequence": 22
+        },
+        "started_after": {
+          "journal": 0,
+          "offset": 100287,
+          "sequence": 22
+        }
+      },
+      "rotation": true,
+      "round": 0,
+      "samples": [
+        {
+          "added": 50,
+          "calls": [
+            {
+              "elapsed_s": 0.000019556,
+              "key_count": 28,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000015645,
+              "key_count": 22,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            }
+          ],
+          "capture_s": 5.239e-6,
+          "captured": 24,
+          "closed": 0,
+          "detect_s": 0.000270013,
+          "engine": "fjall-stable",
+          "findings": 0,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 50273,
+            "sequence": 8
+          },
+          "graph_read_keys": 50,
+          "graph_read_rows": 0,
+          "graph_read_s": 0.000035201000000000004,
+          "index_s": 0.000519004,
+          "members": 50,
+          "normalize_s": 0.00001334,
+          "output_bytes": 12496,
+          "output_cdc_read_s": 0.000470463,
+          "output_commit_s": 0.001698583,
+          "output_ready_s": 0.002216888,
+          "output_stage_s": 0.000627399,
+          "output_sync_s": 0.001058402,
+          "output_wake_s": 0.00219789,
+          "package_s": 0.000960271,
+          "phase": "initial",
+          "resolve_s": 0.000108117,
+          "restarted": false,
+          "result_read_s": 0.000294947,
+          "result_rows": 50,
+          "revision": 26,
+          "round": 0,
+          "source_cdc_read_s": 0.000319671,
+          "source_commit_s": 0.000318205,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 783,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000448183,
+          "source_wake_s": 0.00042723,
+          "total_s": 0.003929369
+        },
+        {
+          "added": 12,
+          "calls": [
+            {
+              "elapsed_s": 0.000205967,
+              "key_count": 9,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 9,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000216653,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 18,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000092402,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000011175,
+              "key_count": 6,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 6.635e-6,
+              "key_count": 5,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.727e-6,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 0,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000025423,
+          "captured": 27,
+          "closed": 0,
+          "detect_s": 0.000840211,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 81567,
+            "sequence": 13
+          },
+          "graph_read_keys": 30,
+          "graph_read_rows": 34,
+          "graph_read_s": 0.0005385589999999999,
+          "index_s": 0.000899089,
+          "members": 12,
+          "normalize_s": 7.543e-6,
+          "output_bytes": 101400,
+          "output_cdc_read_s": 0.000433097,
+          "output_commit_s": 0.001470615,
+          "output_ready_s": 0.001933325,
+          "output_stage_s": 0.000530877,
+          "output_sync_s": 0.000927655,
+          "output_wake_s": 0.001919077,
+          "package_s": 0.001920963,
+          "phase": "initial",
+          "resolve_s": 0.000116149,
+          "restarted": false,
+          "result_read_s": 0.000437846,
+          "result_rows": 62,
+          "revision": 29,
+          "round": 0,
+          "source_cdc_read_s": 0.000030592,
+          "source_commit_s": 0.000607564,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 50571,
+            "sequence": 12
+          },
+          "source_ready_s": 0.000661623,
+          "source_wake_s": 0.000648003,
+          "total_s": 0.004962906
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000157985,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000290268,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000327843,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000160569,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000022769,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000039462,
+          "captured": 36,
+          "closed": 1,
+          "detect_s": 0.000778331,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 99989,
+            "sequence": 18
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0009594339999999999,
+          "index_s": 0.00131696,
+          "members": 1,
+          "normalize_s": 3.842e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000130816,
+          "output_commit_s": 0.001206957,
+          "output_ready_s": 0.001380308,
+          "output_stage_s": 0.000351939,
+          "output_sync_s": 0.000842516,
+          "output_wake_s": 0.001365361,
+          "package_s": 0.002279816,
+          "phase": "initial",
+          "resolve_s": 0.000108815,
+          "restarted": false,
+          "result_read_s": 0.00044071,
+          "result_rows": 62,
+          "revision": 44,
+          "round": 0,
+          "source_cdc_read_s": 0.000034084,
+          "source_commit_s": 0.000602187,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 81865,
+            "sequence": 17
+          },
+          "source_ready_s": 0.000682087,
+          "source_wake_s": 0.00066728,
+          "total_s": 0.004791092
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000144296,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000230761,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000282585,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00012495,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000023397,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000054268,
+          "captured": 44,
+          "closed": 1,
+          "detect_s": 0.000726507,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 118411,
+            "sequence": 23
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000805989,
+          "index_s": 0.001073907,
+          "members": 1,
+          "normalize_s": 3.771e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000104066,
+          "output_commit_s": 0.001128872,
+          "output_ready_s": 0.001272051,
+          "output_stage_s": 0.000312966,
+          "output_sync_s": 0.000805011,
+          "output_wake_s": 0.001257873,
+          "package_s": 0.001976209,
+          "phase": "initial",
+          "resolve_s": 0.000089189,
+          "restarted": false,
+          "result_read_s": 0.000412563,
+          "result_rows": 62,
+          "revision": 46,
+          "round": 0,
+          "source_cdc_read_s": 0.000043861,
+          "source_commit_s": 0.000594155,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 100287,
+            "sequence": 22
+          },
+          "source_ready_s": 0.00068055,
+          "source_wake_s": 0.000666652,
+          "total_s": 0.004350033
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000196119,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000276788,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000313455,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000138778,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000023538,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000018718,
+          "captured": 48,
+          "closed": 1,
+          "detect_s": 0.000863749,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18124,
+            "sequence": 28
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000948678,
+          "index_s": 0.001310814,
+          "members": 1,
+          "normalize_s": 4.191e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000195142,
+          "output_commit_s": 0.001231822,
+          "output_ready_s": 0.001453643,
+          "output_stage_s": 0.000360879,
+          "output_sync_s": 0.00085893,
+          "output_wake_s": 0.001435554,
+          "package_s": 0.002353221,
+          "phase": "resume",
+          "resolve_s": 0.000122993,
+          "restarted": true,
+          "result_read_s": 0.000583259,
+          "result_rows": 62,
+          "revision": 62,
+          "round": 0,
+          "source_cdc_read_s": 3.283e-6,
+          "source_commit_s": 0.000594853,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 118709,
+            "sequence": 27
+          },
+          "source_ready_s": 0.020719005,
+          "source_wake_s": 0.020705525,
+          "total_s": 0.02512191
+        },
+        {
+          "added": 63,
+          "calls": [
+            {
+              "elapsed_s": 0.000163223,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000265892,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000332523,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000123971,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000044769,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00004002,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000019975,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 4.75e-6,
+          "captured": 62,
+          "closed": 1,
+          "detect_s": 0.000865215,
+          "engine": "fjall-stable",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 95750,
+            "sequence": 31
+          },
+          "graph_read_keys": 95,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0009903730000000001,
+          "index_s": 0.001623501,
+          "members": 63,
+          "normalize_s": 0.000012362,
+          "output_bytes": 126104,
+          "output_cdc_read_s": 0.000458799,
+          "output_commit_s": 0.002359577,
+          "output_ready_s": 0.002849386,
+          "output_stage_s": 0.001223999,
+          "output_sync_s": 0.001126498,
+          "output_wake_s": 0.002838421,
+          "package_s": 0.002640416,
+          "phase": "continued",
+          "resolve_s": 0.000109304,
+          "restarted": false,
+          "result_read_s": 0.000667839,
+          "result_rows": 124,
+          "revision": 64,
+          "round": 0,
+          "source_cdc_read_s": 0.000019975,
+          "source_commit_s": 0.000596599,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18422,
+            "sequence": 30
+          },
+          "source_ready_s": 0.000639064,
+          "source_wake_s": 0.000625654,
+          "total_s": 0.006804946
+        },
+        {
+          "added": 2,
+          "calls": [
+            {
+              "elapsed_s": 0.000149464,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000304376,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000352497,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000150791,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00002235,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 4.26e-6,
+          "captured": 71,
+          "closed": 2,
+          "detect_s": 0.000650099,
+          "engine": "fjall-stable",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 115943,
+            "sequence": 34
+          },
+          "graph_read_keys": 34,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.000979478,
+          "index_s": 0.001263181,
+          "members": 2,
+          "normalize_s": 2.863e-6,
+          "output_bytes": 111816,
+          "output_cdc_read_s": 0.000080738,
+          "output_commit_s": 0.001141863,
+          "output_ready_s": 0.001244393,
+          "output_stage_s": 0.000356339,
+          "output_sync_s": 0.000764572,
+          "output_wake_s": 0.001229656,
+          "package_s": 0.002026635,
+          "phase": "continued",
+          "resolve_s": 0.000082484,
+          "restarted": false,
+          "result_read_s": 0.000568034,
+          "result_rows": 124,
+          "revision": 85,
+          "round": 0,
+          "source_cdc_read_s": 0.000014806,
+          "source_commit_s": 0.00057397,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 96048,
+            "sequence": 33
+          },
+          "source_ready_s": 0.000615457,
+          "source_wake_s": 0.00060065,
+          "total_s": 0.004462131
+        },
+        {
+          "added": 64,
+          "calls": [
+            {
+              "elapsed_s": 0.000155192,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000315341,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000353824,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000149534,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000041906,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000032477,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000023886,
+              "key_count": 3,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 4.68e-6,
+          "captured": 85,
+          "closed": 2,
+          "detect_s": 0.000830294,
+          "engine": "fjall-stable",
+          "findings": 3,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 195135,
+            "sequence": 37
+          },
+          "graph_read_keys": 110,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.00107216,
+          "index_s": 0.001555893,
+          "members": 64,
+          "normalize_s": 0.000015715,
+          "output_bytes": 144856,
+          "output_cdc_read_s": 0.000318205,
+          "output_commit_s": 0.002293296,
+          "output_ready_s": 0.00264733,
+          "output_stage_s": 0.001206329,
+          "output_sync_s": 0.001077817,
+          "output_wake_s": 0.002631965,
+          "package_s": 0.002520775,
+          "phase": "continued",
+          "resolve_s": 0.000092682,
+          "restarted": false,
+          "result_read_s": 0.000832249,
+          "result_rows": 186,
+          "revision": 87,
+          "round": 0,
+          "source_cdc_read_s": 0.000015924,
+          "source_commit_s": 0.000574459,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 116241,
+            "sequence": 36
+          },
+          "source_ready_s": 0.000608752,
+          "source_wake_s": 0.000597856,
+          "total_s": 0.0066163
+        }
+      ],
+      "unavailable": [],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 594,
+          "journal_bytes": 117926,
+          "read_s": 0.001706197,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1087,
+          "journal_bytes": 213857,
+          "read_s": 0.001585577,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 2,
+      "engine": "fjall-stable",
+      "historical_views": 16,
+      "reopen_s": 0.00359929,
+      "resume": {
+        "batches": 3,
+        "caught_up": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "caught_up_s": 0.000531296,
+        "feed_open_s": 0.000031918,
+        "first_decoded": {
+          "journal": 0,
+          "offset": 118411,
+          "sequence": 23
+        },
+        "first_decoded_s": 0.00050266,
+        "first_match": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "first_match_s": 0.00052515,
+        "items": 19,
+        "journal_bytes": 18422,
+        "pending_head": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "read_s": 0.00036960899999999996,
+        "saved_graph": {
+          "journal": 0,
+          "offset": 118411,
+          "sequence": 23
+        },
+        "saved_source": {
+          "journal": 0,
+          "offset": 100287,
+          "sequence": 22
+        },
+        "started_after": {
+          "journal": 0,
+          "offset": 100287,
+          "sequence": 22
+        }
+      },
+      "rotation": true,
+      "round": 1,
+      "samples": [
+        {
+          "added": 50,
+          "calls": [
+            {
+              "elapsed_s": 0.000018648,
+              "key_count": 28,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000015784,
+              "key_count": 22,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            }
+          ],
+          "capture_s": 5.098e-6,
+          "captured": 24,
+          "closed": 0,
+          "detect_s": 0.000223707,
+          "engine": "fjall-stable",
+          "findings": 0,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 50273,
+            "sequence": 8
+          },
+          "graph_read_keys": 50,
+          "graph_read_rows": 0,
+          "graph_read_s": 0.000034432,
+          "index_s": 0.000522635,
+          "members": 50,
+          "normalize_s": 0.000012082,
+          "output_bytes": 12496,
+          "output_cdc_read_s": 0.000463758,
+          "output_commit_s": 0.001655979,
+          "output_ready_s": 0.002167369,
+          "output_stage_s": 0.00064486,
+          "output_sync_s": 0.000999174,
+          "output_wake_s": 0.002148721,
+          "package_s": 0.000906214,
+          "phase": "initial",
+          "resolve_s": 0.000114612,
+          "restarted": false,
+          "result_read_s": 0.000290756,
+          "result_rows": 50,
+          "revision": 26,
+          "round": 1,
+          "source_cdc_read_s": 0.000577183,
+          "source_commit_s": 0.000576764,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 783,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000699897,
+          "source_wake_s": 0.000676849,
+          "total_s": 0.004072757
+        },
+        {
+          "added": 12,
+          "calls": [
+            {
+              "elapsed_s": 0.000224266,
+              "key_count": 9,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 9,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000218329,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 18,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00009352,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000011454,
+              "key_count": 6,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 6.566e-6,
+              "key_count": 5,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.797e-6,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 0,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.0000535,
+          "captured": 27,
+          "closed": 0,
+          "detect_s": 0.000791321,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 81567,
+            "sequence": 13
+          },
+          "graph_read_keys": 30,
+          "graph_read_rows": 34,
+          "graph_read_s": 0.000559932,
+          "index_s": 0.000969631,
+          "members": 12,
+          "normalize_s": 7.124e-6,
+          "output_bytes": 101400,
+          "output_cdc_read_s": 0.000433376,
+          "output_commit_s": 0.001430036,
+          "output_ready_s": 0.00190888,
+          "output_stage_s": 0.000534579,
+          "output_sync_s": 0.000883515,
+          "output_wake_s": 0.001894073,
+          "package_s": 0.001964125,
+          "phase": "initial",
+          "resolve_s": 0.000110352,
+          "restarted": false,
+          "result_read_s": 0.00046285,
+          "result_rows": 62,
+          "revision": 29,
+          "round": 1,
+          "source_cdc_read_s": 0.000034293,
+          "source_commit_s": 0.000601697,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 50571,
+            "sequence": 12
+          },
+          "source_ready_s": 0.000683344,
+          "source_wake_s": 0.000658969,
+          "total_s": 0.005028209
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.00018285,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000237117,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000276928,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000118314,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000022908,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000043303,
+          "captured": 36,
+          "closed": 1,
+          "detect_s": 0.000764571,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 99989,
+            "sequence": 18
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0008381170000000001,
+          "index_s": 0.001140257,
+          "members": 1,
+          "normalize_s": 3.772e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.00015163,
+          "output_commit_s": 0.001634816,
+          "output_ready_s": 0.001829259,
+          "output_stage_s": 0.000383578,
+          "output_sync_s": 0.001239574,
+          "output_wake_s": 0.00181536,
+          "package_s": 0.002095361,
+          "phase": "initial",
+          "resolve_s": 0.000113285,
+          "restarted": false,
+          "result_read_s": 0.000475352,
+          "result_rows": 62,
+          "revision": 44,
+          "round": 1,
+          "source_cdc_read_s": 0.000033874,
+          "source_commit_s": 0.000650727,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 81865,
+            "sequence": 17
+          },
+          "source_ready_s": 0.000729789,
+          "source_wake_s": 0.000714913,
+          "total_s": 0.005138282
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000197306,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000294249,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000335107,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000135845,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000032896,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000069145,
+          "captured": 44,
+          "closed": 1,
+          "detect_s": 0.000900346,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 118411,
+            "sequence": 23
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0009954030000000002,
+          "index_s": 0.001353628,
+          "members": 1,
+          "normalize_s": 4.749e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000125787,
+          "output_commit_s": 0.00146363,
+          "output_ready_s": 0.001672671,
+          "output_stage_s": 0.000447345,
+          "output_sync_s": 0.001003924,
+          "output_wake_s": 0.001616377,
+          "package_s": 0.002460221,
+          "phase": "initial",
+          "resolve_s": 0.000096313,
+          "restarted": false,
+          "result_read_s": 0.000460545,
+          "result_rows": 62,
+          "revision": 46,
+          "round": 1,
+          "source_cdc_read_s": 0.000034293,
+          "source_commit_s": 0.000593526,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 100287,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000672239,
+          "source_wake_s": 0.000656873,
+          "total_s": 0.005275872
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000188646,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00027134,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000340415,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000129978,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000029054,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000033874,
+          "captured": 48,
+          "closed": 1,
+          "detect_s": 0.000966279,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18124,
+            "sequence": 28
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0009594330000000001,
+          "index_s": 0.001267721,
+          "members": 1,
+          "normalize_s": 4.331e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.00023586,
+          "output_commit_s": 0.001341824,
+          "output_ready_s": 0.001645502,
+          "output_stage_s": 0.000388397,
+          "output_sync_s": 0.000941484,
+          "output_wake_s": 0.001600383,
+          "package_s": 0.002411819,
+          "phase": "resume",
+          "resolve_s": 0.000108467,
+          "restarted": true,
+          "result_read_s": 0.000719383,
+          "result_rows": 62,
+          "revision": 62,
+          "round": 1,
+          "source_cdc_read_s": 3.353e-6,
+          "source_commit_s": 0.0005915,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 118709,
+            "sequence": 27
+          },
+          "source_ready_s": 0.020882437,
+          "source_wake_s": 0.020872031,
+          "total_s": 0.025673809
+        },
+        {
+          "added": 63,
+          "calls": [
+            {
+              "elapsed_s": 0.000170417,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000281607,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000344466,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000138359,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000049589,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000045747,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000020464,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 4.68e-6,
+          "captured": 62,
+          "closed": 1,
+          "detect_s": 0.000901604,
+          "engine": "fjall-stable",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 95750,
+            "sequence": 31
+          },
+          "graph_read_keys": 95,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.001050649,
+          "index_s": 0.00170452,
+          "members": 63,
+          "normalize_s": 0.00001306,
+          "output_bytes": 126104,
+          "output_cdc_read_s": 0.000478564,
+          "output_commit_s": 0.002312852,
+          "output_ready_s": 0.002829621,
+          "output_stage_s": 0.001224558,
+          "output_sync_s": 0.001077888,
+          "output_wake_s": 0.002818586,
+          "package_s": 0.00276278,
+          "phase": "continued",
+          "resolve_s": 0.000113984,
+          "restarted": false,
+          "result_read_s": 0.000662322,
+          "result_rows": 124,
+          "revision": 64,
+          "round": 1,
+          "source_cdc_read_s": 0.000032477,
+          "source_commit_s": 0.000598834,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18422,
+            "sequence": 30
+          },
+          "source_ready_s": 0.000705624,
+          "source_wake_s": 0.000691236,
+          "total_s": 0.006968868
+        },
+        {
+          "added": 2,
+          "calls": [
+            {
+              "elapsed_s": 0.000151071,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000308985,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000369191,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00015156,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00002242,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 7.543e-6,
+          "captured": 71,
+          "closed": 2,
+          "detect_s": 0.000680341,
+          "engine": "fjall-stable",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 115943,
+            "sequence": 34
+          },
+          "graph_read_keys": 34,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.001003227,
+          "index_s": 0.001280572,
+          "members": 2,
+          "normalize_s": 3.283e-6,
+          "output_bytes": 111816,
+          "output_cdc_read_s": 0.000093869,
+          "output_commit_s": 0.00105023,
+          "output_ready_s": 0.001176576,
+          "output_stage_s": 0.000264077,
+          "output_sync_s": 0.000776096,
+          "output_wake_s": 0.00116561,
+          "package_s": 0.002078598,
+          "phase": "continued",
+          "resolve_s": 0.00008451,
+          "restarted": false,
+          "result_read_s": 0.000581653,
+          "result_rows": 124,
+          "revision": 85,
+          "round": 1,
+          "source_cdc_read_s": 0.00003576,
+          "source_commit_s": 0.000593876,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 96048,
+            "sequence": 33
+          },
+          "source_ready_s": 0.000669306,
+          "source_wake_s": 0.000654499,
+          "total_s": 0.004513397
+        },
+        {
+          "added": 64,
+          "calls": [
+            {
+              "elapsed_s": 0.000160359,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000323653,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000350612,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00016057,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000042045,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000032686,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000023886,
+              "key_count": 3,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 4.26e-6,
+          "captured": 85,
+          "closed": 2,
+          "detect_s": 0.000784826,
+          "engine": "fjall-stable",
+          "findings": 3,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 195135,
+            "sequence": 37
+          },
+          "graph_read_keys": 110,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.0010938110000000003,
+          "index_s": 0.001603107,
+          "members": 64,
+          "normalize_s": 0.000012571,
+          "output_bytes": 144856,
+          "output_cdc_read_s": 0.000274413,
+          "output_commit_s": 0.002561004,
+          "output_ready_s": 0.002872644,
+          "output_stage_s": 0.001009512,
+          "output_sync_s": 0.001542065,
+          "output_wake_s": 0.002856301,
+          "package_s": 0.002520635,
+          "phase": "continued",
+          "resolve_s": 0.000092053,
+          "restarted": false,
+          "result_read_s": 0.001002108,
+          "result_rows": 186,
+          "revision": 87,
+          "round": 1,
+          "source_cdc_read_s": 0.000022838,
+          "source_commit_s": 0.000578859,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 116241,
+            "sequence": 36
+          },
+          "source_ready_s": 0.000636619,
+          "source_wake_s": 0.000625165,
+          "total_s": 0.007039479
+        }
+      ],
+      "unavailable": [],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 594,
+          "journal_bytes": 117926,
+          "read_s": 0.001982775,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1087,
+          "journal_bytes": 213857,
+          "read_s": 0.0016698059999999998,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 1,
+      "engine": "fjall",
+      "historical_views": 16,
+      "reopen_s": 0.002832554,
+      "resume": {
+        "batches": 3,
+        "caught_up": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "caught_up_s": 0.00052061,
+        "feed_open_s": 0.000033385,
+        "first_decoded": {
+          "journal": 0,
+          "offset": 149294,
+          "sequence": 16
+        },
+        "first_decoded_s": 0.000467249,
+        "first_match": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "first_match_s": 0.000514324,
+        "items": 21,
+        "journal_bytes": 18434,
+        "pending_head": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "read_s": 0.000350891,
+        "saved_graph": {
+          "journal": 0,
+          "offset": 149294,
+          "sequence": 16
+        },
+        "saved_source": {
+          "journal": 0,
+          "offset": 131012,
+          "sequence": 15
+        },
+        "started_after": {
+          "journal": 0,
+          "offset": 131012,
+          "sequence": 15
+        }
+      },
+      "rotation": true,
+      "round": 1,
+      "samples": [
+        {
+          "added": 50,
+          "calls": [
+            {
+              "elapsed_s": 0.000017112,
+              "key_count": 28,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000011944,
+              "key_count": 22,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            }
+          ],
+          "capture_s": 5.727e-6,
+          "captured": 24,
+          "closed": 0,
+          "detect_s": 0.000166366,
+          "engine": "fjall",
+          "findings": 0,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 75686,
+            "sequence": 4
+          },
+          "graph_read_keys": 50,
+          "graph_read_rows": 0,
+          "graph_read_s": 0.000029056,
+          "index_s": 0.000378409,
+          "members": 50,
+          "normalize_s": 0.000010896,
+          "output_bytes": 12496,
+          "output_cdc_read_s": 0.00033399,
+          "output_commit_s": 0.0014505,
+          "output_ready_s": 0.001813404,
+          "output_stage_s": 0.000534788,
+          "output_sync_s": 0.000906632,
+          "output_wake_s": 0.001799715,
+          "package_s": 0.000659667,
+          "phase": "initial",
+          "resolve_s": 0.000075919,
+          "restarted": false,
+          "result_read_s": 0.000211555,
+          "result_rows": 50,
+          "revision": 26,
+          "round": 1,
+          "source_cdc_read_s": 0.000270921,
+          "source_commit_s": 0.000300465,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 161,
+            "sequence": 3
+          },
+          "source_ready_s": 0.000386302,
+          "source_wake_s": 0.000367724,
+          "total_s": 0.003078472
+        },
+        {
+          "added": 12,
+          "calls": [
+            {
+              "elapsed_s": 0.000174956,
+              "key_count": 9,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 9,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000210088,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 18,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000074523,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 9.638e-6,
+              "key_count": 6,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.727e-6,
+              "key_count": 5,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.308e-6,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 0,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000027588,
+          "captured": 27,
+          "closed": 0,
+          "detect_s": 0.00062286,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 112426,
+            "sequence": 8
+          },
+          "graph_read_keys": 30,
+          "graph_read_rows": 34,
+          "graph_read_s": 0.00048024000000000005,
+          "index_s": 0.000781264,
+          "members": 12,
+          "normalize_s": 5.727e-6,
+          "output_bytes": 101400,
+          "output_cdc_read_s": 0.000325748,
+          "output_commit_s": 0.001310744,
+          "output_ready_s": 0.001665267,
+          "output_stage_s": 0.00044071,
+          "output_sync_s": 0.000860886,
+          "output_wake_s": 0.001654162,
+          "package_s": 0.001568674,
+          "phase": "initial",
+          "resolve_s": 0.000106929,
+          "restarted": false,
+          "result_read_s": 0.000384276,
+          "result_rows": 62,
+          "revision": 29,
+          "round": 1,
+          "source_cdc_read_s": 0.000019137,
+          "source_commit_s": 0.000559652,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 75838,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000600999,
+          "source_wake_s": 0.000588637,
+          "total_s": 0.004227459
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000110142,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000292223,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000341882,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000147438,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000017321,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000026261,
+          "captured": 36,
+          "closed": 1,
+          "detect_s": 0.00060512,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 130860,
+            "sequence": 12
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000909006,
+          "index_s": 0.001217783,
+          "members": 2,
+          "normalize_s": 2.863e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000080948,
+          "output_commit_s": 0.00125927,
+          "output_ready_s": 0.001373742,
+          "output_stage_s": 0.000263797,
+          "output_sync_s": 0.000985485,
+          "output_wake_s": 0.001362358,
+          "package_s": 0.002001911,
+          "phase": "initial",
+          "resolve_s": 0.000126416,
+          "restarted": false,
+          "result_read_s": 0.000355082,
+          "result_rows": 62,
+          "revision": 44,
+          "round": 1,
+          "source_cdc_read_s": 0.000024305,
+          "source_commit_s": 0.000577253,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 112578,
+            "sequence": 11
+          },
+          "source_ready_s": 0.000638295,
+          "source_wake_s": 0.000626841,
+          "total_s": 0.004376155
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000109375,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000177401,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000209668,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000091565,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000018927,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000052941,
+          "captured": 44,
+          "closed": 1,
+          "detect_s": 0.000516838,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 149294,
+            "sequence": 16
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000606936,
+          "index_s": 0.000812484,
+          "members": 2,
+          "normalize_s": 2.794e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000078713,
+          "output_commit_s": 0.000982342,
+          "output_ready_s": 0.001100307,
+          "output_stage_s": 0.000247105,
+          "output_sync_s": 0.000725529,
+          "output_wake_s": 0.001083475,
+          "package_s": 0.001474735,
+          "phase": "initial",
+          "resolve_s": 0.000067748,
+          "restarted": false,
+          "result_read_s": 0.000368701,
+          "result_rows": 62,
+          "revision": 46,
+          "round": 1,
+          "source_cdc_read_s": 0.000023887,
+          "source_commit_s": 0.000553087,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 131012,
+            "sequence": 15
+          },
+          "source_ready_s": 0.000613222,
+          "source_wake_s": 0.000601837,
+          "total_s": 0.003564509
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000182849,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000251155,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000334059,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000128372,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000034363,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000046865,
+          "captured": 48,
+          "closed": 1,
+          "detect_s": 0.000776096,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18282,
+            "sequence": 20
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000930798,
+          "index_s": 0.001215408,
+          "members": 2,
+          "normalize_s": 3.283e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000185992,
+          "output_commit_s": 0.001153668,
+          "output_ready_s": 0.001377096,
+          "output_stage_s": 0.000319601,
+          "output_sync_s": 0.000822611,
+          "output_wake_s": 0.001362848,
+          "package_s": 0.002179801,
+          "phase": "resume",
+          "resolve_s": 0.000108187,
+          "restarted": true,
+          "result_read_s": 0.00056971,
+          "result_rows": 62,
+          "revision": 62,
+          "round": 1,
+          "source_cdc_read_s": 2.863e-6,
+          "source_commit_s": 0.000581094,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 149446,
+            "sequence": 19
+          },
+          "source_ready_s": 0.012853771,
+          "source_wake_s": 0.012839384,
+          "total_s": 0.01699218
+        },
+        {
+          "added": 63,
+          "calls": [
+            {
+              "elapsed_s": 0.00012872,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000212672,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000243264,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000108187,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000038553,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000027588,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000023258,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000025982,
+          "captured": 62,
+          "closed": 1,
+          "detect_s": 0.000697383,
+          "engine": "fjall",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 128884,
+            "sequence": 23
+          },
+          "graph_read_keys": 95,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000782242,
+          "index_s": 0.001273029,
+          "members": 64,
+          "normalize_s": 0.000011454,
+          "output_bytes": 126104,
+          "output_cdc_read_s": 0.000513625,
+          "output_commit_s": 0.00214914,
+          "output_ready_s": 0.002697478,
+          "output_stage_s": 0.001079913,
+          "output_sync_s": 0.00105931,
+          "output_wake_s": 0.002685674,
+          "package_s": 0.002127279,
+          "phase": "continued",
+          "resolve_s": 0.000096663,
+          "restarted": false,
+          "result_read_s": 0.000703669,
+          "result_rows": 124,
+          "revision": 64,
+          "round": 1,
+          "source_cdc_read_s": 0.000025284,
+          "source_commit_s": 0.000589196,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18434,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000648563,
+          "source_wake_s": 0.000636759,
+          "total_s": 0.00618509
+        },
+        {
+          "added": 2,
+          "calls": [
+            {
+              "elapsed_s": 0.000154702,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000310941,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000358295,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000171814,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000027169,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.00001348,
+          "captured": 71,
+          "closed": 2,
+          "detect_s": 0.000651426,
+          "engine": "fjall",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 149287,
+            "sequence": 26
+          },
+          "graph_read_keys": 34,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.001022921,
+          "index_s": 0.00128162,
+          "members": 4,
+          "normalize_s": 2.933e-6,
+          "output_bytes": 111816,
+          "output_cdc_read_s": 0.000103647,
+          "output_commit_s": 0.001034655,
+          "output_ready_s": 0.001178113,
+          "output_stage_s": 0.000265194,
+          "output_sync_s": 0.000759404,
+          "output_wake_s": 0.001160582,
+          "package_s": 0.002056668,
+          "phase": "continued",
+          "resolve_s": 0.000078783,
+          "restarted": false,
+          "result_read_s": 0.000610987,
+          "result_rows": 124,
+          "revision": 85,
+          "round": 1,
+          "source_cdc_read_s": 0.000022559,
+          "source_commit_s": 0.000568802,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 129036,
+            "sequence": 25
+          },
+          "source_ready_s": 0.000626073,
+          "source_wake_s": 0.000615248,
+          "total_s": 0.004480082
+        },
+        {
+          "added": 64,
+          "calls": [
+            {
+              "elapsed_s": 0.00016469,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00031611,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000364301,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000151978,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000043791,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000033874,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000030522,
+              "key_count": 3,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000019905,
+          "captured": 85,
+          "closed": 2,
+          "detect_s": 0.000813253,
+          "engine": "fjall",
+          "findings": 3,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 262088,
+            "sequence": 29
+          },
+          "graph_read_keys": 110,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.0011052660000000001,
+          "index_s": 0.001598498,
+          "members": 66,
+          "normalize_s": 0.000012293,
+          "output_bytes": 144856,
+          "output_cdc_read_s": 0.000374289,
+          "output_commit_s": 0.002173026,
+          "output_ready_s": 0.002587893,
+          "output_stage_s": 0.001055049,
+          "output_sync_s": 0.001108408,
+          "output_wake_s": 0.002572877,
+          "package_s": 0.00256296,
+          "phase": "continued",
+          "resolve_s": 0.000092542,
+          "restarted": false,
+          "result_read_s": 0.000908099,
+          "result_rows": 186,
+          "revision": 87,
+          "round": 1,
+          "source_cdc_read_s": 0.00002242,
+          "source_commit_s": 0.00057404,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 149439,
+            "sequence": 28
+          },
+          "source_ready_s": 0.00063173,
+          "source_wake_s": 0.000620625,
+          "total_s": 0.006698715
+        }
+      ],
+      "unavailable": [],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 149285,
+          "read_s": 0.001251378,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 280676,
+          "read_s": 0.0017604629999999997,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 2,
+      "engine": "fjall-stable",
+      "historical_views": 16,
+      "reopen_s": 0.003957935,
+      "resume": {
+        "batches": 3,
+        "caught_up": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "caught_up_s": 0.000608821,
+        "feed_open_s": 0.000034432,
+        "first_decoded": {
+          "journal": 0,
+          "offset": 118411,
+          "sequence": 23
+        },
+        "first_decoded_s": 0.00058256,
+        "first_match": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "first_match_s": 0.000605399,
+        "items": 19,
+        "journal_bytes": 18422,
+        "pending_head": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "read_s": 0.000399223,
+        "saved_graph": {
+          "journal": 0,
+          "offset": 118411,
+          "sequence": 23
+        },
+        "saved_source": {
+          "journal": 0,
+          "offset": 100287,
+          "sequence": 22
+        },
+        "started_after": {
+          "journal": 0,
+          "offset": 100287,
+          "sequence": 22
+        }
+      },
+      "rotation": true,
+      "round": 2,
+      "samples": [
+        {
+          "added": 50,
+          "calls": [
+            {
+              "elapsed_s": 0.000020184,
+              "key_count": 28,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000015225,
+              "key_count": 22,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            }
+          ],
+          "capture_s": 5.238e-6,
+          "captured": 24,
+          "closed": 0,
+          "detect_s": 0.000235511,
+          "engine": "fjall-stable",
+          "findings": 0,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 50273,
+            "sequence": 8
+          },
+          "graph_read_keys": 50,
+          "graph_read_rows": 0,
+          "graph_read_s": 0.000035409,
+          "index_s": 0.000521378,
+          "members": 50,
+          "normalize_s": 0.000012013,
+          "output_bytes": 12496,
+          "output_cdc_read_s": 0.00044923,
+          "output_commit_s": 0.001656677,
+          "output_ready_s": 0.002143273,
+          "output_stage_s": 0.000647305,
+          "output_sync_s": 0.000997429,
+          "output_wake_s": 0.002124834,
+          "package_s": 0.000928074,
+          "phase": "initial",
+          "resolve_s": 0.000124949,
+          "restarted": false,
+          "result_read_s": 0.000273576,
+          "result_rows": 50,
+          "revision": 26,
+          "round": 2,
+          "source_cdc_read_s": 0.000285728,
+          "source_commit_s": 0.000314713,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 783,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000414658,
+          "source_wake_s": 0.000394543,
+          "total_s": 0.003769009
+        },
+        {
+          "added": 12,
+          "calls": [
+            {
+              "elapsed_s": 0.000266801,
+              "key_count": 9,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 9,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000217771,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 18,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000092472,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000010895,
+              "key_count": 6,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 6.635e-6,
+              "key_count": 5,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.728e-6,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 0,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000029544,
+          "captured": 27,
+          "closed": 0,
+          "detect_s": 0.000862282,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 81567,
+            "sequence": 13
+          },
+          "graph_read_keys": 30,
+          "graph_read_rows": 34,
+          "graph_read_s": 0.0006003019999999999,
+          "index_s": 0.000997777,
+          "members": 12,
+          "normalize_s": 7.264e-6,
+          "output_bytes": 101400,
+          "output_cdc_read_s": 0.000419477,
+          "output_commit_s": 0.00149932,
+          "output_ready_s": 0.001944081,
+          "output_stage_s": 0.000563005,
+          "output_sync_s": 0.000924931,
+          "output_wake_s": 0.001930252,
+          "package_s": 0.002036762,
+          "phase": "initial",
+          "resolve_s": 0.000109724,
+          "restarted": false,
+          "result_read_s": 0.00044057,
+          "result_rows": 62,
+          "revision": 29,
+          "round": 2,
+          "source_cdc_read_s": 0.000024864,
+          "source_commit_s": 0.000620485,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 50571,
+            "sequence": 12
+          },
+          "source_ready_s": 0.000668537,
+          "source_wake_s": 0.000653381,
+          "total_s": 0.005099309
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000183058,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000295227,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000345444,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000125857,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000022489,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000046445,
+          "captured": 36,
+          "closed": 1,
+          "detect_s": 0.000784617,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 99989,
+            "sequence": 18
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0009720750000000001,
+          "index_s": 0.001336027,
+          "members": 1,
+          "normalize_s": 3.771e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000130328,
+          "output_commit_s": 0.001200393,
+          "output_ready_s": 0.001373743,
+          "output_stage_s": 0.000347329,
+          "output_sync_s": 0.000841189,
+          "output_wake_s": 0.001358587,
+          "package_s": 0.002309849,
+          "phase": "initial",
+          "resolve_s": 0.000108536,
+          "restarted": false,
+          "result_read_s": 0.000456704,
+          "result_rows": 62,
+          "revision": 44,
+          "round": 2,
+          "source_cdc_read_s": 0.000033874,
+          "source_commit_s": 0.000605888,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 81865,
+            "sequence": 17
+          },
+          "source_ready_s": 0.00068495,
+          "source_wake_s": 0.000670283,
+          "total_s": 0.004833836
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000207364,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000277556,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000288661,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000125718,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000025423,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.00006635,
+          "captured": 44,
+          "closed": 1,
+          "detect_s": 0.000786433,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 118411,
+            "sequence": 23
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000924722,
+          "index_s": 0.001263321,
+          "members": 1,
+          "normalize_s": 3.771e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000115381,
+          "output_commit_s": 0.001229517,
+          "output_ready_s": 0.001387991,
+          "output_stage_s": 0.000378969,
+          "output_sync_s": 0.000839025,
+          "output_wake_s": 0.001374022,
+          "package_s": 0.002279886,
+          "phase": "initial",
+          "resolve_s": 0.000127254,
+          "restarted": false,
+          "result_read_s": 0.000463478,
+          "result_rows": 62,
+          "revision": 46,
+          "round": 2,
+          "source_cdc_read_s": 0.000042954,
+          "source_commit_s": 0.000605818,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 100287,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000698081,
+          "source_wake_s": 0.000682785,
+          "total_s": 0.004837957
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000236279,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000273435,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000388048,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000147928,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000024305,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000046934,
+          "captured": 48,
+          "closed": 1,
+          "detect_s": 0.001093672,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18124,
+            "sequence": 28
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.001069995,
+          "index_s": 0.001488006,
+          "members": 1,
+          "normalize_s": 4.749e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000219167,
+          "output_commit_s": 0.001333094,
+          "output_ready_s": 0.001583831,
+          "output_stage_s": 0.000389165,
+          "output_sync_s": 0.000933522,
+          "output_wake_s": 0.001565811,
+          "package_s": 0.002811322,
+          "phase": "resume",
+          "resolve_s": 0.000138987,
+          "restarted": true,
+          "result_read_s": 0.000580186,
+          "result_rows": 62,
+          "revision": 62,
+          "round": 2,
+          "source_cdc_read_s": 3.352e-6,
+          "source_commit_s": 0.000585075,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 118709,
+            "sequence": 27
+          },
+          "source_ready_s": 0.020302601,
+          "source_wake_s": 0.020296315,
+          "total_s": 0.02529072
+        },
+        {
+          "added": 63,
+          "calls": [
+            {
+              "elapsed_s": 0.000156518,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000213999,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000233415,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000090028,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.0000359,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000033385,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000016763,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 6.216e-6,
+          "captured": 62,
+          "closed": 1,
+          "detect_s": 0.000727275,
+          "engine": "fjall-stable",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 95750,
+            "sequence": 31
+          },
+          "graph_read_keys": 95,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000780008,
+          "index_s": 0.001338402,
+          "members": 63,
+          "normalize_s": 0.000010826,
+          "output_bytes": 126104,
+          "output_cdc_read_s": 0.000478565,
+          "output_commit_s": 0.002023143,
+          "output_ready_s": 0.002526851,
+          "output_stage_s": 0.001002666,
+          "output_sync_s": 0.001011327,
+          "output_wake_s": 0.002517283,
+          "package_s": 0.002216329,
+          "phase": "continued",
+          "resolve_s": 0.000108326,
+          "restarted": false,
+          "result_read_s": 0.000663788,
+          "result_rows": 124,
+          "revision": 64,
+          "round": 2,
+          "source_cdc_read_s": 0.000029614,
+          "source_commit_s": 0.000586192,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18422,
+            "sequence": 30
+          },
+          "source_ready_s": 0.000634803,
+          "source_wake_s": 0.000622441,
+          "total_s": 0.006048965
+        },
+        {
+          "added": 2,
+          "calls": [
+            {
+              "elapsed_s": 0.000153026,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00032491,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000352009,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000149254,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00002242,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 3.841e-6,
+          "captured": 71,
+          "closed": 2,
+          "detect_s": 0.000684252,
+          "engine": "fjall-stable",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 115943,
+            "sequence": 34
+          },
+          "graph_read_keys": 34,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.001001619,
+          "index_s": 0.001271702,
+          "members": 2,
+          "normalize_s": 3.771e-6,
+          "output_bytes": 111816,
+          "output_cdc_read_s": 0.000083323,
+          "output_commit_s": 0.001027391,
+          "output_ready_s": 0.001128873,
+          "output_stage_s": 0.000270712,
+          "output_sync_s": 0.000745714,
+          "output_wake_s": 0.001115044,
+          "package_s": 0.002070147,
+          "phase": "continued",
+          "resolve_s": 0.000083393,
+          "restarted": false,
+          "result_read_s": 0.00058291,
+          "result_rows": 124,
+          "revision": 85,
+          "round": 2,
+          "source_cdc_read_s": 0.000015994,
+          "source_commit_s": 0.000557208,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 96048,
+            "sequence": 33
+          },
+          "source_ready_s": 0.000595272,
+          "source_wake_s": 0.000581024,
+          "total_s": 0.004384466
+        },
+        {
+          "added": 64,
+          "calls": [
+            {
+              "elapsed_s": 0.000156029,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000301932,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000358924,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000149045,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000041068,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000032477,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000023677,
+              "key_count": 3,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 4.33e-6,
+          "captured": 85,
+          "closed": 2,
+          "detect_s": 0.000794045,
+          "engine": "fjall-stable",
+          "findings": 3,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 195135,
+            "sequence": 37
+          },
+          "graph_read_keys": 110,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.001063152,
+          "index_s": 0.001562179,
+          "members": 64,
+          "normalize_s": 0.000012083,
+          "output_bytes": 144856,
+          "output_cdc_read_s": 0.000331475,
+          "output_commit_s": 0.002047239,
+          "output_ready_s": 0.002414684,
+          "output_stage_s": 0.001005251,
+          "output_sync_s": 0.001034375,
+          "output_wake_s": 0.002399458,
+          "package_s": 0.002486482,
+          "phase": "continued",
+          "resolve_s": 0.000092961,
+          "restarted": false,
+          "result_read_s": 0.000798865,
+          "result_rows": 186,
+          "revision": 87,
+          "round": 2,
+          "source_cdc_read_s": 0.000013479,
+          "source_commit_s": 0.000580745,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 116241,
+            "sequence": 36
+          },
+          "source_ready_s": 0.00061839,
+          "source_wake_s": 0.00060505,
+          "total_s": 0.006325613
+        }
+      ],
+      "unavailable": [],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 594,
+          "journal_bytes": 117926,
+          "read_s": 0.001616518,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1087,
+          "journal_bytes": 213857,
+          "read_s": 0.001695299,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 1,
+      "engine": "fjall",
+      "historical_views": 16,
+      "reopen_s": 0.002329475,
+      "resume": {
+        "batches": 3,
+        "caught_up": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "caught_up_s": 0.000354384,
+        "feed_open_s": 0.000024724,
+        "first_decoded": {
+          "journal": 0,
+          "offset": 149294,
+          "sequence": 16
+        },
+        "first_decoded_s": 0.000333291,
+        "first_match": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "first_match_s": 0.000348237,
+        "items": 21,
+        "journal_bytes": 18434,
+        "pending_head": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "read_s": 0.00024396099999999998,
+        "saved_graph": {
+          "journal": 0,
+          "offset": 149294,
+          "sequence": 16
+        },
+        "saved_source": {
+          "journal": 0,
+          "offset": 131012,
+          "sequence": 15
+        },
+        "started_after": {
+          "journal": 0,
+          "offset": 131012,
+          "sequence": 15
+        }
+      },
+      "rotation": true,
+      "round": 2,
+      "samples": [
+        {
+          "added": 50,
+          "calls": [
+            {
+              "elapsed_s": 0.000015994,
+              "key_count": 28,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000011943,
+              "key_count": 22,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            }
+          ],
+          "capture_s": 5.168e-6,
+          "captured": 24,
+          "closed": 0,
+          "detect_s": 0.000161687,
+          "engine": "fjall",
+          "findings": 0,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 75686,
+            "sequence": 4
+          },
+          "graph_read_keys": 50,
+          "graph_read_rows": 0,
+          "graph_read_s": 0.000027937,
+          "index_s": 0.000381902,
+          "members": 50,
+          "normalize_s": 7.613e-6,
+          "output_bytes": 12496,
+          "output_cdc_read_s": 0.000337691,
+          "output_commit_s": 0.001395533,
+          "output_ready_s": 0.00176186,
+          "output_stage_s": 0.000483244,
+          "output_sync_s": 0.000902791,
+          "output_wake_s": 0.001747542,
+          "package_s": 0.000650448,
+          "phase": "initial",
+          "resolve_s": 0.000072078,
+          "restarted": false,
+          "result_read_s": 0.000220146,
+          "result_rows": 50,
+          "revision": 26,
+          "round": 2,
+          "source_cdc_read_s": 0.000576555,
+          "source_commit_s": 0.000578161,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 161,
+            "sequence": 3
+          },
+          "source_ready_s": 0.000678525,
+          "source_wake_s": 0.000660575,
+          "total_s": 0.003318173
+        },
+        {
+          "added": 12,
+          "calls": [
+            {
+              "elapsed_s": 0.000185643,
+              "key_count": 9,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 9,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000194863,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 18,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00007592,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 9.429e-6,
+              "key_count": 6,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.308e-6,
+              "key_count": 5,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.239e-6,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 0,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000026261,
+          "captured": 27,
+          "closed": 0,
+          "detect_s": 0.000614898,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 112426,
+            "sequence": 8
+          },
+          "graph_read_keys": 30,
+          "graph_read_rows": 34,
+          "graph_read_s": 0.00047640199999999996,
+          "index_s": 0.000771975,
+          "members": 12,
+          "normalize_s": 6.635e-6,
+          "output_bytes": 101400,
+          "output_cdc_read_s": 0.000319811,
+          "output_commit_s": 0.001281689,
+          "output_ready_s": 0.001622942,
+          "output_stage_s": 0.00044497,
+          "output_sync_s": 0.000827221,
+          "output_wake_s": 0.001611977,
+          "package_s": 0.001522857,
+          "phase": "initial",
+          "resolve_s": 0.000079062,
+          "restarted": false,
+          "result_read_s": 0.000385044,
+          "result_rows": 62,
+          "revision": 29,
+          "round": 2,
+          "source_cdc_read_s": 0.000021651,
+          "source_commit_s": 0.000555671,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 75838,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000598904,
+          "source_wake_s": 0.000586681,
+          "total_s": 0.00413785
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000109025,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000164969,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000182709,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00007997,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000020883,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000022978,
+          "captured": 36,
+          "closed": 1,
+          "detect_s": 0.000669306,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 130860,
+            "sequence": 12
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000557556,
+          "index_s": 0.000768833,
+          "members": 2,
+          "normalize_s": 2.864e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000069005,
+          "output_commit_s": 0.001037029,
+          "output_ready_s": 0.001124612,
+          "output_stage_s": 0.000289989,
+          "output_sync_s": 0.000738521,
+          "output_wake_s": 0.001114625,
+          "package_s": 0.001555055,
+          "phase": "initial",
+          "resolve_s": 0.000067748,
+          "restarted": false,
+          "result_read_s": 0.000334548,
+          "result_rows": 62,
+          "revision": 44,
+          "round": 2,
+          "source_cdc_read_s": 0.000019207,
+          "source_commit_s": 0.00055204,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 112578,
+            "sequence": 11
+          },
+          "source_ready_s": 0.000590104,
+          "source_wake_s": 0.000580675,
+          "total_s": 0.003611793
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000113285,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000200939,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000245987,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000120549,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000019207,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000038065,
+          "captured": 44,
+          "closed": 1,
+          "detect_s": 0.000574598,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 149294,
+            "sequence": 16
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0006999669999999999,
+          "index_s": 0.000935338,
+          "members": 2,
+          "normalize_s": 2.444e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000070053,
+          "output_commit_s": 0.001006438,
+          "output_ready_s": 0.001098003,
+          "output_stage_s": 0.000277696,
+          "output_sync_s": 0.000720641,
+          "output_wake_s": 0.001087107,
+          "package_s": 0.001663591,
+          "phase": "initial",
+          "resolve_s": 0.000086745,
+          "restarted": false,
+          "result_read_s": 0.000363952,
+          "result_rows": 62,
+          "revision": 46,
+          "round": 2,
+          "source_cdc_read_s": 0.000016204,
+          "source_commit_s": 0.000555042,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 131012,
+            "sequence": 15
+          },
+          "source_ready_s": 0.000591919,
+          "source_wake_s": 0.000582072,
+          "total_s": 0.003725916
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000143667,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000181801,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000219097,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000087793,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000025703,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000018229,
+          "captured": 48,
+          "closed": 1,
+          "detect_s": 0.000599183,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18282,
+            "sequence": 20
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0006580609999999999,
+          "index_s": 0.000880791,
+          "members": 2,
+          "normalize_s": 2.793e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000134448,
+          "output_commit_s": 0.001003155,
+          "output_ready_s": 0.001157229,
+          "output_stage_s": 0.000245568,
+          "output_sync_s": 0.000749415,
+          "output_wake_s": 0.001146124,
+          "package_s": 0.001605133,
+          "phase": "resume",
+          "resolve_s": 0.0000799,
+          "restarted": true,
+          "result_read_s": 0.000407115,
+          "result_rows": 62,
+          "revision": 62,
+          "round": 2,
+          "source_cdc_read_s": 1.886e-6,
+          "source_commit_s": 0.00056943,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 149446,
+            "sequence": 19
+          },
+          "source_ready_s": 0.011807942,
+          "source_wake_s": 0.011797046,
+          "total_s": 0.014986987
+        },
+        {
+          "added": 63,
+          "calls": [
+            {
+              "elapsed_s": 0.000116708,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000190042,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00022238,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000091215,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000035829,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000026261,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00002207,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000011873,
+          "captured": 62,
+          "closed": 1,
+          "detect_s": 0.000648493,
+          "engine": "fjall",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 128884,
+            "sequence": 23
+          },
+          "graph_read_keys": 95,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000704505,
+          "index_s": 0.001149268,
+          "members": 64,
+          "normalize_s": 0.000011315,
+          "output_bytes": 126104,
+          "output_cdc_read_s": 0.000494907,
+          "output_commit_s": 0.002091799,
+          "output_ready_s": 0.002612828,
+          "output_stage_s": 0.001026762,
+          "output_sync_s": 0.001056026,
+          "output_wake_s": 0.002602072,
+          "package_s": 0.00193577,
+          "phase": "continued",
+          "resolve_s": 0.000079551,
+          "restarted": false,
+          "result_read_s": 0.000700455,
+          "result_rows": 124,
+          "revision": 64,
+          "round": 2,
+          "source_cdc_read_s": 0.000013829,
+          "source_commit_s": 0.000566776,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18434,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000597786,
+          "source_wake_s": 0.000588218,
+          "total_s": 0.005854452
+        },
+        {
+          "added": 2,
+          "calls": [
+            {
+              "elapsed_s": 0.000162245,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000315341,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000357876,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000168881,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000027588,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000012781,
+          "captured": 71,
+          "closed": 2,
+          "detect_s": 0.000664766,
+          "engine": "fjall",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 149287,
+            "sequence": 26
+          },
+          "graph_read_keys": 34,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.001031931,
+          "index_s": 0.00129035,
+          "members": 4,
+          "normalize_s": 2.863e-6,
+          "output_bytes": 111816,
+          "output_cdc_read_s": 0.000080319,
+          "output_commit_s": 0.001057005,
+          "output_ready_s": 0.001158417,
+          "output_stage_s": 0.000308846,
+          "output_sync_s": 0.00073901,
+          "output_wake_s": 0.001147801,
+          "package_s": 0.002072592,
+          "phase": "continued",
+          "resolve_s": 0.000081507,
+          "restarted": false,
+          "result_read_s": 0.000599602,
+          "result_rows": 124,
+          "revision": 85,
+          "round": 2,
+          "source_cdc_read_s": 0.000015016,
+          "source_commit_s": 0.000562167,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 129036,
+            "sequence": 25
+          },
+          "source_ready_s": 0.000595342,
+          "source_wake_s": 0.000584796,
+          "total_s": 0.004433217
+        },
+        {
+          "added": 64,
+          "calls": [
+            {
+              "elapsed_s": 0.000165668,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000345793,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000362556,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000153236,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00004449,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000034642,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00003101,
+              "key_count": 3,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000013131,
+          "captured": 85,
+          "closed": 2,
+          "detect_s": 0.000802217,
+          "engine": "fjall",
+          "findings": 3,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 262088,
+            "sequence": 29
+          },
+          "graph_read_keys": 110,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.001137395,
+          "index_s": 0.00161526,
+          "members": 66,
+          "normalize_s": 0.000012083,
+          "output_bytes": 144856,
+          "output_cdc_read_s": 0.000367235,
+          "output_commit_s": 0.002168137,
+          "output_ready_s": 0.002568896,
+          "output_stage_s": 0.001062313,
+          "output_sync_s": 0.001097654,
+          "output_wake_s": 0.002557023,
+          "package_s": 0.002576789,
+          "phase": "continued",
+          "resolve_s": 0.000111958,
+          "restarted": false,
+          "result_read_s": 0.000896505,
+          "result_rows": 186,
+          "revision": 87,
+          "round": 2,
+          "source_cdc_read_s": 0.00002228,
+          "source_commit_s": 0.000588357,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 149439,
+            "sequence": 28
+          },
+          "source_ready_s": 0.000639273,
+          "source_wake_s": 0.000625514,
+          "total_s": 0.006688727
+        }
+      ],
+      "unavailable": [],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 149285,
+          "read_s": 0.0015250230000000001,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 280676,
+          "read_s": 0.0014756430000000002,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 1,
+      "engine": "fjall",
+      "historical_views": 16,
+      "reopen_s": 0.002804407,
+      "resume": {
+        "batches": 3,
+        "caught_up": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "caught_up_s": 0.000367025,
+        "feed_open_s": 0.000026191,
+        "first_decoded": {
+          "journal": 0,
+          "offset": 149294,
+          "sequence": 16
+        },
+        "first_decoded_s": 0.000345933,
+        "first_match": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "first_match_s": 0.000363673,
+        "items": 21,
+        "journal_bytes": 18434,
+        "pending_head": {
+          "journal": 0,
+          "offset": 149446,
+          "sequence": 19
+        },
+        "read_s": 0.000245777,
+        "saved_graph": {
+          "journal": 0,
+          "offset": 149294,
+          "sequence": 16
+        },
+        "saved_source": {
+          "journal": 0,
+          "offset": 131012,
+          "sequence": 15
+        },
+        "started_after": {
+          "journal": 0,
+          "offset": 131012,
+          "sequence": 15
+        }
+      },
+      "rotation": true,
+      "round": 3,
+      "samples": [
+        {
+          "added": 50,
+          "calls": [
+            {
+              "elapsed_s": 0.000016273,
+              "key_count": 28,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000011733,
+              "key_count": 22,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            }
+          ],
+          "capture_s": 5.308e-6,
+          "captured": 24,
+          "closed": 0,
+          "detect_s": 0.000160499,
+          "engine": "fjall",
+          "findings": 0,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 75686,
+            "sequence": 4
+          },
+          "graph_read_keys": 50,
+          "graph_read_rows": 0,
+          "graph_read_s": 0.000028006000000000003,
+          "index_s": 0.000370936,
+          "members": 50,
+          "normalize_s": 9.848e-6,
+          "output_bytes": 12496,
+          "output_cdc_read_s": 0.000333641,
+          "output_commit_s": 0.00139246,
+          "output_ready_s": 0.001756133,
+          "output_stage_s": 0.000497003,
+          "output_sync_s": 0.000886867,
+          "output_wake_s": 0.001742374,
+          "package_s": 0.000642905,
+          "phase": "initial",
+          "resolve_s": 0.000073475,
+          "restarted": false,
+          "result_read_s": 0.000199541,
+          "result_rows": 50,
+          "revision": 26,
+          "round": 3,
+          "source_cdc_read_s": 0.000529899,
+          "source_commit_s": 0.000586402,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 161,
+            "sequence": 3
+          },
+          "source_ready_s": 0.000665045,
+          "source_wake_s": 0.000636409,
+          "total_s": 0.003270749
+        },
+        {
+          "added": 12,
+          "calls": [
+            {
+              "elapsed_s": 0.000186062,
+              "key_count": 9,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 9,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000194233,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 18,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00007117,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 8.172e-6,
+              "key_count": 6,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.657e-6,
+              "key_count": 5,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 5.308e-6,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 0,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.00007585,
+          "captured": 27,
+          "closed": 0,
+          "detect_s": 0.000655966,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 112426,
+            "sequence": 8
+          },
+          "graph_read_keys": 30,
+          "graph_read_rows": 34,
+          "graph_read_s": 0.000470602,
+          "index_s": 0.000756051,
+          "members": 12,
+          "normalize_s": 6.146e-6,
+          "output_bytes": 101400,
+          "output_cdc_read_s": 0.000295366,
+          "output_commit_s": 0.001247047,
+          "output_ready_s": 0.001572655,
+          "output_stage_s": 0.000431141,
+          "output_sync_s": 0.000806827,
+          "output_wake_s": 0.001556312,
+          "package_s": 0.001596332,
+          "phase": "initial",
+          "resolve_s": 0.000078084,
+          "restarted": false,
+          "result_read_s": 0.000461313,
+          "result_rows": 62,
+          "revision": 29,
+          "round": 3,
+          "source_cdc_read_s": 0.000033874,
+          "source_commit_s": 0.000558954,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 75838,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000621463,
+          "source_wake_s": 0.00060505,
+          "total_s": 0.004260774
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000145273,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000303747,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000247873,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000109025,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00001767,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000029893,
+          "captured": 36,
+          "closed": 1,
+          "detect_s": 0.00056964,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 130860,
+            "sequence": 12
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000823588,
+          "index_s": 0.001102682,
+          "members": 2,
+          "normalize_s": 3.283e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000080808,
+          "output_commit_s": 0.001038077,
+          "output_ready_s": 0.001148569,
+          "output_stage_s": 0.000260725,
+          "output_sync_s": 0.000767575,
+          "output_wake_s": 0.001126569,
+          "package_s": 0.00179776,
+          "phase": "initial",
+          "resolve_s": 0.000070192,
+          "restarted": false,
+          "result_read_s": 0.000351171,
+          "result_rows": 62,
+          "revision": 44,
+          "round": 3,
+          "source_cdc_read_s": 0.000034363,
+          "source_commit_s": 0.000564681,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 112578,
+            "sequence": 11
+          },
+          "source_ready_s": 0.00062726,
+          "source_wake_s": 0.000611406,
+          "total_s": 0.003931743
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000136124,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000218539,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00020017,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000094847,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000019277,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000052592,
+          "captured": 44,
+          "closed": 1,
+          "detect_s": 0.000507549,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 149294,
+            "sequence": 16
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000668957,
+          "index_s": 0.000897553,
+          "members": 2,
+          "normalize_s": 2.863e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.00007564,
+          "output_commit_s": 0.000996241,
+          "output_ready_s": 0.001105266,
+          "output_stage_s": 0.000239771,
+          "output_sync_s": 0.000747739,
+          "output_wake_s": 0.001080402,
+          "package_s": 0.001550236,
+          "phase": "initial",
+          "resolve_s": 0.000066351,
+          "restarted": false,
+          "result_read_s": 0.000371425,
+          "result_rows": 62,
+          "revision": 46,
+          "round": 3,
+          "source_cdc_read_s": 0.000029544,
+          "source_commit_s": 0.000551201,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 131012,
+            "sequence": 15
+          },
+          "source_ready_s": 0.000612593,
+          "source_wake_s": 0.000592059,
+          "total_s": 0.003647552
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000163712,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00026219,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000287684,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000119641,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000046376,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000036178,
+          "captured": 48,
+          "closed": 1,
+          "detect_s": 0.000735727,
+          "engine": "fjall",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18282,
+            "sequence": 20
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000879603,
+          "index_s": 0.001123844,
+          "members": 2,
+          "normalize_s": 3.841e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000149394,
+          "output_commit_s": 0.001214431,
+          "output_ready_s": 0.001387083,
+          "output_stage_s": 0.000366466,
+          "output_sync_s": 0.000837627,
+          "output_wake_s": 0.001373324,
+          "package_s": 0.00203767,
+          "phase": "resume",
+          "resolve_s": 0.000108397,
+          "restarted": true,
+          "result_read_s": 0.000546452,
+          "result_rows": 62,
+          "revision": 62,
+          "round": 3,
+          "source_cdc_read_s": 2.444e-6,
+          "source_commit_s": 0.000573691,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 149446,
+            "sequence": 19
+          },
+          "source_ready_s": 0.012401468,
+          "source_wake_s": 0.012398116,
+          "total_s": 0.016383988
+        },
+        {
+          "added": 63,
+          "calls": [
+            {
+              "elapsed_s": 0.000183757,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000415077,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000409141,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000150512,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000039671,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000025144,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00002249,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000012432,
+          "captured": 62,
+          "closed": 1,
+          "detect_s": 0.000656734,
+          "engine": "fjall",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 128884,
+            "sequence": 23
+          },
+          "graph_read_keys": 95,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.001245792,
+          "index_s": 0.001814801,
+          "members": 64,
+          "normalize_s": 0.000011733,
+          "output_bytes": 126104,
+          "output_cdc_read_s": 0.000510063,
+          "output_commit_s": 0.002098714,
+          "output_ready_s": 0.00263888,
+          "output_stage_s": 0.00105016,
+          "output_sync_s": 0.001040312,
+          "output_wake_s": 0.002627355,
+          "package_s": 0.002598579,
+          "phase": "continued",
+          "resolve_s": 0.000079551,
+          "restarted": false,
+          "result_read_s": 0.000746553,
+          "result_rows": 124,
+          "revision": 64,
+          "round": 3,
+          "source_cdc_read_s": 0.000027727,
+          "source_commit_s": 0.001280502,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18434,
+            "sequence": 22
+          },
+          "source_ready_s": 0.001327507,
+          "source_wake_s": 0.001315773,
+          "total_s": 0.007330865
+        },
+        {
+          "added": 2,
+          "calls": [
+            {
+              "elapsed_s": 0.000185573,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000384696,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000480869,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000223288,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00003562,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.00002661,
+          "captured": 71,
+          "closed": 2,
+          "detect_s": 0.000840561,
+          "engine": "fjall",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 149287,
+            "sequence": 26
+          },
+          "graph_read_keys": 34,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.0013100460000000003,
+          "index_s": 0.001643197,
+          "members": 4,
+          "normalize_s": 3.352e-6,
+          "output_bytes": 111816,
+          "output_cdc_read_s": 0.000081646,
+          "output_commit_s": 0.001054141,
+          "output_ready_s": 0.00116142,
+          "output_stage_s": 0.000285798,
+          "output_sync_s": 0.000759892,
+          "output_wake_s": 0.00114801,
+          "package_s": 0.002639717,
+          "phase": "continued",
+          "resolve_s": 0.000098619,
+          "restarted": false,
+          "result_read_s": 0.000616155,
+          "result_rows": 124,
+          "revision": 85,
+          "round": 3,
+          "source_cdc_read_s": 0.000029124,
+          "source_commit_s": 0.000567824,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 129036,
+            "sequence": 25
+          },
+          "source_ready_s": 0.00062293,
+          "source_wake_s": 0.000608193,
+          "total_s": 0.005048394
+        },
+        {
+          "added": 64,
+          "calls": [
+            {
+              "elapsed_s": 0.000165109,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000314154,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000372822,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00015128,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000044001,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000034782,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000031011,
+              "key_count": 3,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.00001355,
+          "captured": 85,
+          "closed": 2,
+          "detect_s": 0.000832529,
+          "engine": "fjall",
+          "findings": 3,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 262088,
+            "sequence": 29
+          },
+          "graph_read_keys": 110,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.001113159,
+          "index_s": 0.001607786,
+          "members": 66,
+          "normalize_s": 0.000012851,
+          "output_bytes": 144856,
+          "output_cdc_read_s": 0.000371775,
+          "output_commit_s": 0.002144461,
+          "output_ready_s": 0.00255884,
+          "output_stage_s": 0.001069925,
+          "output_sync_s": 0.001065874,
+          "output_wake_s": 0.002544592,
+          "package_s": 0.002578256,
+          "phase": "continued",
+          "resolve_s": 0.000090587,
+          "restarted": false,
+          "result_read_s": 0.000891826,
+          "result_rows": 186,
+          "revision": 87,
+          "round": 3,
+          "source_cdc_read_s": 0.000022629,
+          "source_commit_s": 0.000567126,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 149439,
+            "sequence": 28
+          },
+          "source_ready_s": 0.000624607,
+          "source_wake_s": 0.000613641,
+          "total_s": 0.00666079
+        }
+      ],
+      "unavailable": [],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 658,
+          "journal_bytes": 149285,
+          "read_s": 0.001488008,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1227,
+          "journal_bytes": 280676,
+          "read_s": 0.001542201,
+          "source_wakes": 4
+        }
+      ]
+    },
+    {
+      "compactions": 2,
+      "engine": "fjall-stable",
+      "historical_views": 16,
+      "reopen_s": 0.003451991,
+      "resume": {
+        "batches": 3,
+        "caught_up": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "caught_up_s": 0.000435542,
+        "feed_open_s": 0.00003122,
+        "first_decoded": {
+          "journal": 0,
+          "offset": 118411,
+          "sequence": 23
+        },
+        "first_decoded_s": 0.00040935,
+        "first_match": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "first_match_s": 0.000429884,
+        "items": 19,
+        "journal_bytes": 18422,
+        "pending_head": {
+          "journal": 0,
+          "offset": 118709,
+          "sequence": 27
+        },
+        "read_s": 0.000315271,
+        "saved_graph": {
+          "journal": 0,
+          "offset": 118411,
+          "sequence": 23
+        },
+        "saved_source": {
+          "journal": 0,
+          "offset": 100287,
+          "sequence": 22
+        },
+        "started_after": {
+          "journal": 0,
+          "offset": 100287,
+          "sequence": 22
+        }
+      },
+      "rotation": true,
+      "round": 3,
+      "samples": [
+        {
+          "added": 50,
+          "calls": [
+            {
+              "elapsed_s": 0.000016483,
+              "key_count": 28,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000012292,
+              "key_count": 22,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            }
+          ],
+          "capture_s": 4.61e-6,
+          "captured": 24,
+          "closed": 0,
+          "detect_s": 0.000168532,
+          "engine": "fjall-stable",
+          "findings": 0,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 50273,
+            "sequence": 8
+          },
+          "graph_read_keys": 50,
+          "graph_read_rows": 0,
+          "graph_read_s": 0.000028775,
+          "index_s": 0.000478285,
+          "members": 50,
+          "normalize_s": 0.000011245,
+          "output_bytes": 12496,
+          "output_cdc_read_s": 0.000315831,
+          "output_commit_s": 0.001355234,
+          "output_ready_s": 0.001710456,
+          "output_stage_s": 0.000481638,
+          "output_sync_s": 0.000864029,
+          "output_wake_s": 0.001696557,
+          "package_s": 0.000786362,
+          "phase": "initial",
+          "resolve_s": 0.000087653,
+          "restarted": false,
+          "result_read_s": 0.000209948,
+          "result_rows": 50,
+          "revision": 26,
+          "round": 3,
+          "source_cdc_read_s": 0.000304237,
+          "source_commit_s": 0.000289569,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 783,
+            "sequence": 7
+          },
+          "source_ready_s": 0.000401318,
+          "source_wake_s": 0.000381133,
+          "total_s": 0.003116186
+        },
+        {
+          "added": 12,
+          "calls": [
+            {
+              "elapsed_s": 0.000147857,
+              "key_count": 9,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 9,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000155401,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 18,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000061881,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 7.543e-6,
+              "key_count": 6,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 4.749e-6,
+              "key_count": 5,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 4.75e-6,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 0,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000023258,
+          "captured": 27,
+          "closed": 0,
+          "detect_s": 0.000607774,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 81567,
+            "sequence": 13
+          },
+          "graph_read_keys": 30,
+          "graph_read_rows": 34,
+          "graph_read_s": 0.000382181,
+          "index_s": 0.000700036,
+          "members": 12,
+          "normalize_s": 5.728e-6,
+          "output_bytes": 101400,
+          "output_cdc_read_s": 0.000299487,
+          "output_commit_s": 0.001151921,
+          "output_ready_s": 0.001466494,
+          "output_stage_s": 0.000359552,
+          "output_sync_s": 0.000782242,
+          "output_wake_s": 0.001458532,
+          "package_s": 0.001456227,
+          "phase": "initial",
+          "resolve_s": 0.000092542,
+          "restarted": false,
+          "result_read_s": 0.000292852,
+          "result_rows": 62,
+          "revision": 29,
+          "round": 3,
+          "source_cdc_read_s": 0.000032966,
+          "source_commit_s": 0.000565659,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 50571,
+            "sequence": 12
+          },
+          "source_ready_s": 0.000619578,
+          "source_wake_s": 0.000606657,
+          "total_s": 0.003842275
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000109095,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000177541,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000178798,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000075989,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000035969,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000015225,
+          "captured": 36,
+          "closed": 1,
+          "detect_s": 0.000549665,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 99989,
+            "sequence": 18
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000577392,
+          "index_s": 0.000761847,
+          "members": 1,
+          "normalize_s": 3.352e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000071589,
+          "output_commit_s": 0.000965929,
+          "output_ready_s": 0.001051696,
+          "output_stage_s": 0.000243822,
+          "output_sync_s": 0.000712538,
+          "output_wake_s": 0.001041848,
+          "package_s": 0.001424239,
+          "phase": "initial",
+          "resolve_s": 0.000071939,
+          "restarted": false,
+          "result_read_s": 0.000290128,
+          "result_rows": 62,
+          "revision": 44,
+          "round": 3,
+          "source_cdc_read_s": 0.000016274,
+          "source_commit_s": 0.000575576,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 81865,
+            "sequence": 17
+          },
+          "source_ready_s": 0.00060945,
+          "source_wake_s": 0.000599881,
+          "total_s": 0.003383615
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000104415,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00017335,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000198564,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000096733,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000018159,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000026749,
+          "captured": 44,
+          "closed": 1,
+          "detect_s": 0.000522844,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 0,
+            "offset": 118411,
+            "sequence": 23
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0005912210000000001,
+          "index_s": 0.000812414,
+          "members": 1,
+          "normalize_s": 2.934e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.00006684,
+          "output_commit_s": 0.001003924,
+          "output_ready_s": 0.001086129,
+          "output_stage_s": 0.000272947,
+          "output_sync_s": 0.000721549,
+          "output_wake_s": 0.001076002,
+          "package_s": 0.001455878,
+          "phase": "initial",
+          "resolve_s": 0.000067678,
+          "restarted": false,
+          "result_read_s": 0.00032952,
+          "result_rows": 62,
+          "revision": 46,
+          "round": 3,
+          "source_cdc_read_s": 0.000017181,
+          "source_commit_s": 0.000559094,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 100287,
+            "sequence": 22
+          },
+          "source_ready_s": 0.000594155,
+          "source_wake_s": 0.000584237,
+          "total_s": 0.003474062
+        },
+        {
+          "added": 1,
+          "calls": [
+            {
+              "elapsed_s": 0.000174957,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000237187,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000281747,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000119641,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000020115,
+              "key_count": 1,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 0.000015854,
+          "captured": 48,
+          "closed": 1,
+          "detect_s": 0.000684322,
+          "engine": "fjall-stable",
+          "findings": 1,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 18124,
+            "sequence": 28
+          },
+          "graph_read_keys": 19,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.0008336470000000001,
+          "index_s": 0.00115255,
+          "members": 1,
+          "normalize_s": 3.841e-6,
+          "output_bytes": 94920,
+          "output_cdc_read_s": 0.000158893,
+          "output_commit_s": 0.001154715,
+          "output_ready_s": 0.001324154,
+          "output_stage_s": 0.000335456,
+          "output_sync_s": 0.000809341,
+          "output_wake_s": 0.001313677,
+          "package_s": 0.001978583,
+          "phase": "resume",
+          "resolve_s": 0.000091984,
+          "restarted": true,
+          "result_read_s": 0.000450907,
+          "result_rows": 62,
+          "revision": 62,
+          "round": 3,
+          "source_cdc_read_s": 3.422e-6,
+          "source_commit_s": 0.000576065,
+          "source_cursor": {
+            "journal": 0,
+            "offset": 118709,
+            "sequence": 27
+          },
+          "source_ready_s": 0.019582589,
+          "source_wake_s": 0.019570785,
+          "total_s": 0.023348595
+        },
+        {
+          "added": 63,
+          "calls": [
+            {
+              "elapsed_s": 0.000131515,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 6,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00018257,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 16,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000217631,
+              "key_count": 5,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 21,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000088002,
+              "key_count": 3,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 7,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000034293,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000030592,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000016692,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 1,
+              "writer": 2
+            }
+          ],
+          "capture_s": 3.422e-6,
+          "captured": 62,
+          "closed": 1,
+          "detect_s": 0.000679713,
+          "engine": "fjall-stable",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 95750,
+            "sequence": 31
+          },
+          "graph_read_keys": 95,
+          "graph_read_rows": 51,
+          "graph_read_s": 0.000701295,
+          "index_s": 0.00112999,
+          "members": 63,
+          "normalize_s": 0.000011524,
+          "output_bytes": 126104,
+          "output_cdc_read_s": 0.000434214,
+          "output_commit_s": 0.002103043,
+          "output_ready_s": 0.002564426,
+          "output_stage_s": 0.001035563,
+          "output_sync_s": 0.001057424,
+          "output_wake_s": 0.002550877,
+          "package_s": 0.001950786,
+          "phase": "continued",
+          "resolve_s": 0.000102041,
+          "restarted": false,
+          "result_read_s": 0.000826452,
+          "result_rows": 124,
+          "revision": 64,
+          "round": 3,
+          "source_cdc_read_s": 0.00001369,
+          "source_commit_s": 0.000577252,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 18422,
+            "sequence": 30
+          },
+          "source_ready_s": 0.000607774,
+          "source_wake_s": 0.000597716,
+          "total_s": 0.005957191
+        },
+        {
+          "added": 2,
+          "calls": [
+            {
+              "elapsed_s": 0.000160569,
+              "key_count": 4,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00030689,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000349914,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000158543,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.00002235,
+              "key_count": 2,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 4.33e-6,
+          "captured": 71,
+          "closed": 2,
+          "detect_s": 0.000652264,
+          "engine": "fjall-stable",
+          "findings": 2,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 115943,
+            "sequence": 34
+          },
+          "graph_read_keys": 34,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.000998266,
+          "index_s": 0.001260247,
+          "members": 2,
+          "normalize_s": 2.863e-6,
+          "output_bytes": 111816,
+          "output_cdc_read_s": 0.000098828,
+          "output_commit_s": 0.001069227,
+          "output_ready_s": 0.001190614,
+          "output_stage_s": 0.000280629,
+          "output_sync_s": 0.000779169,
+          "output_wake_s": 0.001176226,
+          "package_s": 0.002023632,
+          "phase": "continued",
+          "resolve_s": 0.000083253,
+          "restarted": false,
+          "result_read_s": 0.000563004,
+          "result_rows": 124,
+          "revision": 85,
+          "round": 3,
+          "source_cdc_read_s": 0.000017949,
+          "source_commit_s": 0.000589266,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 96048,
+            "sequence": 33
+          },
+          "source_ready_s": 0.000628239,
+          "source_wake_s": 0.000617832,
+          "total_s": 0.004413521
+        },
+        {
+          "added": 64,
+          "calls": [
+            {
+              "elapsed_s": 0.000159242,
+              "key_count": 18,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 12,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000305633,
+              "key_count": 12,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 32,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000366536,
+              "key_count": 10,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 42,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000148765,
+              "key_count": 6,
+              "operation": "neighbors",
+              "relation": 3,
+              "rows": 14,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000041557,
+              "key_count": 34,
+              "operation": "presence",
+              "relation": 2,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000032337,
+              "key_count": 27,
+              "operation": "presence",
+              "relation": 3,
+              "rows": 0,
+              "writer": 1
+            },
+            {
+              "elapsed_s": 0.000023886,
+              "key_count": 3,
+              "operation": "presence",
+              "relation": 1,
+              "rows": 2,
+              "writer": 2
+            }
+          ],
+          "capture_s": 3.772e-6,
+          "captured": 85,
+          "closed": 2,
+          "detect_s": 0.000798935,
+          "engine": "fjall-stable",
+          "findings": 3,
+          "frontier": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "graph_cursor": {
+            "journal": 1,
+            "offset": 195135,
+            "sequence": 37
+          },
+          "graph_read_keys": 110,
+          "graph_read_rows": 102,
+          "graph_read_s": 0.001077956,
+          "index_s": 0.001558966,
+          "members": 64,
+          "normalize_s": 0.00001341,
+          "output_bytes": 144856,
+          "output_cdc_read_s": 0.000340974,
+          "output_commit_s": 0.002098155,
+          "output_ready_s": 0.00247412,
+          "output_stage_s": 0.001012793,
+          "output_sync_s": 0.001077329,
+          "output_wake_s": 0.002459453,
+          "package_s": 0.002490463,
+          "phase": "continued",
+          "resolve_s": 0.000091983,
+          "restarted": false,
+          "result_read_s": 0.000804103,
+          "result_rows": 186,
+          "revision": 87,
+          "round": 3,
+          "source_cdc_read_s": 0.000014387,
+          "source_commit_s": 0.000572224,
+          "source_cursor": {
+            "journal": 1,
+            "offset": 116241,
+            "sequence": 36
+          },
+          "source_ready_s": 0.000604631,
+          "source_wake_s": 0.000595621,
+          "total_s": 0.006381418
+        }
+      ],
+      "unavailable": [],
+      "walks": [
+        {
+          "batches": 12,
+          "graph_wakes": 4,
+          "items": 594,
+          "journal_bytes": 117926,
+          "read_s": 0.001194945,
+          "source_wakes": 4
+        },
+        {
+          "batches": 15,
+          "graph_wakes": 4,
+          "items": 1087,
+          "journal_bytes": 213857,
+          "read_s": 0.00149073,
+          "source_wakes": 4
+        }
+      ]
+    }
+  ],
+  "source": "48de79440+direct-compression",
+  "target": "fjall-stable",
+  "unsupported": {
+    "neon-layers": "present adapter has no original-WAL CDC feed; native layer enumeration is not substituted"
+  },
+  "versioned_fjall": true,
+  "workload": "original eight Causal cycles; fixed application keys versus revision-key control; native journal source wake, package Graph reads, atomic Graph/cursor write, journal Graph wake, result read, resume and continued appends"
+}

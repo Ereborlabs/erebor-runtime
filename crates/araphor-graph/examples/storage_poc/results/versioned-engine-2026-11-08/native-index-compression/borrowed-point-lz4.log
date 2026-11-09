@@ -1,0 +1,327 @@
+   Compiling lsm-tree v3.1.10 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree)
+warning: usage of an `unsafe` block
+   --> src/table/block/mod.rs:111:21
+    |
+111 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> src/table/block/mod.rs:109:24
+    |
+109 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+   --> src/table/block/mod.rs:172:21
+    |
+172 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> src/table/block/mod.rs:170:24
+    |
+170 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+  --> src/vlog/blob_file/reader.rs:89:35
+   |
+89 |                 let mut builder = unsafe { UserValue::builder_unzeroed(real_val_len as usize) };
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> src/vlog/blob_file/reader.rs:88:24
+   |
+88 |                 #[warn(unsafe_code)]
+   |                        ^^^^^^^^^^^
+
+warning: field `tree_type` is never read
+  --> src/manifest.rs:11:9
+   |
+ 9 | pub struct Manifest {
+   |            -------- field in this struct
+10 |     pub version: FormatVersion,
+11 |     pub tree_type: TreeType,
+   |         ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `Indexed` is never constructed
+  --> src/version/run.rs:15:12
+   |
+15 | pub struct Indexed<T: Ranged> {
+   |            ^^^^^^^
+
+warning: `lsm-tree` (lib) generated 5 warnings
+warning: `lsm-tree` (lib test) generated 5 warnings (5 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.09s
+     Running unittests src/lib.rs (lsm-tree/target/debug/deps/lsm_tree-d5553d3b5f5964cb)
+
+running 246 tests
+test blob_tree::gc::tests::compaction_stream_gc_count_drops ... ok
+test blob_tree::gc::tests::frag_map_roundtrip ... ok
+test blob_tree::gc::tests::frag_map_merge_into ... ok
+test compaction::flavour::tests::drain_blobs_multiple_keys ... ok
+test compaction::flavour::tests::drain_blobs_simple ... ok
+test compaction::state::tests::level_manifest_atomicity ... ignored, wip
+test compaction::stream::tests::compaction_stream_expired_callback_1 ... ok
+test compaction::stream::tests::compaction_stream_no_evict_simple ... ok
+test compaction::stream::tests::compaction_stream_filter_1 ... ok
+test compaction::stream::tests::compaction_stream_no_evict_simple_multi_keys ... ok
+test compaction::stream::tests::compaction_stream_old_tombstone ... ok
+test compaction::stream::tests::compaction_stream_queue_weak_tombstones ... ok
+test compaction::stream::tests::compaction_stream_seqno_zeroing_1 ... ok
+test compaction::stream::tests::compaction_stream_tombstone_no_gc ... ok
+test compaction::stream::tests::compaction_stream_tombstone_overwrite_gc ... ok
+test compaction::stream::tests::compaction_stream_weak_tombstone_evict ... ok
+test compaction::stream::tests::compaction_stream_weak_tombstone_simple ... ok
+test compaction::stream::tests::compaction_stream_weak_tombstone_no_gc ... ok
+test compaction::stream::tests::custom_mvcc::compaction_filter_custom_mvcc ... ok
+test compaction::stream::tests::compaction_stream_weak_tombstone_evict_next_value ... ok
+test compaction::stream::tests::custom_mvcc::compaction_filter_custom_mvcc_multi_keys ... ok
+test compaction::stream::tests::retained_mvcc_predecessors ... ok
+test compaction::stream::tests::retained_intervals_and_deletions ... ok
+test compaction::stream::tests::retained_partial_inputs ... ok
+test compaction::stream::tests::retained_policy_stays_with_inputs ... ok
+test compaction::leveled::test::leveled_empty_levels ... ok
+test compaction::fifo::tests::fifo_empty_levels ... ok
+test compaction::worker::tests::compaction_merge_declines_tables_removed_by_clear ... ok
+test compaction::worker::tests::compaction_move_declines_tables_removed_by_clear ... ok
+test compaction::fifo::tests::fifo_ttl ... ok
+test compaction::fifo::tests::fifo_ttl_then_limit_additional_drops_blob_unit ... ok
+test compression::tests::compression_serialize_none ... ok
+test compression::tests::lz4::compression_serialize_none ... ok
+test file::tests::atomic_rewrite ... ok
+test file::tests::persist_temp_file_replaces_existing ... ok
+test hash::tests::test_hash128 ... ok
+test hash::tests::test_hash64 ... ok
+test key::tests::key_order_smoke_test ... ok
+test key_range::tests::is_disjoint::key_range_not_disjoint ... ok
+test key_range::tests::is_disjoint::key_range_number ... ok
+test key_range::tests::is_disjoint::key_range_string ... ok
+test key_range::tests::key_range_aggregate_1 ... ok
+test key_range::tests::key_range_aggregate_2 ... ok
+test key_range::tests::key_range_contains_key ... ok
+test key_range::tests::overflap_key_range::key_range_no_overlap ... ok
+test key_range::tests::overflap_key_range::key_range_overlap ... ok
+test key_range::tests::overflap_key_range::key_range_overlap_edge ... ok
+test key_range::tests::overlaps_with_bounds::exclusive ... ok
+test key_range::tests::overlaps_with_bounds::inclusive ... ok
+test key_range::tests::overlaps_with_bounds::no_overlap ... ok
+test key_range::tests::overlaps_with_bounds::semi_open_0 ... ok
+test key_range::tests::overlaps_with_bounds::semi_open_1 ... ok
+test key_range::tests::overlaps_with_bounds::semi_open_2 ... ok
+test key_range::tests::overlaps_with_bounds::semi_open_3 ... ok
+test key_range::tests::overlaps_with_bounds::semi_open_4 ... ok
+test key_range::tests::overlaps_with_bounds::semi_open_5 ... ok
+test key_range::tests::overlaps_with_bounds::semi_open_6 ... ok
+test key_range::tests::overlaps_with_bounds::semi_open_7 ... ok
+test key_range::tests::overlaps_with_bounds::unbounded ... ok
+test memtable::tests::memtable_get ... ok
+test memtable::tests::memtable_get_highest_seqno ... ok
+test memtable::tests::memtable_get_old_version ... ok
+test memtable::tests::memtable_get_prefix ... ok
+test memtable::tests::memtable_mvcc_point_read ... ok
+test merge::tests::merge_dup ... ignored, maybe not needed
+test merge::tests::merge_simple ... ok
+test mvcc_stream::tests::mvcc_queue ... ok
+test mvcc_stream::tests::mvcc_queue_almost_gone_2 ... ok
+test mvcc_stream::tests::mvcc_queue_reverse_almost_gone ... ok
+test mvcc_stream::tests::mvcc_queue_weak_almost_gone ... ok
+test mvcc_stream::tests::mvcc_queue_weak_almost_gone_2 ... ok
+test mvcc_stream::tests::mvcc_queue_weak_reverse ... ok
+test mvcc_stream::tests::mvcc_stream_error ... ok
+test mvcc_stream::tests::mvcc_stream_simple ... ok
+test mvcc_stream::tests::mvcc_stream_simple_multi_keys ... ok
+test mvcc_stream::tests::mvcc_stream_tombstone ... ok
+test mvcc_stream::tests::mvcc_stream_tombstone_multi_keys ... ok
+test mvcc_stream::tests::mvcc_stream_weak_tombstone_multi_keys ... ok
+test mvcc_stream::tests::mvcc_stream_weak_tombstone_priority ... ok
+test mvcc_stream::tests::mvcc_stream_weak_tombstone_resurrection ... ok
+test mvcc_stream::tests::mvcc_stream_weak_tombstone_simple ... ok
+test range::tests::prefix_to_range_1 ... ok
+test range::tests::prefix_to_range_2 ... ok
+test compaction::fifo::tests::fifo_below_limit ... ok
+test range::tests::prefix_to_range_3 ... ok
+test compaction::leveled::test::leveled_l0_below_limit ... ok
+test compaction::worker::tests::compaction_drop_tables ... ok
+test range::tests::prefix_to_range_basic ... ok
+test range::tests::prefix_to_range_char_max ... ok
+test range::tests::prefix_to_range_char_max_2 ... ok
+test range::tests::prefix_to_range_empty ... ok
+test range::tests::prefix_to_range_single_char ... ok
+test retention::tests::normalized_cut_bounds ... ok
+test seqno::tests::max_seqno - should panic ... ok
+test seqno::tests::not_max_seqno ... ok
+test slice::tests::slice_empty ... ok
+test slice::tests::slice_fuse_empty ... ok
+test slice::tests::slice_fuse_one ... ok
+test slice::tests::slice_fuse_two ... ok
+test slice::tests::slice_with_size ... ok
+test slice::tests::test_slice_as_slice ... ok
+test slice::tests::test_slice_instantiation ... ok
+test slice_windows::tests::test_growing_windows ... ok
+test slice_windows::tests::test_shrinking_windows ... ok
+test table::block::hash_index::tests::hash_index_build_conflict ... ok
+test table::block::hash_index::tests::hash_index_build_mix ... ok
+test table::block::hash_index::tests::hash_index_build_same_offset ... ok
+test table::block::hash_index::tests::hash_index_build_simple ... ok
+test table::block::hash_index::tests::hash_index_read_conflict ... ok
+test table::block::header::tests::block_header_detect_corruption ... ok
+test table::block::header::tests::block_header_serde_roundtrip ... ok
+test table::block::tests::block_roundtrip_lz4 ... ok
+test table::block::tests::block_roundtrip_uncompressed ... ok
+test table::block::trailer::tests::value_type_never_block_trailer_start_marker ... ok
+test table::data_block::iter_test::tests::data_block_iter_consume_last_back ... ok
+test table::data_block::iter_test::tests::data_block_iter_consume_last_forwards ... ok
+test table::data_block::iter_test::tests::data_block_iter_forward ... ok
+test table::data_block::iter_test::tests::data_block_iter_forward_seek_after_last ... ok
+test table::data_block::iter_test::tests::data_block_iter_forward_seek_before_first ... ok
+test table::data_block::iter_test::tests::data_block_iter_forward_seek_in_interval ... ok
+test table::data_block::iter_test::tests::data_block_iter_forward_seek_last ... ok
+test table::data_block::iter_test::tests::data_block_iter_forward_seek_restart_head ... ok
+test table::data_block::iter_test::tests::data_block_iter_fuzz_3 ... ok
+test table::data_block::iter_test::tests::data_block_iter_fuzz_4 ... ok
+test table::data_block::iter_test::tests::data_block_iter_only_first ... ok
+test compaction::worker::tests::compaction_stream_run_2 ... ok
+test table::data_block::iter_test::tests::data_block_iter_range ... ok
+test table::data_block::iter_test::tests::data_block_iter_range_edges ... ok
+test table::data_block::iter_test::tests::data_block_iter_range_empty ... ok
+test table::data_block::iter_test::tests::data_block_iter_range_same_key ... ok
+test table::data_block::iter_test::tests::data_block_iter_rev ... ok
+test table::data_block::iter_test::tests::data_block_iter_rev_seek_back ... ok
+test table::data_block::iter_test::tests::data_block_range ... ok
+test table::data_block::iter_test::tests::data_block_range_ping_pong ... ok
+test table::data_block::iter_test::tests::data_block_seek_closed_range ... ok
+test table::data_block::iter_test::tests::data_block_iter_ping_pong_exhaust ... ok
+test table::data_block::tests::data_block_mvcc_read_first ... ok
+test compaction::worker::tests::compaction_stream_run ... ok
+test table::data_block::tests::data_block_ping_pong_fuzz_1 ... ok
+test table::data_block::tests::data_block_point_read_dense ... ok
+test table::data_block::tests::data_block_point_read_dense_2 ... ok
+test table::data_block::tests::data_block_point_read_dense_mvcc_no_hash ... ok
+test table::data_block::tests::data_block_point_read_dense_mvcc_with_hash ... ok
+test table::data_block::tests::data_block_point_read_fuzz_1 ... ok
+test table::data_block::tests::data_block_point_read_fuzz_2 ... ok
+test table::data_block::tests::data_block_point_read_mvcc_latest_fuzz_1 ... ok
+test table::data_block::tests::data_block_point_read_mvcc_latest_fuzz_2 ... ok
+test table::data_block::tests::data_block_point_read_mvcc_latest_fuzz_3 ... ok
+test table::data_block::tests::data_block_point_read_mvcc_latest_fuzz_3_dense ... ok
+test table::data_block::tests::data_block_point_read_one ... ok
+test table::data_block::iter_test::tests::data_block_wtf ... ok
+test table::data_block::tests::data_block_point_read_shadowing ... ok
+test table::filter::bit_array::builder::tests::bit_array_builder_basic ... ok
+test table::data_block::tests::data_block_vhandle ... ok
+test table::filter::bit_array::builder::tests::bit_set_true ... ok
+test table::data_block::tests::data_block_point_read_simple ... ok
+test table::filter::standard_bloom::builder::tests::bloom_calculate_m ... ok
+test table::filter::standard_bloom::tests::filter_bloom_standard_basic ... ok
+test compaction::fifo::tests::fifo_more_than_limit_blobs ... ok
+test table::filter::standard_bloom::tests::filter_bloom_standard_serde_round_trip ... ok
+test table::filter::tests::bloom_estimated_size_bpk ... ok
+test table::filter::tests::bloom_estimated_size_fpr ... ok
+test table::id::tests::global_table_id_accessors ... ok
+test table::index_block::iter::tests::index_block_iter_range_1 ... ok
+test table::index_block::iter::tests::index_block_iter_rev_seek ... ok
+test table::index_block::iter::tests::index_block_iter_rev_seek_2 ... ok
+test table::index_block::iter::tests::index_block_iter_rev_seek_3 ... ok
+test table::index_block::iter::tests::index_block_iter_rev_span ... ok
+test table::index_block::iter::tests::index_block_iter_seek_before_start ... ok
+test table::index_block::iter::tests::index_block_iter_seek_middle ... ok
+test table::index_block::iter::tests::index_block_iter_seek_start ... ok
+test table::index_block::iter::tests::index_block_iter_span ... ok
+test table::index_block::iter::tests::index_block_iter_too_far ... ok
+test table::index_block::iter::tests::index_block_iter_too_far_next_back ... ok
+test table::index_block::iter::tests::index_block_mvcc_slab ... ok
+test compaction::worker::tests::compaction_stream_run_not_found ... ok
+test compaction::fifo::tests::fifo_more_than_limit ... ok
+test compaction::leveled::test::leveled_l0_reached_limit_disjoint ... ok
+test compaction::leveled::test::leveled_l0_reached_limit ... ok
+test table::tests::table_global_seqno ... ok
+test table::filter::standard_bloom::tests::filter_bloom_standard_bpk ... ok
+test table::tests::table_partitioned_index ... ok
+test table::tests::table_iter_simple ... ok
+test table::tests::table_partitioned_filter ... ok
+test compaction::worker::tests::compaction_stream_run_3 ... ok
+test table::tests::table_point_read_mvcc_block_boundary ... ok
+test compaction::worker::tests::compaction_stream_run_4 ... ok
+test compaction::worker::tests::blob_file_picking_simple ... ok
+test table::tests::table_point_read ... ok
+test table::tests::table_point_read_partitioned_filter_smoke_test ... ok
+test table::tests::table_read_fuzz_1 ... ok
+test table::tests::table_return_global_seqno ... ok
+test table::tests::table_range_exclusive_bounds ... ok
+test table::util::tests::test_compare_prefixed_slice ... ok
+test table::util::tests::test_longest_shared_prefix_length ... ok
+test table::writer::tests::table_writer_count ... ok
+test util::tests::prefixed_range_1 ... ok
+test util::tests::prefixed_range_2 ... ok
+test util::tests::prefixed_range_3 ... ok
+test util::tests::prefixed_range_4 ... ok
+test util::tests::prefixed_range_5 ... ok
+test util::tests::prefixed_range_6 ... ok
+test util::tests::prefixed_range_7 ... ok
+test value::tests::pik_cmp_seqno ... ok
+test value::tests::pik_cmp_user_key ... ok
+test version::optimize::tests::optimize_runs_empty ... ok
+test version::optimize::tests::optimize_runs_one ... ok
+test version::optimize::tests::optimize_runs_overlap_transitive ... ok
+test version::optimize::tests::optimize_runs_two_disjoint ... ok
+test version::optimize::tests::optimize_runs_two_disjoint_2 ... ok
+test version::optimize::tests::optimize_runs_two_overlap ... ok
+test version::optimize::tests::optimize_runs_two_overlap_2 ... ok
+test table::tests::table_range_ping_pong ... ok
+test version::optimize::tests::optimize_runs_two_overlap_3 ... ok
+test version::run::tests::run_aggregate_key_range ... ok
+test version::run::tests::run_point_lookup ... ok
+test table::tests::table_range_multiple_data_blocks ... ok
+test version::run::tests::run_range_contained ... ok
+test version::run::tests::run_range_culling ... ok
+test version::run::tests::run_range_overlaps ... ok
+test version::super_version::tests::super_version_gc_above_watermark ... ok
+test version::super_version::tests::super_version_gc_below_watermark_keep ... ok
+test version::super_version::tests::super_version_gc_below_watermark_shadowed ... ok
+test version::super_version::tests::super_version_gc_below_watermark_simple ... ok
+test version::super_version::tests::super_version_gc_below_watermark_simple_2 ... ok
+test table::tests::table_range_simple ... ok
+test vlog::blob_file::meta::tests::test_blob_file_meta_roundtrip ... ok
+test vlog::blob_file::reader::tests::blob_reader_roundtrip ... ok
+test vlog::blob_file::merge::tests::blob_file_merger_seqno ... ok
+test table::tests::table_scan ... ok
+test vlog::tests::vlog_recovery_missing_blob_file ... ok
+test vlog::blob_file::scanner::tests::blob_scanner ... ok
+test vlog::blob_file::merge::tests::blob_file_merger ... ok
+test vlog::blob_file::reader::tests::blob_reader_roundtrip_lz4 ... ok
+test table::tests::table_zero_bpk ... ok
+test table::tests::table_seqnos ... ok
+test version::persist::tests::version_persist_replaces_orphaned_file ... ok
+test table::multi_writer::tests::table_multi_writer_same_key_norotate ... ok
+test table::multi_writer::tests::table_multi_writer_same_key_norotate_2 ... ok
+test run_scanner::tests::run_scanner_basic ... ok
+test run_reader::tests::run_reader_basic ... ok
+test run_reader::tests::run_reader_skip ... ok
+test compaction::leveled::test::leveled_l0_reached_limit_disjoint_l1 ... ok
+test table::filter::standard_bloom::tests::filter_bloom_standard_fpr_2 ... ok
+test table::filter::standard_bloom::tests::filter_bloom_standard_fpr ... ok
+test compaction::leveled::test::leveled_sequential_inserts ... ok
+
+test result: ok. 244 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 7.09s
+
+     Running tests/read_view.rs (lsm-tree/target/debug/deps/read_view-e6376650e3406ea4)
+
+running 3 tests
+test overlay_cut_stays_with_each_read ... ok
+test active_records_keep_mvcc_visibility ... ok
+test pinned_records_keep_deletion_and_blob_state ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s
+
+     Running tests/retained_history.rs (lsm-tree/target/debug/deps/retained_history-526b0a3418ccba8a)
+
+running 3 tests
+test policy_snapshot_survives_merge ... ok
+test retention_stays_per_tree ... ok
+test retained_cuts_survive_native_maintenance ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+

@@ -1,0 +1,195 @@
+diff --git a/src/journal/entry.rs b/src/journal/entry.rs
+index 6dbb6fe..ab65536 100644
+--- a/src/journal/entry.rs
++++ b/src/journal/entry.rs
+@@ -38,8 +38,8 @@ pub enum Entry {
+     },
+ }
+ 
+-pub fn serialize_marker_item<W: Write>(
+-    writer: &mut W,
++pub fn serialize_marker_item(
++    writer: &mut Vec<u8>,
+     keyspace_id: InternalKeyspaceId,
+     key: &[u8],
+     value: &[u8],
+@@ -52,16 +52,6 @@ pub fn serialize_marker_item<W: Write>(
+ 
+     compression.encode_into(writer)?;
+ 
+-    let compressed_value = match compression {
+-        CompressionType::None => std::borrow::Cow::Borrowed(value),
+-
+-        #[cfg(feature = "lz4")]
+-        CompressionType::Lz4 => {
+-            let compressed = lz4_flex::compress(value);
+-            std::borrow::Cow::Owned(compressed)
+-        }
+-    };
+-
+     // NOTE: Truncation is okay and actually needed
+     writer.write_u64::<LittleEndian>(keyspace_id)?;
+ 
+@@ -73,13 +63,32 @@ pub fn serialize_marker_item<W: Write>(
+     #[expect(clippy::cast_possible_truncation)]
+     writer.write_u32::<LittleEndian>(value.len() as u32)?;
+ 
+-    // NOTE: Truncation is okay and actually needed
++    #[cfg(feature = "lz4")]
++    let length_at = writer.len();
+     #[expect(clippy::cast_possible_truncation)]
+-    writer.write_u32::<LittleEndian>(compressed_value.len() as u32)?;
++    writer.write_u32::<LittleEndian>(value.len() as u32)?;
+ 
+     writer.write_all(key)?;
+ 
+-    writer.write_all(&compressed_value)?;
++    match compression {
++        CompressionType::None => writer.extend_from_slice(value),
++        #[cfg(feature = "lz4")]
++        CompressionType::Lz4 => {
++            let payload_at = writer.len();
++            writer.resize(
++                payload_at + lz4_flex::block::get_maximum_output_size(value.len()),
++                0,
++            );
++            #[expect(clippy::indexing_slicing, reason = "the payload was just reserved")]
++            let size = lz4_flex::block::compress_into(value, &mut writer[payload_at..])
++                .map_err(std::io::Error::other)?;
++            writer.truncate(payload_at + size);
++            #[expect(clippy::cast_possible_truncation)]
++            let size = size as u32;
++            #[expect(clippy::indexing_slicing, reason = "the length field was just written")]
++            writer[length_at..length_at + 4].copy_from_slice(&size.to_le_bytes());
++        }
++    }
+ 
+     Ok(())
+ }
+@@ -137,7 +146,16 @@ impl Entry {
+                 value_type,
+                 compression,
+             } => {
+-                serialize_marker_item(writer, *keyspace_id, key, value, *value_type, *compression)?;
++                let mut bytes = Vec::new();
++                serialize_marker_item(
++                    &mut bytes,
++                    *keyspace_id,
++                    key,
++                    value,
++                    *value_type,
++                    *compression,
++                )?;
++                writer.write_all(&bytes)?;
+             }
+             End(val) => {
+                 writer.write_u8(Tag::End.into())?;
+@@ -254,6 +272,63 @@ mod tests {
+     use super::*;
+     use test_log::test;
+ 
++    #[cfg(feature = "lz4")]
++    #[test]
++    #[expect(clippy::cast_possible_truncation, clippy::indexing_slicing)]
++    fn compressed_items_keep_original_bytes() -> crate::Result<()> {
++        use rand::{Rng, SeedableRng};
++
++        let mut noise = vec![0; 70_000];
++        rand::rngs::StdRng::seed_from_u64(7).fill_bytes(&mut noise);
++        let values = [
++            Vec::new(),
++            noise,
++            vec![42],
++            vec![42; 32],
++            vec![42; 4096],
++            Vec::new(),
++        ];
++        let key = b"k\0\xff";
++        let prefix = [9, 8];
++        let mut buffer = Vec::new();
++        for value in values {
++            for compression in [CompressionType::None, CompressionType::Lz4] {
++                let payload = match compression {
++                    CompressionType::None => value.clone(),
++                    CompressionType::Lz4 => lz4_flex::compress(&value),
++                };
++                let mut expected = prefix.to_vec();
++                expected.write_u8(Tag::Item.into())?;
++                expected.write_u8(ValueType::Value.into())?;
++                compression.encode_into(&mut expected)?;
++                expected.write_u64::<LittleEndian>(42)?;
++                expected.write_u16::<LittleEndian>(key.len() as u16)?;
++                expected.write_u32::<LittleEndian>(value.len() as u32)?;
++                expected.write_u32::<LittleEndian>(payload.len() as u32)?;
++                expected.extend_from_slice(key);
++                expected.extend_from_slice(&payload);
++
++                buffer.clear();
++                buffer.extend_from_slice(&prefix);
++                serialize_marker_item(&mut buffer, 42, key, &value, ValueType::Value, compression)?;
++                assert_eq!(buffer, expected);
++                let mut reader = &buffer[prefix.len()..];
++                assert_eq!(
++                    Entry::decode_from(&mut reader)?,
++                    Entry::Item {
++                        keyspace_id: 42,
++                        key: key.as_slice().into(),
++                        value: value.clone().into(),
++                        value_type: ValueType::Value,
++                        compression,
++                    }
++                );
++                assert!(reader.is_empty());
++            }
++        }
++        Ok(())
++    }
++
+     #[test]
+     fn test_serialize_and_deserialize_success() -> crate::Result<()> {
+         let item = Entry::Item {
+diff --git a/src/versioned/branch_tests.rs b/src/versioned/branch_tests.rs
+index 54d77b3..37ae951 100644
+--- a/src/versioned/branch_tests.rs
++++ b/src/versioned/branch_tests.rs
+@@ -560,6 +560,10 @@ fn branch_history_and_original_cdc_continue_together() -> crate::Result<()> {
+             Some(b"first".as_slice())
+         );
+         assert_eq!(child.snapshot()?.get("inherited")?, None);
++        assert_eq!(
++            child.read_at(first)?.get("inherited")?.as_deref(),
++            Some(b"parent".as_slice())
++        );
+         let mut feed = db.inner.journal_feed(Some(saved))?;
+         let batch = feed.next_batch()?.ok_or(crate::Error::Unrecoverable)?;
+         assert_eq!(batch.cursor, pending.cursor);
+@@ -580,6 +584,18 @@ fn branch_history_and_original_cdc_continue_together() -> crate::Result<()> {
+             batch.cursor.sequence.to_be_bytes(),
+         ]
+         .concat();
++        let head = child.info()?.head;
++        let journal = db.inner.journal_head()?;
++        let mut tx = child.write_tx()?;
++        tx.insert("output", input.clone());
++        tx.insert("consumed", encoded.clone());
++        tx.rollback();
++        assert_eq!(child.info()?.head, head);
++        assert_eq!(db.inner.journal_head()?, journal);
++        assert_eq!(child.snapshot()?.get("output")?, None);
++        assert_eq!(child.snapshot()?.get("consumed")?, None);
++        assert!(feed.next_batch()?.is_none());
++        assert_eq!(feed.cursor(), Some(pending.cursor));
+         let mut tx = child.write_tx()?;
+         tx.insert("output", input);
+         tx.insert("consumed", encoded.clone());
+@@ -652,6 +668,10 @@ fn branch_history_and_original_cdc_continue_together() -> crate::Result<()> {
+         )
+     );
+     assert_eq!(child.read_at(output.revision)?.get("inherited")?, None);
++    assert_eq!(
++        child.read_at(first)?.get("inherited")?.as_deref(),
++        Some(b"parent".as_slice())
++    );
+     assert_eq!(
+         db.branch("main")?.ok_or(crate::Error::Unrecoverable)?.id(),
+         replacement_id

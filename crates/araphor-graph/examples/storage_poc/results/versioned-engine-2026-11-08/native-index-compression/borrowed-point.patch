@@ -1,0 +1,211 @@
+diff --git a/src/table/block_index/full.rs b/src/table/block_index/full.rs
+index 992b429c..7ad01807 100644
+--- a/src/table/block_index/full.rs
++++ b/src/table/block_index/full.rs
+@@ -20,15 +20,6 @@ impl FullBlockIndex {
+         &self.0
+     }
+ 
+-    pub fn forward_reader(&self, needle: &[u8], seqno: SeqNo) -> Option<Iter> {
+-        let mut it = self.iter();
+-        if it.seek_lower(needle, seqno) {
+-            Some(it)
+-        } else {
+-            None
+-        }
+-    }
+-
+     pub fn iter(&self) -> Iter {
+         Iter(OwnedIndexBlockIter::new(self.0.clone(), IndexBlock::iter))
+     }
+diff --git a/src/table/block_index/mod.rs b/src/table/block_index/mod.rs
+index 4eb54b41..20b488d4 100644
+--- a/src/table/block_index/mod.rs
++++ b/src/table/block_index/mod.rs
+@@ -15,7 +15,6 @@ use super::KeyedBlockHandle;
+ use crate::SeqNo;
+ 
+ pub trait BlockIndex {
+-    fn forward_reader(&self, needle: &[u8], seqno: SeqNo) -> Option<BlockIndexIterImpl>;
+     fn iter(&self) -> BlockIndexIterImpl;
+ }
+ 
+@@ -95,32 +94,6 @@ pub enum BlockIndexImpl {
+ }
+ 
+ impl BlockIndex for BlockIndexImpl {
+-    fn forward_reader(&self, needle: &[u8], seqno: SeqNo) -> Option<BlockIndexIterImpl> {
+-        match self {
+-            Self::Full(index) => index
+-                .forward_reader(needle, seqno)
+-                .map(BlockIndexIterImpl::Full),
+-            Self::VolatileFull(index) => {
+-                let mut it = index.iter();
+-
+-                if it.seek_lower(needle, seqno) {
+-                    Some(BlockIndexIterImpl::Volatile(it))
+-                } else {
+-                    None
+-                }
+-            }
+-            Self::TwoLevel(index) => {
+-                let mut it = index.iter();
+-
+-                if it.seek_lower(needle, seqno) {
+-                    Some(BlockIndexIterImpl::TwoLevel(it))
+-                } else {
+-                    None
+-                }
+-            }
+-        }
+-    }
+-
+     fn iter(&self) -> BlockIndexIterImpl {
+         match self {
+             Self::Full(index) => BlockIndexIterImpl::Full(index.iter()),
+diff --git a/src/table/block_index/volatile.rs b/src/table/block_index/volatile.rs
+index db731c9b..538ba555 100644
+--- a/src/table/block_index/volatile.rs
++++ b/src/table/block_index/volatile.rs
+@@ -34,12 +34,6 @@ pub struct VolatileBlockIndex {
+ }
+ 
+ impl VolatileBlockIndex {
+-    pub fn forward_reader(&self, needle: &[u8], seqno: SeqNo) -> Iter {
+-        let mut iter = Iter::new(self);
+-        iter.seek_lower(needle, seqno);
+-        iter
+-    }
+-
+     pub fn iter(&self) -> Iter {
+         Iter::new(self)
+     }
+diff --git a/src/table/mod.rs b/src/table/mod.rs
+index ea9ceb85..083d851e 100644
+--- a/src/table/mod.rs
++++ b/src/table/mod.rs
+@@ -46,7 +46,7 @@ use iter::Iter;
+ use std::{
+     borrow::Cow,
+     fs::File,
+-    ops::{Bound, RangeBounds},
++    ops::{Bound, ControlFlow, RangeBounds},
+     path::PathBuf,
+     sync::Arc,
+ };
+@@ -315,28 +315,61 @@ impl Table {
+     // TODO: we would need to return something like ValueType + Value
+     // TODO: so the caller can decide whether to return the value or not
+     fn point_read(&self, key: &[u8], seqno: SeqNo) -> crate::Result<Option<InternalValue>> {
+-        let Some(iter) = self.block_index.forward_reader(key, seqno) else {
+-            return Ok(None);
++        let result = match self.block_index.as_ref() {
++            BlockIndexImpl::Full(index) => self.read_index(index.inner(), key, seqno)?,
++            BlockIndexImpl::VolatileFull(index) => {
++                let block = self.load_block(&index.handle, BlockType::Index, index.compression)?;
++                self.read_index(&IndexBlock::new(block), key, seqno)?
++            }
++            BlockIndexImpl::TwoLevel(index) => {
++                let mut iter = index.top_level_index.iter();
++                if !iter.seek(key, seqno) {
++                    return Ok(None);
++                }
++                for handle in iter {
++                    let handle = handle.materialize(index.top_level_index.as_slice());
++                    let block =
++                        self.load_block(handle.as_ref(), BlockType::Index, index.compression)?;
++                    if let ControlFlow::Break(item) =
++                        self.read_index(&IndexBlock::new(block), key, seqno)?
++                    {
++                        return Ok(item);
++                    }
++                }
++                return Ok(None);
++            }
+         };
++        Ok(result.break_value().flatten())
++    }
+ 
+-        for block_handle in iter {
+-            let block_handle = block_handle?;
++    fn read_index(
++        &self,
++        index: &IndexBlock,
++        key: &[u8],
++        seqno: SeqNo,
++    ) -> crate::Result<ControlFlow<Option<InternalValue>>> {
++        let mut iter = index.iter();
++        if !iter.seek(key, seqno) {
++            return Ok(ControlFlow::Break(None));
++        }
+ 
++        for block_handle in iter {
++            let block_handle = block_handle.materialize(index.as_slice());
+             let block = self.load_data_block(block_handle.as_ref())?;
+ 
+             if let Some(mut item) = block.point_read(key, seqno) {
+                 item.key.seqno += self.global_seqno();
+-                return Ok(Some(item));
++                return Ok(ControlFlow::Break(Some(item)));
+             }
+ 
+             // NOTE: If the last block key is higher than ours,
+             // our key cannot be in the next block
+             if block_handle.end_key() > &key {
+-                return Ok(None);
++                return Ok(ControlFlow::Break(None));
+             }
+         }
+ 
+-        Ok(None)
++        Ok(ControlFlow::Continue(()))
+     }
+ 
+     /// Creates a scanner over the `Table`.
+diff --git a/src/table/tests.rs b/src/table/tests.rs
+index 5556fb90..5b1e85de 100644
+--- a/src/table/tests.rs
++++ b/src/table/tests.rs
+@@ -481,12 +481,16 @@ fn table_point_read_mvcc_block_boundary() -> crate::Result<()> {
+         crate::InternalValue::from_components(b"a", b"3", 3, crate::ValueType::Value),
+         crate::InternalValue::from_components(b"a", b"2", 2, crate::ValueType::Value),
+         crate::InternalValue::from_components(b"a", b"1", 1, crate::ValueType::Value),
++        crate::InternalValue::from_components(b"b", [], 5, crate::ValueType::Value),
++        crate::InternalValue::new_tombstone(b"b", 4),
++        crate::InternalValue::new_weak_tombstone(b"b", 3),
++        crate::InternalValue::from_components(b"b", b"2", 2, crate::ValueType::Value),
+     ];
+ 
+     test_with_table(
+         &items,
+         |table| {
+-            assert_eq!(2, table.metadata.data_block_count);
++            assert_eq!(3, table.metadata.data_block_count);
+ 
+             let key_hash = BloomBuilder::get_hash(b"a");
+ 
+@@ -498,6 +502,24 @@ fn table_point_read_mvcc_block_boundary() -> crate::Result<()> {
+             assert_eq!(b"3", &*table.get(b"a", 4, key_hash)?.unwrap().value);
+             assert_eq!(b"2", &*table.get(b"a", 3, key_hash)?.unwrap().value);
+             assert_eq!(b"1", &*table.get(b"a", 2, key_hash)?.unwrap().value);
++            assert!(table.get(b"a", 1, key_hash)?.is_none());
++            assert!(table.get(b"a", 0, key_hash)?.is_none());
++
++            let key_hash = BloomBuilder::get_hash(b"b");
++            assert!(table.get(b"b", 6, key_hash)?.unwrap().value.is_empty());
++            assert_eq!(
++                table.get(b"b", 5, key_hash)?.unwrap().key.value_type,
++                crate::ValueType::Tombstone
++            );
++            assert_eq!(
++                table.get(b"b", 4, key_hash)?.unwrap().key.value_type,
++                crate::ValueType::WeakTombstone
++            );
++            assert_eq!(b"2", &*table.get(b"b", 3, key_hash)?.unwrap().value);
++            assert!(table.get(b"b", 2, key_hash)?.is_none());
++            assert!(table
++                .get(b"z", SeqNo::MAX, BloomBuilder::get_hash(b"z"))?
++                .is_none());
+ 
+             Ok(())
+         },

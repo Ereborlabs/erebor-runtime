@@ -1,0 +1,273 @@
+    Blocking waiting for file lock on build directory
+    Checking lsm-tree v3.1.10 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree)
+warning: field `tree_type` is never read
+  --> src/manifest.rs:11:9
+   |
+ 9 | pub struct Manifest {
+   |            -------- field in this struct
+10 |     pub version: FormatVersion,
+11 |     pub tree_type: TreeType,
+   |         ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `Indexed` is never constructed
+  --> src/version/run.rs:15:12
+   |
+15 | pub struct Indexed<T: Ranged> {
+   |            ^^^^^^^
+
+warning: this function has too many lines (115/100)
+   --> src/blob_tree/mod.rs:368:5
+    |
+368 | /     fn flush_to_tables(
+369 | |         &self,
+370 | |         stream: impl Iterator<Item = crate::Result<InternalValue>>,
+371 | |     ) -> crate::Result<Option<(Vec<Table>, Option<Vec<BlobFile>>)>> {
+    | |___________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_lines
+note: the lint level is defined here
+   --> src/lib.rs:40:9
+    |
+ 40 | #![warn(clippy::pedantic, clippy::nursery)]
+    |         ^^^^^^^^^^^^^^^^
+    = note: `#[warn(clippy::too_many_lines)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: used `expect()` on an `Option` value
+   --> src/compaction/leveled/mod.rs:282:22
+    |
+282 |             let l0 = version.level(0).expect("first level should exist");
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is `None`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+note: the lint level is defined here
+   --> src/lib.rs:41:9
+    |
+ 41 | #![warn(clippy::expect_used)]
+    |         ^^^^^^^^^^^^^^^^^^^
+
+warning: used `expect()` on an `Option` value
+   --> src/compaction/leveled/mod.rs:288:33
+    |
+288 |                     .any(|idx| !version.level(idx).expect("level should exist").is_empty())
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is `None`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on an `Option` value
+   --> src/compaction/leveled/mod.rs:294:28
+    |
+294 |                 let lmax = version.level(lmax_index).expect("last level should exist");
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is `None`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: casting `usize` to `u8` may truncate the value
+   --> src/compaction/leveled/mod.rs:302:37
+    |
+302 |                         dest_level: lmax_index as u8,
+    |                                     ^^^^^^^^^^^^^^^^
+    |
+    = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cast_possible_truncation
+    = note: `#[warn(clippy::cast_possible_truncation)]` implied by `#[warn(clippy::pedantic)]`
+help: ... or use `try_from` and handle the error accordingly
+    |
+302 -                         dest_level: lmax_index as u8,
+302 +                         dest_level: u8::try_from(lmax_index),
+    |
+
+warning: this function has too many lines (104/100)
+   --> src/range.rs:115:5
+    |
+115 | /     fn create_filtered<K: AsRef<[u8]>, R: RangeBounds<K>>(
+116 | |         guard: IterState,
+117 | |         range: R,
+118 | |         seqno: SeqNo,
+119 | |         deletions: bool,
+120 | |     ) -> Self {
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_lines
+
+warning: casting `f32` to `usize` may truncate the value
+  --> src/table/filter/mod.rs:55:38
+   |
+55 |             Self::BitsPerKey(bpk) => (*bpk * (n as f32)) as usize / 8,
+   |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cast_possible_truncation
+
+warning: casting `f32` to `usize` may lose the sign of the value
+  --> src/table/filter/mod.rs:55:38
+   |
+55 |             Self::BitsPerKey(bpk) => (*bpk * (n as f32)) as usize / 8,
+   |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cast_sign_loss
+   = note: `#[warn(clippy::cast_sign_loss)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: casting `f32` to `usize` may truncate the value
+  --> src/table/filter/mod.rs:59:17
+   |
+59 |                 (bpk * (n as f32)) as usize / 8
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cast_possible_truncation
+
+warning: casting `f32` to `usize` may lose the sign of the value
+  --> src/table/filter/mod.rs:59:17
+   |
+59 |                 (bpk * (n as f32)) as usize / 8
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cast_sign_loss
+
+warning: this method could have a `#[must_use]` attribute
+   --> src/table/mod.rs:412:12
+    |
+412 |     pub fn iter(&self) -> impl DoubleEndedIterator<Item = crate::Result<InternalValue>> {
+    |            ^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#must_use_candidate
+    = note: `#[warn(clippy::must_use_candidate)]` implied by `#[warn(clippy::pedantic)]`
+help: add the attribute
+    |
+412 ~     #[must_use]
+413 ~     pub fn iter(&self) -> impl DoubleEndedIterator<Item = crate::Result<InternalValue>> {
+    |
+
+warning: this function has too many arguments (8/7)
+   --> src/table/mod.rs:480:5
+    |
+480 | /     pub fn recover(
+481 | |         file_path: PathBuf,
+482 | |         checksum: Checksum,
+483 | |         global_seqno: SeqNo,
+...   |
+489 | |         #[cfg(feature = "metrics")] metrics: Arc<Metrics>,
+490 | |     ) -> crate::Result<Self> {
+    | |____________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+    = note: TODO: refactor
+note: the lint level is defined here
+   --> src/table/mod.rs:476:9
+    |
+476 |         clippy::too_many_arguments,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this function has too many lines (113/100)
+   --> src/table/mod.rs:480:5
+    |
+480 | /     pub fn recover(
+481 | |         file_path: PathBuf,
+482 | |         checksum: Checksum,
+483 | |         global_seqno: SeqNo,
+...   |
+489 | |         #[cfg(feature = "metrics")] metrics: Arc<Metrics>,
+490 | |     ) -> crate::Result<Self> {
+    | |____________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_lines
+    = note: TODO: refactor
+note: the lint level is defined here
+   --> src/table/mod.rs:477:9
+    |
+477 |         clippy::too_many_lines,
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this argument (8 byte) is passed by reference, but would be more efficient if passed by value (limit: 8 byte)
+  --> src/tree/sealed.rs:38:32
+   |
+38 |     pub fn contains(&self, id: &MemtableId) -> bool {
+   |                                ^^^^^^^^^^^ help: consider passing by value instead: `MemtableId`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#trivially_copy_pass_by_ref
+   = note: `#[warn(clippy::trivially_copy_pass_by_ref)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: this method could have a `#[must_use]` attribute
+   --> src/tree/mod.rs:882:12
+    |
+882 |     pub fn create_iter(
+    |            ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#must_use_candidate
+help: add the attribute
+    |
+882 ~     #[must_use]
+883 ~     pub fn create_iter(
+    |
+
+warning: this function has too many lines (109/100)
+    --> src/tree/mod.rs:1040:5
+     |
+1040 | /     fn recover_levels<P: AsRef<Path>>(
+1041 | |         tree_path: P,
+1042 | |         tree_id: TreeId,
+1043 | |         config: &Config,
+1044 | |         #[cfg(feature = "metrics")] metrics: &Arc<Metrics>,
+1045 | |     ) -> crate::Result<Version> {
+     | |_______________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_lines
+
+warning: used `expect()` on an `Option` value
+   --> src/version/run.rs:141:13
+    |
+141 |             s.get(start..end).expect("should be in range")
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is `None`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+  --> src/vlog/blob_file/reader.rs:37:13
+   |
+37 |             (u64::from(vhandle.on_disk_size) + add_size) as usize,
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cast_possible_truncation
+help: ... or use `try_from` and handle the error accordingly
+   |
+37 -             (u64::from(vhandle.on_disk_size) + add_size) as usize,
+37 +             usize::try_from(u64::from(vhandle.on_disk_size) + add_size),
+   |
+
+warning: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+  --> src/vlog/blob_file/reader.rs:60:36
+   |
+60 |         let raw_data = value.slice((add_size as usize)..);
+   |                                    ^^^^^^^^^^^^^^^^^^^
+   |
+   = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cast_possible_truncation
+help: ... or use `try_from` and handle the error accordingly
+   |
+60 -         let raw_data = value.slice((add_size as usize)..);
+60 +         let raw_data = value.slice(usize::try_from(add_size)..);
+   |
+
+warning: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+  --> src/vlog/mod.rs:96:21
+   |
+96 |                     metadata_section.len() as usize,
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#cast_possible_truncation
+help: ... or use `try_from` and handle the error accordingly
+   |
+96 -                     metadata_section.len() as usize,
+96 +                     usize::try_from(metadata_section.len()),
+   |
+
+warning: `lsm-tree` (lib) generated 22 warnings (run `cargo clippy --fix --lib -p lsm-tree -- ` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.39s

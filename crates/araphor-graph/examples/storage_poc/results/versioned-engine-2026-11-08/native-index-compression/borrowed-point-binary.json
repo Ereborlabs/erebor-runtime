@@ -1,0 +1,8 @@
+{
+  "root_commit": "48de7944054d6b6deb024e2b7e28374a6f429a47",
+  "fjall_commit": "8cb06c850b8071fc290cc0406242ced5dbc0638c",
+  "lsm_tree_commit": "29549fd786f311acdd03f09d1844253e0014739c",
+  "binary_sha256": "4a2145606ee2b47de2ee8160a209eb6e0fcc2f49d1de8a9dfe3ea06f43aa6985",
+  "binary": "output/storage-engine-baseline-20261108/versioned-borrowed-point",
+  "source_label": "48de79440+borrowed-point"
+}

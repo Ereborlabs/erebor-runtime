@@ -1,0 +1,65 @@
+{
+  "summaries_reproduced": [
+    "borrowed-before-combined-0",
+    "borrowed-before-combined-1",
+    "borrowed-after-combined-0",
+    "borrowed-after-combined-1",
+    "compression-before-combined-0",
+    "compression-before-combined-1",
+    "compression-after-combined-0",
+    "compression-after-combined-1",
+    "current-before-combined-0",
+    "current-before-combined-1",
+    "current-after-combined-0",
+    "current-after-combined-1",
+    "borrowed-before-stable-0",
+    "borrowed-before-stable-1",
+    "borrowed-after-stable-0",
+    "borrowed-after-stable-1",
+    "compression-before-stable-0",
+    "compression-before-stable-1",
+    "compression-after-stable-0",
+    "compression-after-stable-1",
+    "current-before-stable-0",
+    "current-before-stable-1",
+    "current-after-stable-0",
+    "current-after-stable-1"
+  ],
+  "binary_hashes_verified": [
+    {
+      "manifest": "results/versioned-engine-2026-11-08/native-index-compression/borrowed-point-binary.json",
+      "binary": "output/storage-engine-baseline-20261108/versioned-borrowed-point",
+      "sha256": "4a2145606ee2b47de2ee8160a209eb6e0fcc2f49d1de8a9dfe3ea06f43aa6985"
+    },
+    {
+      "manifest": "results/versioned-engine-2026-11-08/native-index-compression/direct-compression-binary.json",
+      "binary": "output/storage-engine-baseline-20261108/versioned-direct-compression",
+      "sha256": "77c594162d48bc7d7c747a51f757cbd0dc024244bcaec97a26f6cf329c6c3fb2"
+    },
+    {
+      "manifest": "results/versioned-engine-2026-11-08/control.json",
+      "binary": "output/storage-engine-baseline-20261108/control",
+      "sha256": "953f7fd0f4189f50779838026de82505346090d2940b36707636dd6583ab99a8"
+    },
+    {
+      "manifest": "results/versioned-engine-2026-11-08/reader-position/binary.json",
+      "binary": "output/storage-engine-baseline-20261108/versioned-reader-position",
+      "sha256": "c34c9d5381733151e0e52e1b40a853a120dca3ba5e88e534e15bbf5cbd1044eb"
+    }
+  ],
+  "fjall": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "lsm_tree": "29549fd786f311acdd03f09d1844253e0014739c",
+  "cdc_library_passed": 125,
+  "feature_off_library_passed": 84,
+  "fjall_existing_ignored_each": 1,
+  "native_default_library_passed": 241,
+  "native_lz4_library_passed": 244,
+  "native_existing_ignored_each": 2,
+  "read_view_passed_each": 3,
+  "retained_history_passed_each": 3,
+  "no_default_production_check": "passed",
+  "library_clippy": "passed with existing warnings",
+  "format": "passed",
+  "full_workspace_ci": "not run during iteration",
+  "performance": "Not done"
+}

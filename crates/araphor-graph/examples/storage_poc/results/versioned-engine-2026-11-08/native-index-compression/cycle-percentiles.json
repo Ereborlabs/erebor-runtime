@@ -1,0 +1,125 @@
+{
+  "unit": "milliseconds",
+  "engine": "fjall-stable",
+  "selection": "ordinary cycles; restart excluded",
+  "p95_method": "nearest rank: sorted values[ceil(0.95*n)-1]",
+  "reports": [
+    {
+      "report": "results/combined-2026-11-08/release.json",
+      "source": "beea72d9d08acaf16a6c5df26a930c1e6eb29519",
+      "samples": 28,
+      "minimum": 3.4252179999999997,
+      "median": 4.370082,
+      "p95": 8.600200000000001,
+      "maximum": 8.717326
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/borrowed-after-combined-0.json",
+      "source": "48de79440+borrowed-point",
+      "samples": 28,
+      "minimum": 3.785248,
+      "median": 5.3248185,
+      "p95": 9.367611,
+      "maximum": 10.108569
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/borrowed-after-combined-1.json",
+      "source": "48de79440+borrowed-point",
+      "samples": 28,
+      "minimum": 4.057494,
+      "median": 5.281063,
+      "p95": 9.239031,
+      "maximum": 9.801262999999999
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/borrowed-before-combined-0.json",
+      "source": "ad577e55b+reader-position",
+      "samples": 28,
+      "minimum": 3.9319869999999995,
+      "median": 6.000509,
+      "p95": 9.931519,
+      "maximum": 10.462390000000001
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/borrowed-before-combined-1.json",
+      "source": "ad577e55b+reader-position",
+      "samples": 28,
+      "minimum": 4.109596,
+      "median": 5.64564,
+      "p95": 10.61318,
+      "maximum": 12.117446000000001
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/compression-after-combined-0.json",
+      "source": "48de79440+direct-compression",
+      "samples": 28,
+      "minimum": 2.961353,
+      "median": 4.8269015,
+      "p95": 7.673467,
+      "maximum": 8.595119
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/compression-after-combined-1.json",
+      "source": "48de79440+direct-compression",
+      "samples": 28,
+      "minimum": 3.293667,
+      "median": 4.4761475,
+      "p95": 7.097469,
+      "maximum": 7.148664
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/compression-before-combined-0.json",
+      "source": "48de79440+borrowed-point",
+      "samples": 28,
+      "minimum": 3.299325,
+      "median": 4.6223305,
+      "p95": 8.472683,
+      "maximum": 8.578078
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/compression-before-combined-1.json",
+      "source": "48de79440+borrowed-point",
+      "samples": 28,
+      "minimum": 3.0927279999999997,
+      "median": 4.7668,
+      "p95": 7.53783,
+      "maximum": 7.833826
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/current-after-combined-0.json",
+      "source": "48de79440+direct-compression",
+      "samples": 28,
+      "minimum": 3.116186,
+      "median": 4.8358965000000005,
+      "p95": 6.968868,
+      "maximum": 7.039479
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/current-after-combined-1.json",
+      "source": "48de79440+direct-compression",
+      "samples": 28,
+      "minimum": 3.036146,
+      "median": 4.550692,
+      "p95": 7.415862,
+      "maximum": 7.868655
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/current-before-combined-0.json",
+      "source": "477f47338",
+      "samples": 28,
+      "minimum": 3.2446279999999996,
+      "median": 4.333201000000001,
+      "p95": 8.050317,
+      "maximum": 8.231909
+    },
+    {
+      "report": "results/versioned-engine-2026-11-08/native-index-compression/current-before-combined-1.json",
+      "source": "477f47338",
+      "samples": 28,
+      "minimum": 3.489916,
+      "median": 4.433809,
+      "p95": 7.444636999999999,
+      "maximum": 7.583555
+    }
+  ]
+}

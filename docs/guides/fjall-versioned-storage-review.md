@@ -95,6 +95,14 @@ blob trees.
 The method rejects a different user key before it clones the selected entry.
 It no longer creates a range iterator for that single entry.
 
+[Table::point_read and Table::read_index](../../lsm-tree/src/table/mod.rs)
+borrow native index blocks during point reads. Full, volatile, and two-level
+indexes keep their sequence-aware search, block cache, and error behavior.
+An exhausted child index permits the next two-level child. An exact value,
+deletion, or terminal miss stops the search. Lazy range iterators retain their
+owned index state. The native table checks cover block boundaries, old cuts,
+empty values, strong and weak deletions, and missing keys.
+
 [BranchIterator](../../fjall/src/versioned/scan.rs) holds one native scan directly
 when the branch has one source. Multiple sources retain the existing ordered
 merge and lookahead buffers. Both cases keep the snapshot and use the same
@@ -110,6 +118,16 @@ same underlying file. The buffered reader stays private so callers cannot
 change its file offset outside this owner. The focused
 `positions_survive_buffering_and_partial_tail` case checks large direct reads,
 buffered headers, empty values, nonzero resume, and partial-tail recovery.
+
+[serialize_marker_item](../../fjall/src/journal/entry.rs) compresses items into
+the journal writer's existing byte buffer. The temporary compressed vector
+and its copy are removed. The codec, threshold, and stored bytes remain.
+The `compressed_items_keep_original_bytes` case compares both codecs against
+the previous encoding with empty, repeated, and incompressible values.
+The generic entry encoder keeps its `Write` interface and uses a local vector
+for Item encoding. Production item writes reuse the writer buffer directly.
+That buffer can retain the largest uncompressed compression bound until
+journal rotation. Highly compressible values can increase retained memory.
 
 ## Commit and change flow
 
@@ -197,15 +215,15 @@ cargo test --manifest-path lsm-tree/Cargo.toml --lib --test read_view --test ret
 cargo test --manifest-path lsm-tree/Cargo.toml --features lz4 --lib --test read_view --test retained_history --locked --offline
 ```
 
-Fjall `8cb06c8` passes 124 CDC library cases and 83 cases without CDC, with one
+Fjall `42be11f` passes 125 CDC library cases and 84 cases without CDC, with one
 existing ignored case in each run. The production check without default
 features, library clippy, and formatting pass. Library clippy reports existing
 warnings. The earlier broader clippy run at `66d821e`, with `--tests`, fails on
-65 existing test lints. That command was not repeated at `8cb06c8`.
+65 existing test lints. That command was not repeated at `42be11f`.
 The existing no-default-features test error remains in `keyspace/options.rs`;
 the production check does not prove that test configuration.
 
-`lsm-tree` `4aeaf8d4` passes 241 default library cases and 244 LZ4 library cases,
+`lsm-tree` `29549fd7` passes 241 default library cases and 244 LZ4 library cases,
 with two existing ignored cases in each run. Three read-view and three history
 cases pass in each configuration. The [retained result directory](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/)
 records source IDs, locks, frozen comparisons, and raw reports. Local frozen
@@ -218,6 +236,21 @@ Fjall `8cb06c8` adds native byte-position accounting. The
 [retained comparison](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/reader-position/README.md)
 separates the reader change, disk cleanup, and traced diagnostics. The complete
 performance target remains unmet.
+
+Fjall `f2034d0` adds rollback and pre-creation historical-read assertions to the
+same combined lifecycle case. Actual output and its consumed cursor are staged
+and rolled back before the successful commit. The case checks unchanged head,
+journal, output, and progress. Both reopen stages check the inherited parent
+value at the retained cut before child creation.
+
+`lsm-tree` `29549fd7` adds borrowed point-index ownership. Fjall `42be11f` adds
+direct journal compression. The [retained comparisons](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/native-index-compression/README.md)
+contain all 24 reports and reproduced summaries, source patches, binary hashes,
+and ordinary-cycle percentiles. Current combined medians are 4.836 and
+4.551 ms; maxima are 7.039 and 7.869 ms. Stable medians are 26.240 and
+25.748 ms. Both combined medians exceed their target. Complete performance
+qualification remains **Not done**. The cause of earlier higher maxima is not
+established.
 
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this
