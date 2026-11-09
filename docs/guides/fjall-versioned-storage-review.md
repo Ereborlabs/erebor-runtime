@@ -136,6 +136,14 @@ for Item encoding. Production item writes reuse the writer buffer directly.
 That buffer can retain the largest uncompressed compression bound until
 journal rotation. Highly compressible values can increase retained memory.
 
+[ChecksumRead::read_exact](../../fjall/src/journal/reader.rs) uses bytes already
+in the native `BufReader` when they cover the complete request. It copies and
+hashes the exact wire bytes before consumption. Other requests use the
+standard `Take` read loop through the existing checksum `read` method.
+This preserves partial-read hashing, interruption retries, and error behavior.
+The `checksum_exact_reads_keep_errors` test also checks empty requests before
+and after errors. The reader lifetime and captured durable boundary remain.
+
 ## Commit and change flow
 
 ```mermaid
@@ -290,6 +298,17 @@ changes no standalone native or query-method code bytes. Both drafts pass
 their focused correctness checks and are removed. Metrics library clippy
 fails on the existing eight-argument `Iter::new`; default library clippy passes.
 Accepted engine commits remain unchanged.
+
+Current accepted source is Fjall `f72bd21` and `lsm-tree` `aed3e47a`. The
+[buffered-checksum evidence](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/checksum-buffered/README.md)
+records 9.085% fewer native feed instructions for identical work across both
+layouts and all workers. All 126 CDC and 85 non-CDC library cases pass, with
+one existing ignored case in each run. Production without default features,
+library clippy, formatting, and the release PoC build pass. Combined medians
+are 4.448 and 4.419 ms; both exceed their target. Stable medians are 25.663 and
+25.879 ms. No sustained latency gain is proved. Earlier records above describe
+their recorded source states. The whole-cycle CPU attempt is excluded because
+its reset function was inlined in one executable.
 
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this

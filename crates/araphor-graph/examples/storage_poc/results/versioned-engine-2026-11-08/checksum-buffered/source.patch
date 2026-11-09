@@ -1,0 +1,142 @@
+diff --git a/src/journal/reader.rs b/src/journal/reader.rs
+index 3494729..f47d849 100644
+--- a/src/journal/reader.rs
++++ b/src/journal/reader.rs
+@@ -6,7 +6,7 @@ use super::entry::{Entry, Tag};
+ use byteorder::ReadBytesExt;
+ use std::{
+     fs::{File, OpenOptions},
+-    io::{BufReader, Read, Take},
++    io::{BufRead, BufReader, Read, Take},
+     path::{Path, PathBuf},
+ };
+ 
+@@ -25,7 +25,7 @@ pub struct JournalReader {
+ }
+ 
+ struct ChecksumRead<'a, R> {
+-    reader: &'a mut R,
++    reader: &'a mut BufReader<R>,
+     checksum: &'a mut xxhash_rust::xxh3::Xxh3,
+ }
+ 
+@@ -39,6 +39,18 @@ impl<R: Read> Read for ChecksumRead<'_, R> {
+         self.checksum.update(&buffer[..count]);
+         Ok(count)
+     }
++
++    fn read_exact(&mut self, buffer: &mut [u8]) -> std::io::Result<()> {
++        if let Some(bytes) = self.reader.buffer().get(..buffer.len()) {
++            buffer.copy_from_slice(bytes);
++            self.checksum.update(bytes);
++            self.reader.consume(buffer.len());
++            Ok(())
++        } else {
++            // Keep checksum updates for partial reads in the standard loop.
++            self.take(buffer.len() as u64).read_exact(buffer)
++        }
++    }
+ }
+ 
+ impl JournalReader {
+@@ -147,15 +159,96 @@ impl Iterator for JournalReader {
+     }
+ }
+ 
+-#[cfg(all(test, feature = "journal-cdc"))]
++#[cfg(test)]
+ mod tests {
+     use super::*;
+-    use crate::journal::entry::Tag;
+-    use lsm_tree::{CompressionType, ValueType};
+-    use std::io::Write;
+ 
+     #[test]
++    #[expect(clippy::indexing_slicing)]
++    fn checksum_exact_reads_keep_errors() -> crate::Result<()> {
++        use std::{hash::Hasher, io::ErrorKind};
++
++        struct FaultRead<'a> {
++            bytes: &'a [u8],
++            failure: Option<ErrorKind>,
++            interrupt: bool,
++            calls: usize,
++        }
++        impl Read for FaultRead<'_> {
++            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
++                self.calls += 1;
++                if std::mem::take(&mut self.interrupt) {
++                    return Err(ErrorKind::Interrupted.into());
++                }
++                if self.bytes.is_empty() {
++                    return self.failure.map_or(Ok(0), |kind| Err(kind.into()));
++                }
++                let count = buffer.len().min(self.bytes.len()).min(11);
++                buffer[..count].copy_from_slice(&self.bytes[..count]);
++                self.bytes = &self.bytes[count..];
++                Ok(count)
++            }
++        }
++
++        let data: Vec<_> = (0..=255).cycle().take(512).collect();
++        for (bytes, failure) in [
++            (data.as_slice(), None),
++            (&data[..19], Some(ErrorKind::PermissionDenied)),
++        ] {
++            for capacity in [1, 7, 64] {
++                let mut reader = BufReader::with_capacity(
++                    capacity,
++                    FaultRead {
++                        bytes,
++                        failure,
++                        interrupt: true,
++                        calls: 0,
++                    },
++                );
++                let mut checksum = xxhash_rust::xxh3::Xxh3::default();
++                let mut input = ChecksumRead {
++                    reader: &mut reader,
++                    checksum: &mut checksum,
++                };
++                input.read_exact(&mut [])?;
++                assert_eq!(input.reader.get_ref().calls, 0);
++                let mut consumed = 0;
++                let mut failed = false;
++                for size in [1, 7, 16, 3, 257, 0, 31, 512] {
++                    let mut buffer = vec![0; size];
++                    let result = input.read_exact(&mut buffer);
++                    let end = (consumed + size).min(bytes.len());
++                    let mut expected = xxhash_rust::xxh3::Xxh3::default();
++                    expected.update(&bytes[..end]);
++                    assert_eq!(input.checksum.finish(), expected.finish());
++                    if let Err(error) = result {
++                        assert_eq!(error.kind(), failure.unwrap_or(ErrorKind::UnexpectedEof));
++                        assert_eq!(end, bytes.len());
++                        failed = true;
++                        break;
++                    }
++                    assert_eq!(buffer, bytes[consumed..end]);
++                    consumed = end;
++                }
++                assert!(failed);
++                assert!(!input.reader.get_ref().interrupt);
++                let calls = input.reader.get_ref().calls;
++                let digest = input.checksum.finish();
++                input.read_exact(&mut [])?;
++                assert_eq!(input.reader.get_ref().calls, calls);
++                assert_eq!(input.checksum.finish(), digest);
++            }
++        }
++        Ok(())
++    }
++
++    #[test]
++    #[cfg(feature = "journal-cdc")]
+     fn positions_survive_buffering_and_partial_tail() -> crate::Result<()> {
++        use crate::journal::entry::Tag;
++        use lsm_tree::{CompressionType, ValueType};
++        use std::io::Write;
++
+         let dir = tempfile::tempdir()?;
+         let path = dir.path().join("0.jnl");
+         let entries = [

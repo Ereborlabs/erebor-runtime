@@ -1,0 +1,38 @@
+{
+  "root_commit": "e62700a198452dfb254f49aa21ce3d47dae262c2",
+  "fjall_base": "42be11fb5038fc7b5a639f7ef0c38ec050a9ca4c",
+  "lsm_tree_commit": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "fjall_patch": "checksum-buffered.patch",
+  "patch_sha256": "4ad420c7b270fbb26e675cda065096f4c8673786faec8437174f1b62ea7581ef",
+  "binary": "output/storage-engine-baseline-20261108/versioned-checksum-buffered",
+  "binary_sha256": "69847bb15f668eec5a53c0b00b16ce3f23c31b895429bcae0f029dd39aaefc4b",
+  "before_binary": "output/storage-engine-baseline-20261108/versioned-inline-parser",
+  "before_binary_sha256": "0cad41c8fba195f62e32f5b9f0833a41592391c7eaaa0e3b43593d1b8bf4fe47",
+  "source_label": "e62700a19+checksum-buffered",
+  "build_command": [
+    "cargo",
+    "build",
+    "--release",
+    "--manifest-path",
+    "crates/araphor-graph/examples/storage_poc/neon-bench/Cargo.toml",
+    "--config",
+    "/tmp/araphor-storage-release-override.toml",
+    "--offline"
+  ],
+  "build_environment": {
+    "CARGO_TARGET_DIR": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "4",
+    "POC_SOURCE_REVISION": "e62700a19+checksum-buffered"
+  },
+  "before_bytes": 88445352,
+  "after_bytes": 88445504,
+  "before_sections": {
+    ".rodata": 2582256,
+    ".text": 50340528
+  },
+  "after_sections": {
+    ".rodata": 2582320,
+    ".text": 50341104
+  }
+}

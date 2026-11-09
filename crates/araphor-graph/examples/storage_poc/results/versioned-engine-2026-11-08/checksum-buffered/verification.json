@@ -1,0 +1,123 @@
+{
+  "accepted": true,
+  "fjall_commit": "f72bd21a2e75491bb36420fb03bead2cbe9cd153",
+  "lsm_tree_commit": "aed3e47abec1257a7f3680be669bcee684d7c211",
+  "decision": "Accept measured native feed CPU reduction; complete performance remains Not done.",
+  "summary_checks": [
+    "checksum-before-combined-0.json",
+    "checksum-after-combined-0.json",
+    "checksum-before-combined-1.json",
+    "checksum-after-combined-1.json",
+    "checksum-before-stable-0.json",
+    "checksum-after-stable-0.json",
+    "checksum-before-stable-1.json",
+    "checksum-after-stable-1.json",
+    "control-cdc-combined.json",
+    "inline-cdc-combined.json",
+    "checksum-cdc-combined.json"
+  ],
+  "ordinary_percentiles_ms": [
+    {
+      "report": "checksum-before-combined-0.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 3.6917880000000003,
+      "median": 4.467001999999999,
+      "p95": 6.852007,
+      "maximum": 6.86011
+    },
+    {
+      "report": "checksum-after-combined-0.json",
+      "source": "e62700a19+checksum-buffered",
+      "samples": 28,
+      "minimum": 3.1356349999999997,
+      "median": 4.4477955,
+      "p95": 7.256603999999999,
+      "maximum": 7.308008
+    },
+    {
+      "report": "checksum-before-combined-1.json",
+      "source": "8fb48dccb+inline-parser",
+      "samples": 28,
+      "minimum": 3.5750119999999996,
+      "median": 4.6618965,
+      "p95": 7.022004,
+      "maximum": 7.204711
+    },
+    {
+      "report": "checksum-after-combined-1.json",
+      "source": "e62700a19+checksum-buffered",
+      "samples": 28,
+      "minimum": 3.193464,
+      "median": 4.418776,
+      "p95": 6.945597,
+      "maximum": 7.056715
+    }
+  ],
+  "stable_eight_cycle_ms": {
+    "checksum-before-stable-0.json": {
+      "rounds": [
+        26.926679000000004,
+        25.126288,
+        24.582287,
+        25.741248000000002
+      ],
+      "median": 25.433768,
+      "max": 26.926679000000004
+    },
+    "checksum-after-stable-0.json": {
+      "rounds": [
+        26.132924000000003,
+        24.536261,
+        25.192638,
+        26.380306
+      ],
+      "median": 25.662781000000003,
+      "max": 26.380306
+    },
+    "checksum-before-stable-1.json": {
+      "rounds": [
+        26.769464,
+        23.342099,
+        25.70996,
+        25.582147
+      ],
+      "median": 25.6460535,
+      "max": 26.769464
+    },
+    "checksum-after-stable-1.json": {
+      "rounds": [
+        25.277149,
+        25.236010999999998,
+        26.4799,
+        27.294748000000002
+      ],
+      "median": 25.8785245,
+      "max": 27.294748000000002
+    }
+  },
+  "non_timing_reports_match": true,
+  "p95_method": "Nearest rank; sample27 of28; restart separate.",
+  "full_workspace_ci": "Not run during iteration, as the user requires.",
+  "native_feed_diagnostic": {
+    "scope": "Complete combined driver, all worker threads and both layouts; profiled timings excluded.",
+    "before_instructions": 61885118,
+    "after_instructions": 56262749,
+    "instruction_change_percent": -9.085171333114372,
+    "equal_work": {
+      "feed_calls": 216,
+      "native_batches": 216,
+      "native_items": 14264,
+      "journal_bytes": 3046976,
+      "source_wakes": 64,
+      "graph_wakes": 64
+    },
+    "raw_headers_exclusive_and_feed_inclusive_equal": true,
+    "main_thread_instructions": 0
+  },
+  "all_patch_and_binary_hashes_verified": true,
+  "archive_sha256": "4381a0b08dbb7b80d03f9738a5e56a5588655cfffafd3e402141de85d4b009e6",
+  "archive_members": 70,
+  "archive_members_verified": true,
+  "review": "Independent source and raw evidence review passed before acceptance."
+}
