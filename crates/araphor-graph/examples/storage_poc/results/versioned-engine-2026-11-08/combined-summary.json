@@ -1,0 +1,344 @@
+{
+  "source": "477f47338",
+  "mode": "combined",
+  "engines": {
+    "fjall": {
+      "ordinary_samples": 28,
+      "ordinary_ms": {
+        "source_commit": {
+          "median": 0.5927644999999999,
+          "max": 1.175611
+        },
+        "source_cdc_read": {
+          "median": 0.0360395,
+          "max": 0.120201
+        },
+        "source_wake": {
+          "median": 0.6412715000000001,
+          "max": 1.212489
+        },
+        "capture": {
+          "median": 0.031673999999999994,
+          "max": 0.100994
+        },
+        "graph_read": {
+          "median": 1.055586,
+          "max": 2.7619740000000004
+        },
+        "package": {
+          "median": 2.8078275,
+          "max": 5.146375
+        },
+        "output_stage": {
+          "median": 0.608899,
+          "max": 1.979724
+        },
+        "output_sync": {
+          "median": 0.98836,
+          "max": 1.59209
+        },
+        "output_commit": {
+          "median": 1.5890525,
+          "max": 3.3911290000000003
+        },
+        "output_cdc_read": {
+          "median": 0.6266740000000001,
+          "max": 1.31502
+        },
+        "output_wake": {
+          "median": 2.2204405000000005,
+          "max": 4.678211
+        },
+        "result_read": {
+          "median": 0.6401885,
+          "max": 1.584268
+        },
+        "total": {
+          "median": 6.144548499999999,
+          "max": 11.608189
+        }
+      },
+      "continued_samples": 12,
+      "continued_ms": {
+        "source_commit": {
+          "median": 0.6138925,
+          "max": 1.175611
+        },
+        "source_cdc_read": {
+          "median": 0.028985,
+          "max": 0.07885400000000001
+        },
+        "source_wake": {
+          "median": 0.6524115,
+          "max": 1.212489
+        },
+        "capture": {
+          "median": 0.024131499999999997,
+          "max": 0.065374
+        },
+        "graph_read": {
+          "median": 1.6817345,
+          "max": 2.7619740000000004
+        },
+        "package": {
+          "median": 3.53602,
+          "max": 5.146375
+        },
+        "output_stage": {
+          "median": 1.5618135,
+          "max": 1.979724
+        },
+        "output_sync": {
+          "median": 1.3558089999999998,
+          "max": 1.59209
+        },
+        "output_commit": {
+          "median": 2.9387505000000003,
+          "max": 3.3911290000000003
+        },
+        "output_cdc_read": {
+          "median": 1.1175365,
+          "max": 1.31502
+        },
+        "output_wake": {
+          "median": 4.2031685,
+          "max": 4.678211
+        },
+        "result_read": {
+          "median": 1.27025,
+          "max": 1.584268
+        },
+        "total": {
+          "median": 9.5118955,
+          "max": 11.608189
+        }
+      },
+      "resume_ms": {
+        "feed_open": {
+          "median": 0.037192,
+          "max": 0.044839000000000004
+        },
+        "first_decoded": {
+          "median": 0.5466679999999999,
+          "max": 0.564967
+        },
+        "first_match": {
+          "median": 0.5553985,
+          "max": 0.574186
+        },
+        "caught_up": {
+          "median": 0.5594145,
+          "max": 0.578027
+        },
+        "read": {
+          "median": 0.44158800000000004,
+          "max": 0.45985200000000004
+        }
+      },
+      "resume_backlog_bytes": [
+        18434,
+        18434,
+        18434,
+        18434
+      ],
+      "resume_backlog_items": [
+        21,
+        21,
+        21,
+        21
+      ],
+      "resume_total_including_maintenance_ms": [
+        20.995063000000002,
+        19.665516,
+        20.631596,
+        22.390196
+      ],
+      "graph_sdk_read_ms_per_eight_cycles": 8.417931500000002,
+      "journal_read_ms_per_run": 6.818296,
+      "journal_bytes_per_run": [
+        429961,
+        429961,
+        429961,
+        429961
+      ],
+      "journal_items_per_run": [
+        1885,
+        1885,
+        1885,
+        1885
+      ],
+      "journal_batches_per_run": 27,
+      "historical_views": 64,
+      "unavailable_views": 0
+    },
+    "fjall-stable": {
+      "ordinary_samples": 28,
+      "ordinary_ms": {
+        "source_commit": {
+          "median": 0.607677,
+          "max": 1.867765
+        },
+        "source_cdc_read": {
+          "median": 0.036214,
+          "max": 0.10749
+        },
+        "source_wake": {
+          "median": 0.6677770000000001,
+          "max": 1.919309
+        },
+        "capture": {
+          "median": 0.0064255,
+          "max": 0.014457000000000001
+        },
+        "graph_read": {
+          "median": 0.900776,
+          "max": 1.8566599999999998
+        },
+        "package": {
+          "median": 2.4631139999999996,
+          "max": 4.422164
+        },
+        "output_stage": {
+          "median": 0.6102605,
+          "max": 1.931392
+        },
+        "output_sync": {
+          "median": 1.0513245,
+          "max": 1.898984
+        },
+        "output_commit": {
+          "median": 1.6898719999999998,
+          "max": 3.432896
+        },
+        "output_cdc_read": {
+          "median": 0.659745,
+          "max": 1.2762559999999998
+        },
+        "output_wake": {
+          "median": 2.413071,
+          "max": 4.512333
+        },
+        "result_read": {
+          "median": 0.5240035000000001,
+          "max": 1.614161
+        },
+        "total": {
+          "median": 5.605318499999999,
+          "max": 12.169594
+        }
+      },
+      "continued_samples": 12,
+      "continued_ms": {
+        "source_commit": {
+          "median": 0.6317029999999999,
+          "max": 1.867765
+        },
+        "source_cdc_read": {
+          "median": 0.0314995,
+          "max": 0.043023
+        },
+        "source_wake": {
+          "median": 0.6778344999999999,
+          "max": 1.919309
+        },
+        "capture": {
+          "median": 0.0059365,
+          "max": 0.00908
+        },
+        "graph_read": {
+          "median": 1.6023939999999999,
+          "max": 1.8566599999999998
+        },
+        "package": {
+          "median": 3.6705045000000003,
+          "max": 4.422164
+        },
+        "output_stage": {
+          "median": 1.5279040000000002,
+          "max": 1.931392
+        },
+        "output_sync": {
+          "median": 1.43344,
+          "max": 1.898984
+        },
+        "output_commit": {
+          "median": 2.9566649999999997,
+          "max": 3.432896
+        },
+        "output_cdc_read": {
+          "median": 1.0315245,
+          "max": 1.2762559999999998
+        },
+        "output_wake": {
+          "median": 4.074167,
+          "max": 4.512333
+        },
+        "result_read": {
+          "median": 1.0879575000000001,
+          "max": 1.614161
+        },
+        "total": {
+          "median": 9.3268095,
+          "max": 12.169594
+        }
+      },
+      "resume_ms": {
+        "feed_open": {
+          "median": 0.040091,
+          "max": 0.046795
+        },
+        "first_decoded": {
+          "median": 0.6040449999999999,
+          "max": 0.6326459999999999
+        },
+        "first_match": {
+          "median": 0.612845,
+          "max": 0.640818
+        },
+        "caught_up": {
+          "median": 0.616896,
+          "max": 0.644589
+        },
+        "read": {
+          "median": 0.48894200000000004,
+          "max": 0.511955
+        }
+      },
+      "resume_backlog_bytes": [
+        18203,
+        18203,
+        18203,
+        18203
+      ],
+      "resume_backlog_items": [
+        19,
+        19,
+        19,
+        19
+      ],
+      "resume_total_including_maintenance_ms": [
+        19.979255000000002,
+        19.387188,
+        21.574278999999997,
+        21.347845
+      ],
+      "graph_sdk_read_ms_per_eight_cycles": 7.702487,
+      "journal_read_ms_per_run": 6.2664945,
+      "journal_bytes_per_run": [
+        329812,
+        329812,
+        329812,
+        329812
+      ],
+      "journal_items_per_run": [
+        1681,
+        1681,
+        1681,
+        1681
+      ],
+      "journal_batches_per_run": 27,
+      "historical_views": 24,
+      "unavailable_views": 40
+    }
+  }
+}

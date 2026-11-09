@@ -1,0 +1,11 @@
+{
+  "commits": {
+    "fjall": "aba9e7651d3b0123ad982d43255a4f364fab908e",
+    "lsm-tree": "9ba4f247b440774f9904febfdb25f7fc27159af4",
+    "runtime": "477f473384c7ca3efcc1393d29ce7a0103632b41"
+  },
+  "sha256": "953f7fd0f4189f50779838026de82505346090d2940b36707636dd6583ab99a8",
+  "bytes": 87955008,
+  "cpu": "x86_64",
+  "kernel": "6.8.0-147-generic"
+}
