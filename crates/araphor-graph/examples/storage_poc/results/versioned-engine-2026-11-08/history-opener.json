@@ -1,0 +1,25 @@
+{
+  "old_engine": {
+    "fjall_commit": "bc203ce880b3bdcc108cd17c1927f1aa130de747",
+    "lsm_tree_commit": "d1c99d0af802af05d8ec2b61f0c5e7b70a5e79c1",
+    "binary_sha256": "46319c1a6000b40217cae6935e22174bda7e1f43b452237cd1b2ece5f496d919",
+    "recognizes_format_4": true,
+    "rejects_format_5": true,
+    "library": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/libfjall.rlib"
+  },
+  "fixture_sha256": "cfd66a7840f8522f1e8c732464f512a4cc4807b6b37637f01fcfbda41db03c01",
+  "checks": [
+    {
+      "mode": 2,
+      "file_count": 17,
+      "rejected": true,
+      "files_unchanged": true
+    },
+    {
+      "mode": 3,
+      "file_count": 17,
+      "rejected": true,
+      "files_unchanged": true
+    }
+  ]
+}
