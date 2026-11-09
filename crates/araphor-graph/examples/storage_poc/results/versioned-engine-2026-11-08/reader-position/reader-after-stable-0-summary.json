@@ -1,0 +1,86 @@
+{
+  "source": "ad577e55b+reader-position",
+  "engines": {
+    "fjall": {
+      "eight_cycles_ms": {
+        "rounds": [
+          30.395722,
+          29.536593,
+          28.323786,
+          27.590581999999998
+        ],
+        "median": 28.930189499999997,
+        "max": 30.395722
+      },
+      "historical_16_ms": {
+        "after-compaction": 34.902145,
+        "after-reopen": 35.808873500000004,
+        "after-writes": 36.802309
+      },
+      "reopen_ms": 5.9737035,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "fjall-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          31.958857000000002,
+          33.274124,
+          28.638074,
+          29.493642
+        ],
+        "median": 30.7262495,
+        "max": 33.274124
+      },
+      "historical_16_ms": {
+        "after-compaction": 33.51131049999999,
+        "after-reopen": 33.213712,
+        "after-writes": 32.7021555
+      },
+      "reopen_ms": 6.093204,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-layers": {
+      "eight_cycles_ms": {
+        "rounds": [
+          56.254708,
+          57.004811000000004,
+          54.022483,
+          52.297103
+        ],
+        "median": 55.1385955,
+        "max": 57.004811000000004
+      },
+      "historical_16_ms": {
+        "after-reopen": 67.524788,
+        "after-writes": 68.15078199999999
+      },
+      "reopen_ms": 14.497833499999999,
+      "member_keys": 194,
+      "unsupported_requests_after_reopen": 0
+    },
+    "neon-stable": {
+      "eight_cycles_ms": {
+        "rounds": [
+          55.81624,
+          53.694781,
+          52.180607,
+          54.285508
+        ],
+        "median": 53.9901445,
+        "max": 55.81624
+      },
+      "historical_16_ms": {
+        "after-reopen": 65.329162,
+        "after-writes": 65.9606355
+      },
+      "reopen_ms": 13.7536995,
+      "member_keys": 186,
+      "unsupported_requests_after_reopen": 0
+    }
+  },
+  "primary_cycles": 128,
+  "historical_evaluations": 640,
+  "historical_views": 320
+}

@@ -1,0 +1,1005 @@
+    Blocking waiting for file lock on build directory
+    Checking lsm-tree v3.1.10 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree)
+warning: usage of an `unsafe` block
+   --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/table/block/mod.rs:111:21
+    |
+111 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/table/block/mod.rs:109:24
+    |
+109 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+   --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/table/block/mod.rs:172:21
+    |
+172 |                     unsafe { Slice::builder_unzeroed(header.uncompressed_length as usize) };
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/table/block/mod.rs:170:24
+    |
+170 |                 #[warn(unsafe_code)]
+    |                        ^^^^^^^^^^^
+
+warning: usage of an `unsafe` block
+  --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/vlog/blob_file/reader.rs:89:35
+   |
+89 |                 let mut builder = unsafe { UserValue::builder_unzeroed(real_val_len as usize) };
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/vlog/blob_file/reader.rs:88:24
+   |
+88 |                 #[warn(unsafe_code)]
+   |                        ^^^^^^^^^^^
+
+warning: field `tree_type` is never read
+  --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/manifest.rs:11:9
+   |
+ 9 | pub struct Manifest {
+   |            -------- field in this struct
+10 |     pub version: FormatVersion,
+11 |     pub tree_type: TreeType,
+   |         ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `Indexed` is never constructed
+  --> /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/lsm-tree/src/version/run.rs:15:12
+   |
+15 | pub struct Indexed<T: Ranged> {
+   |            ^^^^^^^
+
+warning: `lsm-tree` (lib) generated 5 warnings
+    Checking fjall v3.1.13 (/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/fjall)
+warning: usage of an `unsafe` block
+   --> src/journal/entry.rs:206:41
+    |
+206 |                         let mut value = unsafe { Slice::builder_unzeroed(value_len as usize) };
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: the lint level is defined here
+   --> src/journal/entry.rs:205:32
+    |
+205 |                         #[warn(unsafe_code)]
+    |                                ^^^^^^^^^^^
+
+warning: enum `RecoveryMode` is never used
+  --> src/journal/error.rs:10:10
+   |
+10 | pub enum RecoveryMode {
+   |          ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `backpressure_lock` is never read
+  --> src/supervisor.rs:35:16
+   |
+16 | pub struct SupervisorInner {
+   |            --------------- field in this struct
+...
+35 |     pub(crate) backpressure_lock: Mutex<()>,
+   |                ^^^^^^^^^^^^^^^^^
+
+warning: multiple versions for dependency `hashbrown`: 0.14.5, 0.16.1
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#multiple_crate_versions
+note: the lint level is defined here
+  --> src/lib.rs:81:9
+   |
+81 | #![warn(clippy::multiple_crate_versions)]
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing `#[must_use]` attribute on a method returning `Self`
+   --> src/builder.rs:223:5
+    |
+223 | /     pub fn with_compaction_filter_factories(mut self, f: CompactionFilterAssigner) -> Self {
+224 | |         self.inner.compaction_filter_factory_assigner = Some(f);
+225 | |         self
+226 | |     }
+    | |_____^
+    |
+    = help: consider adding the `#[must_use]` attribute to the method or directly to the `Self` type
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#return_self_not_must_use
+note: the lint level is defined here
+   --> src/lib.rs:78:9
+    |
+ 78 | #![warn(clippy::pedantic, clippy::nursery)]
+    |         ^^^^^^^^^^^^^^^^
+    = note: `#[warn(clippy::return_self_not_must_use)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: used underscore-prefixed binding
+   --> src/db_config.rs:136:28
+    |
+136 |             signal.publish(_writer, _seqno)?;
+    |                            ^^^^^^^
+    |
+note: binding is defined here
+   --> src/db_config.rs:131:9
+    |
+131 |         _writer: &mut crate::journal::writer::Writer,
+    |         ^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#used_underscore_binding
+    = note: `#[warn(clippy::used_underscore_binding)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: used underscore-prefixed binding
+   --> src/db_config.rs:136:37
+    |
+136 |             signal.publish(_writer, _seqno)?;
+    |                                     ^^^^^^
+    |
+note: binding is defined here
+   --> src/db_config.rs:132:9
+    |
+132 |         _seqno: u64,
+    |         ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#used_underscore_binding
+
+warning: used `expect()` on a `Result` value
+  --> src/db.rs:87:9
+   |
+87 | /         self.supervisor
+88 | |             .keyspaces
+89 | |             .write()
+90 | |             .expect("lock is poisoned")
+   | |_______________________________________^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+note: the lint level is defined here
+  --> src/lib.rs:79:9
+   |
+79 | #![warn(clippy::expect_used)]
+   |         ^^^^^^^^^^^^^^^^^^^
+
+warning: used `expect()` on a `Result` value
+  --> src/db.rs:92:9
+   |
+92 | /         self.supervisor
+93 | |             .journal_manager
+94 | |             .write()
+95 | |             .expect("lock is poisoned")
+   | |_______________________________________^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: docs for function which may panic missing `# Panics` section
+   --> src/db.rs:317:5
+    |
+317 |     pub fn journal_count(&self) -> usize {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> src/db.rs:318:9
+    |
+318 | /         self.supervisor
+319 | |             .journal_manager
+320 | |             .read()
+321 | |             .expect("lock is poisoned")
+    | |_______________________________________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_panics_doc
+    = note: `#[warn(clippy::missing_panics_doc)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: used `expect()` on a `Result` value
+   --> src/db.rs:318:9
+    |
+318 | /         self.supervisor
+319 | |             .journal_manager
+320 | |             .read()
+321 | |             .expect("lock is poisoned")
+    | |_______________________________________^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+   --> src/db.rs:329:15
+    |
+329 |               + self
+    |  _______________^
+330 | |                 .supervisor
+331 | |                 .journal_manager
+332 | |                 .read()
+333 | |                 .expect("lock is poisoned")
+    | |___________________________________________^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: docs for function which may panic missing `# Panics` section
+   --> src/db.rs:351:5
+    |
+351 |     pub fn disk_space(&self) -> crate::Result<u64> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> src/db.rs:354:30
+    |
+354 |           let keyspaces_size = self
+    |  ______________________________^
+355 | |             .supervisor
+356 | |             .keyspaces
+357 | |             .read()
+358 | |             .expect("lock is poisoned")
+    | |_______________________________________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> src/db.rs:351:5
+    |
+351 |     pub fn disk_space(&self) -> crate::Result<u64> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_errors_doc
+    = note: `#[warn(clippy::missing_errors_doc)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: used `expect()` on a `Result` value
+   --> src/db.rs:354:30
+    |
+354 |           let keyspaces_size = self
+    |  ______________________________^
+355 | |             .supervisor
+356 | |             .keyspaces
+357 | |             .read()
+358 | |             .expect("lock is poisoned")
+    | |_______________________________________^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: consider adding a `;` to the last statement for consistent formatting
+   --> src/db.rs:483:13
+    |
+483 |             keyspace_id = self.keyspace_id_counter.next()
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `keyspace_id = self.keyspace_id_counter.next();`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#semicolon_if_nothing_returned
+    = note: `#[warn(clippy::semicolon_if_nothing_returned)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: used `expect()` on a `Result` value
+   --> src/db.rs:535:25
+    |
+535 |         let keyspaces = self.supervisor.keyspaces.write().expect("lock is poisoned");
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: docs for function which may panic missing `# Panics` section
+   --> src/db.rs:580:5
+    |
+580 |     pub fn keyspace_count(&self) -> usize {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> src/db.rs:581:25
+    |
+581 |         let keyspaces = self.supervisor.keyspaces.read().expect("lock is poisoned");
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_panics_doc
+
+warning: used `expect()` on a `Result` value
+   --> src/db.rs:581:25
+    |
+581 |         let keyspaces = self.supervisor.keyspaces.read().expect("lock is poisoned");
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: docs for function which may panic missing `# Panics` section
+   --> src/db.rs:593:5
+    |
+593 |     pub fn list_keyspace_names(&self) -> Vec<KeyspaceKey> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> src/db.rs:594:9
+    |
+594 | /         self.supervisor
+595 | |             .keyspaces
+596 | |             .read()
+597 | |             .expect("lock is poisoned")
+    | |_______________________________________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_panics_doc
+
+warning: used `expect()` on a `Result` value
+   --> src/db.rs:594:9
+    |
+594 | /         self.supervisor
+595 | |             .keyspaces
+596 | |             .read()
+597 | |             .expect("lock is poisoned")
+    | |_______________________________________^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: assigning the result of `Clone::clone()` may be inefficient
+   --> src/db.rs:691:13
+    |
+691 |             manager.cdc = config.cdc.clone();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `manager.cdc.clone_from(&config.cdc)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#assigning_clones
+    = note: `#[warn(clippy::assigning_clones)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: used `expect()` on a `Result` value
+   --> src/db.rs:967:25
+    |
+967 |           for keyspace in db
+    |  _________________________^
+968 | |             .supervisor
+969 | |             .keyspaces
+970 | |             .read()
+971 | |             .expect("lock is poisoned")
+    | |_______________________________________^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: this function has too many lines (108/100)
+    --> src/db.rs:1015:5
+     |
+1015 |     pub fn create_new(config: Config) -> crate::Result<Self> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_lines
+     = note: `#[warn(clippy::too_many_lines)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: assigning the result of `Clone::clone()` may be inefficient
+    --> src/db.rs:1096:21
+     |
+1096 |                     manager.cdc = config.cdc.clone();
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `manager.cdc.clone_from(&config.cdc)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#assigning_clones
+
+warning: docs for function which may panic missing `# Panics` section
+   --> src/cdc.rs:135:5
+    |
+135 |     pub fn stop(&self) {
+    |     ^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> src/cdc.rs:136:22
+    |
+136 |         let _guard = self.signal.head.lock().expect("journal signal poisoned");
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_panics_doc
+
+warning: used `expect()` on a `Result` value
+   --> src/cdc.rs:136:22
+    |
+136 |         let _guard = self.signal.head.lock().expect("journal signal poisoned");
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> src/cdc.rs:144:5
+    |
+144 |     pub fn journal_feed(&self, cursor: Option<Cursor>) -> crate::Result<Feed> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> src/cdc.rs:165:5
+    |
+165 |     pub fn journal_head(&self) -> crate::Result<Option<Cursor>> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> src/cdc.rs:247:5
+    |
+247 |     pub fn retain_after(&self, cursor: Cursor) -> crate::Result<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> src/cdc.rs:261:5
+    |
+261 |     pub fn rotate_journal(&self) -> crate::Result<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> src/cdc.rs:280:5
+    |
+280 |     pub fn collect_journals(&self) -> crate::Result<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_errors_doc
+
+warning: this method could have a `#[must_use]` attribute
+   --> src/cdc.rs:296:12
+    |
+296 |     pub fn cancellation(&self) -> Cancel {
+    |            ^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#must_use_candidate
+    = note: `#[warn(clippy::must_use_candidate)]` implied by `#[warn(clippy::pedantic)]`
+help: add the attribute
+    |
+296 ~     #[must_use]
+297 ~     pub fn cancellation(&self) -> Cancel {
+    |
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> src/cdc.rs:304:5
+    |
+304 |     pub fn wait(&self) -> crate::Result<bool> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#missing_errors_doc
+
+warning: this method could have a `#[must_use]` attribute
+   --> src/cdc.rs:327:12
+    |
+327 |     pub fn cursor(&self) -> Option<Cursor> {
+    |            ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#must_use_candidate
+help: add the attribute
+    |
+327 ~     #[must_use]
+328 ~     pub fn cursor(&self) -> Option<Cursor> {
+    |
+
+warning: this argument is passed by value, but not consumed in the function body
+   --> src/journal/entry.rs:165:61
+    |
+165 |     pub(crate) fn decode_body<R: Read>(reader: &mut R, tag: Tag) -> Result<Self, crate::Error> {
+    |                                                             ^^^
+    |
+help: or consider marking this type as `Copy`
+   --> src/journal/entry.rs:87:1
+    |
+ 87 | pub enum Tag {
+    | ^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_pass_by_value
+    = note: `#[warn(clippy::needless_pass_by_value)]` implied by `#[warn(clippy::pedantic)]`
+help: consider taking a reference instead
+    |
+165 |     pub(crate) fn decode_body<R: Read>(reader: &mut R, tag: &Tag) -> Result<Self, crate::Error> {
+    |                                                             +
+
+warning: use Option::map_or instead of an if let/else
+   --> src/journal/manager.rs:249:26
+    |
+249 |           let watermarks = if let Some(segment) = &rotation.segment {
+    |  __________________________^
+250 | |             keyspaces
+251 | |                 .values()
+252 | |                 .filter_map(|keyspace| {
+...   |
+263 | |             watermarks
+264 | |         };
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#option_if_let_else
+note: the lint level is defined here
+   --> src/lib.rs:78:27
+    |
+ 78 | #![warn(clippy::pedantic, clippy::nursery)]
+    |                           ^^^^^^^^^^^^^^^
+    = note: `#[warn(clippy::option_if_let_else)]` implied by `#[warn(clippy::nursery)]`
+help: try
+    |
+249 ~         let watermarks = rotation.segment.as_ref().map_or(watermarks, |segment| keyspaces
+250 +                 .values()
+251 +                 .filter_map(|keyspace| {
+252 +                     segment
+253 +                         .watermarks
+254 +                         .get(&keyspace.id())
+255 +                         .map(|sequence| EvictionWatermark {
+256 +                             keyspace: keyspace.clone(),
+257 +                             lsn: *sequence,
+258 +                         })
+259 +                 })
+260 ~                 .collect());
+    |
+
+warning: pub(crate) module inside private module
+  --> src/journal/mod.rs:12:1
+   |
+12 | pub(crate) mod segment;
+   | ----------^^^^^^^^^^^^
+   | |
+   | help: consider using: `pub`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+   = note: `#[warn(clippy::redundant_pub_crate)]` implied by `#[warn(clippy::nursery)]`
+
+warning: pub(crate) struct inside private module
+  --> src/journal/segment.rs:15:1
+   |
+15 | pub(crate) struct SegmentStats {
+   | ----------^^^^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider using: `pub`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: pub(crate) struct inside private module
+  --> src/journal/segment.rs:60:1
+   |
+60 | pub(crate) struct Segment {
+   | ----------^^^^^^^^^^^^^^^
+   | |
+   | help: consider using: `pub`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: pub(crate) struct inside private module
+  --> src/journal/writer.rs:37:1
+   |
+37 | pub(crate) struct Rotation {
+   | ----------^^^^^^^^^^^^^^^^
+   | |
+   | help: consider using: `pub`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: redundant clone
+   --> src/journal/writer.rs:143:52
+    |
+143 |         let replacement = Self::create_new(new_path.clone())?;
+    |                                                    ^^^^^^^^ help: remove this
+    |
+note: this value is dropped without further use
+   --> src/journal/writer.rs:143:44
+    |
+143 |         let replacement = Self::create_new(new_path.clone())?;
+    |                                            ^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_clone
+    = note: `#[warn(clippy::redundant_clone)]` implied by `#[warn(clippy::nursery)]`
+
+warning: used `expect()` on an `Option` value
+   --> src/journal/writer.rs:113:22
+    |
+113 |           let folder = self
+    |  ______________________^
+114 | |             .path
+115 | |             .parent()
+116 | |             .expect("should have parent")
+    | |_________________________________________^
+    |
+    = note: if this value is `None`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on an `Option` value
+   --> src/journal/writer.rs:119:30
+    |
+119 |           let Some(basename) = self
+    |  ______________________________^
+120 | |             .path
+121 | |             .file_name()
+122 | |             .expect("should be valid file name")
+123 | |             .to_str()
+124 | |             .expect("should be valid utf-8")
+    | |____________________________________________^
+    |
+    = note: if this value is `None`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on an `Option` value
+   --> src/journal/writer.rs:119:30
+    |
+119 |           let Some(basename) = self
+    |  ______________________________^
+120 | |             .path
+121 | |             .file_name()
+122 | |             .expect("should be valid file name")
+    | |________________________________________________^
+    |
+    = note: if this value is `None`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used underscore-prefixed binding
+   --> src/journal/writer.rs:324:23
+    |
+324 |                     &(_seqno + 1).to_be_bytes(),
+    |                       ^^^^^^
+    |
+note: binding is defined here
+   --> src/journal/writer.rs:312:9
+    |
+312 |         _seqno: SeqNo,
+    |         ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#used_underscore_binding
+
+warning: used underscore-prefixed binding
+   --> src/journal/writer.rs:347:42
+    |
+347 |                 segment.record(clock.id, _seqno);
+    |                                          ^^^^^^
+    |
+note: binding is defined here
+   --> src/journal/writer.rs:312:9
+    |
+312 |         _seqno: SeqNo,
+    |         ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#used_underscore_binding
+
+warning: used underscore-prefixed binding
+   --> src/journal/writer.rs:349:28
+    |
+349 |             segment.finish(_seqno);
+    |                            ^^^^^^
+    |
+note: binding is defined here
+   --> src/journal/writer.rs:312:9
+    |
+312 |         _seqno: SeqNo,
+    |         ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#used_underscore_binding
+
+warning: called `map(<f>).unwrap_or_else(<g>)` on a `Result` value
+  --> src/journal/mod.rs:39:13
+   |
+39 | /             self.path()
+40 | |                 .map(|p| p.display().to_string())
+41 | |                 .unwrap_or_else(|_| String::from("<failed to read path>"))
+   | |__________________________________________________________________________^ help: try: `self.path().map_or_else(|_| String::from("<failed to read path>"), |p| p.display().to_string())`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#map_unwrap_or
+   = note: `#[warn(clippy::map_unwrap_or)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: used `expect()` on a `Result` value
+  --> src/journal/mod.rs:67:30
+   |
+67 |             let mut writer = self.writer.lock().expect("lock is poisoned");
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on an `Option` value
+  --> src/journal/mod.rs:83:22
+   |
+83 |         let folder = path.parent().expect("parent should exist");
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is `None`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+  --> src/keyspace/config/filter.rs:21:21
+   |
+21 |                     v.write_u8(0).expect("cannot fail writing into a vec");
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+  --> src/keyspace/config/filter.rs:24:21
+   |
+24 |                     v.write_u8(1).expect("cannot fail writing into a vec");
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+  --> src/keyspace/config/filter.rs:28:29
+   |
+28 | ...                   v.write_u8(0).expect("cannot fail writing into a vec");
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+  --> src/keyspace/config/filter.rs:29:29
+   |
+29 | / ...                   v.write_f32::<byteorder::LittleEndian>(*bits)
+30 | | ...                       .expect("cannot fail writing into a vec");
+   | |___________________________________________________________________^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+  --> src/keyspace/config/filter.rs:33:29
+   |
+33 | ...                   v.write_u8(1).expect("cannot fail writing into a vec");
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+  --> src/keyspace/config/filter.rs:34:29
+   |
+34 | / ...                   v.write_f32::<byteorder::LittleEndian>(*fpr)
+35 | | ...                       .expect("cannot fail writing into a vec");
+   | |___________________________________________________________________^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+  --> src/keyspace/config/pinning.rs:28:19
+   |
+28 |         let len = bytes.read_u8().expect("cannot fail");
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+  --> src/keyspace/config/pinning.rs:33:21
+   |
+33 |             let b = bytes.read_u8().expect("cannot fail");
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+   --> src/keyspace/options.rs:478:37
+    |
+478 |   ...                   let k = std::str::from_utf8(&k)
+    |  _______________________________^
+479 | | ...                       .expect("compaction strategy should return UTF-8 key");
+    | |________________________________________________________________________________^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+   --> src/keyspace/mod.rs:848:29
+    |
+848 |               for keyspace in self
+    |  _____________________________^
+849 | |                 .supervisor
+850 | |                 .keyspaces
+851 | |                 .read()
+852 | |                 .expect("lock is poisoned")
+    | |___________________________________________^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: temporary with significant `Drop` in `if let` scrutinee will live until the end of the `if let` expression
+   --> src/keyspace/mod.rs:855:33
+    |
+855 |                   if let Err(e) = keyspace.tree.get_version_history_lock().maintenance(
+    |  _________________________________^
+856 | |                     keyspace.path(),
+857 | |                     self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),
+858 | |                 ) {
+    | |_________________^
+...
+863 |                   }
+    |                    - temporary lives until here
+    |
+    = note: this might lead to deadlocks or other unexpected behavior
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#significant_drop_in_scrutinee
+    = note: `#[warn(clippy::significant_drop_in_scrutinee)]` implied by `#[warn(clippy::nursery)]`
+help: try moving the temporary above the match
+    |
+855 ~                 let value = keyspace.tree.get_version_history_lock().maintenance(
+856 +                     keyspace.path(),
+857 +                     self.supervisor.snapshot_tracker.get_seqno_safe_to_gc(),
+858 +                 );
+859 ~                 if let Err(e) = value {
+    |
+
+warning: used `expect()` on a `Result` value
+   --> src/meta_keyspace.rs:193:24
+    |
+193 |         let mut lock = self.keyspaces.write().expect("lock is poisoned");
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+   --> src/meta_keyspace.rs:265:9
+    |
+265 | /         self.keyspaces
+266 | |             .read()
+267 | |             .expect("lock is poisoned")
+    | |_______________________________________^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used underscore-prefixed binding
+  --> src/poison.rs:32:13
+   |
+32 |             _config.cdc.clone(),
+   |             ^^^^^^^
+   |
+note: binding is defined here
+  --> src/poison.rs:28:38
+   |
+28 |     pub fn new(signal: PoisonSignal, _config: &crate::Config) -> Self {
+   |                                      ^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#used_underscore_binding
+
+warning: used `expect()` on a `Result` value
+  --> src/recovery.rs:42:27
+   |
+42 |           let keyspace_id = dirent
+   |  ___________________________^
+43 | |             .file_name()
+44 | |             .to_str()
+45 | |             .expect("should be valid keyspace name")
+46 | |             .parse::<InternalKeyspaceId>()
+47 | |             .expect("should be valid integer");
+   | |______________________________________________^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on an `Option` value
+  --> src/recovery.rs:42:27
+   |
+42 |           let keyspace_id = dirent
+   |  ___________________________^
+43 | |             .file_name()
+44 | |             .to_str()
+45 | |             .expect("should be valid keyspace name")
+   | |____________________________________________________^
+   |
+   = note: if this value is `None`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: unused `self` argument
+  --> src/supervisor.rs:55:9
+   |
+55 |         &self,
+   |         ^^^^^
+   |
+   = help: consider refactoring to an associated function
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#unused_self
+   = note: `#[warn(clippy::unused_self)]` implied by `#[warn(clippy::pedantic)]`
+
+warning: pub(crate) struct inside private module
+ --> src/tx/write_set.rs:5:1
+  |
+5 | pub(crate) struct WriteSet {
+  | ----------^^^^^^^^^^^^^^^^
+  | |
+  | help: consider using: `pub`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: pub(crate) import inside private module
+ --> src/tx/mod.rs:9:1
+  |
+9 | pub(crate) use write_set::WriteSet;
+  | ----------^^^^^^^^^^^^^^^^^^^^^^^^
+  | |
+  | help: consider using: `pub`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: pub(crate) enum inside private module
+  --> src/version.rs:65:1
+   |
+65 | pub(crate) enum Mode {
+   | ----------^^^^^^^^^^
+   | |
+   | help: consider using: `pub`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: pub(crate) struct inside private module
+  --> src/versioned/catalogue.rs:14:1
+   |
+14 | pub(crate) struct Catalogue {
+   | ----------^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider using: `pub`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: pub(crate) module inside private module
+ --> src/versioned/mod.rs:3:1
+  |
+3 | pub(crate) mod clock;
+  | ----------^^^^^^^^^^
+  | |
+  | help: consider using: `pub`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: pub(crate) struct inside private module
+ --> src/versioned/clock.rs:6:1
+  |
+6 | pub(crate) struct Clock {
+  | ----------^^^^^^^^^^^^^
+  | |
+  | help: consider using: `pub`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: pub(crate) struct inside private module
+  --> src/versioned/clock.rs:12:1
+   |
+12 | pub(crate) struct ClockWrite {
+   | ----------^^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider using: `pub`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: use Option::map_or_else instead of an if let/else
+  --> src/versioned/read.rs:32:9
+   |
+32 | /         match self.0.cursor {
+33 | |             Some(cursor) => Ok(Some(cursor)),
+34 | |             None => self.0.db.journal_cursor(self.0.revision),
+35 | |         }
+   | |_________^ help: try: `self.0.cursor.map_or_else(|| self.0.db.journal_cursor(self.0.revision), |cursor| Ok(Some(cursor)))`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#option_if_let_else
+
+warning: pub(crate) import inside private module
+  --> src/versioned/mod.rs:17:1
+   |
+17 | pub(crate) use catalogue::Catalogue;
+   | ----------^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider using: `pub`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#redundant_pub_crate
+
+warning: used `expect()` on a `Result` value
+   --> src/worker_pool.rs:116:10
+    |
+116 |         *self.thread_handles.lock().expect("lock is poisoned") = thread_handles;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: used `expect()` on a `Result` value
+   --> src/worker_pool.rs:240:13
+    |
+240 | /             ctx.supervisor
+241 | |                 .journal_manager
+242 | |                 .write()
+243 | |                 .expect("lock is poisoned")
+    | |___________________________________________^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#expect_used
+
+warning: this parameter is a mutable reference but is not used mutably
+  --> src/cdc.rs:68:17
+   |
+68 |         writer: &mut Writer,
+   |                 ^----^^^^^^
+   |                  |
+   |                  help: consider removing this `mut`
+   |
+   = note: this is cfg-gated and may require further changes
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_pass_by_ref_mut
+   = note: `#[warn(clippy::needless_pass_by_ref_mut)]` implied by `#[warn(clippy::nursery)]`
+
+warning: this lint expectation is unfulfilled
+  --> src/journal/batch_reader.rs:84:14
+   |
+84 |     #[expect(clippy::too_many_lines)]
+   |              ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unfulfilled_lint_expectations)]` on by default
+
+warning: `fjall` (lib) generated 81 warnings (run `cargo clippy --fix --lib -p fjall -- ` to apply 17 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.42s

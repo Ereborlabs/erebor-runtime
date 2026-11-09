@@ -101,6 +101,16 @@ merge and lookahead buffers. Both cases keep the snapshot and use the same
 deletion filter and record resolution. The single-branch check also covers an
 empty root, an empty parent/child view, and native error forwarding.
 
+[JournalReader::offset](../../fjall/src/journal/reader.rs) obtains the absolute
+decoded position from the native `Take<File>` read limit, minus unread
+`BufReader` bytes. This removes a file-position syscall after each entry.
+For a saved nonzero start, the limit begins at `u64::MAX - start`. The decoder,
+checksum, captured end, and cursor remain. Recovery truncates and syncs the
+same underlying file. The buffered reader stays private so callers cannot
+change its file offset outside this owner. The focused
+`positions_survive_buffering_and_partial_tail` case checks large direct reads,
+buffered headers, empty values, nonzero resume, and partial-tail recovery.
+
 ## Commit and change flow
 
 ```mermaid
@@ -187,11 +197,11 @@ cargo test --manifest-path lsm-tree/Cargo.toml --lib --test read_view --test ret
 cargo test --manifest-path lsm-tree/Cargo.toml --features lz4 --lib --test read_view --test retained_history --locked --offline
 ```
 
-Fjall `3f684ab` passes 123 CDC library cases and 83 cases without CDC, with one
+Fjall `8cb06c8` passes 124 CDC library cases and 83 cases without CDC, with one
 existing ignored case in each run. The production check without default
 features, library clippy, and formatting pass. Library clippy reports existing
 warnings. The earlier broader clippy run at `66d821e`, with `--tests`, fails on
-65 existing test lints. That command was not repeated at `3f684ab`.
+65 existing test lints. That command was not repeated at `8cb06c8`.
 The existing no-default-features test error remains in `keyspace/options.rs`;
 the production check does not prove that test configuration.
 
@@ -204,6 +214,10 @@ binaries remain under `output/storage-engine-baseline-20261108/`.
 Fjall `e2c23cb` adds the concurrent bootstrap and floor-advancement proof to the
 combined lifecycle case. The focused case, full 123-case CDC library suite, and
 formatting pass. Fjall `3f684ab` also removes single-source lookahead buffers.
+Fjall `8cb06c8` adds native byte-position accounting. The
+[retained comparison](../../crates/araphor-graph/examples/storage_poc/results/versioned-engine-2026-11-08/reader-position/README.md)
+separates the reader change, disk cleanup, and traced diagnostics. The complete
+performance target remains unmet.
 
 This guide covers those engine commits. The engine API is generic. Araphor production migration, distributed
 storage, branch merge, and production notification latency remain outside this

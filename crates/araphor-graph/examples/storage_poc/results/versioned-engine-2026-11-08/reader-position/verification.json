@@ -1,0 +1,15 @@
+{
+  "fjall": "8cb06c850b8071fc290cc0406242ced5dbc0638c",
+  "lsm_tree": "4aeaf8d44e480dd9abeb853530c960ada919d8f5",
+  "cdc_library_passed": 124,
+  "feature_off_library_passed": 83,
+  "existing_ignored_each": 1,
+  "no_default_production_check": "passed",
+  "library_clippy": "passed with existing warnings",
+  "format": "passed",
+  "full_workspace_ci": "not run during iteration",
+  "performance": "Not done",
+  "lseek_diagnostic_before": 27710,
+  "lseek_diagnostic_after": 3382,
+  "lseek_scope": "whole unchanged combined driver, both layouts; timing excluded"
+}

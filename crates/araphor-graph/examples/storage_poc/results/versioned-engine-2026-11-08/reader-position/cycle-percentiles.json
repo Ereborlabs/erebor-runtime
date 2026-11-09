@@ -1,0 +1,80 @@
+{
+  "unit": "milliseconds",
+  "engine": "fjall-stable",
+  "selection": "ordinary cycles; restart excluded",
+  "p95_method": "nearest rank: sorted values[ceil(0.95*n)-1]",
+  "reports": [
+    {
+      "report": "reader-after-combined-0.json",
+      "source": "ad577e55b+reader-position",
+      "samples": 28,
+      "minimum": 3.346416,
+      "median": 4.801438,
+      "p95": 7.587021999999999,
+      "maximum": 8.908645
+    },
+    {
+      "report": "reader-after-combined-1.json",
+      "source": "ad577e55b+reader-position",
+      "samples": 28,
+      "minimum": 3.744587,
+      "median": 4.9638215,
+      "p95": 7.7345299999999995,
+      "maximum": 9.406899999999998
+    },
+    {
+      "report": "reader-before-combined-0.json",
+      "source": "0041dfd64+direct-scan",
+      "samples": 28,
+      "minimum": 3.848023,
+      "median": 5.1676205,
+      "p95": 7.980233999999999,
+      "maximum": 8.087441
+    },
+    {
+      "report": "reader-before-combined-1.json",
+      "source": "0041dfd64+direct-scan",
+      "samples": 28,
+      "minimum": 3.394748,
+      "median": 5.050530500000001,
+      "p95": 9.178307,
+      "maximum": 10.166293999999999
+    },
+    {
+      "report": "space-reader-after-combined-0.json",
+      "source": "ad577e55b+reader-position",
+      "samples": 28,
+      "minimum": 3.361926,
+      "median": 4.5713145,
+      "p95": 7.2055549999999995,
+      "maximum": 7.231187
+    },
+    {
+      "report": "space-reader-after-combined-1.json",
+      "source": "ad577e55b+reader-position",
+      "samples": 28,
+      "minimum": 3.367724,
+      "median": 4.7899910000000006,
+      "p95": 7.196895,
+      "maximum": 7.367309
+    },
+    {
+      "report": "space-reader-before-combined-0.json",
+      "source": "477f47338",
+      "samples": 28,
+      "minimum": 3.278815,
+      "median": 4.245604999999999,
+      "p95": 7.748787,
+      "maximum": 9.681742
+    },
+    {
+      "report": "space-reader-before-combined-1.json",
+      "source": "477f47338",
+      "samples": 28,
+      "minimum": 3.17419,
+      "median": 4.277698,
+      "p95": 8.331063,
+      "maximum": 8.84161
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "root_commit": "ad577e55b48dd6ef872fbec7bb6f1905771033c9",
+  "lsm_tree_commit": "4aeaf8d44e480dd9abeb853530c960ada919d8f5",
+  "binary_sha256": "c34c9d5381733151e0e52e1b40a853a120dca3ba5e88e534e15bbf5cbd1044eb",
+  "binary": "output/storage-engine-baseline-20261108/versioned-reader-position",
+  "source_label": "ad577e55b+reader-position",
+  "fjall_commit": "8cb06c850b8071fc290cc0406242ced5dbc0638c"
+}
