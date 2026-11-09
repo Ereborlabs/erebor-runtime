@@ -1,5 +1,9 @@
 # Recovered Research
 
+- [DuckDB replacement with versioned Fjall](araphor-fjall-integration.md)
+  maps the completed engine APIs to Data, Graph, native DataFusion providers,
+  original-log subscription wakes, and batch notification writes. Production
+  integration and the incident performance targets remain not done.
 - [Araphor durable storage investigation](araphor-durable-storage-investigation.md)
   compares redb, Fjall, and a custom transaction log against current Data
   snapshots, atomic commits, raw journals, Graph ownership, and measured costs.

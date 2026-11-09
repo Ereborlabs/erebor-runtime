@@ -1,5 +1,51 @@
 # Log-based Graph storage design
 
+The [2026-11-09 integration research](../research/araphor-fjall-integration.md)
+maps this design to the completed engine forks and current production source.
+Its native history and original-journal CDC supersede the stock-Fjall limits
+below. Production replacement and incident timing proof remain not done.
+
+## Production integration status, 2026-11-09
+
+The active user goal approves the complete production migration described in
+the integration research. The full migration and the unchanged incident's
+100-fold and sub-100 ms targets remain **Not done**.
+
+The implementer and reviewer agree on exact revision stamping before editing.
+Fjall `cceaa84` adds `BranchWriteTransaction::commit_stamped`. Stamped references,
+ordinary values, deletes, and the branch head share one durable batch. The two
+new native tests check exact receipts, an intervening raw native write, original
+journal contents, unchanged state after rejected input, and historical values
+after compaction and reopen. The caller can save Data and Graph layer cut indexes
+without a second commit. Data does not use the API yet.
+
+Focused checks pass: Fjall with CDC 137 tests and one ignored; without CDC 87
+tests and one ignored; 86 documentation tests; formatting; library clippy with
+existing warnings. Commands and logs remain under
+`output/araphor-fjall-migration-20261109/`. No speed comparison or full workspace CI
+runs for this API change. Result: **Done for the engine API; migration not done**.
+
+The unchanged retained incident control is qualified again before migration.
+The sandbox attempt stops with `Operation not permitted`. The native rerun
+passes in 27.88 harness seconds and 27.918 process seconds. Its three
+collector-receipt-to-creation intervals are 1.622800, 2.944508, and 3.279012
+seconds. The existing boundary script checks 18 input receipts, three first
+durable notifications, and their exact incident revisions. Public notification
+receipt takes 1.771028, 3.267507, and 3.628382 seconds; that is a different
+boundary. The raw log, command, binary identity, and checked boundary report
+remain in that output directory. This is one pre-migration qualification run,
+not a performance comparison or a speedup result.
+
+The agreed next change promotes the concrete native Graph owner into the
+existing package PoC. Graph borrows the caller's native snapshot and transaction;
+only the caller commits and publishes. Preserve the SDK, journals, expected
+writer heads, endpoint validity, provenance, and resource accounting. Remove
+the PoC's duplicate staging and traversal code when the production owner covers
+that behavior. Do not copy its fixture-specific assumptions, active-member
+pointer duplicate, in-memory revision catalogue, or copied change log. The old
+production store remains the only authority until all Data transaction families
+can switch together. No live dual writes or SQL emulation are proposed.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

@@ -136,6 +136,7 @@ values have `sequence < cut`. The engine owns conversion from batch sequences.
 | `Branch` | `retain_history(range) -> RetentionId` |
 | `SingleWriterTxDatabase` | `history()` lists policies and branch IDs; `release_history(id)` works after a branch name is deleted. |
 | `Branch` | `write_tx()` with read-your-writes, point/range reads, `insert`, `remove`, `rollback`, and `commit -> Option<Commit>` |
+| Branch write transaction | `commit_stamped(keys) -> Option<Commit>` saves the exact native revision at caller keys in the same batch. Fjall `cceaa84` adds this API for the approved Data migration. |
 | Existing batch and single-writer transaction | `commit_receipt() -> Option<Commit>`; existing `commit() -> ()` remains |
 | `Commit` | The exact committed `revision` and `cursor`; `None` means no batch was written |
 | Existing CDC extension | Keep `journal_feed`, `journal_head`, `retain_after`, wait, and cancellation. Replace bulk `read` with `next_batch -> Option<Batch>`. |

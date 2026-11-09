@@ -21,6 +21,31 @@ The original 4.370 ms combined median target and a repeatable latency gain
 are not proved. These PoCs do not measure production DataFusion input or
 notification delivery.
 
+## Atomic caller revision references
+
+Fjall `cceaa84` adds exact caller revision references for the approved Data
+migration. The production Data caller remains **Not implemented**.
+
+[BranchWriteTransaction::commit_stamped](../../fjall/src/versioned/write.rs) Caller commits changes with revision-reference keys
+  -> [BranchWriteTransaction::commit_stamped](../../fjall/src/versioned/write.rs) The transaction rejects duplicate, staged, empty, or over-width stamp keys before sequence allocation.
+  -> [WriteBatch::stamp](../../fjall/src/batch/mod.rs) One batch contains data, caller stamps, and the branch head.
+  -> [WriteBatch::commit_inner](../../fjall/src/batch/mod.rs) The journal owner writes the allocated revision bytes at each stamp key and completes SyncAll.
+  -> [WriteBatch::commit_publish](../../fjall/src/batch/mod.rs) The existing publication boundary advances the branch and exposes the matching receipt and CDC batch.
+
+Ordinary `commit` delegates with no stamp keys. Existing committed stamp values
+can be replaced. The consuming API supplies no provisional revision to a read.
+An empty write with no stamps remains a no-op. Stamps alone create one batch.
+Rollback and pre-write rejection publish no state.
+
+The committed tests `revision_stamps_share_the_commit` and
+`revision_stamp_errors_do_not_write` prove these rules. The first inserts a raw
+native write between branch capture and commit, then checks the allocated cut,
+actual journal items, and historical values through compaction and reopen.
+The second checks head, cursor, native sequence, and data after each rejection.
+Final focused checks pass: CDC 137/one ignored, default 87/one ignored,
+documentation 86, formatting, and library clippy with existing warnings.
+This check does not establish a production latency improvement.
+
 ## Implementation review flow
 
 [Branch::retain_history and Branch::fork](../../fjall/src/versioned/branch.rs) Caller retains a revision range or forks a retained revision
