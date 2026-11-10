@@ -106,9 +106,19 @@ Native finding batches now read requested groups at saved publication cuts.
 They use actual opening producers, retained historical parents, and one shared
 witness, proof, and context accumulator. One hundred focused Data cases pass.
 Read the [provenance qualification](results/araphor-native-provenance-2026-11-10.md).
-Result: **Done for optional native finding provenance reads**. Native
-notification preparation, delivery batches, production binding, retention,
-backup, cutover, DuckDB removal, and both incident targets remain **Not done**.
+Result: **Done for optional native finding provenance reads**. At that
+qualification, native notification preparation, delivery batches, production
+binding, retention, backup, cutover, DuckDB removal, and both incident targets
+were **Not done**.
+Native notification preparation now captures one view and returns the existing
+prepared batch. Charged indexed reads supply current findings, routes,
+obligations, exact pending subjects, and historical routes. Actual producers
+supply proof; canonical values supply comparison only. One hundred and five
+focused Data cases pass. Read the
+[preparation qualification](results/araphor-native-prepared-2026-11-10.md).
+Result: **Done for optional native notification preparation**. Production router
+binding, delivery batches, durable notification consumption, retention, backup,
+cutover, DuckDB removal, and both incident targets remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

@@ -30,6 +30,7 @@ mod context;
 mod extraction;
 pub(in crate::analysis) mod inputs;
 mod managed;
+pub(in crate::analysis) use managed::FindingRead;
 mod notification;
 mod packages;
 mod records;

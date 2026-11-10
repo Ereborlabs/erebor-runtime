@@ -12,6 +12,7 @@ mod cuts;
 mod domain;
 mod origin;
 mod projection;
+pub(in crate::analysis) use projection::FindingRead;
 mod publication;
 mod read;
 mod recovery;

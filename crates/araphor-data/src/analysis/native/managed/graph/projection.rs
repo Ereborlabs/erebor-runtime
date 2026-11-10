@@ -18,6 +18,7 @@ use crate::analysis::{
 use crate::{ManagedReceipt, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result};
 
 mod findings;
+pub(in crate::analysis) use findings::FindingRead;
 mod recovery;
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]

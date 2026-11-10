@@ -65,7 +65,17 @@ impl DataView {
         owner: &str,
         limit: usize,
     ) -> Result<Vec<AnalysisContextVersionV1>> {
-        self.head_versions(tenant, owner, None, limit, true)
+        self.context_heads_charged(tenant, owner, limit, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis) fn context_heads_charged(
+        &self,
+        tenant: [u8; 16],
+        owner: &str,
+        limit: usize,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Vec<AnalysisContextVersionV1>> {
+        self.head_versions(tenant, owner, None, limit, true, charge)
     }
 
     pub fn context_head_page(
@@ -80,6 +90,7 @@ impl DataView {
             after,
             crate::analysis::MAX_ANALYSIS_PAGE_RECORDS,
             false,
+            &mut |_| Ok(()),
         )
     }
 
@@ -90,6 +101,7 @@ impl DataView {
         after: Option<&AnalysisContextKeyV1>,
         limit: usize,
         reject_excess: bool,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<Vec<AnalysisContextVersionV1>> {
         if tenant == [0; 16]
             || owner.is_empty()
@@ -108,6 +120,7 @@ impl DataView {
         );
         let mut versions = Vec::new();
         for (name, base) in self.contexts.range((first, Unbounded)) {
+            charge(0)?;
             if name.0 != tenant || name.1 != owner {
                 break;
             }
@@ -123,7 +136,7 @@ impl DataView {
                 }
                 continue;
             }
-            if let Some((context, _)) = self.head_context(name, *base)? {
+            if let Some((context, _)) = self.head_context_charged(name, *base, charge)? {
                 versions.push(context);
             }
         }

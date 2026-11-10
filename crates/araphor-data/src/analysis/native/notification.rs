@@ -103,6 +103,15 @@ impl DataView {
         tenant: [u8; 16],
         lookup: NotificationLookup<'_>,
     ) -> Result<Vec<AnalysisContextVersionV1>> {
+        self.notification_states_charged(tenant, lookup, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis) fn notification_states_charged(
+        &self,
+        tenant: [u8; 16],
+        lookup: NotificationLookup<'_>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Vec<AnalysisContextVersionV1>> {
         let (kind, lookup) = NoticeIndex::lookup(tenant, lookup)?;
         let Some(scope) = Records::find(&NoticeIndex::identity(kind, &lookup), |key| {
             Records::read(key, &self.snapshot)
@@ -114,6 +123,7 @@ impl DataView {
         let mut states = Vec::new();
         let limit = if kind == b'C' { 2 } else { usize::MAX };
         for entry in self.snapshot.prefix(&prefix).take(limit) {
+            charge(0)?;
             let (key, value) = entry.context(NativeStorageSnafu {
                 operation: "read notification lookup",
             })?;
@@ -137,12 +147,14 @@ impl DataView {
                 }
                 .build()
             })?;
-            let (context, _) = self.head_context(&name, *base)?.ok_or_else(|| {
-                NativeStateSnafu {
-                    field: "notification head",
-                }
-                .build()
-            })?;
+            let (context, _) = self
+                .head_context_charged(&name, *base, charge)?
+                .ok_or_else(|| {
+                    NativeStateSnafu {
+                        field: "notification head",
+                    }
+                    .build()
+                })?;
             if !NoticeIndex::keys(NotificationKeys::from_context(&context)?)
                 .any(|(tag, key)| tag == kind && key == lookup)
             {

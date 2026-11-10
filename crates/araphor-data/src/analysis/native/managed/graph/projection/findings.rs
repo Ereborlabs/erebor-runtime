@@ -14,12 +14,14 @@ use crate::{
     NotificationGrantV1,
 };
 
+mod notification;
 mod provenance;
 
 struct Producer {
     id: u64,
     origin: GraphOrigin,
     record: Record,
+    selected: crate::analysis::PackageResultRefV1,
 }
 
 struct FindingRow {
@@ -28,7 +30,7 @@ struct FindingRow {
     finding: araphor_analysis_types::FindingMember,
 }
 
-struct FindingRead<'a> {
+pub(in crate::analysis) struct FindingRead<'a> {
     store: &'a NativeStore,
     view: &'a DataView,
     tenant: [u8; 16],
@@ -36,9 +38,33 @@ struct FindingRead<'a> {
     charge: RefCell<&'a mut dyn FnMut(usize) -> Result<()>>,
     producers: BTreeMap<(u64, u64), Arc<Producer>>,
     selected: BTreeMap<String, (u64, String, String)>,
+    findings: BTreeMap<(String, String), Arc<Vec<FindingRow>>>,
+    qualified: BTreeSet<u64>,
+    verified: RefCell<crate::analysis::context::VerifiedPackages>,
 }
 
-impl FindingRead<'_> {
+impl<'a> FindingRead<'a> {
+    pub(in crate::analysis) fn new(
+        store: &'a NativeStore,
+        view: &'a DataView,
+        tenant: [u8; 16],
+        control: &'a AnalysisReadControl,
+        charge: &'a mut dyn FnMut(usize) -> Result<()>,
+    ) -> Self {
+        Self {
+            store,
+            view,
+            tenant,
+            control,
+            charge: RefCell::new(charge),
+            producers: BTreeMap::new(),
+            selected: BTreeMap::new(),
+            findings: BTreeMap::new(),
+            qualified: BTreeSet::new(),
+            verified: RefCell::new(crate::analysis::context::VerifiedPackages::default()),
+        }
+    }
+
     fn charge(&self, bytes: usize) -> Result<()> {
         self.control.check()?;
         (self.charge.borrow_mut())(bytes)
@@ -83,47 +109,15 @@ impl FindingRead<'_> {
             .receipt()
             .ok_or_else(|| Code::Missing.error("native finding selected receipt"))?
             .selected;
-        if let Some((revision, instance, attempt)) = self.selected.get(&selected.result_id) {
-            if *revision != selected.commit_revision
-                || instance != &record.instance
-                || attempt != &record.attempt
-            {
-                return Err(Code::Denied.error("native finding selected authority"));
-            }
-        } else {
-            let (selected_id, selected_result, _) = self.view.result_owner(
-                self.tenant,
-                &selected.result_id,
-                self.control,
-                &mut |bytes| self.charge(bytes),
-            )?;
-            let ResultBody::Selected(step) = selected_result.body else {
-                return Err(Code::Invalid.error("native finding selected kind"));
-            };
-            if selected_result.revision != selected.commit_revision
-                || step.instance != record.instance
-                || step.attempt != record.attempt
-            {
-                return Err(Code::Denied.error("native finding selected authority"));
-            }
-            self.view
-                .check_result_pins(selected_id, &step.witnesses, &mut |bytes| {
-                    self.charge(bytes)
-                })?;
-            self.charge(
-                (selected.result_id.len() + step.instance.len() + step.attempt.len())
-                    .saturating_mul(4)
-                    .saturating_add(12 * size_of::<String>()),
-            )?;
-            self.selected.insert(
-                selected.result_id.clone(),
-                (selected.commit_revision, step.instance, step.attempt),
-            );
-        }
-        self.view
-            .check_result_pins(id, &record.witnesses, &mut |bytes| self.charge(bytes))?;
+        self.charge(selected.result_id.len().saturating_mul(4))?;
+        let selected = selected.clone();
         self.charge(12 * size_of::<Producer>())?;
-        let producer = Arc::new(Producer { id, origin, record });
+        let producer = Arc::new(Producer {
+            id,
+            origin,
+            record,
+            selected,
+        });
         self.producers
             .insert((writer, revision), Arc::clone(&producer));
         Ok(producer)
@@ -288,15 +282,7 @@ impl NativeStore {
         let view = self.view()?;
         let control = AnalysisReadControl::default();
         let mut charge = |_| Ok(());
-        let mut reader = FindingRead {
-            store: self,
-            view: &view,
-            tenant,
-            control: &control,
-            charge: RefCell::new(&mut charge),
-            producers: BTreeMap::new(),
-            selected: BTreeMap::new(),
-        };
+        let mut reader = FindingRead::new(self, &view, tenant, &control, &mut charge);
         let mut requested = BTreeMap::<&str, BTreeSet<String>>::new();
         for reference in references {
             requested

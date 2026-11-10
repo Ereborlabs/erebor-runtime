@@ -47,7 +47,7 @@ impl DataView {
         self.context_charged(key, &mut |_| Ok(()))
     }
 
-    pub(in crate::analysis::native) fn context_charged(
+    pub(in crate::analysis) fn context_charged(
         &self,
         key: &AnalysisContextKeyV1,
         charge: &mut dyn FnMut(usize) -> Result<()>,
@@ -97,18 +97,43 @@ impl DataView {
             }))
     }
 
+    pub(in crate::analysis) fn context_latest(
+        &self,
+        key: &AnalysisContextKeyV1,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<AnalysisContextVersionV1>> {
+        let name = ContextRecord::name(key);
+        let Some(base) = self.contexts.get(&name) else {
+            return Ok(None);
+        };
+        Ok(self
+            .head_context_charged(&name, *base, charge)?
+            .map(|(context, _)| context))
+    }
+
     pub(in crate::analysis::native) fn head_context(
         &self,
         name: &super::ContextName,
         base: u64,
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
+        self.head_context_charged(name, base, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis::native) fn head_context_charged(
+        &self,
+        name: &super::ContextName,
+        base: u64,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         let Some(bytes) = Records::read(&Records::key(b'H', base), &self.snapshot)? else {
             return Ok(None);
         };
         let id = NativeStore::number(&bytes)?;
-        let bytes = Records::payload(&Records::key(b'C', id), |key| {
-            Records::read(key, &self.snapshot)
-        })?
+        let bytes = Records::charged_payload(
+            &Records::key(b'C', id),
+            |key| Records::read(key, &self.snapshot),
+            charge,
+        )?
         .ok_or_else(|| {
             NativeStateSnafu {
                 field: "context head record",

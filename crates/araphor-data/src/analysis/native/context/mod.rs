@@ -73,7 +73,7 @@ impl DataView {
         Ok(Some(row))
     }
 
-    pub(in crate::analysis::native) fn verify_context(
+    pub(in crate::analysis) fn verify_context(
         &self,
         input: &AnalysisContextVersionV1,
     ) -> Result<()> {

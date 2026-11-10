@@ -10,6 +10,9 @@ use crate::{
     NotificationRouteRefV1, NOTIFICATION_ROUTE_OWNER,
 };
 
+#[cfg(feature = "native-store")]
+mod native;
+
 type FindingKey = (String, String);
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -44,7 +47,57 @@ pub struct PreparedNotificationBatch<'a> {
     subjects: BTreeMap<(NotificationKeyV1, u64), NotificationObligationV1>,
 }
 
-impl PreparedNotificationBatch<'_> {
+impl<'a> PreparedNotificationBatch<'a> {
+    fn new(control: &'a AnalysisReadControl, budget: &'a dyn ManagedBudget) -> Result<Self> {
+        Ok(Self {
+            memory: PreparedMemory::new(control, budget)?,
+            failed: false,
+            errors: BTreeMap::new(),
+            comparisons: BTreeMap::new(),
+            comparison_errors: BTreeMap::new(),
+            heads: BTreeMap::new(),
+            findings: BTreeMap::new(),
+            routes: Vec::new(),
+            versions: BTreeMap::new(),
+            states: BTreeMap::new(),
+            subjects: BTreeMap::new(),
+        })
+    }
+
+    fn charge_inputs(
+        &mut self,
+        references: &[NotificationFindingRefV1],
+        keys: &[NotificationKeyV1],
+    ) -> Result<()> {
+        let bytes = references
+            .iter()
+            .try_fold(0usize, |bytes, reference| {
+                bytes
+                    .checked_add(
+                        reference
+                            .finding_id
+                            .len()
+                            .saturating_add(reference.result_id.len())
+                            .saturating_mul(12),
+                    )
+                    .and_then(|bytes| bytes.checked_add(12 * size_of::<FindingKey>()))
+            })
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    keys.len()
+                        .saturating_mul(12 * size_of::<NotificationKeyV1>()),
+                )
+            })
+            .ok_or_else(|| crate::PackageErrorCodeV1::Limit.error("notification request memory"))?;
+        self.charge(bytes)
+    }
+
+    fn insert_state(&mut self, context: AnalysisContextVersionV1) -> Result<()> {
+        let state = NotificationObligationV1::try_from(&context)?;
+        self.states.insert(state.key, (state, context.body.len()));
+        Ok(())
+    }
+
     pub fn charge(&mut self, bytes: usize) -> Result<()> {
         let result = self.memory.charge(bytes);
         self.failed |= result.is_err();
@@ -284,27 +337,10 @@ impl AnalysisStore {
         budget: &'a dyn ManagedBudget,
     ) -> Result<PreparedNotificationBatch<'a>> {
         Code::Invalid.require(tenant != [0; 16], "notification tenant")?;
-        let mut batch = PreparedNotificationBatch {
-            memory: PreparedMemory::new(control, budget)?,
-            failed: false,
-            errors: BTreeMap::new(),
-            comparisons: BTreeMap::new(),
-            comparison_errors: BTreeMap::new(),
-            heads: BTreeMap::new(),
-            findings: BTreeMap::new(),
-            routes: Vec::new(),
-            versions: BTreeMap::new(),
-            states: BTreeMap::new(),
-            subjects: BTreeMap::new(),
-        };
+        let mut batch = PreparedNotificationBatch::new(control, budget)?;
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |reader| {
-            let input_bytes = references.iter().try_fold(0usize, |bytes, reference|
-                bytes.checked_add(reference.finding_id.len().saturating_add(reference.result_id.len()).saturating_mul(12))
-                    .and_then(|bytes| bytes.checked_add(12*size_of::<FindingKey>())))
-                .and_then(|bytes| bytes.checked_add(keys.len().saturating_mul(12*size_of::<NotificationKeyV1>())))
-                .ok_or_else(|| crate::PackageErrorCodeV1::Limit.error("notification request memory"))?;
-            batch.charge(input_bytes)?;
+            batch.charge_inputs(references, keys)?;
             let valid = references.iter().filter(|reference| NotificationGrantV1::identifier(&reference.finding_id, usize::MAX)
                 && NotificationGrantV1::identifier(&reference.result_id, usize::MAX)).collect::<Vec<_>>();
             let ids = valid.iter().map(|reference| &reference.finding_id).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
@@ -342,7 +378,7 @@ impl AnalysisStore {
                         "SELECT entity_key,owner_revision,commit_revision,state_key FROM notification_heads WHERE finding_key=? ORDER BY entity_key LIMIT ?",
                         self.storage.notification_routes.and_then(|n| n.checked_add(2)).and_then(|n| i64::try_from(n).ok()), &lookup_key)?;
                     Code::Limit.require(self.storage.notification_routes.is_none_or(|n| states.len() <= n.saturating_add(1)), "related obligation count")?;
-                    for context in states { Self::prepare_notice_state(context, &mut batch)?; }
+                    for context in states { batch.insert_state(context)?; }
                     Ok(())
                 })();
                 batch.capture(read, ReadOwner::Related, &reference.result_id, &reference.finding_id)?;
@@ -354,7 +390,7 @@ impl AnalysisStore {
                     if batch.states.contains_key(key) { return Ok(()); }
                     let state_key = NotificationKeys::state(tenant, &key.notification_id)?;
                     Self::bound_notice_states(reader, &[], Some(&state_key), &mut batch)?;
-                    if let Some(context) = self.notification_head_from(reader, tenant, &key.notification_id, &state_key)? { Self::prepare_notice_state(context, &mut batch)?; }
+                    if let Some(context) = self.notification_head_from(reader, tenant, &key.notification_id, &state_key)? { batch.insert_state(context)?; }
                     Ok(())
                 })();
                 batch.capture(read, ReadOwner::State, &identity, "")?;
@@ -397,15 +433,6 @@ impl AnalysisStore {
             batch.memory.check()
         })?;
         Ok(batch)
-    }
-
-    fn prepare_notice_state(
-        context: AnalysisContextVersionV1,
-        batch: &mut PreparedNotificationBatch<'_>,
-    ) -> Result<()> {
-        let state = NotificationObligationV1::try_from(&context)?;
-        batch.states.insert(state.key, (state, context.body.len()));
-        Ok(())
     }
 
     fn notice_context(
@@ -497,9 +524,14 @@ impl AnalysisStore {
                 continue;
             }
             let value = (|| {
-                let native = owners.finding(&self.graph_engine, reader, tenant, result, id, &mut |_, bytes| {
-                    batch.charge(bytes)
-                })?;
+                let native = owners.finding(
+                    &self.graph_engine,
+                    reader,
+                    tenant,
+                    result,
+                    id,
+                    &mut |_, bytes| batch.charge(bytes),
+                )?;
                 let source: bool = reader.query_row(
                     "SELECT EXISTS(SELECT 1 FROM managed_source_publications WHERE tenant_id=? AND result_id=?)",
                     params![tenant.as_slice(), result], |row| row.get(0),
@@ -547,7 +579,7 @@ impl AnalysisStore {
             let basis = (|| {
                 let revision = if definition {
                     Self::finding_basis_on(
-                    &self.graph_engine,
+                        &self.graph_engine,
                         reader,
                         tenant,
                         result,

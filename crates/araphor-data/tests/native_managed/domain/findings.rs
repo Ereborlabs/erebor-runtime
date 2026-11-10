@@ -1,7 +1,7 @@
 use super::*;
 use araphor_data::NotificationFindingRefV1;
 
-fn reference(
+pub(super) fn reference(
     store: &NativeStore,
     step: u8,
     id: &str,

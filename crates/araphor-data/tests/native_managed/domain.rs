@@ -265,6 +265,31 @@ fn commit_expiry(
             .select(&[index], Arc::new(()))?,
     );
     frame.record_rows(&contexts)?;
+    let mut attributed = vec![Arc::clone(&rows), Arc::clone(&contexts)];
+    if step == 5 {
+        for (batch, values) in page.page.tables["context_versions"].iter().enumerate() {
+            let owners = values
+                .column_by_name("owner_id")
+                .ok_or("context owner")?
+                .as_any()
+                .downcast_ref::<sdk::arrow_array::StringArray>()
+                .ok_or("context owner type")?;
+            let indices = (0..values.num_rows())
+                .filter(|index| owners.value(*index) == "native-package-v1")
+                .collect::<Vec<_>>();
+            if indices.is_empty() {
+                continue;
+            }
+            let values = Arc::new(
+                frame
+                    .row_handles("context_versions", batch)?
+                    .select(&indices, Arc::new(()))?,
+            );
+            frame.record_rows(&values)?;
+            attributed.push(values);
+        }
+        assert!(attributed.len() > 2);
+    }
     let view = store.view()?;
     let raw = store.read_page_at(&view, &observation.id.stream, 1, &control)?;
     let record = DiscoveryRecordV1::try_from((&observation.id.stream, 0, &raw.records[0]))?;
@@ -309,12 +334,7 @@ fn commit_expiry(
         if step == 3 {
             continue;
         }
-        frame.attribute_input(
-            call,
-            &[Arc::clone(&rows), Arc::clone(&contexts)],
-            &[Arc::clone(&derived)],
-            Arc::new(()),
-        )?;
+        frame.attribute_input(call, &attributed, &[Arc::clone(&derived)], Arc::new(()))?;
     }
     let mut request = super::attempts::request(&format!("domain-{step}"), true);
     if let Some(expiry) = expiry {
@@ -323,7 +343,10 @@ fn commit_expiry(
     request.rebuild = step != 0;
     let attempt = Arc::new(store.register_managed_attempt(&page.state, &request, || Ok(()))?);
     let output = super::publication::output(model)?;
-    let finding = finding(observation, &output.datasets[0].batches[0])?;
+    let mut finding = finding(observation, &output.datasets[0].batches[0])?;
+    if step == 4 {
+        finding.value.severity = FindingSeverityV1::Warning;
+    }
     let anchor = finding.anchor.clone();
     let task = observation.task_subject();
     let execution = GraphSubjectKeyV1::native(
@@ -430,17 +453,21 @@ fn commit_expiry(
                 &control,
             )?;
         }
-        if step == 0 || step == 3 && call == 20 || step != 3 && call == 10 {
+        if step == 0 || step == 4 || step == 3 && call == 20 || step != 3 && call == 10 {
             let mut commands = command(
                 model,
                 DomainRelations::FINDINGS,
-                if step == 2 { b"replacement" } else { b"owner" },
+                if step == 2 || step == 4 && call == 10 {
+                    b"replacement"
+                } else {
+                    b"owner"
+                },
                 &[DomainRelations::key(&finding.value.finding_id)?],
                 None,
                 FindingMember::encode(std::slice::from_ref(&finding))?,
                 step == 1,
             )?;
-            if step == 3 {
+            if step == 3 || step == 4 {
                 let mut columns = commands.columns().to_vec();
                 columns[2] = Arc::new(UInt8Array::from(vec![araphor_graph::Write::Update as u8]));
                 commands = sdk::RecordBatch::try_new(commands.schema(), columns)?;
@@ -548,3 +575,6 @@ mod inputs;
 mod read;
 #[path = "domain/recovery.rs"]
 mod recovery;
+
+#[path = "domain/notifications.rs"]
+mod notifications;

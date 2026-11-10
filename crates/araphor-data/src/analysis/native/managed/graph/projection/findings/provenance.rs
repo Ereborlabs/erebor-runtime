@@ -1,6 +1,101 @@
 use super::*;
 
 impl FindingRead<'_> {
+    fn qualify(&mut self, producer: &Producer) -> Result<()> {
+        self.charge(0)?;
+        if self.qualified.contains(&producer.id) {
+            return Ok(());
+        }
+        let selected = &producer.selected;
+        let record = &producer.record;
+        if let Some((revision, instance, attempt)) = self.selected.get(&selected.result_id) {
+            if *revision != selected.commit_revision
+                || instance != &record.instance
+                || attempt != &record.attempt
+            {
+                return Err(Code::Denied.error("native finding selected authority"));
+            }
+        } else {
+            let (selected_id, selected_result, _) = self.view.result_owner(
+                self.tenant,
+                &selected.result_id,
+                self.control,
+                &mut |bytes| self.charge(bytes),
+            )?;
+            let ResultBody::Selected(step) = selected_result.body else {
+                return Err(Code::Invalid.error("native finding selected kind"));
+            };
+            if selected_result.revision != selected.commit_revision
+                || step.instance != record.instance
+                || step.attempt != record.attempt
+            {
+                return Err(Code::Denied.error("native finding selected authority"));
+            }
+            self.view
+                .check_result_pins(selected_id, &step.witnesses, &mut |bytes| {
+                    self.charge(bytes)
+                })?;
+            self.charge(
+                (selected.result_id.len() + step.instance.len() + step.attempt.len())
+                    .saturating_mul(4)
+                    .saturating_add(12 * size_of::<String>()),
+            )?;
+            self.selected.insert(
+                selected.result_id.clone(),
+                (selected.commit_revision, step.instance, step.attempt),
+            );
+        }
+        self.view
+            .check_result_pins(producer.id, &record.witnesses, &mut |bytes| {
+                self.charge(bytes)
+            })?;
+        self.charge(12 * size_of::<u64>())?;
+        self.qualified.insert(producer.id);
+        Ok(())
+    }
+
+    fn verify(&self, value: &crate::AnalysisContextVersionV1) -> Result<()> {
+        if value.key.owner_id != "native-package-v1" {
+            return self.charge(0);
+        }
+        self.charge(value.body.len().saturating_mul(12))?;
+        let mut failed = false;
+        let result =
+            self.verified
+                .borrow_mut()
+                .check_context(value, |tenant, package, revision| {
+                    let mut charge = |bytes: usize| {
+                        let result = self.charge(bytes.saturating_mul(12));
+                        failed |= result.is_err();
+                        result
+                    };
+                    let row = self.view.package_revision_charged(
+                        tenant,
+                        package,
+                        revision,
+                        self.control,
+                        &mut charge,
+                    )?;
+                    if let Some(row) = &row {
+                        charge(
+                            row.descriptor
+                                .len()
+                                .saturating_add(row.artifact.len())
+                                .saturating_add(
+                                    12 * size_of::<crate::analysis::PackageRevisionV1>(),
+                                ),
+                        )?;
+                    }
+                    Ok(row)
+                });
+        self.charge(0)?;
+        if failed {
+            result
+        } else {
+            result.map_err(crate::Error::stored_artifact)
+        }
+    }
+
     fn parents(
         &mut self,
         owner: &FindingOrigin,
@@ -121,6 +216,7 @@ impl FindingRead<'_> {
             if producer.origin.reference.result_id != owner.result {
                 return Err(Code::Denied.error("native finding producer reference"));
             }
+            self.qualify(&producer)?;
             let uncovered = basis.observe(&records, &producer.record);
             let parents = self.parents(&owner, &records, &producer)?;
             basis.parents(&mut owners, uncovered, parents)?;
@@ -169,7 +265,7 @@ impl FindingRead<'_> {
                 if revision != reference.commit_revision {
                     return Err(Code::Conflict.error("native finding context revision"));
                 }
-                self.view.verify_context(&value)?;
+                self.verify(&value)?;
                 let fact = DataView::fact_record(
                     id,
                     &value,

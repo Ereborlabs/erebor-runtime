@@ -14,6 +14,7 @@ mod authority;
 mod capture;
 mod commit;
 mod graph;
+pub(in crate::analysis) use graph::FindingRead;
 mod lifecycle;
 mod prepare;
 mod priors;

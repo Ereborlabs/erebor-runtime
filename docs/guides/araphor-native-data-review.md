@@ -758,7 +758,8 @@ routing, notification batches, cutover, and incident speedup remain **Not done**
 
 This extension follows `f6e9a217e`. It supplies native context pages,
 notification lookup indexes, and checked batch writes. Production notification
-preparation and delivery remain **Not implemented** on this owner.
+delivery remains **Not implemented** on this owner. Native preparation is
+qualified in the extension below.
 
 [NativeStore::commit_contexts_checked](../../crates/araphor-data/src/analysis/native/context/admission.rs) A caller supplies ordered context versions and expected heads
   -> [DataWrite::context](../../crates/araphor-data/src/analysis/native/context/admission.rs) Data checks each value and its expected head in the same staged transaction.
@@ -812,14 +813,15 @@ production binding, DuckDB removal, and both incident targets were **Not done**.
 
 This extension follows `4b5230cf5`. It supplies native finding batches and
 their retained provenance. Production notification preparation still uses
-DuckDB. The native preparation and delivery callers remain **Not implemented**.
+DuckDB. Native preparation is qualified below. Production delivery remains
+**Not implemented** on the native owner.
 
 [NativeStore::graph_finding_batch](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs) A caller requests findings by publication and finding ID
   -> [DataView::managed_graph_owner](../../crates/araphor-data/src/analysis/native/managed/graph/cuts.rs) Data checks the saved Selected result and publication owner.
   -> [FindingRead::rows](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs) Data resolves only requested groups and properties at that publication cut.
   -> [View::member](../../crates/araphor-graph/src/native/view.rs) Araphor Graph opens each actual member at its selected writer cut.
-  -> [FindingRead::producer](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs) Data checks the opening producer, actual call result, attempt, definition version, and exact Selected receipt.
-  -> [DataView::check_result_pins](../../crates/araphor-data/src/analysis/native/managed/references/read.rs) Data checks saved evidence references against original raw metadata and expiry.
+  -> [FindingRead::producer](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs) Data checks the opening producer, actual call result, attempt, and definition version.
+  -> [FindingRead::qualify](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/provenance.rs) Data checks the exact Selected receipt and saved evidence references against original raw metadata and expiry.
 
 [FindingRead::basis](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/provenance.rs) Data collects the finding's evidence
   -> [FindingBasis::observe](../../crates/araphor-data/src/analysis/managed/graph/provenance/basis.rs) The shared accumulator adds producer witnesses and Graph proof.
@@ -846,6 +848,78 @@ Selected results, and a receipt rebound to a different valid Selected result.
 The existing expired-reference read behavior stays unchanged.
 
 Read the [qualification](../research/results/araphor-native-provenance-2026-11-10.md)
-for the source hashes and exact checks. Native notification preparation,
-production binding, cutover, DuckDB removal, and both incident targets remain
-**Not done**.
+for the source hashes and exact checks. At that qualification, native notification
+preparation, production binding, cutover, DuckDB removal, and both incident targets
+were **Not done**.
+
+
+## Native notification preparation
+
+This extension follows `3ce46f4d3`. The optional native store now supplies the
+existing `PreparedNotificationBatch`. Production router binding, delivery
+batches, and durable notification consumption remain **Not implemented**.
+
+[NativeStore::prepare_notifications](../../crates/araphor-data/src/analysis/notification/prepared/native.rs) A caller requests changed findings and notification keys
+  -> [NativeStore::view](../../crates/araphor-data/src/analysis/native/mod.rs) Data captures one committed view before preparation starts.
+  -> [PreparedNotificationBatch::new](../../crates/araphor-data/src/analysis/notification/prepared.rs) Data creates the shared batch and admits request memory.
+  -> [FindingRead::heads](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/notification.rs) Data selects only requested groups through the captured tenant Graph catalogue and exact publication heads.
+  -> [DataView::context_heads_charged](../../crates/araphor-data/src/analysis/native/context/pages.rs) Data reads current routes through the ordered context catalogue.
+  -> [FindingRead::value](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/notification.rs) Data opens requested values through actual producers at saved publication cuts.
+  -> [FindingRead::revision](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/notification.rs) Data computes retained provenance separately from the finding value.
+  -> [DataView::notification_states_charged](../../crates/araphor-data/src/analysis/native/notification.rs) Data reads only obligations in the requested finding lookup.
+  -> [DataView::context_latest](../../crates/araphor-data/src/analysis/native/context/record.rs) Data reads explicit obligation heads from the same captured view.
+  -> [NativeStore::notice_context](../../crates/araphor-data/src/analysis/notification/prepared/native.rs) Data loads each pending attempt's exact subject revision and referenced route revisions.
+  -> [FindingRead::changed](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/notification.rs) Data compares immutable canonical value tokens for the required current and prior findings.
+  -> [PreparedNotificationBatch](../../crates/araphor-data/src/analysis/notification/prepared.rs) Data returns the prepared values and per-owner errors.
+
+[PreparedNotificationBatch::capture](../../crates/araphor-data/src/analysis/notification/prepared.rs) A stored value or proof cannot be read
+  -> [PreparedNotificationBatch::share](../../crates/araphor-data/src/analysis/notification/prepared.rs) Data defers the error to the affected batch method.
+  -> [PreparedNotificationBatch::finding](../../crates/araphor-data/src/analysis/notification/prepared.rs) A proof-only failure does not remove an available finding value.
+  -> [PreparedNotificationBatch::historical](../../crates/araphor-data/src/analysis/notification/prepared.rs) The historical method returns the deferred proof failure.
+
+[PreparedNotificationBatch::share](../../crates/araphor-data/src/analysis/notification/prepared.rs) Preparation exceeds its memory budget or is cancelled
+  -> Data returns the operation error and discards the batch.
+  -> No notification write, input acknowledgement, or external delivery occurs.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Data
+    participant View
+    participant Graph
+    Caller->>Data: Prepare findings and notification keys
+    Data->>View: Capture committed view
+    Data->>View: Read indexed heads, states, subjects, routes
+    Data->>Graph: Open members at saved writer cuts
+    Graph-->>Data: Actual member and producer
+    Data->>View: Read saved proof and exact context references
+    Data-->>Caller: Shared prepared batch
+```
+
+The local `FindingRead` caches requested rows, actual producers, Selected
+receipts, and retained package proof. The reader and caches end before the
+batch returns. The batch keeps its memory leases until the caller drops it.
+No cache writes durable state. One local `RefCell` permits charge callbacks;
+no batch borrow remains active during storage I/O.
+
+Context payloads and notification data are charged before decode. Package
+proof uses the charged retained-package reader and the caller's cancellation
+control. Decode and bundle allowances are admitted before artifact decode.
+Ordinary contexts do not receive the package-proof allowance. Existing proof
+validation and expired-witness behavior stay unchanged.
+
+Head selection uses the latest `(publication revision, result ID)` order. It
+reads no unrelated finding value and scans no old context versions. Canonical
+tokens supply comparison only. Actual members and saved reads supply proof.
+Pending subjects use `attempt.context_revision`; the current head cannot
+replace that subject. Historical routes use the saved route revision.
+
+The [notification preparation tests](../../crates/araphor-data/tests/native_managed/domain/notifications.rs)
+exercise the public API with real package Graph writes. They check equal values
+after producer removal and replacement, changed values, immutable subjects and
+routes after compaction and restart, error isolation, a concurrent later
+commit, finite memory, and cancellation. A matched allocation case proves that
+a small context's large retained package proof uses the same memory budget.
+Read the [qualification](../research/results/araphor-native-prepared-2026-11-10.md)
+for exact source hashes and checks. This extension adds no benchmark or new
+incident timing. Production still uses DuckDB. Full CI does not run.
