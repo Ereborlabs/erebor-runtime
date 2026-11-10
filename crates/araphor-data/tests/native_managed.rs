@@ -97,7 +97,6 @@ impl Fixture {
         model: sdk::Model,
         package: &str,
     ) -> araphor_data::Result<Self> {
-        let graph = model.graph.is_some();
         let schema = model.outputs[0].schema.clone();
         let artifact = PackageArtifactV1 {
             descriptor: sdk::Package::new(package, "1", vec![model]),

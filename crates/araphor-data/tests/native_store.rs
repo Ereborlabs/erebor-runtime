@@ -287,10 +287,10 @@ fn prior_native_format_is_rejected() -> TestResult {
     let store = NativeStore::open(&root)?;
     assert_eq!(
         store.view()?.snapshot().get(b"\0data/format")?.as_deref(),
-        Some(9u64.to_be_bytes().as_slice())
+        Some(10u64.to_be_bytes().as_slice())
     );
     let mut tx = store.branch().write_tx()?;
-    tx.insert(b"\0data/format", 8u64.to_be_bytes());
+    tx.insert(b"\0data/format", 9u64.to_be_bytes());
     tx.commit_stamped([cut(0)])?;
     drop(store);
     assert!(matches!(

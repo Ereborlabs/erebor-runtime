@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use snafu::ResultExt as _;
 
 use super::{definitions::DefinitionRecord, image::ImageRecord, PackageRecord, Records};
-use crate :: { analysis :: native :: { DataView , NativeStore } , AnalysisReadControl , NativeStateSnafu , NativeStorageSnafu , Result } ;
+use crate::{
+    analysis::native::{DataView, NativeStore},
+    AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, Result,
+};
 
 impl DataView {
     pub(in crate::analysis::native) fn validate_catalogue(&self) -> Result<()> {
@@ -12,6 +15,7 @@ impl DataView {
         let mut definitions = BTreeMap::<Vec<u8>, u64>::new();
         let mut values = BTreeSet::new();
         let mut headers = BTreeSet::new();
+        let mut bodies = BTreeSet::new();
         for entry in self.snapshot.prefix(b"\0data/P") {
             let (key, _) = entry.context(NativeStorageSnafu {
                 operation: "validate package catalogue",
@@ -32,7 +36,8 @@ impl DataView {
                     }
                     .build()
                 })?;
-            let row: PackageRecord = Records::decode(&bytes)?;
+            let mut row: PackageRecord = Records::decode(&bytes)?;
+            row.check()?;
             let identity = PackageRecord::identity(
                 row.value.tenant_id,
                 &row.value.package_id,
@@ -48,6 +53,18 @@ impl DataView {
                 }
                 .fail();
             }
+            let id = id.ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "package artifact owner",
+                }
+                .build()
+            })?;
+            bodies.extend(row.body_keys(id));
+            row.value.artifact = row.body(
+                id,
+                |key| Records::read(key, &self.snapshot),
+                &mut |_| Ok(()),
+            )?;
             row.value
                 .decode_artifact()
                 .map_err(crate::Error::stored_artifact)?;
@@ -72,6 +89,23 @@ impl DataView {
                     .fail();
                 }
             }
+        }
+        for entry in self.snapshot.prefix(PackageRecord::BODY) {
+            let (key, _) = entry.context(NativeStorageSnafu {
+                operation: "validate package artifact bodies",
+            })?;
+            if !bodies.remove(key.as_ref()) {
+                return NativeStateSnafu {
+                    field: "package artifact body set",
+                }
+                .fail();
+            }
+        }
+        if !bodies.is_empty() {
+            return NativeStateSnafu {
+                field: "package artifact body set",
+            }
+            .fail();
         }
         for entry in self
             .snapshot

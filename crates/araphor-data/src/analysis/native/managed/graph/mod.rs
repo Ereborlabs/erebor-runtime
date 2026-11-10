@@ -33,7 +33,10 @@ pub(super) struct GraphCall {
     pub relations: BTreeMap<String, u64>,
 }
 
-use crate :: { analysis :: native :: { DataView , DataWrite } , AnalysisReadControl , ManagedSpec , NativeStateSnafu , PackageErrorCodeV1 as Code , Result } ;
+use crate::{
+    analysis::native::{DataView, DataWrite},
+    AnalysisReadControl, ManagedSpec, NativeStateSnafu, PackageErrorCodeV1 as Code, Result,
+};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ManagedGraph {
@@ -228,22 +231,21 @@ impl DataView {
         call: &crate::ManagedCall,
         charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<sdk::Package> {
-        let row = self
-            .package_revision_charged(
+        let descriptor = self
+            .package_descriptor_charged(
                 spec.tenant,
                 &call.package.package_id,
                 &call.package.revision,
-                &AnalysisReadControl::default(),
                 charge,
             )?
             .ok_or_else(|| Code::Missing.error("managed SDK descriptor"))?;
         charge(
-            row.descriptor
+            descriptor
                 .len()
                 .saturating_mul(12)
                 .saturating_add(12 * size_of::<sdk::Package>()),
         )?;
-        call.contract(&row.descriptor)
+        call.contract(&descriptor)
     }
 
     pub fn managed_graph(

@@ -58,6 +58,81 @@ pub(super) fn fixture(
     Ok((instance, descriptor.exports[0].clone()))
 }
 
+#[test]
+fn contract_reads_metadata() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = NativeStore::open(&root)?;
+    let (instance, model) = fixture(&store)?;
+    let page = super::attempts::capture(&store, &instance, false)?;
+    let attempt = Arc::new(store.register_managed_attempt(
+        &page.state,
+        &super::attempts::request("header", false),
+        || Ok(()),
+    )?);
+    let call = &instance.spec.manifest.calls[&10];
+    let held = store.view()?;
+    let row = held
+        .package_revision(
+            [1; 16],
+            &call.package.package_id,
+            &call.package.revision,
+            &AnalysisReadControl::default(),
+        )?
+        .ok_or("package")?;
+    let prefix = b"\0data/@package-body/";
+    let bodies = held
+        .snapshot()
+        .prefix(prefix)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(bodies.len(), 1);
+    let (key, bytes) = &bodies[0];
+    assert_eq!(bytes[0], 0);
+    assert_eq!(&bytes[1..], row.artifact.as_slice());
+    let mut tx = store.write()?;
+    tx.native().remove(key.clone());
+    tx.commit([])?;
+    let changed = store.view()?;
+    let producer = ManagedGraphTransaction::new(
+        &store,
+        Arc::clone(&attempt),
+        10,
+        &model,
+        Vec::new(),
+        Arc::new(Budget),
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(
+        producer.spec(),
+        model.graph.as_ref().ok_or("Graph contract")?
+    );
+    assert_eq!(read_nodes(&producer, &store)?.data.rows(), 0);
+    assert!(changed
+        .package_revision(
+            [1; 16],
+            &call.package.package_id,
+            &call.package.revision,
+            &AnalysisReadControl::default()
+        )
+        .is_err());
+    assert_eq!(
+        held.package_revision(
+            [1; 16],
+            &call.package.package_id,
+            &call.package.revision,
+            &AnalysisReadControl::default()
+        )?,
+        Some(row)
+    );
+    drop(changed);
+    drop(held);
+    drop(producer);
+    drop(attempt);
+    drop(store);
+    assert!(NativeStore::open(&root).is_err());
+    Ok(())
+}
+
 pub(super) fn node(
     transaction: &ManagedGraphTransaction,
     key: &[u8],

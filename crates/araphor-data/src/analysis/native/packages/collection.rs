@@ -3,9 +3,16 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use araphor_discovery_definition::ImagePin;
 use snafu::ResultExt as _;
 
-use super :: { catalogue :: PackageHeader , definitions :: DefinitionRecord , image :: ImageRecord , PackageRecord , Records } ;
-use crate :: analysis :: native :: { context :: ContextRecord , managed :: VersionRecord , DataWrite , NativeStore } ;
-use crate :: { NativeStateSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , PackageRefV1 , Result } ;
+use super::{
+    catalogue::PackageHeader, definitions::DefinitionRecord, image::ImageRecord, PackageRecord,
+    Records,
+};
+use crate::analysis::native::{
+    context::ContextRecord, managed::VersionRecord, DataWrite, NativeStore,
+};
+use crate::{
+    NativeStateSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code, PackageRefV1, Result,
+};
 
 impl NativeStore {
     pub fn uninstall_package_image(
@@ -224,6 +231,7 @@ impl DataWrite<'_> {
                 continue;
             };
             Records::remove(&mut self.transaction, Records::key(b'P', id))?;
+            Records::remove(&mut self.transaction, PackageRecord::body_key(id))?;
             Records::remove(&mut self.transaction, Records::key(b'I', id))?;
             Records::remove(&mut self.transaction, PackageHeader::key(id))?;
             self.dirty = true;

@@ -1,5 +1,13 @@
 # Native execution performance handoff
 
+## Current work, 2026-11-10
+
+Use the [native storage integration worklist](../research/araphor-fjall-integration.md#current-replacement-work-2026-11-10)
+and [current owner review](../guides/araphor-native-storage-review.md). Commit
+`abdc4694e` replaces the production DuckDB owner. Complete retirement and both
+performance targets remain open. The records below describe earlier source
+states; they are not the current execution checklist.
+
 ## Follow transactions use the recorded input cut, 2026-11-05
 
 Status: **Done** for recorded-cut Follow validation. Performance acceptance is

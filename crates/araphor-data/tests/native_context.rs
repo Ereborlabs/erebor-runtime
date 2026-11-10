@@ -1,5 +1,3 @@
-
-
 use araphor_data::{
     analysis::native::NativeStore, AnalysisContextKeyV1, AnalysisContextVersionV1,
     ContextSensitivityV1, Error, PackageErrorCodeV1 as Code,
@@ -213,12 +211,14 @@ fn retained_package_proof_does_not_require_installation() -> TestResult {
         .prefix(b"\0data/P")
         .next()
         .ok_or("retained package")??;
-    let (row, _): (araphor_data::analysis::PackageRevisionV1, u64) =
+    let (row, _, body_bytes): (araphor_data::analysis::PackageRevisionV1, u64, u64) =
         rmp_serde::from_slice(&bytes[1..])?;
     let mut tx = store.write()?;
     let future = tx.revision() + 1;
-    tx.native()
-        .insert(key, [vec![0], rmp_serde::to_vec(&(row, future))?].concat());
+    tx.native().insert(
+        key,
+        [vec![0], rmp_serde::to_vec(&(row, future, body_bytes))?].concat(),
+    );
     tx.commit([])?;
     store.accept_validated_batch(
         araphor_data::EvidenceIntakeIdentityV1 {

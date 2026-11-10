@@ -66,6 +66,38 @@ snapshots require real package state. Traversal uses native node and adjacency
 indexes. One depth map spans the requested retained versions. Identity reads do
 not load property chunks. Selected properties retain the normal validation path.
 
+## Package-row replacement
+
+The current replacement uses native format 10. It rejects format 9 before Data reads
+package rows. This is a changed durable format; no automatic conversion is
+provided. The cutover qualification below used format 9.
+
+[PackageRecord](../../crates/araphor-data/src/analysis/native/packages/mod.rs)
+stores immutable metadata in `P`. The original artifact bytes occur once under
+`\0data/@package-body/` and the same dictionary ID. Routine managed contracts
+read metadata only. Full package reads join the artifact through the same native
+snapshot or transaction. Existing artifact and bundle authentication still runs
+at its owning callers. No verifier cache is added by this change.
+
+Installation retries compare both metadata and artifact bytes.
+[Collection](../../crates/araphor-data/src/analysis/native/packages/collection.rs)
+removes metadata, body fragments, and the compact GC catalogue atomically.
+[Recovery](../../crates/araphor-data/src/analysis/native/packages/recovery.rs)
+checks exact body ownership, length, and fragment membership before it
+authenticates artifacts. Historical views retain their original bodies.
+
+The focused checks pass: ten package lifecycle cases, twelve context-proof
+cases, three Graph authority cases, and prior-format rejection. Two opposite-order
+native pairs pass the unchanged incident. This change reduces durable creation
+from 143.985–265.681 ms to 50.864–89.282 ms, a measured 2.78–3.48-fold gain.
+
+Two matched release pairs against the saved successful DuckDB control also pass.
+Native durable creation is 50.864–88.972 ms; the paired gain is 6.45–7.36 fold.
+Public receipt is 58.730–104.749 ms. Whole-test time is 2.08–2.12 seconds native
+and 5.03–5.09 seconds DuckDB. The measured creation target is met in these runs;
+the 100-fold requirement is not met. These short pairs do not establish a
+sustained latency guarantee. Read the current worklist for exact report paths.
+
 ## Capacity and maintenance
 
 [Writer admission](../../crates/araphor-data/src/analysis/native/capacity.rs)
@@ -118,9 +150,9 @@ DuckDB directory is rejected; it is not opened as an empty native database.
   These cover exact output admission, refusal, source readiness, encoding parity,
   and retained branches, history, CDC, and compaction.
 
-The final production release build passed. The unchanged incident passed in
+The format 9 cutover release build passed. The unchanged incident passed in
 3.03 seconds, with durable creation delays of 147.276 to 268.944 ms.
-That unpaired run does not prove either performance target. SQL-only fixture
+That earlier unpaired run does not prove either performance target. SQL-only fixture
 ports, finite-history collection, and complete production qualification remain
 open. Full CI and physical device failure after manifest replacement have not
 been run for this replacement.

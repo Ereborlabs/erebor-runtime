@@ -1,5 +1,3 @@
-
-
 use std::collections::BTreeMap;
 
 use araphor_analysis_sdk as sdk;
@@ -44,6 +42,100 @@ fn image(revision: &str, sql: &str) -> araphor_data::Result<PackageBundle> {
         root: artifact.reference(),
         artifacts: vec![artifact],
     })?)
+}
+
+#[test]
+fn artifact_body_ownership() -> TestResult {
+    for fault in 0..4 {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("store");
+        let store = NativeStore::open(&root)?;
+        let bundle = image("1", "SELECT 1::BIGINT UNSIGNED AS count")?;
+        store.install_package_image([1; 16], &bundle, || Ok(()))?;
+        let view = store.view()?;
+        let (key, bytes) = view
+            .snapshot()
+            .prefix(b"\0data/@package-body/")
+            .next()
+            .ok_or("body")??;
+        let mut tx = store.write()?;
+        match fault {
+            0 => tx.native().remove(key.clone()),
+            1 => tx.native().insert(key.clone(), &bytes[..bytes.len() - 1]),
+            2 => tx.native().insert(
+                [b"\0data/@package-body/".as_slice(), &u64::MAX.to_be_bytes()].concat(),
+                bytes.clone(),
+            ),
+            3 => tx.native().insert(
+                [key.as_ref(), &0u64.to_be_bytes()].concat(),
+                b"extra fragment",
+            ),
+            _ => unreachable!(),
+        }
+        tx.commit([])?;
+        drop(view);
+        drop(store);
+        assert!(NativeStore::open(&root).is_err(), "fault {fault}");
+    }
+    Ok(())
+}
+
+#[test]
+fn artifact_collection_keeps_history() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = NativeStore::open(&root)?;
+    let bundle = image("1", "SELECT 1::BIGINT UNSIGNED AS count")?;
+    let installed = store.install_package_image([1; 16], &bundle, || Ok(()))?;
+    let held = store.view()?;
+    let pin = ImagePin {
+        image: bundle.bundle().root.clone(),
+        digest: bundle.digest().into(),
+    };
+    assert!(store.uninstall_package_image([1; 16], &pin, || Ok(()))?);
+    let view = store.view()?;
+    assert_eq!(view.snapshot().prefix(b"\0data/P").count(), 0);
+    assert_eq!(view.snapshot().prefix(b"\0data/@package/").count(), 0);
+    assert_eq!(view.snapshot().prefix(b"\0data/@package-body/").count(), 0);
+    assert!(view
+        .package_image(
+            [1; 16],
+            "native-counts",
+            None,
+            &AnalysisReadControl::default()
+        )?
+        .is_none());
+    assert_eq!(
+        held.package_image(
+            [1; 16],
+            "native-counts",
+            None,
+            &AnalysisReadControl::default()
+        )?
+        .ok_or("historical image")?
+        .digest(),
+        bundle.digest()
+    );
+    drop(view);
+    drop(held);
+    store.database().inner().flush_memtables()?;
+    store.database().inner().major_compact()?;
+    drop(store);
+    let store = NativeStore::open(&root)?;
+    assert_eq!(
+        store
+            .read_at(installed)?
+            .package_image(
+                [1; 16],
+                "native-counts",
+                None,
+                &AnalysisReadControl::default()
+            )?
+            .ok_or("retained image")?
+            .digest(),
+        bundle.digest()
+    );
+    Ok(())
 }
 
 fn definition(
@@ -484,11 +576,16 @@ fn native_bytes_and_raw_positions_survive_reopen() -> TestResult {
     }
     for entry in view.snapshot().prefix(b"\0data/P") {
         let (key, value) = entry?;
-        let row: (PackageRevisionV1, u64) = rmp_serde::from_slice(&value[1..])?;
+        let row: (PackageRevisionV1, u64, u64) = rmp_serde::from_slice(&value[1..])?;
         assert!(row.0.dependencies.is_empty());
-        assert!(value
-            .windows(row.0.artifact.len())
-            .any(|bytes| bytes == row.0.artifact));
+        assert!(row.0.artifact.is_empty());
+        let body_key = [b"\0data/@package-body/".as_slice(), &key[7..]].concat();
+        let body = view.snapshot().get(&body_key)?.ok_or("package body")?;
+        let artifact = image.bundle().artifacts[0].encode()?;
+        assert_eq!(body[0], 0);
+        assert_eq!(row.2, artifact.len() as u64);
+        assert_eq!(&body[1..], artifact.as_slice());
+        old.push((body_key.into(), body.to_vec()));
         old.push((key, [vec![0], rmp_serde::to_vec(&row)?].concat()));
     }
     for entry in view.snapshot().prefix(b"\0data/coverage/report/") {
@@ -499,7 +596,7 @@ fn native_bytes_and_raw_positions_survive_reopen() -> TestResult {
         assert!(value.windows(row.1.len()).any(|bytes| bytes == row.1));
         old.push((key, [vec![0], rmp_serde::to_vec(&row)?].concat()));
     }
-    assert_eq!(old.len(), 3);
+    assert_eq!(old.len(), 4);
     let mut tx = store.write()?;
     for (key, value) in old {
         tx.native().insert(key, value);
@@ -613,11 +710,13 @@ fn raw_tail_cannot_validate_future_metadata() -> TestResult {
         .prefix(b"\0data/P")
         .next()
         .ok_or("package")??;
-    let (row, _): (PackageRevisionV1, u64) = rmp_serde::from_slice(&value[1..])?;
+    let (row, _, body_bytes): (PackageRevisionV1, u64, u64) = rmp_serde::from_slice(&value[1..])?;
     let mut tx = store.write()?;
     let future = tx.revision() + 1;
-    tx.native()
-        .insert(key, [vec![0], rmp_serde::to_vec(&(row, future))?].concat());
+    tx.native().insert(
+        key,
+        [vec![0], rmp_serde::to_vec(&(row, future, body_bytes))?].concat(),
+    );
     tx.commit([])?;
     let source = EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],

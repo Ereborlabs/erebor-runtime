@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::{records::Records, DataView, DataWrite, NativeStore};
@@ -12,13 +12,63 @@ mod definitions;
 mod image;
 mod recovery;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct PackageRecord {
     value: PackageRevisionV1,
     revision: u64,
+    body_bytes: u64,
 }
 
 impl PackageRecord {
+    const BODY: &'static [u8] = b"\0data/@package-body/";
+
+    fn body_key(id: u64) -> Vec<u8> {
+        [Self::BODY, &id.to_be_bytes()].concat()
+    }
+
+    fn body_keys(&self, id: u64) -> impl Iterator<Item = Vec<u8>> {
+        let key = Self::body_key(id);
+        let fragments = if self.body_bytes >= u64::from(u32::MAX) {
+            self.body_bytes.div_ceil(u64::from(u32::MAX))
+        } else {
+            0
+        };
+        std::iter::once(key.clone()).chain(
+            (0..fragments).map(move |slot| [key.as_slice(), &slot.to_be_bytes()[..]].concat()),
+        )
+    }
+
+    fn check(&self) -> Result<()> {
+        if self.revision == 0 || self.body_bytes == 0 || !self.value.artifact.is_empty() {
+            return NativeStateSnafu {
+                field: "package metadata header",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    fn body(
+        &self,
+        id: u64,
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Vec<u8>> {
+        let body =
+            Records::charged_payload(&Self::body_key(id), get, charge)?.ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "package artifact body",
+                }
+                .build()
+            })?;
+        if body.len() as u64 != self.body_bytes {
+            return NativeStateSnafu {
+                field: "package artifact length",
+            }
+            .fail();
+        }
+        Ok(body)
+    }
     fn identity(tenant: [u8; 16], package: &str, revision: Option<&str>) -> Result<Vec<u8>> {
         rmp_serde::to_vec(&(b'P', tenant, package, revision)).context(ManagedEncodingSnafu)
     }
@@ -39,6 +89,22 @@ impl PackageRecord {
         mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
         charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<Option<Self>> {
+        let Some((id, mut record)) =
+            Self::read_header(tenant, package, revision, &mut get, charge)?
+        else {
+            return Ok(None);
+        };
+        record.value.artifact = record.body(id, get, charge)?;
+        Ok(Some(record))
+    }
+
+    fn read_header(
+        tenant: [u8; 16],
+        package: &str,
+        revision: &str,
+        mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<(u64, Self)>> {
         let identity = Self::identity(tenant, package, Some(revision))?;
         let Some(id) = Records::find(&identity, &mut get)? else {
             return Ok(None);
@@ -47,6 +113,7 @@ impl PackageRecord {
             return Ok(None);
         };
         let record: Self = Records::decode(&bytes)?;
+        record.check()?;
         if record.value.tenant_id != tenant
             || record.value.package_id != package
             || record.value.revision != revision
@@ -57,11 +124,37 @@ impl PackageRecord {
             }
             .fail();
         }
-        Ok(Some(record))
+        Ok(Some((id, record)))
     }
 }
 
 impl DataView {
+    pub(in crate::analysis::native) fn package_descriptor_charged(
+        &self,
+        tenant: [u8; 16],
+        package: &str,
+        revision: &str,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<Vec<u8>>> {
+        let row = PackageRecord::read_header(
+            tenant,
+            package,
+            revision,
+            |key| Records::read(key, &self.snapshot),
+            charge,
+        )?;
+        if row
+            .as_ref()
+            .is_some_and(|(_, row)| row.revision > self.metadata_revision)
+        {
+            return NativeStateSnafu {
+                field: "package record revision",
+            }
+            .fail();
+        }
+        Ok(row.map(|(_, row)| row.value.descriptor))
+    }
+
     pub fn package_revision(
         &self,
         tenant: [u8; 16],
@@ -162,8 +255,24 @@ impl DataWrite<'_> {
                 Some(&package.revision),
             )?;
             let id = Records::intern(&mut self.transaction, &identity)?;
-            let bytes = Records::encode(&(package, self.revision))?;
+            let record = PackageRecord {
+                value: PackageRevisionV1 {
+                    tenant_id: package.tenant_id,
+                    package_id: package.package_id.clone(),
+                    revision: package.revision.clone(),
+                    descriptor: package.descriptor.clone(),
+                    artifact: Vec::new(),
+                    dependencies: package.dependencies.clone(),
+                },
+                revision: self.revision,
+                body_bytes: package.artifact.len() as u64,
+            };
+            let bytes = Records::encode(&record)?;
             Records::stage(&mut self.transaction, Records::key(b'P', id), bytes);
+            let mut body = Vec::with_capacity(package.artifact.len() + 1);
+            body.push(0);
+            body.extend_from_slice(&package.artifact);
+            Records::stage(&mut self.transaction, PackageRecord::body_key(id), body);
             let header =
                 catalogue::PackageHeader::from_package(package, self.revision, |dependency| {
                     Records::intern(&mut self.transaction, dependency)

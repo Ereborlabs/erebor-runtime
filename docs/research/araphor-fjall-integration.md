@@ -38,10 +38,31 @@ fixture ports, finite-history collection, and complete qualification remain open
 | Storage lifecycle | Complete configured physical and witness admission, retention, collection, and checkpoint/restore integration. Recovery must preserve acknowledged raw input and distinguish a failed raw append from a poisoned native engine. Preserve the existing failure assertions. |
 | Subscription and execution | Complete retained Source providers. Keep saved positions in the original logs and native DataFusion plans. Require restart and unchanged incident proof through the public owner. |
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
-| Performance | Use the saved successful control and a matched native build. Neither latency target is proved. |
+| Performance | Matched release runs measure durable creation below 100 ms. The measured gain against DuckDB is 6.45 to 7.36 fold. The 100-fold target is not met. |
 
 Current evidence:
 
+- Commit `abdc4694e` contains the connected production cutover. Its qualification
+  uses native format 9. The package-row replacement keeps metadata in `P`,
+  and the original artifact body has a disjoint same-ID
+  key. Routine contract reads use metadata only. Full reads join the body from
+  the same cut. Native format 10 rejects older native stores. Ten package
+  lifecycle, twelve context-proof, three Graph authority, and one format-rejection
+  checks pass. The matched release build passed in 6 minutes 29 seconds.
+- Two opposite-order native pairs pass the unchanged incident. Package metadata
+  separation reduces collector-to-durable creation from 143.985–265.681 ms to
+  50.864–89.282 ms, a measured 2.78–3.48-fold gain. Whole-test time decreases
+  from 2.88–2.93 seconds to 2.09–2.12 seconds. Read
+  `output/araphor-fjall-migration-20261110/package-header-comparison.json`.
+- Two opposite-order matched DuckDB/native release pairs also pass. Native
+  durable creation is 50.864–88.972 ms; DuckDB is 328.286–607.395 ms. The paired
+  gain is 6.45–7.36 fold. Native public receipt is 58.730–104.749 ms; DuckDB is
+  393.279–701.488 ms. Whole-test time is 2.08–2.12 seconds native and 5.03–5.09
+  seconds DuckDB. Each run has 18 collector inputs, 16,384 bulk rows, and three
+  durable notification creations. Test and definition hashes match the saved
+  control. Read `output/araphor-fjall-migration-20261110/duckdb-header-comparison.json`.
+  These short pairs meet the measured sub-100 ms creation target. They do not
+  establish a sustained latency guarantee, and the 100-fold target is not met.
 - The final connected release build passed in 7 minutes 20 seconds. The unchanged
   incident passed in 3.03 seconds. Collector receipt to durable notification
   creation was 147.276, 255.605, and 268.944 milliseconds. Public receipt was
