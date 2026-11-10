@@ -257,6 +257,154 @@ fn native_delta_history_and_rollback() -> TestResult {
 }
 
 #[test]
+fn point_members_preserve_selected_history_and_leases() -> TestResult {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Charge(Arc<AtomicUsize>, usize);
+    impl Drop for Charge {
+        fn drop(&mut self) {
+            self.0.fetch_sub(self.1, Ordering::AcqRel);
+        }
+    }
+    let fixture = Fixture::new()?;
+    let empty = fixture.view()?;
+    let mut journal = Journal::new(17)?;
+    fixture.edit(&empty, &mut journal, 11, b"owner", &[b"source"], 0)?;
+    fixture.edit(&empty, &mut journal, 12, b"owner", &[b"target"], 0)?;
+    fixture.edit(&empty, &mut journal, 13, b"owner", &[b"edge"], 0)?;
+    let first = fixture
+        .stage(&empty, &[&journal], 100, true)?
+        .ok_or("commit")?;
+    let current = fixture.view()?;
+    for (relation, key) in [(11, b"source".as_slice()), (13, b"edge")] {
+        let point = current
+            .member(17, relation, b"owner", key, &|_, _, _| Ok(None))?
+            .ok_or("point")?;
+        let mut visited = None;
+        current.visit(
+            relation,
+            Read::Owned(17),
+            &RecordBatch::new_empty(Arc::new(Schema::empty())),
+            &|_, _, _| Ok(None),
+            |row| {
+                visited = Some(row);
+                Ok(())
+            },
+        )?;
+        let visited = visited.ok_or("visited")?;
+        assert_eq!(
+            (
+                point.writer,
+                point.relation,
+                &point.owner,
+                &point.key,
+                &point.endpoints,
+                point.property,
+                point.revision,
+                point.row
+            ),
+            (
+                visited.writer,
+                visited.relation,
+                &visited.owner,
+                &visited.key,
+                &visited.endpoints,
+                visited.property,
+                visited.revision,
+                visited.row
+            )
+        );
+        assert_eq!(point.properties(), visited.properties());
+    }
+    assert!(current
+        .member(0, 11, b"owner", b"source", &|_, _, _| Ok(None))
+        .is_err());
+    assert!(current
+        .member(17, 999, b"owner", b"source", &|_, _, _| Ok(None))
+        .is_err());
+    assert!(current
+        .member(999, 11, b"owner", b"source", &|_, _, _| Ok(None))?
+        .is_none());
+    assert!(current
+        .member(17, 11, b"missing", b"source", &|_, _, _| Ok(None))?
+        .is_none());
+    let mut remove = Journal::new(17)?;
+    remove.publish(remove.prepare_clear(RecordBatch::try_new(
+        Arc::new(Relation::clear_schema()),
+        vec![Arc::new(BinaryArray::from_iter_values([
+            b"owner".as_slice(),
+        ]))],
+    )?)?)?;
+    fixture.stage(&current, &[&remove], 101, true)?;
+    let latest = fixture.view()?;
+    assert!(latest.member_key(17, 13, b"owner", b"edge")?.is_some());
+    assert!(latest
+        .member(17, 13, b"owner", b"edge", &|_, _, _| Ok(None))?
+        .is_none());
+    fixture.db.inner().flush_memtables()?;
+    fixture.db.inner().major_compact()?;
+    let held = Arc::new(AtomicUsize::new(0));
+    let reserve = |_, bytes, _| -> Result<Option<Lease>> {
+        held.fetch_add(bytes, Ordering::AcqRel);
+        Ok(Some(Box::new(Charge(Arc::clone(&held), bytes))))
+    };
+    let selected = fixture.graph.view(
+        fixture.branch.snapshot()?,
+        BTreeMap::from([(17, fixture.branch.read_at(first.revision)?)]),
+        &reserve,
+    )?;
+    let point = selected
+        .member(17, 13, b"owner", b"edge", &reserve)?
+        .ok_or("historical point")?;
+    assert_eq!(point.revision, 100);
+    drop(selected);
+    assert!(held.load(Ordering::Acquire) > 0);
+    assert_eq!(
+        point
+            .properties()
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("properties")?
+            .value(point.row),
+        42
+    );
+    drop(point);
+    assert_eq!(held.load(Ordering::Acquire), 0);
+    Ok(())
+}
+
+#[test]
+fn point_missing_members_do_not_hide_invalid_indexes() -> TestResult {
+    for remove in [true, false] {
+        let fixture = Fixture::new()?;
+        let empty = fixture.view()?;
+        let mut journal = Journal::new(17)?;
+        fixture.edit(&empty, &mut journal, 11, b"owner", &[b"source"], 0)?;
+        fixture.stage(&empty, &[&journal], 100, true)?;
+        let key = fixture
+            .view()?
+            .member_key(17, 11, b"owner", b"source")?
+            .ok_or("member key")?;
+        let mut tx = fixture.branch.write_tx()?;
+        if remove {
+            tx.remove(key);
+        } else {
+            tx.insert(key, [255]);
+        }
+        tx.commit()?;
+        let view = fixture.view()?;
+        let point = view.member(17, 11, b"owner", b"source", &|_, _, _| Ok(None));
+        if remove {
+            assert!(point?.is_none());
+        } else {
+            assert!(point.is_err());
+        }
+        assert!(Fixture::count(&view, 11, Read::Owned(17), &[]).is_err());
+    }
+    Ok(())
+}
+
+#[test]
 fn shared_endpoints_and_full_delta() -> TestResult {
     let fixture = Fixture::new()?;
     let empty = fixture.view()?;

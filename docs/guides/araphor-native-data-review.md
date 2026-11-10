@@ -15,6 +15,34 @@ commits Graph, findings, state, references, and consumed positions. Original
 logs supply selective subscription wakes. Native DataFusion plans read one
 consistent view. The complete migration remains **Not done**.
 
+## Native Graph point reads
+
+[View::member](../../crates/araphor-graph/src/native/view.rs) resolves one
+writer, relation, owner, and entity key through the existing dictionary.
+It reads that membership once from the writer's selected snapshot. It uses
+the same decoder, property cache, and memory leases as indexed traversal.
+The returned member keeps its properties and leases after the view is dropped.
+
+An unknown or deleted member returns `None`. Invalid relations, writer zero,
+and malformed records return an error. Indexed traversal still returns an
+error if an index refers to a missing member. The point API adds no scan,
+persistent index, package rule, or DataFusion operator.
+
+The [native Graph tests](../../crates/araphor-graph/src/native/tests.rs) compare
+point and traversal fields. They check deleted membership with retained
+dictionary IDs, selected historical writer cuts after compaction, property
+lifetime, and corrupt membership/index records. All nine native cases pass:
+
+```sh
+cargo test --offline -p araphor-graph --features native-store --lib native::tests \
+  --config /tmp/araphor-storage-release-override.toml
+```
+
+The local config selects the existing DuckDB build override for this workspace.
+Selected-file formatting also passes. Evidence:
+`output/araphor-fjall-migration-20261109/native-member-tests.log`.
+Production integration and incident performance remain **Not done**.
+
 ## Review flow
 
 [NativeStore::open](../../crates/araphor-data/src/analysis/native/mod.rs) Data opens the native metadata store

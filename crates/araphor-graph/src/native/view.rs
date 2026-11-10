@@ -295,7 +295,7 @@ impl View {
                     let (_, key) = item.context(NativeSnafu {
                         operation: "scan Graph owned members",
                     })?;
-                    visit(self.member(*writer, &key, reserve)?)?;
+                    visit(self.read_member(*writer, &key, reserve)?)?;
                 }
                 continue;
             }
@@ -322,7 +322,7 @@ impl View {
                         }
                         memory.charge(*writer, member.len() + 128)?;
                         seen.insert(member.to_vec());
-                        visit(self.member(*writer, &member, reserve)?)?;
+                        visit(self.read_member(*writer, &member, reserve)?)?;
                     }
                 }
             }
@@ -330,7 +330,27 @@ impl View {
         Ok(())
     }
 
-    fn member(&self, writer: u64, key: &[u8], reserve: &Reserve<'_>) -> Result<Member> {
+    pub fn member(
+        &self,
+        writer: u64,
+        relation: u64,
+        owner: &[u8],
+        key: &[u8],
+        reserve: &Reserve<'_>,
+    ) -> Result<Option<Member>> {
+        let Some(key) = self.member_key(writer, relation, owner, key)? else {
+            return Ok(None);
+        };
+        let Some(bytes) = self.snapshot(writer)?.get(&key).context(NativeSnafu {
+            operation: "read Graph point member",
+        })?
+        else {
+            return Ok(None);
+        };
+        self.decode_member(writer, &key, &bytes, reserve).map(Some)
+    }
+
+    fn read_member(&self, writer: u64, key: &[u8], reserve: &Reserve<'_>) -> Result<Member> {
         let snapshot = self.snapshot(writer)?;
         let bytes = snapshot
             .get(key)
@@ -343,9 +363,20 @@ impl View {
                 }
                 .build()
             })?;
+        self.decode_member(writer, key, &bytes, reserve)
+    }
+
+    fn decode_member(
+        &self,
+        writer: u64,
+        key: &[u8],
+        bytes: &[u8],
+        reserve: &Reserve<'_>,
+    ) -> Result<Member> {
+        let snapshot = self.snapshot(writer)?;
         let mut memory = Scratch::new(reserve);
         memory.charge(writer, bytes.len() + 256)?;
-        let stored: StoredMember = Key::decode(&bytes)?;
+        let stored: StoredMember = Key::decode(bytes)?;
         if stored.writer != writer || stored.key() != key {
             return InvalidSnafu {
                 field: "native Graph member identity",
