@@ -140,11 +140,17 @@ impl<'a> FindingRead<'a> {
     }
 
     fn rows(&mut self, result: &str, ids: &BTreeSet<String>) -> Result<Vec<FindingRow>> {
-        let (publication, _) =
+        let (publication, owner) =
             self.view
                 .managed_graph_owner(self.tenant, result, self.control, &mut |bytes| {
                     self.charge(bytes)
                 })?;
+        if matches!(
+            &owner.instance().spec.destination,
+            crate::ManagedDestination::Graph { .. }
+        ) {
+            return Err(Code::Unsupported.error("native source finding owner"));
+        }
         let publication =
             publication.ok_or_else(|| Code::Missing.error("native finding publication"))?;
         let at = self.store.read_at(publication.reference.commit_revision)?;

@@ -15,6 +15,7 @@ use crate::{
 mod context;
 mod discovery;
 mod graph;
+mod graph_state;
 mod source;
 
 impl NativeStore {
@@ -160,6 +161,7 @@ impl NativeStore {
                     | "findings"
                     | "graph_manifest"
                     | "discovery_state"
+                    | "graph_state"
             ) {
                 return Err(Code::Unsupported.error("native table owner"));
             }
@@ -182,6 +184,11 @@ impl NativeStore {
         }
         let mut selected = projected;
         let mut output = AnalysisExtractionV1::new(view.meta(), limits);
+        output.graph_enabled = true;
+        output.discovery_enabled = self
+            .discovery_owners
+            .load(std::sync::atomic::Ordering::Acquire)
+            != 0;
         output.charge(size_of::<AnalysisExtractionV1>() + selected.allocation_bytes())?;
         if let Some(owners) = owners {
             for owner in owners {
@@ -266,6 +273,7 @@ impl NativeStore {
             &mut capture,
             control,
         )?;
+        self.extract_graph_state(view, &selected, &read, &mut output, &mut capture, control)?;
         self.extract_discovery_state(
             view,
             &selected,

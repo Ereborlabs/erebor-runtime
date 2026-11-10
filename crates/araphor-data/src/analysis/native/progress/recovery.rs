@@ -246,20 +246,29 @@ impl NativeStore {
                 return Err(Code::Invalid.error("processor source bounds"));
             }
             if let Some(head) = &state.head {
-                let (_, result) = ResultRecord::read_header(
+                if let Some((_, result)) = ResultRecord::read_header(
                     &head.result_id,
                     at.metadata_revision,
                     |key| Records::read(key, &at.snapshot),
                     &mut |_| Ok(()),
-                )?
-                .ok_or_else(|| Code::Missing.error("processor head"))?;
-                if result.revision != head.commit_revision
-                    || result.request.scope != state.scope
-                    || result.request.consumed_cursor != state.consumed
-                    || result.request.coverage_revision != state.coverage
-                    || result.request.context_revision != state.context
-                {
-                    return Err(Code::Invalid.error("processor head progress"));
+                )? {
+                    if result.revision != head.commit_revision
+                        || result.request.scope != state.scope
+                        || result.request.consumed_cursor != state.consumed
+                        || result.request.coverage_revision != state.coverage
+                        || result.request.context_revision != state.context
+                    {
+                        return Err(Code::Invalid.error("processor head progress"));
+                    }
+                } else {
+                    let (header, result) = at.source_progress(&state.scope, head)?;
+                    let source = header.summary(&result)?;
+                    if source.last > state.consumed
+                        || header.coverage != state.coverage
+                        || header.captured.commit_revision != state.context
+                    {
+                        return Err(Code::Invalid.error("source processor progress"));
+                    }
                 }
             }
             let before = self.read_at(state.revision - 1)?;

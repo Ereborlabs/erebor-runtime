@@ -176,13 +176,20 @@ impl DataView {
         let Some(head) = state.head else {
             return Ok(None);
         };
-        let (_, result) = ResultRecord::read(
+        let Some((_, result)) = ResultRecord::read(
             &head.result_id,
             self.metadata_revision,
             |key| Records::read(key, &self.snapshot),
             &mut |_| Ok(()),
         )?
-        .ok_or_else(|| Code::Missing.error("processor head result"))?;
+        else {
+            let (header, result) = self.source_progress(scope, &head)?;
+            return Ok(Some(AnalysisProcessorResultV1 {
+                result_id: head.result_id,
+                body: header.manifest(&result, &scope.identity)?.encode()?,
+                commit_revision: result.revision,
+            }));
+        };
         if result.revision != head.commit_revision || result.request.scope != *scope {
             return Err(Code::Invalid.error("processor head result"));
         }

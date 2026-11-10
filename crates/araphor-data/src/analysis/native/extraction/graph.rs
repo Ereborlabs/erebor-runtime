@@ -106,6 +106,12 @@ impl NativeStore {
                 view.managed_graph_owner(selected.tenant_id, name, control, &mut |bytes| {
                     output.charge(bytes)
                 })?;
+            if matches!(
+                &owner.instance().spec.destination,
+                crate::ManagedDestination::Graph { .. }
+            ) {
+                return Err(Code::Unsupported.error("native source Graph provider"));
+            }
             let publication = publication
                 .ok_or_else(|| Code::Unsupported.error("native Graph publication owner"))?;
             if owner.instance().grant.permitted_by(scope).is_err() {

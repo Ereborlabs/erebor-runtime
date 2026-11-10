@@ -157,9 +157,6 @@ impl crate::analysis::native::NativeStore {
         if derived.windows(2).any(|pair| pair[0].key >= pair[1].key) {
             return Err(Code::Invalid.error("derived evidence order"));
         }
-        if !origins.is_empty() {
-            return Err(Code::Denied.error("derived historical source scope"));
-        }
         let view = self.view()?;
         let (instance, attempt) = result.owner();
         let attempt = view
@@ -170,6 +167,12 @@ impl crate::analysis::native::NativeStore {
                 &crate::AnalysisReadControl::default(),
             )?
             .ok_or_else(|| Code::Missing.error("managed derived owner"))?;
+        let historical = self.source_origins(
+            &attempt,
+            origins.iter(),
+            &crate::AnalysisReadControl::default(),
+            &mut |_| Ok(()),
+        )?;
         let source = self.read_at(attempt.captured_revision())?;
         crate::analysis::managed::source::SourceEvidence::check_proofs(
             (witnesses, derived, proofs),
@@ -231,7 +234,20 @@ impl crate::analysis::native::NativeStore {
                 return Err(Code::Denied.error("derived fact source witness"));
             }
             if !captured.contains(reference) && !(fact.is_some() && imported.is_some()) {
-                return Err(Code::Denied.error("unbound derived parent"));
+                let mut bound = false;
+                for source in &historical {
+                    if source.contains(id, reference, fact.as_ref(), witnesses)? {
+                        bound = true;
+                        break;
+                    }
+                }
+                if !bound {
+                    return Err(Code::Denied.error("unbound derived parent"));
+                }
+                let allowed = &attempt.0.capture.grant.selection.contexts;
+                if !allowed.is_all() && !allowed.as_slice().contains(&reference.key) {
+                    return Err(Code::Denied.error("derived historical context grant"));
+                }
             }
         }
         if !imports.is_empty() {

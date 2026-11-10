@@ -26,21 +26,31 @@ impl DataView {
             return Err(Code::Invalid.error("managed success selected body"));
         };
         let spec = &owner.1.spec;
-        if owner.0 != *attempt
-            || !matches!(
-                spec.destination,
-                ManagedDestination::Selected | ManagedDestination::DiscoveryProfile { .. }
-            )
-            || receipt.graph.is_some()
-        {
-            return Err(Code::Invalid.error("managed success destination"));
+        if owner.0 != *attempt {
+            return Err(Code::Invalid.error("managed success owner"));
+        }
+        match &spec.destination {
+            ManagedDestination::Selected | ManagedDestination::DiscoveryProfile { .. }
+                if receipt.graph.is_none() && step.source.is_none() => {}
+            ManagedDestination::Graph {
+                operation: crate::ManagedGraphOperation::Evaluate,
+                ..
+            } if receipt.graph.as_ref() == Some(&receipt.selected) && step.source.is_some() => {}
+            ManagedDestination::Graph {
+                operation: crate::ManagedGraphOperation::Evaluate,
+                ..
+            } if receipt.graph.is_none()
+                && step.source.is_none()
+                && step.rows == 0
+                && receipt.results.is_empty() => {}
+            _ => return Err(Code::Invalid.error("managed success destination")),
         }
         self.check_step_evidence(attempt, step, spec)?;
         let mut expected = attempt.capture.dependencies.clone();
         expected.extend(receipt.results.values().cloned());
         expected.sort_by(|left, right| left.result_id.cmp(&right.result_id));
         expected.dedup();
-        if step.dependencies != expected || step.source.is_some() {
+        if step.dependencies != expected {
             return Err(Code::Invalid.error("managed selected dependencies"));
         }
         let mut derived = Vec::new();
@@ -69,6 +79,25 @@ impl DataView {
                     .is_some_and(|prior| prior != *reference)
                 {
                     return Err(Code::Conflict.error("selected call proof identity"));
+                }
+            }
+        }
+        if let Some(source) = &step.source {
+            derived = crate::AnalysisStore::join_contexts(&derived, &source.derived)?;
+            for origin in &source.origins {
+                if origins
+                    .insert(origin.result_id.clone(), origin.clone())
+                    .is_some_and(|prior| prior != *origin)
+                {
+                    return Err(Code::Conflict.error("selected source origin identity"));
+                }
+            }
+            for (record, reference) in &source.proofs {
+                if proofs
+                    .insert((record.clone(), reference.key.clone()), reference.clone())
+                    .is_some_and(|prior| prior != *reference)
+                {
+                    return Err(Code::Conflict.error("selected source proof identity"));
                 }
             }
         }

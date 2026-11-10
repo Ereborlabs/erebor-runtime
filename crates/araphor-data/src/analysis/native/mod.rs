@@ -260,6 +260,7 @@ impl NativeStore {
         store.validate_progress_recovery()?;
         store.validate_result_recovery()?;
         store.validate_graph_recovery()?;
+        store.validate_source_recovery()?;
         store.recover_managed_startup()?;
         Ok(store)
     }

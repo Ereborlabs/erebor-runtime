@@ -368,18 +368,35 @@ pub(super) fn publish(
         budget: &budget,
         attempt,
         completed: true,
-        now_utc_ns: 1000,
+        now_utc_ns: attempt.request().time_utc_ns,
         returns: &returns,
         selected: &outputs[1].datasets[0],
         selected_schema: &attempt.instance().spec.manifest.selected_schema,
     };
-    Ok(store.commit_managed(store.prepare_managed(&input)?, || {
+    let prepared = store.prepare_managed(&input)?;
+    let check = || {
         if reject {
             Err(Code::Denied.error("guard"))
         } else {
             Ok(())
         }
-    })?)
+    };
+    if let ManagedDestination::Graph { source, .. } = &attempt.instance().spec.destination {
+        let scope = araphor_data::ProcessorScopeV1 {
+            processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+            method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+            identity: source.clone(),
+        };
+        Ok(store
+            .commit_managed_graph(
+                prepared,
+                Some(super::source::packet(scope, attempt.request().time_utc_ns)),
+                check,
+            )?
+            .0)
+    } else {
+        Ok(store.commit_managed(prepared, check)?)
+    }
 }
 
 #[test]

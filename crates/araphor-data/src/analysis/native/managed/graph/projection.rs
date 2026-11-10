@@ -17,6 +17,7 @@ use crate::analysis::{
 };
 use crate::{ManagedReceipt, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result};
 
+mod expiry;
 mod findings;
 pub(in crate::analysis) use findings::FindingRead;
 mod recovery;
@@ -518,6 +519,7 @@ impl DataWrite<'_> {
                 )?;
             }
         }
+        self.check_expired_source(input, &mut values)?;
         drop(values);
         let _ = receipt;
         self.dirty = true;

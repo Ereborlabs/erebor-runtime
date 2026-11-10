@@ -153,8 +153,18 @@ Result: **Done for native processor registration, immutable results, retirement,
 and typed managed Profile publication**. Native expiry/resume proof, production
 binding, remaining storage owners, notification delivery, capacity, retention,
 backup, cutover, DuckDB removal, and both incident targets remain **Not done**.
-The shared-progress library tests fail to compile. The production binding check
-still fails with 24 errors. No native production speedup is measured.
+The shared-progress library tests fail to compile. At that qualification, the
+production binding check failed with 24 errors. No native production speedup is measured.
+
+Native Data now stores Graph source publications and retained membership with
+the same Selected result, Graph journals, reference pins, and consumed input.
+The frozen gate passes 144 tests in 11 suites. Read the
+[source qualification](results/araphor-native-source-2026-11-10.md).
+Result: **Done for optional native source publication and retained input reads**.
+Source finding providers and notification revisions remain **Not done** and
+return `Unsupported`. Recovery can scan growing membership repeatedly. The
+native Analysis binding check fails with 14 errors. Production still uses
+DuckDB. Cutover, removal, and both incident targets remain **Not done**.
 
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),

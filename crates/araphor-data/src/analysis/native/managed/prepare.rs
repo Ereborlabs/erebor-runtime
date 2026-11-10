@@ -18,6 +18,7 @@ pub struct PreparedManagedCommit<'a> {
     pub(super) contracts: BTreeMap<u64, sdk::Package>,
     pub(super) derived: PreparedDerived,
     pub(super) graph: Option<PreparedGraph>,
+    pub(super) source: Option<crate::analysis::managed::source::publication::PreparedSource>,
     pub(super) memory: PreparedMemory<'a>,
 }
 
@@ -62,17 +63,7 @@ impl NativeStore {
                 }
             }
         };
-        if input
-            .attempt
-            .5
-            .as_ref()
-            .map(|source| source.input_selection())
-            .transpose()?
-            .flatten()
-            .is_some()
-        {
-            return Err(Code::Unsupported.error("native source publication owner"));
-        }
+        let source = self.prepare_source(input, &mut memory)?;
         Packet::charge(
             input.attempt,
             input
@@ -135,9 +126,12 @@ impl NativeStore {
             &mut memory,
             |facts, _, memory| current.inspect_facts(facts, &mut |bytes| memory.charge(bytes)),
         )?;
-        if derived.has_origins() {
-            return Err(Code::Denied.error("derived historical source scope"));
-        }
+        self.source_origins(
+            input.attempt,
+            derived.origin_refs(),
+            input.control,
+            &mut |bytes| memory.charge(bytes),
+        )?;
         let graph =
             self.prepare_graph_journals(&contracts, input, &evidence, &derived, &mut memory)?;
         memory.check()?;
@@ -149,6 +143,7 @@ impl NativeStore {
             contracts,
             derived,
             graph,
+            source,
             memory,
         })
     }

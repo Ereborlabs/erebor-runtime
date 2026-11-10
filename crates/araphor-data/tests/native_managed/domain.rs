@@ -20,6 +20,21 @@ fn fixture(
     ),
     Box<dyn std::error::Error>,
 > {
+    fixture_source(store, false)
+}
+
+pub(super) fn fixture_source(
+    store: &NativeStore,
+    source_bound: bool,
+) -> Result<
+    (
+        ManagedInstance,
+        sdk::Model,
+        EvidenceIntakeIdentityV1,
+        algorithm::Observation,
+    ),
+    Box<dyn std::error::Error>,
+> {
     let schema = sdk::Schema::new(vec![sdk::Field::new("count", sdk::DataType::UInt64, false)]);
     let mut model = sdk::Model::new(
         "count",
@@ -39,12 +54,6 @@ fn fixture(
     let mut dependent = fixture.spec.manifest.calls[&10].clone();
     dependent.dependencies.insert(10);
     fixture.spec.manifest.calls.insert(20, dependent);
-    let admitted = fixture.admit(store)?;
-    let instance =
-        store.set_managed_running([1; 16], &admitted.spec.id, admitted.lifecycle, true, || {
-            Ok(())
-        })?;
-    store.commit_contexts(&[super::attempts::context(99)])?;
     let source = EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],
         node_id: "domain-node".into(),
@@ -53,6 +62,21 @@ fn fixture(
         source_id: [3; 16],
         source_epoch: 1,
     };
+    if source_bound {
+        fixture.spec.destination = ManagedDestination::Graph {
+            source: source.clone(),
+            events_sql: "SELECT * FROM events".into(),
+            control_sql: "SELECT * FROM graph_state".into(),
+            calls: std::collections::BTreeSet::from([10, 20]),
+            operation: araphor_data::ManagedGraphOperation::Evaluate,
+        };
+    }
+    let admitted = fixture.admit(store)?;
+    let instance =
+        store.set_managed_running([1; 16], &admitted.spec.id, admitted.lifecycle, true, || {
+            Ok(())
+        })?;
+    store.commit_contexts(&[super::attempts::context(99)])?;
     let framed = Vec::<u8>::try_from(&EvidenceRecord {
         task_cookie: 1,
         observed_boottime_ns: 10,
@@ -110,7 +134,11 @@ fn capture(
             )
         })
         .collect();
-    let selection = instance.grant.selection.project(&requests)?;
+    let selection = instance
+        .spec
+        .destination
+        .selection(&instance.grant.selection)?
+        .project(&requests)?;
     store.read_managed_tables_filtered(
         &selection,
         &ManagedRead {
@@ -169,7 +197,7 @@ fn finding(
     })
 }
 
-fn command(
+pub(super) fn command(
     model: &sdk::Model,
     relation: &str,
     owner: &[u8],
@@ -216,7 +244,7 @@ fn command(
     )?)
 }
 
-fn commit(
+pub(super) fn commit(
     store: &NativeStore,
     model: &sdk::Model,
     observation: &algorithm::Observation,
@@ -330,6 +358,32 @@ fn commit_expiry(
         None,
         Arc::new(()),
     )?;
+    if matches!(
+        &resume.instance.spec.destination,
+        ManagedDestination::Graph { .. }
+    ) {
+        let scope = araphor_data::ProcessorScopeV1 {
+            processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+            method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+            identity: observation.id.stream.clone(),
+        };
+        let base = store.processor_result(&scope)?.map(|result| {
+            araphor_data::analysis::PackageResultRefV1 {
+                result_id: result.result_id,
+                commit_revision: result.commit_revision,
+            }
+        });
+        frame.select_graph_input(
+            &page.state,
+            None,
+            &input,
+            &derived,
+            base.as_ref(),
+            (1, 1, 2000),
+            (false, false, false),
+            Arc::new(()),
+        )?;
+    }
     for call in [10, 20] {
         if step == 3 {
             continue;

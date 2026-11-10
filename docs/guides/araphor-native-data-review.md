@@ -1219,3 +1219,69 @@ storage owners, notification delivery, capacity, retention, backup, DuckDB
 removal, and incident performance acceptance remain **Not done**. Read the
 [qualification record](../research/results/araphor-native-progress-2026-11-10.md)
 for the frozen source and verification limits.
+
+## Native Graph source publication and retained input
+
+This extension follows `368786ae7`. Data stores source publication metadata and
+membership in native storage. Package code still selects the input and Graph
+changes. Araphor Graph contains no package catalogue. Production still uses
+DuckDB.
+
+### Intended end state
+
+One Data transaction commits the Selected result, source membership, package
+Graph journals, context pins, processor progress, and consumed input. A retained
+native snapshot supplies historical source membership. Raw payloads remain in
+the existing segments.
+
+[select_graph_input](../../crates/araphor-data/src/analysis/managed/source/input.rs) A package selects source input through its captured frame
+  -> [prepare_source](../../crates/araphor-data/src/analysis/native/managed/source/publication.rs) Data reads the indexed prior source head
+  -> [PreparedSource::prepare](../../crates/araphor-data/src/analysis/managed/source/publication.rs) Shared preparation checks the original frame, proof, base, append prefix, expiry, and counts
+  -> [commit_managed_graph](../../crates/araphor-data/src/analysis/native/managed/source/publication.rs) Data checks that a selected source has a publication request
+  -> [commit_managed_projection](../../crates/araphor-data/src/analysis/native/managed/commit.rs) Data binds the Graph receipt to the same Selected result before it stages the completed attempt
+  -> [publish_source](../../crates/araphor-data/src/analysis/native/managed/source/publication.rs) Data stages membership, fact and proof postings, source heads, and processor progress in the same write
+
+[check_expired_source](../../crates/araphor-data/src/analysis/native/managed/graph/projection/expiry.rs) A package publishes an expired source window
+  -> [check_expired_source](../../crates/araphor-data/src/analysis/native/managed/graph/projection/expiry.rs) Data checks the final staged relationships and findings
+  -> [commit_managed_projection](../../crates/araphor-data/src/analysis/native/managed/commit.rs) A retained healthy claim rejects the complete transaction
+  -> [commit_managed_graph](../../crates/araphor-data/src/analysis/native/managed/source/publication.rs) A retry can commit package-selected degraded values
+
+[Coordinator::records](../../crates/araphor-data/src/analysis/native/inputs/records.rs) The input reader reads a committed original journal batch
+  -> [input_graph_key](../../crates/araphor-data/src/analysis/native/managed/graph/cuts.rs) Data identifies source headers and Graph publications
+  -> [input_source](../../crates/araphor-data/src/analysis/native/managed/source/inputs.rs) Data checks the publication revision and emits its exact source identity
+  -> [InputInterest::matches](../../crates/araphor-data/src/analysis/inputs/interest.rs) Only matching source interests advance
+
+[graph_frozen_facts](../../crates/araphor-data/src/analysis/native/managed/source/frozen.rs) A package requests retained source records
+  -> [source_reader](../../crates/araphor-data/src/analysis/native/managed/source/frozen.rs) Data checks the capture, completed receipt, source grant, and retained revision
+  -> [frozen_source_input](../../crates/araphor-data/src/analysis/native/managed/source/frozen/facts.rs) Data reads member keys and fact or proof postings at that revision
+  -> [HistoricalSource::contains](../../crates/araphor-data/src/analysis/native/managed/source/history.rs) A later publication admits historical references only with their exact origin pins and record association
+
+[extract_graph_state](../../crates/araphor-data/src/analysis/native/extraction/graph_state.rs) A saved plan requests processor metadata
+  -> [Processor::read](../../crates/araphor-data/src/analysis/native/progress/mod.rs) Data reads the processor from the captured native snapshot
+  -> [Capture::graph_state](../../crates/araphor-data/src/analysis/extraction/tables/graph_state.rs) An absent processor has null state fields
+
+[NativeStore::open](../../crates/araphor-data/src/analysis/native/mod.rs) Data reopens the store
+  -> [validate_source_recovery](../../crates/araphor-data/src/analysis/native/managed/source/recovery.rs) Data checks source owners, retained membership transitions, postings, heads, coverage, and processor references
+
+Each member stores its input position, origin Selected identity, and restricted
+fact count. Fact and proof postings contain context identities and revisions.
+These records contain no raw payload copy. Replacement changes the current
+member set. Append adds member keys. Expiry retains membership. Fjall snapshots
+preserve the prior sets through compaction.
+
+The [source tests](../../crates/araphor-data/tests/native_managed/source.rs)
+check replacement, append with retained proof, historical imports, damaged
+indexes, empty gates, and window winners. The
+[expiry test](../../crates/araphor-data/tests/native_managed/source/expiry.rs)
+checks rollback and package-selected degraded values through compaction and
+restart. The [input tests](../../crates/araphor-data/tests/native_managed/source/inputs.rs)
+check selective journal routing, restart, captured processor state, absent
+processors, and rejection of an unported table.
+
+Source finding providers and notification revision construction remain
+**Not done**. Those native paths return `Unsupported` for source publications.
+Recovery scans retained membership for each publication. A long append chain
+can make recovery work quadratic. Bounded recovery cost is not proved.
+Read the [qualification record](../research/results/araphor-native-source-2026-11-10.md)
+for the exact source and checks. Production cutover, DuckDB removal, and both
+incident performance targets remain **Not done**.

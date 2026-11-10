@@ -29,6 +29,8 @@ mod progress;
 mod publication;
 #[path = "native_managed/read.rs"]
 mod read;
+#[path = "native_managed/source.rs"]
+mod source;
 
 struct Fixture {
     spec: ManagedSpec,

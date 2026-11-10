@@ -15,8 +15,8 @@ pub(in crate::analysis) struct PreparedDerived {
 }
 
 impl PreparedDerived {
-    pub(in crate::analysis) fn has_origins(&self) -> bool {
-        !self.union.origins.is_empty()
+    pub(in crate::analysis) fn origin_refs(&self) -> impl Iterator<Item = &PackageResultRefV1> {
+        self.union.origins.iter()
     }
 
     pub(in crate::analysis) fn values(

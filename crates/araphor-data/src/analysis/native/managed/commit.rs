@@ -96,13 +96,20 @@ impl NativeStore {
             return Err(Code::Incomplete.error("managed witness lifetime"));
         }
         let segments = self.resolve_witnesses(&prepared.evidence.witnesses, tx.revision - 1)?;
-        let (mut packets, mut step, receipt) = ManagedReceipt::bind(
+        let (mut packets, mut step, mut receipt) = ManagedReceipt::bind(
             input.attempt,
             input.completed,
             prepared.packets,
             prepared.step,
             tx.revision,
         );
+        if prepared.source.is_some() {
+            receipt.graph = Some(receipt.selected.clone());
+        }
+        let prefix = prepared
+            .source
+            .as_ref()
+            .and_then(|source| source.selection.prefix.clone());
         let mut references = BTreeMap::new();
         for fact in &prepared.derived.facts {
             let reference = tx.context(fact.value(), None)?;
@@ -202,12 +209,25 @@ impl NativeStore {
             (&prepared.evidence.witnesses, &segments),
             &mut prepared.memory,
         )?;
+        if prepared.graph.is_none() {
+            tx.check_unwritten_expiry(input, &prepared.memory)?;
+        }
         let pending = prepared
             .graph
             .take()
             .map(|graph| graph.stage(&mut tx, input, &receipt, &results, &mut prepared.memory))
             .transpose()?;
         tx.publish_managed_graph(input, &receipt, selected_id, &results, &mut prepared.memory)?;
+        if let Some(source) = prepared.source.take() {
+            tx.publish_source(
+                input,
+                &receipt,
+                selected_id,
+                step,
+                source,
+                &mut prepared.memory,
+            )?;
+        }
         let projected = projection(&mut tx, input, &receipt, &mut prepared.memory)?;
         instance.spec = spec.clone();
         if instance.generation != input.attempt.0.capture.generation {
@@ -230,7 +250,7 @@ impl NativeStore {
             }),
             &receipt,
             std::mem::take(&mut tx.verified),
-            None,
+            prefix,
         );
         let source_proof = input
             .attempt

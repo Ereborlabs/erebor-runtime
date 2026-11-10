@@ -1,7 +1,7 @@
 use super::*;
 use crate::AnalysisSourceReceiptV1;
 
-pub(in crate::analysis::extraction) struct GraphState {
+pub(in crate::analysis) struct GraphState {
     pub class: Option<String>,
     pub start: Option<u64>,
     pub consumed: Option<u64>,
@@ -12,7 +12,7 @@ pub(in crate::analysis::extraction) struct GraphState {
 
 impl Capture<'_> {
     table_row! {
-        pub(in crate::analysis::extraction) fn graph_state(
+        pub(in crate::analysis) fn graph_state(
             &mut self,
             receipt: &AnalysisSourceReceiptV1,
             state: &GraphState,

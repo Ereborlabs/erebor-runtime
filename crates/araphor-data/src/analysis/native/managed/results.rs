@@ -7,13 +7,13 @@ use crate::analysis::native::{DataView, DataWrite};
 use crate::{AnalysisReadControl, ManagedAttempt, ManagedSpec, PackageErrorCodeV1 as Code, Result};
 
 #[derive(Deserialize, Serialize)]
-pub(super) enum ResultBody {
+pub(in crate::analysis::native) enum ResultBody {
     Call(Record),
     Selected(Step),
 }
 
 #[derive(Deserialize, Serialize)]
-pub(super) struct StoredResult {
+pub(in crate::analysis::native) struct StoredResult {
     pub tenant: [u8; 16],
     pub id: String,
     pub revision: u64,

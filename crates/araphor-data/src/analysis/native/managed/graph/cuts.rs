@@ -64,7 +64,9 @@ impl GraphPublication {
 
 impl DataView {
     pub(in crate::analysis::native) fn input_graph_key(key: &[u8]) -> bool {
-        key.starts_with(GraphPublication::PREFIX) && key.len() == GraphPublication::PREFIX.len() + 8
+        Self::input_source_key(key)
+            || key.starts_with(GraphPublication::PREFIX)
+                && key.len() == GraphPublication::PREFIX.len() + 8
     }
 
     pub(in crate::analysis::native) fn input_graph(
@@ -73,6 +75,9 @@ impl DataView {
         inputs: &crate::analysis::inputs::InputChanges,
         position: crate::StorePositionV1,
     ) -> Result<()> {
+        if Self::input_source_key(key) {
+            return self.input_source(key, inputs, position);
+        }
         if !Self::input_graph_key(key) {
             return Ok(());
         }
@@ -88,10 +93,20 @@ impl DataView {
         if publication.reference.commit_revision != position.commit_revision {
             return Err(Code::Invalid.error("input Graph publication revision"));
         }
+        let (_, _, owner) = self.result_owner(
+            publication.tenant,
+            &publication.reference.result_id,
+            &AnalysisReadControl::default(),
+            &mut |_| Ok(()),
+        )?;
+        let source = match &owner.instance().spec.destination {
+            crate::ManagedDestination::Graph { source, .. } => Some(source),
+            _ => None,
+        };
         if !inputs.interested(crate::analysis::inputs::InputChange::Graph {
             tenant: publication.tenant,
             result: &publication.reference.result_id,
-            source: None,
+            source,
             witnesses: &[],
         }) {
             return Ok(());
@@ -124,7 +139,7 @@ impl DataView {
                     crate::analysis::inputs::InputChange::Graph {
                         tenant: publication.tenant,
                         result: &publication.reference.result_id,
-                        source: None,
+                        source,
                         witnesses: &record.witnesses,
                     },
                 );
@@ -136,7 +151,7 @@ impl DataView {
                 crate::analysis::inputs::InputChange::Graph {
                     tenant: publication.tenant,
                     result: &publication.reference.result_id,
-                    source: None,
+                    source,
                     witnesses: &[],
                 },
             );

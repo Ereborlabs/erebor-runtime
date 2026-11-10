@@ -20,7 +20,7 @@ mod discovery_state;
 mod events;
 mod graph;
 mod graph_state;
-pub(super) use graph_state::GraphState;
+pub(in crate::analysis) use graph_state::GraphState;
 mod metadata;
 mod notification;
 mod schema;
