@@ -185,6 +185,9 @@ impl NativeStore {
         let mut selected = projected;
         let mut output = AnalysisExtractionV1::new(view.meta(), limits);
         output.graph_enabled = true;
+        output.notification_enabled = self
+            .notification_owner
+            .load(std::sync::atomic::Ordering::Acquire);
         output.discovery_enabled = self
             .discovery_owners
             .load(std::sync::atomic::Ordering::Acquire)

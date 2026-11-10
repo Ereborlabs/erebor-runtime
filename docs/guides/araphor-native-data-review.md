@@ -1349,9 +1349,10 @@ sequenceDiagram
 focused tests re-read committed progress after this hint. This hint has no
 durable consumed position and does not replace package CDC routing.
 
-The native build excludes `InstanceHost::with_notifications` while the router
-still owns DuckDB. Native host constructors leave notifications absent. Native
-notification integration remains **Not done**.
+At this host qualification, the native build excludes
+`InstanceHost::with_notifications` while the router still owns DuckDB. Native
+host constructors leave notifications absent. The Router extension below
+qualifies direct native concern delivery only.
 
 The [public API tests](../../crates/araphor-analysis/tests/native_instance.rs)
 exercise native Selected/copy publication, retained replay, denied authority
@@ -1363,3 +1364,68 @@ Read the [qualification record](../research/results/araphor-native-host-2026-11-
 for the frozen source and exact checks. Source finding providers, native
 notification integration, configured capacity, retention, backup, production
 cutover, DuckDB removal, and both incident targets remain **Not done**.
+
+## Native notification Router binding
+
+This extension follows `200c9fa7c`. The optional native Router uses the existing
+delivery algorithm and native Data context writes. Production Control still
+uses DuckDB. Native Host notification admission remains unavailable.
+
+Read the owners in this order:
+
+1. [storage](../../crates/araphor-analysis/src/storage.rs) selects the concrete Data owner.
+2. [NotificationRouter](../../crates/araphor-analysis/src/notification/mod.rs) acquires and releases exclusive ownership.
+3. [native notification ownership](../../crates/araphor-data/src/analysis/native/notification.rs) emits the existing control hint on owner changes.
+4. [NotificationCycle](../../crates/araphor-analysis/src/notification/cycle.rs) reuses the frozen prepared batch.
+5. [attempt](../../crates/araphor-analysis/src/notification/attempt.rs) orders Pending, effect, and outcome.
+6. [context admission](../../crates/araphor-data/src/analysis/native/context/admission.rs) performs checked immutable-version writes.
+7. [public API tests](../../crates/araphor-analysis/tests/native_notification.rs) exercise the connected Router and Data owners.
+
+A caller creates the Router
+  -> Native Data rejects a second live notification owner
+  -> Native Data signals the existing control hint
+  -> Router drop releases the owner and signals the control hint
+
+A caller submits an approved concern
+  -> The existing Router checks the grant, route, and exact retry identity
+  -> Data commits the immutable obligation and lookup membership together
+  -> A reader obtains the current head or an exact retained version
+
+A caller delivers the obligation
+  -> The existing cycle prepares state, pending subjects, and route versions
+  -> Data commits Pending with the expected current context revision
+  -> The sink receives the captured subject and route
+  -> Data commits the attempt outcome
+
+A Pending write conflicts
+  -> Data rejects the stale checked write
+  -> The Router returns the error before any sink effect
+
+An effect occurs and outcome persistence is interrupted
+  -> The saved Pending retains the original attempt number and subject revision
+  -> Reopen restores the same obligation and immutable context versions
+  -> Retry uses the same notification key, delivery kind, and attempt number
+
+```mermaid
+sequenceDiagram
+    participant Router
+    participant Data
+    participant Sink
+    Router->>Data: Commit checked Pending
+    Data-->>Router: Durable context version
+    Router->>Sink: Deliver captured subject and route
+    Sink-->>Router: Outcome
+    Router->>Data: Commit checked outcome
+```
+
+`storage_limits` returns the default limits held by native Data. Native open
+has no configured-limit API. This binding does not qualify configured capacity.
+The control hint does not replace CDC input consumption. No kernel or ABI
+boundary changes in this extension.
+
+Read the [qualification record](../research/results/araphor-native-router-2026-11-10.md)
+for the frozen source and 17 passing cases in four suites. The four new cases
+qualify concern delivery, not actual finding routing. Native Host notification
+binding, Source readers and revisions, durable notification consumption,
+notification write batches, capacity, retention, backup, cutover, DuckDB
+removal, and both incident targets remain **Not done**.

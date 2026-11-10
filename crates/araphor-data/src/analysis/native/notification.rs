@@ -88,6 +88,31 @@ impl DataWrite<'_> {
 }
 
 impl NativeStore {
+    pub fn enable_notification_owner(&self) -> Result<()> {
+        crate::NotificationErrorCodeV1::Conflict.require(
+            self.notification_owner
+                .compare_exchange(
+                    false,
+                    true,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Acquire,
+                )
+                .is_ok(),
+            "router owner",
+        )?;
+        self.controls.send_replace(());
+        Ok(())
+    }
+
+    pub fn release_notification_owner(&self) {
+        if self
+            .notification_owner
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            self.controls.send_replace(());
+        }
+    }
+
     pub fn notification_states(
         &self,
         tenant: [u8; 16],

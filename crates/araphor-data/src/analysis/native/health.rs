@@ -6,6 +6,10 @@ use super::NativeStore;
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result, StorageHealthV1, StorageLimitsV1};
 
 impl NativeStore {
+    pub fn storage_limits(&self) -> &StorageLimitsV1 {
+        &self.storage
+    }
+
     pub fn storage_health(&self) -> Result<StorageHealthV1> {
         let usage = crate::AnalysisStore::storage_at(&self.root, 0, 0)?;
         let view = self.published.read().map_err(|_| {
@@ -33,7 +37,7 @@ impl NativeStore {
                     && policy.first <= first
                     && policy.last.to_bytes() == u64::MAX.to_be_bytes()
             });
-        let limits = StorageLimitsV1::default();
+        let limits = self.storage_limits();
         Ok(StorageHealthV1 {
             write_ready: self.ready.load(Ordering::Acquire),
             retention_healthy: retained,

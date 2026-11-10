@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use araphor_data::*;
 
+use crate::storage::AnalysisStore;
 use crate::Result;
 
 mod attempt;

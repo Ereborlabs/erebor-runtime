@@ -172,9 +172,20 @@ cases in four suites. Default and native Analysis library checks and native
 library Clippy pass. Read the [host qualification](results/araphor-native-host-2026-11-10.md).
 Result: **Done for optional native Selected/copy host binding**. Graph and
 Profile sink destinations compile but are not qualified at runtime by these
-four new cases. Native builds exclude the constructor for the DuckDB
-notification router. Native notifications, Source providers, production cutover,
+four new cases. At that host qualification, native builds exclude the
+constructor for the DuckDB notification router. Native notifications, Source providers, production cutover,
 removal, and both incident targets remain **Not done**.
+
+The optional native Router now uses the existing prepared batch and native
+context writes. Pending is durable before the sink effect; its outcome is
+durable after the effect. The frozen gate passes 17 cases in four suites. Read
+the [Router qualification](results/araphor-native-router-2026-11-10.md).
+Result: **Done for optional native Router binding and concern delivery**.
+The cases do not qualify actual finding routing. Native Host notification
+binding, Source providers and revisions, durable notification consumption,
+notification write batches, configured capacity, retention, backup, cutover,
+DuckDB removal, and both incident targets remain **Not done**. Production
+still uses DuckDB. No native production speedup is measured.
 
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
