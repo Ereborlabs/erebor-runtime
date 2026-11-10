@@ -7,6 +7,9 @@ use araphor_data::{
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "native_context/pages.rs"]
+mod pages;
+
 fn context(entity: &[u8], revision: u64) -> AnalysisContextVersionV1 {
     AnalysisContextVersionV1 {
         key: AnalysisContextKeyV1 {

@@ -4,12 +4,24 @@ use crate::{AnalysisContextKeyV1, AnalysisContextVersionV1, Result};
 mod admission;
 mod facts;
 mod index;
+mod pages;
 mod record;
 mod recovery;
+
+pub(super) type ContextName = ([u8; 16], String, Vec<u8>, Vec<u8>);
+pub(super) type ContextNames = rpds::RedBlackTreeMapSync<ContextName, u64>;
 
 pub(in crate::analysis::native) use record::ContextRecord;
 
 impl ContextRecord {
+    pub(in crate::analysis::native) fn name(key: &AnalysisContextKeyV1) -> ContextName {
+        (
+            key.tenant_id,
+            key.owner_id.clone(),
+            key.entity_key.clone(),
+            key.lifetime_key.clone(),
+        )
+    }
     fn load(id: u64, get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>) -> Result<Self> {
         let bytes = Records::payload(&Records::key(b'C', id), get)?.ok_or_else(|| {
             crate::NativeStateSnafu {

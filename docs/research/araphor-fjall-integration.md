@@ -94,6 +94,14 @@ focused Data cases pass. Read the
 Result: **Done for optional native managed input consumption**. Production
 query coverage mapping, collection floors, retention, notification batches,
 backup, cutover, removal, and both incident targets remain **Not done**.
+Native notification storage now supplies indexed finding/concern lookups,
+ordered context pages, and checked batches of immutable versions. Historical
+inserts and exact retries preserve current lookup membership. Read the
+[notification storage qualification](results/araphor-native-notification-2026-11-10.md).
+Result: **Done for optional native notification storage**. Finding provenance,
+prepared notification reads, production delivery batches, durable notification
+consumption, retention, backup, cutover, DuckDB removal, and both incident
+targets remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

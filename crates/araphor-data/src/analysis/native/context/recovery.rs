@@ -9,7 +9,7 @@ use crate::{
 };
 
 impl DataView {
-    pub(in crate::analysis::native) fn validate_contexts(&self) -> Result<()> {
+    pub(in crate::analysis::native) fn validate_contexts(&mut self) -> Result<()> {
         let mut heads = BTreeMap::<Vec<u8>, (u64, u64)>::new();
         let mut documents =
             BTreeMap::<Vec<u8>, BTreeMap<u64, (u64, DiscoveryContextRevisionV1)>>::new();
@@ -75,6 +75,8 @@ impl DataView {
                 }
                 .build()
             })?;
+            self.contexts
+                .insert_mut(ContextRecord::name(&input.key), base);
             heads
                 .entry(Records::key(b'H', base))
                 .and_modify(|head| {
@@ -165,6 +167,7 @@ impl DataView {
         )?;
         self.validate_heads(b"\0data/M", imported)?;
         self.check_context_indexes(contexts.len())?;
+        self.validate_notice_indexes()?;
         Ok(())
     }
 }

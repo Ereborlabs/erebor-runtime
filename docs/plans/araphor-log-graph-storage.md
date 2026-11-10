@@ -223,6 +223,16 @@ Result: **Done for optional native managed input consumption**. Production
 query coverage mapping, collection floors, retention, notification batches,
 backup, cutover, removal, and both incident targets remain **Not done**.
 
+Native notification storage now supplies indexed current lookups, ordered
+context pages, and checked batch writes. The batch retains each immutable
+subject and pending-attempt version. Historical inserts do not change current
+lookup membership. Read the
+[notification storage qualification](../research/results/araphor-native-notification-2026-11-10.md).
+Result: **Done for optional native notification storage**. Native finding
+provenance, prepared notification reads, production delivery batches, durable
+notification consumption, retention, backup, cutover, DuckDB removal, and both
+incident targets remain **Not done**.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

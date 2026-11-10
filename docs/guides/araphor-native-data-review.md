@@ -455,7 +455,7 @@ prefix, header, and decoded-record charges after their storage is dropped.
 Arrow buffers, references, coverage reports, and pending gaps remain charged.
 Cancellation and existing key, input, scan, and page limits stay active.
 
-Native physical format 3 persists logical schema 41 and recovery epoch 1.
+Native physical format 4 persists logical schema 41 and recovery epoch 1.
 `DataView::meta` returns these saved values and the captured global Data revision.
 Ordinary reopen preserves the recovery epoch. Older prototype native formats
 are rejected. This does not convert a DuckDB directory.
@@ -753,3 +753,57 @@ selection; the existing scope check is unchanged.
 Read the [qualification](../research/results/araphor-native-finding-reads-2026-11-09.md)
 for the 74 passing focused cases. Production provider binding, original-log
 routing, notification batches, cutover, and incident speedup remain **Not done**.
+
+## Native notification storage
+
+This extension follows `f6e9a217e`. It supplies native context pages,
+notification lookup indexes, and checked batch writes. Production notification
+preparation and delivery remain **Not implemented** on this owner.
+
+[NativeStore::commit_contexts_checked](../../crates/araphor-data/src/analysis/native/context/admission.rs) A caller supplies ordered context versions and expected heads
+  -> [DataWrite::context](../../crates/araphor-data/src/analysis/native/context/admission.rs) Data checks each value and its expected head in the same staged transaction.
+  -> [DataWrite::record](../../crates/araphor-data/src/analysis/native/context/record.rs) Data retains each immutable version and advances its head.
+  -> [DataWrite::index_notification](../../crates/araphor-data/src/analysis/native/notification.rs) Data removes prior lookup membership and adds current membership when the head advances.
+  -> [NativeStore::commit_contexts_checked](../../crates/araphor-data/src/analysis/native/context/admission.rs) The caller's guard runs before commit.
+  -> [DataWrite::commit](../../crates/araphor-data/src/analysis/native/mod.rs) Data commits all versions and indexes and publishes one view.
+
+[NativeStore::commit_contexts_checked](../../crates/araphor-data/src/analysis/native/context/admission.rs) A value, expected head, or guard fails
+  -> [DataWrite](../../crates/araphor-data/src/analysis/native/mod.rs) Data drops the uncommitted transaction.
+  -> The published view, journal position, context catalogue, and lookup indexes stay unchanged.
+
+[DataView::context_head_page](../../crates/araphor-data/src/analysis/native/context/pages.rs) A reader requests current contexts
+  -> [ContextNames](../../crates/araphor-data/src/analysis/native/context/mod.rs) Data selects identities from the ordered persistent tree.
+  -> [DataView::head_context](../../crates/araphor-data/src/analysis/native/context/record.rs) The captured snapshot supplies each exact head and immutable value.
+
+[DataView::notification_states](../../crates/araphor-data/src/analysis/native/notification.rs) A reader requests a finding or concern
+  -> [NoticeIndex](../../crates/araphor-data/src/analysis/native/notification.rs) Data resolves the shared lookup identity through the existing interner.
+  -> [DataView::head_context](../../crates/araphor-data/src/analysis/native/context/record.rs) Fixed-width membership keys select current contexts from the captured snapshot.
+
+[DataView::validate_contexts](../../crates/araphor-data/src/analysis/native/context/recovery.rs) Data reopens the store
+  -> The existing context validation scan restores the identity catalogue.
+  -> [DataView::validate_notice_indexes](../../crates/araphor-data/src/analysis/native/notification.rs) Data compares notification membership with the validated heads.
+
+`DataView` and `DataWrite` share immutable catalogue roots. The catalogue stores
+identity-to-head-key mappings; it stores no head version or body. Raw-only
+publication carries the root. A historical view can use current identities as
+candidates because its snapshot supplies the visible head. Future identities
+without a captured head produce no row. Pages do not sort or scan old versions.
+Future context collection must preserve identities required by retained views.
+Physical format 4 requires the notification indexes. The native owner rejects
+earlier prototype formats. Recovery does not rebuild a missing index.
+
+Lookup keys reuse `NotificationKeys`. The interner accepts long finding IDs;
+membership keys contain a numeric scope and a 16-byte notification ID.
+Historical inserts and exact retries do not change current membership. The
+checked batch retains intermediate subjects and pending attempts. It does not
+collapse multiple versions into the final obligation.
+
+The [context page tests](../../crates/araphor-data/tests/native_context/pages.rs)
+cover ordering, bounds, long identities, historical cuts, compaction, and reopen.
+The [notification tests](../../crates/araphor-data/tests/native_notification.rs)
+cover batch rollback, retries, immutable subjects, pending attempts, lookup
+changes, tenant scope, long finding IDs, historical inserts, and a missing index.
+The [qualification](../research/results/araphor-native-notification-2026-11-10.md)
+records the exact checks. Native finding provenance, prepared notification
+reads, delivery batches, durable notification consumption, retention, backup,
+production binding, DuckDB removal, and both incident targets remain **Not done**.

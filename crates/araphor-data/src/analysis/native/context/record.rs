@@ -76,11 +76,24 @@ impl DataView {
     }
 
     pub fn context_head(&self, key: &AnalysisContextKeyV1) -> Result<Option<AnalysisContextRefV1>> {
-        let identity = ContextRecord::identity(key, false)?;
-        let Some(id) = Records::find(&identity, |key| Records::read(key, &self.snapshot))? else {
+        let name = ContextRecord::name(key);
+        let Some(id) = self.contexts.get(&name) else {
             return Ok(None);
         };
-        let Some(bytes) = Records::read(&Records::key(b'H', id), &self.snapshot)? else {
+        Ok(self
+            .head_context(&name, *id)?
+            .map(|(context, revision)| AnalysisContextRefV1 {
+                key: context.key,
+                commit_revision: revision,
+            }))
+    }
+
+    pub(in crate::analysis::native) fn head_context(
+        &self,
+        name: &super::ContextName,
+        base: u64,
+    ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
+        let Some(bytes) = Records::read(&Records::key(b'H', base), &self.snapshot)? else {
             return Ok(None);
         };
         let id = NativeStore::number(&bytes)?;
@@ -94,7 +107,11 @@ impl DataView {
             .build()
         })?;
         let record: ContextRecord = Records::decode(&bytes)?;
-        if ContextRecord::identity(&record.version.key, false)? != identity
+        let key = &record.version.key;
+        if key.tenant_id != name.0
+            || key.owner_id != name.1
+            || key.entity_key != name.2
+            || key.lifetime_key != name.3
             || !record.version.valid()
             || record.revision == 0
             || record.revision > self.metadata_revision
@@ -108,10 +125,7 @@ impl DataView {
             .fail();
         }
         self.verify_context(&record.version)?;
-        Ok(Some(AnalysisContextRefV1 {
-            key: record.version.key,
-            commit_revision: record.revision,
-        }))
+        Ok(Some((record.version, record.revision)))
     }
 }
 
@@ -120,6 +134,7 @@ impl DataWrite<'_> {
         &mut self,
         input: &AnalysisContextVersionV1,
         expected: Option<u64>,
+        notification: Option<crate::analysis::notification::NotificationKeys>,
     ) -> Result<AnalysisContextRefV1> {
         let identity = ContextRecord::identity(&input.key, true)?;
         let base = ContextRecord::identity(&input.key, false)?;
@@ -167,6 +182,10 @@ impl DataWrite<'_> {
             Some(id) => id,
             None => Records::intern(&mut self.transaction, &base)?,
         };
+        if previous.is_none() {
+            self.contexts
+                .insert_mut(ContextRecord::name(&input.key), base);
+        }
         let head = Records::key(b'H', base);
         let id = Records::intern(&mut self.transaction, &identity)?;
         let encoded = Records::encode(&(input, self.revision))?;
@@ -181,6 +200,9 @@ impl DataWrite<'_> {
             .as_ref()
             .is_none_or(|prior| prior.version.key.owner_revision < input.key.owner_revision)
         {
+            if let Some(keys) = notification {
+                self.index_notification(previous.as_ref().map(|row| &row.version), input, keys)?;
+            }
             self.transaction.insert(head, id.to_be_bytes());
         }
         self.dirty = true;

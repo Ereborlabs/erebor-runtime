@@ -5,6 +5,25 @@ use crate::{
 };
 
 impl NativeStore {
+    pub fn commit_contexts_checked(
+        &self,
+        inputs: &[(AnalysisContextVersionV1, u64)],
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<AnalysisContextRefV1>> {
+        if inputs.is_empty() {
+            check()?;
+            return Ok(Vec::new());
+        }
+        let mut tx = self.write()?;
+        let references = inputs
+            .iter()
+            .map(|(input, expected)| tx.context(input, Some(*expected)))
+            .collect::<Result<Vec<_>>>()?;
+        check()?;
+        tx.commit([])?;
+        Ok(references)
+    }
+
     pub fn commit_contexts(
         &self,
         inputs: &[AnalysisContextVersionV1],
@@ -163,9 +182,9 @@ impl DataWrite<'_> {
             }
             .fail();
         }
-        if input.key.owner_id == crate::NOTIFICATION_STATE_OWNER {
-            crate::analysis::notification::NotificationKeys::from_context(input)?;
-        }
+        let notification = (input.key.owner_id == crate::NOTIFICATION_STATE_OWNER)
+            .then(|| crate::analysis::notification::NotificationKeys::from_context(input))
+            .transpose()?;
         if input.key.owner_id == crate::NOTIFICATION_ROUTE_OWNER {
             ApprovedNotificationRouteV1::try_from(input)?;
         }
@@ -231,7 +250,7 @@ impl DataWrite<'_> {
         } else {
             None
         };
-        let reference = self.record(input, expected)?;
+        let reference = self.record(input, expected, notification)?;
         let id = ContextRecord::id(&input.key, |key| Records::staged(key, &self.transaction))?
             .ok_or_else(|| {
                 NativeStateSnafu {

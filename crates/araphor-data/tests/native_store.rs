@@ -281,6 +281,29 @@ fn long_context_keys_and_invalid_stamps() -> TestResult {
 }
 
 #[test]
+fn prior_native_format_is_rejected() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().join("data");
+    let store = NativeStore::open(&root)?;
+    assert_eq!(
+        store.view()?.snapshot().get(b"\0data/format")?.as_deref(),
+        Some(4u64.to_be_bytes().as_slice())
+    );
+    let mut tx = store.branch().write_tx()?;
+    tx.insert(b"\0data/format", 3u64.to_be_bytes());
+    tx.commit_stamped([cut(0)])?;
+    drop(store);
+    assert!(matches!(
+        NativeStore::open(&root),
+        Err(Error::NativeState {
+            field: "format version",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
 fn initialization_and_cut_recovery() -> TestResult {
     use std::os::unix::fs::DirBuilderExt as _;
     let dir = tempfile::tempdir()?;

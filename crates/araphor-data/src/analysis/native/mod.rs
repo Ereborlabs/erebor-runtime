@@ -30,6 +30,7 @@ mod context;
 mod extraction;
 pub(in crate::analysis) mod inputs;
 mod managed;
+mod notification;
 mod packages;
 mod records;
 mod revisions;
@@ -64,6 +65,7 @@ pub struct DataView {
     recovery_epoch: u64,
     raw: RawIndex,
     graphs: rpds::RedBlackTreeMapSync<([u8; 16], u64), ()>,
+    contexts: context::ContextNames,
 }
 
 pub struct DataWrite<'a> {
@@ -72,6 +74,7 @@ pub struct DataWrite<'a> {
     transaction: BranchWriteTransaction<'a>,
     raw: RawIndex,
     graphs: rpds::RedBlackTreeMapSync<([u8; 16], u64), ()>,
+    contexts: context::ContextNames,
     metadata_revision: u64,
     dirty: bool,
     verified: super::context::VerifiedPackages,
@@ -167,7 +170,7 @@ impl NativeStore {
             let mut tx = branch.write_tx().context(NativeStorageSnafu {
                 operation: "initialize",
             })?;
-            tx.insert(FORMAT, 3u64.to_be_bytes());
+            tx.insert(FORMAT, 4u64.to_be_bytes());
             tx.insert(
                 SCHEMA,
                 (super::ANALYSIS_SCHEMA_VERSION as u64).to_be_bytes(),
@@ -253,7 +256,7 @@ impl NativeStore {
     }
 
     fn decode_view(snapshot: BranchSnapshot) -> Result<DataView> {
-        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 3 {
+        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 4 {
             return NativeStateSnafu {
                 field: "format version",
             }
@@ -298,6 +301,7 @@ impl NativeStore {
             recovery_epoch,
             raw: RawIndex::default(),
             graphs: Default::default(),
+            contexts: Default::default(),
         })
     }
 
@@ -407,6 +411,7 @@ impl NativeStore {
         view.revision = revision;
         view.raw = current.raw.clone();
         view.graphs = current.graphs.clone();
+        view.contexts = current.contexts.clone();
         Ok(view)
     }
 
@@ -446,6 +451,7 @@ impl NativeStore {
             transaction,
             raw: view.raw.clone(),
             graphs: view.graphs.clone(),
+            contexts: view.contexts.clone(),
             metadata_revision: view.metadata_revision,
             dirty: false,
             verified: super::context::VerifiedPackages::default(),
@@ -526,6 +532,7 @@ impl<'a> DataWrite<'a> {
             }
             view.raw = self.raw;
             view.graphs = self.graphs;
+            view.contexts = self.contexts;
             self.store
                 .raw
                 .lock()

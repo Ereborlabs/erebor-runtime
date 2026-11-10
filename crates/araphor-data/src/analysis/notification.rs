@@ -28,7 +28,10 @@ impl NotificationKeys {
         rmp_serde::to_vec(&(tenant, notification)).context(crate::AnalysisKeyEncodeSnafu)
     }
 
-    fn lookup(tenant: [u8; 16], lookup: NotificationLookup<'_>) -> Result<Vec<u8>> {
+    pub(in crate::analysis) fn lookup(
+        tenant: [u8; 16],
+        lookup: NotificationLookup<'_>,
+    ) -> Result<Vec<u8>> {
         match lookup {
             NotificationLookup::Finding(finding, action) => {
                 rmp_serde::to_vec(&(tenant, finding, action)).context(crate::AnalysisKeyEncodeSnafu)
