@@ -63,6 +63,87 @@ impl GraphPublication {
 }
 
 impl DataView {
+    pub(in crate::analysis::native) fn input_graph_key(key: &[u8]) -> bool {
+        key.starts_with(GraphPublication::PREFIX) && key.len() == GraphPublication::PREFIX.len() + 8
+    }
+
+    pub(in crate::analysis::native) fn input_graph(
+        &self,
+        key: &[u8],
+        inputs: &crate::analysis::inputs::InputChanges,
+        position: crate::StorePositionV1,
+    ) -> Result<()> {
+        if !Self::input_graph_key(key) {
+            return Ok(());
+        }
+        let id =
+            crate::analysis::native::NativeStore::number(&key[GraphPublication::PREFIX.len()..])?;
+        let publication = GraphPublication::read(
+            id,
+            self.metadata_revision,
+            |key| Records::read(key, &self.snapshot),
+            &mut |_| Ok(()),
+        )?
+        .ok_or_else(|| Code::Missing.error("input Graph publication"))?;
+        if publication.reference.commit_revision != position.commit_revision {
+            return Err(Code::Invalid.error("input Graph publication revision"));
+        }
+        if !inputs.interested(crate::analysis::inputs::InputChange::Graph {
+            tenant: publication.tenant,
+            result: &publication.reference.result_id,
+            source: None,
+            witnesses: &[],
+        }) {
+            return Ok(());
+        }
+        let mut has_witnesses = false;
+        for (&writer, &(layer, revision)) in &publication.heads {
+            let origin = self.graph_origin(writer, revision)?;
+            let (_, result) = super::super::results::StoredResult::read(
+                publication.tenant,
+                &origin.reference.result_id,
+                self.metadata_revision,
+                |key| Records::read(key, &self.snapshot),
+                &mut |_| Ok(()),
+            )?
+            .ok_or_else(|| Code::Missing.error("input Graph producer"))?;
+            let ResultBody::Call(record) = result.body else {
+                return Err(Code::Invalid.error("input Graph producer kind"));
+            };
+            if origin.graph != publication.graph
+                || origin.layer != layer
+                || result.revision != revision
+                || record.call != origin.call
+            {
+                return Err(Code::Invalid.error("input Graph producer identity"));
+            }
+            if !record.witnesses.is_empty() {
+                has_witnesses = true;
+                inputs.publish(
+                    position,
+                    crate::analysis::inputs::InputChange::Graph {
+                        tenant: publication.tenant,
+                        result: &publication.reference.result_id,
+                        source: None,
+                        witnesses: &record.witnesses,
+                    },
+                );
+            }
+        }
+        if !has_witnesses {
+            inputs.publish(
+                position,
+                crate::analysis::inputs::InputChange::Graph {
+                    tenant: publication.tenant,
+                    result: &publication.reference.result_id,
+                    source: None,
+                    witnesses: &[],
+                },
+            );
+        }
+        Ok(())
+    }
+
     pub fn managed_graph_publication(
         &self,
         tenant: [u8; 16],

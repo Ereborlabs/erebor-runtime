@@ -28,6 +28,7 @@ const RECOVERY: &[u8] = b"\0data/recovery";
 
 mod context;
 mod extraction;
+pub(in crate::analysis) mod inputs;
 mod managed;
 mod packages;
 mod records;
@@ -43,13 +44,14 @@ pub struct NativeStore {
     database: SingleWriterTxDatabase,
     branch: Branch,
     writer: Mutex<()>,
-    published: RwLock<Arc<DataView>>,
+    published: Arc<RwLock<Arc<DataView>>>,
     root: PathBuf,
     raw: RawMutex<RawJournal>,
     maintenance: Maintenance<()>,
-    ready: AtomicBool,
+    ready: Arc<AtomicBool>,
     managed_owner: AtomicBool,
     revision: tokio::sync::watch::Sender<u64>,
+    inputs: Arc<inputs::Coordinator>,
     _lease: super::connection::AnalysisLease,
 }
 
@@ -222,17 +224,26 @@ impl NativeStore {
         view.validate_managed()?;
         view.validate_attempts()?;
         let revision = tokio::sync::watch::channel(view.revision).0;
+        let published = Arc::new(RwLock::new(Arc::new(view)));
+        let ready = Arc::new(AtomicBool::new(true));
+        let inputs = Arc::new(inputs::Coordinator::new(
+            database.clone(),
+            branch.clone(),
+            Arc::clone(&published),
+            Arc::clone(&ready),
+        )?);
         let store = Self {
             database,
             branch,
             writer: Mutex::new(()),
-            published: RwLock::new(Arc::new(view)),
+            published,
             root: root.to_path_buf(),
             raw: RawMutex::new(raw),
             maintenance: Maintenance::new(()),
-            ready: AtomicBool::new(true),
+            ready,
             managed_owner: AtomicBool::new(false),
             revision,
+            inputs,
             _lease: lease,
         };
         store.validate_result_recovery()?;

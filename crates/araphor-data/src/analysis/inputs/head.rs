@@ -89,17 +89,9 @@ impl InputInterest {
                 control.check()?;
                 if revision < position.commit_revision { break; }
                 for span in &entry.commit.spans {
-                    if !self.matches(&InputChange::Raw { identity: &entry.identity,
-                        range: Some((span.first,span.last,entry.commit.intake)) }) { continue; }
-                    let last = match &entry.identity {
-                        AnalysisStreamIdentityV1::Evidence(_) if !self.has(&["coverage", "discovery_state", "graph_state"]) => {
-                            let Some((_, upper)) = self.selection.cursor_range() else { continue; };
-                            span.last.min(upper)
-                        }
-                        _ => span.last,
-                    };
-                    position = position.max(StorePositionV1 { commit_revision: revision,
-                        ordinal: span.ordinal+(last-span.first) as u32 });
+                    if let Some(matched) = self.raw_position(entry, span) {
+                        position = position.max(matched);
+                    }
                 }
             }
             Ok((meta, position))

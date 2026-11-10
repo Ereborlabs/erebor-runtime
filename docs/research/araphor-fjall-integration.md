@@ -78,6 +78,13 @@ Data cases pass. Read the
 [finding-read qualification](results/araphor-native-finding-reads-2026-11-09.md).
 Production provider binding, original-log routing, notifications, cutover, and
 both performance targets remain **Not done**.
+Optional native input routing now walks the original Fjall batches and raw
+entries after a committed Data view. Shared readers stop at the published cut,
+route matching positions, and replay after a saved view. Eighty-one focused
+Data cases pass. Read the
+[input-routing qualification](results/araphor-native-input-routing-2026-11-09.md).
+Durable consumer records, atomic acknowledgement, collection floors, query
+resume parity, production binding, cutover, and both targets remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

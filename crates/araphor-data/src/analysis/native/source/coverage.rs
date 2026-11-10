@@ -9,6 +9,38 @@ use crate::{
 use snafu::ResultExt as _;
 use std::ops::Bound::{Excluded, Included};
 impl DataView {
+    pub(in crate::analysis::native) fn input_coverage_key(key: &[u8]) -> bool {
+        key.starts_with(Sources::CHANGES)
+    }
+
+    pub(in crate::analysis::native) fn input_coverage(
+        &self,
+        key: &[u8],
+    ) -> Result<Option<CoverageReportRef>> {
+        if !Self::input_coverage_key(key) {
+            return Ok(None);
+        }
+        let reference: CoverageReportRef =
+            Sources::read(&self.snapshot, key)?.ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "input coverage reference",
+                }
+                .build()
+            })?;
+        if !reference.source.valid()
+            || reference.revision == 0
+            || reference.position.commit_revision != self.metadata_revision
+            || reference.position.ordinal != 0
+            || Sources::change(&reference) != key
+        {
+            return NativeStateSnafu {
+                field: "input coverage identity",
+            }
+            .fail();
+        }
+        Ok(Some(reference))
+    }
+
     pub(in crate::analysis::native) fn source_proof_coverage(
         &self,
         identity: &EvidenceIntakeIdentityV1,

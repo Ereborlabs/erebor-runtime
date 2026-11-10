@@ -52,18 +52,19 @@ pub(super) enum InputChange<'a> {
     },
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct InputChanges {
     readers: Arc<Mutex<BTreeMap<[u8; 16], BTreeMap<usize, Arc<InputWatch>>>>>,
 }
 
-struct InputWatch {
-    interest: InputInterest,
-    changes: watch::Sender<StorePositionV1>,
-    _memory: Box<dyn std::any::Any + Send + Sync>,
+pub(in crate::analysis) struct InputWatch {
+    pub(in crate::analysis) interest: InputInterest,
+    pub(in crate::analysis) changes: watch::Sender<StorePositionV1>,
+    pub(in crate::analysis) after: u64,
+    pub(in crate::analysis) _memory: Box<dyn std::any::Any + Send + Sync>,
 }
 
-struct InputRegistration {
+pub(in crate::analysis) struct InputRegistration {
     readers: Weak<Mutex<BTreeMap<[u8; 16], BTreeMap<usize, Arc<InputWatch>>>>>,
     watch: Arc<InputWatch>,
 }
@@ -86,9 +87,11 @@ impl Drop for InputRegistration {
 
 #[derive(Clone)]
 pub struct InputSubscription {
-    _registration: Arc<InputRegistration>,
-    changes: watch::Receiver<StorePositionV1>,
-    meta: AnalysisStoreMetaV1,
+    pub(in crate::analysis) _registration: Arc<InputRegistration>,
+    pub(in crate::analysis) changes: watch::Receiver<StorePositionV1>,
+    pub(in crate::analysis) meta: AnalysisStoreMetaV1,
+    #[cfg(feature = "native-store")]
+    pub(in crate::analysis) native: Option<super::native::inputs::Wake>,
 }
 
 impl InputSubscription {
@@ -115,6 +118,11 @@ impl InputSubscription {
     }
 
     pub async fn changed(&mut self) -> Result<StorePositionV1> {
+        #[cfg(feature = "native-store")]
+        if let Some(native) = &mut self.native {
+            native.changed(&mut self.changes).await?;
+            return Ok(self.observe());
+        }
         self.changes
             .changed()
             .await
@@ -124,6 +132,44 @@ impl InputSubscription {
 }
 
 impl InputChanges {
+    #[cfg(feature = "native-store")]
+    pub(in crate::analysis) fn is_empty(&self) -> bool {
+        self.readers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+    }
+
+    #[cfg(feature = "native-store")]
+    pub(in crate::analysis) fn interested(&self, change: InputChange<'_>) -> bool {
+        self.readers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&change.tenant())
+            .is_some_and(|readers| {
+                readers
+                    .values()
+                    .any(|reader| reader.interest.matches(&change))
+            })
+    }
+
+    #[cfg(feature = "native-store")]
+    pub(in crate::analysis) fn raw(&self, entry: &super::raw::RawEntry) {
+        let readers = self
+            .readers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(readers) = readers.get(&entry.identity.tenant()) {
+            for reader in readers.values() {
+                for span in &entry.commit.spans {
+                    if let Some(position) = reader.interest.raw_position(entry, span) {
+                        reader.advance(position);
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn metadata(&self, revision: u64, change: InputChange<'_>) {
         self.publish(
             StorePositionV1 {
@@ -143,7 +189,7 @@ impl InputChanges {
         }
     }
 
-    fn register(&self, owner: &Arc<InputWatch>) -> Arc<InputRegistration> {
+    pub(in crate::analysis) fn register(&self, owner: &Arc<InputWatch>) -> Arc<InputRegistration> {
         self.readers
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -165,16 +211,24 @@ impl InputChanges {
         if let Some(readers) = readers.get(&tenant) {
             for reader in readers.values() {
                 if reader.interest.matches(&change) {
-                    reader.changes.send_if_modified(|current| {
-                        if position > *current {
-                            *current = position;
-                            true
-                        } else {
-                            false
-                        }
-                    });
+                    reader.advance(position);
                 }
             }
+        }
+    }
+}
+
+impl InputWatch {
+    fn advance(&self, position: StorePositionV1) {
+        if position.commit_revision > self.after {
+            self.changes.send_if_modified(|current| {
+                if position > *current {
+                    *current = position;
+                    true
+                } else {
+                    false
+                }
+            });
         }
     }
 }
@@ -198,6 +252,7 @@ impl AnalysisStore {
         let owner = Arc::new(InputWatch {
             interest,
             changes,
+            after: 0,
             _memory: lease,
         });
         let registration = self.inputs.register(&owner);
@@ -214,6 +269,8 @@ impl AnalysisStore {
             _registration: registration,
             changes: receiver,
             meta,
+            #[cfg(feature = "native-store")]
+            native: None,
         })
     }
 }

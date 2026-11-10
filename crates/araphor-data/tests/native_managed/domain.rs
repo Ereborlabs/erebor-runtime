@@ -496,6 +496,8 @@ fn canonical_finding_survives_removed_producer_and_reopen() -> TestResult {
     Ok(())
 }
 
+#[path = "domain/inputs.rs"]
+mod inputs;
 #[path = "domain/read.rs"]
 mod read;
 #[path = "domain/recovery.rs"]

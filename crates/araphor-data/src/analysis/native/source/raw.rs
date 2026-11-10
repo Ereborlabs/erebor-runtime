@@ -267,6 +267,8 @@ impl NativeStore {
             .build()
         })?;
         *published = std::sync::Arc::new(next);
+        drop(published);
+        self.revision.send_replace(revision);
         Ok(raw.outcome(&identity, last))
     }
 

@@ -2,7 +2,32 @@ use super::*;
 use crate::TraceIdentityV1;
 
 impl InputInterest {
-    pub(super) fn new(
+    pub(in crate::analysis) fn raw_position(
+        &self,
+        entry: &crate::analysis::raw::RawEntry,
+        span: &crate::analysis::raw::RawRange,
+    ) -> Option<StorePositionV1> {
+        if !self.matches(&InputChange::Raw {
+            identity: &entry.identity,
+            range: Some((span.first, span.last, entry.commit.intake)),
+        }) {
+            return None;
+        }
+        let last = match &entry.identity {
+            AnalysisStreamIdentityV1::Evidence(_)
+                if !self.has(&["coverage", "discovery_state", "graph_state"]) =>
+            {
+                span.last.min(self.selection.cursor_range()?.1)
+            }
+            _ => span.last,
+        };
+        Some(StorePositionV1 {
+            commit_revision: entry.commit.revision,
+            ordinal: span.ordinal + (last - span.first) as u32,
+        })
+    }
+
+    pub(in crate::analysis) fn new(
         selection: AnalysisSelectionV1,
         requests: AnalysisTableRequests,
         owners: Option<BTreeSet<String>>,
@@ -21,7 +46,7 @@ impl InputInterest {
         })
     }
 
-    pub(super) fn allocation_bytes(
+    pub(in crate::analysis) fn allocation_bytes(
         selection: &AnalysisSelectionV1,
         requests: &AnalysisTableRequests,
         owners: Option<&BTreeSet<String>>,

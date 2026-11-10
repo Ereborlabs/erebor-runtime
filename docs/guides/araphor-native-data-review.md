@@ -645,6 +645,31 @@ Read the [qualification](../research/results/araphor-native-result-reads-2026-11
 for the 73 passing focused cases and the exact scope. Production provider
 binding, cutover, and incident speedup remain **Not done**.
 
+## Native input routing
+
+[NativeStore::subscribe_inputs_at](../../crates/araphor-data/src/analysis/native/inputs.rs)
+registers an existing interest after one committed Data view. The native
+`subscribe_inputs` method uses the current view. This differs from the legacy
+initial-head query. Query resume must use a durable consumed cut before
+production binding can change.
+
+Data publishes a view
+  -> Data sends the existing revision availability signal.
+  -> [Wake::changed](../../crates/araphor-data/src/analysis/native/inputs.rs) starts one blocking read of the shared readers.
+  -> [Coordinator::records](../../crates/araphor-data/src/analysis/native/inputs/records.rs) reads canonical context headers, coverage references, and Graph publications from original Fjall batches.
+  -> The raw reader uses original entry spans and intake times.
+  -> Existing interests receive only matching positions.
+
+The readers stop at the captured published view. A failed batch restores its
+previous cursor. A lagging registration can rewind the shared readers without
+repeating an already delivered position. Missing journal history or a saved raw
+footer returns an error. Complete Data cuts do not replace partial raw-page
+positions. Durable consumption and collection floors remain **Not done**.
+
+The [qualification](../research/results/araphor-native-input-routing-2026-11-09.md)
+records 81 passing Data cases. Production provider binding, notifications,
+cutover, and incident performance remain **Not done**.
+
 ## Native finding and manifest tables
 
 [extraction/graph.rs](../../crates/araphor-data/src/analysis/native/extraction/graph.rs)

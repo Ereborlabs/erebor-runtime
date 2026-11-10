@@ -59,6 +59,42 @@ impl DataWrite<'_> {
 }
 
 impl DataView {
+    pub(in crate::analysis::native) fn input_context_key(key: &[u8]) -> bool {
+        key.starts_with(ContextIndex::TENANT) && key.len() == ContextIndex::TENANT.len() + 32
+    }
+
+    pub(in crate::analysis::native) fn input_context(
+        &self,
+        key: &[u8],
+    ) -> Result<Option<AnalysisContextRefV1>> {
+        if !Self::input_context_key(key) {
+            return Ok(None);
+        }
+        let bytes =
+            Records::payload(key, |key| Records::read(key, &self.snapshot))?.ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "input context header",
+                }
+                .build()
+            })?;
+        let reference: AnalysisContextRefV1 = Records::decode(&bytes)?;
+        let id = NativeStore::number(&key[key.len() - 8..])?;
+        if !reference.key.valid()
+            || reference.commit_revision != self.metadata_revision
+            || ContextIndex::key(
+                &ContextIndex::tenant(&reference.key.tenant_id),
+                reference.commit_revision,
+                id,
+            ) != key
+        {
+            return NativeStateSnafu {
+                field: "input context header identity",
+            }
+            .fail();
+        }
+        Ok(Some(reference))
+    }
+
     pub(super) fn check_context_index(
         &self,
         id: u64,
