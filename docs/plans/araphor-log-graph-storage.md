@@ -207,10 +207,21 @@ entries after a committed Data view. It bounds reads by the published cut,
 keeps matching record positions, and replays after a saved view. Eighty-one
 focused Data cases pass. Read the
 [input-routing qualification](../research/results/araphor-native-input-routing-2026-11-09.md).
-Result: **Done for optional native routing after complete Data cuts**. Durable
-consumer records, atomic acknowledgement, collection floors, query resume
-parity, production providers, notification batches, capacity, retention, backup,
-cutover, removal, and both incident targets remain **Not done**.
+Result: **Done for optional native routing after complete Data cuts**. At that
+qualification, durable consumer records, atomic acknowledgement, collection
+floors, query resume parity, production providers, notification batches,
+capacity, retention, backup, cutover, removal, and both incident targets were
+**Not done**.
+
+Optional native managed subscriptions now retain the exact interest and log
+cut. Completed exhaustive captures save consumed progress with results and
+Graph changes. Recovery checks the actual successful capture; filtered
+checkpoints do not acknowledge pending matches or create another checkpoint.
+Ninety focused Data cases pass. Read the
+[consumption qualification](../research/results/araphor-native-consumption-2026-11-10.md).
+Result: **Done for optional native managed input consumption**. Production
+query coverage mapping, collection floors, retention, notification batches,
+backup, cutover, removal, and both incident targets remain **Not done**.
 
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the

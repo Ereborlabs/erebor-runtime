@@ -5,7 +5,7 @@ use crate::analysis::raw::RawIndex;
 use crate::{AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, Result};
 
 impl NativeStore {
-    fn relation_key(name: &str) -> Vec<u8> {
+    pub(super) fn relation_key(name: &str) -> Vec<u8> {
         [b"\0data/relation/".as_slice(), name.as_bytes()].concat()
     }
 }

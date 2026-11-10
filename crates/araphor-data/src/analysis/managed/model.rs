@@ -500,6 +500,8 @@ pub(in crate::analysis) struct Capture {
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub contexts: Vec<AnalysisContextRefV1>,
     pub traces: Vec<[u8; 16]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<crate::analysis::inputs::InputCapture>,
 }
 
 impl Capture {

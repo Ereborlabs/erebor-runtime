@@ -7,12 +7,17 @@ use super::*;
 
 mod head;
 mod interest;
+mod model;
+
+pub(in crate::analysis) use model::InputCapture;
+#[cfg(feature = "native-store")]
+pub(in crate::analysis) use model::{InputCut, InputSpec};
 
 pub(super) struct InputInterest {
-    original: AnalysisSelectionV1,
+    pub(in crate::analysis) original: AnalysisSelectionV1,
     selection: AnalysisSelectionV1,
-    requests: AnalysisTableRequests,
-    owners: Option<BTreeSet<String>>,
+    pub(in crate::analysis) requests: AnalysisTableRequests,
+    pub(in crate::analysis) owners: Option<BTreeSet<String>>,
 }
 
 pub(super) enum InputChange<'a> {
@@ -61,12 +66,14 @@ pub(in crate::analysis) struct InputWatch {
     pub(in crate::analysis) interest: InputInterest,
     pub(in crate::analysis) changes: watch::Sender<StorePositionV1>,
     pub(in crate::analysis) after: u64,
+    #[cfg(feature = "native-store")]
+    pub(in crate::analysis) delivery: Option<Arc<super::native::inputs::Delivery>>,
     pub(in crate::analysis) _memory: Box<dyn std::any::Any + Send + Sync>,
 }
 
 pub(in crate::analysis) struct InputRegistration {
     readers: Weak<Mutex<BTreeMap<[u8; 16], BTreeMap<usize, Arc<InputWatch>>>>>,
-    watch: Arc<InputWatch>,
+    pub(in crate::analysis) watch: Arc<InputWatch>,
 }
 
 impl Drop for InputRegistration {
@@ -95,6 +102,14 @@ pub struct InputSubscription {
 }
 
 impl InputSubscription {
+    pub fn needs_initial(&self) -> bool {
+        #[cfg(feature = "native-store")]
+        if let Some(native) = &self.native {
+            return native.needs_initial();
+        }
+        false
+    }
+
     pub fn meta(&self) -> &AnalysisStoreMetaV1 {
         &self.meta
     }
@@ -221,6 +236,14 @@ impl InputChanges {
 impl InputWatch {
     fn advance(&self, position: StorePositionV1) {
         if position.commit_revision > self.after {
+            #[cfg(feature = "native-store")]
+            if self
+                .delivery
+                .as_ref()
+                .is_some_and(|delivery| !delivery.record(position))
+            {
+                return;
+            }
             self.changes.send_if_modified(|current| {
                 if position > *current {
                     *current = position;
@@ -253,6 +276,8 @@ impl AnalysisStore {
             interest,
             changes,
             after: 0,
+            #[cfg(feature = "native-store")]
+            delivery: None,
             _memory: lease,
         });
         let registration = self.inputs.register(&owner);

@@ -83,8 +83,17 @@ entries after a committed Data view. Shared readers stop at the published cut,
 route matching positions, and replay after a saved view. Eighty-one focused
 Data cases pass. Read the
 [input-routing qualification](results/araphor-native-input-routing-2026-11-09.md).
-Durable consumer records, atomic acknowledgement, collection floors, query
-resume parity, production binding, cutover, and both targets remain **Not done**.
+At the input-routing qualification, durable consumer records, atomic
+acknowledgement, collection floors, query resume parity, production binding,
+cutover, and both targets were **Not done**.
+Optional native managed subscriptions now save their exact interest and log
+cut. Exhaustive completed captures advance consumed progress in the result and
+Graph transaction. Recovery checks the actual successful capture. Ninety
+focused Data cases pass. Read the
+[consumption qualification](results/araphor-native-consumption-2026-11-10.md).
+Result: **Done for optional native managed input consumption**. Production
+query coverage mapping, collection floors, retention, notification batches,
+backup, cutover, removal, and both incident targets remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

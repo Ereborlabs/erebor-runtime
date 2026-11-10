@@ -37,7 +37,7 @@ struct VersionRecord {
 }
 
 #[derive(Deserialize, Serialize)]
-struct InstanceRecord {
+pub(super) struct InstanceRecord {
     tenant: [u8; 16],
     id: String,
     grant: PackageGrantV1,
@@ -55,7 +55,7 @@ struct CallHead {
 }
 
 impl InstanceRecord {
-    fn identity(tenant: [u8; 16], id: &str) -> Result<Vec<u8>> {
+    pub(in crate::analysis::native) fn identity(tenant: [u8; 16], id: &str) -> Result<Vec<u8>> {
         rmp_serde::to_vec(&(b'J', tenant, id)).context(crate::ManagedEncodingSnafu)
     }
 
@@ -209,7 +209,11 @@ impl DataView {
 }
 
 impl DataWrite<'_> {
-    fn managed_instance(&self, tenant: [u8; 16], id: &str) -> Result<Option<ManagedInstance>> {
+    pub(in crate::analysis::native) fn managed_instance(
+        &self,
+        tenant: [u8; 16],
+        id: &str,
+    ) -> Result<Option<ManagedInstance>> {
         InstanceRecord::read(tenant, id, self.revision, |key| {
             Records::staged(key, &self.transaction)
         })

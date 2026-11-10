@@ -1,7 +1,7 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ops::Bound::{Excluded, Included},
-    sync::{atomic::Ordering, Arc, Mutex, RwLock},
+    sync::{atomic::Ordering, Arc, Mutex, RwLock, Weak},
 };
 
 use fjall::{cdc::Feed, Branch, SingleWriterTxDatabase};
@@ -15,7 +15,16 @@ use crate::{
     ManagedBudget, NativeStateSnafu, NativeStorageSnafu, Result, StorePositionV1,
 };
 
+mod capture;
+mod checkpoint;
+mod consumer;
+mod cut;
 mod records;
+mod recovery;
+mod registration;
+
+pub(in crate::analysis) use consumer::Delivery;
+use consumer::{Consumer, InputRecord};
 
 pub(super) struct Coordinator {
     database: SingleWriterTxDatabase,
@@ -29,12 +38,15 @@ pub(super) struct Coordinator {
 struct Scan {
     native: Feed,
     raw: u64,
+    consumers: BTreeMap<(u64, u64), Arc<Consumer>>,
+    last_real: u64,
 }
 
 #[derive(Clone)]
 pub(in crate::analysis) struct Wake {
     coordinator: Arc<Coordinator>,
     revision: watch::Receiver<u64>,
+    consumer: Option<(Arc<Consumer>, Weak<NativeStore>)>,
 }
 
 impl Coordinator {
@@ -60,15 +72,23 @@ impl Coordinator {
                 operation: "open input journal reader",
             })?;
         let raw = view.revision;
+        let recovered = Arc::clone(&view);
         drop(view);
-        Ok(Self {
+        let owner = Self {
             database,
             branch,
             published,
             ready,
             readers: InputChanges::default(),
-            scan: Mutex::new(Scan { native, raw }),
-        })
+            scan: Mutex::new(Scan {
+                native,
+                raw,
+                consumers: BTreeMap::new(),
+                last_real: 0,
+            }),
+        };
+        owner.restore(&recovered)?;
+        Ok(owner)
     }
 
     fn view(&self) -> Result<Arc<DataView>> {
@@ -125,16 +145,16 @@ impl Coordinator {
                     }
                     .fail();
                 }
-                self.records(&batch, view)
+                self.records(&batch, view, scan)
             })();
             if let Err(error) = routed {
-                scan.native =
-                    self.database
-                        .inner()
-                        .journal_feed(before)
-                        .context(NativeStorageSnafu {
-                            operation: "restore failed input journal read",
-                        })?;
+                scan.native = self
+                    .database
+                    .inner()
+                    .journal_feed(before.min(scan.native.cursor()))
+                    .context(NativeStorageSnafu {
+                        operation: "restore failed input journal read",
+                    })?;
                 return Err(error);
             }
         }
@@ -144,6 +164,7 @@ impl Coordinator {
             .range((Excluded(scan.raw), Included(view.revision)))
         {
             self.readers.raw(entry);
+            scan.last_real = scan.last_real.max(entry.commit.revision);
         }
         scan.raw = view.revision;
         Ok(())
@@ -151,6 +172,12 @@ impl Coordinator {
 }
 
 impl Wake {
+    pub(in crate::analysis) fn needs_initial(&self) -> bool {
+        self.consumer
+            .as_ref()
+            .is_some_and(|(consumer, _)| consumer.delivery.completed().commit_revision == 0)
+    }
+
     pub(in crate::analysis) async fn changed(
         &mut self,
         changes: &mut watch::Receiver<StorePositionV1>,
@@ -165,13 +192,28 @@ impl Wake {
                     }
                     .build()
                 })??;
+            if self
+                .consumer
+                .as_ref()
+                .is_some_and(|(consumer, _)| !consumer.delivery.active())
+            {
+                return Err(crate::PackageErrorCodeV1::Conflict.error("input consumer retired"));
+            }
             if changes.has_changed().map_err(|_| {
                 NativeStateSnafu {
                     field: "input change receiver",
                 }
                 .build()
             })? {
-                return Ok(());
+                let position = *changes.borrow_and_update();
+                if self
+                    .consumer
+                    .as_ref()
+                    .is_none_or(|(consumer, _)| position > consumer.delivery.completed())
+                {
+                    return Ok(());
+                }
+                continue;
             }
             self.revision.changed().await.map_err(|_| {
                 NativeStateSnafu {
@@ -266,6 +308,7 @@ impl NativeStore {
             interest,
             changes,
             after: after.revision,
+            delivery: None,
             _memory: lease,
         });
         let registration = self.inputs.readers.register(&owner);
@@ -277,6 +320,7 @@ impl NativeStore {
             native: Some(Wake {
                 coordinator: Arc::clone(&self.inputs),
                 revision: self.revision.subscribe(),
+                consumer: None,
             }),
         })
     }

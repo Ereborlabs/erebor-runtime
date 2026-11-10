@@ -373,6 +373,10 @@ impl NativeStore {
 
     pub fn read_at(&self, revision: u64) -> Result<DataView> {
         let current = self.view()?;
+        Self::cut_at(&self.branch, &current, revision)
+    }
+
+    fn cut_at(branch: &Branch, current: &DataView, revision: u64) -> Result<DataView> {
         if revision > current.revision {
             return NativeStateSnafu {
                 field: "requested revision",
@@ -393,7 +397,7 @@ impl NativeStore {
                 operation: "read historical cut",
             })?;
         let selected = Self::number(&key[b"\0data/cut/".len()..])?;
-        let mut view = Self::cut_view(&self.branch, selected, &cut)?;
+        let mut view = Self::cut_view(branch, selected, &cut)?;
         if view.store_uuid != current.store_uuid {
             return NativeStateSnafu {
                 field: "historical store identity",
@@ -485,6 +489,7 @@ impl<'a> DataWrite<'a> {
         if !self.dirty && stamps.is_empty() {
             return Ok(None);
         }
+        self.checkpoint_inputs()?;
         self.stage_raw()?;
         self.transaction.insert(HEAD, self.revision.to_be_bytes());
         let stamps = stamps.into_iter().chain([NativeStore::cut(self.revision)]);

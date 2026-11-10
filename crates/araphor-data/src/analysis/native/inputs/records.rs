@@ -1,6 +1,6 @@
 use snafu::ResultExt as _;
 
-use super::Coordinator;
+use super::{Coordinator, InputRecord, Scan};
 use crate::analysis::{
     inputs::InputChange,
     native::{DataView, NativeStore},
@@ -8,7 +8,46 @@ use crate::analysis::{
 use crate::{NativeStorageSnafu, Result, StorePositionV1};
 
 impl Coordinator {
-    pub(super) fn records(&self, batch: &fjall::cdc::Batch, bound: &DataView) -> Result<()> {
+    pub(super) fn records(
+        &self,
+        batch: &fjall::cdc::Batch,
+        bound: &DataView,
+        scan: &mut Scan,
+    ) -> Result<()> {
+        for item in &batch.items {
+            if item.branch == Some(self.branch.id()) && item.key.starts_with(InputRecord::PREFIX) {
+                self.refresh(scan, &item.key, bound)?;
+            }
+            if item.branch == Some(self.branch.id())
+                && item.key.starts_with(b"\0data/J")
+                && item.key.len() == 15
+            {
+                let owner = NativeStore::number(&item.key[7..])?;
+                let keys = scan
+                    .consumers
+                    .range((owner, 0)..=(owner, u64::MAX))
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>();
+                for (owner, generation) in keys {
+                    self.refresh(scan, &InputRecord::key(owner, generation), bound)?;
+                }
+            }
+        }
+        let items = || {
+            batch
+                .items
+                .iter()
+                .filter(|item| item.branch == Some(self.branch.id()))
+        };
+        let coordinator = items().any(|item| item.key.starts_with(InputRecord::PREFIX))
+            && items().all(|item| Self::checkpoint_key(&item.key));
+        if !coordinator {
+            if let Some(head) = items().find(|item| item.key.as_ref() == super::super::HEAD) {
+                if let Some(value) = &head.value {
+                    scan.last_real = scan.last_real.max(NativeStore::number(value)?);
+                }
+            }
+        }
         let mut candidates = batch
             .items
             .iter()
@@ -74,5 +113,18 @@ impl Coordinator {
             }
         }
         Ok(())
+    }
+
+    fn checkpoint_key(key: &[u8]) -> bool {
+        key.starts_with(InputRecord::PREFIX)
+            || key == super::super::HEAD
+            || key.starts_with(b"\0data/cut/")
+            || key.starts_with(b"\0data/source/")
+            || key.starts_with(b"\0data/epoch/")
+            || key.starts_with(b"\0data/raw/end/")
+            || key == b"\0data/raw/next"
+            || ["events", "source_receipts", "source_bindings"]
+                .iter()
+                .any(|name| key == NativeStore::relation_key(name))
     }
 }

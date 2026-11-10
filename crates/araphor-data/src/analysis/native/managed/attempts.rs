@@ -353,6 +353,7 @@ impl DataWrite<'_> {
         capture.check_native_heads(&current, &spec, owner, |key| {
             Records::staged(key, &self.transaction)
         })?;
+        self.check_input_capture(capture)?;
         let control = AnalysisReadControl::default();
         if !capture.follow && !self.sources_current(&capture.sources, &control)? {
             return crate::AnalysisSourceChangedSnafu.fail();

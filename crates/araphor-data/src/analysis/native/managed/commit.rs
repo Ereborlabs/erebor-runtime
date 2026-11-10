@@ -200,6 +200,7 @@ impl NativeStore {
         instance.generation = input.attempt.0.capture.generation;
         instance.progress = tx.revision;
         tx.stage_instance(&instance)?;
+        let consumed = tx.consume_inputs(&input.attempt.0.capture, input.completed)?;
         tx.transaction.remove(Records::key(b'Y', owner));
         let retained = ManagedExecution::retain(
             input.attempt,
@@ -231,6 +232,9 @@ impl NativeStore {
                 .into_iter()
                 .flat_map(|pending| pending.stamps.iter().cloned()),
             || {
+                if let Some((delivery, position)) = consumed {
+                    delivery.complete(position);
+                }
                 if let Some((frame, proof)) = source_proof {
                     frame.commit_proof(proof);
                 }

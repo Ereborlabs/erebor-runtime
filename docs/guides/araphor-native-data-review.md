@@ -664,11 +664,70 @@ The readers stop at the captured published view. A failed batch restores its
 previous cursor. A lagging registration can rewind the shared readers without
 repeating an already delivered position. Missing journal history or a saved raw
 footer returns an error. Complete Data cuts do not replace partial raw-page
-positions. Durable consumption and collection floors remain **Not done**.
+positions. At that qualification, durable consumption and collection floors
+were **Not done**. The durable consumption implementation is below.
 
 The [qualification](../research/results/araphor-native-input-routing-2026-11-09.md)
 records 81 passing Data cases. Production provider binding, notifications,
 cutover, and incident performance remain **Not done**.
+
+## Durable native input consumption
+
+This implementation follows Runtime `39e015332`. The
+[qualification](../research/results/araphor-native-consumption-2026-11-10.md)
+records the exact source hashes. Production still uses DuckDB.
+
+[NativeStore::subscribe_managed_inputs](../../crates/araphor-data/src/analysis/native/inputs/registration.rs) An execution owner registers a managed subscription
+  -> [InputInterest::new](../../crates/araphor-data/src/analysis/inputs/interest.rs) Data checks the selection, table requests, and context owners.
+  -> [InputRecord](../../crates/araphor-data/src/analysis/native/inputs/consumer.rs) Data saves the interest, instance generation, stable binding version, and exact native/raw cut.
+  -> [NativeStore::subscribe_managed_inputs](../../crates/araphor-data/src/analysis/native/inputs/registration.rs) A new record starts with no completed input; an existing record keeps its saved cut.
+  -> [Coordinator::refresh](../../crates/araphor-data/src/analysis/native/inputs/recovery.rs) Data registers the interest with the shared original-log readers.
+  -> [InputSubscription::needs_initial](../../crates/araphor-data/src/analysis/inputs/mod.rs) The caller must perform an initial full capture before waiting for new input.
+
+[NativeStore::read_managed_subscribed](../../crates/araphor-data/src/analysis/native/managed/capture.rs) Data captures package input
+  -> [NativeStore::capture_managed_tables](../../crates/araphor-data/src/analysis/native/managed/capture.rs) The existing read and seal procedure uses one pinned Data view.
+  -> [Wake::capture_inputs](../../crates/araphor-data/src/analysis/native/inputs/capture.rs) Data binds the token to that view and the registered consumer.
+  -> [Wake::capture_inputs](../../crates/araphor-data/src/analysis/native/inputs/capture.rs) Full physical coverage permits consumption; a narrowed or projected read can publish without consuming omitted input.
+
+[NativeStore::commit_managed](../../crates/araphor-data/src/analysis/native/managed/commit.rs) A completed package publication succeeds
+  -> [DataWrite::consume_inputs](../../crates/araphor-data/src/analysis/native/inputs/capture.rs) Data stages the actual exhaustive capture position with results, Graph changes, and references.
+  -> [DataWrite::checkpoint_inputs](../../crates/araphor-data/src/analysis/native/inputs/checkpoint.rs) Data coalesces filtered scan progress and stops before pending matching input.
+  -> [DataWrite::commit_published](../../crates/araphor-data/src/analysis/native/mod.rs) Data commits one native batch and publishes its exact view.
+  -> [Delivery::complete](../../crates/araphor-data/src/analysis/native/inputs/consumer.rs) Data advances the in-memory completed position after publication.
+
+[NativeStore::commit_managed](../../crates/araphor-data/src/analysis/native/managed/commit.rs) A publication fails, rolls back, or remains incomplete
+  -> [DataWrite::consume_inputs](../../crates/araphor-data/src/analysis/native/inputs/capture.rs) Data does not advance completed input.
+  -> [Wake::changed](../../crates/araphor-data/src/analysis/native/inputs.rs) Matching unconsumed input remains available from the original logs.
+
+[NativeStore::open](../../crates/araphor-data/src/analysis/native/mod.rs) Data reopens the store
+  -> [DataView::validate_attempts](../../crates/araphor-data/src/analysis/native/managed/attempt_recovery.rs) The existing attempt scan collects successful exhaustive capture positions.
+  -> [DataView::check_input_completions](../../crates/araphor-data/src/analysis/native/inputs/recovery.rs) Each consumer completion must match its actual successful capture.
+  -> [Coordinator::restore](../../crates/araphor-data/src/analysis/native/inputs/recovery.rs) Data restores the saved interests and exact retained log cuts.
+  -> [Wake::changed](../../crates/araphor-data/src/analysis/native/inputs.rs) Data discards queued positions that the package has already consumed.
+
+The coordinator owns each durable registration after a local subscription
+handle closes. Stop/start keeps the same generation and pending input. The
+original instance records retire obsolete generations. The native update and
+remove callers remain **Not implemented**.
+
+The record separates the safe physical scan cut from completed matching work.
+Filtered checkpoints do not clear the initial-capture requirement. Checkpoint
+records do not create matching work or another checkpoint. An ordinary write
+does not run synchronous CDC replay when no durable consumer exists. Raw append
+adds no checkpoint sync. The explicit checkpoint API is for maintenance; its
+capacity and collection callers remain **Not implemented**.
+
+The [committed tests](../../crates/araphor-data/tests/native_managed/inputs.rs)
+cover atomic rejection and success, restart after compaction, filtered traffic,
+checkpoint restart, missing completion authority, incomplete publication,
+metadata and narrowed reads, stop/start, queued wakes, and a real Graph
+publication with later raw input. The Graph case preserves the later input.
+
+Collection-floor release, bootstrap retention enforcement, configured recovery
+memory, and production query coverage mapping remain **Not implemented**.
+Production binding, notification batches, backup, cutover, DuckDB removal, and
+both incident targets remain **Not done**. No DataFusion operator changes or
+incident performance claim form part of this qualification.
 
 ## Native finding and manifest tables
 

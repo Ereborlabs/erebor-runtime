@@ -220,6 +220,7 @@ impl AnalysisStore {
                 witnesses: Vec::new(),
                 contexts: Vec::new(),
                 traces: Vec::new(),
+                input: None,
             },
             instance,
             prior,

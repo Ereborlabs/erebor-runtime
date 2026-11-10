@@ -121,6 +121,40 @@ impl NativeStore {
         control: &AnalysisReadControl,
         owners: Option<&BTreeSet<String>>,
     ) -> Result<ManagedPage> {
+        self.capture_managed_tables(selection, managed, read, limits, control, owners, None)
+    }
+
+    pub fn read_managed_subscribed(
+        &self,
+        inputs: &crate::InputSubscription,
+        selection: &AnalysisSelectionV1,
+        managed: &ManagedRead,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        owners: Option<&BTreeSet<String>>,
+    ) -> Result<ManagedPage> {
+        self.capture_managed_tables(
+            selection,
+            managed,
+            read,
+            limits,
+            control,
+            owners,
+            Some(inputs),
+        )
+    }
+
+    fn capture_managed_tables(
+        &self,
+        selection: &AnalysisSelectionV1,
+        managed: &ManagedRead,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        owners: Option<&BTreeSet<String>>,
+        inputs: Option<&crate::InputSubscription>,
+    ) -> Result<ManagedPage> {
         if selection.tenant_id != managed.instance.spec.tenant
             || !matches!(
                 read.mode,
@@ -151,6 +185,17 @@ impl NativeStore {
         )?;
         state.seal(selection, &page.extraction);
         state.seal_source(&mut page, control)?;
+        if let Some(inputs) = inputs {
+            state.contract.input = Some(inputs.capture_inputs(
+                self,
+                &view,
+                &managed.instance,
+                selection,
+                &read,
+                &page,
+                owners,
+            )?);
+        }
         Ok(ManagedPage { page, state })
     }
 }
@@ -344,6 +389,7 @@ impl DataView {
             witnesses: Vec::new(),
             contexts: Vec::new(),
             traces: Vec::new(),
+            input: None,
         };
         if contract
             .prior

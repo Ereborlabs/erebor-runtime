@@ -19,6 +19,8 @@ mod attempts;
 mod domain;
 #[path = "native_managed/graph.rs"]
 mod graph;
+#[path = "native_managed/inputs.rs"]
+mod inputs;
 #[path = "native_managed/publication.rs"]
 mod publication;
 #[path = "native_managed/read.rs"]

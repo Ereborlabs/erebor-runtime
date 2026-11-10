@@ -19,6 +19,7 @@ impl DataView {
         let mut history = BTreeMap::<(u64, u64), BTreeSet<u64>>::new();
         let mut successes = BTreeMap::<(u64, u64), BTreeSet<u64>>::new();
         let mut captures = Vec::new();
+        let mut inputs = BTreeMap::<(u64, u64, u64), u64>::new();
         for row in self.snapshot.prefix(b"\0data/a") {
             let (key, _) = row.context(NativeStorageSnafu {
                 operation: "validate managed attempts",
@@ -39,6 +40,7 @@ impl DataView {
             let capture = &attempt.capture;
             Attempts::validate_request(&attempt.request)?;
             capture.grant.validate()?;
+            self.check_input_token(capture)?;
             let owner = Records::find(
                 &InstanceRecord::identity(capture.tenant, &capture.instance)?,
                 |key| Records::read(key, &self.snapshot),
@@ -135,6 +137,18 @@ impl DataView {
                     return Err(Code::Invalid.error("managed attempt outcome"));
                 }
                 self.validate_success(&attempt)?;
+                if let Some(input) = capture.input.as_ref().filter(|input| {
+                    input.exhaustive
+                        && receipt
+                            .frontier
+                            .as_ref()
+                            .is_none_or(|frontier| !frontier.pending)
+                }) {
+                    let completed = inputs
+                        .entry((owner, input.generation, input.version))
+                        .or_default();
+                    *completed = (*completed).max(capture.revision);
+                }
                 successes
                     .entry((owner, capture.generation))
                     .or_default()
@@ -230,6 +244,7 @@ impl DataView {
                 .fail();
             }
         }
+        self.check_input_completions(&inputs)?;
         self.validate_heads(b"\0data/p", pending)?;
         self.validate_heads(b"\0data/E", ended)?;
         for row in self.snapshot.prefix(b"\0data/o") {
