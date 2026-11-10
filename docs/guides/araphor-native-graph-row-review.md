@@ -1,8 +1,9 @@
 # Native Graph row review
 
-This guide covers the Graph row rewrite in the current working tree. Data owns
-the durable Graph. Query uses the DataFusion parser, plans, and table provider.
-The rewrite stores shared values and version membership in DuckDB.
+The sections before `Native identity reads` describe the earlier DuckDB Graph
+row rewrite and its recorded checks. They are historical evidence. The native
+storage replacement uses the versioned Fjall and lsm-tree forks. Its current
+worklist is in the [integration research](../research/araphor-fjall-integration.md).
 
 ## Intended end state
 
@@ -152,3 +153,38 @@ case made 18 extra OCI decodes in the baseline Graph classifier and zero in
 the instrumented cache run. One warm whole test took 104.25 seconds before
 the cache and 103.06 seconds after it. The four Graph stages took 3.78 and
 3.79 seconds. These runs do not prove a Graph-stage or end-to-end speed gain.
+
+## Native identity reads
+
+The native Graph API can read member identity without a property chunk. This
+API prepares the indexed traversal replacement. It does not implement Data
+traversal or prove incident latency.
+
+Read these files in order:
+
+1. [Native exports](../../crates/araphor-graph/src/native/mod.rs): `Identity` is
+   a generic Graph value. It has no package fields.
+2. [View](../../crates/araphor-graph/src/native/view.rs): `visit_identities`
+   and `visit` share `visit_index`. The selected writer snapshots and the
+   requested node or adjacency index select the members.
+3. [Native tests](../../crates/araphor-graph/src/native/tests.rs):
+   `identities_skip_property_chunks` removes property chunks after a commit.
+   Identity reads still return node, owner, and adjacency membership. A full
+   member read fails because its property chunk is absent.
+
+The read flow is `visit_identities` -> `visit_index` -> `read_identity` ->
+`decode_identity` -> caller. The decoder checks the stored writer and member
+key. It resolves owner, entity, and endpoint values in the selected dictionary.
+Each selected member needs one membership read. A full `visit` then calls
+`attach_member` to read and check its property row.
+
+`View` holds the selected snapshots. Returned identities hold the memory
+leases for their decoded values. `Scratch` checks the caller's budget during
+index scans and dictionary reads. Missing membership, invalid identity, and
+backend errors stop the read. This change adds no persistent index, format,
+transaction, or commit owner.
+
+The 13 native Graph tests passed on this source in 2.43 seconds. The run log is
+`output/araphor-fjall-migration-20261110/public-cutover-graph-native-tests.log`.
+The checks include retained history, forks, rollback, budgets, corruption,
+and point reads. The incident workload and the 100-fold target remain unproved.

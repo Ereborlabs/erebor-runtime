@@ -7,7 +7,7 @@ mod write;
 
 pub use crate::scratch::{Lease, Reserve};
 pub use prepare::Prepared;
-pub use view::{Member, ReadBatch, View};
+pub use view::{Identity, Member, ReadBatch, View};
 pub use write::{LayerRequest, Pending};
 
 use std::collections::BTreeMap;

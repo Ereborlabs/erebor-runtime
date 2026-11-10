@@ -711,3 +711,55 @@ fn installation_checks_are_read_only_and_exact() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn identities_skip_property_chunks() -> TestResult {
+    let fixture = Fixture::new()?;
+    let empty = fixture.view()?;
+    let mut journal = Journal::new(17)?;
+    fixture.edit(&empty, &mut journal, 11, b"owner", &[b"source"], 0)?;
+    fixture.edit(&empty, &mut journal, 12, b"owner", &[b"target"], 0)?;
+    fixture.edit(&empty, &mut journal, 13, b"owner", &[b"edge"], 0)?;
+    fixture.stage(&empty, &[&journal], 100, true)?;
+    let snapshot = fixture.branch.snapshot()?;
+    let mut tx = fixture.branch.write_tx()?;
+    for entry in snapshot.prefix(record::Key::record(b'P', &[])) {
+        tx.remove(entry?.0);
+    }
+    tx.commit()?;
+    let view = fixture.view()?;
+    for (relation, read, key, expected) in [
+        (11, Read::Nodes, b"source".as_slice(), b"source".as_slice()),
+        (13, Read::Outgoing, b"source".as_slice(), b"edge".as_slice()),
+        (13, Read::Incoming, b"target".as_slice(), b"edge".as_slice()),
+    ] {
+        let mut rows = Vec::new();
+        view.visit_identities(
+            relation,
+            read,
+            &Fixture::keys(&[key])?,
+            &|_, _, _| Ok(None),
+            |row| {
+                rows.push((row.writer, row.owner, row.key, row.revision));
+                Ok(())
+            },
+        )?;
+        assert_eq!(rows, [(17, b"owner".to_vec(), expected.to_vec(), 100)]);
+    }
+    let mut nodes = Vec::new();
+    view.visit_identities(
+        11,
+        Read::Owned(17),
+        &RecordBatch::new_empty(Arc::new(Schema::empty())),
+        &|_, _, _| Ok(None),
+        |row| {
+            nodes.push(row.key);
+            Ok(())
+        },
+    )?;
+    assert_eq!(nodes, [b"source".to_vec()]);
+    assert!(view
+        .member(17, 11, b"owner", b"source", &|_, _, _| Ok(None))
+        .is_err());
+    Ok(())
+}

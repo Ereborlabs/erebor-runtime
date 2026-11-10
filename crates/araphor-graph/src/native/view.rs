@@ -22,6 +22,17 @@ pub(super) struct Chunk {
     pub(super) _leases: Arc<Vec<Lease>>,
 }
 
+pub struct Identity {
+    pub writer: u64,
+    pub relation: u64,
+    pub owner: Vec<u8>,
+    pub key: Vec<u8>,
+    pub endpoints: Option<[Vec<u8>; 3]>,
+    pub property: u64,
+    pub revision: u64,
+    _leases: Vec<Lease>,
+}
+
 pub struct Member {
     pub writer: u64,
     pub relation: u64,
@@ -259,6 +270,30 @@ impl View {
         reserve: &Reserve<'_>,
         mut visit: impl FnMut(Member) -> Result<()>,
     ) -> Result<()> {
+        self.visit_index(relation, read, keys, reserve, |stored, identity| {
+            visit(self.attach_member(stored, identity, reserve)?)
+        })
+    }
+
+    pub fn visit_identities(
+        &self,
+        relation: u64,
+        read: Read,
+        keys: &RecordBatch,
+        reserve: &Reserve<'_>,
+        mut visit: impl FnMut(Identity) -> Result<()>,
+    ) -> Result<()> {
+        self.visit_index(relation, read, keys, reserve, |_, identity| visit(identity))
+    }
+
+    fn visit_index(
+        &self,
+        relation: u64,
+        read: Read,
+        keys: &RecordBatch,
+        reserve: &Reserve<'_>,
+        mut visit: impl FnMut(StoredMember, Identity) -> Result<()>,
+    ) -> Result<()> {
         let (declaration, shape) = self.relation(relation)?;
         if keys.schema().as_ref()
             != &if matches!(read, Read::Owned(_)) {
@@ -295,7 +330,8 @@ impl View {
                     let (_, key) = item.context(NativeSnafu {
                         operation: "scan Graph owned members",
                     })?;
-                    visit(self.read_member(*writer, &key, reserve)?)?;
+                    let (stored, identity) = self.read_identity(*writer, &key, reserve)?;
+                    visit(stored, identity)?;
                 }
                 continue;
             }
@@ -322,7 +358,8 @@ impl View {
                         }
                         memory.charge(*writer, member.len() + 128)?;
                         seen.insert(member.to_vec());
-                        visit(self.read_member(*writer, &member, reserve)?)?;
+                        let (stored, identity) = self.read_identity(*writer, &member, reserve)?;
+                        visit(stored, identity)?;
                     }
                 }
             }
@@ -350,7 +387,12 @@ impl View {
         self.decode_member(writer, &key, &bytes, reserve).map(Some)
     }
 
-    fn read_member(&self, writer: u64, key: &[u8], reserve: &Reserve<'_>) -> Result<Member> {
+    fn read_identity(
+        &self,
+        writer: u64,
+        key: &[u8],
+        reserve: &Reserve<'_>,
+    ) -> Result<(StoredMember, Identity)> {
         let snapshot = self.snapshot(writer)?;
         let bytes = snapshot
             .get(key)
@@ -363,7 +405,7 @@ impl View {
                 }
                 .build()
             })?;
-        self.decode_member(writer, key, &bytes, reserve)
+        self.decode_identity(writer, key, &bytes, reserve)
     }
 
     fn decode_member(
@@ -373,6 +415,17 @@ impl View {
         bytes: &[u8],
         reserve: &Reserve<'_>,
     ) -> Result<Member> {
+        let (stored, identity) = self.decode_identity(writer, key, bytes, reserve)?;
+        self.attach_member(stored, identity, reserve)
+    }
+
+    fn decode_identity(
+        &self,
+        writer: u64,
+        key: &[u8],
+        bytes: &[u8],
+        reserve: &Reserve<'_>,
+    ) -> Result<(StoredMember, Identity)> {
         let snapshot = self.snapshot(writer)?;
         let mut memory = Scratch::new(reserve);
         memory.charge(writer, bytes.len() + 256)?;
@@ -383,7 +436,7 @@ impl View {
             }
             .fail();
         }
-        let (declaration, shape) = self.relation(stored.relation)?;
+        let (declaration, _) = self.relation(stored.relation)?;
         let owner = Dictionary::resolve(snapshot, 0, writer, stored.owner, writer, &mut memory)?;
         let key = Dictionary::resolve(
             snapshot,
@@ -407,6 +460,36 @@ impl View {
                 .fail()
             }
         };
+        let identity = Identity {
+            writer,
+            relation: stored.relation,
+            owner,
+            key,
+            endpoints,
+            property: stored.property,
+            revision: stored.revision,
+            _leases: memory.into_leases(),
+        };
+        Ok((stored, identity))
+    }
+
+    fn attach_member(
+        &self,
+        stored: StoredMember,
+        identity: Identity,
+        reserve: &Reserve<'_>,
+    ) -> Result<Member> {
+        let Identity {
+            writer,
+            relation,
+            owner,
+            key,
+            endpoints,
+            property,
+            revision,
+            _leases,
+        } = identity;
+        let (_, shape) = self.relation(relation)?;
         let chunk = self.chunk(writer, stored.chunk, reserve)?;
         if chunk.batch.schema().as_ref() != &shape.properties
             || stored.row >= chunk.batch.num_rows()
@@ -418,16 +501,16 @@ impl View {
         }
         Ok(Member {
             writer,
-            relation: stored.relation,
+            relation,
             owner,
             key,
             endpoints,
-            property: stored.property,
-            revision: stored.revision,
+            property,
+            revision,
             properties: Arc::clone(&chunk.batch),
             row: stored.row,
             _chunk: chunk,
-            _leases: memory.into_leases(),
+            _leases,
         })
     }
 
