@@ -1,0 +1,94 @@
+{
+  "status": "Done for optional native result reads; production cutover and latency Not done",
+  "parent_commit": "f717909210f6b4a7a5228e85f9bda3bb7a4c4797",
+  "engine_commits": {
+    "fjall": "cceaa84d371165c2f0d4952650543c27fc8e22d9",
+    "lsm-tree": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+  },
+  "tests": {
+    "passed": 73,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 0,
+    "elapsed_seconds": 35.949851542012766,
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "araphor-data",
+      "--features",
+      "native-store,test-fixtures",
+      "--test",
+      "native_extraction",
+      "--test",
+      "native_context",
+      "--test",
+      "native_managed",
+      "--test",
+      "native_packages",
+      "--test",
+      "native_raw",
+      "--test",
+      "native_store",
+      "--test",
+      "raw_index",
+      "--test",
+      "store_schema",
+      "--config",
+      "/tmp/araphor-storage-release-override.toml",
+      "--",
+      "--nocapture"
+    ],
+    "sources_unchanged": true
+  },
+  "format": {
+    "exit_code": 0,
+    "command": [
+      "rustfmt",
+      "--check",
+      "--edition",
+      "2021",
+      "--config",
+      "skip_children=true",
+      "crates/araphor-data/src/analysis/native/extraction/mod.rs",
+      "crates/araphor-data/src/analysis/native/managed/capture.rs",
+      "crates/araphor-data/src/analysis/native/managed/mod.rs",
+      "crates/araphor-data/src/analysis/native/managed/read.rs",
+      "crates/araphor-data/src/analysis/native/managed/results.rs",
+      "crates/araphor-data/src/analysis/native/revisions.rs",
+      "crates/araphor-data/src/analysis/native/source/coverage.rs",
+      "crates/araphor-data/src/analysis/native/source/raw.rs",
+      "crates/araphor-data/src/analysis/raw/index.rs",
+      "crates/araphor-data/tests/native_managed.rs",
+      "crates/araphor-data/tests/native_managed/publication.rs",
+      "crates/araphor-data/tests/native_managed/read.rs"
+    ]
+  },
+  "source_sha256": {
+    "crates/araphor-data/src/analysis/native/extraction/mod.rs": "4d9cbd705de3722a35651b187452cc7d0452b20e66c80f5b80666271f0a6f8ae",
+    "crates/araphor-data/src/analysis/native/managed/capture.rs": "07d419facceca1b32ddeffbdb1dd84ebcc4f0e0902f63c1ca09b53b717f019d9",
+    "crates/araphor-data/src/analysis/native/managed/mod.rs": "3ddfe11d4f9604e27e2722b986441f24893390aee9d480259e19782a3cb3b583",
+    "crates/araphor-data/src/analysis/native/managed/read.rs": "a472a2dbcc69c789b96216f9ec76e7508b78979d9668b467b8d9f802de6ea811",
+    "crates/araphor-data/src/analysis/native/managed/results.rs": "7742744d46757bc992c807c6c95d38aa7c1c7d37211c3277df4364ca0990b32f",
+    "crates/araphor-data/src/analysis/native/revisions.rs": "cc05756ea32b54f2d73d9963c4a40202b319d373984d461830e9b9048beb0c12",
+    "crates/araphor-data/src/analysis/native/source/coverage.rs": "42e5b029936f238d43a579eb698fccf758971708099db1e2de1e5293126faef9",
+    "crates/araphor-data/src/analysis/native/source/raw.rs": "e4338e224226b144c5f8afdbe6a5663f27be45c1df7bedcc3f24065b77db8683",
+    "crates/araphor-data/src/analysis/raw/index.rs": "ba4e6500a35d152b5bbd905dd028bdb2670bbcd9bb76f3c48fe26d522e659ab1",
+    "crates/araphor-data/tests/native_managed.rs": "50e33eec02280dffe46280df752eb232c4fb35f165268d6fd9bcdfd4838c494a",
+    "crates/araphor-data/tests/native_managed/publication.rs": "eac81f416d4d4df4eb0e20649f3cd2aca603e13fadb0c6042a33f817fc7ab552",
+    "crates/araphor-data/tests/native_managed/read.rs": "4694a348dc8d118cc4fa2484ece8be10857d3e16b03c791f6c179ed418eb2122"
+  },
+  "evidence_sha256": {
+    "output/araphor-fjall-migration-20261109/native-result-reads-tests.json": "e16463710b0aa14b1047658ccc018a286ed44f11a64ddb2ac5f9bf145714cc0f",
+    "output/araphor-fjall-migration-20261109/native-result-reads-tests.log": "d0711e4b9a1afb9e26928df77cdcddfe7464c8ba5c5c0c111df023bb1bad47d8",
+    "output/araphor-fjall-migration-20261109/native-result-reads-format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "workload_sha256": {
+    "crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs": "9d2ba0f5c12c5040e23313497d02e74bc84c426767222b5e6f7ff00ac17c0f12",
+    "packages/default-definitions/causal.yaml": "ecf71b7b1897f4c3e2739f239db989369316eea5fc2def9acc0de24b952b3cef"
+  },
+  "performance_claim": null,
+  "production_incident_rerun": false,
+  "full_ci_run": false
+}

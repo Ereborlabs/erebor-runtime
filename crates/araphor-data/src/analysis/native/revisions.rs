@@ -81,11 +81,16 @@ impl NativeStore {
                 }
                 .fail();
             }
-            let raw = match name.as_str() {
-                "events" | "source_receipts" => raw.evidence_revision,
-                "source_bindings" => raw.binding_revision,
+            let kind = match name.as_str() {
+                "events" | "source_receipts" => b'E',
+                "source_bindings" => b'B',
                 _ => 0,
             };
+            let raw = raw
+                .relations
+                .range((kind, 0)..=(kind, revision))
+                .next_back()
+                .map_or(0, |((_, revision), ())| *revision);
             if saved.max(raw) > *captured {
                 return Ok(false);
             }
@@ -103,7 +108,7 @@ impl DataView {
         NativeStore::check_sources(
             sources,
             &self.raw,
-            self.metadata_revision,
+            self.revision,
             |key| Records::read(key, &self.snapshot),
             control,
         )

@@ -5,11 +5,105 @@ use super::{CallHead, InstanceRecord, Records, VersionRecord};
 use crate::analysis::managed::{Capture, SourceScope};
 use crate::{
     AnalysisExtractLimits, AnalysisReadControl, AnalysisReadModeV1, AnalysisSelectionV1,
-    AnalysisTableRead, ManagedCapture, ManagedPage, ManagedRead, ManagedSourceRead,
+    AnalysisTableRead, ManagedAttempt, ManagedCapture, ManagedPage, ManagedRead, ManagedSourceRead,
     NativeStateSnafu, PackageErrorCodeV1 as Code, Result,
 };
 
 impl NativeStore {
+    pub fn read_managed_reference(
+        &self,
+        selection: &AnalysisSelectionV1,
+        reference: &ManagedAttempt,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        owners: Option<&BTreeSet<String>>,
+    ) -> Result<ManagedPage> {
+        control.check()?;
+        if selection.tenant_id != reference.instance().spec.tenant {
+            return Err(Code::Denied.error("managed reference tenant"));
+        }
+        let scope = reference
+            .instance()
+            .spec
+            .destination
+            .selection(&reference.instance().grant.selection)?;
+        read.check_scope(selection, &scope)?;
+        let physical = self.view()?;
+        let selected = reference.source_meta();
+        if physical.store_uuid != selected.store_uuid
+            || physical.schema_version != selected.schema_version
+            || physical.recovery_epoch < selected.recovery_epoch
+            || physical.revision < selected.commit_revision
+        {
+            return Err(Code::Conflict.error("managed journal identity"));
+        }
+        if !reference.0.capture.traces.is_empty() {
+            return Err(Code::Unsupported.error("native managed trace owner"));
+        }
+        self.check_captured_progress(&reference.0.capture)?;
+        let view = self.read_at(selected.commit_revision)?;
+        let (mut page, mut state) =
+            self.read_tables_with(&view, selection, read, limits, control, owners, |output| {
+                output.meta = selected;
+                let mut state = ManagedCapture::from(reference);
+                if read.now == reference.request().time_utc_ns {
+                    let mode = match read.mode {
+                        AnalysisReadModeV1::Complete => Some(ManagedSourceRead::Initial),
+                        AnalysisReadModeV1::Changes(after) => {
+                            let parent = self
+                                .managed_parent(reference, control)?
+                                .filter(|parent| parent.position == after)
+                                .ok_or_else(|| {
+                                    Code::Invalid.error("managed reference source cut")
+                                })?;
+                            Some(ManagedSourceRead::Changes(parent))
+                        }
+                        _ => None,
+                    };
+                    if let Some(mode) = mode {
+                        let mut meta = output.meta.clone();
+                        meta.recovery_epoch = physical.recovery_epoch;
+                        state.source = SourceScope::capture(
+                            &state.instance,
+                            &meta,
+                            mode,
+                            &read,
+                            selection,
+                            owners,
+                        )?;
+                        if matches!(read.mode, AnalysisReadModeV1::Changes(_))
+                            && state.source.is_none()
+                        {
+                            return Err(Code::Unsupported.error("managed source projection"));
+                        }
+                        if let (Some(source), Some(receipt)) = (&state.source, reference.receipt())
+                        {
+                            source.commit_proof(std::sync::Arc::new(receipt.selected.clone()));
+                        }
+                    }
+                }
+                if !state.rebuild() {
+                    for (call, prior) in &state.contract.prior {
+                        let Some(prior) = prior else { continue };
+                        let prior = view.managed_prior(
+                            &state.instance,
+                            *call,
+                            &prior.result_id,
+                            prior.commit_revision,
+                            output,
+                            control,
+                        )?;
+                        state.prior.insert(*call, std::sync::Arc::new(prior));
+                    }
+                }
+                state.bytes = output.input_bytes;
+                Ok(state)
+            })?;
+        state.seal_source(&mut page, control)?;
+        Ok(ManagedPage { page, state })
+    }
+
     pub fn read_managed_tables_filtered(
         &self,
         selection: &AnalysisSelectionV1,
@@ -37,15 +131,10 @@ impl NativeStore {
         read.check_scope(selection, &scope)?;
         read.check_managed_changes(selection)?;
         let view = self.view()?;
-        let mut page = self.read_tables_at(&view, selection, read, limits, control, owners)?;
-        let mut state = view.capture_managed(
-            managed,
-            &read,
-            selection,
-            &mut page.extraction,
-            owners,
-            control,
-        )?;
+        let (mut page, mut state) =
+            self.read_tables_with(&view, selection, read, limits, control, owners, |output| {
+                view.capture_managed(managed, &read, selection, output, owners, control)
+            })?;
         state.seal(selection, &page.extraction);
         state.seal_source(&mut page, control)?;
         Ok(ManagedPage { page, state })

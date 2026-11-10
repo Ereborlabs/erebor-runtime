@@ -21,6 +21,8 @@ mod domain;
 mod graph;
 #[path = "native_managed/publication.rs"]
 mod publication;
+#[path = "native_managed/read.rs"]
+mod read;
 
 struct Fixture {
     spec: ManagedSpec,

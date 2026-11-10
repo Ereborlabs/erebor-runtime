@@ -184,6 +184,15 @@ maintenance, attempt-dependent lifecycle, production activation, notification
 batching, configured capacity, retention, backup, cutover, and removal remain
 **Not done**. Both incident performance targets remain **Not done**.
 
+The optional native result owner now reads metadata and historical replay
+through one captured view. It restores saved checkpoints before Arrow row
+allocation. Indexed raw predecessors preserve historical freshness after later
+appends and reopen. Seventy-three focused Data cases pass. Read the
+[result-read qualification](../research/results/araphor-native-result-reads-2026-11-09.md).
+Result: **Done for optional native result reads**. Production provider binding,
+original-log routing, notification batches, capacity, retention, backup, cutover,
+removal, and both incident performance targets remain **Not done**.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

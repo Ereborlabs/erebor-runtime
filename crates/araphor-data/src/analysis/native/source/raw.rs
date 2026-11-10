@@ -56,7 +56,6 @@ impl NativeStore {
             }
             raw.next_segment = raw.next_segment.max(next);
         }
-        let mut known = BTreeSet::new();
         for row in snapshot.prefix(Sources::RECEIPTS) {
             let (key, _) = row.context(NativeStorageSnafu {
                 operation: "read raw receipt keys",
@@ -77,7 +76,6 @@ impl NativeStore {
                 }
                 .fail();
             }
-            known.insert(receipt.identity.key());
             let source = raw.index.sources.get_mut(&receipt.identity.key());
             match source {
                 Some(source) => {
@@ -107,15 +105,54 @@ impl NativeStore {
         }
         raw.index.refresh_receipts()?;
         let metadata = Self::number(&Self::required(snapshot, super::super::HEAD)?)?;
-        raw.index.binding_revision = Self::relation_revision(snapshot, "source_bindings")?;
-        for (_, entry) in raw
-            .index
-            .entries
-            .range((Excluded(metadata), std::ops::Bound::Unbounded))
-        {
-            if entry.identity.evidence().is_some() && known.insert(entry.identity.key()) {
-                raw.index.binding_revision = raw.index.binding_revision.max(entry.commit.revision);
+        let mut births = BTreeMap::<Vec<u8>, u64>::new();
+        for (revision, entry) in raw.index.entries.iter() {
+            if entry.identity.evidence().is_some() {
+                births.entry(entry.identity.key()).or_insert(*revision);
             }
+        }
+        for row in snapshot.prefix(Sources::CHANGES) {
+            let (key, _) = row.context(NativeStorageSnafu {
+                operation: "recover source binding history",
+            })?;
+            let reference: crate::CoverageReportRef =
+                Sources::read(snapshot, &key)?.ok_or_else(|| {
+                    NativeStateSnafu {
+                        field: "source binding history",
+                    }
+                    .build()
+                })?;
+            let revision = reference.position.commit_revision;
+            if !reference.source.valid()
+                || reference.revision == 0
+                || revision == 0
+                || revision > metadata
+                || reference.position.ordinal != 0
+                || Sources::change(&reference) != key.as_ref()
+            {
+                return NativeStateSnafu {
+                    field: "source binding history identity",
+                }
+                .fail();
+            }
+            births
+                .entry(reference.source.key())
+                .and_modify(|first| *first = (*first).min(revision))
+                .or_insert(revision);
+        }
+        let bindings = raw
+            .index
+            .relations
+            .range((b'B', 0)..=(b'B', u64::MAX))
+            .map(|(key, ())| *key)
+            .collect::<Vec<_>>();
+        for key in bindings {
+            raw.index.relations.remove_mut(&key);
+        }
+        raw.index.binding_revision = 0;
+        for revision in births.into_values() {
+            raw.index.relations.insert_mut((b'B', revision), ());
+            raw.index.binding_revision = raw.index.binding_revision.max(revision);
         }
         let mut expected = BTreeMap::<u64, u64>::new();
         for (revision, entry) in raw.index.entries.iter() {

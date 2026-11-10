@@ -65,6 +65,12 @@ This still uses DuckDB in production and establishes no native speedup.
 Other destination owners, production providers, original-log routing, indexed
 source-header maintenance, notifications, capacity, retention, backup, cutover,
 and removal remain **Not done**.
+Native result metadata and historical replay now use one captured view and
+actual saved checkpoints. Indexed raw predecessors preserve historical
+freshness after later appends and reopen. Seventy-three focused Data tests pass.
+Read the [result-read qualification](results/araphor-native-result-reads-2026-11-09.md).
+Production provider binding, cutover, and both performance targets remain
+**Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

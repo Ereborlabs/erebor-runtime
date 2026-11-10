@@ -30,6 +30,19 @@ impl StoredResult {
         tenant: [u8; 16],
         name: &str,
         head: u64,
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<(u64, Self)>> {
+        let Some((id, result)) = Self::load(tenant, name, get, charge)? else {
+            return Ok(None);
+        };
+        result.check_identity(tenant, name, head)?;
+        Ok(Some((id, result)))
+    }
+
+    pub(super) fn load(
+        tenant: [u8; 16],
+        name: &str,
         mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
         charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<Option<(u64, Self)>> {
@@ -41,14 +54,14 @@ impl StoredResult {
             return Ok(None);
         };
         let result: Self = Records::decode(&bytes)?;
-        if result.tenant != tenant
-            || result.id != name
-            || result.revision == 0
-            || result.revision > head
-        {
+        Ok(Some((id, result)))
+    }
+
+    pub(super) fn check_identity(&self, tenant: [u8; 16], name: &str, head: u64) -> Result<()> {
+        if self.tenant != tenant || self.id != name || self.revision == 0 || self.revision > head {
             return Err(Code::Invalid.error("managed result identity"));
         }
-        Ok(Some((id, result)))
+        Ok(())
     }
 
     pub(super) fn owner(&self) -> (&str, &str) {
@@ -58,7 +71,7 @@ impl StoredResult {
         }
     }
 
-    fn check(&self, attempt: &Attempt, spec: &ManagedSpec) -> Result<()> {
+    pub(super) fn check(&self, attempt: &Attempt, spec: &ManagedSpec) -> Result<()> {
         let (instance, name) = self.owner();
         let receipt = attempt
             .receipt

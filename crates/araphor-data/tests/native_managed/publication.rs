@@ -107,7 +107,8 @@ fn checkpoint_resumes_from_native_result_after_each_restart() -> TestResult {
     });
     {
         let store = NativeStore::open(&root)?;
-        let fixture = Fixture::with_model(&store, [1; 16], "checkpoint", model.clone())?;
+        let mut fixture = Fixture::with_model(&store, [1; 16], "checkpoint", model.clone())?;
+        fixture.grant.selection = AnalysisSelectionV1::tenant([1; 16]);
         let instance = fixture.admit(&store)?;
         store.set_managed_running([1; 16], &instance.spec.id, instance.lifecycle, true, || {
             Ok(())
@@ -117,6 +118,7 @@ fn checkpoint_resumes_from_native_result_after_each_restart() -> TestResult {
     let mut last = None;
     for step in 0..2 {
         let store = NativeStore::open(&root)?;
+        super::attempts::append(&store, step + 1)?;
         let resume = store.managed_resume([1; 16], "checkpoint", &control)?;
         let page = if step == 0 {
             super::attempts::capture(&store, &resume.instance, false)?
@@ -173,7 +175,116 @@ fn checkpoint_resumes_from_native_result_after_each_restart() -> TestResult {
             selected: &output.datasets[0],
             selected_schema: &resume.instance.spec.manifest.selected_schema,
         };
-        last = Some(store.commit_managed(store.prepare_managed(&input)?, || Ok(()))?);
+        let receipt = store.commit_managed(store.prepare_managed(&input)?, || Ok(()))?;
+        if step == 1 {
+            let (reference, _, _) = store.managed_reference(
+                &resume.instance,
+                &receipt.selected.result_id,
+                1000,
+                &control,
+            )?;
+            let parent = store
+                .managed_parent(&reference, &control)?
+                .ok_or("replay parent")?;
+            let requests: AnalysisTableRequests = ["events", "context_versions"]
+                .into_iter()
+                .map(|name| {
+                    (
+                        name.into(),
+                        Some(
+                            (0..araphor_data::AnalysisStore::table_schemas()[name]
+                                .fields()
+                                .len())
+                                .collect(),
+                        ),
+                    )
+                })
+                .collect();
+            let selection = resume.instance.grant.selection.project(&requests)?;
+            let read = AnalysisTableRead {
+                requests: &requests,
+                mode: AnalysisReadModeV1::Changes(parent.position),
+                now: 1000,
+                event_ranges: None,
+            };
+            let restored = store.read_managed_reference(
+                &selection,
+                &reference,
+                read,
+                AnalysisExtractLimits::default(),
+                &control,
+                None,
+            )?;
+            assert_eq!(
+                restored.page.tables["events"]
+                    .iter()
+                    .map(sdk::RecordBatch::num_rows)
+                    .sum::<usize>(),
+                1
+            );
+            assert_eq!(
+                restored.state.source().ok_or("restored source")?.read(),
+                &ManagedSourceRead::Changes(parent.clone())
+            );
+            let (checkpoint, _) = restored.state.prior(10).ok_or("restored prior")?.state(
+                &model,
+                &[],
+                None,
+                false,
+            )?;
+            assert_eq!(
+                checkpoint.ok_or("restored checkpoint")?.datasets[0].batches[0]
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or("restored values")?
+                    .value(0),
+                71
+            );
+            let paged = AnalysisTableRead {
+                mode: AnalysisReadModeV1::Page(None),
+                now: 1001,
+                ..read
+            };
+            let limits = AnalysisExtractLimits {
+                page_rows: 1,
+                ..Default::default()
+            };
+            let measured = store
+                .read_managed_reference(&selection, &reference, paged, limits, &control, None)?;
+            let tight = AnalysisExtractLimits {
+                input_bytes: measured.page.extraction.input_bytes,
+                ..limits
+            };
+            let bounded = store
+                .read_managed_reference(&selection, &reference, paged, tight, &control, None)?;
+            assert!(bounded.page.extraction.input_bytes <= tight.input_bytes);
+            assert_eq!(
+                bounded.page.tables["events"]
+                    .iter()
+                    .map(sdk::RecordBatch::num_rows)
+                    .sum::<usize>(),
+                1
+            );
+            assert!(bounded.state.source().is_none());
+            assert!(bounded.state.prior(10).is_some());
+            let mut wrong = parent.position;
+            wrong.commit_revision += 1;
+            assert!(store
+                .read_managed_reference(
+                    &selection,
+                    &reference,
+                    AnalysisTableRead {
+                        mode: AnalysisReadModeV1::Changes(wrong),
+                        ..read
+                    },
+                    AnalysisExtractLimits::default(),
+                    &control,
+                    None
+                )
+                .is_err());
+        }
+        last = Some(receipt);
     }
     let store = NativeStore::open(&root)?;
     assert_eq!(

@@ -619,3 +619,28 @@ rejects it before staging. The live evaluator supplies a fresh journal.
 Configured capacity, retention, backup, production providers, original-log
 subscription routing, notification batches, and production cutover remain
 **Not done**. This implementation does not establish an incident speedup.
+
+## Native result reads and replay
+
+[managed/read.rs](../../crates/araphor-data/src/analysis/native/managed/read.rs)
+reads the existing result DTOs through one captured Data view. Caller scope is
+checked before result integrity. Metadata reads use actual result, attempt, and
+retained-version records. They do not decode checkpoint or raw bodies. Stale
+results stay readable; the view's actual progress and call heads determine
+`current`. Each exact dependency is visited once.
+
+[managed/capture.rs](../../crates/araphor-data/src/analysis/native/managed/capture.rs)
+binds replay to the original capture revision. The private
+[read_tables_with](../../crates/araphor-data/src/analysis/native/extraction/mod.rs)
+entry restores prior charges before source and Arrow allocation. Fresh capture
+uses the same order. Historical replay retains its original contract and uses
+the exact saved parent for changes. Only fresh reads seal a new capture.
+
+[revisions.rs](../../crates/araphor-data/src/analysis/native/revisions.rs) uses
+indexed raw predecessors at the view revision. Recovery combines original raw
+positions with immutable coverage positions to restore source births. These
+freshness heads do not replace original-log subscription positions.
+
+Read the [qualification](../research/results/araphor-native-result-reads-2026-11-09.md)
+for the 73 passing focused cases and the exact scope. Production provider
+binding, cutover, and incident speedup remain **Not done**.

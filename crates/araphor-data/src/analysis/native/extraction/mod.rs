@@ -35,6 +35,20 @@ impl NativeStore {
         control: &AnalysisReadControl,
         owners: Option<&BTreeSet<String>>,
     ) -> Result<AnalysisPositionPageV1> {
+        self.read_tables_with(view, selection, read, limits, control, owners, |_| Ok(()))
+            .map(|(page, ())| page)
+    }
+
+    pub(in crate::analysis::native) fn read_tables_with<T>(
+        &self,
+        view: &DataView,
+        selection: &AnalysisSelectionV1,
+        read: AnalysisTableRead<'_>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        owners: Option<&BTreeSet<String>>,
+        prepare: impl FnOnce(&mut AnalysisExtractionV1) -> Result<T>,
+    ) -> Result<(AnalysisPositionPageV1, T)> {
         control.check()?;
         read.check_inputs(selection, limits, &self.root)?;
         let _lease = self.maintenance.read_until(control)?;
@@ -86,6 +100,7 @@ impl NativeStore {
                 output.charge(owner.len() + size_of::<String>())?;
             }
         }
+        let prepared = prepare(&mut output)?;
         self.select_sources(view, &mut selected, &mut output, control)?;
         limits.check_keys(&selected)?;
         let mode = match read.mode {
@@ -161,6 +176,9 @@ impl NativeStore {
                 ordinal: 0,
             })
         };
-        capture.finish(output, through, exhausted, control)
+        Ok((
+            capture.finish(output, through, exhausted, control)?,
+            prepared,
+        ))
     }
 }

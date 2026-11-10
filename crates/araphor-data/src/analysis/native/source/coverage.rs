@@ -246,6 +246,7 @@ impl DataWrite<'_> {
         if new_binding {
             self.note_relation("source_bindings", self.revision)?;
             self.raw.binding_revision = self.revision;
+            self.raw.relations.insert_mut((b'B', self.revision), ());
         }
         if let Some(source) = self.raw.sources.get_mut(&key) {
             source.receipt = RawReceipt::Evidence(receipt);
