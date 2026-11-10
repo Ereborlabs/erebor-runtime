@@ -35,6 +35,7 @@ araphor-detector-example = { path = "../araphor-detector-example" }
 araphor-query = { path = "../araphor-query", features = ["test-fixtures"] }
 araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
 prost.workspace = true
+rmp-serde.workspace = true
 tempfile = "3.23.0"
 
 [lints]

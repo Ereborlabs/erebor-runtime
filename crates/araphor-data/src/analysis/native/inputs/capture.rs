@@ -18,13 +18,37 @@ impl InputSubscription {
         request: &ManagedRead,
         selection: &AnalysisSelectionV1,
         read: &AnalysisTableRead<'_>,
-        page: &AnalysisPositionPageV1,
+        page: &mut AnalysisPositionPageV1,
         owners: Option<&BTreeSet<String>>,
     ) -> Result<InputCapture> {
         self.native
             .as_ref()
             .ok_or_else(|| Code::Conflict.error("native input subscription"))?
-            .capture_inputs(store, view, request, selection, read, page, owners)
+            .capture_inputs(
+                store,
+                view,
+                &request.instance,
+                request.source.as_ref(),
+                selection,
+                read,
+                page,
+                owners,
+            )
+    }
+    pub(in crate::analysis::native) fn capture_notification(
+        &self,
+        store: &NativeStore,
+        view: &DataView,
+        instance: &crate::ManagedInstance,
+        selection: &AnalysisSelectionV1,
+        read: &AnalysisTableRead<'_>,
+        page: &mut AnalysisPositionPageV1,
+        owners: Option<&BTreeSet<String>>,
+    ) -> Result<InputCapture> {
+        self.native
+            .as_ref()
+            .ok_or_else(|| Code::Conflict.error("native input subscription"))?
+            .capture_inputs(store, view, instance, None, selection, read, page, owners)
     }
 }
 
@@ -33,13 +57,13 @@ impl Wake {
         &self,
         store: &NativeStore,
         view: &DataView,
-        request: &ManagedRead,
+        instance: &crate::ManagedInstance,
+        source: Option<&crate::ManagedSourceRead>,
         selection: &AnalysisSelectionV1,
         read: &AnalysisTableRead<'_>,
-        page: &AnalysisPositionPageV1,
+        page: &mut AnalysisPositionPageV1,
         owners: Option<&BTreeSet<String>>,
     ) -> Result<InputCapture> {
-        let instance = &request.instance;
         let (consumer, _) = self
             .consumer
             .as_ref()
@@ -50,9 +74,12 @@ impl Wake {
             })
             .ok_or_else(|| Code::Conflict.error("input consumer store"))?;
         let interest = &consumer.registration.watch.interest;
-        let record = InputRecord::read(consumer.owner, consumer.generation, |key| {
-            Records::read(key, &view.snapshot)
-        })?
+        let record = InputRecord::read_charged(
+            consumer.owner,
+            consumer.generation,
+            |key| Records::read(key, &view.snapshot),
+            &mut |bytes| page.extraction.charge(bytes),
+        )?
         .ok_or_else(|| Code::Missing.error("input capture consumer"))?;
         if instance.generation != consumer.generation
             || record.version != consumer.version
@@ -72,7 +99,7 @@ impl Wake {
                 AnalysisReadModeV1::Changes(after) => {
                     let consumed = record.completed_through.commit_revision != 0
                         && after <= record.cut.position();
-                    let replayed = match (&request.source, &self.replay) {
+                    let replayed = match (source, &self.replay) {
                         (Some(crate::ManagedSourceRead::Changes(parent)), Some(replay))
                             if parent.position == after =>
                         {
@@ -99,26 +126,36 @@ impl DataView {
         let Some(input) = &capture.input else {
             return Ok(());
         };
+        self.check_consumer(input, capture.tenant, &capture.instance)?;
+        if input.cut.revision != capture.revision || input.generation != capture.generation {
+            return Err(Code::Invalid.error("input capture token"));
+        }
+        Ok(())
+    }
+    pub(in crate::analysis::native) fn check_consumer(
+        &self,
+        input: &InputCapture,
+        tenant: [u8; 16],
+        instance: &str,
+    ) -> Result<InputRecord> {
         input.cut.check(self)?;
         let record = InputRecord::read(input.owner, input.generation, |key| {
             Records::read(key, &self.snapshot)
         })?
         .ok_or_else(|| Code::Missing.error("input capture consumer"))?;
         let owner = Records::find(
-            &super::super::managed::InstanceRecord::identity(capture.tenant, &capture.instance)?,
+            &super::super::managed::InstanceRecord::identity(tenant, instance)?,
             |key| Records::read(key, &self.snapshot),
         )?;
-        if input.cut.revision != capture.revision
-            || input.generation != capture.generation
-            || record.version != input.version
-            || record.tenant != capture.tenant
-            || record.instance != capture.instance
+        if record.version != input.version
+            || record.tenant != tenant
+            || record.instance != instance
             || owner != Some(input.owner)
-            || record.version > capture.revision
+            || record.version > input.cut.revision
         {
             return Err(Code::Invalid.error("input capture token"));
         }
-        Ok(())
+        Ok(record)
     }
 }
 
@@ -130,22 +167,11 @@ impl DataWrite<'_> {
         let Some(input) = &capture.input else {
             return Ok(None);
         };
-        let view = self.store.view()?;
-        view.check_input_token(capture)?;
-        let record = InputRecord::read(input.owner, input.generation, |key| {
-            Records::staged(key, &self.transaction)
-        })?
-        .ok_or_else(|| Code::Missing.error("input capture consumer"))?;
-        if input.cut.revision != capture.revision
-            || input.generation != capture.generation
-            || record.version != input.version
-            || record.tenant != capture.tenant
-            || record.instance != capture.instance
-            || !record.active(input.owner, &view)?
-        {
-            return Err(Code::Conflict.error("input capture consumer"));
+        if input.cut.revision != capture.revision || input.generation != capture.generation {
+            return Err(Code::Invalid.error("input capture token"));
         }
-        Ok(Some(record))
+        self.check_live_consumer(input, capture.tenant, &capture.instance)
+            .map(Some)
     }
 
     pub(in crate::analysis::native) fn consume_inputs(
@@ -153,13 +179,54 @@ impl DataWrite<'_> {
         capture: &Capture,
         completed: bool,
     ) -> Result<Option<(std::sync::Arc<super::Delivery>, crate::StorePositionV1)>> {
-        let Some(mut record) = self.check_input_capture(capture)? else {
+        let Some(input) = &capture.input else {
             return Ok(None);
         };
-        let input = capture
-            .input
-            .as_ref()
-            .ok_or_else(|| Code::Missing.error("input capture"))?;
+        let Some(record) = self.check_input_capture(capture)? else {
+            return Ok(None);
+        };
+        self.advance_input(input, record, completed)
+    }
+
+    fn check_live_consumer(
+        &self,
+        input: &InputCapture,
+        tenant: [u8; 16],
+        instance: &str,
+    ) -> Result<InputRecord> {
+        let view = self.store.view()?;
+        view.check_consumer(input, tenant, instance)?;
+        let record = InputRecord::read(input.owner, input.generation, |key| {
+            Records::staged(key, &self.transaction)
+        })?
+        .ok_or_else(|| Code::Missing.error("input capture consumer"))?;
+        if record.version != input.version
+            || record.tenant != tenant
+            || record.instance != instance
+            || !record.active(input.owner, &view)?
+        {
+            return Err(Code::Conflict.error("input capture consumer"));
+        }
+        Ok(record)
+    }
+
+    pub(in crate::analysis::native) fn consume_capture(
+        &mut self,
+        input: &InputCapture,
+        tenant: [u8; 16],
+        instance: &str,
+        completed: bool,
+    ) -> Result<Option<(std::sync::Arc<super::Delivery>, crate::StorePositionV1)>> {
+        let record = self.check_live_consumer(input, tenant, instance)?;
+        self.advance_input(input, record, completed)
+    }
+
+    fn advance_input(
+        &mut self,
+        input: &InputCapture,
+        mut record: InputRecord,
+        completed: bool,
+    ) -> Result<Option<(std::sync::Arc<super::Delivery>, crate::StorePositionV1)>> {
         if completed && input.exhaustive && input.cut.position() > record.completed_through {
             if input.cut.revision > record.cut.revision {
                 record.cut = input.cut.clone();

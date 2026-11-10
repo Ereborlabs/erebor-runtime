@@ -134,6 +134,7 @@ impl Coordinator {
 
     fn checkpoint_key(key: &[u8]) -> bool {
         key.starts_with(InputRecord::PREFIX)
+            || key.starts_with(super::super::notification::NotificationCompletion::PREFIX)
             || key == super::super::HEAD
             || key.starts_with(b"\0data/cut/")
             || key.starts_with(b"\0data/source/")

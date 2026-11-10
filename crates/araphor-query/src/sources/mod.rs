@@ -339,6 +339,8 @@ pub struct SourceSnapshot {
     managed: Option<araphor_data::ManagedRead>,
     #[cfg(feature = "native-store")]
     inputs: OnceLock<araphor_data::InputSubscription>,
+    #[cfg(feature = "native-store")]
+    consumer: OnceLock<araphor_data::ManagedInstance>,
     reference: OnceLock<Arc<araphor_data::ManagedAttempt>>,
     attempt: OnceLock<Arc<araphor_data::ManagedAttempt>>,
     limits: AnalysisExtractLimits,
@@ -506,6 +508,8 @@ impl SourceSnapshot {
             managed,
             #[cfg(feature = "native-store")]
             inputs: OnceLock::new(),
+            #[cfg(feature = "native-store")]
+            consumer: OnceLock::new(),
             reference: OnceLock::new(),
             attempt: OnceLock::new(),
             limits,
@@ -557,6 +561,13 @@ impl SourceSnapshot {
                 (name.clone(), provider)
             })
             .collect()
+    }
+
+    #[cfg(feature = "native-store")]
+    pub(crate) fn bind_consumer(&self, consumer: araphor_data::ManagedInstance) -> Result<()> {
+        self.consumer
+            .set(consumer)
+            .map_err(|_| DataFusionError::Internal("source consumer is already bound".into()))
     }
 
     #[cfg(feature = "native-store")]

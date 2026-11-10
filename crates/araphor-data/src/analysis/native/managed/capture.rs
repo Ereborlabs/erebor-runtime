@@ -203,8 +203,9 @@ impl NativeStore {
         }
         state.seal_source(&mut page, control)?;
         if let Some(inputs) = inputs {
-            state.contract.input =
-                Some(inputs.capture_inputs(self, &view, managed, selection, &read, &page, owners)?);
+            state.contract.input = Some(
+                inputs.capture_inputs(self, &view, managed, selection, &read, &mut page, owners)?,
+            );
         }
         Ok(ManagedPage { page, state })
     }

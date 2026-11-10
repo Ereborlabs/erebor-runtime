@@ -529,14 +529,15 @@ impl Engine {
             control: Arc::clone(&control),
             active: true,
         };
-        let engine = Arc::clone(self);
+        let task = (operation, (Arc::clone(self), lease));
         let worker = {
             let _entered = handle.enter();
             SpawnedTask::spawn(
                 async move {
-                    let _engine = engine;
-                    let _lease = lease;
-                    operation.await
+                    // Move the whole tuple to keep its cancellation drop order.
+                    let owned = task;
+                    let (operation, guard) = owned;
+                    (operation.await, guard)
                 }
                 .in_current_span()
                 .with_current_subscriber(),
@@ -544,9 +545,10 @@ impl Engine {
         };
         let result = worker.await;
         pending.active = false;
-        result.map_err(|source| crate::Error::Sql {
+        let (result, _guard) = result.map_err(|source| crate::Error::Sql {
             source: DataFusionError::External(Box::new(source)),
-        })?
+        })?;
+        result
     }
 
     async fn plan_physical(
@@ -714,6 +716,8 @@ impl Engine {
             tables: Arc::default(),
             calls: None,
             managed: None,
+            #[cfg(feature = "native-store")]
+            consumer: None,
             reference: None,
             replay_frontier: None,
             nested_permit: None,
@@ -881,6 +885,8 @@ pub struct Session {
     pub(crate) tables: Arc<LocalTables>,
     pub(crate) calls: Option<Arc<crate::definition::CallContext>>,
     pub(crate) managed: Option<araphor_data::ManagedRead>,
+    #[cfg(feature = "native-store")]
+    pub(crate) consumer: Option<araphor_data::ManagedInstance>,
     pub(crate) reference: Option<Arc<araphor_data::ManagedAttempt>>,
     pub(crate) replay_frontier: Option<ReplayFrontier>,
     pub(crate) nested_permit: Option<Arc<Permit>>,
@@ -1048,6 +1054,23 @@ impl Session {
         Engine::blocking(control, scope, move || capture.capture().context(SqlSnafu)).await
     }
 
+    #[cfg(feature = "native-store")]
+    pub fn bind_consumer(&mut self, instance: araphor_data::ManagedInstance) -> Result<()> {
+        if self.consumer.is_some()
+            || self.managed.is_some()
+            || self.reference.is_some()
+            || instance.spec.destination != araphor_data::ManagedDestination::Notification
+        {
+            return InvalidSnafu {
+                field: "notification consumer binding",
+            }
+            .fail();
+        }
+        instance.grant.permitted_by(&self.selection)?;
+        self.consumer = Some(instance);
+        Ok(())
+    }
+
     pub(crate) fn at(&self, selection: AnalysisSelectionV1, now: u64) -> Self {
         Self {
             engine: Arc::clone(&self.engine),
@@ -1058,6 +1081,8 @@ impl Session {
             tables: Arc::clone(&self.tables),
             calls: None,
             managed: None,
+            #[cfg(feature = "native-store")]
+            consumer: self.consumer.clone(),
             reference: self.reference.clone(),
             replay_frontier: self.replay_frontier.clone(),
             nested_permit: self.nested_permit.clone(),
@@ -1912,7 +1937,14 @@ impl Session {
             managed,
         );
         #[cfg(feature = "native-store")]
-        if self.reference.is_none() && self.managed.as_ref().is_some_and(|managed| managed.follow) {
+        if let Some(consumer) = &self.consumer {
+            snapshot.bind_consumer(consumer.clone()).context(SqlSnafu)?;
+        }
+        #[cfg(feature = "native-store")]
+        if self.reference.is_none()
+            && (self.managed.as_ref().is_some_and(|managed| managed.follow)
+                || self.consumer.is_some())
+        {
             if let Some(inputs) = &self.input_changes {
                 snapshot.bind_inputs(inputs.clone()).context(SqlSnafu)?;
             }

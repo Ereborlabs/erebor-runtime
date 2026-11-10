@@ -33,6 +33,7 @@ pub(in crate::analysis) mod inputs;
 mod managed;
 pub(in crate::analysis) use managed::FindingRead;
 mod notification;
+pub use notification::NotificationCapture;
 mod packages;
 mod progress;
 mod records;
@@ -178,7 +179,7 @@ impl NativeStore {
             let mut tx = branch.write_tx().context(NativeStorageSnafu {
                 operation: "initialize",
             })?;
-            tx.insert(FORMAT, 6u64.to_be_bytes());
+            tx.insert(FORMAT, 7u64.to_be_bytes());
             tx.insert(
                 SCHEMA,
                 (super::ANALYSIS_SCHEMA_VERSION as u64).to_be_bytes(),
@@ -233,7 +234,7 @@ impl NativeStore {
         view.validate_catalogue()?;
         view.validate_contexts()?;
         view.validate_managed()?;
-        view.validate_attempts()?;
+        view.validate_attempts(&branch)?;
         let revision = tokio::sync::watch::channel(view.revision).0;
         let published = Arc::new(RwLock::new(Arc::new(view)));
         let ready = Arc::new(AtomicBool::new(true));
@@ -270,7 +271,7 @@ impl NativeStore {
     }
 
     fn decode_view(snapshot: BranchSnapshot) -> Result<DataView> {
-        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 6 {
+        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 7 {
             return NativeStateSnafu {
                 field: "format version",
             }

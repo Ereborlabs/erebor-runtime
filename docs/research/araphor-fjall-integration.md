@@ -221,6 +221,18 @@ CDC completion, affected-key reads, native Host admission, capacity, retention,
 collection, backup, production cutover, DuckDB removal, and both incident targets
 remain **Not done**. Production still uses DuckDB. No native speedup is measured.
 
+The optional native Host now runs its notification SQL definition with a durable
+consumer. Data commits final outcomes, exact context references, completion
+receipts, and consumed input together. Pending batches remain separate from
+completion. Reopen validates retained native cuts; joined shutdown releases the
+query worker before store reopen. Native format 7 adds completion receipts.
+Read the [notification CDC qualification](results/araphor-native-notification-consumption-2026-11-10.md).
+Result: **Done for optional native notification CDC completion and Host concern
+delivery**. Actual Source/finding delivery, affected-key reads, remaining storage
+owners, capacity, retention, collection, backup, public Data cutover, DuckDB
+removal, and both incident targets remain **Not done**. Production still uses
+DuckDB. No native production speedup is measured.
+
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

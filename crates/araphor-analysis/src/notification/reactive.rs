@@ -9,6 +9,8 @@ use super::*;
 pub struct NotificationUpdate {
     pub routed: Vec<(NotificationFindingRefV1, Result<usize>)>,
     pub delivered: Vec<(NotificationKeyV1, Result<usize>)>,
+    #[cfg(feature = "native-store")]
+    pub(crate) publication: Option<(u64, bool)>,
 }
 
 impl NotificationRouter {
@@ -23,15 +25,23 @@ impl NotificationRouter {
             update.exhausted && !update.limited && update.evaluated_utc_ns > 0,
             "notification subscription completeness",
         )?;
-        self.consume_rows(
+        let control = araphor_data::AnalysisReadControl::default();
+        let memory = araphor_query::memory::Memory::new(None, None);
+        let budget = memory.managed_budget(&control, usize::MAX);
+        self.consume_bounded(
             update.snapshot.selection.tenant_id,
             update.evaluated_utc_ns,
             update.batches.as_deref().unwrap_or_default(),
+            &control,
+            budget.as_ref(),
             &|| Ok(()),
             &mut |delivery| Ok(sink.deliver(delivery)),
+            #[cfg(feature = "native-store")]
+            update.snapshot.notification_capture(),
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn consume_rows(
         &self,
         tenant: [u8; 16],
@@ -51,6 +61,8 @@ impl NotificationRouter {
             budget.as_ref(),
             check,
             effect,
+            #[cfg(feature = "native-store")]
+            None,
         )
     }
 
@@ -63,6 +75,9 @@ impl NotificationRouter {
         budget: &dyn araphor_data::ManagedBudget,
         check: &dyn Fn() -> Result<()>,
         effect: &mut Effect<'_>,
+        #[cfg(feature = "native-store")] capture: Option<
+            &araphor_data::analysis::native::NotificationCapture,
+        >,
     ) -> Result<NotificationUpdate> {
         let started = std::time::Instant::now();
         NotificationErrorCodeV1::Invalid.require(now > 0, "notification evaluation time")?;
@@ -141,7 +156,21 @@ impl NotificationRouter {
         }
         let decoded = std::time::Instant::now();
         if work.is_empty() {
-            return Ok(NotificationUpdate::default());
+            let update = NotificationUpdate::default();
+            #[cfg(feature = "native-store")]
+            let update = if let Some(capture) = capture {
+                check()?;
+                let _guard = self.lock()?;
+                let tx = self.store.write()?;
+                check()?;
+                NotificationUpdate {
+                    publication: Some(tx.commit_notifications(capture, &[])?),
+                    ..update
+                }
+            } else {
+                update
+            };
+            return Ok(update);
         }
         check()?;
         let _guard = self.lock()?;
@@ -261,6 +290,14 @@ impl NotificationRouter {
             }
             update.delivered.push((state.key, result));
         }
+        #[cfg(feature = "native-store")]
+        {
+            let complete = update.routed.iter().all(|(_, result)| result.is_ok())
+                && update.delivered.iter().all(|(_, result)| result.is_ok());
+            update.publication = cycle.commit(check, capture.filter(|_| complete))?;
+        }
+        #[cfg(not(feature = "native-store"))]
+        cycle.flush(check)?;
         let completed = std::time::Instant::now();
         erebor_telemetry::debug!(
             tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,

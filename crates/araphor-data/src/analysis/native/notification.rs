@@ -1,3 +1,7 @@
+mod consumption;
+pub use consumption::NotificationCapture;
+pub(super) use consumption::NotificationCompletion;
+
 use snafu::ResultExt as _;
 
 use super::{context::ContextRecord, records::Records, DataView, DataWrite, NativeStore};

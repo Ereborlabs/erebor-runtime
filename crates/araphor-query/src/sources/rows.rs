@@ -64,6 +64,8 @@ pub struct ArrowSnapshot {
     pub(crate) now: u64,
     requests: Arc<CapturedRequests>,
     managed: Option<araphor_data::ManagedCapture>,
+    #[cfg(feature = "native-store")]
+    notification: Option<araphor_data::analysis::native::NotificationCapture>,
     _metadata: MemoryReservation,
 }
 
@@ -97,6 +99,13 @@ impl ArrowSnapshot {
         )?;
         self.windows = windows;
         Ok(())
+    }
+
+    #[cfg(feature = "native-store")]
+    pub fn notification_capture(
+        &self,
+    ) -> Option<&araphor_data::analysis::native::NotificationCapture> {
+        self.notification.as_ref()
     }
 
     pub fn managed(&self) -> Option<&araphor_data::ManagedCapture> {
@@ -677,6 +686,8 @@ impl SourceSnapshot {
                 .map(|append| (append, after)),
             _ => None,
         };
+        #[cfg(feature = "native-store")]
+        let mut notification = None;
         let (mut page, managed) = if let Some(reference) = self.reference.get() {
             let captured = self
                 .store
@@ -736,6 +747,29 @@ impl SourceSnapshot {
                     )?;
                     ArrowSnapshot::check_store(&page.extraction.meta, &meta)
                         .map_err(|source| DataFusionError::External(Box::new(source)))?;
+                    (page, None)
+                }
+                #[cfg(feature = "native-store")]
+                (None, None) if self.consumer.get().is_some() => {
+                    let consumer = self.consumer.get().ok_or_else(|| {
+                        DataFusionError::Internal("notification consumer is absent".into())
+                    })?;
+                    let inputs = self.inputs.get().ok_or_else(|| {
+                        DataFusionError::Internal("notification subscription is absent".into())
+                    })?;
+                    let (page, capture) = self
+                        .store
+                        .read_notification_subscribed(
+                            inputs,
+                            selected,
+                            consumer,
+                            read,
+                            limits,
+                            control,
+                            context_owners,
+                        )
+                        .map_err(data_error)?;
+                    notification = Some(capture);
                     (page, None)
                 }
                 (None, None) => (
@@ -879,6 +913,12 @@ impl SourceSnapshot {
                     })
                     .sum::<usize>(),
             );
+        #[cfg(feature = "native-store")]
+        let metadata = metadata.saturating_add(
+            notification
+                .as_ref()
+                .map_or(0, |capture| capture.metadata_bytes()),
+        );
         let removed = removals.iter().fold(0usize, |bytes, (identity, gaps)| {
             bytes
                 .saturating_add(std::mem::size_of::<(
@@ -937,6 +977,8 @@ impl SourceSnapshot {
             witnesses,
             requests,
             managed,
+            #[cfg(feature = "native-store")]
+            notification,
             _metadata: reservation,
         });
         Ok(Captured {

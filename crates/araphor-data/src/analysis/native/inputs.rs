@@ -27,8 +27,9 @@ mod registration;
 mod replay;
 use replay::Replay;
 
+use consumer::Consumer;
 pub(in crate::analysis) use consumer::Delivery;
-use consumer::{Consumer, InputRecord};
+pub(super) use consumer::InputRecord;
 
 pub(super) struct Coordinator {
     database: SingleWriterTxDatabase,

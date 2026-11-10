@@ -61,7 +61,7 @@ async fn progress(fixture: &Fixture, clock: Arc<dyn Clock>) -> Progress {
         .await
         .unwrap();
     let run = Arc::new(crate::stream::Run {
-        session,
+        session: Arc::clone(&session),
         sources,
         plan,
         clock,
@@ -75,7 +75,7 @@ async fn progress(fixture: &Fixture, clock: Arc<dyn Clock>) -> Progress {
         managed: None,
     });
     let mut progress = Progress::new(run);
-    progress.bind(&physical).await.unwrap();
+    progress.bind(&physical, &session).await.unwrap();
     progress
 }
 

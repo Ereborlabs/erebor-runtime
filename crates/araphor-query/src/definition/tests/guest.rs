@@ -394,6 +394,7 @@ async fn guest_drop_keeps_worker_lease() -> TestResult {
         None,
         None,
         None,
+        None,
         lease,
     ));
     assert!(call.as_mut().now_or_never().is_none());

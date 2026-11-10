@@ -1579,3 +1579,53 @@ for exact checks and the production regression result. Notification CDC
 completion, affected-key reads, native Host admission, capacity, retention,
 collection, backup, cutover, DuckDB removal, and both incident targets remain
 **Not done**. These batches do not acknowledge subscription input.
+
+## Durable native notification CDC
+
+This extension follows `d1d8cb078`. The optional native Host now starts its
+notification definition through the existing SQL Subscription. Production still
+uses DuckDB.
+
+Read the owners in this order:
+
+1. [Host notification binding](../../crates/araphor-analysis/src/instance/host/notification.rs) binds the actual running Notification instance to an ordinary Session.
+2. [Progress](../../crates/araphor-query/src/stream/progress.rs) registers the optimized plan's actual input requests and saved log position.
+3. [notification capture](../../crates/araphor-data/src/analysis/native/notification/consumption.rs) seals the instance and input token at one Data view.
+4. [input capture](../../crates/araphor-data/src/analysis/native/inputs/capture.rs) checks actual coverage and charges the consumer record before decode.
+5. [the sink](../../crates/araphor-analysis/src/instance/sink.rs) passes the actual execution receipt to notification delivery.
+6. [NotificationCycle](../../crates/araphor-analysis/src/notification/cycle.rs) commits final context versions and consumed input through Data.
+7. [connected tests](../../crates/araphor-analysis/tests/native_notification/consumption.rs) use actual SQL, Host startup, delivery, and reopen.
+
+The original journal contains matching unconsumed input
+  -> Progress wakes the retained SQL Subscription
+  -> Data returns rows and an opaque NotificationCapture from one view
+  -> The Router commits Pending batches before external effects
+  -> Data commits final outcomes, exact context references, the completion receipt, and the consumed position together
+  -> Data publishes the committed view before it advances in-memory delivery
+  -> The sink acknowledges the actual execution receipt
+
+An exhaustive SQL read with zero result rows can consume its captured input.
+A partial read does not consume it. Input that arrives after capture remains
+unconsumed. A repeated completed capture makes no receipt-only commit. A guard,
+lifecycle, or reference failure rolls back the final batch. An interrupted effect
+leaves Pending durable and input unconsumed; restart retries the same attempt.
+
+The notification token uses the existing InputCapture. It does not create a
+package attempt or a managed Graph read. Native format 7 adds one current
+completion receipt for each consumer identity, generation, and interest version.
+Reopen checks its captured instance and exact committed contexts at retained
+native Data cuts. It does not open completed historical WAL files. Completion
+and checkpoint records do not wake subscriptions by themselves. The owner
+rejects earlier native formats; it does not convert DuckDB data.
+
+[Engine::run](../../crates/araphor-query/src/execution.rs) keeps the operation,
+returned value, Engine, and worker lease in an explicit drop order. The existing
+DataFusion task retains the lease until an abandoned result is destroyed.
+Subscription shutdown can then join its work before immediate store reopen.
+
+Read the [qualification record](../research/results/araphor-native-notification-consumption-2026-11-10.md)
+for exact checks and limits. These cases use concerns. Actual Source/finding
+delivery through the native Host remains separate proof. Affected-key reads,
+configured capacity, retention, collection, backup, production cutover, DuckDB
+removal, and both incident targets remain **Not done**. No kernel or ABI
+boundary changes in this extension.

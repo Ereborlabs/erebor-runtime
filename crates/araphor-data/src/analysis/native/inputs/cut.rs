@@ -5,7 +5,7 @@ use crate::analysis::inputs::InputCut;
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result, StorePositionV1};
 
 impl InputCut {
-    pub(super) fn capture(view: &DataView) -> Result<Self> {
+    pub(in crate::analysis::native) fn capture(view: &DataView) -> Result<Self> {
         let native = view
             .snapshot
             .cursor()
@@ -39,14 +39,14 @@ impl InputCut {
         }
     }
 
-    pub(super) fn position(&self) -> StorePositionV1 {
+    pub(in crate::analysis::native) fn position(&self) -> StorePositionV1 {
         StorePositionV1 {
             commit_revision: self.revision,
             ordinal: u32::MAX,
         }
     }
 
-    pub(super) fn check(&self, view: &DataView) -> Result<()> {
+    pub(in crate::analysis::native) fn check(&self, view: &DataView) -> Result<()> {
         if self.revision > view.revision
             || self.native.1 == 0
             || self.native.2.checked_add(1).is_none()

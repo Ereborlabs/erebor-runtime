@@ -189,6 +189,103 @@ async fn blocking_drop_orders_cleanup(
 }
 
 #[tokio::test]
+async fn run_drop_orders_cleanup(
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Returned(Arc<AtomicBool>);
+    impl Drop for Returned {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+    struct Lease {
+        dropped: Arc<AtomicBool>,
+        engine: std::sync::Weak<Engine>,
+        report: Option<tokio::sync::oneshot::Sender<bool>>,
+        _token: araphor_package_runtime::TaskTrackerToken,
+    }
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            let dropped = self.dropped.load(Ordering::Acquire) && self.engine.strong_count() == 1;
+            if let Some(report) = self.report.take() {
+                let _reported = report.send(dropped);
+            }
+        }
+    }
+
+    for started in [false, true] {
+        let fixture = Fixture::new(Limits::default());
+        let tracker = araphor_package_runtime::TaskTracker::new();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (report, observed) = tokio::sync::oneshot::channel();
+        let lease = Lease {
+            dropped: Arc::clone(&dropped),
+            engine: Arc::downgrade(&fixture.engine),
+            report: Some(report),
+            _token: tracker.token(),
+        };
+        let mut occupied = Vec::new();
+        if !started {
+            let runtime = fixture.engine.runtime.as_ref().ok_or("runtime")?;
+            for _ in 0..runtime.metrics().num_workers() {
+                let (entered, ready) = tokio::sync::oneshot::channel();
+                let (release, held) = std::sync::mpsc::channel();
+                let worker = runtime.spawn(async move {
+                    let _entered = entered.send(());
+                    held.recv_timeout(Duration::from_secs(5))
+                });
+                occupied.push((release, worker, ready));
+            }
+            for (_, _, ready) in &mut occupied {
+                ready.await?;
+            }
+        }
+        let (entered, ready) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let resource = Returned(Arc::clone(&dropped));
+        let mut work = Box::pin(fixture.engine.run(
+            Arc::new(AnalysisReadControl::default()),
+            lease,
+            async move {
+                let _entered = entered.send(());
+                held.recv_timeout(Duration::from_secs(5))
+                    .map_err(|source| crate::Error::Sql {
+                        source: datafusion::common::DataFusionError::External(Box::new(source)),
+                    })?;
+                Ok(resource)
+            },
+        ));
+        if started {
+            tokio::select! {
+                result = &mut work => {
+                    let _result = result?;
+                    return Err("native operation completed before release".into());
+                }
+                ready = ready => ready?,
+            }
+        } else {
+            assert!(futures_util::poll!(work.as_mut()).is_pending());
+        }
+        drop(work);
+        tracker.close();
+        if started {
+            release.send(())?;
+        }
+        for (release, worker, _) in occupied {
+            release.send(())?;
+            worker.await??;
+        }
+        tokio::time::timeout(Duration::from_secs(5), tracker.wait()).await?;
+        assert!(
+            observed.await?,
+            "native resources outlived the worker lease"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn planning_drop_orders_cleanup(
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     #[derive(Debug)]

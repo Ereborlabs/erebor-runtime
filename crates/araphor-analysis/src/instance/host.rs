@@ -227,7 +227,6 @@ impl InstanceHost {
         })
     }
 
-    #[cfg(not(feature = "native-store"))]
     pub fn with_notifications(
         query: Arc<Engine>,
         authority: Arc<dyn PackageAuthorization>,

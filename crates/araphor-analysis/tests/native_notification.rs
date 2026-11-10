@@ -13,10 +13,13 @@ const TENANT: [u8; 16] = [1; 16];
 
 #[path = "native_notification/batching.rs"]
 mod batching;
+#[path = "native_notification/consumption.rs"]
+mod consumption;
 
 struct Authority {
     store: Arc<NativeStore>,
     competing: Mutex<Option<(AnalysisContextVersionV1, u64)>>,
+    changes: tokio::sync::watch::Sender<u64>,
 }
 
 impl NotificationAuthorization for Authority {
@@ -59,6 +62,7 @@ impl Fixture {
         let authority = Arc::new(Authority {
             store: store.clone(),
             competing: Mutex::new(None),
+            changes: tokio::sync::watch::channel(0).0,
         });
         Ok(Self {
             directory,

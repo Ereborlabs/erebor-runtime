@@ -79,7 +79,7 @@ impl Progress {
         };
         crate::sources::SourceSnapshot::project_requests(&mut requests, &mut bounds, indexed)
             .context(crate::SqlSnafu)?;
-        let subscription = loop {
+        let subscribe = || {
             #[cfg(feature = "native-store")]
             let session = Arc::new(binding.clone());
             #[cfg(not(feature = "native-store"))]
@@ -88,62 +88,77 @@ impl Progress {
             let worker = Arc::clone(&control);
             let requests = requests.clone();
             let owners = bounds.input_owners.clone();
-            let result = crate::execution::Engine::blocking(control, session.token()?, move || {
-                let budget = session
-                    .memory()
-                    .managed_budget(worker.as_ref(), session.engine().limits().input_bytes);
-                #[cfg(feature = "native-store")]
-                if let Some(managed) = session.managed.as_ref().filter(|managed| managed.follow) {
-                    return session
+            async move {
+                crate::execution::Engine::blocking(control, session.token()?, move || {
+                    let budget = session
+                        .memory()
+                        .managed_budget(worker.as_ref(), session.engine().limits().input_bytes);
+                    #[cfg(feature = "native-store")]
+                    if let Some(instance) = session
+                        .managed
+                        .as_ref()
+                        .filter(|managed| managed.follow)
+                        .map(|managed| &managed.instance)
+                        .or(session.consumer.as_ref())
+                    {
+                        return session
+                            .engine()
+                            .store()
+                            .subscribe_managed_inputs(
+                                instance,
+                                session.selection(),
+                                &requests,
+                                owners.as_ref(),
+                                &worker,
+                                budget.as_ref(),
+                            )
+                            .map_err(crate::Error::from);
+                    }
+                    session
                         .engine()
                         .store()
-                        .subscribe_managed_inputs(
-                            &managed.instance,
+                        .subscribe_inputs(
                             session.selection(),
                             &requests,
                             owners.as_ref(),
                             &worker,
                             budget.as_ref(),
                         )
-                        .map_err(crate::Error::from);
-                }
-                session
-                    .engine()
-                    .store()
-                    .subscribe_inputs(
-                        session.selection(),
-                        &requests,
-                        owners.as_ref(),
-                        &worker,
-                        budget.as_ref(),
-                    )
-                    .map_err(crate::Error::from)
-            })
-            .await;
-            match result {
-                #[cfg(not(feature = "native-store"))]
-                Err(crate::Error::Data {
-                    source:
-                        araphor_data::Error::AnalysisBusy {
-                            resource: "reader", ..
-                        },
-                }) => {
-                    self.run
-                        .session
-                        .control()
-                        .query_async(async {
-                            self.run
-                                .session
-                                .engine()
-                                .store()
-                                .wait_capacity()
-                                .await
-                                .map_err(crate::Error::from)
-                        })
-                        .await?;
-                }
-                result => break result?,
+                        .map_err(crate::Error::from)
+                })
+                .await
             }
+        };
+        #[cfg(feature = "native-store")]
+        let subscription = subscribe().await?;
+        #[cfg(not(feature = "native-store"))]
+        let subscription = {
+            let mut result = subscribe().await;
+            while matches!(
+                &result,
+                Err(crate::Error::Data {
+                    source: araphor_data::Error::AnalysisBusy {
+                        resource: "reader",
+                        ..
+                    },
+                })
+            ) {
+                self.run
+                    .session
+                    .control()
+                    .query_async(async {
+                        self.run
+                            .session
+                            .engine()
+                            .store()
+                            .wait_capacity()
+                            .await
+                            .map_err(crate::Error::from)
+                    })
+                    .await?;
+                result = subscribe().await;
+            }
+            result?
         };
         self.changes = Some(subscription);
         self.observe();

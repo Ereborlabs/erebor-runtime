@@ -114,7 +114,9 @@ impl NotificationCycle<'_, '_> {
                     }
                 }
             }
-            self.flush(check)?;
+            if !ready.is_empty() {
+                self.flush(check)?;
+            }
             for (index, number, subject) in ready.drain(..) {
                 let state = &mut states[index];
                 let mut guard_failed = false;
@@ -148,7 +150,6 @@ impl NotificationCycle<'_, '_> {
                 }
             }
         }
-        self.flush(check)?;
         Ok(results)
     }
 

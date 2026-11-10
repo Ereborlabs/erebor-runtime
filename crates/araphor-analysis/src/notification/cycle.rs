@@ -155,16 +155,53 @@ impl<'a, 'b> NotificationCycle<'a, 'b> {
     pub(super) fn flush(&mut self, check: &dyn Fn() -> Result<()>) -> Result<()> {
         check()?;
         #[cfg(feature = "native-store")]
-        if !self.writes.is_empty() {
-            let mut tx = self.store.write()?;
-            for (context, expected) in &self.writes {
-                tx.context(context, Some(*expected))?;
-            }
-            check()?;
-            tx.commit([])?;
-            self.writes.clear();
-        }
+        self.commit(check, None)?;
         Ok(())
+    }
+
+    #[cfg(feature = "native-store")]
+    pub(super) fn commit(
+        &mut self,
+        check: &dyn Fn() -> Result<()>,
+        capture: Option<&araphor_data::analysis::native::NotificationCapture>,
+    ) -> Result<Option<(u64, bool)>> {
+        if self.writes.is_empty() && capture.is_none() {
+            return Ok(None);
+        }
+        check()?;
+        let bytes = self
+            .writes
+            .iter()
+            .try_fold(0usize, |bytes, (context, _)| {
+                bytes
+                    .checked_add(std::mem::size_of::<AnalysisContextRefV1>())?
+                    .checked_add(context.key.owner_id.len())?
+                    .checked_add(context.key.entity_key.len())?
+                    .checked_add(context.key.lifetime_key.len())
+            })
+            .and_then(|bytes| bytes.checked_mul(8))
+            .ok_or_else(|| {
+                NotificationSnafu {
+                    code: NotificationErrorCodeV1::Limit,
+                    field: "notification completion memory",
+                }
+                .build()
+            })?;
+        self.prepared.charge(bytes)?;
+        let mut tx = self.store.write()?;
+        let mut references = Vec::with_capacity(self.writes.len());
+        for (context, expected) in &self.writes {
+            references.push(tx.context(context, Some(*expected))?);
+        }
+        check()?;
+        let publication = if let Some(capture) = capture {
+            Some(tx.commit_notifications(capture, &references)?)
+        } else {
+            tx.commit([])?;
+            None
+        };
+        self.writes.clear();
+        Ok(publication)
     }
 
     pub(super) fn clone_subject(

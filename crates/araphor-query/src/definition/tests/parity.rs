@@ -170,9 +170,7 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
     let retained = fixture.engine.memory().input_reserved();
     let image = definition.images().next().ok_or("admitted image")?;
     let package = image.bundle().root.clone();
-    assert!(!fixture
-        .engine
-        .guest_cached(image, &package, "evaluate")?);
+    assert!(!fixture.engine.guest_cached(image, &package, "evaluate")?);
     for id in ["cold", "cached"] {
         let error = session
             .execute_definition(
@@ -191,9 +189,7 @@ async fn preparation_precedes_evaluation_deadline() -> TestResult {
             crate::Failure::DeadlineExceeded,
             "{error:?}"
         );
-        assert!(fixture
-            .engine
-            .guest_cached(image, &package, "evaluate")?);
+        assert!(fixture.engine.guest_cached(image, &package, "evaluate")?);
         control.check()?;
         drop(fixture.engine.reserve_evaluation([1; 16])?);
         assert_eq!(fixture.engine.memory().input_reserved(), retained);
@@ -281,17 +277,13 @@ async fn views_prepare_hidden_guests() -> TestResult {
     }
     assert!(Fixture::calls(&plan)?.is_empty());
     assert!(PackageCall::contains(&plan)?);
-    assert!(!fixture
-        .engine
-        .guest_cached(image, &package, "evaluate")?);
+    assert!(!fixture.engine.guest_cached(image, &package, "evaluate")?);
     let mut state = session.state()?;
     state
         .config_mut()
         .set_extension(Arc::new(fixture.engine.reserve_evaluation([1; 16])?));
     let physical = session.physical(&plan, &state).await?;
-    assert!(fixture
-        .engine
-        .guest_cached(image, &package, "evaluate")?);
+    assert!(fixture.engine.guest_cached(image, &package, "evaluate")?);
     drop(physical);
     drop(state);
     control.check()?;
@@ -447,6 +439,7 @@ async fn prepared_guest_keeps_identity() -> TestResult {
                 None,
                 Some(prepared.clone()),
                 None,
+                None,
                 (),
             )
             .await
@@ -472,6 +465,7 @@ async fn prepared_guest_keeps_identity() -> TestResult {
             &workers,
             None,
             Some(prepared),
+            None,
             None,
             (),
         )

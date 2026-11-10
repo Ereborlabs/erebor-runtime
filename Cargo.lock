@@ -202,6 +202,7 @@ dependencies = [
  "erebor-telemetry",
  "futures-util",
  "prost",
+ "rmp-serde",
  "serde",
  "serde_arrow",
  "serde_bytes",

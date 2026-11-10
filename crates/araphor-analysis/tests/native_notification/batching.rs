@@ -48,7 +48,9 @@ impl NotificationSink for BatchSink {
 }
 
 impl Fixture {
-    fn subjects(router: &NotificationRouter) -> TestResult<Vec<NotificationObligationV1>> {
+    pub(super) fn subjects(
+        router: &NotificationRouter,
+    ) -> TestResult<Vec<NotificationObligationV1>> {
         (1..=3)
             .map(|id| {
                 let mut concern = Self::concern();

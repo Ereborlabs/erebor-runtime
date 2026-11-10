@@ -11,7 +11,10 @@ use crate::{
 };
 
 impl DataView {
-    pub(in crate::analysis::native) fn validate_attempts(&self) -> Result<()> {
+    pub(in crate::analysis::native) fn validate_attempts(
+        &self,
+        branch: &fjall::Branch,
+    ) -> Result<()> {
         let control = AnalysisReadControl::default();
         let mut pending = BTreeMap::new();
         let mut completed = BTreeMap::<Vec<u8>, (u64, u64)>::new();
@@ -244,6 +247,7 @@ impl DataView {
                 .fail();
             }
         }
+        self.notification_completions(branch, &mut inputs)?;
         self.check_input_completions(&inputs)?;
         self.validate_heads(b"\0data/p", pending)?;
         self.validate_heads(b"\0data/E", ended)?;

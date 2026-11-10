@@ -136,9 +136,14 @@ impl Instance {
         .and_then(LogicalPlanBuilder::build)
         .map_err(|source| araphor_query::Error::Sql { source })?;
         let binding = self.admitted.spec.manifest.definition.to_be_bytes();
-        Ok(self
-            .session
-            .operation(&control, 0)?
+        let session = self.session.operation(&control, 0)?;
+        #[cfg(feature = "native-store")]
+        let session = {
+            let mut session = session;
+            session.bind_consumer(self.current_lifecycle(lifecycle, &control)?)?;
+            session
+        };
+        Ok(session
             .subscribe(plan, self.prepared.sources().clone(), &binding, true)?
             .until_change(self.authority.changes_for(&self.admitted.grant)))
     }

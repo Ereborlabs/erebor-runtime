@@ -112,9 +112,9 @@ impl Delivery {
 }
 
 impl InputRecord {
-    pub(super) const PREFIX: &'static [u8] = b"\0data/input/";
+    pub(in crate::analysis::native) const PREFIX: &'static [u8] = b"\0data/input/";
 
-    pub(super) fn key(owner: u64, generation: u64) -> Vec<u8> {
+    pub(in crate::analysis::native) fn key(owner: u64, generation: u64) -> Vec<u8> {
         [
             Self::PREFIX,
             &owner.to_be_bytes(),
@@ -123,7 +123,7 @@ impl InputRecord {
         .concat()
     }
 
-    pub(super) fn read(
+    pub(in crate::analysis::native) fn read(
         owner: u64,
         generation: u64,
         get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,

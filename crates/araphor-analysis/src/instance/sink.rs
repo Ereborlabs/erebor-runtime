@@ -103,7 +103,10 @@ impl Publication {
         now: u64,
         batches: &[sdk::RecordBatch],
         control: &AnalysisReadControl,
-    ) -> crate::Result<()> {
+        #[cfg(feature = "native-store")] capture: Option<
+            &araphor_data::analysis::native::NotificationCapture,
+        >,
+    ) -> crate::Result<crate::NotificationUpdate> {
         let Mode::Notification {
             router,
             sink,
@@ -118,17 +121,17 @@ impl Publication {
             .session
             .memory()
             .managed_budget(control, self.owner.query.limits().input_bytes);
-        router
-            .consume_bounded(
-                tenant,
-                now,
-                batches,
-                control,
-                budget.as_ref(),
-                &check,
-                &mut |delivery| Ok(sink.deliver(delivery)),
-            )
-            .map(|_| ())
+        router.consume_bounded(
+            tenant,
+            now,
+            batches,
+            control,
+            budget.as_ref(),
+            &check,
+            &mut |delivery| Ok(sink.deliver(delivery)),
+            #[cfg(feature = "native-store")]
+            capture,
+        )
     }
 }
 
@@ -269,16 +272,35 @@ impl DataSink for Publication {
             let tenant = snapshot.selection.tenant_id;
             let now = snapshot.time_utc_ns();
             let publication = self.clone();
-            return receipt
+            let captured = receipt.clone();
+            let acknowledgement = receipt.clone();
+            let result = receipt
                 .blocking(context, reservation, move |control| {
-                    publication
-                        .notify(tenant, now, &batches, control)
+                    let update = publication
+                        .notify(
+                            tenant,
+                            now,
+                            &batches,
+                            control,
+                            #[cfg(feature = "native-store")]
+                            captured.snapshot().notification_capture(),
+                        )
                         .map_err(|source| araphor_query::Error::Sql {
                             source: DataFusionError::External(Box::new(source)),
                         })?;
-                    Ok(rows as u64)
+                    #[cfg(feature = "native-store")]
+                    return Ok(update.publication);
+                    #[cfg(not(feature = "native-store"))]
+                    {
+                        let _ = (update, captured);
+                        Ok(None::<(u64, bool)>)
+                    }
                 })
-                .await;
+                .await?;
+            if let Some((revision, completed)) = result {
+                acknowledgement.acknowledge(context, revision, completed, None)?;
+            }
+            return Ok(rows as u64);
         }
         let (state, _, mode) = self
             .managed()
