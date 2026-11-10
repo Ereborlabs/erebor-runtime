@@ -8,6 +8,58 @@ use crate::{
 };
 
 impl NativeStore {
+    pub fn managed_changes(
+        &self,
+        reference: &ManagedAttempt,
+        call: u64,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<crate::ManagedChanges>> {
+        let instance = reference.instance();
+        let receipt = reference
+            .receipt()
+            .ok_or_else(|| Code::Invalid.error("managed change receipt"))?;
+        let result = receipt
+            .results
+            .get(&call)
+            .ok_or_else(|| Code::Missing.error("managed change call"))?;
+        if reference.terminal().is_some()
+            || result.commit_revision != receipt.commit_revision
+            || receipt.selected.commit_revision != receipt.commit_revision
+        {
+            return Err(Code::Conflict.error("managed change publication"));
+        }
+        let view = self.view()?;
+        let (id, stored, owner) = view.result_owner(
+            instance.spec.tenant,
+            &result.result_id,
+            control,
+            &mut |_| control.check(),
+        )?;
+        let ResultBody::Call(record) = stored.body else {
+            return Err(Code::Invalid.error("managed change call kind"));
+        };
+        if stored.revision != result.commit_revision
+            || record.call != call
+            || record.instance != instance.spec.id
+            || record.attempt != reference.request().id
+        {
+            return Err(Code::Conflict.error("managed change reference"));
+        }
+        if owner.0 != reference.0 || owner.instance().spec != instance.spec {
+            return Err(Code::Conflict.error("managed change owner"));
+        }
+        view.check_dependencies(id, instance.spec.tenant, &record.dependencies, control)?;
+        owner
+            .0
+            .capture
+            .grant
+            .permitted_by(&instance.grant.selection)?;
+        control.check()?;
+        Ok(record
+            .changes
+            .map(|changes| crate::ManagedChanges { base: changes.base }))
+    }
+
     pub fn managed_reference(
         &self,
         instance: &ManagedInstance,

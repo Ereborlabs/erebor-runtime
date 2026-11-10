@@ -480,7 +480,7 @@ impl SourceSnapshot {
     pub fn with_capture<T>(
         &self,
         read: impl FnOnce(
-            &araphor_data::AnalysisStore,
+            &crate::storage::AnalysisStore,
             &araphor_data::ManagedCapture,
             Option<&araphor_data::ManagedAttempt>,
         ) -> araphor_data::Result<T>,
@@ -686,6 +686,29 @@ impl SourceSnapshot {
         } else {
             match (&self.managed, append) {
                 (Some(managed), _) => {
+                    #[cfg(feature = "native-store")]
+                    let captured = if let Some(inputs) = self.inputs.get() {
+                        self.store.read_managed_subscribed(
+                            inputs,
+                            selected,
+                            managed,
+                            read,
+                            limits,
+                            control,
+                            context_owners,
+                        )
+                    } else {
+                        self.store.read_managed_tables_filtered(
+                            selected,
+                            managed,
+                            read,
+                            limits,
+                            control,
+                            context_owners,
+                        )
+                    }
+                    .map_err(data_error)?;
+                    #[cfg(not(feature = "native-store"))]
                     let captured = self
                         .store
                         .read_managed_tables_filtered(

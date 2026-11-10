@@ -70,7 +70,7 @@ pub struct CallResult {
     origin: Origin,
     retained: Option<araphor_data::analysis::PackageResultRefV1>,
     changes: Option<araphor_data::ManagedChanges>,
-    graph: Option<Arc<araphor_data::ManagedGraphJournal>>,
+    graph: Option<Arc<crate::storage::ManagedGraphJournal>>,
     _input: Arc<MemoryReservation>,
     _output: Arc<MemoryReservation>,
     _metadata: Option<MemoryReservation>,
@@ -267,7 +267,7 @@ impl CallResult {
         self.changes.as_ref()
     }
 
-    pub fn graph(&self) -> Option<&Arc<araphor_data::ManagedGraphJournal>> {
+    pub fn graph(&self) -> Option<&Arc<crate::storage::ManagedGraphJournal>> {
         self.graph.as_ref()
     }
 }

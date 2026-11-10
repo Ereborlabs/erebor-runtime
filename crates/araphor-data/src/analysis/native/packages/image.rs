@@ -96,6 +96,28 @@ impl NativeStore {
     }
 }
 
+impl NativeStore {
+    pub fn package_image(
+        &self,
+        tenant: [u8; 16],
+        package: &str,
+        revision: Option<&str>,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<PackageBundle>> {
+        self.view()?
+            .package_image(tenant, package, revision, control)
+    }
+
+    pub fn retained_package_image(
+        &self,
+        tenant: [u8; 16],
+        pin: &ImagePin,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<PackageBundle>> {
+        self.view()?.retained_package_image(tenant, pin, control)
+    }
+}
+
 impl DataView {
     pub fn package_image(
         &self,

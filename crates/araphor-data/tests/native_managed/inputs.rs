@@ -105,6 +105,125 @@ fn capture(
     )
 }
 
+#[test]
+fn consumption_requires_complete_event_and_context_owner_coverage() -> TestResult {
+    for (watched, captured, alias, complete, expected) in [
+        (Some(vec!["watched"]), None, false, true, true),
+        (
+            Some(vec!["watched"]),
+            Some(vec!["watched", "other"]),
+            false,
+            true,
+            true,
+        ),
+        (None, Some(vec!["watched"]), false, true, false),
+        (
+            Some(vec!["watched"]),
+            Some(vec!["other"]),
+            false,
+            true,
+            false,
+        ),
+        (
+            Some(vec!["watched"]),
+            Some(vec!["watched"]),
+            true,
+            true,
+            false,
+        ),
+        (
+            Some(vec!["watched"]),
+            Some(vec!["watched", "mithril-control/target"]),
+            true,
+            true,
+            true,
+        ),
+        (None, None, false, false, false),
+    ] {
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(NativeStore::open(&directory.path().join("data"))?);
+        let instance = instance(&store)?;
+        super::attempts::append(&store, 1)?;
+        let owners = |values: Option<Vec<&str>>| {
+            values.map(|values| {
+                values
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<std::collections::BTreeSet<_>>()
+            })
+        };
+        let watched = owners(watched);
+        let captured = owners(captured);
+        let mut requests = requests();
+        if alias {
+            requests.insert(
+                "targets".into(),
+                Some(
+                    (0..araphor_data::AnalysisStore::table_schemas()["targets"]
+                        .fields()
+                        .len())
+                        .collect(),
+                ),
+            );
+        }
+        let control = AnalysisReadControl::default();
+        let inputs = store.subscribe_managed_inputs(
+            &instance,
+            &instance.grant.selection,
+            &requests,
+            watched.as_ref(),
+            &control,
+            &super::graph::Budget,
+        )?;
+        let selection = instance.grant.selection.project(&requests)?;
+        let page = store.read_managed_subscribed(
+            &inputs,
+            &selection,
+            &ManagedRead {
+                instance: instance.clone(),
+                expected: None,
+                rebuild: false,
+                follow: false,
+                source: None,
+                completed: None,
+                execution: None,
+            },
+            AnalysisTableRead {
+                requests: &requests,
+                event_ranges: Some(if complete {
+                    &[(0, u64::MAX)]
+                } else {
+                    &[(0, 0)]
+                }),
+                mode: AnalysisReadModeV1::Complete,
+                now: 1000,
+            },
+            AnalysisExtractLimits::default(),
+            &control,
+            captured.as_ref(),
+        )?;
+        let cut = page.page.scanned_through;
+        let attempt = store.register_managed_attempt(
+            &page.state,
+            &super::attempts::request("coverage", true),
+            || Ok(()),
+        )?;
+        publish(&store, &attempt, true, false)?;
+        assert_eq!(
+            saved(&store)?.completed_through,
+            if expected {
+                cut
+            } else {
+                StorePositionV1 {
+                    commit_revision: 0,
+                    ordinal: 0,
+                }
+            }
+        );
+    }
+    Ok(())
+}
+
 fn publish(
     store: &NativeStore,
     attempt: &ManagedAttempt,

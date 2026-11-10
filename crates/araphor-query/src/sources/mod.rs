@@ -1,3 +1,4 @@
+use crate::storage::AnalysisStore;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -5,8 +6,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use araphor_data::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
-    AnalysisTableRead, AnalysisTableRequests, StorePositionV1,
+    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRead,
+    AnalysisTableRequests, StorePositionV1,
 };
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -336,6 +337,8 @@ pub struct SourceSnapshot {
     store: Arc<AnalysisStore>,
     selection: AnalysisSelectionV1,
     managed: Option<araphor_data::ManagedRead>,
+    #[cfg(feature = "native-store")]
+    inputs: OnceLock<araphor_data::InputSubscription>,
     reference: OnceLock<Arc<araphor_data::ManagedAttempt>>,
     attempt: OnceLock<Arc<araphor_data::ManagedAttempt>>,
     limits: AnalysisExtractLimits,
@@ -501,6 +504,8 @@ impl SourceSnapshot {
             store,
             selection,
             managed,
+            #[cfg(feature = "native-store")]
+            inputs: OnceLock::new(),
             reference: OnceLock::new(),
             attempt: OnceLock::new(),
             limits,
@@ -552,6 +557,13 @@ impl SourceSnapshot {
                 (name.clone(), provider)
             })
             .collect()
+    }
+
+    #[cfg(feature = "native-store")]
+    pub(crate) fn bind_inputs(&self, inputs: araphor_data::InputSubscription) -> Result<()> {
+        self.inputs
+            .set(inputs)
+            .map_err(|_| DataFusionError::Internal("source input binding is already set".into()))
     }
 
     pub(crate) fn capture(

@@ -328,8 +328,11 @@ fn append_and_commit_failure_recover() -> TestResult {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("data");
     let store = NativeStore::open(&root)?;
+    let mut controls = store.subscribe_control();
+    assert!(store.storage_health()?.write_ready);
     let source = identity();
     store.accept_validated_batch(source.clone(), batch(1))?;
+    assert!(!controls.has_changed()?);
     let before = store.view()?;
     let segment = std::fs::read_dir(root.join("segments"))?
         .next()
@@ -343,6 +346,10 @@ fn append_and_commit_failure_recover() -> TestResult {
         .is_err());
     assert!(store.view().is_err());
     assert!(store.write().is_err());
+    assert!(controls.has_changed()?);
+    controls.borrow_and_update();
+    assert!(!store.storage_health()?.write_ready);
+    assert!(!controls.has_changed()?);
     assert_eq!(
         before
             .source_receipt(&source)?
@@ -355,12 +362,16 @@ fn append_and_commit_failure_recover() -> TestResult {
     drop(before);
     drop(store);
     let store = NativeStore::open(&root)?;
+    let controls = store.subscribe_control();
+    assert!(store.storage_health()?.write_ready);
     assert_eq!(store.view()?.revision(), 1);
     store.accept_validated_batch(source.clone(), batch(2))?;
     let mut tx = store.write()?;
     tx.coverage(&coverage(&source, 7))?;
     assert!(tx.commit([b"same".to_vec(), b"same".to_vec()]).is_err());
     assert!(store.view().is_err());
+    assert!(controls.has_changed()?);
+    assert!(!store.storage_health()?.write_ready);
     drop(store);
     let store = NativeStore::open(&root)?;
     assert_eq!(store.view()?.revision(), 2);

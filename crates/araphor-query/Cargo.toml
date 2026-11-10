@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+native-store = ["araphor-data/native-store"]
 test-fixtures = ["araphor-data/test-fixtures", "araphor-package-runtime/test-fixtures"]
 
 [dependencies]
@@ -35,6 +36,7 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+araphor-analysis-types = { path = "../araphor-analysis-types" }
 tokio = { workspace = true, features = ["test-util"] }
 araphor-package-runtime = { path = "../araphor-package-runtime", features = ["test-fixtures"] }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }

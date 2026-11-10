@@ -66,8 +66,26 @@ impl Wake {
             && page.scanned_through == cut.position()
             && *selection == interest.original.project(read.requests)?
             && interest.requests == *read.requests
-            && interest.owners.as_ref() == owners
-            && read.event_ranges.is_none()
+            && (owners.is_none()
+                || interest
+                    .owners
+                    .as_ref()
+                    .zip(owners)
+                    .is_some_and(|(watched, captured)| watched.is_subset(captured)))
+            && owners.is_none_or(|owners| {
+                [
+                    ("targets", "mithril-control/target"),
+                    ("compiled_policies", "mithril-control/compiled-policy"),
+                    ("notification_routes", crate::NOTIFICATION_ROUTE_OWNER),
+                ]
+                .iter()
+                .all(|(table, owner)| {
+                    !read.requests.contains_key(*table) || owners.contains(*owner)
+                })
+            })
+            && read
+                .event_ranges
+                .is_none_or(|ranges| ranges == [(0, u64::MAX)])
             && (!matches!(read.mode, AnalysisReadModeV1::Metadata) || !read.reads_raw())
             && match read.mode {
                 AnalysisReadModeV1::Complete | AnalysisReadModeV1::Metadata => true,

@@ -1,3 +1,4 @@
+use crate::storage::AnalysisStore;
 use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
@@ -6,8 +7,8 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use araphor_data::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
-    AnalysisTableRequests, ManagedSourceRef, StorePositionV1,
+    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisTableRequests,
+    ManagedSourceRef, StorePositionV1,
 };
 use datafusion::arrow::array::{Array as _, RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
@@ -455,23 +456,34 @@ impl Engine {
         if snapshot.page.extraction.trace_reads().is_empty() {
             return Ok(());
         }
-        let control = Arc::new(AnalysisReadControl::default().within(self.limits.extract_timeout)?);
-        let permit = self.store.reserve_trace_read()?;
-        let engine = Arc::clone(self);
-        let snapshot = Arc::clone(snapshot);
-        let stage = Arc::clone(&control);
-        Self::blocking(control, scope, move || {
-            engine
-                .store
-                .check_trace_reads(
-                    snapshot.selection.tenant_id,
-                    snapshot.page.extraction.trace_reads(),
-                    &stage,
-                    permit,
-                )
-                .map_err(crate::Error::from)
-        })
-        .await
+        #[cfg(feature = "native-store")]
+        {
+            drop(scope);
+            Err(araphor_data::PackageErrorCodeV1::Unsupported
+                .error("native trace storage")
+                .into())
+        }
+        #[cfg(not(feature = "native-store"))]
+        {
+            let control =
+                Arc::new(AnalysisReadControl::default().within(self.limits.extract_timeout)?);
+            let permit = self.store.reserve_trace_read()?;
+            let engine = Arc::clone(self);
+            let snapshot = Arc::clone(snapshot);
+            let stage = Arc::clone(&control);
+            Self::blocking(control, scope, move || {
+                engine
+                    .store
+                    .check_trace_reads(
+                        snapshot.selection.tenant_id,
+                        snapshot.page.extraction.trace_reads(),
+                        &stage,
+                        permit,
+                    )
+                    .map_err(crate::Error::from)
+            })
+            .await
+        }
     }
 
     pub async fn blocking<T: Send + 'static>(
@@ -1883,6 +1895,12 @@ impl Session {
             Arc::clone(&self.memory),
             managed,
         );
+        #[cfg(feature = "native-store")]
+        if self.reference.is_none() {
+            if let Some(inputs) = &self.input_changes {
+                snapshot.bind_inputs(inputs.clone()).context(SqlSnafu)?;
+            }
+        }
         if let Some(reference) = &self.reference {
             snapshot
                 .bind_reference(reference.clone())
@@ -1930,9 +1948,7 @@ impl Session {
         };
         let mut recovery = run
             .filter(|run| run.follow && run.managed.is_some())
-            .map(|run| {
-                crate::stream::recovery::SourceRecovery::new(run)
-            });
+            .map(|run| crate::stream::recovery::SourceRecovery::new(run));
         self.capture(
             Arc::clone(&snapshot),
             requests,

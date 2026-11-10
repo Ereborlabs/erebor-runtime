@@ -156,6 +156,28 @@ impl NativeStore {
     }
 }
 
+impl NativeStore {
+    pub fn definition(
+        &self,
+        tenant: [u8; 16],
+        name: &str,
+        revision: Option<u64>,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<(ResolvedDefinition, u64)>> {
+        self.view()?.definition(tenant, name, revision, control)
+    }
+
+    pub fn definition_revision(
+        &self,
+        tenant: [u8; 16],
+        definition: &ResolvedDefinition,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<u64>> {
+        self.view()?
+            .definition_revision(tenant, definition, control)
+    }
+}
+
 impl DataView {
     pub fn definition(
         &self,

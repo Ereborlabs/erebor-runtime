@@ -923,3 +923,88 @@ a small context's large retained package proof uses the same memory budget.
 Read the [qualification](../research/results/araphor-native-prepared-2026-11-10.md)
 for exact source hashes and checks. This extension adds no benchmark or new
 incident timing. Production still uses DuckDB. Full CI does not run.
+
+## Optional native Query binding
+
+The `araphor-query/native-store` feature selects the concrete native Data and
+Graph types at build time. The default build still selects `AnalysisStore`.
+The feature adds no backend trait or runtime dispatch. Production Control and
+Analysis owners do not enable this feature.
+
+[Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) A package subscription receives matching input progress
+  -> [Progress::bind](../../crates/araphor-query/src/stream/progress.rs) Query registers the actual managed instance and native-plan interest
+  -> [SourceSnapshot](../../crates/araphor-query/src/sources/mod.rs) Query carries the native input subscription into capture
+  -> [read_selected](../../crates/araphor-query/src/sources/rows.rs) Providers read one captured view through `read_managed_subscribed`
+  -> [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) The saved native DataFusion plan calls the declared packages
+  -> [GraphService](../../crates/araphor-query/src/definition/physical/graph.rs) Package code reads and stages native Graph changes
+
+[ManagedCommit](../../crates/araphor-data/src/analysis/native/managed/commit.rs) The package step is ready
+  -> [commit_managed](../../crates/araphor-data/src/analysis/native/managed/commit.rs) Data saves result records, Graph changes, references, and consumed progress atomically
+  -> [input capture](../../crates/araphor-data/src/analysis/native/inputs/capture.rs) Later matching input remains unconsumed
+
+Partial [Analysis publication](../../crates/araphor-analysis/src/instance/sink.rs) Production Analysis still selects the DuckDB transaction family.
+Not implemented: Production Control and Analysis select the native owner.
+Not implemented: Production notification delivery and acknowledgement use native batches.
+
+```mermaid
+sequenceDiagram
+    participant Query
+    participant Data
+    participant Package
+    Query->>Data: Register managed interest
+    Data-->>Query: Matching committed log position
+    Query->>Data: Capture subscribed inputs
+    Query->>Package: Execute saved native plan
+    Package->>Data: Stage Graph journal
+    Query->>Data: Commit results and consumed cut
+```
+
+`Runtime.initial` contains the actual managed session. The base `Run.session`
+does not contain that instance. `Progress::bind` uses the actual session when
+it creates a durable native subscription. The capture carries that subscription
+only for a current read. Historical reference reads do not consume input.
+The retained DataFusion plans, providers, source indexes, and package operators
+remain the query owners.
+
+Data accepts a consumed cut only for a complete capture. The projected selection
+and table requests match the saved interest exactly. A context-owner filter
+must cover every watched owner and each requested alias owner. An unrestricted
+capture covers a finite interest. A finite capture cannot cover an unrestricted
+interest. Only an absent event interval or the full `0..=u64::MAX` interval can
+cover all event inputs. These rules affect acknowledgement, not wake matching.
+
+The [native append reader](../../crates/araphor-data/src/analysis/extraction/append/native.rs)
+uses the existing `AnalysisAppendRead`, `AppendCapture`, and `RawScan`.
+The retained range fixes the original file end and input cut. A cached page
+returns the original capture metadata and the current store metadata separately.
+Each page holds the maintenance read lease. A fresh failure releases the retained
+charge and clears the cursor. A cached failure preserves the cursor for retry.
+No payload copy or second cursor format is added.
+
+The [native health reader](../../crates/araphor-data/src/analysis/native/health.rs)
+uses actual file usage, history policies, and readiness. It uses the existing
+default storage limits. Configured capacity and collection are not qualified.
+The control watch signals readiness loss after an uncertain write or publication.
+Successful input commits use CDC. Nonempty trace read receipts remain unsupported
+on the native path; the default build keeps its existing trace permit checks.
+
+The [Query integration tests](../../crates/araphor-query/tests/native_execution.rs)
+use the public managed-publication and Data-sink interfaces with actual native
+commits. They check package inputs, exact consumed cuts, unrelated-input silence,
+saved plans, restart, and input received after capture. The
+[Causal test](../../crates/araphor-query/tests/native_execution/graph.rs) checks
+actual package Graph links, failed-commit rollback, retry, and indexed changes.
+Its retry names the first committed call as its base, keeps reset disabled,
+and reads one affected audit row. Two immutable audit versions retain six links.
+The fixture settles the failed attempt after execution joins, through the public
+Data API. The fixture does not qualify the production Analysis sink.
+
+An earlier direct SQL `UNION ALL` fixture exposed different field metadata in
+child batches. The final mixed-owner test uses two package calls with a declared
+output schema. This increment does not fix or qualify that direct-union shape.
+Live follow creates a new call context for each evaluation. The tests do not
+claim that an unchanged stateless package call is skipped between evaluations.
+
+Read the [Query qualification](../research/results/araphor-native-query-2026-11-10.md)
+for the exact source state and checks. Production cutover, DuckDB removal,
+retention, backup, and both incident performance targets remain **Not done**.

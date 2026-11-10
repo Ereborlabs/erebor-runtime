@@ -19,6 +19,9 @@ use sdk::arrow_array::{Array, StringArray, UInt64Array};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "native_extraction/append.rs"]
+mod append;
+
 fn identity(node: &str) -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],

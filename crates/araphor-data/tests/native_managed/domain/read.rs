@@ -2,6 +2,66 @@ use super::*;
 use araphor_data::{AnalysisPositionPageV1, Selection};
 use sdk::arrow_array::{StringArray, UInt64Array};
 
+#[test]
+fn change_reads_check_exact_dependency_indexes() -> TestResult {
+    for corruption in ["missing", "revision", "extra"] {
+        let directory = tempfile::tempdir()?;
+        let store = NativeStore::open(&directory.path().join("data"))?;
+        let (_, model, _, observation) = fixture(&store)?;
+        commit(&store, &model, &observation, 0)?;
+        let control = AnalysisReadControl::default();
+        let attempt = store
+            .managed_attempt([1; 16], "domain", "domain-0", &control)?
+            .ok_or("attempt")?;
+        assert!(store.managed_changes(&attempt, 20, &control)?.is_none());
+        let result = &attempt.receipt().ok_or("receipt")?.results[&20].result_id;
+        #[derive(serde::Deserialize)]
+        struct Header {
+            id: String,
+        }
+        let view = store.view()?;
+        let mut native_id = None;
+        for entry in view.snapshot().prefix(b"\0data/X") {
+            let (key, bytes) = entry?;
+            if key.len() == 15 && bytes[0] == 0 {
+                let header: Header = rmp_serde::from_slice(&bytes[1..])?;
+                if header.id == *result {
+                    native_id = Some(key[7..].to_vec());
+                }
+            }
+        }
+        let prefix = [
+            b"\0data/ref/dependency/".as_slice(),
+            &native_id.ok_or("result ID")?,
+        ]
+        .concat();
+        let (key, value) = view
+            .snapshot()
+            .prefix(&prefix)
+            .next()
+            .ok_or("dependency")??;
+        let mut write = store.write()?;
+        match corruption {
+            "missing" => write.native().remove(key.as_ref()),
+            "revision" => write.native().insert(key.as_ref(), 0u64.to_be_bytes()),
+            "extra" => write.native().insert(
+                [prefix, u64::MAX.to_be_bytes().to_vec()].concat(),
+                value.as_ref(),
+            ),
+            _ => unreachable!(),
+        }
+        write.commit([])?;
+        assert!(matches!(
+            store.managed_changes(&attempt, 20, &control),
+            Err(araphor_data::Error::Package {
+                code: Code::Conflict,
+                ..
+            })
+        ));
+    }
+    Ok(())
+}
+
 fn requests() -> AnalysisTableRequests {
     ["findings", "graph_manifest"]
         .into_iter()

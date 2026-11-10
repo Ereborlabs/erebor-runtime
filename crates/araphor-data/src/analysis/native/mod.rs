@@ -28,6 +28,7 @@ const RECOVERY: &[u8] = b"\0data/recovery";
 
 mod context;
 mod extraction;
+mod health;
 pub(in crate::analysis) mod inputs;
 mod managed;
 pub(in crate::analysis) use managed::FindingRead;
@@ -53,6 +54,7 @@ pub struct NativeStore {
     ready: Arc<AtomicBool>,
     managed_owner: AtomicBool,
     revision: tokio::sync::watch::Sender<u64>,
+    controls: tokio::sync::watch::Sender<()>,
     inputs: Arc<inputs::Coordinator>,
     _lease: super::connection::AnalysisLease,
 }
@@ -247,6 +249,7 @@ impl NativeStore {
             ready,
             managed_owner: AtomicBool::new(false),
             revision,
+            controls: tokio::sync::watch::channel(()).0,
             inputs,
             _lease: lease,
         };
@@ -362,6 +365,16 @@ impl NativeStore {
             .fail();
         }
         Ok(())
+    }
+
+    fn poison(&self) {
+        if self.ready.swap(false, Ordering::AcqRel) {
+            self.controls.send_replace(());
+        }
+    }
+
+    pub fn subscribe_control(&self) -> tokio::sync::watch::Receiver<()> {
+        self.controls.subscribe()
     }
 
     pub fn view(&self) -> Result<Arc<DataView>> {
@@ -510,7 +523,7 @@ impl<'a> DataWrite<'a> {
                 .fail()
             }
             Err(source) => {
-                self.store.ready.store(false, Ordering::Release);
+                self.store.poison();
                 return Err(source).context(NativeStorageSnafu {
                     operation: "commit Data write",
                 });
@@ -553,7 +566,7 @@ impl<'a> DataWrite<'a> {
             Ok(())
         })();
         if let Err(error) = visible {
-            self.store.ready.store(false, Ordering::Release);
+            self.store.poison();
             return Err(error);
         }
         published();

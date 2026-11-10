@@ -186,7 +186,12 @@ impl Runtime {
         if self.ended {
             return Ok(None);
         }
-        self.progress.bind(&self.input).await?;
+        let binding = self
+            .initial
+            .as_ref()
+            .map(|(_, _, session)| session)
+            .unwrap_or(&self.run.session);
+        self.progress.bind(&self.input, binding).await?;
         let mut resumed_clock = false;
         if self.snapshot.is_none() {
             let now = self.progress.now()?;
@@ -342,6 +347,10 @@ impl Runtime {
                     .await?
             }
         };
+        #[cfg(feature = "native-store")]
+        {
+            session.input_changes = self.progress.subscription();
+        }
         session.source_index = self.source_index.clone();
         session.append_read = self.append_read.clone();
         let calls = session.calls.clone().ok_or_else(Self::state_error)?;

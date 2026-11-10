@@ -520,6 +520,7 @@ version = "0.1.0"
 dependencies = [
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
+ "araphor-analysis-types",
  "araphor-data",
  "araphor-discovery-definition",
  "araphor-graph",

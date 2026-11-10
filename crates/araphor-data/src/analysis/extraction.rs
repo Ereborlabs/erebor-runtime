@@ -23,7 +23,7 @@ use crate::{
 
 type IndexedNotificationGraph = (Vec<u8>, u64, u64, u64, Option<bool>, u64);
 
-mod append;
+pub(in crate::analysis) mod append;
 pub use append::AnalysisAppendRead;
 
 mod changes;
@@ -491,7 +491,10 @@ impl AnalysisTableRead<'_> {
         root: &std::path::Path,
     ) -> Result<()> {
         if matches!(self.mode, AnalysisReadModeV1::Changes(after) if after.ordinal != u32::MAX) {
-            return AnalysisStore::reject_path(root, "the raw change frontier is not a complete commit");
+            return AnalysisStore::reject_path(
+                root,
+                "the raw change frontier is not a complete commit",
+            );
         }
         for (name, columns) in self.requests {
             let Some(columns) = columns else {
@@ -511,7 +514,10 @@ impl AnalysisTableRead<'_> {
             return AnalysisStore::reject_path(root, "the event input range is invalid");
         }
         if !selection.valid() {
-            return AnalysisStore::reject_path(root, "the extraction selection has invalid, duplicate, or foreign keys");
+            return AnalysisStore::reject_path(
+                root,
+                "the extraction selection has invalid, duplicate, or foreign keys",
+            );
         }
         if (self.requests.contains_key("discovery_state")
             || self.requests.contains_key("graph_state"))
@@ -577,7 +583,10 @@ impl AnalysisTableRead<'_> {
         })
     }
 
-    pub(in crate::analysis) fn check_managed_changes(&self, selection: &AnalysisSelectionV1) -> Result<()> {
+    pub(in crate::analysis) fn check_managed_changes(
+        &self,
+        selection: &AnalysisSelectionV1,
+    ) -> Result<()> {
         if !matches!(self.mode, AnalysisReadModeV1::Changes(_)) {
             return Ok(());
         }
@@ -806,7 +815,10 @@ pub enum AnalysisReadModeV1 {
 }
 
 impl AnalysisExtractionV1 {
-    pub(in crate::analysis) fn new(meta: AnalysisStoreMetaV1, limits: AnalysisExtractLimits) -> Self {
+    pub(in crate::analysis) fn new(
+        meta: AnalysisStoreMetaV1,
+        limits: AnalysisExtractLimits,
+    ) -> Self {
         Self {
             discovery_enabled: false,
             graph_enabled: false,
@@ -1082,7 +1094,10 @@ impl AnalysisExtractionV1 {
             .ok()
             .map(|index| &self.graph_coverage[index].1)
     }
-    pub(in crate::analysis) fn sink<'a>(&'a mut self, control: &'a AnalysisReadControl) -> ReadBudget<'a> {
+    pub(in crate::analysis) fn sink<'a>(
+        &'a mut self,
+        control: &'a AnalysisReadControl,
+    ) -> ReadBudget<'a> {
         self.row_budget(control, None)
     }
 
@@ -1711,7 +1726,8 @@ impl AnalysisStore {
             control,
             None,
             Some(bytes),
-         None,)?;
+            None,
+        )?;
         Ok((selection, page))
     }
 
@@ -1723,8 +1739,8 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
     ) -> Result<AnalysisPositionPageV1> {
         self.read_tables_inner(
-            selection, selection, None, None, read, limits, control, None, None,
-         None,)
+            selection, selection, None, None, read, limits, control, None, None, None,
+        )
         .map(|(page, _)| page)
     }
 
@@ -1748,7 +1764,8 @@ impl AnalysisStore {
             control,
             context_owners,
             None,
-         None,)
+            None,
+        )
         .map(|(page, _)| page)
     }
 
@@ -1788,7 +1805,8 @@ impl AnalysisStore {
             control,
             context_owners,
             None,
-         None,)?;
+            None,
+        )?;
         let state = state.ok_or_else(|| self.state_error("the managed capture is absent"))?;
         Ok(super::ManagedPage { page, state })
     }
@@ -1821,7 +1839,8 @@ impl AnalysisStore {
             control,
             context_owners,
             None,
-         None,)?;
+            None,
+        )?;
         Ok(super::ManagedPage {
             page,
             state: state.ok_or_else(|| self.state_error("the referenced capture is absent"))?,
@@ -2510,8 +2529,6 @@ impl AnalysisStore {
         }
         Ok(sensitivity)
     }
-
-
 }
 
 #[cfg(test)]
@@ -3700,7 +3717,15 @@ mod tests {
                             .raw
                             .until(control)
                             .and_then(|raw| {
-                                raw.index.source_state(&store.root, &receipt, 1, &[], &[], control, (0, usize::MAX))
+                                raw.index.source_state(
+                                    &store.root,
+                                    &receipt,
+                                    1,
+                                    &[],
+                                    &[],
+                                    control,
+                                    (0, usize::MAX),
+                                )
                             })
                             .and_then(|state| store.check_selected_source(&receipt, state.covered)),
                         _ => store.read_coordinator(control).map(|_| ()),

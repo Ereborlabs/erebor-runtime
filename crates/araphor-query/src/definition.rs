@@ -46,7 +46,7 @@ enum ImageRead<'a> {
 
 struct DefinitionAdmission {
     resolved: ResolvedDefinition,
-    store: std::sync::Weak<araphor_data::AnalysisStore>,
+    store: std::sync::Weak<crate::storage::AnalysisStore>,
     sources: AnalysisTableRequests,
     tenant: [u8; 16],
     images: Arc<package::Bundles>,

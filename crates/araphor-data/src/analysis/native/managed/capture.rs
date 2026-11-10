@@ -51,6 +51,7 @@ impl NativeStore {
             limits,
             control,
             owners,
+            None,
             |output| {
                 output.meta = selected;
                 let mut state = ManagedCapture::from(reference);
@@ -181,6 +182,7 @@ impl NativeStore {
             limits,
             control,
             owners,
+            None,
             |output| view.capture_managed(managed, &read, selection, output, owners, control),
         )?;
         state.seal(selection, &page.extraction);

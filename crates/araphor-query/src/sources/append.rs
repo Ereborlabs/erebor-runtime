@@ -1,8 +1,9 @@
+use crate::storage::AnalysisStore;
 use std::sync::{Arc, Mutex};
 
 use araphor_data::{
     AnalysisAppendRead, AnalysisExtractLimits, AnalysisPositionPageV1, AnalysisReadControl,
-    AnalysisSelectionV1, AnalysisStore, AnalysisStoreMetaV1, AnalysisTableRead, StorePositionV1,
+    AnalysisSelectionV1, AnalysisStoreMetaV1, AnalysisTableRead, StorePositionV1,
 };
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;

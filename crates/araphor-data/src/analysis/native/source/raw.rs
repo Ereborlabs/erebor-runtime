@@ -244,8 +244,7 @@ impl NativeStore {
             None
         };
         if let Err(error) = raw.append(&identity, append) {
-            self.ready
-                .store(false, std::sync::atomic::Ordering::Release);
+            self.poison();
             return Err(error);
         }
         let next = DataView {
@@ -260,8 +259,7 @@ impl NativeStore {
             contexts: view.contexts.clone(),
         };
         let mut published = self.published.write().map_err(|_| {
-            self.ready
-                .store(false, std::sync::atomic::Ordering::Release);
+            self.poison();
             NativeStateSnafu {
                 field: "publication lock",
             }

@@ -51,7 +51,11 @@ impl Progress {
         }
     }
 
-    pub(crate) async fn bind(&mut self, physical: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    pub(crate) async fn bind(
+        &mut self,
+        physical: &Arc<dyn ExecutionPlan>,
+        binding: &crate::execution::Session,
+    ) -> Result<()> {
         if self.changes.is_some() {
             self.observe();
             return Ok(());
@@ -65,9 +69,20 @@ impl Progress {
         )
         .context(crate::SqlSnafu)?;
         requests.retain(|_, columns| columns.is_some());
-        crate::sources::SourceSnapshot::project_requests(&mut requests, &mut bounds, false)
+        #[cfg(feature = "native-store")]
+        let indexed = binding.managed.is_some()
+            && crate::sources::SourceLookup::required(physical, None).context(crate::SqlSnafu)?;
+        #[cfg(not(feature = "native-store"))]
+        let indexed = {
+            let _ = binding;
+            false
+        };
+        crate::sources::SourceSnapshot::project_requests(&mut requests, &mut bounds, indexed)
             .context(crate::SqlSnafu)?;
         let subscription = loop {
+            #[cfg(feature = "native-store")]
+            let session = Arc::new(binding.clone());
+            #[cfg(not(feature = "native-store"))]
             let session = Arc::clone(&self.run.session);
             let control = Arc::clone(session.control());
             let worker = Arc::clone(&control);
@@ -77,6 +92,21 @@ impl Progress {
                 let budget = session
                     .memory()
                     .managed_budget(worker.as_ref(), session.engine().limits().input_bytes);
+                #[cfg(feature = "native-store")]
+                if let Some(managed) = &session.managed {
+                    return session
+                        .engine()
+                        .store()
+                        .subscribe_managed_inputs(
+                            &managed.instance,
+                            session.selection(),
+                            &requests,
+                            owners.as_ref(),
+                            &worker,
+                            budget.as_ref(),
+                        )
+                        .map_err(crate::Error::from);
+                }
                 session
                     .engine()
                     .store()
@@ -91,6 +121,7 @@ impl Progress {
             })
             .await;
             match result {
+                #[cfg(not(feature = "native-store"))]
                 Err(crate::Error::Data {
                     source:
                         araphor_data::Error::AnalysisBusy {

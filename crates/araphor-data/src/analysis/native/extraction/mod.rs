@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, mem::size_of};
 
 use super::{DataView, NativeStore};
 use crate::analysis::extraction::{
+    append::AppendCapture,
     raw::{JournalWork, RawScan},
     tables::Capture,
 };
@@ -16,6 +17,49 @@ mod graph;
 mod source;
 
 impl NativeStore {
+    pub fn subscription_metadata(
+        &self,
+        scope: &AnalysisSelectionV1,
+        demands: &crate::AnalysisTableRequests,
+        now: u64,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+    ) -> Result<(AnalysisSelectionV1, AnalysisPositionPageV1)> {
+        control.check()?;
+        if demands.iter().any(|(name, columns)| {
+            columns.is_some() || !crate::AnalysisStore::table_schemas().contains_key(name)
+        }) {
+            return Err(Code::Invalid.error("subscription metadata scope"));
+        }
+        let bytes = scope.metadata_bytes(demands);
+        if bytes > limits.input_bytes {
+            return crate::AnalysisInputTooLargeSnafu {
+                resource: "subscription metadata scope",
+            }
+            .fail();
+        }
+        let selection = scope.metadata_projection(demands);
+        let read = AnalysisTableRead {
+            requests: demands,
+            event_ranges: None,
+            mode: AnalysisReadModeV1::Metadata,
+            now,
+        };
+        let view = self.view()?;
+        let (page, ()) = self.read_tables_with(
+            &view,
+            &selection,
+            scope,
+            read,
+            limits,
+            control,
+            None,
+            None,
+            |output| output.charge(bytes),
+        )?;
+        Ok((selection, page))
+    }
+
     pub fn read_tables(
         &self,
         selection: &AnalysisSelectionV1,
@@ -44,6 +88,7 @@ impl NativeStore {
             limits,
             control,
             owners,
+            None,
             |_| Ok(()),
         )
         .map(|(page, ())| page)
@@ -67,12 +112,13 @@ impl NativeStore {
             limits,
             control,
             owners,
+            None,
             |_| Ok(()),
         )
         .map(|(page, ())| page)
     }
 
-    pub(in crate::analysis::native) fn read_tables_with<T>(
+    pub(in crate::analysis) fn read_tables_with<T>(
         &self,
         view: &DataView,
         selection: &AnalysisSelectionV1,
@@ -81,6 +127,7 @@ impl NativeStore {
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
         owners: Option<&BTreeSet<String>>,
+        retain: Option<&mut AppendCapture<'_>>,
         prepare: impl FnOnce(&mut AnalysisExtractionV1) -> Result<T>,
     ) -> Result<(AnalysisPositionPageV1, T)> {
         control.check()?;
@@ -183,7 +230,7 @@ impl NativeStore {
             checked_catalog: checked,
             instance: None,
             frozen: None,
-            retain: None,
+            retain,
         };
         let mut work: JournalWork = Default::default();
         let (through, exhausted) = scan.read(
@@ -225,5 +272,30 @@ impl NativeStore {
             capture.finish(output, through, exhausted, control)?,
             prepared,
         ))
+    }
+
+    pub(in crate::analysis) fn scan_append(
+        &self,
+        scan: &mut RawScan<'_, '_>,
+        output: &mut AnalysisExtractionV1,
+        capture: &mut Capture<'_>,
+        control: &AnalysisReadControl,
+    ) -> Result<(Option<StorePositionV1>, bool, crate::AnalysisStoreMetaV1)> {
+        control.check()?;
+        let _lease = self.maintenance.read_until(control)?;
+        let view = self.view()?;
+        let (through, exhausted) = scan.read(
+            &self.root,
+            |selection, after, revision, limit, control| {
+                self.raw
+                    .until(control)?
+                    .select_position_at(&view.raw, selection, after, revision, limit, control)
+            },
+            &mut output.sink(control),
+            capture,
+            &mut Vec::new().into_iter().peekable(),
+            &mut JournalWork::default(),
+        )?;
+        Ok((through, exhausted, view.meta()))
     }
 }

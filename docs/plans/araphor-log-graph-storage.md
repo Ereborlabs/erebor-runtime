@@ -253,6 +253,15 @@ Result: **Done for optional native notification preparation**. Production router
 binding, delivery batches, durable notification consumption, retention, backup,
 cutover, DuckDB removal, and both incident targets remain **Not done**.
 
+Optional native Query now binds the existing DataFusion plans, source indexes,
+package Graph journals, and managed subscriptions to native Data. The combined
+gate passes 112 tests in 11 suites. Read the
+[Query qualification](../research/results/araphor-native-query-2026-11-10.md).
+Result: **Done for optional native Query binding**. Production Control and
+Analysis still use DuckDB. Production sink and router binding, delivery
+batches, durable notification consumption, remaining storage owners, capacity,
+retention, backup, cutover, removal, and both incident targets remain **Not done**.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

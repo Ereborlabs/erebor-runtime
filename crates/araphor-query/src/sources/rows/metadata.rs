@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) struct MetadataRead {
-    store: Arc<araphor_data::AnalysisStore>,
+    store: Arc<crate::storage::AnalysisStore>,
     selection: AnalysisSelectionV1,
     requests: AnalysisTableRequests,
     limits: araphor_data::AnalysisExtractLimits,

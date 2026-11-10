@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use super::*;
 
+#[cfg(feature = "native-store")]
+mod native;
+
 /// Read bounded pages from one native append subscription.
 #[derive(Default)]
 pub struct AnalysisAppendRead {

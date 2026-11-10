@@ -10,6 +10,7 @@ pub mod memory;
 pub mod parser;
 pub mod planner;
 pub mod sources;
+mod storage;
 mod stream;
 
 pub use araphor_data::AnalysisTableRequests;
