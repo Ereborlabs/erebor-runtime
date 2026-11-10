@@ -13,6 +13,7 @@ use crate::{
 };
 
 mod context;
+mod discovery;
 mod graph;
 mod source;
 
@@ -55,6 +56,7 @@ impl NativeStore {
             control,
             None,
             None,
+            None,
             |output| output.charge(bytes),
         )?;
         Ok((selection, page))
@@ -89,6 +91,7 @@ impl NativeStore {
             control,
             owners,
             None,
+            None,
             |_| Ok(()),
         )
         .map(|(page, ())| page)
@@ -113,6 +116,7 @@ impl NativeStore {
             control,
             owners,
             None,
+            None,
             |_| Ok(()),
         )
         .map(|(page, ())| page)
@@ -128,6 +132,7 @@ impl NativeStore {
         control: &AnalysisReadControl,
         owners: Option<&BTreeSet<String>>,
         retain: Option<&mut AppendCapture<'_>>,
+        target: Option<&crate::ManagedInstance>,
         prepare: impl FnOnce(&mut AnalysisExtractionV1) -> Result<T>,
     ) -> Result<(AnalysisPositionPageV1, T)> {
         control.check()?;
@@ -154,6 +159,7 @@ impl NativeStore {
                     | "trace_recipes"
                     | "findings"
                     | "graph_manifest"
+                    | "discovery_state"
             ) {
                 return Err(Code::Unsupported.error("native table owner"));
             }
@@ -256,6 +262,15 @@ impl NativeStore {
             &selected,
             scope,
             &read,
+            &mut output,
+            &mut capture,
+            control,
+        )?;
+        self.extract_discovery_state(
+            view,
+            &selected,
+            &read,
+            target,
             &mut output,
             &mut capture,
             control,

@@ -1148,3 +1148,74 @@ next matching input without the old replay handle. Read the
 [startup qualification](../research/results/araphor-native-startup-2026-11-10.md)
 for the frozen source hashes, exact commands, and 127 passing tests in 11 suites.
 Production cutover and both incident targets remain **Not done**.
+
+## Native processor results and Profile publication
+
+This extension follows `9aaf939dd`. Data stores processor progress and typed
+Profiles in the native database. Production Analysis still uses DuckDB.
+
+### Intended end state
+
+The native path preserves processor registration, immutable results, current
+heads, interval history, producer authority, and reference pins. One Data
+transaction publishes the package result, Profile, contexts, and consumed input.
+
+[register_processor_guarded](../../crates/araphor-data/src/analysis/native/progress/mod.rs) A caller registers a processor
+  -> [Processor](../../crates/araphor-data/src/analysis/native/progress/mod.rs) Data stores the source, class, start cursor, and progress
+  -> [stage_processor](../../crates/araphor-data/src/analysis/native/progress/mod.rs) Data updates the processor relation head in the same write
+  -> [input_progress](../../crates/araphor-data/src/analysis/native/progress/inputs.rs) The original journal reader wakes matching source inputs
+
+[commit_managed_profile](../../crates/araphor-data/src/analysis/native/progress/profile.rs) A package returns a typed Profile
+  -> [PreparedManagedCommit::contract](../../crates/araphor-data/src/analysis/native/managed/prepare.rs) Data uses the existing prepared package descriptor
+  -> [commit_managed_projection](../../crates/araphor-data/src/analysis/native/managed/commit.rs) Data opens the existing managed transaction
+  -> [profile_rows](../../crates/araphor-data/src/analysis/native/progress/profile.rs) Data checks the prior Profile and actual producing call
+  -> [progress_rows](../../crates/araphor-data/src/analysis/native/progress/commit.rs) Data admits contexts and stores the immutable result
+  -> [stage_result_references](../../crates/araphor-data/src/analysis/native/managed/references.rs) Data pins raw input, contexts, and the producer
+  -> [consume_inputs](../../crates/araphor-data/src/analysis/native/inputs/capture.rs) Data advances complete consumed input in the same transaction
+
+[extract_discovery_state](../../crates/araphor-data/src/analysis/native/extraction/discovery.rs) A saved plan requests Discovery state
+  -> [ResultRecord::read_header](../../crates/araphor-data/src/analysis/native/progress/result.rs) Data reads metadata without the Profile body
+  -> [IntervalHead](../../crates/araphor-data/src/analysis/native/progress/profile.rs) Requested history reads only the indexed winner for each interval
+  -> [profile_notice](../../crates/araphor-data/src/analysis/native/progress/notices.rs) Data applies notice values from the same captured view
+  -> [profile_producer](../../crates/araphor-data/src/analysis/native/progress/result.rs) Compatibility uses the actual target package version and retained producer
+
+[NativeStore::open](../../crates/araphor-data/src/analysis/native/mod.rs) Data reopens the store
+  -> [validate_progress_recovery](../../crates/araphor-data/src/analysis/native/progress/recovery.rs) Data checks immutable bodies, interval winners, retirement gaps, and notice owners
+  -> [validate_processor_history](../../crates/araphor-data/src/analysis/native/progress/recovery.rs) Data reads the same key at each update revision minus one
+  -> [validate_result_references](../../crates/araphor-data/src/analysis/native/managed/references.rs) Data checks the exact shared reference index
+
+A processor head and an interval head are different records. A repair to a
+sealed historical interval does not replace a newer current interval. A
+close-only seal keeps the original Profile's witnesses and producing call.
+A notice changes only the stored maximum facts and coverage revisions. A
+notice does not replace the immutable Profile body.
+
+Result names use one global dictionary identity across managed and processor
+results. Both writers reject an occupied identity. Reference resolution rejects
+two payload owners for one identity. Native format 5 rejects format 4 stores.
+This format change applies to the optional native path. It does not migrate
+a production DuckDB directory.
+
+Processor and notice history use Fjall's retained values at stable keys.
+Recovery checks the value at its declared revision, then reads revision minus
+one to find the preceding update. Raw-only revisions can occur between updates.
+No second history archive or revision key is added.
+
+The Profile encoder charges buffer growth before allocation. Current metadata
+reads do not load a Profile body. Producer qualification reuses the record and
+Profile already decoded by extraction, publication, or recovery.
+
+The [processor tests](../../crates/araphor-data/tests/native_managed/progress.rs)
+check retry, retirement, opaque Discovery results, intermediate history
+corruption, missing gaps, extra fragments, and changed bodies. The
+[Profile tests](../../crates/araphor-data/tests/native_managed/progress/profile.rs)
+check real managed publication, rollback, captured contexts, distinct close-only
+witnesses, historical repair, notice overlays, candidate compatibility, stale
+input, global name conflicts, journal replay, compaction, and restart.
+
+Native expired-range proof and optional resume remain incomplete. New Profile
+gaps without native expiry proof are rejected. Production binding, remaining
+storage owners, notification delivery, capacity, retention, backup, DuckDB
+removal, and incident performance acceptance remain **Not done**. Read the
+[qualification record](../research/results/araphor-native-progress-2026-11-10.md)
+for the frozen source and verification limits.

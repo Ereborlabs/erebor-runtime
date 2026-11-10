@@ -2,7 +2,7 @@ use super::*;
 use crate::DiscoveryStateRowV1;
 
 impl Capture<'_> {
-    pub(in crate::analysis::extraction) fn discovery_state(
+    pub(in crate::analysis) fn discovery_state(
         &mut self,
         state: &DiscoveryStateRowV1,
         budget: &mut ReadBudget<'_>,

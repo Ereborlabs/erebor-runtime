@@ -20,15 +20,10 @@ impl DataView {
         let mut expected = std::collections::BTreeMap::new();
         for reference in references {
             control.check()?;
-            let (target, stored) = StoredResult::read(
-                tenant,
-                &reference.result_id,
-                self.metadata_revision,
-                |key| Records::read(key, &self.snapshot),
-                &mut |_| control.check(),
-            )?
-            .ok_or_else(|| Code::Missing.error("managed result dependency"))?;
-            if stored.revision != reference.commit_revision {
+            let (target, revision) = self
+                .result_reference(tenant, &reference.result_id, &mut |_| control.check())?
+                .ok_or_else(|| Code::Missing.error("managed result dependency"))?;
+            if revision != reference.commit_revision {
                 return Err(Code::Conflict.error("managed change owner"));
             }
             expected.insert(

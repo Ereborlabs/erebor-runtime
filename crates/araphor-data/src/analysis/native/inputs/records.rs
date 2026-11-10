@@ -57,6 +57,7 @@ impl Coordinator {
                     && (DataView::input_context_key(&item.key)
                         || DataView::input_coverage_key(&item.key)
                         || DataView::input_graph_key(&item.key)
+                        || DataView::input_progress_key(&item.key)
                         || self.activations.receiver_count() != 0
                             && item.key.starts_with(b"\0data/J")
                             && item.key.len() == 15)
@@ -122,6 +123,8 @@ impl Coordinator {
                         range: None,
                     },
                 );
+            } else if DataView::input_progress_key(&item.key) {
+                view.input_progress(&item.key, &self.readers, position)?;
             } else {
                 view.input_graph(&item.key, &self.readers, position)?;
             }

@@ -47,7 +47,10 @@ pub(in crate::analysis) struct Capture<'a> {
 }
 
 impl<'a> Capture<'a> {
-    pub(in crate::analysis) fn new(read: &'a AnalysisTableRead<'a>, scope: &'a AnalysisSelectionV1) -> Self {
+    pub(in crate::analysis) fn new(
+        read: &'a AnalysisTableRead<'a>,
+        scope: &'a AnalysisSelectionV1,
+    ) -> Self {
         Self {
             read,
             scope,
@@ -73,7 +76,7 @@ impl<'a> Capture<'a> {
         self.scope.key_count()
     }
 
-    pub(super) fn input_unbounded(&self) -> bool {
+    pub(in crate::analysis) fn input_unbounded(&self) -> bool {
         self.scope.time_range() == Some((0, u64::MAX))
             && self.scope.cursor_range() == Some((0, u64::MAX))
             && self

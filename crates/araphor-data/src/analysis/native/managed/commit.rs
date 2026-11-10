@@ -9,7 +9,7 @@ use super::{
 };
 use crate::analysis::PackageResultRefV1;
 use crate::analysis::{
-    managed::ManagedExecution,
+    managed::{ManagedExecution, PreparedMemory},
     native::{DataWrite, NativeStore},
 };
 use crate::{
@@ -40,14 +40,29 @@ pub struct ManagedCommit<'a> {
 impl NativeStore {
     pub fn commit_managed(
         &self,
-        mut prepared: PreparedManagedCommit<'_>,
+        prepared: PreparedManagedCommit<'_>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<ManagedReceipt> {
-        let input = prepared.input;
-        let spec = &input.attempt.1.spec;
-        if spec.destination != ManagedDestination::Selected {
+        if prepared.input.attempt.1.spec.destination != ManagedDestination::Selected {
             return Err(Code::Unsupported.error("native managed destination"));
         }
+        self.commit_managed_projection(prepared, |_, _, _, _| Ok(()), check)
+            .map(|(receipt, ())| receipt)
+    }
+
+    pub(in crate::analysis::native) fn commit_managed_projection<T>(
+        &self,
+        mut prepared: PreparedManagedCommit<'_>,
+        projection: impl FnOnce(
+            &mut DataWrite<'_>,
+            &ManagedCommit<'_>,
+            &ManagedReceipt,
+            &mut PreparedMemory<'_>,
+        ) -> Result<T>,
+        check: impl FnOnce() -> Result<()>,
+    ) -> Result<(ManagedReceipt, T)> {
+        let input = prepared.input;
+        let spec = &input.attempt.1.spec;
         prepared.memory.check()?;
         let mut tx = self.write()?;
         let current = self.live_attempt(input.attempt, input.control)?;
@@ -193,6 +208,7 @@ impl NativeStore {
             .map(|graph| graph.stage(&mut tx, input, &receipt, &results, &mut prepared.memory))
             .transpose()?;
         tx.publish_managed_graph(input, &receipt, selected_id, &results, &mut prepared.memory)?;
+        let projected = projection(&mut tx, input, &receipt, &mut prepared.memory)?;
         instance.spec = spec.clone();
         if instance.generation != input.attempt.0.capture.generation {
             instance.lifecycle = tx.revision;
@@ -243,7 +259,7 @@ impl NativeStore {
                 }
             },
         )?;
-        Ok(receipt)
+        Ok((receipt, projected))
     }
 }
 

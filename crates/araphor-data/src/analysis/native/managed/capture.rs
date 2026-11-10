@@ -52,6 +52,7 @@ impl NativeStore {
             control,
             owners,
             None,
+            Some(reference.instance()),
             |output| {
                 output.meta = selected;
                 let mut state = ManagedCapture::from(reference);
@@ -183,9 +184,23 @@ impl NativeStore {
             control,
             owners,
             None,
+            Some(&managed.instance),
             |output| view.capture_managed(managed, &read, selection, output, owners, control),
         )?;
         state.seal(selection, &page.extraction);
+        if read.requests.contains_key("discovery_state") {
+            state.contract.sources.extend(
+                [
+                    "analysis_results",
+                    "processor_progress",
+                    "processor_gaps",
+                    "result_notices",
+                ]
+                .map(|name| (name.to_owned(), view.revision)),
+            );
+            state.contract.sources.sort();
+            state.contract.sources.dedup();
+        }
         state.seal_source(&mut page, control)?;
         if let Some(inputs) = inputs {
             state.contract.input =

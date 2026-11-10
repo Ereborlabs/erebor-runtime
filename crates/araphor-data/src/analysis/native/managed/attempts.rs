@@ -247,7 +247,7 @@ impl NativeStore {
         ))
     }
 
-    pub(super) fn resolve_witnesses(
+    pub(in crate::analysis::native) fn resolve_witnesses(
         &self,
         witnesses: &[crate::AnalysisWitnessV1],
         revision: u64,
@@ -384,8 +384,21 @@ impl DataWrite<'_> {
         if !capture.follow && !self.sources_current(&capture.sources, &control)? {
             return crate::AnalysisSourceChangedSnafu.fail();
         }
-        if !capture.traces.is_empty() || !capture.dependencies.is_empty() {
+        if !capture.traces.is_empty() {
             return Err(Code::Unsupported.error("native managed dependency owner"));
+        }
+        for reference in &capture.dependencies {
+            if NativeStore::reference_id(
+                capture.tenant,
+                &reference.result_id,
+                self.revision,
+                |key| Records::staged(key, &self.transaction),
+                &mut |_| Ok(()),
+            )?
+            .is_none_or(|(_, revision)| revision != reference.commit_revision)
+            {
+                return AnalysisConflictSnafu.fail();
+            }
         }
         for reference in &capture.contexts {
             if !self.check_context_ref(reference)? {

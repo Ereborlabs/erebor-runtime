@@ -27,7 +27,10 @@ impl DataView {
         };
         let spec = &owner.1.spec;
         if owner.0 != *attempt
-            || spec.destination != ManagedDestination::Selected
+            || !matches!(
+                spec.destination,
+                ManagedDestination::Selected | ManagedDestination::DiscoveryProfile { .. }
+            )
             || receipt.graph.is_some()
         {
             return Err(Code::Invalid.error("managed success destination"));

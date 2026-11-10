@@ -15,9 +15,9 @@ mod replay;
 pub use replay::DiscoveryProducer;
 
 pub struct PreparedProfile {
-    profile: DiscoveryProfileV1,
-    body: Vec<u8>,
-    contexts: Vec<crate::AnalysisContextVersionV1>,
+    pub(in crate::analysis) profile: DiscoveryProfileV1,
+    pub(in crate::analysis) body: Vec<u8>,
+    pub(in crate::analysis) contexts: Vec<crate::AnalysisContextVersionV1>,
 }
 
 pub struct ProfileCommit {
@@ -34,52 +34,11 @@ enum ProfileWrite {
 }
 
 impl PreparedProfile {
-    pub fn new(profile: DiscoveryProfileV1) -> Result<Self> {
-        profile.validate()?;
-        let body = Self::encode(&profile)?;
-        Ok(Self {
-            profile,
-            body,
-            contexts: Vec::new(),
-        })
-    }
-
-    pub fn captured(
-        profile: DiscoveryProfileV1,
-        contexts: Vec<crate::AnalysisContextVersionV1>,
-    ) -> Result<Self> {
-        profile.validate()?;
-        if contexts.is_empty() {
-            return Self::new(profile);
-        }
-        Ok(Self {
-            profile,
-            body: Vec::new(),
-            contexts,
-        })
-    }
-
-    pub(super) fn encode(profile: &DiscoveryProfileV1) -> Result<Vec<u8>> {
-        let mut output = araphor_analysis_sdk::wire::BoundedBuffer::new(MAX_RESULT_BYTES as u64);
-        if let Err(source) = serde_json::to_writer(&mut output, &profile) {
-            if source.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) {
-                return crate::DiscoveryInvalidSnafu {
-                    field: "profile bytes",
-                }
-                .fail();
-            }
-            return Err(source).context(DiscoveryEncodingSnafu);
-        }
-        Ok(output.finish())
-    }
-}
-
-impl AnalysisStore {
-    pub(super) fn check_profile_transition(
-        &self,
+    pub(in crate::analysis) fn check_transition(
         profile: &DiscoveryProfileV1,
         previous: &DiscoveryProfileV1,
         historical: bool,
+        root: &std::path::Path,
     ) -> Result<()> {
         if profile.profile_id == previous.profile_id
             || profile.scope != previous.scope
@@ -107,9 +66,111 @@ impl AnalysisStore {
                     || profile.created_utc_ns != previous.created_utc_ns
             }
         {
-            return self.reject("the immutable profile transition is invalid");
+            return AnalysisStore::reject_path(root, "the immutable profile transition is invalid");
         }
         Ok(())
+    }
+
+    pub fn new(profile: DiscoveryProfileV1) -> Result<Self> {
+        profile.validate()?;
+        let body = Self::encode(&profile)?;
+        Ok(Self {
+            profile,
+            body,
+            contexts: Vec::new(),
+        })
+    }
+
+    pub fn captured(
+        profile: DiscoveryProfileV1,
+        contexts: Vec<crate::AnalysisContextVersionV1>,
+    ) -> Result<Self> {
+        profile.validate()?;
+        if contexts.is_empty() {
+            return Self::new(profile);
+        }
+        Ok(Self {
+            profile,
+            body: Vec::new(),
+            contexts,
+        })
+    }
+
+    pub(in crate::analysis) fn encode(profile: &DiscoveryProfileV1) -> Result<Vec<u8>> {
+        Self::encode_charged(profile, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis) fn encode_charged(
+        profile: &DiscoveryProfileV1,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Vec<u8>> {
+        struct Buffer<'a> {
+            bytes: Vec<u8>,
+            charge: &'a mut dyn FnMut(usize) -> Result<()>,
+            error: Option<crate::Error>,
+        }
+        impl std::io::Write for Buffer<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let next = self
+                    .bytes
+                    .len()
+                    .checked_add(bytes.len())
+                    .ok_or_else(|| std::io::Error::other("profile capacity"))?;
+                if next > self.bytes.capacity() {
+                    let capacity = self.bytes.capacity().saturating_mul(2).max(next);
+                    if let Err(error) = (self.charge)(
+                        capacity
+                            .saturating_sub(self.bytes.capacity())
+                            .saturating_mul(2),
+                    ) {
+                        self.error = Some(error);
+                        return Err(std::io::Error::other("profile memory"));
+                    }
+                    self.bytes
+                        .try_reserve_exact(capacity - self.bytes.len())
+                        .map_err(std::io::Error::other)?;
+                }
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut output = araphor_analysis_sdk::wire::BoundedBuffer::from_writer(
+            Buffer {
+                bytes: Vec::new(),
+                charge,
+                error: None,
+            },
+            MAX_RESULT_BYTES as u64,
+        );
+        let result = serde_json::to_writer(&mut output, &profile);
+        let output = output.finish();
+        if let Some(error) = output.error {
+            return Err(error);
+        }
+        if let Err(source) = result {
+            if source.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) {
+                return crate::DiscoveryInvalidSnafu {
+                    field: "profile bytes",
+                }
+                .fail();
+            }
+            return Err(source).context(DiscoveryEncodingSnafu);
+        }
+        Ok(output.bytes)
+    }
+}
+
+impl AnalysisStore {
+    pub(super) fn check_profile_transition(
+        &self,
+        profile: &DiscoveryProfileV1,
+        previous: &DiscoveryProfileV1,
+        historical: bool,
+    ) -> Result<()> {
+        PreparedProfile::check_transition(profile, previous, historical, &self.root)
     }
 
     pub fn commit_managed_profile(

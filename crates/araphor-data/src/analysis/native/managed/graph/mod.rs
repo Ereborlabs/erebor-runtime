@@ -143,7 +143,7 @@ impl ManagedGraph {
 }
 
 impl DataWrite<'_> {
-    pub(super) fn managed_contract(
+    pub(in crate::analysis::native) fn managed_contract(
         &self,
         spec: &ManagedSpec,
         call: &crate::ManagedCall,
@@ -216,7 +216,7 @@ impl DataWrite<'_> {
 }
 
 impl DataView {
-    pub(super) fn managed_contract(
+    pub(in crate::analysis::native) fn managed_contract(
         &self,
         spec: &ManagedSpec,
         call: &crate::ManagedCall,

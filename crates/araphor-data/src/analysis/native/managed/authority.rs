@@ -104,8 +104,19 @@ impl NativeStore {
         if !capture.follow && !view.sources_current(&capture.sources, control)? {
             return crate::AnalysisSourceChangedSnafu.fail();
         }
-        if !capture.traces.is_empty() || !capture.dependencies.is_empty() {
+        if !capture.traces.is_empty() {
             return Err(Code::Unsupported.error("native managed dependency owner"));
+        }
+        for reference in &capture.dependencies {
+            control.check()?;
+            if view
+                .result_reference(capture.tenant, &reference.result_id, &mut |_| {
+                    control.check()
+                })?
+                .is_none_or(|(_, revision)| revision != reference.commit_revision)
+            {
+                return AnalysisConflictSnafu.fail();
+            }
         }
         for reference in &capture.contexts {
             control.check()?;

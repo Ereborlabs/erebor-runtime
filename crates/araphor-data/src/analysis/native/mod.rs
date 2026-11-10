@@ -5,7 +5,7 @@ use std::{
     ops::Bound::Included,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex, MutexGuard, RwLock,
     },
 };
@@ -34,6 +34,7 @@ mod managed;
 pub(in crate::analysis) use managed::FindingRead;
 mod notification;
 mod packages;
+mod progress;
 mod records;
 mod revisions;
 mod source;
@@ -54,6 +55,7 @@ pub struct NativeStore {
     maintenance: Maintenance<()>,
     ready: Arc<AtomicBool>,
     managed_owner: AtomicBool,
+    discovery_owners: AtomicUsize,
     revision: tokio::sync::watch::Sender<u64>,
     controls: tokio::sync::watch::Sender<()>,
     inputs: Arc<inputs::Coordinator>,
@@ -174,7 +176,7 @@ impl NativeStore {
             let mut tx = branch.write_tx().context(NativeStorageSnafu {
                 operation: "initialize",
             })?;
-            tx.insert(FORMAT, 4u64.to_be_bytes());
+            tx.insert(FORMAT, 5u64.to_be_bytes());
             tx.insert(
                 SCHEMA,
                 (super::ANALYSIS_SCHEMA_VERSION as u64).to_be_bytes(),
@@ -249,11 +251,13 @@ impl NativeStore {
             maintenance: Maintenance::new(()),
             ready,
             managed_owner: AtomicBool::new(false),
+            discovery_owners: AtomicUsize::new(0),
             revision,
             controls: tokio::sync::watch::channel(()).0,
             inputs,
             _lease: lease,
         };
+        store.validate_progress_recovery()?;
         store.validate_result_recovery()?;
         store.validate_graph_recovery()?;
         store.recover_managed_startup()?;
@@ -261,7 +265,7 @@ impl NativeStore {
     }
 
     fn decode_view(snapshot: BranchSnapshot) -> Result<DataView> {
-        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 4 {
+        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 5 {
             return NativeStateSnafu {
                 field: "format version",
             }

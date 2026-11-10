@@ -43,6 +43,7 @@ impl NativeStore {
                 control,
                 None,
                 raw.then_some(&mut retained),
+                None,
                 |_| Ok(()),
             )
         });

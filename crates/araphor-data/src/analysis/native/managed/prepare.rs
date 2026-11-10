@@ -25,6 +25,10 @@ impl<'a> PreparedManagedCommit<'a> {
     pub fn input(&self) -> &'a ManagedCommit<'a> {
         self.input
     }
+
+    pub(in crate::analysis::native) fn contract(&self, call: u64) -> Option<&sdk::Package> {
+        self.contracts.get(&call)
+    }
 }
 
 impl NativeStore {

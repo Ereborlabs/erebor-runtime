@@ -23,6 +23,8 @@ mod graph;
 mod inputs;
 #[path = "native_managed/lifecycle.rs"]
 mod lifecycle;
+#[path = "native_managed/progress.rs"]
+mod progress;
 #[path = "native_managed/publication.rs"]
 mod publication;
 #[path = "native_managed/read.rs"]

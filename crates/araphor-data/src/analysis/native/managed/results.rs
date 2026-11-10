@@ -1,6 +1,5 @@
 use araphor_analysis_sdk as sdk;
 use serde::{Deserialize, Serialize};
-use snafu::ResultExt as _;
 
 use super::{attempts::Attempts, InstanceRecord, Records, VersionRecord};
 use crate::analysis::managed::{Attempt, Packet, Record, Step};
@@ -22,8 +21,8 @@ pub(super) struct StoredResult {
 }
 
 impl StoredResult {
-    pub(super) fn identity(tenant: [u8; 16], id: &str) -> Result<Vec<u8>> {
-        rmp_serde::to_vec(&(b'X', tenant, id)).context(crate::ManagedEncodingSnafu)
+    pub(super) fn identity(_tenant: [u8; 16], id: &str) -> Result<Vec<u8>> {
+        super::super::progress::ResultRecord::identity(id)
     }
 
     pub(super) fn read(
@@ -36,6 +35,9 @@ impl StoredResult {
         let Some((id, result)) = Self::load(tenant, name, get, charge)? else {
             return Ok(None);
         };
+        if result.tenant != tenant {
+            return Ok(None);
+        }
         result.check_identity(tenant, name, head)?;
         Ok(Some((id, result)))
     }
@@ -120,6 +122,50 @@ impl StoredResult {
 }
 
 impl DataView {
+    pub(in crate::analysis::native) fn profile_call(
+        &self,
+        selection: &crate::AnalysisSelectionV1,
+        result: &crate::analysis::PackageResultRefV1,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<crate::analysis::DiscoveryProducer> {
+        let (_, stored, attempt) = self.result_owner(
+            selection.tenant_id,
+            &result.result_id,
+            &AnalysisReadControl::default(),
+            charge,
+        )?;
+        let ResultBody::Call(record) = stored.body else {
+            return Err(Code::Invalid.error("discovery producer call"));
+        };
+        attempt.0.capture.grant.permitted_by(selection)?;
+        if stored.revision != result.commit_revision
+            || attempt.instance().grant.selection.tenant_id != selection.tenant_id
+        {
+            return Err(Code::Invalid.error("discovery producer revision"));
+        }
+        Ok(crate::analysis::DiscoveryProducer {
+            result: result.clone(),
+            generation: attempt.instance().generation,
+            call: record.call,
+            spec: attempt.instance().spec.clone(),
+        })
+    }
+
+    pub(in crate::analysis::native) fn result_reference(
+        &self,
+        tenant: [u8; 16],
+        name: &str,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<(u64, u64)>> {
+        super::super::NativeStore::reference_id(
+            tenant,
+            name,
+            self.metadata_revision,
+            |key| Records::read(key, &self.snapshot),
+            charge,
+        )
+    }
+
     pub(super) fn result_owner(
         &self,
         tenant: [u8; 16],
@@ -157,6 +203,32 @@ impl DataView {
         )?
         .ok_or_else(|| Code::Missing.error("managed checkpoint"))?;
         Records::decode(&bytes)
+    }
+}
+
+impl super::super::NativeStore {
+    pub(in crate::analysis::native) fn reference_id(
+        tenant: [u8; 16],
+        name: &str,
+        head: u64,
+        mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<(u64, u64)>> {
+        let managed = StoredResult::load(tenant, name, &mut get, charge)?;
+        let progress = super::super::progress::ResultRecord::read_header(name, head, get, charge)?;
+        if managed.is_some() && progress.is_some() {
+            return Err(Code::Invalid.error("multiple result owners"));
+        }
+        if let Some((id, result)) = managed {
+            if result.tenant != tenant {
+                return Ok(None);
+            }
+            result.check_identity(tenant, name, head)?;
+            return Ok(Some((id, result.revision)));
+        }
+        Ok(progress
+            .filter(|(_, result)| result.request.scope.identity.tenant_id == tenant)
+            .map(|(id, result)| (id, result.revision)))
     }
 }
 

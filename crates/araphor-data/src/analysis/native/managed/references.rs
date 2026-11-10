@@ -30,7 +30,7 @@ impl References {
 }
 
 impl DataWrite<'_> {
-    pub(super) fn stage_result_references(
+    pub(in crate::analysis::native) fn stage_result_references(
         &mut self,
         tenant: [u8; 16],
         result: u64,
@@ -118,7 +118,7 @@ impl DataWrite<'_> {
             for reference in references {
                 memory.check()?;
                 let mut temporary = Vec::new();
-                let (id, retained) = StoredResult::read(
+                let (id, revision) = crate::analysis::native::NativeStore::reference_id(
                     tenant,
                     &reference.result_id,
                     self.revision,
@@ -129,7 +129,7 @@ impl DataWrite<'_> {
                     },
                 )?
                 .ok_or_else(|| Code::Missing.error("managed result dependency"))?;
-                if retained.revision != reference.commit_revision {
+                if revision != reference.commit_revision {
                     return crate::AnalysisConflictSnafu.fail();
                 }
                 memory.charge(128)?;
@@ -240,9 +240,71 @@ impl crate::analysis::native::NativeStore {
         Ok(expected)
     }
 
+    fn reference_keys(
+        &self,
+        view: &crate::analysis::native::DataView,
+        id: u64,
+        tenant: [u8; 16],
+        revision: u64,
+        witnesses: &[AnalysisWitnessV1],
+        contexts: &[AnalysisContextRefV1],
+        dependencies: &[PackageResultRefV1],
+        origins: &[PackageResultRefV1],
+        expected: &mut std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
+    ) -> Result<()> {
+        let segments = self.resolve_witnesses(witnesses, revision - 1)?;
+        for (ordinal, (witness, segment)) in witnesses.iter().zip(segments).enumerate() {
+            expected.insert(
+                References::key(References::RAW, &[id, ordinal as u64]),
+                [segment.to_be_bytes(), witness.expires_utc_ns.to_be_bytes()].concat(),
+            );
+            expected.insert(
+                References::key(References::SEGMENT, &[segment, id, ordinal as u64]),
+                witness.expires_utc_ns.to_be_bytes().to_vec(),
+            );
+        }
+        for reference in contexts {
+            let context =
+                ContextRecord::id(&reference.key, |key| Records::read(key, &view.snapshot))?
+                    .ok_or_else(|| Code::Missing.error("managed referenced context"))?;
+            if view
+                .context(&reference.key)?
+                .is_none_or(|(_, revision)| revision != reference.commit_revision)
+            {
+                return Err(Code::Invalid.error("managed context reference revision"));
+            }
+            expected.insert(
+                References::key(References::CONTEXT, &[id, context]),
+                reference.commit_revision.to_be_bytes().to_vec(),
+            );
+            expected.insert(
+                References::key(References::CONTEXT_OWNER, &[context, id]),
+                reference.commit_revision.to_be_bytes().to_vec(),
+            );
+        }
+        for (prefix, references) in [
+            (References::DEPENDENCY, dependencies),
+            (References::ORIGIN, origins),
+        ] {
+            for reference in references {
+                let (target, revision) = view
+                    .result_reference(tenant, &reference.result_id, &mut |_| Ok(()))?
+                    .ok_or_else(|| Code::Missing.error("result dependency"))?;
+                if revision != reference.commit_revision {
+                    return Err(Code::Invalid.error("managed result reference revision"));
+                }
+                expected.insert(
+                    References::key(prefix, &[id, target]),
+                    reference.commit_revision.to_be_bytes().to_vec(),
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     pub(super) fn validate_result_references(&self) -> Result<()> {
         let view = self.view()?;
-        let control = crate::AnalysisReadControl::default();
         let mut expected = std::collections::BTreeMap::new();
         for entry in view.snapshot.prefix(b"\0data/X") {
             let (key, _) = entry.context(crate::NativeStorageSnafu {
@@ -277,56 +339,45 @@ impl crate::analysis::native::NativeStore {
                 id, &result, witnesses, contexts, derived, origins, proofs,
             )?;
             expected.extend(imports);
-            let segments = self.resolve_witnesses(witnesses, result.revision - 1)?;
-            for (ordinal, (witness, segment)) in witnesses.iter().zip(segments).enumerate() {
-                expected.insert(
-                    References::key(References::RAW, &[id, ordinal as u64]),
-                    [segment.to_be_bytes(), witness.expires_utc_ns.to_be_bytes()].concat(),
-                );
-                expected.insert(
-                    References::key(References::SEGMENT, &[segment, id, ordinal as u64]),
-                    witness.expires_utc_ns.to_be_bytes().to_vec(),
-                );
+            self.reference_keys(
+                &view,
+                id,
+                result.tenant,
+                result.revision,
+                witnesses,
+                &crate::AnalysisStore::join_contexts(contexts, derived)?,
+                dependencies,
+                origins,
+                &mut expected,
+            )?;
+        }
+        use crate::analysis::native::progress::ResultRecord;
+        for entry in view.snapshot.prefix(ResultRecord::PREFIX) {
+            let (key, _) = entry.context(crate::NativeStorageSnafu {
+                operation: "validate processor reference owners",
+            })?;
+            if key.len() != ResultRecord::PREFIX.len() + 8 {
+                continue;
             }
-            for reference in crate::AnalysisStore::join_contexts(contexts, derived)? {
-                let context =
-                    ContextRecord::id(&reference.key, |key| Records::read(key, &view.snapshot))?
-                        .ok_or_else(|| Code::Missing.error("managed referenced context"))?;
-                if view
-                    .context(&reference.key)?
-                    .is_none_or(|(_, revision)| revision != reference.commit_revision)
-                {
-                    return Err(Code::Invalid.error("managed context reference revision"));
-                }
-                expected.insert(
-                    References::key(References::CONTEXT, &[id, context]),
-                    reference.commit_revision.to_be_bytes().to_vec(),
-                );
-                expected.insert(
-                    References::key(References::CONTEXT_OWNER, &[context, id]),
-                    reference.commit_revision.to_be_bytes().to_vec(),
-                );
-            }
-            for (prefix, references) in [
-                (References::DEPENDENCY, dependencies),
-                (References::ORIGIN, origins),
-            ] {
-                for reference in references {
-                    let (target, stored, _) = view.result_owner(
-                        result.tenant,
-                        &reference.result_id,
-                        &control,
-                        &mut |_| Ok(()),
-                    )?;
-                    if stored.revision != reference.commit_revision {
-                        return Err(Code::Invalid.error("managed result reference revision"));
-                    }
-                    expected.insert(
-                        References::key(prefix, &[id, target]),
-                        reference.commit_revision.to_be_bytes().to_vec(),
-                    );
-                }
-            }
+            let id = Self::number(&key[ResultRecord::PREFIX.len()..])?;
+            let bytes = Records::payload(&key, |key| Records::read(key, &view.snapshot))?
+                .ok_or_else(|| Code::Missing.error("processor reference owner"))?;
+            let result: ResultRecord = Records::decode(&bytes)?;
+            self.reference_keys(
+                &view,
+                id,
+                result.request.scope.identity.tenant_id,
+                result.revision,
+                &result.request.witnesses,
+                &result.request.context_refs,
+                &[],
+                result
+                    .producer
+                    .as_ref()
+                    .map(std::slice::from_ref)
+                    .unwrap_or_default(),
+                &mut expected,
+            )?;
         }
         for entry in view.snapshot.prefix(b"\0data/ref/") {
             let (key, value) = entry.context(crate::NativeStorageSnafu {

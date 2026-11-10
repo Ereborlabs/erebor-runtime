@@ -145,6 +145,17 @@ Result: **Done for optional native subscription startup and version changes**.
 Production binding, remaining storage owners, notification delivery, capacity,
 retention, backup, cutover, DuckDB removal, and both incident targets remain
 **Not done**. No native production speedup is measured.
+Native Data now stores processor results and typed managed Profiles with
+their contexts, reference pins, interval heads, notices, and consumed input.
+The native gate passes 135 tests in 11 suites. Read the
+[processor and Profile qualification](results/araphor-native-progress-2026-11-10.md).
+Result: **Done for native processor registration, immutable results, retirement,
+and typed managed Profile publication**. Native expiry/resume proof, production
+binding, remaining storage owners, notification delivery, capacity, retention,
+backup, cutover, DuckDB removal, and both incident targets remain **Not done**.
+The shared-progress library tests fail to compile. The production binding check
+still fails with 24 errors. No native production speedup is measured.
+
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

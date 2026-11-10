@@ -20,7 +20,7 @@ pub const MAX_RESULT_BYTES: usize = usize::MAX;
 pub const MAX_RESULT_REFS: usize = usize::MAX;
 const MAX_WITNESS_AGE_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProcessorClassV1 {
     Optional,
     Required,
@@ -62,7 +62,7 @@ pub struct AnalysisContextRefV1 {
     pub commit_revision: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AnalysisResultCommitV1 {
     pub scope: ProcessorScopeV1,
     pub expected_cursor: u64,
@@ -77,6 +77,77 @@ pub struct AnalysisResultCommitV1 {
 }
 
 impl AnalysisResultCommitV1 {
+    pub(in crate::analysis) fn check(
+        &self,
+        profile: Option<&crate::DiscoveryProfileV1>,
+        contexts: &[super::AnalysisContextVersionV1],
+        root: &std::path::Path,
+    ) -> Result<()> {
+        let input = self;
+        if profile.is_some_and(|profile| {
+            profile.scope != input.scope
+                || profile.profile_id != input.result_id
+                || profile.coverage_revision != input.coverage_revision
+                || profile.context_refs != input.context_refs
+        }) {
+            return AnalysisStore::reject_path(
+                root,
+                "the profile header or references differ from its commit",
+            );
+        }
+        if !input.scope.valid()
+            || input.result_id.is_empty()
+            || (input.body.is_empty() && (profile.is_none() || contexts.is_empty()))
+            || input.created_utc_ns == 0
+            || input.consumed_cursor < input.expected_cursor
+            || input.witnesses.windows(2).any(|pair| {
+                (&pair[0].identity, pair[0].cursor) >= (&pair[1].identity, pair[1].cursor)
+            })
+            || input
+                .context_refs
+                .windows(2)
+                .any(|pair| pair[0].key >= pair[1].key)
+            || input.context_refs.iter().any(|reference| {
+                !reference.key.valid()
+                    || reference.key.tenant_id != input.scope.identity.tenant_id
+                    || reference.commit_revision == 0
+            })
+        {
+            return AnalysisStore::reject_path(
+                root,
+                "the analysis result or progress bounds are invalid",
+            );
+        }
+        if (profile.is_none() && !contexts.is_empty())
+            || contexts.windows(2).any(|pair| pair[0].key >= pair[1].key)
+            || contexts.iter().any(|context| {
+                !context.valid() || context.key.tenant_id != input.scope.identity.tenant_id
+            })
+        {
+            return AnalysisStore::reject_path(root, "the result contexts are invalid");
+        }
+        let witness_deadline = input
+            .created_utc_ns
+            .checked_add(MAX_WITNESS_AGE_NS)
+            .ok_or_else(|| {
+                crate::AnalysisStateSnafu {
+                    path: root.to_path_buf(),
+                    reason: "the witness deadline is exhausted".to_owned(),
+                }
+                .build()
+            })?;
+        if input.witnesses.iter().any(|witness| {
+            witness.identity.tenant() != input.scope.identity.tenant_id
+                || !witness.identity.valid()
+                || witness.cursor == 0
+                || witness.expires_utc_ns < input.created_utc_ns
+                || witness.expires_utc_ns > witness_deadline
+        }) {
+            return AnalysisStore::reject_path(root, "the result has a foreign or invalid witness");
+        }
+        Ok(())
+    }
+
     pub(super) fn request_meta(&self) -> std::result::Result<Vec<u8>, serde_json::Error> {
         self.request_meta_refs(self.context_revision, &self.context_refs, &[])
     }
@@ -156,15 +227,15 @@ pub(in crate::analysis) struct ProgressWrite {
     pub(in crate::analysis) contexts: Vec<AnalysisContextRefV1>,
 }
 
-#[derive(Default)]
-struct ProfileHeader {
-    stream_key: Option<Vec<u8>>,
-    method_version: Option<u64>,
-    interval_id: Option<String>,
-    profile_revision: Option<u64>,
-    facts_revision: Option<u64>,
-    coverage_revision: Option<u64>,
-    first_cursor: Option<u64>,
+#[derive(Default, Deserialize, Serialize)]
+pub(in crate::analysis) struct ProfileHeader {
+    pub(in crate::analysis) stream_key: Option<Vec<u8>>,
+    pub(in crate::analysis) method_version: Option<u64>,
+    pub(in crate::analysis) interval_id: Option<String>,
+    pub(in crate::analysis) profile_revision: Option<u64>,
+    pub(in crate::analysis) facts_revision: Option<u64>,
+    pub(in crate::analysis) coverage_revision: Option<u64>,
+    pub(in crate::analysis) first_cursor: Option<u64>,
 }
 
 impl From<&crate::DiscoveryProfileV1> for ProfileHeader {
@@ -421,7 +492,8 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("register.after");
         self.revision.send_replace(revision);
-        self.inputs.metadata(revision, super::inputs::InputChange::Processor(scope));
+        self.inputs
+            .metadata(revision, super::inputs::InputChange::Processor(scope));
         Ok(revision)
     }
 
@@ -541,7 +613,8 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("resume.after");
         self.revision.send_replace(revision);
-        self.inputs.metadata(revision, super::inputs::InputChange::Processor(scope));
+        self.inputs
+            .metadata(revision, super::inputs::InputChange::Processor(scope));
         Ok(Some(gap))
     }
 
@@ -687,14 +760,21 @@ impl AnalysisStore {
             #[cfg(any(test, feature = "test-fixtures"))]
             self.crash_at("result.after");
             self.revision.send_replace(write.receipt.commit_revision);
-            self.inputs.metadata(write.receipt.commit_revision,
-                super::inputs::InputChange::Processor(&input.scope));
+            self.inputs.metadata(
+                write.receipt.commit_revision,
+                super::inputs::InputChange::Processor(&input.scope),
+            );
             if profile.is_some() {
-                self.inputs.metadata(write.receipt.commit_revision, super::inputs::InputChange::Profile {
-                    scope: &input.scope, result: &input.result_id,
-                });
+                self.inputs.metadata(
+                    write.receipt.commit_revision,
+                    super::inputs::InputChange::Profile {
+                        scope: &input.scope,
+                        result: &input.result_id,
+                    },
+                );
             }
-            self.inputs.contexts(write.receipt.commit_revision, &write.contexts);
+            self.inputs
+                .contexts(write.receipt.commit_revision, &write.contexts);
         }
         Ok(write.receipt)
     }
@@ -708,55 +788,7 @@ impl AnalysisStore {
         profile: Option<&crate::DiscoveryProfileV1>,
         contexts: &[super::AnalysisContextVersionV1],
     ) -> Result<ProgressWrite> {
-        if profile.is_some_and(|profile| {
-            profile.scope != input.scope
-                || profile.profile_id != input.result_id
-                || profile.coverage_revision != input.coverage_revision
-                || profile.context_refs != input.context_refs
-        }) {
-            return self.reject("the profile header or references differ from its commit");
-        }
-        if !input.scope.valid()
-            || input.result_id.is_empty()
-            || (input.body.is_empty() && (profile.is_none() || contexts.is_empty()))
-            || input.created_utc_ns == 0
-            || input.consumed_cursor < input.expected_cursor
-            || input.witnesses.windows(2).any(|pair| {
-                (&pair[0].identity, pair[0].cursor) >= (&pair[1].identity, pair[1].cursor)
-            })
-            || input
-                .context_refs
-                .windows(2)
-                .any(|pair| pair[0].key >= pair[1].key)
-            || input.context_refs.iter().any(|reference| {
-                !reference.key.valid()
-                    || reference.key.tenant_id != input.scope.identity.tenant_id
-                    || reference.commit_revision == 0
-            })
-        {
-            return self.reject("the analysis result or progress bounds are invalid");
-        }
-        if (profile.is_none() && !contexts.is_empty())
-            || contexts.windows(2).any(|pair| pair[0].key >= pair[1].key)
-            || contexts.iter().any(|context| {
-                !context.valid() || context.key.tenant_id != input.scope.identity.tenant_id
-            })
-        {
-            return self.reject("the result contexts are invalid");
-        }
-        let witness_deadline = input
-            .created_utc_ns
-            .checked_add(MAX_WITNESS_AGE_NS)
-            .ok_or_else(|| self.state_error("the witness deadline is exhausted"))?;
-        if input.witnesses.iter().any(|witness| {
-            witness.identity.tenant() != input.scope.identity.tenant_id
-                || !witness.identity.valid()
-                || witness.cursor == 0
-                || witness.expires_utc_ns < input.created_utc_ns
-                || witness.expires_utc_ns > witness_deadline
-        }) {
-            return self.reject("the result has a foreign or invalid witness");
-        }
+        input.check(profile, contexts, &self.root)?;
         let path = self.root.join("analysis.duckdb");
         let key = input.scope.identity.key();
         let existing = transaction
