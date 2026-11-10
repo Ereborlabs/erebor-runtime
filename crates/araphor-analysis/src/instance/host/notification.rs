@@ -137,7 +137,7 @@ impl Instance {
         .map_err(|source| araphor_query::Error::Sql { source })?;
         let binding = self.admitted.spec.manifest.definition.to_be_bytes();
         let session = self.session.operation(&control, 0)?;
-        #[cfg(feature = "native-store")]
+        
         let session = {
             let mut session = session;
             session.bind_consumer(self.current_lifecycle(lifecycle, &control)?)?;

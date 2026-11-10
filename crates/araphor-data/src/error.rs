@@ -6,7 +6,7 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-    #[cfg(feature = "native-store")]
+    
     #[snafu(display("Native Data operation {operation} failed: {source}"))]
     NativeStorage {
         operation: &'static str,
@@ -14,7 +14,7 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[cfg(feature = "native-store")]
+    
     #[snafu(display("Native Data {field} is invalid"))]
     NativeState {
         field: &'static str,
@@ -80,7 +80,7 @@ pub enum Error {
     },
     #[snafu(display("Package table encoding failed: {source}"))]
     PackageArrow {
-        source: duckdb::arrow::error::ArrowError,
+        source: araphor_analysis_sdk::arrow_schema::ArrowError,
         #[snafu(implicit)]
         location: Location,
     },
@@ -267,13 +267,6 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Analysis database operation {operation} failed: {source}"))]
-    AnalysisDatabase {
-        operation: &'static str,
-        source: duckdb::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("Analysis store `{}` is invalid: {reason}", path.display()))]
     AnalysisState {
         path: PathBuf,
@@ -432,14 +425,14 @@ impl From<araphor_analysis_types::Error> for Error {
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
-            #[cfg(feature = "native-store")]
+            
             Self::NativeStorage {
                 source: fjall::Error::HistoryUnavailable(..),
                 ..
             } => StatusCode::NotFound,
-            #[cfg(feature = "native-store")]
+            
             Self::NativeStorage { .. } => StatusCode::External,
-            #[cfg(feature = "native-store")]
+            
             Self::NativeState { .. } => StatusCode::IllegalState,
             Self::PreparedNotification { source } => source.status_code(),
             Self::GraphFacility { source } => source.status_code(),
@@ -499,8 +492,7 @@ impl ErrorExt for Error {
             | Self::AnalysisState { .. }
             | Self::StoredArtifact { .. }
             | Self::Json { .. } => StatusCode::IllegalState,
-            Self::AnalysisDatabase { .. }
-            | Self::Io { .. }
+            Self::Io { .. }
             | Self::DiscoveryContext { .. }
             | Self::DiscoveryExecution { .. } => StatusCode::External,
             Self::GraphContext { .. } => StatusCode::External,
@@ -628,7 +620,7 @@ mod package_tests {
             location: snafu::location!(),
         });
         semantic.push(Error::PackageArrow {
-            source: duckdb::arrow::error::ArrowError::ParseError("stored batch".into()),
+            source: araphor_analysis_sdk::arrow_schema::ArrowError::ParseError("stored batch".into()),
             location: snafu::location!(),
         });
         semantic.push(Error::AnalysisContract {
@@ -660,10 +652,6 @@ mod package_tests {
 
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("absent");
-        let database = duckdb::Connection::open_in_memory()?
-            .execute("SELECT * FROM absent_artifact", [])
-            .err()
-            .ok_or("invalid SQL accepted")?;
         for error in [
             AnalysisReadCancelledSnafu.build(),
             AnalysisReadDeadlineSnafu.build(),
@@ -679,9 +667,9 @@ mod package_tests {
             Code::Denied.error("stored scope"),
             Code::Conflict.error("stored pin"),
             Code::Incomplete.error("stored input"),
-            Error::AnalysisDatabase {
+            Error::NativeStorage {
                 operation: "read stored row",
-                source: database,
+                source: fjall::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "storage read failed")),
                 location: snafu::location!(),
             },
             Error::Io {
@@ -749,5 +737,15 @@ mod package_tests {
             );
         }
         Ok(())
+    }
+}
+
+impl Error {
+    pub(crate) fn reject_path<T>(root: &std::path::Path, reason: &str) -> Result<T> {
+        crate::AnalysisStateSnafu {
+            path: root.to_path_buf(),
+            reason: reason.to_owned(),
+        }
+        .fail()
     }
 }

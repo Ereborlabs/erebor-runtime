@@ -7,7 +7,6 @@ repository.workspace = true
 
 [features]
 default = []
-store = ["dep:duckdb", "dep:erebor-telemetry"]
 native-store = ["dep:fjall", "dep:arrow-ipc", "dep:rmp-serde", "dep:serde"]
 
 [dependencies]
@@ -15,9 +14,7 @@ arrow-array = "=59.2.0"
 arrow-schema = "=59.2.0"
 arrow-select = "=59.2.0"
 arrow-cast = "=59.2.0"
-duckdb = { workspace = true, optional = true, features = ["appender-arrow"] }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
-erebor-telemetry = { path = "../erebor-telemetry", optional = true }
 snafu.workspace = true
 fjall = { path = "../../fjall", version = "=3.1.13", features = ["journal-cdc"], optional = true }
 arrow-ipc = { version = "=59.2.0", optional = true }
@@ -47,7 +44,7 @@ tokio.workspace = true
 [[example]]
 name = "storage_poc"
 path = "examples/storage_poc/main.rs"
-required-features = ["store"]
+required-features = ["native-store"]
 
 [lints]
 workspace = true

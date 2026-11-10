@@ -2,10 +2,7 @@ use serde::Deserialize;
 use snafu::ResultExt as _;
 
 use super::super::{records::Records, DataView, DataWrite, NativeStore};
-use crate::{
-    AnalysisConflictSnafu, AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1,
-    ManagedEncodingSnafu, NativeStateSnafu, Result,
-};
+use crate :: { AnalysisConflictSnafu , AnalysisContextKeyV1 , AnalysisContextRefV1 , AnalysisContextVersionV1 , ManagedEncodingSnafu , NativeStateSnafu , Result } ;
 
 #[derive(Deserialize)]
 pub(in crate::analysis::native) struct ContextRecord {
@@ -222,6 +219,7 @@ impl DataWrite<'_> {
         }
         let head = Records::key(b'H', base);
         let id = Records::intern(&mut self.transaction, &identity)?;
+        self.count_revision(input.key.tenant_id, 1)?;
         let encoded = Records::encode(&(input, self.revision))?;
         Records::stage(&mut self.transaction, Records::key(b'C', id), encoded);
         let reference = AnalysisContextRefV1 {

@@ -1,20 +1,21 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use araphor_analysis_types::{DomainRelations, FindingMember};
+use araphor_analysis_types::{DomainRelations, FindingMember, GraphStateMember};
 use sdk::arrow_array::{Array as _, ArrayRef, BinaryArray, StructArray, UInt8Array};
 
 use super::*;
 
 #[derive(Default)]
-pub(super) struct GraphCommands {
+pub struct GraphCommands {
     subjects: BTreeMap<(Vec<u8>, Vec<u8>), SubjectChange>,
     edges: BTreeMap<(Vec<u8>, Vec<u8>), RelationshipChange>,
     findings: BTreeMap<(Vec<u8>, Vec<u8>), FindingMember>,
+    states: BTreeMap<(Vec<u8>, Vec<u8>), GraphStateMember>,
 }
 
 impl GraphCommands {
-    pub(super) fn expire(
+    pub fn expire(
         graph: &araphor_graph::Transaction<sdk::GraphTransport<'_>>,
     ) -> sdk::Result<sdk::Output> {
         let mut commands = Self::default();
@@ -42,6 +43,12 @@ impl GraphCommands {
         {
             for (row, value) in FindingMember::decode(&data)?.into_iter().enumerate() {
                 commands.finding(owners.value(row), value.retained_expiry())?;
+            }
+        }
+        for (owners, data) in Self::owned(graph, DomainRelations::STATES, GraphStateMember::port())?
+        {
+            for (row, value) in GraphStateMember::decode(&data)?.into_iter().enumerate() {
+                commands.state(owners.value(row), value.retained_expiry())?;
             }
         }
         graph.clear_scope().map_err(sdk::Error::backend)?;
@@ -91,7 +98,7 @@ impl GraphCommands {
             .collect()
     }
 
-    pub(super) fn subject(&mut self, owner: &[u8], value: SubjectChange) -> sdk::Result<()> {
+    pub fn subject(&mut self, owner: &[u8], value: SubjectChange) -> sdk::Result<()> {
         let key = (owner.to_vec(), DomainRelations::key(&value.key)?);
         if self.subjects.get(&key).is_some_and(|prior| prior != &value) {
             return Err(Computation::invalid("graph subject duplicate"));
@@ -100,7 +107,7 @@ impl GraphCommands {
         Ok(())
     }
 
-    pub(super) fn edge(&mut self, owner: &[u8], value: RelationshipChange) -> sdk::Result<()> {
+    pub fn edge(&mut self, owner: &[u8], value: RelationshipChange) -> sdk::Result<()> {
         let key = (owner.to_vec(), DomainRelations::key(&value.key)?);
         if self.edges.get(&key).is_some_and(|prior| prior != &value) {
             return Err(Computation::invalid("graph relationship duplicate"));
@@ -109,7 +116,7 @@ impl GraphCommands {
         Ok(())
     }
 
-    pub(super) fn finding(&mut self, owner: &[u8], value: FindingMember) -> sdk::Result<()> {
+    pub fn finding(&mut self, owner: &[u8], value: FindingMember) -> sdk::Result<()> {
         let key = (
             owner.to_vec(),
             DomainRelations::key(&value.value.finding_id)?,
@@ -125,7 +132,16 @@ impl GraphCommands {
         Ok(())
     }
 
-    pub(super) fn stage(
+    pub fn state(&mut self, owner: &[u8], value: GraphStateMember) -> sdk::Result<()> {
+        let key = (owner.to_vec(), DomainRelations::key(&value.record)?);
+        if self.states.get(&key).is_some_and(|prior| prior != &value) {
+            return Err(Computation::invalid("graph state duplicate"));
+        }
+        self.states.insert(key, value);
+        Ok(())
+    }
+
+    pub fn stage(
         self,
         graph: &araphor_graph::Transaction<sdk::GraphTransport<'_>>,
     ) -> sdk::Result<()> {
@@ -178,6 +194,15 @@ impl GraphCommands {
                 &declarations[2],
                 keys,
                 FindingMember::encode(&values)?,
+            )?;
+        }
+        if !self.states.is_empty() {
+            let (keys, values): (Vec<_>, Vec<_>) = self.states.into_iter().unzip();
+            Self::nodes(
+                graph,
+                &declarations[3],
+                keys,
+                GraphStateMember::encode(&values)?,
             )?;
         }
         Ok(())

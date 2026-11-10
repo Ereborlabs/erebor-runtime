@@ -5,12 +5,19 @@ use rpds::RedBlackTreeMapSync;
 use super::{RawEntry, RawIdentity, RawReceipt, RawSource, RawSourceState};
 use crate::{AnalysisSourceReceiptV1, Result};
 
+#[derive(Clone)]
+pub(in crate::analysis) struct RawExpiry {
+    pub revision: u64,
+    pub identity: RawIdentity,
+}
+
 #[derive(Clone, Default)]
 pub(in crate::analysis) struct RawIndex {
     pub(in crate::analysis) sources: RedBlackTreeMapSync<Vec<u8>, RawSource>,
     pub(in crate::analysis) entries: RedBlackTreeMapSync<u64, RawEntry>,
     pub(in crate::analysis) ranges: RedBlackTreeMapSync<(Vec<u8>, u64), (u64, usize)>,
     pub(in crate::analysis) relations: RedBlackTreeMapSync<(u8, u64), ()>,
+    pub(in crate::analysis) expired: RedBlackTreeMapSync<u64, RawExpiry>,
     pub(in crate::analysis) revision: u64,
     pub(in crate::analysis) evidence_revision: u64,
     pub(in crate::analysis) binding_revision: u64,
@@ -78,7 +85,7 @@ impl RawIndex {
             .range((key.clone(), 0)..=(key, u64::MAX))
             .filter_map(|(_, &(id, index))| {
                 let span = &self.entries[&id].commit.spans[index];
-                (id <= revision).then_some((span.first, span.last))
+                (id <= revision && self.expired.get(&self.entries[&id].reference.id).is_none_or(|expired| expired.revision > revision)).then_some((span.first, span.last))
             });
         let expired = expired
             .iter()
@@ -229,6 +236,8 @@ impl RawIndex {
                 next.relations.insert_mut((b'B', revision), ());
                 next.binding_revision = next.binding_revision.max(revision);
             }
+        } else {
+            next.relations.insert_mut((b'T', revision), ());
         }
         if !next.sources.contains_key(&key) {
             next.sources.insert_mut(

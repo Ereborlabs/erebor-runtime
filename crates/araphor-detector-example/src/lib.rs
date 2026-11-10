@@ -25,7 +25,35 @@ impl sdk::Guest for BurstDetector {
         }
         let evaluation = checked.evaluation();
         let model = checked.model();
+        let graph = checked.graph()?;
+        if Unit::expired(&evaluation.input("window")?.data)? {
+            return GraphCommands::expire(&graph);
+        }
         let threshold = Self::threshold(evaluation)?;
+        let units = Unit::decode(&evaluation.input("units")?.data)?;
+        let removals = Unit::decode(&evaluation.input("unit_removals")?.data)?;
+        let mut cleared = units
+            .iter()
+            .chain(&removals)
+            .map(|unit| araphor_analysis_types::DomainRelations::key(&unit.record))
+            .collect::<sdk::Result<std::collections::BTreeSet<_>>>()?;
+        cleared.insert(araphor_analysis_types::DomainRelations::key(
+            &Option::<araphor_analysis_types::source::DiscoveryRecordIdV1>::None,
+        )?);
+        if model
+            .change_inputs
+            .as_ref()
+            .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "change inputs"))?
+            .is_reset(evaluation)?
+        {
+            graph.clear_scope().map_err(sdk::Error::backend)?;
+        } else {
+            graph
+                .clear_owners(sdk::arrow_array::BinaryArray::from_iter_values(
+                    cleared.iter().map(Vec::as_slice),
+                ))
+                .map_err(sdk::Error::backend)?;
+        }
         let records = Observation::read(checked)?;
         let facts = Fact::read(checked)?;
         let mut groups = BTreeMap::new();
@@ -59,47 +87,30 @@ impl sdk::Guest for BurstDetector {
                 "duplicate records",
             ));
         }
-        let mut contributions = Vec::new();
         let mut owners = BTreeMap::new();
-        for unit in Unit::decode(&evaluation.input("units")?.data)? {
+        for unit in units {
             if !record_rows.contains_key(&unit.record)
-                || owners
-                    .insert(unit.record.clone(), (contributions.len(), unit.restricted))
-                    .is_some()
+                || owners.insert(unit.record, unit.restricted).is_some()
             {
                 return Err(sdk::Error::contract(
                     sdk::ErrorCode::Invalid,
                     "detector unit",
                 ));
             }
-            contributions.push(Contribution {
-                record: unit.record,
-                support: records
-                    .iter()
-                    .enumerate()
-                    .map(|(row, record)| {
-                        let mut keys = facts
-                            .iter()
-                            .filter(|fact| fact.record as usize == row)
-                            .map(|fact| fact.key.clone())
-                            .collect::<Vec<_>>();
-                        keys.sort();
-                        UnitSupport {
-                            record: record.id.clone(),
-                            proof: record.proof_quality,
-                            facts: keys,
-                        }
-                    })
-                    .collect(),
-                subjects: Vec::new(),
-                relationships: Vec::new(),
-                findings: Vec::new(),
-                state: None,
-            });
         }
-        let mut output = sdk::Output::default();
+        let mut commands = GraphCommands::default();
+        commands.state(
+            &araphor_analysis_types::DomainRelations::key(
+                &Option::<araphor_analysis_types::source::DiscoveryRecordIdV1>::None,
+            )?,
+            araphor_analysis_types::GraphStateMember {
+                record: None,
+                position: None,
+                fact: None,
+                state: GraphPackageStateV1::Declared("0".into()),
+            },
+        )?;
         let mut subjects = Vec::new();
-        let mut findings = Vec::new();
         for rows in groups
             .into_values()
             .filter(|rows| rows.len() as u64 >= threshold)
@@ -109,10 +120,10 @@ impl sdk::Guest for BurstDetector {
                 .min_by_key(|&&row| &record_ids[row as usize])
                 .copied()
                 .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "record group"))?;
-            let Some(&(owner, restricted)) = owners.get(&record_ids[anchor_row as usize]) else {
+            let Some(&restricted) = owners.get(&record_ids[anchor_row as usize]) else {
                 continue;
             };
-            let row = findings.len() as u64;
+            let row = subjects.len() as u64;
             let reason = Self::reason(model, row, threshold, rows.len() as u64)?;
             let declared = FindingReasonV1::Declared(DeclaredFindingReasonV1::from_value(&reason)?);
             let mut value = FindingV1::resolve(
@@ -134,45 +145,38 @@ impl sdk::Guest for BurstDetector {
             } else {
                 ContextSensitivityV1::Tenant
             };
-            let finding = Finding::from_finding(anchor_row, None, value, reason.code.clone());
-            let anchor = Anchor::from_positions(finding.record, None, &record_ids, &facts)?;
-            contributions[owner].subjects.push(subjects.len() as u64);
-            subjects.push(SubjectChange {
+            let anchor = Anchor::from_positions(anchor_row, None, &record_ids, &facts)?;
+            let owner =
+                araphor_analysis_types::DomainRelations::key(&record_ids[anchor_row as usize])?;
+            let subject = SubjectChange {
                 anchor: anchor.clone(),
-                key: finding.subject_id.clone(),
-            });
-            contributions[owner].findings.push(row);
-            for record in &finding.evidence {
-                let record = record_rows.get(record).ok_or_else(|| {
-                    sdk::Error::contract(sdk::ErrorCode::Invalid, "record evidence")
-                })?;
-                output.evidence.push(sdk::EvidenceLink {
-                    output: reason.output.clone(),
-                    input: sdk::RowRef {
-                        dataset: "records".into(),
-                        row: *record as u64,
-                    },
-                });
-            }
-            findings.push(FindingChange::from_local(finding, anchor));
-            output.reasons.push(reason);
+                key: value.subject_id.clone(),
+            };
+            commands.subject(&owner, subject.clone())?;
+            subjects.push(subject);
+            commands.finding(
+                &owner,
+                araphor_analysis_types::FindingMember { anchor, value },
+            )?;
         }
         if let Some(record) = records.iter().max_by_key(|record| &record.id) {
-            if let Some(&(owner, _)) = owners.get(&record.id) {
-                contributions[owner].state = Some(UnitState {
-                    state: GraphPackageStateV1::Declared(records.len().to_string()),
-                    position: record.position,
-                    fact: None,
-                });
+            if owners.contains_key(&record.id) {
+                commands.state(
+                    &araphor_analysis_types::DomainRelations::key(&record.id)?,
+                    araphor_analysis_types::GraphStateMember {
+                        record: Some(record.id.clone()),
+                        position: Some(record.position),
+                        fact: None,
+                        state: GraphPackageStateV1::Declared(records.len().to_string()),
+                    },
+                )?;
             }
         }
-        output.datasets = vec![
-            SubjectChange::encode(&subjects)?,
-            RelationshipChange::encode(&[])?,
-            FindingChange::encode(&findings)?,
-            Contribution::encode(&contributions)?,
-            GraphPackageStateV1::encode(&[GraphPackageStateV1::Declared("0".into())])?,
-        ];
+        commands.stage(&graph)?;
+        let output = sdk::Output {
+            datasets: vec![SubjectChange::encode(&subjects)?],
+            ..Default::default()
+        };
         Ok(output)
     }
 }

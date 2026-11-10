@@ -123,7 +123,7 @@ fn source_finding_revision_reads() -> TestResult {
     assert_eq!((manifest.first_cursor, manifest.last_cursor), (1, 1));
     assert_eq!(
         (manifest.subject_count, manifest.relationship_count),
-        (3, 1)
+        (2, 1)
     );
     assert_eq!(manifest.witness_deadline_utc_ns, 2000);
     assert!(!manifest.retained_input_expired);

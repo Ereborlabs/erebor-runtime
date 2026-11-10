@@ -7,11 +7,7 @@ use araphor_analysis_sdk as sdk;
 use sdk::arrow_array::{ArrayRef, RecordBatch};
 
 use super::{AnalysisTableRead, ReadBudget};
-use crate::{
-    AnalysisExtractionV1, AnalysisGapV1, AnalysisPositionPageV1, AnalysisReadControl,
-    AnalysisSelectionV1, AnalysisStore, AnalysisStreamIdentityV1, AnalysisWitnessV1, Result,
-    StorePositionV1, TraceRecipeV1,
-};
+use crate :: { AnalysisExtractionV1 , AnalysisGapV1 , AnalysisPositionPageV1 , AnalysisReadControl , AnalysisSelectionV1 , AnalysisStreamIdentityV1 , AnalysisWitnessV1 , Result , StorePositionV1 , TraceRecipeV1 } ;
 
 mod builder;
 mod context;
@@ -111,7 +107,7 @@ impl<'a> Capture<'a> {
                     + indices.len() * (size_of::<usize>() + size_of::<Arc<sdk::Field>>()),
             )?;
             let indices = indices.iter().copied().collect::<Vec<_>>();
-            let schema = AnalysisStore::table_schemas()
+            let schema = crate::AnalysisStore::table_schemas()
                 .get(name)
                 .ok_or_else(|| invalid("the relation has no native Arrow schema"))?;
             self.tables.insert(
@@ -255,7 +251,7 @@ fn overflow() -> crate::Error {
         location: snafu::location!(),
     }
 }
-fn arrow_error(source: duckdb::arrow::error::ArrowError) -> crate::Error {
+fn arrow_error(source: araphor_analysis_sdk::arrow_schema::ArrowError) -> crate::Error {
     crate::Error::AnalysisContract {
         source: source.into(),
         location: snafu::location!(),

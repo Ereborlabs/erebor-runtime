@@ -1,16 +1,10 @@
 use std::collections::BTreeMap;
 
-use araphor_analysis_sdk::arrow_array::{
-    BinaryArray, BooleanArray, RecordBatch, StringArray, UInt32Array, UInt64Array,
-};
+use araphor_analysis_sdk :: arrow_array :: { BinaryArray , BooleanArray , RecordBatch , StringArray , UInt32Array , UInt64Array } ;
 use prost::Message as _;
 
 use super::*;
-use crate::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisReadModeV1, AnalysisSelectionV1,
-    AnalysisTableRead, AnalysisWitnessV1, CoverageCounters, CoverageInterval, CoverageReport,
-    DiscoveryInputManifestV1, Selection, ValidatedCoverageV1,
-};
+use crate :: { AnalysisExtractLimits , AnalysisReadControl , AnalysisReadModeV1 , AnalysisSelectionV1 , AnalysisTableRead , AnalysisWitnessV1 , CoverageCounters , CoverageInterval , CoverageReport , DiscoveryInputManifestV1 , Selection , ValidatedCoverageV1 } ;
 
 #[test]
 fn profile_native_fields() -> TestResult {
@@ -94,7 +88,7 @@ fn profile_native_fields() -> TestResult {
         vec![profile.scope.identity.clone()],
     );
     selection.select_profiles(Selection::Exact(vec![profile.profile_id.clone()]))?;
-    let schema = &AnalysisStore::table_schemas()["behaviors"];
+    let schema = &crate::AnalysisStore::table_schemas()["behaviors"];
     let columns = BTreeMap::from([(
         "behaviors".to_owned(),
         Some((0..schema.fields().len()).collect()),

@@ -1,9 +1,6 @@
 use super::*;
 
-use crate::{
-    AnalysisPositionPageV1, AnalysisStreamIdentityV1, EvidenceRecord, EvidenceRetentionOwner,
-    StorePositionV1, ValidatedEvidenceBatchV1,
-};
+use crate :: { AnalysisPositionPageV1 , AnalysisStreamIdentityV1 , EvidenceRecord , EvidenceRetentionOwner , StorePositionV1 , ValidatedEvidenceBatchV1 } ;
 use sdk::arrow_array::{UInt32Array, UInt64Array};
 
 mod contexts;
@@ -21,7 +18,7 @@ impl Journal {
         let source = crate::analysis::tests::identity();
         let mut selection = AnalysisSelectionV1::new(source.tenant_id, vec![source]);
         selection.contexts = crate::Selection::All;
-        let schema = &AnalysisStore::table_schemas()["events"];
+        let schema = &crate::AnalysisStore::table_schemas()["events"];
         let columns = ["source_cursor", "commit_revision", "ordinal"]
             .into_iter()
             .map(|name| schema.index_of(name))

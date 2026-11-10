@@ -1,13 +1,6 @@
 use super::{InputRecord, Wake};
-use crate::analysis::{
-    inputs::{InputCapture, InputCut},
-    managed::Capture,
-    native::{records::Records, DataView, DataWrite, NativeStore},
-};
-use crate::{
-    AnalysisPositionPageV1, AnalysisReadModeV1, AnalysisSelectionV1, AnalysisTableRead,
-    InputSubscription, ManagedRead, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: analysis :: { inputs :: { InputCapture , InputCut } , managed :: Capture , native :: { records :: Records , DataView , DataWrite , NativeStore } } ;
+use crate :: { AnalysisPositionPageV1 , AnalysisReadModeV1 , AnalysisSelectionV1 , AnalysisTableRead , InputSubscription , ManagedRead , PackageErrorCodeV1 as Code , Result } ;
 use std::collections::BTreeSet;
 
 impl InputSubscription {

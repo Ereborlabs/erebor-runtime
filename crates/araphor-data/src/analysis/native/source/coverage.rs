@@ -1,11 +1,8 @@
 use super::super::{DataView, DataWrite, NativeStore};
 use super::{Records, Report, Sources};
 use crate::analysis::raw::RawReceipt;
-use crate::{AnalysisReadControl, AnalysisStore, NativeStateSnafu, NativeStorageSnafu, Result};
-use crate::{
-    AnalysisSelectionV1, AnalysisSourceReceiptV1, CoverageRecord, CoverageReportRef,
-    EvidenceIntakeIdentityV1, StorePositionV1, ValidatedCoverageV1,
-};
+use crate::{AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, Result};
+use crate :: { AnalysisSelectionV1 , AnalysisSourceReceiptV1 , CoverageRecord , CoverageReportRef , EvidenceIntakeIdentityV1 , StorePositionV1 , ValidatedCoverageV1 } ;
 use snafu::ResultExt as _;
 use std::ops::Bound::{Excluded, Included};
 impl DataView {
@@ -170,8 +167,9 @@ impl DataView {
 
 impl NativeStore {
     pub fn accept_validated_coverage(&self, input: ValidatedCoverageV1) -> Result<u64> {
+        self.require_retention()?;
         let revision = input.revision;
-        let mut write = self.write()?;
+        let mut write = self.maintenance_write()?;
         write.coverage(&input)?;
         write.commit([])?;
         Ok(revision)
@@ -182,7 +180,7 @@ impl DataWrite<'_> {
     pub fn coverage(&mut self, input: &ValidatedCoverageV1) -> Result<()> {
         let identity = &input.identity;
         if !identity.valid() || input.revision == 0 || input.encoded_report.is_empty() {
-            return AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.store.root,
                 "the validated coverage identity or bounds are invalid",
             );
@@ -194,7 +192,7 @@ impl DataWrite<'_> {
             .get(&key)
             .and_then(|source| source.receipt.evidence());
         if previous.is_some_and(|receipt| receipt.cpu_id != input.cpu_id) {
-            return AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.store.root,
                 "coverage changed the bound evidence CPU identity",
             );
@@ -214,7 +212,7 @@ impl DataWrite<'_> {
                     }
                 }
             }
-            return AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.store.root,
                 "coverage evidence is stale or has conflicting content",
             );
@@ -257,6 +255,7 @@ impl DataWrite<'_> {
                 ordinal: 0,
             },
         };
+        self.count_revision(identity.tenant_id, 0)?;
         let report = Records::encode(&(&reference, &input.encoded_report))?;
         let encoded = Records::encode(&receipt)?;
         let change = Records::encode(&reference)?;

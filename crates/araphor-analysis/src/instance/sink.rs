@@ -103,7 +103,7 @@ impl Publication {
         now: u64,
         batches: &[sdk::RecordBatch],
         control: &AnalysisReadControl,
-        #[cfg(feature = "native-store")] capture: Option<
+         capture: Option<
             &araphor_data::analysis::native::NotificationCapture,
         >,
     ) -> crate::Result<crate::NotificationUpdate> {
@@ -129,7 +129,7 @@ impl Publication {
             budget.as_ref(),
             &check,
             &mut |delivery| Ok(sink.deliver(delivery)),
-            #[cfg(feature = "native-store")]
+            
             capture,
         )
     }
@@ -282,19 +282,15 @@ impl DataSink for Publication {
                             now,
                             &batches,
                             control,
-                            #[cfg(feature = "native-store")]
+                            
                             captured.snapshot().notification_capture(),
                         )
                         .map_err(|source| araphor_query::Error::Sql {
                             source: DataFusionError::External(Box::new(source)),
                         })?;
-                    #[cfg(feature = "native-store")]
+                    
                     return Ok(update.publication);
-                    #[cfg(not(feature = "native-store"))]
-                    {
-                        let _ = (update, captured);
-                        Ok(None::<(u64, bool)>)
-                    }
+                    
                 })
                 .await?;
             if let Some((revision, completed)) = result {

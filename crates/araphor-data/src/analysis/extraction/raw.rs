@@ -16,28 +16,7 @@ pub(in crate::analysis) struct RawScan<'a, 'c> {
     pub(in crate::analysis) retain: Option<&'a mut super::append::AppendCapture<'c>>,
 }
 
-impl AnalysisStore {
-    pub(super) fn scan_raw(
-        &self,
-        scan: &mut RawScan<'_, '_>,
-        output: &mut AnalysisExtractionV1,
-        capture: &mut tables::Capture<'_>,
-        removals: &mut std::iter::Peekable<std::vec::IntoIter<changes::RemovedRange>>,
-        control: &AnalysisReadControl,
-        journal_work: &mut JournalWork,
-    ) -> Result<(Option<StorePositionV1>, bool)> {
-        scan.read(
-            &self.root,
-            |selection, after, revision, limit, control| {
-                self.selected_position(selection, after, revision, limit, control)
-            },
-            &mut output.sink(control),
-            capture,
-            removals,
-            journal_work,
-        )
-    }
-}
+
 
 impl RawScan<'_, '_> {
     pub(in crate::analysis) fn read(
@@ -208,7 +187,7 @@ impl RawScan<'_, '_> {
                                 if terminal.execution_id != identity.execution_id
                                     || terminal.last_sequence + 1 != record.cursor
                                 {
-                                    return AnalysisStore::reject_path(
+                                    return crate::Error::reject_path(
                                         root,
                                         "the selected trace terminal identity changed",
                                     );
@@ -243,6 +222,13 @@ impl RawScan<'_, '_> {
                     after = Some(self.end);
                 }
                 break;
+            }
+        }
+        if exhausted {
+            while let Some(removal) =
+                removals.next_if(|removal| removal.revision <= self.end.commit_revision)
+            {
+                output.remove_raw(capture, &removal, control)?;
             }
         }
         Ok((after, exhausted))

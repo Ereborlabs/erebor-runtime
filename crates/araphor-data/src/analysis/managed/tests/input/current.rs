@@ -291,7 +291,7 @@ fn empty_graph_keeps_capture() -> TestResult {
         )?;
         let fixture = Fixture::admit_scope(store, false, selection.clone())?;
         let requests = if selected {
-            let schema = &AnalysisStore::table_schemas()["graph_manifest"];
+            let schema = &crate::AnalysisStore::table_schemas()["graph_manifest"];
             AnalysisTableRequests::from([(
                 "graph_manifest".into(),
                 Some((0..schema.fields().len()).collect()),

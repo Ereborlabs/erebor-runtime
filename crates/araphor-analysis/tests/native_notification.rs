@@ -1,4 +1,4 @@
-#![cfg(feature = "native-store")]
+
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},

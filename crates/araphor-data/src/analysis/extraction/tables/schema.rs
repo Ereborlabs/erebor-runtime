@@ -8,7 +8,7 @@ use super::Capture;
 type SchemaRef = Arc<Schema>;
 
 impl Capture<'_> {
-    pub(in crate::analysis::extraction) fn schemas() -> &'static BTreeMap<String, SchemaRef> {
+    pub(in crate::analysis) fn schemas() -> &'static BTreeMap<String, SchemaRef> {
         static SCHEMAS: LazyLock<BTreeMap<String, SchemaRef>> =
             LazyLock::new(Capture::build_table_schemas);
         &SCHEMAS

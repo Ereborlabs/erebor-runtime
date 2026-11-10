@@ -28,14 +28,6 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[cfg(feature = "store")]
-    #[snafu(display("Graph storage operation {operation} failed: {source}"))]
-    Database {
-        operation: &'static str,
-        source: duckdb::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[cfg(feature = "native-store")]
     #[snafu(display("Graph native operation {operation} failed: {source}"))]
     Native {
@@ -96,8 +88,6 @@ impl ErrorExt for Error {
             Self::Arrow { .. } => StatusCode::External,
             Self::Backend { source, .. } => source.0.status_code(),
             Self::Conflict { .. } => StatusCode::IllegalState,
-            #[cfg(feature = "store")]
-            Self::Database { .. } => StatusCode::External,
             #[cfg(feature = "native-store")]
             Self::Native { .. } | Self::Encode { .. } | Self::Decode { .. } => StatusCode::External,
         }

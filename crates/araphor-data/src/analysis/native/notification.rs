@@ -6,10 +6,7 @@ use snafu::ResultExt as _;
 
 use super::{context::ContextRecord, records::Records, DataView, DataWrite, NativeStore};
 use crate::analysis::notification::{NotificationKeys, NotificationLookup};
-use crate::{
-    AnalysisContextKeyV1, AnalysisContextVersionV1, NativeStateSnafu, NativeStorageSnafu, Result,
-    NOTIFICATION_STATE_OWNER,
-};
+use crate :: { AnalysisContextKeyV1 , AnalysisContextVersionV1 , NativeStateSnafu , NativeStorageSnafu , Result , NOTIFICATION_STATE_OWNER } ;
 
 struct NoticeIndex;
 
@@ -122,7 +119,9 @@ impl NativeStore {
         tenant: [u8; 16],
         lookup: NotificationLookup<'_>,
     ) -> Result<Vec<AnalysisContextVersionV1>> {
-        self.view()?.notification_states(tenant, lookup)
+        self.view()?.notification_states_charged(tenant, lookup,
+            self.storage.notification_routes.and_then(|limit| limit.checked_add(2)).unwrap_or(usize::MAX),
+            &mut |_| Ok(()))
     }
 }
 
@@ -132,13 +131,14 @@ impl DataView {
         tenant: [u8; 16],
         lookup: NotificationLookup<'_>,
     ) -> Result<Vec<AnalysisContextVersionV1>> {
-        self.notification_states_charged(tenant, lookup, &mut |_| Ok(()))
+        self.notification_states_charged(tenant, lookup, usize::MAX, &mut |_| Ok(()))
     }
 
     pub(in crate::analysis) fn notification_states_charged(
         &self,
         tenant: [u8; 16],
         lookup: NotificationLookup<'_>,
+        limit: usize,
         charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<Vec<AnalysisContextVersionV1>> {
         let (kind, lookup) = NoticeIndex::lookup(tenant, lookup)?;
@@ -150,7 +150,7 @@ impl DataView {
         };
         let prefix = NoticeIndex::prefix(kind, scope);
         let mut states = Vec::new();
-        let limit = if kind == b'C' { 2 } else { usize::MAX };
+        let limit = if kind == b'C' { 2 } else { limit };
         for entry in self.snapshot.prefix(&prefix).take(limit) {
             charge(0)?;
             let (key, value) = entry.context(NativeStorageSnafu {

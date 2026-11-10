@@ -1,5 +1,5 @@
 use super::*;
-use crate::AnalysisStore;
+
 use snafu::ResultExt as _;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;

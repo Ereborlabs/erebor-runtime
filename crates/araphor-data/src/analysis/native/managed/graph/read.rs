@@ -11,6 +11,9 @@ use crate::analysis::native::NativeStore;
 use crate::analysis::PackageResultRefV1;
 use crate::{AnalysisReadControl, PackageErrorCodeV1 as Code, Result};
 
+mod publication;
+pub(in crate::analysis::native) use publication::PublicationRead;
+
 type Identity = (u64, Vec<u8>, Vec<u8>);
 
 impl ManagedGraphTransaction {

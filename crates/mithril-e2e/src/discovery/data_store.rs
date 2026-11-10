@@ -38,7 +38,7 @@ struct TestClock(AtomicU64);
 
 enum StartupFault {
     Pending,
-    Sql(&'static str),
+    Native(araphor_data::analysis::native::StorageFault),
     Corrupt,
 }
 
@@ -218,8 +218,8 @@ impl DataStoreQualification {
             )
             .await?;
             let usage = data.storage_usage()?;
-            let database_bytes = Self::file_size(&root.join("analysis.duckdb"))?;
-            let wal_bytes = Self::file_size(&root.join("analysis.duckdb.wal"))?;
+            let database_bytes = Self::native_sizes(&root)?.0;
+            let wal_bytes = Self::native_sizes(&root)?.1;
             for (index, (ack, policy_us, ack_us)) in replies.into_iter().enumerate() {
                 observations[index].acknowledge_evidence(ack)?;
                 self.check(
@@ -335,8 +335,8 @@ impl DataStoreQualification {
                 "sampled_peak_bytes": peak_bytes, "after_checkpoint": usage,
                 "commit_revision": meta.commit_revision,
                 "recovery_epoch": meta.recovery_epoch,
-                "database_bytes": Self::file_size(&root.join("analysis.duckdb"))?,
-                "wal_bytes": Self::file_size(&root.join("analysis.duckdb.wal"))?,
+                "database_bytes": Self::native_sizes(&root)?.0,
+                "wal_bytes": Self::native_sizes(&root)?.1,
                 "qualification": "measurement only; no rollout, full-quota, or reserve claim",
             }),
         )?;
@@ -489,25 +489,33 @@ impl DataStoreQualification {
         drop(Self::reopen_data(&tls.path().join("evidence/analysis")).await?);
         drop(reopen_control_store(&control_root).await?);
 
-        let database = tls.path().join("evidence/analysis/analysis.duckdb");
-        let pending = tls.path().join("evidence/analysis/restore.pending");
+        let root = tls.path().join("evidence/analysis");
+        {
+            let data = AnalysisStore::open(&root)?;
+            data.register_processor(&araphor_data::ProcessorScopeV1 {
+                processor_id: "startup-proof".into(), method_version: 1, identity: identity.clone(),
+            }, araphor_data::ProcessorClassV1::Required, 1)?;
+        }
+        let database = root.join("fjall/version");
+        let pending = root.join("restore.pending");
         Self::record(&observations, 2);
+        use araphor_data::analysis::native::StorageFault;
         let faults = [
             StartupFault::Pending,
-            StartupFault::Sql("UPDATE source_receipts SET contiguous_cursor = 2"),
-            StartupFault::Sql("UPDATE store_meta SET schema_version = 99"),
-            StartupFault::Sql("ALTER TABLE segments RENAME TO missing_segments"),
+            StartupFault::Native(StorageFault::Receipt(identity.clone(), 2)),
+            StartupFault::Native(StorageFault::Schema(99)),
+            StartupFault::Native(StorageFault::RawEnd(1)),
             StartupFault::Corrupt,
         ];
         for fault in faults {
             let saved = match fault {
                 StartupFault::Pending => {
-                    let bytes = fs::read(&database)?;
+                    let proof = Self::native_proof(&root)?;
                     fs::write(&pending, b"")?;
-                    Some(bytes)
+                    Some(proof)
                 }
-                StartupFault::Sql(sql) => {
-                    duckdb::Connection::open(&database)?.execute_batch(sql)?;
+                StartupFault::Native(fault) => {
+                    AnalysisStore::corrupt_fixture(&root, &fault)?;
                     None
                 }
                 StartupFault::Corrupt => {
@@ -568,7 +576,7 @@ impl DataStoreQualification {
             drop(control);
             if let Some(bytes) = saved {
                 self.check(
-                    pending.is_file() && fs::read(&database)? == bytes,
+                    pending.is_file() && Self::native_proof(&root)? == bytes,
                     "startup changed an incomplete restore",
                 )?;
                 fs::remove_file(&pending)?;
@@ -1078,12 +1086,7 @@ impl DataStoreQualification {
         let checkpoint_start = Instant::now();
         data.checkpoint()?;
         let checkpoint_us = checkpoint_start.elapsed().as_micros();
-        let database_bytes = fs::metadata(data_root.join("analysis.duckdb"))?.len();
-        let wal_bytes = match fs::metadata(data_root.join("analysis.duckdb.wal")) {
-            Ok(metadata) => metadata.len(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-            Err(error) => return Err(error.into()),
-        };
+        let (database_bytes, wal_bytes) = Self::native_sizes(&data_root)?;
         let backup_path = backup_root.join("after-expiry");
         let backup = data.backup(&backup_path)?;
         connection.send_evidence_batch(blocked).await?;

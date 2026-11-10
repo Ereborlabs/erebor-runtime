@@ -1,12 +1,12 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
 
 use araphor_analysis_sdk as sdk;
 use araphor_analysis_types::{DomainRelations, FindingMember};
-use araphor_graph::native::{Graph, Member};
+use araphor_graph::native::Member;
 use sdk::arrow_array::{Array, StringArray, StructArray};
 use snafu::ResultExt as _;
 
@@ -18,7 +18,10 @@ use crate::{
     AnalysisTableRead, PackageErrorCodeV1 as Code, Result, Selection,
 };
 
+mod snapshot;
 mod source;
+mod traversal;
+use crate::analysis::native::PublicationRead;
 
 fn finding_id(member: &Member) -> Result<&str> {
     let values = member
@@ -47,6 +50,7 @@ impl NativeStore {
         for ((_, graph), ()) in view
             .graphs
             .range((selection.tenant_id, 0)..=(selection.tenant_id, u64::MAX))
+            .filter(|_| selection.graph_traversal().is_none())
         {
             control.check()?;
             let key = [GraphPublication::HEAD, &graph.to_be_bytes()].concat();
@@ -128,7 +132,30 @@ impl NativeStore {
         capture: &mut Capture<'_>,
         control: &AnalysisReadControl,
     ) -> Result<()> {
-        if read.projected("findings").is_none() && read.projected("graph_manifest").is_none() {
+        if let Some(request) = selected.graph_traversal() {
+            return self.traverse_graphs(view, selected, request, read, output, capture, control);
+        }
+        let complete = ["snapshot", "metadata"]
+            .iter()
+            .any(|field| read.projects_field("graph_manifest", field));
+        let full = !selected.binding_ids.is_empty()
+            || ["snapshot", "metadata"]
+                .iter()
+                .any(|field| read.projects_field("graph_manifest", field))
+            || [
+                "relationships",
+                "graph_subjects",
+                "graph_branches",
+                "correlation_packages",
+                "policy_observations",
+            ]
+            .iter()
+            .any(|table| read.projected(table).is_some());
+        if !full
+            && ["findings", "graph_manifest", "graph_coverage"]
+                .iter()
+                .all(|table| read.projected(table).is_none())
+        {
             return Ok(());
         }
         for name in selected.graphs() {
@@ -139,12 +166,74 @@ impl NativeStore {
                 if !selected.sources.as_slice().contains(source.identity()?) {
                     continue;
                 }
-                if ["snapshot", "metadata"]
-                    .iter()
-                    .any(|field| read.projects_field("graph_manifest", field))
-                    || !selected.binding_ids.is_empty()
-                {
-                    return Err(Code::Unsupported.error("native source Graph snapshot"));
+                if full {
+                    if source
+                        .publication(view, &mut |bytes| output.charge(bytes))?
+                        .is_none()
+                    {
+                        if complete {
+                            return Err(Code::Missing.error("Source Graph snapshot"));
+                        }
+                        if !selected.binding_ids.is_empty() {
+                            let (revision, _) = source
+                                .revision(self, control, &mut |bytes| output.charge(bytes))?;
+                            if !revision.evidence.is_empty() {
+                                continue;
+                            }
+                        }
+                        self.extract_source_manifest(
+                            &source,
+                            read,
+                            (0, 0),
+                            false,
+                            output,
+                            capture,
+                            control,
+                        )?;
+                        continue;
+                    }
+                    let data = self.read_source_snapshot(
+                        view,
+                        &source,
+                        complete,
+                        control,
+                        &mut |bytes| output.charge(bytes),
+                    )?;
+                    let snapshot = &data.snapshot;
+                    if !selected.permits_graph(snapshot) {
+                        continue;
+                    }
+                    let reference = source.reference();
+                    output.capture_graph(&reference.result_id, snapshot, control)?;
+                    output.reference_result(
+                        &reference.result_id,
+                        reference.commit_revision,
+                        AnalysisReferenceOriginV1::Graph,
+                    )?;
+                    capture.graph(
+                        &reference.result_id,
+                        snapshot,
+                        &data.values,
+                        snapshot.graph.subjects.len(),
+                        snapshot.graph.edges.len(),
+                        reference.commit_revision,
+                        if data.restricted {
+                            crate::ContextSensitivityV1::HostRestricted
+                        } else {
+                            crate::ContextSensitivityV1::Tenant
+                        },
+                        None,
+                        None,
+                        &data.contexts,
+                        (
+                            source.header.captured.commit_revision,
+                            source.header.coverage,
+                        ),
+                        source.expired(),
+                        Some(source.restricted()),
+                        &mut output.sink(control),
+                    )?;
+                    continue;
                 }
                 let publication = source.publication(view, &mut |bytes| output.charge(bytes))?;
                 if let Some(publication) = publication {
@@ -159,7 +248,15 @@ impl NativeStore {
                         control,
                     )?;
                 } else {
-                    self.extract_source_manifest(&source, read, (0, 0), output, capture, control)?;
+                    self.extract_source_manifest(
+                        &source,
+                        read,
+                        (0, 0),
+                        false,
+                        output,
+                        capture,
+                        control,
+                    )?;
                 }
                 continue;
             }
@@ -197,16 +294,14 @@ impl NativeStore {
         capture: &mut Capture<'_>,
         control: &AnalysisReadControl,
     ) -> Result<()> {
-        let at = self.read_at(publication.reference.commit_revision)?;
-        let mapping = at
-            .managed_graph_charged(
-                publication.tenant,
-                &publication.instance,
-                control,
-                &mut |bytes| output.charge(bytes),
-            )?
-            .ok_or_else(|| Code::Missing.error("Graph publication mapping"))?;
         let memory = RefCell::new(output);
+        let reader = PublicationRead::open(self, publication, control, &mut |bytes| {
+            memory.borrow_mut().charge(bytes)
+        })?;
+        let at = &reader.at;
+        let mapping = &reader.mapping;
+        let graph = &reader.graph;
+        let restricted = reader.restricted || source.is_some_and(|source| source.restricted() != 0);
         let reserve = |_: u64, bytes: usize, _: usize| {
             control.check().map_err(araphor_graph::Error::backend)?;
             memory
@@ -215,79 +310,83 @@ impl NativeStore {
                 .map_err(araphor_graph::Error::backend)?;
             Ok(None)
         };
-        let mut snapshots = BTreeMap::new();
-        let mut restricted = source.is_some_and(|source| source.restricted() != 0);
-        for (writer, (_, revision)) in &publication.heads {
-            memory
-                .borrow_mut()
-                .charge(12 * size_of::<(u64, fjall::BranchSnapshot)>())?;
-            let selected = self.read_at(*revision)?;
-            snapshots.insert(*writer, selected.snapshot().clone());
-            restricted |= view
-                .graph_origin_charged(*writer, *revision, &mut |bytes| {
-                    memory.borrow_mut().charge(bytes)
-                })?
-                .restricted;
-        }
-        let graph =
-            Graph::new(publication.graph)?.view(at.snapshot().clone(), snapshots, &reserve)?;
-        for (writer, (layer, _)) in &publication.heads {
-            if graph.head(*writer)? != Some(*layer) {
-                return Err(Code::Invalid.error("Graph publication writer cut"));
-            }
-        }
         let manifest = read.projected("graph_manifest").is_some();
         let findings = read.projected("findings").is_some();
         let mut nodes = BTreeSet::new();
         let mut edges = BTreeSet::new();
-        let mut origins = BTreeMap::new();
+        let origins = RefCell::new(BTreeMap::new());
+        let restricted = Cell::new(restricted);
+        let origin = |writer: u64, revision: u64| -> Result<(bool, bool)> {
+            if let Some(found) = origins.borrow().get(&(writer, revision)).copied() {
+                return Ok(found);
+            }
+            let opening = view.graph_origin_charged(writer, revision, &mut |bytes| {
+                memory.borrow_mut().charge(bytes)
+            })?;
+            let value = (
+                source.is_some() || opening.grant.permitted_by(scope).is_ok(),
+                opening.restricted,
+            );
+            memory
+                .borrow_mut()
+                .charge(12 * size_of::<((u64, u64), (bool, bool))>())?;
+            origins.borrow_mut().insert((writer, revision), value);
+            restricted.set(restricted.get() || opening.restricted);
+            Ok(value)
+        };
         let mut rows = Vec::new();
         let mut permitted = true;
         let keys = sdk::RecordBatch::new_empty(Arc::new(sdk::Schema::empty()));
+        let spec = sdk::GraphSpec {
+            access: sdk::GraphAccess::ReadWrite,
+            relations: mapping
+                .relations
+                .values()
+                .map(|(_, declaration)| declaration.clone())
+                .collect(),
+        };
         for (relation, declaration) in mapping.relations.values() {
-            let finding = DomainRelations::findings(declaration);
-            if !manifest && !(findings && finding) {
-                continue;
-            }
             for writer in publication.heads.keys() {
-                graph.visit(
-                    *relation,
-                    araphor_graph::Read::Owned(*writer),
-                    &keys,
-                    &reserve,
-                    |member| {
-                        let result = (|| -> Result<()> {
-                            control.check()?;
-                            let opening = (member.writer, member.revision);
-                            if !origins.contains_key(&opening) {
-                                let origin = view.graph_origin_charged(
-                                    opening.0,
-                                    opening.1,
-                                    &mut |bytes| memory.borrow_mut().charge(bytes),
-                                )?;
-                                origins.insert(
-                                    opening,
-                                    (
-                                        source.is_some()
-                                            || origin.grant.permitted_by(scope).is_ok(),
-                                        origin.restricted,
-                                    ),
-                                );
-                            }
-                            let (allowed, restricted) = origins[&opening];
-                            if manifest {
+                if manifest {
+                    graph.visit_identities(
+                        *relation,
+                        araphor_graph::Read::Owned(*writer),
+                        &keys,
+                        &reserve,
+                        |member| {
+                            let result = (|| -> Result<()> {
+                                let (allowed, _) = origin(member.writer, member.revision)?;
+                                if source.is_some()
+                                    && !DomainRelations::subjects(declaration)
+                                    && !DomainRelations::relationships(declaration, &spec)
+                                {
+                                    return Ok(());
+                                }
                                 permitted &= allowed;
-                                memory
-                                    .borrow_mut()
-                                    .charge(member.key.len() + 12 * size_of::<(u64, Vec<u8>)>())?;
+                                memory.borrow_mut().charge(
+                                    member.key.len() + 12 * size_of::<(Option<u64>, Vec<u8>)>(),
+                                )?;
                                 let set = if matches!(declaration.kind, sdk::GraphKind::Node) {
                                     &mut nodes
                                 } else {
                                     &mut edges
                                 };
-                                set.insert((*relation, member.key.clone()));
-                            }
-                            if findings && finding {
+                                set.insert((source.is_none().then_some(*relation), member.key));
+                                Ok(())
+                            })();
+                            result.map_err(araphor_graph::Error::backend)
+                        },
+                    )?;
+                }
+                if findings && DomainRelations::findings(declaration) {
+                    graph.visit(
+                        *relation,
+                        araphor_graph::Read::Owned(*writer),
+                        &keys,
+                        &reserve,
+                        |member| {
+                            let result = (|| -> Result<()> {
+                                let (allowed, restricted) = origin(member.writer, member.revision)?;
                                 let mut output = memory.borrow_mut();
                                 let added = AnalysisExtractionV1::grow(
                                     &mut rows,
@@ -296,12 +395,12 @@ impl NativeStore {
                                 )?;
                                 output.charge(added)?;
                                 rows.push((member, allowed, restricted));
-                            }
-                            Ok(())
-                        })();
-                        result.map_err(araphor_graph::Error::backend)
-                    },
-                )?;
+                                Ok(())
+                            })();
+                            result.map_err(araphor_graph::Error::backend)
+                        },
+                    )?;
+                }
             }
         }
         rows.sort_unstable_by(|(a, _, _), (b, _, _)| {
@@ -362,6 +461,7 @@ impl NativeStore {
                 source,
                 read,
                 (nodes.len(), edges.len()),
+                restricted.get(),
                 &mut memory.borrow_mut(),
                 capture,
                 control,
@@ -384,7 +484,7 @@ impl NativeStore {
                     .previous
                     .as_ref()
                     .map(|prior| prior.result_id.as_str()),
-                restricted,
+                restricted.get(),
                 &mut output.sink(control),
             )?;
         }

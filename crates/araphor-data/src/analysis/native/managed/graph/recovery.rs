@@ -3,15 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use araphor_graph::native::Graph;
 use snafu::ResultExt as _;
 
-use super::super::{
-    results::{ResultBody, StoredResult},
-    InstanceRecord,
-};
+use super :: super :: { results :: { ResultBody , StoredResult } , InstanceRecord } ;
 use super::{cuts::GraphPublication, origin::GraphOrigin, ManagedGraph, Records};
 use crate::analysis::native::NativeStore;
-use crate::{
-    AnalysisReadControl, ManagedAttempt, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { AnalysisReadControl , ManagedAttempt , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 impl NativeStore {
     pub(in crate::analysis::native) fn validate_graph_recovery(&self) -> Result<()> {

@@ -1,15 +1,15 @@
-#[cfg(feature = "native-store")]
+
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "native-store")]
+
 use super::InputInterest;
-#[cfg(feature = "native-store")]
+
 use crate::{AnalysisSelectionV1, AnalysisTableRequests};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg(feature = "native-store")]
+
 pub(in crate::analysis) struct InputSpec {
     pub selection: AnalysisSelectionV1,
     pub requests: AnalysisTableRequests,
@@ -32,7 +32,7 @@ pub(in crate::analysis) struct InputCapture {
     pub exhaustive: bool,
 }
 
-#[cfg(feature = "native-store")]
+
 impl InputInterest {
     pub(in crate::analysis) fn spec(&self) -> InputSpec {
         InputSpec {

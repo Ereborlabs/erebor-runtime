@@ -5,9 +5,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::arrow::{
     self,
-    views::{AnchorRow, FindingValueRow},
+    views::{AnchorRow, ContextKeyRow, FindingValueRow, RecordIdRow, StateRow},
 };
-use crate::{Anchor, FindingV1, RelationshipChange, SubjectChange};
+use crate::source::DiscoveryRecordIdV1;
+use crate::{
+    AnalysisContextKeyV1, Anchor, FindingV1, GraphPackageStateV1, Position, RelationshipChange,
+    SubjectChange,
+};
 
 pub struct DomainRelations;
 
@@ -26,6 +30,7 @@ struct FindingRow {
 impl DomainRelations {
     pub const SUBJECTS: &'static str = "araphor_subjects_v1";
     pub const RELATIONSHIPS: &'static str = "araphor_relationships_v1";
+    pub const STATES: &'static str = "araphor_package_states_v1";
     pub const FINDINGS: &'static str = "araphor_findings_v1";
 
     pub fn declarations() -> Vec<sdk::GraphRelation> {
@@ -48,6 +53,11 @@ impl DomainRelations {
                 kind: sdk::GraphKind::Node,
                 properties: FindingMember::port().schema,
             },
+            sdk::GraphRelation {
+                name: Self::STATES.into(),
+                kind: sdk::GraphKind::Node,
+                properties: GraphStateMember::port().schema,
+            },
         ]
     }
 
@@ -58,6 +68,11 @@ impl DomainRelations {
 
     pub fn subjects(relation: &sdk::GraphRelation) -> bool {
         relation.kind == sdk::GraphKind::Node && relation.properties == SubjectChange::port().schema
+    }
+
+    pub fn states(relation: &sdk::GraphRelation) -> bool {
+        relation.kind == sdk::GraphKind::Node
+            && relation.properties == GraphStateMember::port().schema
     }
 
     pub fn findings(relation: &sdk::GraphRelation) -> bool {
@@ -95,5 +110,95 @@ impl FindingMember {
                 value: row.value.try_into()?,
             })
         })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphStateMember {
+    pub record: Option<DiscoveryRecordIdV1>,
+    pub position: Option<Position>,
+    pub fact: Option<AnalysisContextKeyV1>,
+    pub state: GraphPackageStateV1,
+}
+
+#[derive(Deserialize, Serialize)]
+struct StateMemberRow {
+    record: Option<RecordIdRow>,
+    position: Option<Position>,
+    fact: Option<ContextKeyRow>,
+    state: StateRow,
+}
+
+impl GraphStateMember {
+    pub fn port() -> sdk::Port {
+        static PORT: OnceLock<sdk::Port> = OnceLock::new();
+        arrow::port::<StateMemberRow>(DomainRelations::STATES, &PORT)
+    }
+
+    pub fn encode(values: &[Self]) -> sdk::Result<sdk::Dataset> {
+        for value in values {
+            value.validate()?;
+        }
+        arrow::encode(Self::port(), values, |value| StateMemberRow {
+            record: value.record.as_ref().map(RecordIdRow::from),
+            position: value.position,
+            fact: value.fact.as_ref().map(ContextKeyRow::from),
+            state: StateRow::from(&value.state),
+        })
+    }
+
+    pub fn decode(data: &sdk::Dataset) -> sdk::Result<Vec<Self>> {
+        arrow::decode::<StateMemberRow, Self>(Self::port(), data, |row| {
+            let value = Self {
+                record: row.record.map(TryInto::try_into).transpose()?,
+                position: row.position,
+                fact: row.fact.map(TryInto::try_into).transpose()?,
+                state: row.state.try_into()?,
+            };
+            value.validate()?;
+            Ok(value)
+        })
+    }
+
+    pub fn validate(&self) -> sdk::Result<()> {
+        if self.record.is_some() != self.position.is_some()
+            || self.record.is_none() && self.fact.is_some()
+            || matches!(&self.state, GraphPackageStateV1::Declared(value) if value.is_empty())
+        {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Invalid,
+                "Graph package state",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn retained_expiry(mut self) -> Self {
+        self.state = GraphPackageStateV1::CoverageInsufficient;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_codec_keeps_fallback() -> sdk::Result<()> {
+        let fallback = GraphStateMember {
+            record: None,
+            position: None,
+            fact: None,
+            state: GraphPackageStateV1::Declared("0".into()),
+        };
+        let data = GraphStateMember::encode(std::slice::from_ref(&fallback))?;
+        assert_eq!(GraphStateMember::decode(&data)?, [fallback.clone()]);
+        let mut invalid = fallback;
+        invalid.position = Some(Position {
+            commit_revision: 1,
+            ordinal: 0,
+        });
+        assert!(GraphStateMember::encode(&[invalid]).is_err());
+        Ok(())
     }
 }

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::{RawIndex, RawJournal, RawRead, RawReceipt};
-use crate::{AnalysisReadControl, AnalysisReadPageV1, AnalysisStore, Result};
+use crate :: { AnalysisReadControl , AnalysisReadPageV1 , Result } ;
 
 pub(in crate::analysis) struct RawPage {
     first_cursor: u64,
@@ -28,7 +28,7 @@ impl RawJournal {
             }
         };
         if first_cursor == 0 || first_cursor > receipt.cursor().saturating_add(1) {
-            return AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.root,
                 "the evidence read cursor is outside the accepted range",
             );
@@ -79,7 +79,7 @@ impl RawJournal {
                 let span = &entry.commit.spans[index];
                 let first = span.first.max(first_cursor);
                 if first_cursor.checked_add(count as u64) != Some(first) {
-                    return AnalysisStore::reject_path(
+                    return crate::Error::reject_path(
                         &self.root,
                         "the accepted evidence range has a missing record",
                     );
@@ -99,7 +99,7 @@ impl RawJournal {
         }
         let next_cursor = first_cursor.checked_add(count as u64);
         if next_cursor.is_some_and(|next| next <= page_end) && !bounded {
-            return AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.root,
                 "the accepted evidence range has a missing record",
             );

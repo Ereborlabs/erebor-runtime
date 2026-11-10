@@ -1,21 +1,18 @@
 use super::{results::StoredResult, Records};
 use crate::analysis::PackageResultRefV1;
-use crate::analysis::{
-    managed::PreparedMemory,
-    native::{context::ContextRecord, DataWrite},
-};
+use crate :: analysis :: { managed :: PreparedMemory , native :: { context :: ContextRecord , DataWrite } } ;
 use crate::{AnalysisContextRefV1, AnalysisWitnessV1, PackageErrorCodeV1 as Code, Result};
 use snafu::ResultExt as _;
 
 mod read;
 
-pub(super) struct References;
+pub(in crate::analysis::native) struct References;
 
 impl References {
-    pub(super) const RAW: &'static [u8] = b"\0data/ref/raw/";
-    pub(super) const SEGMENT: &'static [u8] = b"\0data/ref/segment/";
+    pub(in crate::analysis::native) const RAW: &'static [u8] = b"\0data/ref/raw/";
+    pub(in crate::analysis::native) const SEGMENT: &'static [u8] = b"\0data/ref/segment/";
     pub(super) const CONTEXT: &'static [u8] = b"\0data/ref/context/";
-    pub(super) const CONTEXT_OWNER: &'static [u8] = b"\0data/ref/context-owner/";
+    pub(in crate::analysis::native) const CONTEXT_OWNER: &'static [u8] = b"\0data/ref/context-owner/";
     pub(super) const DEPENDENCY: &'static [u8] = b"\0data/ref/dependency/";
     pub(super) const ORIGIN: &'static [u8] = b"\0data/ref/origin/";
     pub(super) const IMPORT: &'static [u8] = b"\0data/ref/import/";
@@ -57,7 +54,7 @@ impl DataWrite<'_> {
             let ordinal = ordinal as u64;
             self.transaction.insert(
                 References::key(References::RAW, &[result, ordinal]),
-                [segment.to_be_bytes(), witness.expires_utc_ns.to_be_bytes()].concat(),
+                [segment.to_be_bytes(), witness.expires_utc_ns.to_be_bytes(), witness.cursor.to_be_bytes()].concat(),
             );
             self.transaction.insert(
                 References::key(References::SEGMENT, &[segment, result, ordinal]),
@@ -268,11 +265,11 @@ impl crate::analysis::native::NativeStore {
         origins: &[PackageResultRefV1],
         expected: &mut std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
     ) -> Result<()> {
-        let segments = self.resolve_witnesses(witnesses, revision - 1)?;
+        let segments = self.recover_witnesses(witnesses, revision - 1)?;
         for (ordinal, (witness, segment)) in witnesses.iter().zip(segments).enumerate() {
             expected.insert(
                 References::key(References::RAW, &[id, ordinal as u64]),
-                [segment.to_be_bytes(), witness.expires_utc_ns.to_be_bytes()].concat(),
+                [segment.to_be_bytes(), witness.expires_utc_ns.to_be_bytes(), witness.cursor.to_be_bytes()].concat(),
             );
             expected.insert(
                 References::key(References::SEGMENT, &[segment, id, ordinal as u64]),
@@ -361,7 +358,7 @@ impl crate::analysis::native::NativeStore {
                 result.tenant,
                 result.revision,
                 witnesses,
-                &crate::AnalysisStore::join_contexts(contexts, derived)?,
+                &crate::AnalysisContextRefV1::join(contexts, derived)?,
                 dependencies,
                 origins,
                 &mut expected,

@@ -2,10 +2,7 @@ use std::collections::BTreeSet;
 
 use super::{results::ResultBody, results::StoredResult, CallHead, InstanceRecord, Records};
 use crate::analysis::native::{DataView, NativeStore};
-use crate::{
-    AnalysisReadControl, InstanceResultKindV1, InstanceResultV1, ManagedAttempt, ManagedInstance,
-    ManagedSpec, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { AnalysisReadControl , InstanceResultKindV1 , InstanceResultV1 , ManagedAttempt , ManagedInstance , ManagedSpec , PackageErrorCodeV1 as Code , Result } ;
 
 impl NativeStore {
     pub fn managed_changes(
@@ -283,7 +280,7 @@ impl DataView {
                 (
                     &record.dependencies,
                     &record.witnesses,
-                    crate::AnalysisStore::join_contexts(&record.contexts, &record.derived)?,
+                    crate::AnalysisContextRefV1::join(&record.contexts, &record.derived)?,
                 )
             }
             ResultBody::Selected(step) => {
@@ -296,7 +293,7 @@ impl DataView {
                 (
                     &step.dependencies,
                     &step.witnesses,
-                    crate::AnalysisStore::join_contexts(&step.contexts, &step.derived)?,
+                    crate::AnalysisContextRefV1::join(&step.contexts, &step.derived)?,
                 )
             }
         };
@@ -314,9 +311,7 @@ impl DataView {
         {
             return Ok(false);
         }
-        if !attempt.0.capture.traces.is_empty() {
-            return Err(Code::Unsupported.error("native managed trace owner"));
-        }
+        self.check_trace_reads(attempt.0.capture.tenant, &attempt.0.capture.traces, control)?;
         for reference in &contexts {
             control.check()?;
             if self

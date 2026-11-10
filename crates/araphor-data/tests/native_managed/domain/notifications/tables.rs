@@ -416,3 +416,140 @@ fn native_notification_scope_limits() -> TestResult {
         .is_err());
     Ok(())
 }
+
+#[test]
+fn source_binding_keeps_target() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = NativeStore::open(&root)?;
+    store.enable_notification_owner()?;
+    use araphor_analysis_builtins::graph::{FindingResolve as _, ReasonDetails};
+    let package = "HF-PROC-001";
+    let (_, model, source, observation) =
+        super::super::fixture_package(&store, true, Some([6; 16]), package)?;
+    store.register_processor(
+        &araphor_data::ProcessorScopeV1 {
+            processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+            method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+            identity: source.clone(),
+        },
+        araphor_data::ProcessorClassV1::Required,
+        1,
+    )?;
+    let target = super::super::finding_for(
+        package,
+        &observation,
+        &super::super::super::publication::output(&model)?.datasets[0].batches[0],
+    )?;
+    assert_eq!(target.value.effects[0].binding_id, Some([6; 16]));
+    let external = GraphSubjectKeyV1 {
+        tenant_id: [1; 16],
+        authority: araphor_data::GraphSubjectAuthorityV1::External {
+            authority_id: "external-context".into(),
+        },
+        kind: GraphSubjectKindV1::External,
+        identity: vec![9; 16],
+    };
+    let value = araphor_data::GraphFactValueV1::Context {
+        subject: external.clone(),
+        action_id: "outside".into(),
+        classification: araphor_data::GraphContextActionV1::OutsideAuthority,
+        proof_quality: observation.proof_quality,
+    };
+    let fact = algorithm::Fact {
+        record: 0,
+        key: super::super::super::attempts::context(1).key,
+        sensitivity: ContextSensitivityV1::Tenant,
+        value: value.clone(),
+    };
+    let finding = FindingV1::resolve(
+        package,
+        FindingReasonV1::OutsideAuthority,
+        ReasonDetails {
+            record: 0,
+            context: Some(0),
+            reason: "OUTSIDE_AUTHORITY".into(),
+            confirmed: false,
+            evidence: vec![0],
+            limits: Vec::new(),
+        },
+        std::slice::from_ref(&observation),
+        std::slice::from_ref(&fact),
+    )?;
+    assert!(finding.effects.is_empty());
+    let anchor = algorithm::Anchor {
+        record: observation.id.clone(),
+        fact: Some(algorithm::FactAnchor {
+            record: observation.id.clone(),
+            key: fact.key.clone(),
+            sensitivity: fact.sensitivity,
+            value: value.clone(),
+        }),
+    };
+    let other = FindingMember {
+        anchor: anchor.clone(),
+        value: finding,
+    };
+    let subject = algorithm::SubjectChange {
+        anchor,
+        key: external,
+    };
+    let commands = [
+        (
+            DomainRelations::SUBJECTS.into(),
+            command(
+                &model,
+                DomainRelations::SUBJECTS,
+                b"context",
+                &[DomainRelations::key(&subject.key)?],
+                None,
+                algorithm::SubjectChange::encode(&[subject])?,
+                false,
+            )?,
+        ),
+        (
+            DomainRelations::FINDINGS.into(),
+            command(
+                &model,
+                DomainRelations::FINDINGS,
+                b"other-finding",
+                &[DomainRelations::key(&other.value.finding_id)?],
+                None,
+                FindingMember::encode(&[other])?,
+                false,
+            )?,
+        ),
+    ];
+    super::super::commit_commands(
+        &store,
+        &model,
+        &observation,
+        0,
+        None,
+        "domain",
+        None,
+        &commands,
+        Some(&value),
+    )?;
+    let reference = reference_for(&store, 0, &target.value.finding_id)?;
+    let mut obligation = state(reference);
+    obligation.package_id = package.into();
+    let mut approved = route(1);
+    approved.policy.package_ids = vec![package.into()];
+    store.commit_contexts(&[context(&obligation)?, route_context(&approved)?])?;
+    let mut selection = AnalysisSelectionV1::new([1; 16], vec![source]);
+    selection.binding_ids.push([6; 16]);
+    let selected = rows(&page(&store, None, &selection, 50)?)?;
+    assert_eq!(selected.len(), 1);
+    assert!(selected[0].finding_available);
+    let mut foreign = selection.clone();
+    foreign.binding_ids = vec![[99; 16]];
+    assert!(rows(&page(&store, None, &foreign, 50)?)?.is_empty());
+    store.database().inner().flush_memtables()?;
+    store.database().inner().major_compact()?;
+    drop(store);
+    let store = NativeStore::open(&root)?;
+    store.enable_notification_owner()?;
+    assert_eq!(rows(&page(&store, None, &selection, 50)?)?, selected);
+    Ok(())
+}

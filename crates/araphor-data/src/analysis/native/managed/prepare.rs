@@ -3,10 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use araphor_analysis_sdk as sdk;
 
 use super::{graph::PreparedGraph, results::ResultBody, ManagedCommit};
-use crate::analysis::managed::{
-    source::{import::PreparedDerived, SourceEvidence},
-    Packet, PreparedMemory, Step,
-};
+use crate :: analysis :: managed :: { source :: { import :: PreparedDerived , SourceEvidence } , Packet , PreparedMemory , Step } ;
 use crate::analysis::native::{DataView, NativeStore};
 use crate::{PackageErrorCodeV1 as Code, Result};
 

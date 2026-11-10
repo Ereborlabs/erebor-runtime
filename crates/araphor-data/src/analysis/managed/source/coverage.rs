@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    AnalysisSourceReceiptV1, CoverageReport, DiscoveryCoverageStateV1, DiscoveryCoverageV1,
-    GraphCoverageKeyV1, GraphReplayInputV1,
-};
+use crate :: { AnalysisSourceReceiptV1 , CoverageReport , DiscoveryCoverageStateV1 , DiscoveryCoverageV1 , GraphCoverageKeyV1 , GraphReplayInputV1 } ;
 
 #[derive(Clone, Debug)]
 pub(super) struct SourceCoverage {

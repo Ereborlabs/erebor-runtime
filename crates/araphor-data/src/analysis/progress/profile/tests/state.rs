@@ -3,18 +3,14 @@ use std::collections::BTreeMap;
 use araphor_analysis_sdk::arrow_array::{RecordBatch, StringArray};
 
 use super::*;
-use crate::{
-    AnalysisExtractLimits, AnalysisPositionPageV1, AnalysisReadControl, AnalysisReadModeV1,
-    AnalysisSelectionV1, AnalysisTableRead, DiscoveryInputManifestV1, DiscoverySnapshotRowV1,
-    DiscoveryStateRowV1, EvidenceRetentionOwner, RetentionLimitsV1,
-};
+use crate :: { AnalysisExtractLimits , AnalysisPositionPageV1 , AnalysisReadControl , AnalysisReadModeV1 , AnalysisSelectionV1 , AnalysisTableRead , DiscoveryInputManifestV1 , DiscoverySnapshotRowV1 , DiscoveryStateRowV1 , EvidenceRetentionOwner , RetentionLimitsV1 } ;
 
 fn read_state(
     store: &AnalysisStore,
     selection: &AnalysisSelectionV1,
     columns: Option<&[&str]>,
 ) -> std::result::Result<AnalysisPositionPageV1, Box<dyn std::error::Error>> {
-    let schema = &AnalysisStore::table_schemas()["discovery_state"];
+    let schema = &crate::AnalysisStore::table_schemas()["discovery_state"];
     let projected = match columns {
         Some(names) => names
             .iter()

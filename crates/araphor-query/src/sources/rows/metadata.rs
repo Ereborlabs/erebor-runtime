@@ -132,7 +132,7 @@ impl MetadataRead {
             witnesses: Vec::new(),
             requests,
             managed: None,
-            #[cfg(feature = "native-store")]
+            
             notification: None,
             _metadata: memory,
         }))

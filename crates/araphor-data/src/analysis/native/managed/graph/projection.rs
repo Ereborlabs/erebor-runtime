@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std :: { collections :: { BTreeMap , BTreeSet } , sync :: Arc } ;
 
 use araphor_analysis_sdk as sdk;
 use araphor_analysis_types::DomainRelations;
@@ -11,10 +8,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::ManagedGraphJournal;
-use crate::analysis::{
-    managed::PreparedMemory,
-    native::{DataView, DataWrite, ManagedCommit, NativeStore},
-};
+use crate :: analysis :: { managed :: PreparedMemory , native :: { DataView , DataWrite , ManagedCommit , NativeStore } } ;
 use crate::{ManagedReceipt, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result};
 
 mod expiry;

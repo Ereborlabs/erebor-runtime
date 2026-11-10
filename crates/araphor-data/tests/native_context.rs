@@ -1,4 +1,4 @@
-#![cfg(feature = "native-store")]
+
 
 use araphor_data::{
     analysis::native::NativeStore, AnalysisContextKeyV1, AnalysisContextVersionV1,

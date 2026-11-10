@@ -1,7 +1,5 @@
 use super::NativeStore;
-use crate::{
-    ManagedDecodingSnafu, ManagedEncodingSnafu, NativeStateSnafu, NativeStorageSnafu, Result,
-};
+use crate :: { ManagedDecodingSnafu , ManagedEncodingSnafu , NativeStateSnafu , NativeStorageSnafu , Result } ;
 use fjall::{BranchSnapshot, BranchWriteTransaction};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
@@ -169,6 +167,28 @@ impl Records {
                 tx.insert(Self::fragment(&key, slot), fragment);
             }
         }
+    }
+
+    pub(super) fn remove(tx: &mut BranchWriteTransaction<'_>, key: Vec<u8>) -> Result<()> {
+        if let Some(value) = Self::staged(&key, tx)? {
+            match value.first() {
+                Some(0) => (),
+                Some(1) => {
+                    let len = NativeStore::number(&value[1..])?;
+                    for slot in 0..len.div_ceil(u32::MAX as u64) {
+                        tx.remove(Self::fragment(&key, slot as usize));
+                    }
+                }
+                _ => {
+                    return NativeStateSnafu {
+                        field: "context payload tag",
+                    }
+                    .fail()
+                }
+            }
+            tx.remove(key);
+        }
+        Ok(())
     }
 
     pub(super) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {

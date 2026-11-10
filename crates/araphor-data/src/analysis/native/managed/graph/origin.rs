@@ -1,13 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use super::super::{
-    results::{ResultBody, StoredResult},
-    Records,
-};
-use crate::analysis::{
-    native::{DataView, DataWrite},
-    PackageResultRefV1,
-};
+use super :: super :: { results :: { ResultBody , StoredResult } , Records } ;
+use crate :: analysis :: { native :: { DataView , DataWrite } , PackageResultRefV1 } ;
 use crate::{PackageErrorCodeV1 as Code, PackageGrantV1, Result};
 
 #[derive(Deserialize, PartialEq, Serialize)]

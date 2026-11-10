@@ -1,5 +1,5 @@
 use super::*;
-use duckdb::params;
+
 
 #[test]
 fn context_guard_rolls_back() -> std::result::Result<(), Box<dyn std::error::Error>> {

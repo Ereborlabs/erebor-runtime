@@ -3,10 +3,7 @@ use snafu::ResultExt as _;
 
 use super::model::require;
 use super::*;
-use crate::{
-    AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1, AnalysisGapV1,
-    ContextSensitivityV1, DiscoveryEncodingSnafu, ProcessorScopeV1, Result,
-};
+use crate :: { AnalysisContextKeyV1 , AnalysisContextRefV1 , AnalysisContextVersionV1 , AnalysisGapV1 , ContextSensitivityV1 , DiscoveryEncodingSnafu , ProcessorScopeV1 , Result } ;
 
 impl crate::CoverageInterval {
     pub fn record_state(

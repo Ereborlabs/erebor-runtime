@@ -125,6 +125,122 @@ impl DataWrite<'_> {
                 return Err(Code::Denied.error("expired source proof claim"));
             }
         }
+        self.check_expired_states(input, graph, values)?;
+        Ok(())
+    }
+    fn check_expired_states(
+        &self,
+        input: &ManagedCommit<'_>,
+        graph: u64,
+        values: &mut Values<'_>,
+    ) -> Result<()> {
+        use araphor_analysis_types::{GraphPackageStateV1, GraphStateMember};
+        let mapping =
+            super::super::ManagedGraph::read(graph, |key| Records::staged(key, &self.transaction))?
+                .ok_or_else(|| Code::Missing.error("expired Graph mapping"))?;
+        let current = self.store.view()?;
+        let view = Graph::new(graph)?.view(
+            current.snapshot.clone(),
+            BTreeMap::new(),
+            &|writer, bytes, total| values.graph_reserve(writer, bytes, total),
+        )?;
+        let keys = sdk::RecordBatch::new_empty(Arc::new(sdk::Schema::empty()));
+        for (relation, declaration) in mapping
+            .relations
+            .values()
+            .filter(|(_, declaration)| DomainRelations::states(declaration))
+        {
+            for (&call, &writer) in &mapping.writers {
+                let mut batches = Vec::new();
+                let mut held = Vec::new();
+                view.read(
+                    *relation,
+                    araphor_graph::Read::Owned(writer),
+                    &keys,
+                    &|writer, bytes, total| values.graph_reserve(writer, bytes, total),
+                    |read| {
+                        batches.push(read.batch().clone());
+                        held.push(read);
+                        Ok(())
+                    },
+                )?;
+                let had_state = batches.iter().any(|batch| batch.num_rows() != 0);
+                if let Some(journal) = input
+                    .returns
+                    .iter()
+                    .find(|returned| returned.call == call)
+                    .and_then(|returned| returned.graph)
+                {
+                    let bytes = journal
+                        .work
+                        .journal
+                        .batches()
+                        .iter()
+                        .try_fold(0usize, |bytes, staged| {
+                            let batch = match staged {
+                                araphor_graph::Staged::Edits { batch, .. }
+                                | araphor_graph::Staged::Clear { batch, .. } => batch,
+                            };
+                            bytes.checked_add(batch.get_array_memory_size().saturating_mul(4))
+                        })
+                        .ok_or_else(|| Code::Limit.error("expired Graph state memory"))?;
+                    values.charge(bytes)?;
+                    batches = journal.work.journal.overlay(
+                        *relation,
+                        &declaration.engine(),
+                        araphor_graph::Read::Owned(writer),
+                        &[],
+                        batches,
+                    )?;
+                }
+                let mut fallback = None;
+                let mut selected = None::<GraphStateMember>;
+                for batch in batches {
+                    let properties = batch
+                        .column_by_name("properties")
+                        .and_then(|array| array.as_any().downcast_ref::<StructArray>())
+                        .ok_or_else(|| Code::Invalid.error("expired Graph state properties"))?;
+                    values.charge(properties.get_array_memory_size().saturating_mul(12))?;
+                    let port = GraphStateMember::port();
+                    let batch = sdk::RecordBatch::try_new(
+                        Arc::new(port.schema),
+                        properties.columns().to_vec(),
+                    )
+                    .context(crate::PackageArrowSnafu)?;
+                    for row in GraphStateMember::decode(&sdk::Dataset {
+                        name: port.name,
+                        batches: vec![batch],
+                    })
+                    .context(crate::AnalysisContractSnafu)?
+                    {
+                        if row.record.is_none() {
+                            fallback = Some(row.state);
+                            continue;
+                        }
+                        let greater = if let Some(prior) = &selected {
+                            match (&row.fact, &prior.fact) {
+                                (Some(left), Some(right)) => {
+                                    (left, &row.record) > (right, &prior.record)
+                                }
+                                (None, None) => row.record > prior.record,
+                                _ => return Err(Code::Invalid.error("Graph state ordering mode")),
+                            }
+                        } else {
+                            true
+                        };
+                        if greater {
+                            selected = Some(row);
+                        }
+                    }
+                }
+                let state = selected.map(|row| row.state).or(fallback);
+                if (had_state || state.is_some())
+                    && state != Some(GraphPackageStateV1::CoverageInsufficient)
+                {
+                    return Err(Code::Denied.error("expired source package state"));
+                }
+            }
+        }
         Ok(())
     }
 }

@@ -3,13 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use snafu::ResultExt as _;
 
 use super::{ContextRecord, DataView, NativeStore, Records};
-use crate::{
-    AnalysisReadControl, ApprovedNotificationRouteV1, DiscoveryContextRevisionV1, NativeStateSnafu,
-    NativeStorageSnafu, Result,
-};
+use crate :: { AnalysisReadControl , ApprovedNotificationRouteV1 , DiscoveryContextRevisionV1 , NativeStateSnafu , NativeStorageSnafu , Result } ;
 
 impl DataView {
-    pub(in crate::analysis::native) fn validate_contexts(&mut self) -> Result<()> {
+    pub(in crate::analysis::native) fn validate_contexts(&mut self, counts: &mut super::super::capacity::RevisionCounts) -> Result<()> {
         let mut heads = BTreeMap::<Vec<u8>, (u64, u64)>::new();
         let mut documents =
             BTreeMap::<Vec<u8>, BTreeMap<u64, (u64, DiscoveryContextRevisionV1)>>::new();
@@ -40,6 +37,7 @@ impl DataView {
                 }
                 .fail();
             }
+            counts.add(row.version.key.tenant_id, 1)?;
             contexts.insert(id);
             self.check_context_index(
                 id,

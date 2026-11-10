@@ -5,9 +5,7 @@ fn managed_images_reject_forged_implementation_pin() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("store"))?;
     let fixture = Fixture::admit(&store)?;
-    store.read_snapshot(|reader| {
-        AnalysisStore::check_managed_images(reader, &fixture.instance.spec)
-    })?;
+    store.read_snapshot(|reader| AnalysisStore::check_managed_images(reader, &fixture.instance.spec))?;
     let identity = crate::PackageImplementationV1::Wasm {
         exports: vec!["detect".into()],
         artifact: araphor_analysis_builtins::components::PROCESS.to_vec(),

@@ -10,7 +10,7 @@ pub(super) struct NotificationCycle<'a, 'b> {
     tenant: [u8; 16],
     pub(super) prepared: PreparedNotificationBatch<'b>,
     sizes: BTreeMap<NotificationKeyV1, usize>,
-    #[cfg(feature = "native-store")]
+
     writes: Vec<(AnalysisContextVersionV1, u64)>,
 }
 
@@ -37,7 +37,7 @@ impl<'a, 'b> NotificationCycle<'a, 'b> {
             tenant,
             prepared,
             sizes,
-            #[cfg(feature = "native-store")]
+
             writes: Vec::new(),
         }
     }
@@ -109,13 +109,6 @@ impl<'a, 'b> NotificationCycle<'a, 'b> {
     }
 
     pub(super) fn save(&mut self, state: &mut NotificationObligationV1) -> Result<()> {
-        #[cfg(not(feature = "native-store"))]
-        {
-            let bytes = self.router.save_bytes(state)?;
-            self.sizes.insert(state.key, bytes);
-            Ok(())
-        }
-        #[cfg(feature = "native-store")]
         {
             let previous = state.revision;
             state.revision = previous.checked_add(1).ok_or_else(|| {
@@ -133,6 +126,15 @@ impl<'a, 'b> NotificationCycle<'a, 'b> {
                         .saturating_add(8 * std::mem::size_of::<(AnalysisContextVersionV1, u64)>()),
                 )?;
                 self.sizes.insert(state.key, body.len());
+                if previous == 0 {
+                    erebor_telemetry::debug!(
+                        stage = "notification_creation_staged",
+                        notification_id = %uuid::Uuid::from_bytes(state.key.notification_id),
+                        result_id = state.finding.as_ref().map_or("", |finding| finding.result_id.as_str()),
+                        finding_id = state.finding.as_ref().map_or("", |finding| finding.finding_id.as_str()),
+                        "Notification creation staged"
+                    );
+                }
                 self.writes.push((
                     AnalysisContextVersionV1 {
                         key: NotificationRouter::state_key(state),
@@ -154,12 +156,11 @@ impl<'a, 'b> NotificationCycle<'a, 'b> {
 
     pub(super) fn flush(&mut self, check: &dyn Fn() -> Result<()>) -> Result<()> {
         check()?;
-        #[cfg(feature = "native-store")]
+
         self.commit(check, None)?;
         Ok(())
     }
 
-    #[cfg(feature = "native-store")]
     pub(super) fn commit(
         &mut self,
         check: &dyn Fn() -> Result<()>,
@@ -188,7 +189,9 @@ impl<'a, 'b> NotificationCycle<'a, 'b> {
                 .build()
             })?;
         self.prepared.charge(bytes)?;
+        let started = std::time::Instant::now();
         let mut tx = self.store.write()?;
+        let revision = tx.revision();
         let mut references = Vec::with_capacity(self.writes.len());
         for (context, expected) in &self.writes {
             references.push(tx.context(context, Some(*expected))?);
@@ -200,6 +203,23 @@ impl<'a, 'b> NotificationCycle<'a, 'b> {
             tx.commit([])?;
             None
         };
+        let elapsed = started.elapsed().as_secs_f64();
+        for ((context, expected), reference) in self.writes.iter().zip(&references) {
+            if *expected != 0 || reference.commit_revision != revision {
+                continue;
+            }
+            if let Ok(id) = <[u8; 16]>::try_from(context.key.entity_key.as_slice()) {
+                erebor_telemetry::debug!(
+                    stage = "notification_save_timing",
+                    notification_id = %uuid::Uuid::from_bytes(id),
+                    previous_revision = 0,
+                    state_revision = context.key.owner_revision,
+                    commit_revision = reference.commit_revision,
+                    batch_elapsed_s = elapsed,
+                    "Notification state committed"
+                );
+            }
+        }
         self.writes.clear();
         Ok(publication)
     }

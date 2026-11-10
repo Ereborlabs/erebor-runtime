@@ -1,9 +1,6 @@
 use super::{records::Records, DataView};
 use crate::analysis::raw::RawIdentity;
-use crate::{
-    AnalysisSourceReceiptV1, AnalysisSourceStatusV1, CoverageReportRef, EvidenceIntakeIdentityV1,
-    NativeStateSnafu, NativeStorageSnafu, Result,
-};
+use crate :: { AnalysisSourceReceiptV1 , AnalysisSourceStatusV1 , CoverageReportRef , EvidenceIntakeIdentityV1 , NativeStateSnafu , NativeStorageSnafu , Result } ;
 use fjall::BranchSnapshot;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
@@ -12,7 +9,85 @@ mod coverage;
 mod raw;
 mod recovery;
 
-struct Sources;
+impl super::NativeStore {
+    pub fn source_binding(
+        &self,
+        tenant: [u8; 16],
+        node: &str,
+        source: [u8; 16],
+        epoch: u64,
+    ) -> Result<Option<EvidenceIntakeIdentityV1>> {
+        let _permit = self.reserve_reader()?;
+        self.view()?.source_binding(tenant, node, source, epoch)
+    }
+
+    pub fn source_receipt(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<Option<AnalysisSourceReceiptV1>> {
+        let _permit = self.reserve_reader()?;
+        self.view()?.source_receipt(identity)
+    }
+
+    pub fn source_status(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<Option<AnalysisSourceStatusV1>> {
+        let _permit = self.reserve_reader()?;
+        self.view()?.source_status(identity)
+    }
+
+    pub fn source_page(&self, tenant: [u8; 16], after: Option<&EvidenceIntakeIdentityV1>) -> Result<Vec<EvidenceIntakeIdentityV1>> {
+        use std::ops::Bound::{Excluded, Included};
+        if tenant == [0; 16] || after.is_some_and(|source| source.tenant_id != tenant || !source.valid()) {
+            return crate::Error::reject_path(&self.root, "the source page tenant or cursor is invalid");
+        }
+        let _permit = self.reserve_reader()?;
+        let view = self.view()?;
+        let prefix = [b"\0".as_slice(), &tenant].concat();
+        let first = after.map_or_else(|| Included(prefix.clone()), |source| Excluded(source.key()));
+        let last = match u128::from_be_bytes(tenant).checked_add(1) {
+            Some(next) => [b"\0".as_slice(), &next.to_be_bytes()].concat(),
+            None => vec![1],
+        };
+        view.raw.sources.range((first, Excluded(last)))
+            .take(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS)
+            .map(|(_, source)| source.receipt.evidence().map(|receipt| receipt.identity.clone())
+                .ok_or_else(|| NativeStateSnafu { field: "source page kind" }.build())).collect()
+    }
+
+    pub fn tenant_page(&self, after: Option<[u8; 16]>) -> Result<Vec<[u8; 16]>> {
+        use std::ops::Bound::{Excluded, Included};
+        let view = self.view()?;
+        let mut next = after.map_or(Some(0), |tenant| u128::from_be_bytes(tenant).checked_add(1));
+        let mut tenants = Vec::new();
+        while let Some(tenant) = next {
+            let first = [b"\0".as_slice(), &tenant.to_be_bytes()].concat();
+            let Some((_, source)) = view
+                .raw
+                .sources
+                .range((Included(first), Excluded(vec![1])))
+                .next()
+            else {
+                break;
+            };
+            let Some(receipt) = source.receipt.evidence() else {
+                return NativeStateSnafu {
+                    field: "source tenant index",
+                }
+                .fail();
+            };
+            tenants.push(receipt.identity.tenant_id);
+            if tenants.len() == crate::analysis::MAX_ANALYSIS_PAGE_RECORDS {
+                break;
+            }
+            next = u128::from_be_bytes(receipt.identity.tenant_id).checked_add(1);
+        }
+        Ok(tenants)
+    }
+}
+
+pub(in crate::analysis::native) struct Sources;
 
 #[derive(Deserialize, Serialize)]
 struct Report {
@@ -21,14 +96,14 @@ struct Report {
 }
 
 impl Sources {
-    const RECEIPTS: &'static [u8] = b"\0data/source/";
+    pub(in crate::analysis::native) const RECEIPTS: &'static [u8] = b"\0data/source/";
     const EPOCHS: &'static [u8] = b"\0data/epoch/";
-    const ENDS: &'static [u8] = b"\0data/raw/end/";
+    pub(in crate::analysis::native) const ENDS: &'static [u8] = b"\0data/raw/end/";
     const NEXT: &'static [u8] = b"\0data/raw/next";
     const REPORTS: &'static [u8] = b"\0data/coverage/report/";
     const CHANGES: &'static [u8] = b"\0data/coverage/change/";
 
-    fn key(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
+    pub(in crate::analysis::native) fn key(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
         [prefix, suffix].concat()
     }
 
@@ -306,17 +381,21 @@ impl DataView {
         for gap in &recovery {
             revision = revision.max(gap.commit_revision);
         }
+        let expired = self.expired_ranges(identity, output, control)?;
+        for gap in &expired {
+            revision = revision.max(gap.commit_revision);
+        }
         let state = self.raw.source_state(
             root,
             &receipt,
             self.revision,
-            &[],
+            &expired,
             &[],
             control,
             (output.input_bytes, output.limits.input_bytes),
         )?;
         if state.covered != receipt.contiguous_cursor {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 root,
                 "the selected source has an unrecorded input gap",
             );
@@ -328,7 +407,7 @@ impl DataView {
         Ok(crate::AnalysisSourceSnapshotV1 {
             receipt,
             commit_revision: revision,
-            expired: Vec::new(),
+            expired,
             recovery,
             pending: state.pending,
             coverage_report,

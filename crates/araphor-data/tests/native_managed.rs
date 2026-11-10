@@ -1,5 +1,3 @@
-#![cfg(feature = "native-store")]
-
 use std::{collections::BTreeMap, sync::Arc};
 
 use araphor_analysis_sdk as sdk;
@@ -84,18 +82,25 @@ impl Fixture {
         id: &str,
         model: sdk::Model,
     ) -> araphor_data::Result<Self> {
+        let package = if model.graph.is_some() {
+            "managed-graph"
+        } else {
+            "managed-count"
+        };
+        Self::with_package(store, tenant, id, model, package)
+    }
+
+    fn with_package(
+        store: &NativeStore,
+        tenant: [u8; 16],
+        id: &str,
+        model: sdk::Model,
+        package: &str,
+    ) -> araphor_data::Result<Self> {
         let graph = model.graph.is_some();
         let schema = model.outputs[0].schema.clone();
         let artifact = PackageArtifactV1 {
-            descriptor: sdk::Package::new(
-                if graph {
-                    "managed-graph"
-                } else {
-                    "managed-count"
-                },
-                "1",
-                vec![model],
-            ),
+            descriptor: sdk::Package::new(package, "1", vec![model]),
             implementations: vec![PackageImplementationV1::Sql {
                 export: "count".into(),
                 program: SqlModelV1 {

@@ -3,11 +3,7 @@ use serde::Deserialize;
 use snafu::ResultExt as _;
 
 use super::{image::ImageRecord, Records};
-use crate::{
-    analysis::native::{DataView, DataWrite, NativeStore},
-    AnalysisReadControl, ManagedEncodingSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code,
-    Result,
-};
+use crate :: { analysis :: native :: { DataView , DataWrite , NativeStore } , AnalysisReadControl , ManagedEncodingSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 #[derive(Deserialize)]
 pub(super) struct DefinitionRecord {

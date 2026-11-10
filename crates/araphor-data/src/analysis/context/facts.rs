@@ -1,12 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use duckdb::{params, Connection, OptionalExt as _};
-use snafu::ResultExt as _;
 
-use super::{version_key, AnalysisContextVersionV1};
-use crate::{
-    AnalysisDatabaseSnafu, AnalysisStore, GraphValidate as _, PackageErrorCodeV1 as Code, Result,
-};
+
+use super::AnalysisContextVersionV1;
+use crate :: { GraphValidate as _ , PackageErrorCodeV1 as Code , Result } ;
 
 #[derive(Deserialize, Eq, PartialEq, Serialize)]
 pub(in crate::analysis) struct FactRecord {
@@ -41,46 +38,4 @@ impl FactRecord {
     }
 }
 
-impl AnalysisStore {
-    pub(in crate::analysis) fn check_fact_index(
-        connection: &Connection,
-        input: &AnalysisContextVersionV1,
-    ) -> Result<()> {
-        let actual: Option<FactRecord> = connection
-            .query_row(
-                "SELECT record_key,stream_key,source_cursor FROM graph_fact_records WHERE version_key=?",
-                params![version_key(&input.key)?],
-                |row| Ok(FactRecord { record:row.get(0)?,stream:row.get(1)?,cursor:row.get(2)? }),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read canonical fact index",
-            })?;
-        if actual != FactRecord::from_context(input)? {
-            return Err(Code::Invalid.error("canonical fact index"));
-        }
-        Ok(())
-    }
 
-    pub(in crate::analysis) fn insert_fact_index(
-        connection: &Connection,
-        input: &AnalysisContextVersionV1,
-    ) -> Result<()> {
-        if let Some(record) = FactRecord::from_context(input)? {
-            connection
-                .execute(
-                    "INSERT INTO graph_fact_records VALUES (?,?,?,?)",
-                    params![
-                        version_key(&input.key)?,
-                        record.record,
-                        record.stream,
-                        record.cursor
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "index canonical fact record",
-                })?;
-        }
-        Ok(())
-    }
-}

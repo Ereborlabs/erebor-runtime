@@ -1,18 +1,6 @@
 use super::*;
 
-impl AnalysisStore {
-    pub fn crash_at(&self, point: &str) {
-        Self::crash_path(&self.root, point);
-    }
 
-    pub(super) fn crash_path(root: &Path, point: &str) {
-        if std::env::var("ARAPHOR_CRASH_POINT").as_deref() == Ok(point)
-            && std::env::var_os("ARAPHOR_CRASH_ROOT").is_some_and(|value| Path::new(&value) == root)
-        {
-            std::process::exit(73);
-        }
-    }
-}
 
 #[test]
 fn observability_trace_crashes() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -225,8 +213,7 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
         Ok(())
     };
     if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
-        let store =
-            AnalysisStore::open_with_limits(PathBuf::from(root), limits, Default::default())?;
+        let store = AnalysisStore::open_with_limits(PathBuf::from(root), limits, Default::default())?;
         let point = std::env::var("ARAPHOR_CRASH_POINT")?;
         let (kind, _) = point.split_once('.').ok_or("invalid crash point")?;
         apply(&store, kind)?;
@@ -646,8 +633,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
         raw_max_bytes: Some(1024),
     };
     if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
-        let store =
-            AnalysisStore::open_with_limits(PathBuf::from(root), limits, Default::default())?;
+        let store = AnalysisStore::open_with_limits(PathBuf::from(root), limits, Default::default())?;
         let point = std::env::var("ARAPHOR_CRASH_POINT")?;
         if point.starts_with("result.") {
             store.commit_result(&input)?;

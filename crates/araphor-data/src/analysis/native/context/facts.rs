@@ -1,7 +1,5 @@
 use super::{DataView, Records};
-use crate::{
-    analysis::context::FactRecord, AnalysisContextVersionV1, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { analysis :: context :: FactRecord , AnalysisContextVersionV1 , PackageErrorCodeV1 as Code , Result } ;
 
 impl DataView {
     pub(super) fn check_fact(

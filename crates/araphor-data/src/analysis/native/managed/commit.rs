@@ -61,10 +61,12 @@ impl NativeStore {
         ) -> Result<T>,
         check: impl FnOnce() -> Result<()>,
     ) -> Result<(ManagedReceipt, T)> {
+        let started = std::time::Instant::now();
         let input = prepared.input;
         let spec = &input.attempt.1.spec;
         prepared.memory.check()?;
         let mut tx = self.write()?;
+        let acquired = std::time::Instant::now();
         let current = self.live_attempt(input.attempt, input.control)?;
         if input.now_utc_ns < input.attempt.request().time_utc_ns {
             return Err(Code::Invalid.error("managed publication time"));
@@ -187,7 +189,7 @@ impl NativeStore {
                 spec.tenant,
                 *id,
                 &record.witnesses,
-                &crate::AnalysisStore::join_contexts(&record.contexts, &record.derived)?,
+                &crate::AnalysisContextRefV1::join(&record.contexts, &record.derived)?,
                 &record.dependencies,
                 &record.origins,
                 imported.resolved(record.call),
@@ -202,7 +204,7 @@ impl NativeStore {
             spec.tenant,
             selected_id,
             &step.witnesses,
-            &crate::AnalysisStore::join_contexts(&step.contexts, &step.derived)?,
+            &crate::AnalysisContextRefV1::join(&step.contexts, &step.derived)?,
             &step.dependencies,
             &step.origins,
             imported.selected_imports(),
@@ -262,6 +264,10 @@ impl NativeStore {
         }
         prepared.memory.check()?;
         check()?;
+        tx.check_witnesses(spec.tenant, input.now_utc_ns)?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
+        let prepared_at = std::time::Instant::now();
         tx.commit_published(
             pending
                 .as_ref()
@@ -279,6 +285,18 @@ impl NativeStore {
                 }
             },
         )?;
+        let committed = std::time::Instant::now();
+        erebor_telemetry::debug!(
+            stage = "managed_commit_timing",
+            instance_id = %spec.id,
+            cut_revision = input.attempt.captured_revision(),
+            publication_revision = receipt.selected.commit_revision,
+            writer_acquire_s = acquired.duration_since(started).as_secs_f64(),
+            transaction_work_s = prepared_at.duration_since(acquired).as_secs_f64(),
+            commit_s = committed.duration_since(prepared_at).as_secs_f64(),
+            elapsed_s = committed.duration_since(started).as_secs_f64(),
+            "Managed commit timing completed"
+        );
         Ok((receipt, projected))
     }
 }

@@ -1,10 +1,7 @@
 use snafu::ResultExt as _;
 
 use super::{Coordinator, InputRecord, Scan};
-use crate::analysis::{
-    inputs::InputChange,
-    native::{DataView, NativeStore},
-};
+use crate :: analysis :: { inputs :: InputChange , native :: { DataView , NativeStore } } ;
 use crate::{NativeStorageSnafu, Result, StorePositionV1};
 
 impl Coordinator {
@@ -57,6 +54,8 @@ impl Coordinator {
                     && (DataView::input_context_key(&item.key)
                         || DataView::input_coverage_key(&item.key)
                         || DataView::input_recovery_key(&item.key)
+                        || DataView::input_expiry_key(&item.key)
+                        || DataView::input_trace_key(&item.key)
                         || DataView::input_graph_key(&item.key)
                         || DataView::input_progress_key(&item.key)
                         || self.activations.receiver_count() != 0
@@ -133,6 +132,10 @@ impl Coordinator {
                         range: Some((gap.first_cursor, gap.last_cursor, None)),
                     },
                 );
+            } else if DataView::input_expiry_key(&item.key) {
+                view.input_expiry(&item.key, &self.readers, position)?;
+            } else if DataView::input_trace_key(&item.key) {
+                view.input_trace(&item.key, &self.readers, position)?;
             } else if DataView::input_progress_key(&item.key) {
                 view.input_progress(&item.key, &self.readers, position)?;
             } else {

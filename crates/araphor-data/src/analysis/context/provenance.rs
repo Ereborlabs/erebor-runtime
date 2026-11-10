@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use duckdb::Connection;
+
 
 use super::*;
-use crate::{PackageBundle, PackageImplementationV1, PackageRefV1};
+use crate::{PackageBundle, PackageRefV1};
 
 type RevisionKey = ([u8; 16], PackageRefV1);
 
@@ -76,35 +76,7 @@ impl VerifiedPackages {
         Ok(())
     }
 
-    pub(in crate::analysis) fn recheck(&mut self, reader: &Connection) -> Result<bool> {
-        self.revisions.clear();
-        let mut current = true;
-        for ((tenant, _), proof) in &self.roots {
-            for row in &proof.rows {
-                if AnalysisStore::package_from(reader, *tenant, &row.package_id, &row.revision)?
-                    .as_ref()
-                    != Some(row)
-                {
-                    current = false;
-                    break;
-                }
-            }
-        }
-        if current {
-            for ((tenant, _), proof) in &self.roots {
-                self.revisions.extend(proof.rows.iter().map(|row| {
-                    (
-                        *tenant,
-                        PackageRefV1 {
-                            package_id: row.package_id.clone(),
-                            revision: row.revision.clone(),
-                        },
-                    )
-                }));
-            }
-        }
-        Ok(current)
-    }
+    
 
     pub(in crate::analysis) fn seed(&self) -> Self {
         Self {
@@ -173,65 +145,7 @@ impl VerifiedPackages {
     }
 }
 
-impl AnalysisStore {
-    pub(in crate::analysis) fn verify_package_revision(
-        &self,
-        reader: &Connection,
-        tenant: [u8; 16],
-        key: &PackageRefV1,
-        verified: &mut VerifiedPackages,
-    ) -> Result<()> {
-        let revision = (tenant, key.clone());
-        if verified.revisions.contains(&revision) {
-            return Ok(());
-        }
-        let package = Self::package_from(reader, tenant, &key.package_id, &key.revision)?
-            .ok_or_else(|| crate::PackageErrorCodeV1::Missing.error("verified package revision"))?;
-        let artifact = package.decode_artifact()?;
-        for implementation in &artifact.implementations {
-            if let PackageImplementationV1::Wasm { .. } = implementation {
-                for export in implementation.exports() {
-                    artifact.implementation(export)?;
-                }
-            }
-        }
-        verified.revisions.insert(revision);
-        Ok(())
-    }
 
-    pub(in crate::analysis) fn validate_context_packages(
-        reader: &Connection,
-        context: &AnalysisContextVersionV1,
-    ) -> Result<()> {
-        Self::context_packages(reader, context, &mut VerifiedPackages::default())
-    }
-
-    pub(super) fn context_packages(
-        reader: &Connection,
-        context: &AnalysisContextVersionV1,
-        verified: &mut VerifiedPackages,
-    ) -> Result<()> {
-        verified.check_context(context, |tenant, package, revision| {
-            Self::package_from(reader, tenant, package, revision)
-        })
-    }
-
-    pub(super) fn validate_stored_context_packages(
-        reader: &Connection,
-        context: &AnalysisContextVersionV1,
-    ) -> Result<()> {
-        Self::validate_context_packages(reader, context).map_err(crate::Error::stored_artifact)
-    }
-
-    pub(super) fn verify_context_packages(
-        &self,
-        reader: &Connection,
-        context: &AnalysisContextVersionV1,
-        verified: &mut VerifiedPackages,
-    ) -> Result<()> {
-        Self::context_packages(reader, context, verified).map_err(crate::Error::stored_artifact)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -240,7 +154,7 @@ mod tests {
     use crate::PackageImplementationV1;
     use crate::{PackageArtifactV1, PackageBundle, PackageBundleV1};
     use araphor_analysis_builtins::{components, graph::Detector};
-    use duckdb::params;
+    
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 

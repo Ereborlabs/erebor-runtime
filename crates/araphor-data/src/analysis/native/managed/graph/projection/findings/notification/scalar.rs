@@ -2,7 +2,7 @@ use super::*;
 use crate::analysis::native::managed::source::SourceRecord;
 
 impl FindingRead<'_> {
-    fn scalar_owner(&mut self, result: &str) -> Result<Option<Arc<ScalarOwner>>> {
+    pub(super) fn scalar_owner(&mut self, result: &str) -> Result<Option<Arc<ScalarOwner>>> {
         if let Some(owner) = self.scalar_owners.get(result) {
             return Ok(owner.clone());
         }
@@ -105,7 +105,14 @@ impl FindingRead<'_> {
         }
         let source = matches!(owner.scope, ScalarScope::Source(_));
         if source && !selection.binding_ids.is_empty() {
-            return Err(Code::Unsupported.error("native source Graph snapshot"));
+            allowed &= self.source_bound(&reference.result_id, selection)?;
+        }
+        if !allowed {
+            return Ok(Some(FindingScalar {
+                revision: owner.revision,
+                value: None,
+                allowed,
+            }));
         }
         let rows = self.cached_rows(&reference.result_id, &reference.finding_id)?;
         if !source {
@@ -137,5 +144,124 @@ impl FindingRead<'_> {
             },
             allowed,
         }))
+    }
+}
+
+impl FindingRead<'_> {
+    fn source_bound(
+        &mut self,
+        result: &str,
+        selection: &crate::AnalysisSelectionV1,
+    ) -> Result<bool> {
+        self.charge(
+            result.len()
+                + selection.binding_ids.len().saturating_mul(16)
+                + 12 * size_of::<(String, Vec<[u8; 16]>)>(),
+        )?;
+        let key = (result.to_owned(), selection.binding_ids.clone());
+        if let Some(allowed) = self.source_bounds.get(&key) {
+            return Ok(*allowed);
+        }
+        let source = crate::analysis::native::managed::source::SourceRead::load(
+            self.view,
+            self.tenant,
+            result,
+            self.control,
+            &mut |bytes| self.charge(bytes),
+        )?
+        .ok_or_else(|| Code::Missing.error("source binding publication"))?;
+        let publication = source
+            .publication(self.view, &mut |bytes| self.charge(bytes))?
+            .ok_or_else(|| Code::Missing.error("source binding Graph"))?;
+        let graph = crate::analysis::native::PublicationRead::open(
+            self.store,
+            &publication,
+            self.control,
+            &mut |bytes| self.charge(bytes),
+        )?;
+        let revision = if let Some(revision) = self.source_revisions.get(result) {
+            Arc::clone(revision)
+        } else {
+            let (revision, _) =
+                source.revision(self.store, self.control, &mut |bytes| self.charge(bytes))?;
+            let revision = Arc::new(revision);
+            self.source_revisions
+                .insert(result.to_owned(), Arc::clone(&revision));
+            revision
+        };
+        self.charge(
+            revision
+                .evidence
+                .iter()
+                .map(|record| record.allocated_bytes() + 12 * size_of::<DiscoveryRecordIdV1>())
+                .sum(),
+        )?;
+        let mut missing = revision.evidence.iter().cloned().collect::<BTreeSet<_>>();
+        let keys = sdk::RecordBatch::new_empty(Arc::new(sdk::Schema::empty()));
+        let mut rows = Vec::new();
+        for (relation, _) in graph
+            .mapping
+            .relations
+            .values()
+            .filter(|(_, declaration)| DomainRelations::findings(declaration))
+        {
+            for writer in publication.heads.keys() {
+                graph.graph.visit(
+                    *relation,
+                    araphor_graph::Read::Owned(*writer),
+                    &keys,
+                    &|writer, bytes, total| self.reserve(writer, bytes, total),
+                    |member| {
+                        self.charge(12 * size_of::<Member>())
+                            .map_err(araphor_graph::Error::backend)?;
+                        rows.push(member);
+                        Ok(())
+                    },
+                )?;
+            }
+        }
+        rows.sort_unstable_by(|left, right| {
+            (left.relation, left.property, left.writer, &left.owner).cmp(&(
+                right.relation,
+                right.property,
+                right.writer,
+                &right.owner,
+            ))
+        });
+        let mut seen = BTreeSet::new();
+        for member in rows {
+            let producer = self.producer(member.writer, member.revision)?;
+            if producer.origin.graph != publication.graph
+                || producer.origin.instance != publication.instance
+                || graph.mapping.writers.get(&producer.origin.call) != Some(&member.writer)
+            {
+                return Err(Code::Denied.error("source binding producer authority"));
+            }
+            let finding = self.decode(&member)?;
+            if finding.value.tenant_id != self.tenant
+                || DomainRelations::key(&finding.value.finding_id)
+                    .context(crate::AnalysisContractSnafu)?
+                    != member.key
+            {
+                return Err(Code::Denied.error("source binding finding identity"));
+            }
+            revision.validate_finding(&finding.value)?;
+            if !seen.insert(finding.value.finding_id.clone()) {
+                continue;
+            }
+            self.charge(finding.value.finding_id.len() + 12 * size_of::<String>())?;
+            let effects = &finding.value.effects;
+            for effect in effects {
+                if effect
+                    .binding_id
+                    .is_some_and(|binding| selection.binding_ids.contains(&binding))
+                {
+                    missing.remove(&effect.evidence);
+                }
+            }
+        }
+        let allowed = missing.is_empty();
+        self.source_bounds.insert(key, allowed);
+        Ok(allowed)
     }
 }

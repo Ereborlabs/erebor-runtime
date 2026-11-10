@@ -2,7 +2,7 @@ use super::*;
 use crate::TraceIdentityV1;
 
 impl InputInterest {
-    #[cfg(feature = "native-store")]
+    
     pub(in crate::analysis) fn covers_read(
         &self,
         selection: &AnalysisSelectionV1,
@@ -106,7 +106,7 @@ impl InputInterest {
             Some(None) => true,
             Some(Some(columns)) => columns.iter().any(|index| {
                 matches!(
-                    AnalysisStore::table_schemas()["graph_manifest"]
+                    crate::AnalysisStore::table_schemas()["graph_manifest"]
                         .field(*index)
                         .name()
                         .as_str(),
@@ -204,18 +204,6 @@ impl InputInterest {
                 }
             },
             InputChange::Context(key) => self.context(key),
-            InputChange::Publication {
-                tenant,
-                result,
-                owners,
-            } => owners.publication_matches(*tenant, result, |witnesses| {
-                self.matches(&InputChange::Graph {
-                    tenant: *tenant,
-                    result,
-                    source: None,
-                    witnesses,
-                })
-            }),
             InputChange::Processor(scope) => {
                 self.source(&scope.identity)
                     && match scope.processor_id.as_str() {

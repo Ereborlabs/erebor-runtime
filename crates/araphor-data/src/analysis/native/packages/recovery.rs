@@ -3,10 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use snafu::ResultExt as _;
 
 use super::{definitions::DefinitionRecord, image::ImageRecord, PackageRecord, Records};
-use crate::{
-    analysis::native::{DataView, NativeStore},
-    AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, Result,
-};
+use crate :: { analysis :: native :: { DataView , NativeStore } , AnalysisReadControl , NativeStateSnafu , NativeStorageSnafu , Result } ;
 
 impl DataView {
     pub(in crate::analysis::native) fn validate_catalogue(&self) -> Result<()> {
@@ -14,6 +11,7 @@ impl DataView {
         let mut images = BTreeMap::new();
         let mut definitions = BTreeMap::<Vec<u8>, u64>::new();
         let mut values = BTreeSet::new();
+        let mut headers = BTreeSet::new();
         for entry in self.snapshot.prefix(b"\0data/P") {
             let (key, _) = entry.context(NativeStorageSnafu {
                 operation: "validate package catalogue",
@@ -53,6 +51,11 @@ impl DataView {
             row.value
                 .decode_artifact()
                 .map_err(crate::Error::stored_artifact)?;
+            headers.insert(super::catalogue::PackageHeader::key(
+                super::catalogue::PackageHeader::check(&row.value, row.revision, |key| {
+                    Records::read(key, &self.snapshot)
+                })?,
+            ));
             for dependency in &row.value.dependencies {
                 if self
                     .package_revision(
@@ -69,6 +72,29 @@ impl DataView {
                     .fail();
                 }
             }
+        }
+        for entry in self
+            .snapshot
+            .prefix(super::catalogue::PackageHeader::PREFIX)
+        {
+            let (key, _) = entry.context(NativeStorageSnafu {
+                operation: "validate package headers",
+            })?;
+            if key.len() == super::catalogue::PackageHeader::PREFIX.len() + 16 {
+                continue;
+            }
+            if !headers.remove(key.as_ref()) {
+                return NativeStateSnafu {
+                    field: "package header set",
+                }
+                .fail();
+            }
+        }
+        if !headers.is_empty() {
+            return NativeStateSnafu {
+                field: "package header set",
+            }
+            .fail();
         }
         for entry in self.snapshot.prefix(b"\0data/I") {
             let (key, _) = entry.context(NativeStorageSnafu {

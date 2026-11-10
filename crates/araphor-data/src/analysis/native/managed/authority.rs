@@ -1,10 +1,7 @@
 use super::{attempts::Attempts, CallHead, InstanceRecord, Records};
 use crate::analysis::managed::Capture;
 use crate::analysis::native::{DataView, NativeStore};
-use crate::{
-    AnalysisConflictSnafu, AnalysisReadControl, AnalysisStoreMetaV1, ManagedAttempt,
-    ManagedInstance, ManagedSpec, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { AnalysisConflictSnafu , AnalysisReadControl , AnalysisStoreMetaV1 , ManagedAttempt , ManagedInstance , ManagedSpec , PackageErrorCodeV1 as Code , Result } ;
 
 impl Capture {
     pub(super) fn check_native_owner(
@@ -104,9 +101,7 @@ impl NativeStore {
         if !capture.follow && !view.sources_current(&capture.sources, control)? {
             return crate::AnalysisSourceChangedSnafu.fail();
         }
-        if !capture.traces.is_empty() {
-            return Err(Code::Unsupported.error("native managed dependency owner"));
-        }
+        view.check_trace_reads(capture.tenant, &capture.traces, control)?;
         for reference in &capture.dependencies {
             control.check()?;
             if view

@@ -1,8 +1,8 @@
-use duckdb::params;
+
 use snafu::ResultExt as _;
 
-use super::AnalysisStore;
-use crate::{AnalysisDatabaseSnafu, Result};
+
+use crate :: { Result } ;
 
 pub struct RawIndexFixture {
     index: super::raw::RawIndex,
@@ -29,92 +29,6 @@ impl RawIndexFixture {
     }
 }
 
-impl AnalysisStore {
-    pub fn raw_index_fixture(&self) -> Result<RawIndexFixture> {
-        let index = self
-            .raw
-            .lock()
-            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
-            .index
-            .clone();
-        Ok(RawIndexFixture { index })
-    }
 
-    pub fn fault_write(&self, query: &str, values: &[&dyn duckdb::ToSql]) -> Result<()> {
-        let mut writer = self.writer_access()?;
-        let writer = writer.get_mut()?;
-        writer
-            .execute_batch("SET memory_limit = '-1'")
-            .context(AnalysisDatabaseSnafu {
-                operation: "set fixture memory limit",
-            })?;
-        let mutation = writer
-            .execute(query, values)
-            .and_then(|_| writer.execute_batch("FORCE CHECKPOINT"));
-        let restored = writer.execute_batch(&format!(
-            "SET memory_limit='{}'",
-            self.storage
-                .native_memory_bytes
-                .map_or_else(|| "-1".to_owned(), |bytes| format!("{bytes}B"))
-        ));
-        mutation.context(AnalysisDatabaseSnafu {
-            operation: "inject fixture mutation",
-        })?;
-        restored.context(AnalysisDatabaseSnafu {
-            operation: "restore fixture memory limit",
-        })?;
-        Ok(())
-    }
-}
 
-impl AnalysisStore {
-    pub fn verify_state(&self) -> Result<()> {
-        Self::validate_state(self.writer()?.get()?, &self.root)
-    }
 
-    pub fn frozen_result(&self, result_id: &str) -> Result<(Vec<u8>, Vec<u8>, u64)> {
-        self.read_snapshot(|reader| {
-            reader.query_row(
-                "SELECT body, request_meta, commit_revision FROM analysis_results WHERE result_id = ?",
-                params![result_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            ).context(AnalysisDatabaseSnafu { operation: "read frozen result fixture" })
-        })
-    }
-
-    pub fn retained_counts(&self, tenant: [u8; 16]) -> Result<(u64, u64, u64, u64)> {
-        self.read_snapshot(|reader| {
-            reader
-                .query_row(
-                    "SELECT c + x + r, c, x, r FROM (
-                    SELECT (SELECT count(*)::UBIGINT FROM coverage WHERE tenant_id = ?) c,
-                        (SELECT count(*)::UBIGINT FROM context_versions WHERE tenant_id = ?) x,
-                        (SELECT count(*)::UBIGINT FROM analysis_results WHERE tenant_id = ?) r)",
-                    params![tenant.as_slice(), tenant.as_slice(), tenant.as_slice()],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read tenant retained counts fixture",
-                })
-        })
-    }
-
-    pub fn graph_call_counts(&self) -> Result<(u64, u64, u64, u64)> {
-        self.read_snapshot(|reader| {
-            reader
-                .query_row(
-                    "SELECT (SELECT count(*) FROM graph_unit_state_values),
-                    (SELECT count(*) FROM graph_producer_members m
-                     JOIN graph_producer_scopes s USING(scope_id)
-                     WHERE s.producer_kind = 0 AND m.member_kind = 8),
-                    (SELECT coalesce(max(value_ref), 0) FROM graph_unit_state_values),
-                    (SELECT count(*) FROM graph_producer_versions)",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read Graph call row counts fixture",
-                })
-        })
-    }
-}

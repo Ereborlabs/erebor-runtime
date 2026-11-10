@@ -17,7 +17,11 @@ mod discovery;
 mod graph;
 mod graph_state;
 mod notification;
+mod profiles;
+mod removals;
+mod results;
 mod source;
+mod trace;
 
 impl NativeStore {
     pub fn subscription_metadata(
@@ -139,6 +143,7 @@ impl NativeStore {
     ) -> Result<(AnalysisPositionPageV1, T)> {
         control.check()?;
         read.check_inputs(selection, limits, &self.root)?;
+        let _permit = self.reserve_reader()?;
         let _lease = self.maintenance.read_until(control)?;
         self.check()?;
         if view.store_uuid != self.view()?.store_uuid {
@@ -160,21 +165,39 @@ impl NativeStore {
                     | "targets"
                     | "catalog"
                     | "trace_recipes"
+                    | "traces"
+                    | "trace_output"
+                    | "trace_measurements"
                     | "findings"
                     | "graph_manifest"
+                    | "relationships"
+                    | "graph_subjects"
+                    | "graph_branches"
+                    | "correlation_packages"
+                    | "policy_observations"
+                    | "graph_coverage"
                     | "discovery_state"
                     | "graph_state"
+                    | "behaviors"
             ) {
                 return Err(Code::Unsupported.error("native table owner"));
             }
         }
-        let projected = selection.project(read.requests)?;
-        if !projected.results.is_empty()
-            || !projected.traces.is_empty()
-            || !projected.profiles().is_empty()
-            || projected.graph_traversal().is_some()
-        {
-            return Err(Code::Unsupported.error("native selection owner"));
+        if let Some(request) = selection.graph_traversal() {
+            if !selection.graphs.is_all()
+                && request
+                    .result_ids
+                    .iter()
+                    .any(|id| !selection.graphs().contains(id))
+            {
+                return crate::AnalysisReadDeniedSnafu.fail();
+            }
+        }
+        let mut projected = selection.project(read.requests)?;
+        if let Some(request) = projected.graph_traversal() {
+            if !request.result_ids.is_empty() {
+                projected.graphs = crate::Selection::Exact(request.result_ids.clone());
+            }
         }
         limits.check_keys(&projected)?;
         if projected.allocation_bytes() > limits.input_bytes {
@@ -204,7 +227,9 @@ impl NativeStore {
         }
         let prepared = prepare(&mut output)?;
         self.select_sources(view, &mut selected, &mut output, control)?;
+        let requests = self.select_traces(view, &mut selected, &mut output, control)?;
         self.select_graphs(view, &mut selected, &mut output, control)?;
+        self.select_profiles(view, &mut selected, &mut output, control)?;
         limits.check_keys(&selected)?;
         let mode = match read.mode {
             AnalysisReadModeV1::Complete if !read.reads_raw() => AnalysisReadModeV1::Metadata,
@@ -220,12 +245,34 @@ impl NativeStore {
             _ => None,
         };
         if after.is_some_and(|after| after > end) {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.root,
                 "the position read starts beyond the captured revision",
             );
         }
+        output.replay_floor = self.view()?.replay_floor(selected.tenant_id)?;
+        if read.reads_raw()
+            && matches!(
+                mode,
+                AnalysisReadModeV1::Page(_) | AnalysisReadModeV1::Changes(_)
+            )
+        {
+            if let (Some(position), Some(floor)) = (after, output.replay_floor) {
+                if position < floor {
+                    return crate::AnalysisReplayExpiredSnafu { position, floor }.fail();
+                }
+            }
+        }
         let mut capture = Capture::new(&read, &selected);
+        let traces = self.trace_headers(
+            view,
+            &selected,
+            &read,
+            &mut output,
+            &mut capture,
+            control,
+            requests,
+        )?;
         let decode = !selected.binding_ids.is_empty() || read.needs_event_decode();
         let checked = read.projected("events").is_some_and(|columns| {
             let schema = &crate::AnalysisStore::table_schemas()["events"];
@@ -239,10 +286,14 @@ impl NativeStore {
                 ) || name.starts_with("catalog_key_")
             })
         });
+        let mut removals = view
+            .raw_removals(&selected, &traces, mode, &mut output, control)?
+            .into_iter()
+            .peekable();
         let mut scan = RawScan {
             selection: &selected,
             read: &read,
-            traces: &[],
+            traces: &traces,
             mode,
             end,
             after,
@@ -262,7 +313,7 @@ impl NativeStore {
             },
             &mut output.sink(control),
             &mut capture,
-            &mut Vec::new().into_iter().peekable(),
+            &mut removals,
             &mut work,
         )?;
         context::ContextRead::new(view, &mut output, control).capture(
@@ -280,6 +331,16 @@ impl NativeStore {
             &mut capture,
             control,
         )?;
+        self.extract_profiles(
+            view,
+            &selected,
+            &read,
+            &mut output,
+            &mut capture,
+            target.is_some(),
+            control,
+        )?;
+        self.extract_results(view, &selected, &mut output, control)?;
         self.extract_notifications(
             view,
             &selected,
@@ -308,6 +369,7 @@ impl NativeStore {
                 ordinal: 0,
             })
         };
+        self.check_trace_authority(selected.tenant_id, output.trace_reads(), control)?;
         Ok((
             capture.finish(output, through, exhausted, control)?,
             prepared,
@@ -323,7 +385,16 @@ impl NativeStore {
     ) -> Result<(Option<StorePositionV1>, bool, crate::AnalysisStoreMetaV1)> {
         control.check()?;
         let _lease = self.maintenance.read_until(control)?;
+        let _permit = self.reserve_reader()?;
+        self.check_trace_authority(scan.selection.tenant_id, output.trace_reads(), control)?;
         let view = self.view()?;
+        if let (Some(position), Some(floor)) =
+            (scan.after, view.replay_floor(scan.selection.tenant_id)?)
+        {
+            if position < floor {
+                return crate::AnalysisReplayExpiredSnafu { position, floor }.fail();
+            }
+        }
         let (through, exhausted) = scan.read(
             &self.root,
             |selection, after, revision, limit, control| {
@@ -336,6 +407,7 @@ impl NativeStore {
             &mut Vec::new().into_iter().peekable(),
             &mut JournalWork::default(),
         )?;
+        self.check_trace_authority(scan.selection.tenant_id, output.trace_reads(), control)?;
         Ok((through, exhausted, view.meta()))
     }
 }

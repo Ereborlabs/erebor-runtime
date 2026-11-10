@@ -1,9 +1,7 @@
-use duckdb::{params, OptionalExt as _};
-use serde::{Deserialize, Serialize};
-use snafu::ResultExt as _;
 
-use super::{AnalysisStore, ProcessorScopeV1};
-use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, Result};
+use serde::{Deserialize, Serialize};
+
+use super :: { ProcessorScopeV1 } ;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -31,144 +29,12 @@ impl ProcessorRetirementV1 {
     }
 }
 
-impl AnalysisStore {
-    /// Control must authorize the exact request before it calls this method.
-    pub fn retire_required(&self, input: &ProcessorRetirementV1) -> Result<u64> {
-        if !input.valid() {
-            return self.reject("the processor retirement request is invalid");
-        }
-        let scope = &input.scope;
-        let key = scope.identity.key();
-        let tenant = scope.identity.tenant_id.as_slice();
-        let mut writer = self.maintenance_writer()?;
-        let transaction = writer
-            .get_mut()?
-            .transaction()
-            .context(AnalysisDatabaseSnafu {
-                operation: "begin required processor retirement",
-            })?;
-        let progress: Option<(String, u64, bool, String, String, u64, u64)> = transaction
-            .query_row(
-                "SELECT class, consumed_cursor, retired, retirement_id, retirement_reason,
-                    retirement_cursor, retirement_revision FROM processor_progress
-                 WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
-                params![scope.processor_id, scope.method_version, tenant, key.as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu { operation: "read retirement progress" })?;
-        let Some((class, consumed, retired, change_id, reason, cutoff, prior)) = progress else {
-            return AnalysisConflictSnafu.fail();
-        };
-        if class != "required" || consumed != input.expected_cursor {
-            return AnalysisConflictSnafu.fail();
-        }
-        if retired {
-            if change_id != input.change_id
-                || reason != input.reason
-                || cutoff != input.cutoff_cursor
-            {
-                return AnalysisConflictSnafu.fail();
-            }
-            return Ok(prior);
-        }
-        let accepted = Self::read_receipt_from(&transaction, &self.root, &scope.identity, &key)?
-            .map_or(0, |(receipt, _)| receipt.contiguous_cursor);
-        if input.cutoff_cursor != accepted {
-            return AnalysisConflictSnafu.fail();
-        }
-        let revision = Self::read_meta_from(&transaction, &self.root.join("analysis.duckdb"))?
-            .commit_revision
-            .checked_add(1)
-            .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        if consumed < accepted {
-            transaction
-                .execute(
-                    "INSERT INTO processor_gaps VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        scope.processor_id,
-                        scope.method_version,
-                        tenant,
-                        key.as_slice(),
-                        consumed + 1,
-                        accepted,
-                        revision,
-                        revision
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "record retired missing input",
-                })?;
-        }
-        transaction
-            .execute(
-                "INSERT INTO processor_versions
-             SELECT processor_id, method_version, tenant_id, stream_key, class,
-                consumed_cursor, resume_floor, coverage_revision, context_revision,
-                start_cursor, required_floor, true, ?, ?, ?, ?, result_id, ?
-             FROM processor_progress
-             WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
-                params![
-                    input.change_id,
-                    input.reason,
-                    accepted,
-                    revision,
-                    revision,
-                    scope.processor_id,
-                    scope.method_version,
-                    tenant,
-                    key.as_slice()
-                ],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "retire required processor",
-            })?;
-        self.check_revision_limits(&transaction, scope.identity.tenant_id)?;
-        let relations: &[&str] = if consumed < accepted {
-            &["processor_progress", "processor_gaps"]
-        } else {
-            &["processor_progress"]
-        };
-        Self::record_revision(&transaction, revision, relations)?;
-        #[cfg(test)]
-        self.crash_at("retire.before");
-        self.commit_metadata(transaction, "commit processor retirement")?;
-        #[cfg(test)]
-        self.crash_at("retire.after");
-        self.revision.send_replace(revision);
-        self.inputs.metadata(revision, super::inputs::InputChange::Processor(scope));
-        if scope.processor_id==crate::GRAPH_PROCESSOR { self.activations.send_replace(revision); }
-        Ok(revision)
-    }
 
-    pub fn processor_retirement(
-        &self,
-        scope: &ProcessorScopeV1,
-    ) -> Result<Option<(ProcessorRetirementV1, u64)>> {
-        if !scope.valid() {
-            return self.reject("the processor retirement scope is invalid");
-        }
-        self.read_snapshot(|reader| reader.query_row(
-            "SELECT retirement_id, retirement_reason, consumed_cursor, retirement_cursor, retirement_revision
-             FROM processor_progress WHERE processor_id = ? AND method_version = ?
-                AND tenant_id = ? AND stream_key = ? AND retired = true",
-            params![scope.processor_id, scope.method_version, scope.identity.tenant_id.as_slice(), scope.identity.key().as_slice()],
-            |row| Ok((ProcessorRetirementV1 {
-                scope: scope.clone(), change_id: row.get(0)?, reason: row.get(1)?,
-                expected_cursor: row.get(2)?, cutoff_cursor: row.get(3)?,
-            }, row.get(4)?)),
-        ).optional().context(AnalysisDatabaseSnafu { operation: "read processor retirement" }))
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        AnalysisResultCommitV1, AnalysisWitnessV1, EvidenceIntakeIdentityV1,
-        EvidenceRetentionOwner, ProcessorClassV1, ProcessorStateV1, RetentionLimitsV1,
-        ValidatedEvidenceBatchV1,
-    };
+    use crate :: { AnalysisResultCommitV1 , AnalysisWitnessV1 , EvidenceIntakeIdentityV1 , EvidenceRetentionOwner , ProcessorClassV1 , ProcessorStateV1 , RetentionLimitsV1 , ValidatedEvidenceBatchV1 } ;
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 

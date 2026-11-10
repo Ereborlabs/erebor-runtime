@@ -1,11 +1,13 @@
 use super::*;
 
 impl NativeStore {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn extract_source_manifest(
         &self,
         source: &SourceRead,
         read: &AnalysisTableRead<'_>,
         counts: (usize, usize),
+        restricted: bool,
         output: &mut AnalysisExtractionV1,
         capture: &mut Capture<'_>,
         control: &AnalysisReadControl,
@@ -33,7 +35,7 @@ impl NativeStore {
         if read.projected("graph_manifest").is_none() {
             return Ok(());
         }
-        let sensitivity = if source.restricted() != 0 {
+        let sensitivity = if restricted || source.restricted() != 0 {
             crate::ContextSensitivityV1::HostRestricted
         } else {
             crate::ContextSensitivityV1::Tenant

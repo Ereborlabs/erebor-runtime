@@ -75,7 +75,6 @@ impl History {
     pub fn orders() -> Vec<Vec<&'static str>> {
         #[allow(unused_mut)]
         let mut engines = vec![
-            "duckdb",
             "redb",
             "fjall",
             "home",

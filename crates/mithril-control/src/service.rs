@@ -2152,11 +2152,11 @@ fn trace_status(error: impl Into<crate::Error>) -> Status {
             | araphor_data::Error::AnalysisBusy { .. } => tonic::Code::ResourceExhausted,
             araphor_data::Error::AnalysisReadCancelled { .. } => tonic::Code::Cancelled,
             araphor_data::Error::AnalysisReadDeadline { .. } => tonic::Code::DeadlineExceeded,
-            araphor_data::Error::AnalysisState { .. } | araphor_data::Error::Json { .. } => {
+            araphor_data::Error::AnalysisState { .. } | araphor_data::Error::NativeState { .. } | araphor_data::Error::Json { .. } => {
                 tonic::Code::DataLoss
             }
             araphor_data::Error::RetentionUnavailable { .. }
-            | araphor_data::Error::AnalysisDatabase { .. }
+            | araphor_data::Error::NativeStorage { .. }
             | araphor_data::Error::Io { .. } => tonic::Code::Unavailable,
             _ => tonic::Code::Internal,
         }

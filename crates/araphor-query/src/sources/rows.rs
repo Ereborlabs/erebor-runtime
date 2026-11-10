@@ -64,7 +64,7 @@ pub struct ArrowSnapshot {
     pub(crate) now: u64,
     requests: Arc<CapturedRequests>,
     managed: Option<araphor_data::ManagedCapture>,
-    #[cfg(feature = "native-store")]
+    
     notification: Option<araphor_data::analysis::native::NotificationCapture>,
     _metadata: MemoryReservation,
 }
@@ -101,7 +101,7 @@ impl ArrowSnapshot {
         Ok(())
     }
 
-    #[cfg(feature = "native-store")]
+    
     pub fn notification_capture(
         &self,
     ) -> Option<&araphor_data::analysis::native::NotificationCapture> {
@@ -686,7 +686,7 @@ impl SourceSnapshot {
                 .map(|append| (append, after)),
             _ => None,
         };
-        #[cfg(feature = "native-store")]
+        
         let mut notification = None;
         let (mut page, managed) = if let Some(reference) = self.reference.get() {
             let captured = self
@@ -697,7 +697,7 @@ impl SourceSnapshot {
         } else {
             match (&self.managed, append) {
                 (Some(managed), _) => {
-                    #[cfg(feature = "native-store")]
+                    
                     let captured = if let Some(inputs) = self.inputs.get() {
                         self.store.read_managed_subscribed(
                             inputs,
@@ -719,18 +719,7 @@ impl SourceSnapshot {
                         )
                     }
                     .map_err(data_error)?;
-                    #[cfg(not(feature = "native-store"))]
-                    let captured = self
-                        .store
-                        .read_managed_tables_filtered(
-                            selected,
-                            managed,
-                            read,
-                            limits,
-                            control,
-                            context_owners,
-                        )
-                        .map_err(data_error)?;
+                    
                     (captured.page, Some(captured.state))
                 }
                 (None, Some((append, after))) => {
@@ -749,7 +738,7 @@ impl SourceSnapshot {
                         .map_err(|source| DataFusionError::External(Box::new(source)))?;
                     (page, None)
                 }
-                #[cfg(feature = "native-store")]
+                
                 (None, None) if self.consumer.get().is_some() => {
                     let consumer = self.consumer.get().ok_or_else(|| {
                         DataFusionError::Internal("notification consumer is absent".into())
@@ -913,7 +902,7 @@ impl SourceSnapshot {
                     })
                     .sum::<usize>(),
             );
-        #[cfg(feature = "native-store")]
+        
         let metadata = metadata.saturating_add(
             notification
                 .as_ref()
@@ -977,7 +966,7 @@ impl SourceSnapshot {
             witnesses,
             requests,
             managed,
-            #[cfg(feature = "native-store")]
+            
             notification,
             _metadata: reservation,
         });

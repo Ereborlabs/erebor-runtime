@@ -1,8 +1,5 @@
-use duckdb::{params, Connection, Transaction};
-use snafu::ResultExt as _;
 
-use super::{AnalysisReadControl, AnalysisStore};
-use crate::{AnalysisDatabaseSnafu, Result};
+
 
 pub(super) const TRACE_RESERVE: u64 = 16 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -15,269 +12,10 @@ pub struct WitnessUsageV1 {
     pub charged_bytes: u64,
 }
 
-impl TryFrom<&duckdb::Row<'_>> for WitnessUsageV1 {
-    type Error = duckdb::Error;
-
-    fn try_from(row: &duckdb::Row<'_>) -> duckdb::Result<Self> {
-        Ok(Self {
-            charged_bytes: row.get(0)?,
-            segment_bytes: row.get(1)?,
-            context_bytes: row.get(2)?,
-            referenced_bytes: row.get(3)?,
-            extra_segment_bytes: row.get(4)?,
-            read_revision: row.get(5)?,
-        })
-    }
-}
-
-impl AnalysisStore {
-    pub(super) fn reserve_trace(
-        &self,
-        transaction: &Transaction<'_>,
-        intent: &super::TraceIntentV1,
-        revision: u64,
-    ) -> Result<()> {
-        for binding in &intent.bindings {
-            let identity = super::raw::RawIdentity::Diagnostic(binding.identity.clone());
-            let key = identity.key();
-            let json = identity.json(&self.root)?;
-            let changed = transaction
-                .execute(
-                    "INSERT INTO trace_versions VALUES (?, ?, ?, 0, 0, NULL, 0, 0, ?)
-                 ON CONFLICT DO NOTHING",
-                    params![key.as_slice(), json, identity.tenant().as_slice(), revision],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "reserve diagnostic terminal state",
-                })?;
-            if changed != 1 {
-                return crate::AnalysisConflictSnafu.fail();
-            }
-        }
-        if self.storage.diagnostic_sources.is_some()
-            || self.storage.tenant_diagnostic_sources.is_some()
-        {
-            let (total, scoped): (u64, u64) = transaction
-                .query_row(
-                    "SELECT COUNT(*)::UBIGINT,
-                        COUNT(*) FILTER (WHERE tenant_id = ?)::UBIGINT FROM trace_receipts",
-                    params![intent.tenant_id.as_slice()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "count diagnostic sources",
-                })?;
-            self.storage.check_sources(
-                usize::try_from(total)
-                    .map_err(|_| self.state_error("the diagnostic source count overflows"))?,
-                usize::try_from(scoped)
-                    .map_err(|_| self.state_error("the tenant source count overflows"))?,
-                true,
-            )?;
-        }
-        let (reserved, slots) = Self::terminal_reserve(transaction)?;
-        self.storage
-            .check_append(self.storage_with_reserve(0, slots)?, reserved)
-    }
-
-    pub(super) fn terminal_reserve(connection: &Connection) -> Result<(u64, usize)> {
-        let (count, slots): (u64, u64) = connection.query_row(
-            "SELECT COUNT(*)::UBIGINT,
-                COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
-                    WHERE s.stream_key = t.stream_key AND s.state = 'Live') THEN 1 ELSE 2 END), 0)::UBIGINT
-                FROM trace_receipts t WHERE terminal IS NULL", [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).context(AnalysisDatabaseSnafu { operation: "count diagnostic terminal reserves" })?;
-        let bytes = count.checked_mul(TRACE_RESERVE).ok_or_else(|| {
-            crate::StorageCapacitySnafu {
-                resource: "diagnostic physical reserve",
-            }
-            .build()
-        })?;
-        let slots = usize::try_from(slots).map_err(|_| {
-            crate::StorageCapacitySnafu {
-                resource: "diagnostic storage entries",
-            }
-            .build()
-        })?;
-        Ok((bytes, slots))
-    }
-
-    const WITNESS_USAGE: &'static str = "WITH pins AS (
-            SELECT DISTINCT segment_id FROM evidence_refs
-            WHERE tenant_id = ? AND expires_utc_ns > ?
-        ), usage AS (
-            SELECT COALESCE((SELECT SUM(s.committed_end) FROM segments s
-                SEMI JOIN pins p USING (segment_id) WHERE s.state = 'Live'), 0)::UBIGINT AS segments,
-            COALESCE((SELECT SUM(octet_length(c.body) + octet_length(encode(c.owner_id))
-            + octet_length(c.entity_key) + octet_length(c.lifetime_key)) FROM context_versions c
-            SEMI JOIN (
-                SELECT tenant_id, owner_id, entity_key, lifetime_key, owner_revision
-                FROM context_refs WHERE tenant_id = ?
-            ) r USING (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)), 0)::UBIGINT AS context
-        ) SELECT segments + context, segments, context, 0::UBIGINT, segments,
-            (SELECT commit_revision FROM store_meta) FROM usage";
-
-    /// Count distinct live witnesses and their whole segments. This read does not pin data.
-    pub fn witness_usage(&self, tenant: [u8; 16], now: u64) -> Result<WitnessUsageV1> {
-        if tenant == [0; 16] || now == 0 {
-            return self.reject("the witness usage tenant or time is invalid");
-        }
-        let control = AnalysisReadControl::default();
-        let mut reader = self.reader_until(&control)?;
-        control.run(&mut reader, |snapshot| {
-            self.witness_totals(snapshot, tenant, now)
-        })
-    }
-
-    pub(super) fn witness_base(
-        connection: &Connection,
-        tenant: [u8; 16],
-        now: u64,
-    ) -> Result<WitnessUsageV1> {
-        connection
-            .query_row(
-                Self::WITNESS_USAGE,
-                params![tenant.as_slice(), now, tenant.as_slice()],
-                |row| WitnessUsageV1::try_from(row),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "count exact witness storage",
-            })
-    }
-
-    fn witness_totals(
-        &self,
-        connection: &Connection,
-        tenant: [u8; 16],
-        now: u64,
-    ) -> Result<WitnessUsageV1> {
-        let mut usage = Self::witness_base(connection, tenant, now)?;
-        let mut statement = connection
-            .prepare(
-                "SELECT DISTINCT stream_key, durable_cursor, segment_id FROM evidence_refs
-             WHERE tenant_id = ? AND expires_utc_ns > ? ORDER BY stream_key, durable_cursor",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare witness record sizes",
-            })?;
-        let rows = statement
-            .query_map(params![tenant.as_slice(), now], |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, u64>(1)?,
-                    row.get::<_, u64>(2)?,
-                ))
-            })
-            .context(AnalysisDatabaseSnafu {
-                operation: "read witness record sizes",
-            })?;
-        let raw = self
-            .raw
-            .lock()
-            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
-        let mut cached = None;
-        for row in rows {
-            let (key, cursor, segment) = row.context(AnalysisDatabaseSnafu {
-                operation: "decode witness record size",
-            })?;
-            if !super::raw::RawIdentity::valid_key(&key) {
-                return self.reject("the witness key is invalid");
-            }
-            let (entry, index) = raw.locate(&key, cursor, usage.read_revision)?;
-            if entry.reference.id != segment {
-                return self.reject("the witness segment differs");
-            }
-            if cached
-                .as_ref()
-                .is_none_or(|(revision, _)| *revision != entry.commit.revision)
-            {
-                cached = Some((entry.commit.revision, raw.read_entry(entry)?));
-            }
-            let span = &cached
-                .as_ref()
-                .ok_or_else(|| self.state_error("the witness batch is absent"))?
-                .1
-                .spans[index];
-            let position = (cursor - span.first) as usize;
-            let end = span.ends[position];
-            let start = position.checked_sub(1).map_or(0, |prior| span.ends[prior]);
-            usage.referenced_bytes += u64::from(end - start);
-        }
-        usage.extra_segment_bytes = usage
-            .segment_bytes
-            .checked_sub(usage.referenced_bytes)
-            .ok_or_else(|| self.state_error("the witness byte count exceeds its segments"))?;
-        Ok(usage)
-    }
-
-    pub(super) fn revision_usage(connection: &Connection, tenant: [u8; 16]) -> Result<(u64, u64)> {
-        connection
-            .query_row(
-                "SELECT GREATEST(
-                    (SELECT count(*)::UBIGINT FROM coverage),
-                    (SELECT count(*)::UBIGINT FROM context_versions),
-                    (SELECT count(*)::UBIGINT FROM analysis_results)),
-                    GREATEST(
-                    (SELECT count(*)::UBIGINT FROM coverage WHERE tenant_id = ?),
-                    (SELECT count(*)::UBIGINT FROM context_versions WHERE tenant_id = ?),
-                    (SELECT count(*)::UBIGINT FROM analysis_results WHERE tenant_id = ?))",
-                params![tenant.as_slice(), tenant.as_slice(), tenant.as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "count retained revisions",
-            })
-    }
-
-    pub(super) fn check_revision_limits(
-        &self,
-        transaction: &Transaction<'_>,
-        tenant: [u8; 16],
-    ) -> Result<()> {
-        if self.storage.retained_revisions.is_none() && self.storage.tenant_revisions.is_none() {
-            return Ok(());
-        }
-        let (total, scoped) = Self::revision_usage(transaction, tenant)?;
-        self.storage.check_revisions(total, scoped)
-    }
-
-    pub(super) fn check_witnesses(
-        &self,
-        transaction: &Transaction<'_>,
-        tenant: [u8; 16],
-        now: u64,
-    ) -> Result<()> {
-        if self.storage.witness_max_bytes.is_none() {
-            return Ok(());
-        }
-        let referenced: bool = transaction
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM evidence_refs WHERE tenant_id = ? AND expires_utc_ns > ?)
-                    OR EXISTS(SELECT 1 FROM context_refs WHERE tenant_id = ?)",
-                params![tenant.as_slice(), now, tenant.as_slice()],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "check tenant witness references",
-            })?;
-        if !referenced {
-            return Ok(());
-        }
-        let usage = self.witness_totals(transaction, tenant, now)?;
-        self.storage.check_witness(usage.charged_bytes)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1,
-        AnalysisResultCommitV1, AnalysisWitnessV1, ContextSensitivityV1, EvidenceIntakeIdentityV1,
-        ProcessorClassV1, ProcessorScopeV1, StorageLimitsV1, TraceBatchV1, TraceFrameKindV1,
-        TraceFrameV1, ValidatedEvidenceBatchV1,
-    };
+    use crate :: { AnalysisContextKeyV1 , AnalysisContextRefV1 , AnalysisContextVersionV1 , AnalysisResultCommitV1 , AnalysisWitnessV1 , ContextSensitivityV1 , EvidenceIntakeIdentityV1 , ProcessorClassV1 , ProcessorScopeV1 , StorageLimitsV1 , TraceBatchV1 , TraceFrameKindV1 , TraceFrameV1 , ValidatedEvidenceBatchV1 } ;
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -675,23 +413,14 @@ mod tests {
                 commit_revision, ('tenant2:' || HEX(version_key))::BLOB FROM context_versions",
             params![[2u8; 16].as_slice()],
         )?;
-        assert_eq!(
-            AnalysisStore::revision_usage(&transaction, [2; 16])?,
-            (2, 1)
-        );
+        assert_eq!(AnalysisStore::revision_usage(&transaction, [2; 16])?, (2, 1));
         transaction.execute(
             "DELETE FROM context_versions WHERE tenant_id = ?",
             params![[1u8; 16].as_slice()],
         )?;
-        assert_eq!(
-            AnalysisStore::revision_usage(&transaction, [1; 16])?,
-            (1, 0)
-        );
+        assert_eq!(AnalysisStore::revision_usage(&transaction, [1; 16])?, (1, 0));
         transaction.rollback()?;
-        assert_eq!(
-            AnalysisStore::revision_usage(writer.get()?, [1; 16])?,
-            before
-        );
+        assert_eq!(AnalysisStore::revision_usage(writer.get()?, [1; 16])?, before);
         AnalysisStore::validate_state(writer.get()?, &root)?;
         drop(writer);
         drop(store);

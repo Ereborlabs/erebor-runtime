@@ -5,7 +5,7 @@ use araphor_analysis_sdk as sdk;
 
 use super::super::context::VerifiedPackages;
 use super::model::*;
-use crate::{AnalysisStore, AnalysisStoreMetaV1, ResultContext};
+use crate :: { AnalysisStoreMetaV1 , ResultContext } ;
 
 #[derive(Debug, Default)]
 pub struct ManagedExecution {
@@ -25,7 +25,7 @@ pub(in crate::analysis) struct Committed {
 pub(in crate::analysis) struct RetainedGraphProof {
     graph: crate::analysis::PackageResultRefV1,
     source: super::ManagedSourceRef,
-    input: Arc<crate::analysis::graph_rows::store::InputProof>,
+    input: Arc<crate::InputProof>,
 }
 
 impl RetainedGraphProof {
@@ -33,7 +33,7 @@ impl RetainedGraphProof {
         &self,
         graph: &crate::analysis::PackageResultRefV1,
         source: &super::ManagedSourceRead,
-    ) -> Option<&Arc<crate::analysis::graph_rows::store::InputProof>> {
+    ) -> Option<&Arc<crate::InputProof>> {
         (self.graph == *graph
             && matches!(source,
             super::ManagedSourceRead::Changes(parent) if parent == &self.source))
@@ -227,29 +227,7 @@ impl ManagedPrior {
     }
 }
 
-impl AnalysisStore {
-    pub(super) fn retain_managed(
-        input: &ManagedCommit<'_>,
-        receipt: &ManagedReceipt,
-        packages: VerifiedPackages,
-        input_proof: Option<Arc<crate::analysis::graph_rows::store::InputProof>>,
-    ) -> Option<(Arc<ManagedExecution>, Committed)> {
-        ManagedExecution::retain(
-            input.attempt,
-            input.returns.iter().map(|returned| {
-                (
-                    returned.call,
-                    returned.evaluation,
-                    returned.output,
-                    returned.changes,
-                )
-            }),
-            receipt,
-            packages,
-            input_proof,
-        )
-    }
-}
+
 
 impl ManagedExecution {
     pub(in crate::analysis) fn retain<'a>(
@@ -264,7 +242,7 @@ impl ManagedExecution {
         >,
         receipt: &ManagedReceipt,
         packages: VerifiedPackages,
-        input_proof: Option<Arc<crate::analysis::graph_rows::store::InputProof>>,
+        input_proof: Option<Arc<crate::InputProof>>,
     ) -> Option<(Arc<Self>, Committed)> {
         let owner = attempt.4.as_ref()?;
         let mut calls = attempt.3.clone();

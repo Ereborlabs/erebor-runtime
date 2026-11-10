@@ -1,19 +1,10 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std :: { collections :: { BTreeMap , BTreeSet } , sync :: Arc } ;
 
 use araphor_analysis_sdk as sdk;
 use araphor_graph::native::{Graph, LayerRequest, Pending, Prepared};
 
 use super::{origin::GraphOrigin, ManagedGraphJournal};
-use crate::analysis::{
-    managed::{
-        source::{import::PreparedDerived, SourceEvidence},
-        GraphProof, PreparedMemory,
-    },
-    native::{DataWrite, ManagedCommit, NativeStore},
-};
+use crate :: analysis :: { managed :: { source :: { import :: PreparedDerived , SourceEvidence } , GraphProof , PreparedMemory } , native :: { DataWrite , ManagedCommit , NativeStore } } ;
 use crate::{ManagedReceipt, PackageErrorCodeV1 as Code, Result};
 
 pub(in crate::analysis::native::managed) struct PreparedGraph {

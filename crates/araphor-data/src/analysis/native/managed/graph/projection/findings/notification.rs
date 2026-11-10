@@ -239,3 +239,143 @@ impl FindingRead<'_> {
             .is_none_or(|value| value != canonical))
     }
 }
+
+impl FindingRead<'_> {
+    fn finding(&mut self, result: &str, id: &str) -> Result<Option<(FindingV1, GraphRevisionV1)>> {
+        let Some(value) = self.value(result, id)? else {
+            return Ok(None);
+        };
+        let revision = self.revision(result, id)?;
+        Ok(Some((value, revision.as_ref().clone())))
+    }
+}
+
+impl NativeStore {
+    pub fn graph_finding(
+        &self,
+        tenant: [u8; 16],
+        result_id: &str,
+        finding_id: &str,
+    ) -> Result<Option<(FindingV1, GraphRevisionV1)>> {
+        Notice::Invalid.require(
+            tenant != [0; 16]
+                && [result_id, finding_id]
+                    .iter()
+                    .all(|id| NotificationGrantV1::identifier(id, usize::MAX)),
+            "finding reference",
+        )?;
+        let view = self.view()?;
+        let control = AnalysisReadControl::default();
+        let mut charge = |_| Ok(());
+        FindingRead::new(self, &view, tenant, &control, &mut charge).finding(result_id, finding_id)
+    }
+
+    pub fn notification_finding(
+        &self,
+        tenant: [u8; 16],
+        reference: &NotificationFindingRefV1,
+    ) -> Result<(FindingV1, GraphRevisionV1)> {
+        Notice::Invalid.require(
+            tenant != [0; 16]
+                && [&reference.result_id, &reference.finding_id]
+                    .iter()
+                    .all(|id| NotificationGrantV1::identifier(id, usize::MAX)),
+            "finding reference",
+        )?;
+        let view = self.view()?;
+        let control = AnalysisReadControl::default();
+        let mut charge = |_| Ok(());
+        let mut reader = FindingRead::new(self, &view, tenant, &control, &mut charge);
+        let heads = reader.heads(&BTreeSet::from([reference.finding_id.as_str()]))?;
+        let current = heads.get(&reference.finding_id).ok_or_else(|| {
+            crate::NotificationSnafu {
+                code: Notice::Denied,
+                field: "current finding scope",
+            }
+            .build()
+        })?;
+        let requested = reader.scalar_owner(&reference.result_id)?;
+        if requested.is_some_and(|owner| matches!(owner.scope, ScalarScope::Definition(_))) {
+            let owner = reader.scalar_owner(current)?;
+            Notice::Denied.require(
+                owner.is_some_and(|owner| matches!(owner.scope, ScalarScope::Definition(_))),
+                "current finding scope",
+            )?;
+            let current = reader.cached_rows(current, &reference.finding_id)?;
+            let requested = reader.cached_rows(&reference.result_id, &reference.finding_id)?;
+            let (Some(current), Some(requested)) =
+                (reader.canonical(&current)?, reader.canonical(&requested)?)
+            else {
+                return Err(crate::NotificationSnafu {
+                    code: Notice::Denied,
+                    field: "current finding scope",
+                }
+                .build());
+            };
+            Notice::Conflict.require(current == requested, "current finding reference")?;
+        } else {
+            Notice::Conflict
+                .require(current == &reference.result_id, "current finding reference")?;
+        }
+        reader
+            .finding(&reference.result_id, &reference.finding_id)?
+            .ok_or_else(|| {
+                crate::NotificationSnafu {
+                    code: Notice::Denied,
+                    field: "current finding scope",
+                }
+                .build()
+            })
+    }
+
+    pub fn graph_revision_finding(
+        &self,
+        tenant: [u8; 16],
+        finding_id: &str,
+        revision: &GraphRevisionV1,
+    ) -> Result<Option<FindingV1>> {
+        Notice::Invalid.require(
+            tenant != [0; 16] && NotificationGrantV1::identifier(finding_id, usize::MAX),
+            "finding reference",
+        )?;
+        revision.validate(tenant)?;
+        let view = self.view()?;
+        let control = AnalysisReadControl::default();
+        let mut charge = |_| Ok(());
+        let mut reader = FindingRead::new(self, &view, tenant, &control, &mut charge);
+        let heads = reader.heads(&BTreeSet::from([finding_id]))?;
+        let current = heads.get(finding_id);
+        if let Some(current) = current {
+            if let Some((finding, basis)) = reader.finding(current, finding_id)? {
+                if &basis == revision {
+                    return Ok(Some(finding));
+                }
+            }
+        }
+        for entry in view.snapshot.prefix(GraphPublication::PREFIX) {
+            control.check()?;
+            let (key, _) = entry.context(NativeStorageSnafu {
+                operation: "read historical Graph publication",
+            })?;
+            let id = NativeStore::number(&key[GraphPublication::PREFIX.len()..])?;
+            let publication = GraphPublication::read(
+                id,
+                view.metadata_revision,
+                |key| Records::read(key, &view.snapshot),
+                &mut |_| Ok(()),
+            )?
+            .ok_or_else(|| Code::Missing.error("historical Graph publication"))?;
+            if publication.tenant != tenant || current == Some(&publication.reference.result_id) {
+                continue;
+            }
+            if let Some((finding, basis)) =
+                reader.finding(&publication.reference.result_id, finding_id)?
+            {
+                if &basis == revision {
+                    return Ok(Some(finding));
+                }
+            }
+        }
+        Ok(None)
+    }
+}

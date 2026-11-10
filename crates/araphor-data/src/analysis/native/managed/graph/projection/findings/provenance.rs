@@ -237,7 +237,7 @@ impl FindingRead<'_> {
                 )?
                 .saturating_mul(4),
             )?;
-            let contexts = crate::AnalysisStore::join_contexts(
+            let contexts = crate::AnalysisContextRefV1::join(
                 &producer.record.contexts,
                 &producer.record.derived,
             )?;

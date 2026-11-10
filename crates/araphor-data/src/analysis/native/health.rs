@@ -6,12 +6,21 @@ use super::NativeStore;
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result, StorageHealthV1, StorageLimitsV1};
 
 impl NativeStore {
+    pub fn storage_usage(&self) -> Result<crate::StorageUsageV1> {
+        self.check()?;
+        crate::StorageUsageV1::at(&self.root, 0, 0)
+    }
+
+    pub fn retention_healthy(&self) -> bool {
+        self.retention_healthy.load(Ordering::Acquire)
+    }
+
     pub fn storage_limits(&self) -> &StorageLimitsV1 {
         &self.storage
     }
 
     pub fn storage_health(&self) -> Result<StorageHealthV1> {
-        let usage = crate::AnalysisStore::storage_at(&self.root, 0, 0)?;
+        let usage = crate::StorageUsageV1::at(&self.root, 0, 0)?;
         let view = self.published.read().map_err(|_| {
             NativeStateSnafu {
                 field: "publication lock",
@@ -40,7 +49,7 @@ impl NativeStore {
         let limits = self.storage_limits();
         Ok(StorageHealthV1 {
             write_ready: self.ready.load(Ordering::Acquire),
-            retention_healthy: retained,
+            retention_healthy: retained && self.retention_healthy.load(Ordering::Acquire),
             intake_capacity: limits.check(usage, false).is_ok(),
             maintenance_capacity: limits.check(usage, true).is_ok(),
             usage,

@@ -1,17 +1,13 @@
-use std::collections::BTreeSet;
-use std::fs::{self, File};
-use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 
-use duckdb::{params, Connection};
-use snafu::ResultExt as _;
 
-use super::{AnalysisRecordV1, AnalysisStore};
+
+use super :: { AnalysisRecordV1 } ;
 #[cfg(test)]
 use crate::EvidenceIntakeIdentityV1;
-use crate::{AnalysisDatabaseSnafu, IoSnafu, Result};
+use crate :: Result ;
 
 #[derive(Clone)]
 pub(super) struct SegmentRange {
@@ -50,7 +46,7 @@ impl SegmentRange {
             .checked_sub(self.byte_start)
             .is_none_or(|bytes| bytes == 0 || bytes > self.scan_bytes as u64)
         {
-            return AnalysisStore::reject_path(root, "the selected raw byte range is invalid");
+            return crate::Error::reject_path(root, "the selected raw byte range is invalid");
         }
         self.reader.read(root)
     }
@@ -78,161 +74,12 @@ impl SegmentRange {
     }
 }
 
-impl AnalysisStore {
-    pub(super) fn segment_directory(root: &Path) -> Result<()> {
-        let path = root.join("segments");
-        match fs::DirBuilder::new().mode(0o700).create(&path) {
-            Ok(()) => {
-                File::open(root)
-                    .context(IoSnafu { path: root })?
-                    .sync_all()
-                    .context(IoSnafu { path: root })?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(source) => return Err(source).context(IoSnafu { path: &path }),
-        }
-        let metadata = fs::symlink_metadata(&path).context(IoSnafu { path: &path })?;
-        if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
-            return Self::reject_path(root, "the segment directory is not private");
-        }
-        Ok(())
-    }
 
-    #[cfg(test)]
-    pub(super) fn raw_ranges(
-        &self,
-        writer: &Connection,
-        identity: &EvidenceIntakeIdentityV1,
-        first: u64,
-        last: u64,
-        limit: usize,
-    ) -> Result<Vec<SegmentRange>> {
-        let revision = Self::read_meta_from(writer, &self.root)?.commit_revision;
-        let raw = self
-            .raw
-            .lock()
-            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
-        raw.select_ranges(&identity.clone().into(), first, last, revision, None, limit)
-    }
-
-    pub(super) fn remove_segments(
-        writer: &mut Connection,
-        root: &Path,
-        raw: &super::raw::RawJournal,
-        ids: &BTreeSet<u64>,
-    ) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let encoded = serde_json::to_string(ids).context(crate::JsonSnafu { path: root })?;
-        let removals = writer
-            .prepare(
-                "SELECT s.segment_id, s.file_name, s.first_cursor, s.last_cursor, s.last_intake_utc_ns, s.committed_end FROM segments s WHERE s.segment_id IN (SELECT unnest(CAST(? AS UBIGINT[])))
-                 AND s.state = 'Deleting'
-                 AND NOT EXISTS (SELECT 1 FROM evidence_refs r WHERE r.segment_id = s.segment_id)
-                 AND EXISTS (SELECT 1 FROM expired_ranges x WHERE x.segment_id = s.segment_id
-                     AND x.stream_key = s.stream_key AND x.tenant_id = s.tenant_id)
-                 ORDER BY s.segment_id",
-            )
-            .context(AnalysisDatabaseSnafu { operation: "prepare recorded segment removals" })?
-            .query_map(params![encoded], |row| {
-                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?, row.get::<_, u64>(2)?, row.get::<_, u64>(3)?, row.get::<_, u64>(4)?, row.get::<_, u64>(5)?))
-            })
-            .context(AnalysisDatabaseSnafu { operation: "check recorded segment removal" })?
-            .collect::<duckdb::Result<Vec<_>>>()
-            .context(AnalysisDatabaseSnafu { operation: "decode recorded segment removals" })?;
-        if removals.len() != ids.len() {
-            return Self::reject_path(root, "the segment has no complete removal authorization");
-        }
-        let mut expiry = writer
-            .prepare(
-                "SELECT EXISTS(SELECT 1 FROM expired_ranges WHERE segment_id = ? AND stream_key = ?
-             AND tenant_id = ? AND first_cursor <= ? AND last_cursor >= ?
-             AND source_revision = ? AND received_utc_ns = ?)",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare segment expiry coverage",
-            })?;
-        for (id, _, first, last, intake, end) in &removals {
-            if !raw.segments.contains_key(id) {
-                continue;
-            }
-            for entry in raw.segment_entries(*id, *first, *last, *intake, *end)? {
-                for span in &entry.commit.spans {
-                    let expired: bool = expiry
-                        .query_row(
-                            params![
-                                entry.reference.id,
-                                entry.identity.key().as_slice(),
-                                entry.identity.tenant().as_slice(),
-                                span.first,
-                                span.last,
-                                entry.commit.revision,
-                                entry.commit.intake,
-                            ],
-                            |row| row.get(0),
-                        )
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "check segment expiry coverage",
-                        })?;
-                    if !expired {
-                        return Self::reject_path(
-                            root,
-                            "the removed segment has unrecorded expiry",
-                        );
-                    }
-                }
-            }
-        }
-        drop(expiry);
-        let current = raw.directory_current()?;
-        for (_, name, _, _, _, _) in removals {
-            let path = super::raw::RawJournal::file_path(root, &name)?;
-            match fs::symlink_metadata(&path) {
-                Ok(metadata) => {
-                    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
-                        return Self::reject_path(
-                            root,
-                            "the removable segment is not a private file",
-                        );
-                    }
-                    fs::remove_file(&path).context(IoSnafu { path: &path })?;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(source) => return Err(source).context(IoSnafu { path: &path }),
-            }
-            #[cfg(test)]
-            Self::crash_path(root, "retention.unlinked");
-        }
-        let directory = root.join("segments");
-        File::open(&directory)
-            .context(IoSnafu { path: &directory })?
-            .sync_all()
-            .context(IoSnafu { path: &directory })?;
-        raw.directory_changed(current)?;
-        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin segment cleanup",
-        })?;
-        transaction.execute(
-            "DELETE FROM segments WHERE segment_id IN (SELECT unnest(CAST(? AS UBIGINT[]))) AND state = 'Deleting'",
-            params![encoded],
-        ).context(AnalysisDatabaseSnafu { operation: "remove expired segment metadata" })?;
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit segment cleanup",
-        })?;
-        #[cfg(test)]
-        Self::crash_path(root, "retention.cleaned");
-        Ok(())
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        AnalysisResultCommitV1, AnalysisWitnessV1, EvidenceRetentionOwner, ProcessorClassV1,
-        ProcessorScopeV1, RetentionLimitsV1, ValidatedEvidenceBatchV1,
-    };
+    use crate :: { AnalysisResultCommitV1 , AnalysisWitnessV1 , EvidenceRetentionOwner , ProcessorClassV1 , ProcessorScopeV1 , RetentionLimitsV1 , ValidatedEvidenceBatchV1 } ;
 
     fn source() -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {

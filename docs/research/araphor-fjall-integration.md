@@ -25,10 +25,12 @@ Use the same incident workload and measurement boundaries to prove them.
 
 ## Current replacement work, 2026-11-10
 
-Result: **Not done**. The production cutover is an uncommitted draft.
+Result: **Not done for the complete replacement and performance proof**.
 The current source uses the native Data owner through the public storage API.
-The draft removes the SQL Data owner, SQL Graph backend, and caller backend
-switches. The complete default build and unchanged incident are not qualified.
+The connected replacement removes the SQL Data owner, SQL Graph backend,
+caller backend switches, DuckDB dependencies, and vendored DuckDB code.
+The default production release build and unchanged incident pass. SQL-only
+fixture ports, finite-history collection, and complete qualification remain open.
 
 | Owner | Current work and completion proof |
 | --- | --- |
@@ -38,10 +40,48 @@ switches. The complete default build and unchanged incident are not qualified.
 | Notifications | Keep batch writes and durable Pending before external delivery. Measure durable creation and public receipt separately. |
 | Performance | Use the saved successful control and a matched native build. Neither latency target is proved. |
 
+Current evidence:
+
+- The final connected release build passed in 7 minutes 20 seconds. The unchanged
+  incident passed in 3.03 seconds. Collector receipt to durable notification
+  creation was 147.276, 255.605, and 268.944 milliseconds. Public receipt was
+  155.453, 266.644, and 285.581 milliseconds. Read
+  `output/araphor-fjall-migration-20261110/public-cutover-incident-run3.json`.
+  This run is unpaired. It proves neither performance target.
+- Commit `4a99e7304` adds native Graph identity reads without property chunks.
+  The 13 native Graph tests passed in 2.43 seconds.
+- The native release incident build passed. The first native incident run
+  failed in 91.73 seconds. The package committed its input, but Data did not
+  emit `managed_commit_timing`. The unchanged test waits for that event.
+  After the native commit event was restored, the unchanged incident passed
+  in 3.10 seconds. That release build used optimization level 3, no debug
+  information, and disabled debug assertions and overflow checks.
+- In that successful run, collector receipt to durable notification creation
+  was 137.893, 284.968, and 287.109 milliseconds. Collector receipt to public
+  notification receipt was 147.791, 297.636, and 324.387 milliseconds. Read
+  `output/araphor-fjall-migration-20261110/public-cutover-incident-run2.json`.
+  This is an unpaired diagnostic run. Later Source read changes are not in
+  that binary. Neither performance target is proved.
+- The connected draft adds retained Source snapshots, package-owned state
+  rows, indexed traversal, and Source binding reads for notifications. Expanded
+  domain checks passed: 24 cases. These changes do not yet prove a latency gain.
+- Fjall `7fd777c` and `lsm-tree` `56d74411` add admission before checkpoint
+  output is created. Data checks backup capacity through that API. Restore
+  checks entry limits before it creates the target. The focused engine checks
+  passed: three Fjall cases and two LSM metadata cases.
+- The draft restores Required-input byte and age admission from committed
+  processor positions and original raw spans. Retention uses the same reconciled
+  minima. Ordinary metadata writes check actual capacity; maintenance can free
+  an over-capacity store. Six native lifecycle cases passed in 0.21 seconds.
+  Read the [native storage review guide](../guides/araphor-native-storage-review.md)
+  for the current owners, commit flow, checks, and remaining limits.
+- Configured notification route and related-state bounds pass seven focused
+  preparation cases. The indexed notification suite passes four cases.
+
 Complete connected replacements before repeating their passing checks. Read the
 [current execution priority](#current-execution-priority-2026-11-10) for the
 implementation order. The records below describe earlier source states; they
-do not qualify this draft.
+do not qualify the current replacement.
 
 ## Previous qualification records
 Research date: 2026-11-09. Result: **Research complete; production migration not done**.

@@ -10,7 +10,7 @@ mod interest;
 mod model;
 
 pub(in crate::analysis) use model::InputCapture;
-#[cfg(feature = "native-store")]
+
 pub(in crate::analysis) use model::{InputCut, InputSpec};
 
 pub(super) struct InputInterest {
@@ -45,11 +45,6 @@ pub(super) enum InputChange<'a> {
         source: Option<&'a EvidenceIntakeIdentityV1>,
         witnesses: &'a [AnalysisWitnessV1],
     },
-    Publication {
-        tenant: [u8; 16],
-        result: &'a str,
-        owners: &'a managed::CommittedOwners,
-    },
     Trace {
         tenant: [u8; 16],
         request: [u8; 16],
@@ -66,7 +61,7 @@ pub(in crate::analysis) struct InputWatch {
     pub(in crate::analysis) interest: InputInterest,
     pub(in crate::analysis) changes: watch::Sender<StorePositionV1>,
     pub(in crate::analysis) after: u64,
-    #[cfg(feature = "native-store")]
+    
     pub(in crate::analysis) delivery: Option<Arc<super::native::inputs::Delivery>>,
     pub(in crate::analysis) _memory: Box<dyn std::any::Any + Send + Sync>,
 }
@@ -97,13 +92,13 @@ pub struct InputSubscription {
     pub(in crate::analysis) _registration: Arc<InputRegistration>,
     pub(in crate::analysis) changes: watch::Receiver<StorePositionV1>,
     pub(in crate::analysis) meta: AnalysisStoreMetaV1,
-    #[cfg(feature = "native-store")]
+    
     pub(in crate::analysis) native: Option<super::native::inputs::Wake>,
 }
 
 impl InputSubscription {
     pub fn can_resume(&self, position: StorePositionV1) -> bool {
-        #[cfg(feature = "native-store")]
+        
         if let Some(native) = &self.native {
             return native.can_resume(position);
         }
@@ -112,7 +107,7 @@ impl InputSubscription {
     }
 
     pub fn needs_initial(&self) -> bool {
-        #[cfg(feature = "native-store")]
+        
         if let Some(native) = &self.native {
             return native.needs_initial();
         }
@@ -142,7 +137,7 @@ impl InputSubscription {
     }
 
     pub async fn changed(&mut self) -> Result<StorePositionV1> {
-        #[cfg(feature = "native-store")]
+        
         if let Some(native) = &mut self.native {
             native.changed(&mut self.changes).await?;
             return Ok(self.observe());
@@ -156,7 +151,7 @@ impl InputSubscription {
 }
 
 impl InputChanges {
-    #[cfg(feature = "native-store")]
+    
     pub(in crate::analysis) fn is_empty(&self) -> bool {
         self.readers
             .lock()
@@ -164,7 +159,7 @@ impl InputChanges {
             .is_empty()
     }
 
-    #[cfg(feature = "native-store")]
+    
     pub(in crate::analysis) fn interested(&self, change: InputChange<'_>) -> bool {
         self.readers
             .lock()
@@ -177,7 +172,7 @@ impl InputChanges {
             })
     }
 
-    #[cfg(feature = "native-store")]
+    
     pub(in crate::analysis) fn raw(&self, entry: &super::raw::RawEntry) {
         let readers = self
             .readers
@@ -245,7 +240,7 @@ impl InputChanges {
 impl InputWatch {
     fn advance(&self, position: StorePositionV1) {
         if position.commit_revision > self.after {
-            #[cfg(feature = "native-store")]
+            
             if self
                 .delivery
                 .as_ref()
@@ -265,49 +260,7 @@ impl InputWatch {
     }
 }
 
-impl AnalysisStore {
-    pub fn subscribe_inputs(
-        &self,
-        selection: &AnalysisSelectionV1,
-        requests: &AnalysisTableRequests,
-        owners: Option<&BTreeSet<String>>,
-        control: &AnalysisReadControl,
-        budget: &dyn crate::ManagedBudget,
-    ) -> Result<InputSubscription> {
-        let memory = managed::PreparedMemory::new(control, budget)?;
-        let lease = memory.reserve(InputInterest::allocation_bytes(selection, requests, owners))?;
-        let interest = InputInterest::new(selection.clone(), requests.clone(), owners.cloned())?;
-        let (changes, receiver) = watch::channel(StorePositionV1 {
-            commit_revision: 0,
-            ordinal: 0,
-        });
-        let owner = Arc::new(InputWatch {
-            interest,
-            changes,
-            after: 0,
-            #[cfg(feature = "native-store")]
-            delivery: None,
-            _memory: lease,
-        });
-        let registration = self.inputs.register(&owner);
-        let (meta, position) = owner.interest.head(self, control, &memory)?;
-        owner.changes.send_if_modified(|current| {
-            if position > *current {
-                *current = position;
-                true
-            } else {
-                false
-            }
-        });
-        Ok(InputSubscription {
-            _registration: registration,
-            changes: receiver,
-            meta,
-            #[cfg(feature = "native-store")]
-            native: None,
-        })
-    }
-}
+
 
 impl InputChange<'_> {
     fn tenant(&self) -> [u8; 16] {
@@ -318,7 +271,6 @@ impl InputChange<'_> {
                 scope.identity.tenant_id
             }
             Self::Graph { tenant, .. }
-            | Self::Publication { tenant, .. }
             | Self::Trace { tenant, .. } => *tenant,
         }
     }

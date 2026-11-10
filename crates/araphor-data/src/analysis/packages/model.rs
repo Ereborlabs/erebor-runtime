@@ -22,7 +22,7 @@ impl PackageRevisionV1 {
         root: &std::path::Path,
     ) -> crate::Result<()> {
         if revisions.is_empty() {
-            return crate::AnalysisStore::reject_path(root, "the package closure is empty");
+            return crate::Error::reject_path(root, "the package closure is empty");
         }
         let tenant = revisions[0].tenant_id;
         let mut keys = std::collections::BTreeSet::new();
@@ -36,7 +36,7 @@ impl PackageRevisionV1 {
                 || package.artifact.is_empty()
                 || !keys.insert((&package.package_id, &package.revision))
             {
-                return crate::AnalysisStore::reject_path(root, "the package closure is invalid");
+                return crate::Error::reject_path(root, "the package closure is invalid");
             }
         }
         for package in revisions {

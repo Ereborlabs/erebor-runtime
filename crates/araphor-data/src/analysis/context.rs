@@ -1,8 +1,9 @@
+use std::path::Path;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use super::AnalysisStore;
-use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, Result};
+
+use crate :: Result ;
 
 mod batch;
 pub(in crate::analysis) use batch::PreparedFact;
@@ -14,8 +15,8 @@ mod reads;
 mod tests;
 mod write;
 
-pub(super) use provenance::VerifiedPackages;
 pub(in crate::analysis) use facts::FactRecord;
+pub(super) use provenance::VerifiedPackages;
 
 type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 
@@ -52,5 +53,31 @@ impl AnalysisContextVersionV1 {
                 (None, Some(_)) => false,
             }
             && !self.body.is_empty()
+    }
+}
+
+impl AnalysisContextVersionV1 {
+pub(in crate::analysis) fn decode_row(
+        root: &Path,
+        key: AnalysisContextKeyV1,
+        (from, until, sensitivity, body, revision): ContextRow,
+    ) -> Result<(AnalysisContextVersionV1, u64)> {
+        let sensitivity = match ContextSensitivityV1::try_from(sensitivity.as_str()) {
+            Ok(value) => value,
+            Err(()) => {
+                return crate::Error::reject_path(root, "the context sensitivity is invalid")
+            }
+        };
+        let result = AnalysisContextVersionV1 {
+            key,
+            valid_from_utc_ns: from,
+            valid_until_utc_ns: until,
+            sensitivity,
+            body,
+        };
+        if !result.valid() || revision == 0 {
+            return crate::Error::reject_path(root, "the retained context version is invalid");
+        }
+        Ok((result, revision))
     }
 }

@@ -1,10 +1,7 @@
 use super::{attempts::Attempts, results::ResultBody, InstanceRecord, Records};
 use crate::analysis::managed::Attempt;
 use crate::analysis::native::{DataView, NativeStore};
-use crate::{
-    AnalysisExtractionV1, AnalysisReadControl, ManagedAttempt, ManagedInstance, ManagedPrior,
-    ManagedSourceRef, PackageErrorCodeV1 as Code, Result, StorePositionV1,
-};
+use crate :: { AnalysisExtractionV1 , AnalysisReadControl , ManagedAttempt , ManagedInstance , ManagedPrior , ManagedSourceRef , PackageErrorCodeV1 as Code , Result , StorePositionV1 } ;
 
 impl DataView {
     pub(super) fn managed_prior(

@@ -2,18 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use araphor_analysis_sdk as sdk;
-use duckdb::{params, Connection};
+
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use super::codec::ManagedCodec;
-use super::model::{Attempt, ManagedInstance, ManagedRead, Step};
+use super::model::ManagedInstance;
 use crate::analysis::PackageResultRefV1;
-use crate::{
-    AnalysisDatabaseSnafu, AnalysisGapV1, AnalysisReadControl, AnalysisReadModeV1,
-    AnalysisSelectionV1, AnalysisStore, AnalysisStoreMetaV1, AnalysisStreamIdentityV1,
-    AnalysisTableRead, AnalysisTableRequests, PackageErrorCodeV1 as Code, Result, StorePositionV1,
-};
+use crate :: { AnalysisGapV1 , AnalysisReadControl , AnalysisSelectionV1 , AnalysisStoreMetaV1 , AnalysisStreamIdentityV1 , AnalysisTableRead , AnalysisTableRequests , PackageErrorCodeV1 as Code , Result , StorePositionV1 } ;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -67,7 +62,7 @@ impl SourceEvidence {
 
 #[derive(Clone, Debug)]
 pub struct ManagedSourceFrame {
-    #[cfg(feature = "native-store")]
+    
     complete: bool,
     pub(super) tables: Vec<sdk::Dataset>,
     pub(super) removals: BTreeMap<AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
@@ -170,7 +165,7 @@ pub(in crate::analysis) mod import;
 mod input;
 mod reader;
 mod selection;
-pub use input::ManagedInputSelection;
+pub use input::{InputProof, ManagedInputSelection, ResolvedInput};
 pub(in crate::analysis) mod publication;
 
 impl ManagedSourceRead {
@@ -183,7 +178,7 @@ impl ManagedSourceRead {
 }
 
 impl ManagedSourceFrame {
-    #[cfg(feature = "native-store")]
+    
     pub(in crate::analysis) fn covers_inputs(
         &self,
         meta: &AnalysisStoreMetaV1,
@@ -299,7 +294,7 @@ impl SourceScope {
             .get(name)
             .and_then(Option::as_ref)
             .ok_or_else(|| Code::Invalid.error("managed source projection"))?;
-        let schema = AnalysisStore::table_schemas()
+        let schema = crate::AnalysisStore::table_schemas()
             .get(name)
             .ok_or_else(|| Code::Invalid.error("managed source relation"))?;
         schema

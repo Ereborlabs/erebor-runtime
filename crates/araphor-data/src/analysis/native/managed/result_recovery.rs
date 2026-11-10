@@ -5,10 +5,7 @@ use snafu::ResultExt as _;
 use super::{results::ResultBody, Records};
 use crate::analysis::managed::{Attempt, Record, Step};
 use crate::analysis::native::{DataView, NativeStore};
-use crate::{
-    AnalysisContextRefV1, AnalysisReadControl, AnalysisWitnessV1, ManagedDestination,
-    NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { AnalysisContextRefV1 , AnalysisReadControl , AnalysisWitnessV1 , ManagedDestination , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 impl DataView {
     pub(super) fn validate_success(&self, attempt: &Attempt) -> Result<()> {
@@ -69,7 +66,7 @@ impl DataView {
                 return Err(Code::Invalid.error("managed selected call binding"));
             }
             self.check_call_record(id, attempt, record, step, spec)?;
-            derived = crate::AnalysisStore::join_contexts(&derived, &record.derived)?;
+            derived = crate::AnalysisContextRefV1::join(&derived, &record.derived)?;
             for origin in &record.origins {
                 origins.insert(origin.result_id.clone(), origin.clone());
             }
@@ -83,7 +80,7 @@ impl DataView {
             }
         }
         if let Some(source) = &step.source {
-            derived = crate::AnalysisStore::join_contexts(&derived, &source.derived)?;
+            derived = crate::AnalysisContextRefV1::join(&derived, &source.derived)?;
             for origin in &source.origins {
                 if origins
                     .insert(origin.result_id.clone(), origin.clone())
@@ -277,7 +274,7 @@ impl DataView {
 }
 
 impl NativeStore {
-    pub(in crate::analysis::native) fn validate_result_recovery(&self) -> Result<()> {
+    pub(in crate::analysis::native) fn validate_result_recovery(&self, counts: &mut super::super::capacity::RevisionCounts) -> Result<()> {
         let current = self.view()?;
         let control = AnalysisReadControl::default();
         let mut expected_results = BTreeMap::new();
@@ -366,6 +363,7 @@ impl NativeStore {
             let result = expected_results
                 .remove(&id)
                 .ok_or_else(|| Code::Invalid.error("managed result owner set"))?;
+            counts.add(result.tenant, 2)?;
             if matches!(result.body, ResultBody::Call(_)) {
                 checkpoints.insert(id);
             }

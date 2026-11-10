@@ -5,11 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[features]
-native-store = ["araphor-query/native-store"]
-
 [dependencies]
-araphor-graph = { path = "../araphor-graph", features = ["store"] }
+araphor-graph = { path = "../araphor-graph" }
 async-trait = "0.1"
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 datafusion = { version = "=55.0.0", default-features = false, features = ["sql", "nested_expressions", "encoding_expressions", "string_expressions", "unicode_expressions", "recursive_protection"] }

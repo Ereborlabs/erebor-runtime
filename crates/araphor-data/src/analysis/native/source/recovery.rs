@@ -5,10 +5,7 @@ use snafu::ResultExt as _;
 
 use super::super::{DataView, DataWrite, NativeStore};
 use super::Records;
-use crate::{
-    AnalysisExtractionV1, AnalysisGapV1, AnalysisReadControl, AnalysisRecoveryStatusV1,
-    EvidenceIntakeIdentityV1, NativeStateSnafu, NativeStorageSnafu, Result,
-};
+use crate :: { AnalysisExtractionV1 , AnalysisGapV1 , AnalysisReadControl , AnalysisRecoveryStatusV1 , EvidenceIntakeIdentityV1 , NativeStateSnafu , NativeStorageSnafu , Result } ;
 
 #[derive(Deserialize, Serialize)]
 struct RecoveryRange {
@@ -67,7 +64,7 @@ impl NativeStore {
         identity: &EvidenceIntakeIdentityV1,
         node_floor: u64,
     ) -> Result<AnalysisRecoveryStatusV1> {
-        let mut write = self.write()?;
+        let mut write = self.maintenance_write()?;
         let status = write.record_recovery_floor(identity, node_floor)?;
         write.commit([])?;
         Ok(status)

@@ -3,19 +3,9 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use crate::{
-    AnalysisRecordV1, DiscoveryConflictSnafu, DiscoveryEncodingSnafu, DiscoveryInvalidSnafu, Error,
-    EvidenceIntakeIdentityV1, EvidenceRecord, Result, WorkloadTargetFactV1,
-};
+use crate :: { AnalysisRecordV1 , DiscoveryConflictSnafu , DiscoveryEncodingSnafu , DiscoveryInvalidSnafu , Error , EvidenceIntakeIdentityV1 , EvidenceRecord , Result , WorkloadTargetFactV1 } ;
 
-pub use araphor_analysis_builtins::discovery::{
-    BehaviorAtomKeyV1, BehaviorAtomV1, BehaviorDisplayGroupV1, BehaviorDisplayKeyV1,
-    DiscoveryComparisonV1, DiscoveryContextBindingV1, DiscoveryCoverageStateV1,
-    DiscoveryCoverageV1, DiscoveryEffectKeyV1, DiscoveryFileObjectV1, DiscoveryGroupChangeV1,
-    DiscoveryLifecycleCaseV1, DiscoveryLifecycleEntryV1, DiscoveryLifecycleStateV1,
-    DiscoveryPhysicalResultV1, DiscoveryPolicyKeyV1, DiscoveryPolicyRevisionV1,
-    DiscoveryProofKindV1, DiscoveryRecordIdV1, DiscoveryUnresolvedV1,
-};
+pub use araphor_analysis_builtins :: discovery :: { BehaviorAtomKeyV1 , BehaviorAtomV1 , BehaviorDisplayGroupV1 , BehaviorDisplayKeyV1 , DiscoveryComparisonV1 , DiscoveryContextBindingV1 , DiscoveryCoverageStateV1 , DiscoveryCoverageV1 , DiscoveryEffectKeyV1 , DiscoveryFileObjectV1 , DiscoveryGroupChangeV1 , DiscoveryLifecycleCaseV1 , DiscoveryLifecycleEntryV1 , DiscoveryLifecycleStateV1 , DiscoveryPhysicalResultV1 , DiscoveryPolicyKeyV1 , DiscoveryPolicyRevisionV1 , DiscoveryProofKindV1 , DiscoveryRecordIdV1 , DiscoveryUnresolvedV1 } ;
 
 pub trait DiscoveryValidate {
     fn validate(&self) -> Result<()>;

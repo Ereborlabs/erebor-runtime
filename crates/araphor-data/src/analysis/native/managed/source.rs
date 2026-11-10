@@ -32,7 +32,7 @@ mod records;
 mod recovery;
 mod windows;
 
-pub(in crate::analysis::native) use read::SourceRead;
+pub(in crate::analysis::native) use read::{SourceContents, SourceRead};
 
 #[derive(Deserialize, Serialize)]
 pub(in crate::analysis::native) struct SourceRecord {
@@ -47,6 +47,7 @@ pub(in crate::analysis::native) struct SourceRecord {
 #[derive(Deserialize, Eq, PartialEq, Serialize)]
 struct Member {
     position: StorePositionV1,
+    observed: u64,
     origin: u64,
     restricted: u64,
 }

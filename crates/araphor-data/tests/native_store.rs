@@ -1,4 +1,4 @@
-#![cfg(feature = "native-store")]
+
 
 use araphor_data::analysis::native::NativeStore;
 use araphor_data::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1, Error};
@@ -125,7 +125,7 @@ fn graph_context_progress_share_one_batch() -> TestResult {
         native::{Declaration, Graph},
         EntityKind, Relation,
     };
-    use duckdb::arrow::datatypes::Schema;
+    use araphor_analysis_sdk::Schema;
     let dir = tempfile::tempdir()?;
     let store = NativeStore::open(&dir.path().join("data"))?;
     let graph = Graph::new(11)?;
@@ -287,10 +287,10 @@ fn prior_native_format_is_rejected() -> TestResult {
     let store = NativeStore::open(&root)?;
     assert_eq!(
         store.view()?.snapshot().get(b"\0data/format")?.as_deref(),
-        Some(8u64.to_be_bytes().as_slice())
+        Some(9u64.to_be_bytes().as_slice())
     );
     let mut tx = store.branch().write_tx()?;
-    tx.insert(b"\0data/format", 7u64.to_be_bytes());
+    tx.insert(b"\0data/format", 8u64.to_be_bytes());
     tx.commit_stamped([cut(0)])?;
     drop(store);
     assert!(matches!(

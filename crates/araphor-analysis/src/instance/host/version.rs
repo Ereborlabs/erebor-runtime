@@ -333,7 +333,8 @@ impl InstanceHost {
                     .prepare_resolved(
                         &definition,
                         retained.as_ref().map(|spec| spec.manifest.definition),
-                     None,)
+                        None,
+                    )
                     .await?;
                 if prepared.resolved() != &definition {
                     return Err(Code::Conflict.error("managed update definition pin").into());

@@ -5,11 +5,7 @@ use araphor_analysis_sdk::arrow_array::{UInt32Array, UInt64Array};
 use snafu::ResultExt as _;
 
 use super::*;
-use crate::{
-    AnalysisContextVersionV1, AnalysisReadModeV1, AnalysisTableRead, ContextSensitivityV1,
-    EvidenceRetentionOwner, TraceBatchV1, TraceFrameKindV1, TraceFrameV1, TraceStateV1,
-    ValidatedEvidenceBatchV1,
-};
+use crate :: { AnalysisContextVersionV1 , AnalysisReadModeV1 , AnalysisTableRead , ContextSensitivityV1 , EvidenceRetentionOwner , TraceBatchV1 , TraceFrameKindV1 , TraceFrameV1 , TraceStateV1 , ValidatedEvidenceBatchV1 } ;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 type Row = (u8, u64, u64, StorePositionV1);
@@ -58,7 +54,7 @@ fn read(
     ]
     .into_iter()
     .map(|(name, fields)| {
-        let schema = &AnalysisStore::table_schemas()[name];
+        let schema = &crate::AnalysisStore::table_schemas()[name];
         let indices = fields
             .iter()
             .map(|field| {

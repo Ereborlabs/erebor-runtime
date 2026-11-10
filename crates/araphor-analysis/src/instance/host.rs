@@ -366,10 +366,9 @@ impl InstanceHost {
         registration: Registration,
         mut requests: mpsc::UnboundedReceiver<PauseRequest>,
     ) -> Result<()> {
-        #[cfg(feature = "native-store")]
+        
         let mut notices = self.query.store().subscribe_activations()?;
-        #[cfg(not(feature = "native-store"))]
-        let mut notices = self.query.store().subscribe_activations();
+        
         let mut metadata = Some(self.membership(Arc::clone(&reader)).boxed());
         let mut members = FuturesUnordered::new();
         let result = loop {
@@ -415,10 +414,7 @@ impl InstanceHost {
                                     if araphor_query::Failure::from(source) == araphor_query::Failure::Busy) {
                                     break Err(error);
                                 }
-                                #[cfg(feature = "native-store")]
                                 let advanced = notices.position() > revision;
-                                #[cfg(not(feature = "native-store"))]
-                                let advanced = *notices.borrow_and_update() > revision;
                                 metadata = Some(if advanced {
                                     self.membership(Arc::clone(&reader)).boxed()
                                 } else {
@@ -490,7 +486,6 @@ impl InstanceHost {
             })
         };
         let result = read().await;
-        #[cfg(not(feature = "native-store"))]
         let result = {
             let mut result = result;
             while matches!(
@@ -768,14 +763,11 @@ impl InstanceHost {
         epoch: u64,
     ) -> Result<bool> {
         match Self::open_resource(error) {
-            #[cfg(not(feature = "native-store"))]
             Some(("reader", _)) => {
                 control
                     .query_async(self.query.store().wait_capacity())
                     .await?
             }
-            #[cfg(feature = "native-store")]
-            Some(("reader", _)) => return Ok(false),
             Some(("shared input" | "shared output", _)) => {
                 control.query_async(memory.capacity_changed(epoch)).await?
             }
@@ -1062,7 +1054,6 @@ impl InstanceHost {
             })
         };
         let result = read().await;
-        #[cfg(not(feature = "native-store"))]
         let result = {
             let mut result = result;
             while matches!(

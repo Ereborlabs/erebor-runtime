@@ -8,79 +8,10 @@ pub(in crate::analysis) struct Basis {
     subjects: BTreeMap<Identity, Vec<algorithm::SubjectChange>>,
     edges: BTreeMap<Identity, Vec<algorithm::RelationshipChange>>,
     findings: BTreeMap<Identity, Vec<FindingMember>>,
+    states: BTreeMap<Identity, Vec<GraphStateMember>>,
 }
 
 impl Basis {
-    pub(super) fn read(
-        journal: &ManagedGraphJournal,
-        scratch: &mut DomainScratch<'_>,
-    ) -> Result<Self> {
-        if journal.work.reads.is_empty() {
-            return Ok(Self::default());
-        }
-        for row in &journal.work.reads {
-            scratch.charge(0)?;
-            if !journal
-                .work
-                .origins
-                .contains_key(&araphor_graph::ReadOrigin {
-                    writer: row.writer,
-                    revision: row.revision,
-                })
-            {
-                return Err(Code::Denied.error("domain Graph read origin"));
-            }
-        }
-        let mut basis = Self::default();
-        for declaration in &journal.call.spec.relations {
-            let subjects = DomainRelations::subjects(declaration);
-            let edges = DomainRelations::relationships(declaration, &journal.call.spec);
-            let findings = DomainRelations::findings(declaration);
-            if !subjects && !edges && !findings {
-                continue;
-            }
-            let relation = journal.call.relations[&declaration.name];
-            let wanted = journal
-                .work
-                .reads
-                .iter()
-                .filter(|row| row.relation == relation)
-                .map(|row| {
-                    (
-                        row.writer,
-                        row.owner.as_slice(),
-                        row.key.as_slice(),
-                        row.revision,
-                    )
-                })
-                .collect::<std::collections::BTreeSet<_>>();
-            let keys = wanted
-                .iter()
-                .map(|(_, _, key, _)| key.to_vec())
-                .collect::<Vec<_>>();
-            for row in journal.prepared.view.members(relation, Some(&keys), || {
-                scratch.charge(0).map_err(araphor_graph::Error::backend)
-            })? {
-                if !wanted.contains(&(
-                    row.writer,
-                    row.owner_key.as_ref(),
-                    row.key.as_ref(),
-                    row.revision,
-                )) {
-                    continue;
-                }
-                basis.append(
-                    (relation, row.owner_key.as_ref(), row.key.as_ref()),
-                    declaration,
-                    &journal.call.spec,
-                    row.property_batch()?,
-                    scratch,
-                )?;
-            }
-        }
-        Ok(basis)
-    }
-
     pub(in crate::analysis) fn append(
         &mut self,
         identity: (u64, &[u8], &[u8]),
@@ -92,7 +23,8 @@ impl Basis {
         let subjects = DomainRelations::subjects(declaration);
         let edges = DomainRelations::relationships(declaration, spec);
         let findings = DomainRelations::findings(declaration);
-        if !subjects && !edges && !findings {
+        let states = DomainRelations::states(declaration);
+        if !subjects && !edges && !findings && !states {
             return Ok(());
         }
         scratch.charge(
@@ -105,6 +37,8 @@ impl Basis {
             algorithm::SubjectChange::port()
         } else if edges {
             algorithm::RelationshipChange::port()
+        } else if states {
+            GraphStateMember::port()
         } else {
             FindingMember::port()
         };
@@ -130,6 +64,12 @@ impl Basis {
                     .entry((identity.0, identity.1.clone(), key))
                     .or_default()
                     .push(expired);
+            }
+        } else if states {
+            for value in GraphStateMember::decode(&data).context(crate::AnalysisContractSnafu)? {
+                let values = self.states.entry(identity.clone()).or_default();
+                values.push(value.clone().retained_expiry());
+                values.push(value);
             }
         } else {
             for value in FindingMember::decode(&data).context(crate::AnalysisContractSnafu)? {
@@ -197,5 +137,17 @@ impl Basis {
                     .iter()
                     .any(|prior| prior.anchor == value.anchor && prior.value == value.value)
             }))
+    }
+    pub(super) fn state(
+        &self,
+        relation: u64,
+        batch: &sdk::RecordBatch,
+        row: usize,
+        value: &GraphStateMember,
+    ) -> Result<bool> {
+        Ok(self
+            .states
+            .get(&Self::identity(relation, batch, row)?)
+            .is_some_and(|values| values.contains(value)))
     }
 }

@@ -92,87 +92,7 @@ impl ManagedSourceFrame {
         Ok(contexts.into_values().collect())
     }
 
-    pub(in crate::analysis) fn canonical_contexts(
-        &self,
-        calls: &BTreeSet<u64>,
-        root: &std::path::Path,
-        charge: &mut dyn FnMut(usize) -> Result<()>,
-    ) -> Result<
-        BTreeMap<
-            crate::AnalysisContextKeyV1,
-            (crate::AnalysisContextVersionV1, AnalysisContextRefV1),
-        >,
-    > {
-        let selected = self
-            .selected
-            .lock()
-            .map_err(|_| Code::Conflict.error("canonical source lock"))?;
-        let mut result = BTreeMap::<
-            crate::AnalysisContextKeyV1,
-            (crate::AnalysisContextVersionV1, AnalysisContextRefV1),
-        >::new();
-        for cells in calls
-            .iter()
-            .filter_map(|call| selected.calls.get(call))
-            .flat_map(|call| &call.cells)
-        {
-            if cells.table.as_ref() != "context_versions" {
-                continue;
-            }
-            for index in &cells.indices {
-                charge(0)?;
-                let SourceRow::Context(reference) = &cells.rows[*index] else {
-                    return Err(Code::Invalid.error("canonical context handle"));
-                };
-                let body = SourceRow::array::<BinaryArray>(&cells.batch, "body")?.value(*index);
-                let nullable = |name| -> Result<Option<u64>> {
-                    let array = cells
-                        .batch
-                        .column_by_name(name)
-                        .and_then(|array| array.as_any().downcast_ref::<UInt64Array>())
-                        .ok_or_else(|| Code::Invalid.error("canonical context validity"))?;
-                    Ok((!array.is_null(*index)).then(|| array.value(*index)))
-                };
-                let from = nullable("valid_from_utc_ns")?;
-                let until = nullable("valid_until_utc_ns")?;
-                let sensitivity =
-                    SourceRow::array::<StringArray>(&cells.batch, "sensitivity")?.value(*index);
-                let revision =
-                    SourceRow::array::<UInt64Array>(&cells.batch, "commit_revision")?.value(*index);
-                if revision != reference.commit_revision {
-                    return Err(Code::Conflict.error("canonical context revisions"));
-                }
-                if let Some((prior, prior_ref)) = result.get(&reference.key) {
-                    let prior_sensitivity: &str = prior.sensitivity.into();
-                    if prior_ref != reference
-                        || prior.body != body
-                        || prior.valid_from_utc_ns != from
-                        || prior.valid_until_utc_ns != until
-                        || prior_sensitivity != sensitivity
-                    {
-                        return Err(Code::Conflict.error("canonical context cells"));
-                    }
-                    continue;
-                }
-                charge(
-                    body.len()
-                        .saturating_mul(8)
-                        .saturating_add(reference.key.allocated_bytes().saturating_mul(4))
-                        .saturating_add(
-                            12 * size_of::<(crate::AnalysisContextVersionV1, AnalysisContextRefV1)>(
-                            ),
-                        ),
-                )?;
-                let (value, _) = AnalysisStore::decode_context_row(
-                    root,
-                    reference.key.clone(),
-                    (from, until, sensitivity.to_owned(), body.to_vec(), revision),
-                )?;
-                result.insert(reference.key.clone(), (value, reference.clone()));
-            }
-        }
-        Ok(result)
-    }
+    
 
     pub(in crate::analysis) fn canonical_events(
         &self,
@@ -284,5 +204,89 @@ impl ManagedSourceFrame {
             }
         }
         Ok(())
+    }
+}
+
+impl ManagedSourceFrame {
+pub(in crate::analysis) fn canonical_contexts(
+        &self,
+        calls: &BTreeSet<u64>,
+        root: &std::path::Path,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<
+        BTreeMap<
+            crate::AnalysisContextKeyV1,
+            (crate::AnalysisContextVersionV1, AnalysisContextRefV1),
+        >,
+    > {
+        let selected = self
+            .selected
+            .lock()
+            .map_err(|_| Code::Conflict.error("canonical source lock"))?;
+        let mut result = BTreeMap::<
+            crate::AnalysisContextKeyV1,
+            (crate::AnalysisContextVersionV1, AnalysisContextRefV1),
+        >::new();
+        for cells in calls
+            .iter()
+            .filter_map(|call| selected.calls.get(call))
+            .flat_map(|call| &call.cells)
+        {
+            if cells.table.as_ref() != "context_versions" {
+                continue;
+            }
+            for index in &cells.indices {
+                charge(0)?;
+                let SourceRow::Context(reference) = &cells.rows[*index] else {
+                    return Err(Code::Invalid.error("canonical context handle"));
+                };
+                let body = SourceRow::array::<BinaryArray>(&cells.batch, "body")?.value(*index);
+                let nullable = |name| -> Result<Option<u64>> {
+                    let array = cells
+                        .batch
+                        .column_by_name(name)
+                        .and_then(|array| array.as_any().downcast_ref::<UInt64Array>())
+                        .ok_or_else(|| Code::Invalid.error("canonical context validity"))?;
+                    Ok((!array.is_null(*index)).then(|| array.value(*index)))
+                };
+                let from = nullable("valid_from_utc_ns")?;
+                let until = nullable("valid_until_utc_ns")?;
+                let sensitivity =
+                    SourceRow::array::<StringArray>(&cells.batch, "sensitivity")?.value(*index);
+                let revision =
+                    SourceRow::array::<UInt64Array>(&cells.batch, "commit_revision")?.value(*index);
+                if revision != reference.commit_revision {
+                    return Err(Code::Conflict.error("canonical context revisions"));
+                }
+                if let Some((prior, prior_ref)) = result.get(&reference.key) {
+                    let prior_sensitivity: &str = prior.sensitivity.into();
+                    if prior_ref != reference
+                        || prior.body != body
+                        || prior.valid_from_utc_ns != from
+                        || prior.valid_until_utc_ns != until
+                        || prior_sensitivity != sensitivity
+                    {
+                        return Err(Code::Conflict.error("canonical context cells"));
+                    }
+                    continue;
+                }
+                charge(
+                    body.len()
+                        .saturating_mul(8)
+                        .saturating_add(reference.key.allocated_bytes().saturating_mul(4))
+                        .saturating_add(
+                            12 * size_of::<(crate::AnalysisContextVersionV1, AnalysisContextRefV1)>(
+                            ),
+                        ),
+                )?;
+                let (value, _) = crate::AnalysisContextVersionV1::decode_row(
+                    root,
+                    reference.key.clone(),
+                    (from, until, sensitivity.to_owned(), body.to_vec(), revision),
+                )?;
+                result.insert(reference.key.clone(), (value, reference.clone()));
+            }
+        }
+        Ok(result)
     }
 }

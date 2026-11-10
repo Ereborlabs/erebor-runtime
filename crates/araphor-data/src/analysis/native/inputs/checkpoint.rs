@@ -1,8 +1,5 @@
 use super::InputRecord;
-use crate::analysis::{
-    inputs::InputCut,
-    native::{records::Records, DataWrite, NativeStore},
-};
+use crate :: analysis :: { inputs :: InputCut , native :: { records :: Records , DataWrite , NativeStore } } ;
 use crate::{NativeStateSnafu, Result};
 
 impl DataWrite<'_> {
@@ -45,7 +42,7 @@ impl DataWrite<'_> {
 
 impl NativeStore {
     pub fn checkpoint_inputs(&self) -> Result<()> {
-        let mut tx = self.write()?;
+        let mut tx = self.maintenance_write()?;
         tx.checkpoint_inputs()?;
         tx.commit([])?;
         Ok(())

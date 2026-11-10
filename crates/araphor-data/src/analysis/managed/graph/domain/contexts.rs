@@ -23,7 +23,7 @@ impl ContextInputs {
         let calls = attempt.1.spec.manifest.input_calls(call)?;
         let frame = attempt.5.as_ref();
         let refs = frame.map(|frame| frame.call_contexts(&calls)).transpose()?;
-        let wanted = AnalysisStore::join_contexts(
+        let wanted = crate::AnalysisContextRefV1::join(
             refs.as_deref().unwrap_or(&evidence.contexts),
             &derived.contexts(call),
         )?;

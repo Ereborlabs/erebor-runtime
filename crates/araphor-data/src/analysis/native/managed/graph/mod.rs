@@ -15,6 +15,7 @@ mod projection;
 pub(in crate::analysis) use projection::FindingRead;
 mod publication;
 mod read;
+pub(in crate::analysis::native) use read::PublicationRead;
 mod recovery;
 mod transaction;
 pub use cuts::GraphPublication;
@@ -32,10 +33,7 @@ pub(super) struct GraphCall {
     pub relations: BTreeMap<String, u64>,
 }
 
-use crate::{
-    analysis::native::{DataView, DataWrite},
-    AnalysisReadControl, ManagedSpec, NativeStateSnafu, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { analysis :: native :: { DataView , DataWrite } , AnalysisReadControl , ManagedSpec , NativeStateSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ManagedGraph {

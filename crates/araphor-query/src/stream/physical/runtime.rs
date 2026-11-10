@@ -354,7 +354,7 @@ impl Runtime {
                     .await?
             }
         };
-        #[cfg(feature = "native-store")]
+        
         {
             session.input_changes = self.progress.subscription();
         }

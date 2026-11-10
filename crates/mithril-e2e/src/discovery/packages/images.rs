@@ -25,7 +25,7 @@ async fn image_install_roundtrip() -> Result<()> {
         .analysis_store()
         .ok_or("image store absent")?;
     let before = data.active_managed(&Default::default())?.1;
-    let lifecycle = data.subscribe_activations();
+    let lifecycle = data.subscribe_activations()?;
     let layout = root.join("image");
     bundle.write_layout(&layout)?;
     let local = PackageBundleV1::read(&layout)?;

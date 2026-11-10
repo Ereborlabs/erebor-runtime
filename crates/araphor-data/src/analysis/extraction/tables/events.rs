@@ -166,7 +166,7 @@ mod tests {
                 framed_records: frame.into(),
             },
         )?;
-        let schema = &AnalysisStore::table_schemas()["events"];
+        let schema = &crate::AnalysisStore::table_schemas()["events"];
         let columns = fields
             .iter()
             .map(|field| schema.index_of(field))

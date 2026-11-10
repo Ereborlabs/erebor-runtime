@@ -2,11 +2,7 @@ use araphor_discovery_definition::ImagePin;
 use serde::Deserialize;
 
 use super::{PackageRecord, PackageRevisionV1, Records};
-use crate::{
-    analysis::native::{DataView, DataWrite, NativeStore},
-    AnalysisConflictSnafu, AnalysisReadControl, NativeStateSnafu, PackageBundle, PackageBundleV1,
-    PackageErrorCodeV1 as Code, PackageRefV1, Result,
-};
+use crate :: { analysis :: native :: { DataView , DataWrite , NativeStore } , AnalysisConflictSnafu , AnalysisReadControl , NativeStateSnafu , PackageBundle , PackageBundleV1 , PackageErrorCodeV1 as Code , PackageRefV1 , Result } ;
 
 #[derive(Deserialize)]
 pub(super) struct ImageRecord {
@@ -72,7 +68,7 @@ impl NativeStore {
         tx.stage_packages(&revisions)?;
         if let Some(row) = existing.filter(|row| row.installed) {
             if tx.dirty {
-                return crate::AnalysisStore::reject_path(
+                return crate::Error::reject_path(
                     &self.root,
                     "the installed image closure is absent",
                 );

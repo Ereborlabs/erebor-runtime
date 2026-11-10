@@ -245,9 +245,17 @@ impl ManagedSourceFrame {
     pub fn allocated_bytes(&self) -> usize {
         let record = self;
         let mut bytes = size_of::<Self>()
-            .saturating_add(self.coverage.capacity().saturating_mul(size_of::<super::coverage::SourceCoverage>()))
-            .saturating_add(self.coverage.iter().map(super::coverage::SourceCoverage::allocated_bytes)
-                .fold(0usize, usize::saturating_add))
+            .saturating_add(
+                self.coverage
+                    .capacity()
+                    .saturating_mul(size_of::<super::coverage::SourceCoverage>()),
+            )
+            .saturating_add(
+                self.coverage
+                    .iter()
+                    .map(super::coverage::SourceCoverage::allocated_bytes)
+                    .fold(0usize, usize::saturating_add),
+            )
             .saturating_add(self.scope.allocated_bytes().unwrap_or(usize::MAX))
             .saturating_add(size_of::<OnceLock<Arc<PackageResultRefV1>>>())
             .saturating_add(size_of::<Mutex<SourceSelection>>())

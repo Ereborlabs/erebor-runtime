@@ -1,10 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::managed::Record;
-use crate::{
-    AnalysisContextRefV1, AnalysisWitnessV1, DiscoveryRecordIdV1, GraphRevisionV1,
-    PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { AnalysisContextRefV1 , AnalysisWitnessV1 , DiscoveryRecordIdV1 , GraphRevisionV1 , PackageErrorCodeV1 as Code , Result } ;
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub(in crate::analysis) struct FindingOrigin {

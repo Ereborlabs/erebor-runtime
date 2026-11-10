@@ -247,7 +247,7 @@ fn graph_publication_requires_a_graph_producer() -> TestResult {
 }
 
 fn read(graph: &CommitFixture, mode: &ManagedRead) -> TestResult<ManagedCapture> {
-    let cursor = AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
+    let cursor = crate::AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
     Ok(graph
         .store
         .read_managed_tables_filtered(

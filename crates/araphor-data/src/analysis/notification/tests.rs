@@ -1,9 +1,5 @@
 use super::*;
-use crate::{
-    AnalysisContextKeyV1, ContextSensitivityV1, NotificationFindingRefV1, NotificationKeyV1,
-    NotificationPriorityV1, NotificationRouteRefV1, NotificationSinkHealthV1,
-    UnconfirmedNotificationConcernV1,
-};
+use crate :: { AnalysisContextKeyV1 , ContextSensitivityV1 , NotificationFindingRefV1 , NotificationKeyV1 , NotificationPriorityV1 , NotificationRouteRefV1 , NotificationSinkHealthV1 , UnconfirmedNotificationConcernV1 } ;
 
 enum Subject<'a> {
     Finding(&'a str, Option<&'a str>),

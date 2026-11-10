@@ -3,11 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::super::{DataView, NativeStore};
 use super::{CallHead, InstanceRecord, Records, VersionRecord};
 use crate::analysis::managed::{Capture, SourceScope};
-use crate::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisReadModeV1, AnalysisSelectionV1,
-    AnalysisTableRead, ManagedAttempt, ManagedCapture, ManagedPage, ManagedRead, ManagedSourceRead,
-    NativeStateSnafu, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { AnalysisExtractLimits , AnalysisReadControl , AnalysisReadModeV1 , AnalysisSelectionV1 , AnalysisTableRead , ManagedAttempt , ManagedCapture , ManagedPage , ManagedRead , ManagedSourceRead , NativeStateSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 impl NativeStore {
     pub fn read_managed_reference(
@@ -38,9 +34,11 @@ impl NativeStore {
         {
             return Err(Code::Conflict.error("managed journal identity"));
         }
-        if !reference.0.capture.traces.is_empty() {
-            return Err(Code::Unsupported.error("native managed trace owner"));
-        }
+        physical.check_trace_reads(
+            reference.0.capture.tenant,
+            &reference.0.capture.traces,
+            control,
+        )?;
         self.check_captured_progress(&reference.0.capture)?;
         let view = self.read_at(selected.commit_revision)?;
         let (mut page, mut state) = self.read_tables_with(

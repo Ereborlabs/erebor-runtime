@@ -42,7 +42,7 @@ impl StoredResult {
         Ok(Some((id, result)))
     }
 
-    pub(super) fn load(
+    pub(in crate::analysis::native) fn load(
         tenant: [u8; 16],
         name: &str,
         mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
@@ -59,7 +59,12 @@ impl StoredResult {
         Ok(Some((id, result)))
     }
 
-    pub(super) fn check_identity(&self, tenant: [u8; 16], name: &str, head: u64) -> Result<()> {
+    pub(in crate::analysis::native) fn check_identity(
+        &self,
+        tenant: [u8; 16],
+        name: &str,
+        head: u64,
+    ) -> Result<()> {
         if self.tenant != tenant || self.id != name || self.revision == 0 || self.revision > head {
             return Err(Code::Invalid.error("managed result identity"));
         }
@@ -182,7 +187,7 @@ impl DataView {
         )
     }
 
-    pub(super) fn result_owner(
+    pub(in crate::analysis::native) fn result_owner(
         &self,
         tenant: [u8; 16],
         name: &str,
@@ -198,13 +203,23 @@ impl DataView {
             charge,
         )?
         .ok_or_else(|| Code::Missing.error("managed result"))?;
+        let owner = self.qualify_result(&result, control, charge)?;
+        Ok((id, result, owner))
+    }
+
+    pub(in crate::analysis::native) fn qualify_result(
+        &self,
+        result: &StoredResult,
+        control: &AnalysisReadControl,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<ManagedAttempt> {
         let (instance, attempt) = result.owner();
         let owner = self
-            .managed_attempt_charged(tenant, instance, attempt, control, charge)?
+            .managed_attempt_charged(result.tenant, instance, attempt, control, charge)?
             .ok_or_else(|| Code::Missing.error("managed result attempt"))?;
         result.check(&owner.0, &owner.1.spec)?;
         control.check()?;
-        Ok((id, result, owner))
+        Ok(owner)
     }
 
     pub(super) fn result_checkpoint(
@@ -275,6 +290,7 @@ impl DataWrite<'_> {
         if Records::find(&identity, |key| Records::staged(key, &self.transaction))?.is_some() {
             return Err(Code::Conflict.error("immutable managed result"));
         }
+        self.count_revision(result.tenant, 2)?;
         let id = Records::intern(&mut self.transaction, &identity)?;
         Records::stage(
             &mut self.transaction,

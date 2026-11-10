@@ -1,9 +1,6 @@
 use super::*;
 use crate::analysis::PackageResultRefV1;
-use crate::{
-    BehaviorSnapshotV1, DiscoveryProofKindV1, EvidenceIntakeIdentityV1, ProcessorClassV1,
-    ProcessorScopeV1, ValidatedEvidenceBatchV1, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION,
-};
+use crate :: { BehaviorSnapshotV1 , DiscoveryProofKindV1 , EvidenceIntakeIdentityV1 , ProcessorClassV1 , ProcessorScopeV1 , ValidatedEvidenceBatchV1 , DISCOVERY_PROCESSOR , DISCOVERY_SCHEMA_VERSION } ;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 

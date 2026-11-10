@@ -42,13 +42,11 @@ members = [
     "crates/mithril-e2e-macros",
     "crates/mithril-node",
 ]
-exclude = ["neon", "fjall", "lsm-tree", "vendor/duckdb", "vendor/libduckdb-sys", "vendor/datafusion-physical-optimizer"]
+exclude = ["neon", "fjall", "lsm-tree", "vendor/datafusion-physical-optimizer"]
 resolver = "2"
 
 [patch.crates-io]
 datafusion-physical-optimizer = { path = "vendor/datafusion-physical-optimizer" }
-duckdb = { path = "vendor/duckdb" }
-libduckdb-sys = { path = "vendor/libduckdb-sys" }
 
 [workspace.package]
 version = "0.1.0"
@@ -65,7 +63,6 @@ comfy-table = "~7.1.4"
 containerd-client = "=0.8.0"
 crc32c = "0.6.8"
 crossterm = "0.29.0"
-duckdb = { version = "=1.10505.0", default-features = false, features = ["bundled"] }
 ed25519-dalek = "3.0.0"
 futures-util = "0.3"
 gix = { git = "https://github.com/nhaghighat/gitoxide", rev = "f803d3ea2efd54f18cafea76129e4c07e3e2eab9", default-features = false, features = ["parallel", "sha1", "sha256", "tree-editor"] }

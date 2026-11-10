@@ -5,10 +5,7 @@ use snafu::ResultExt as _;
 use super::super::{DataView, DataWrite, NativeStore};
 use super::{InstanceRecord, Records};
 use crate::analysis::managed::{Attempt, Capture, ManagedAttempt};
-use crate::{
-    AnalysisConflictSnafu, AnalysisReadControl, ManagedCapture, ManagedInstance, ManagedRequest,
-    NativeStateSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { AnalysisConflictSnafu , AnalysisReadControl , ManagedCapture , ManagedInstance , ManagedRequest , NativeStateSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 pub(super) struct Attempts;
 
@@ -252,58 +249,43 @@ impl NativeStore {
         witnesses: &[crate::AnalysisWitnessV1],
         revision: u64,
     ) -> Result<Vec<u64>> {
+        let raw = self.raw.lock().map_err(|_| NativeStateSnafu { field: "raw owner lock" }.build())?;
+        let mut checked = std::collections::BTreeSet::new();
         let mut segments = Vec::with_capacity(witnesses.len());
-        let mut cached = Vec::<crate::AnalysisRecordV1>::new();
-        let mut source = None;
-        let mut segment = 0;
         for witness in witnesses {
-            if source != Some(&witness.identity)
-                || cached
-                    .first()
-                    .is_none_or(|record| witness.cursor < record.cursor)
-                || cached
-                    .last()
-                    .is_none_or(|record| witness.cursor > record.cursor)
-            {
-                let ranges = self
-                    .raw
-                    .lock()
-                    .map_err(|_| {
-                        NativeStateSnafu {
-                            field: "raw owner lock",
-                        }
-                        .build()
-                    })?
-                    .select_ranges(
-                        &witness.identity,
-                        witness.cursor,
-                        witness.cursor,
-                        revision,
-                        None,
-                        2,
-                    )?;
-                if ranges.len() != 1 {
-                    return crate::AnalysisStore::reject_path(
-                        &self.root,
-                        "the result witness is not retained exactly once",
-                    );
-                }
-                cached = ranges[0].read(&self.root)?.0;
-                segment = ranges[0].segment_id;
-                source = Some(&witness.identity);
+            let entry = raw.witness_entry(witness, revision)?;
+            let id = entry.reference.id;
+            let segment = raw.segments.get(&id).filter(|segment|
+                segment.live.load(std::sync::atomic::Ordering::Acquire) && !raw.index.expired.contains_key(&id))
+                .ok_or_else(|| Code::Incomplete.error("result witness is not retained"))?;
+            if entry.reference.offset > segment.end { return Err(Code::Invalid.error("witness committed end")); }
+            if checked.insert(id) && crate::SegmentFile::reader(&segment.path)?.length()? < segment.end {
+                return Err(Code::Incomplete.error("witness segment is truncated"));
             }
-            cached
-                .binary_search_by_key(&witness.cursor, |record| record.cursor)
-                .map_err(|_| {
-                    NativeStateSnafu {
-                        field: "result witness is not retained",
-                    }
-                    .build()
-                })?;
-            segments.push(segment);
+            segments.push(id);
         }
         Ok(segments)
     }
+
+    pub(in crate::analysis::native) fn recover_witnesses(
+        &self,
+        witnesses: &[crate::AnalysisWitnessV1],
+        revision: u64,
+    ) -> Result<Vec<u64>> {
+        let raw = self.raw.lock().map_err(|_| NativeStateSnafu { field: "raw owner lock" }.build())?;
+        let mut segments = Vec::with_capacity(witnesses.len());
+        for witness in witnesses {
+            let entry = raw.witness_entry(witness, revision)?;
+            if let Some(expired) = raw.index.expired.get(&entry.reference.id) {
+                if expired.revision <= revision { return Err(Code::Invalid.error("witness expired before admission")); }
+            } else if raw.segments.get(&entry.reference.id).is_none_or(|segment| entry.reference.offset > segment.end) {
+                return Err(Code::Invalid.error("recovered witness committed end"));
+            }
+            segments.push(entry.reference.id);
+        }
+        Ok(segments)
+    }
+
 }
 
 impl DataWrite<'_> {
@@ -384,9 +366,7 @@ impl DataWrite<'_> {
         if !capture.follow && !self.sources_current(&capture.sources, &control)? {
             return crate::AnalysisSourceChangedSnafu.fail();
         }
-        if !capture.traces.is_empty() {
-            return Err(Code::Unsupported.error("native managed dependency owner"));
-        }
+        view.check_trace_reads(capture.tenant, &capture.traces, &control)?;
         for reference in &capture.dependencies {
             if NativeStore::reference_id(
                 capture.tenant,

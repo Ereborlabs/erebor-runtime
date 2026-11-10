@@ -1,10 +1,7 @@
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use crate::{
-    AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1,
-    PackageContextDecodeSnafu, PackageContextEncodeSnafu, Result,
-};
+use crate :: { AnalysisContextKeyV1 , AnalysisContextVersionV1 , ContextSensitivityV1 , PackageContextDecodeSnafu , PackageContextEncodeSnafu , Result } ;
 
 use super::PackageErrorCodeV1 as Code;
 use super::{PackageArtifactV1, PackageBundle, PackageBundleV1, PackageRefV1};

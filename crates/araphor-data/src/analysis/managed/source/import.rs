@@ -1,6 +1,5 @@
 use super::*;
-use crate::analysis::context::VerifiedPackages;
-use crate::{AnalysisContextRefV1, ManagedCommit};
+use crate::AnalysisContextRefV1;
 
 pub(in crate::analysis) struct PreparedDerived {
     sources: BTreeMap<u64, Vec<Arc<ManagedDerivedSource>>>,
@@ -192,127 +191,7 @@ impl ImportedSource {
         Ok(Some(step))
     }
 
-    pub(in crate::analysis) fn pin(
-        &self,
-        connection: &Connection,
-        receipt: &crate::ManagedReceipt,
-        prepared: &PreparedDerived,
-    ) -> Result<()> {
-        {
-            let mut appender =
-                connection
-                    .appender("managed_source_proofs")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "open source record proof pins",
-                    })?;
-            for (call, values) in &self.proofs {
-                for (record, reference) in values {
-                    appender
-                        .append_row(params![
-                            receipt.results[call].result_id,
-                            prepared.records[record].0,
-                            prepared.versions[&reference.key],
-                            reference.commit_revision,
-                            prepared.records[record].1,
-                            record.cpu_id,
-                            record.durable_cursor
-                        ])
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "append source record proof pin",
-                        })?;
-                }
-            }
-            for (record, reference) in &self.union.proofs {
-                appender
-                    .append_row(params![
-                        receipt.selected.result_id,
-                        prepared.records[record].0,
-                        prepared.versions[&reference.key],
-                        reference.commit_revision,
-                        prepared.records[record].1,
-                        record.cpu_id,
-                        record.durable_cursor
-                    ])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "append selected source proof pin",
-                    })?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush source record proof pins",
-            })?;
-        }
-        {
-            let mut appender =
-                connection
-                    .appender("managed_context_imports")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "open derived import pins",
-                    })?;
-            for (call, values) in &self.resolved {
-                for value in values {
-                    appender
-                        .append_row(params![
-                            receipt.results[call].result_id,
-                            prepared.versions[&value.key],
-                            value.commit_revision
-                        ])
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "append derived import pin",
-                        })?;
-                }
-            }
-            for value in &self.union.resolved {
-                appender
-                    .append_row(params![
-                        receipt.selected.result_id,
-                        prepared.versions[&value.key],
-                        value.commit_revision
-                    ])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "append selected import pin",
-                    })?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush derived import pins",
-            })?;
-        }
-        {
-            let mut appender =
-                connection
-                    .appender("managed_source_reads")
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "open derived origin pins",
-                    })?;
-            for (call, values) in &self.origins {
-                for value in values {
-                    appender
-                        .append_row(params![
-                            receipt.results[call].result_id,
-                            value.result_id,
-                            value.commit_revision
-                        ])
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "append derived origin pin",
-                        })?;
-                }
-            }
-            for value in &self.union.origins {
-                appender
-                    .append_row(params![
-                        receipt.selected.result_id,
-                        value.result_id,
-                        value.commit_revision
-                    ])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "append selected origin pin",
-                    })?;
-            }
-            appender.flush().context(AnalysisDatabaseSnafu {
-                operation: "flush derived origin pins",
-            })?;
-        }
-        Ok(())
-    }
+    
     pub(in crate::analysis) fn selected_proofs(
         &self,
     ) -> Result<Vec<(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)>> {
@@ -326,65 +205,7 @@ impl ImportedSource {
     }
 }
 
-impl AnalysisStore {
-    pub(in crate::analysis) fn source_origins(
-        connection: &Connection,
-        result: &str,
-    ) -> Result<Vec<PackageResultRefV1>> {
-        connection.prepare("SELECT producer_id,revision FROM managed_source_reads WHERE result_id=? ORDER BY producer_id")
-            .and_then(|mut query| query.query_map(params![result],|row| Ok(PackageResultRefV1 { result_id:row.get(0)?,commit_revision:row.get(1)? }))?.collect())
-            .context(AnalysisDatabaseSnafu { operation:"read derived origin pins" })
-    }
 
-    pub(in crate::analysis) fn join_contexts(
-        before: &[AnalysisContextRefV1],
-        after: &[AnalysisContextRefV1],
-    ) -> Result<Vec<AnalysisContextRefV1>> {
-        let mut values = BTreeMap::new();
-        for value in before.iter().chain(after) {
-            if values
-                .insert(value.key.clone(), value.clone())
-                .is_some_and(|prior| prior != *value)
-            {
-                return Err(Code::Conflict.error("derived immutable context"));
-            }
-        }
-        Ok(values.into_values().collect())
-    }
-
-    pub(in crate::analysis) fn prepare_derived(
-        &self,
-        connection: &Connection,
-        input: &ManagedCommit<'_>,
-        revision: u64,
-        verified: &mut VerifiedPackages,
-        memory: &mut super::super::budget::PreparedMemory<'_>,
-    ) -> Result<PreparedDerived> {
-        PreparedDerived::prepare(
-            input.attempt,
-            input
-                .returns
-                .iter()
-                .map(|returned| (returned.call, returned.retained.is_some())),
-            revision,
-            memory,
-            |facts, revision, _| self.inspect_fact_rows(connection, facts, revision, verified),
-        )
-    }
-
-    pub(in crate::analysis) fn import_derived(
-        &self,
-        connection: &duckdb::Transaction<'_>,
-        prepared: &mut PreparedDerived,
-        revision: u64,
-        verified: &mut VerifiedPackages,
-        cached: bool,
-    ) -> Result<ImportedSource> {
-        let references =
-            self.import_fact_rows(connection, &prepared.facts, revision, verified, cached)?;
-        prepared.bind(&references)
-    }
-}
 
 impl PreparedDerived {
     pub(in crate::analysis) fn prepare(

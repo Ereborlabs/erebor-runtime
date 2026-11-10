@@ -169,11 +169,15 @@ impl NativeStore {
                 }
                 let restricted = restricted.get(record).copied().unwrap_or(0);
                 let key = SourceRecord::member_key(&prefix, record);
+                let bytes = Records::payload(&key, |key| Records::read(key, &at.snapshot))?
+                    .ok_or_else(|| Code::Missing.error("source observed member"))?;
+                let retained: Member = Records::decode(&bytes)?;
                 if expected
                     .insert(
                         key,
                         Member {
                             position: *position,
+                            observed: retained.observed,
                             origin: selected,
                             restricted,
                         },

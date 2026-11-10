@@ -1,9 +1,5 @@
 use super::{CallHead, InstanceRecord, Records, VersionRecord};
-use crate::{
-    analysis::native::{DataWrite, NativeStore},
-    AnalysisConflictSnafu, ManagedInstance, ManagedSpec, PackageErrorCodeV1 as Code,
-    PackageGrantV1, Result,
-};
+use crate :: { analysis :: native :: { DataWrite , NativeStore } , AnalysisConflictSnafu , ManagedInstance , ManagedSpec , PackageErrorCodeV1 as Code , PackageGrantV1 , Result } ;
 
 impl NativeStore {
     pub fn admit_managed(

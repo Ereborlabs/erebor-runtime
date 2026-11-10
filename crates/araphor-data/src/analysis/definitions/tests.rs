@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use araphor_discovery_definition::{Definition, ImagePin, Program, Source};
-use duckdb::params;
+
 
 use super::*;
 use crate::analysis::tests::assert_no_execution;

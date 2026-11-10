@@ -18,7 +18,6 @@ axum-server.workspace = true
 clap.workspace = true
 containerd-client.workspace = true
 crc32c.workspace = true
-duckdb.workspace = true
 datafusion-common = { version = "=55.0.0", default-features = false }
 ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }

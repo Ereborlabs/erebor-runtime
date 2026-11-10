@@ -28,10 +28,7 @@ fn attempt_bytes(store: &AnalysisStore, instance: &str, attempt: &str) -> TestRe
     })?)
 }
 
-fn call_heads(
-    store: &AnalysisStore,
-    instance: &str,
-) -> TestResult<Vec<(u64, u64, Option<String>)>> {
+fn call_heads(store: &AnalysisStore, instance: &str) -> TestResult<Vec<(u64, u64, Option<String>)>> {
     Ok(store.read_snapshot(|reader| {
         let mut statement = reader.prepare(
             "SELECT call_id, state_revision, result_id FROM managed_calls WHERE tenant_id = ? AND instance_id = ? ORDER BY call_id",

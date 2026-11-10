@@ -73,6 +73,7 @@ impl NativeStore {
             let kind = match name.as_str() {
                 "events" | "source_receipts" => b'E',
                 "source_bindings" => b'B',
+                "traces" | "trace_output" | "trace_measurements" => b'T',
                 _ => 0,
             };
             let raw = raw

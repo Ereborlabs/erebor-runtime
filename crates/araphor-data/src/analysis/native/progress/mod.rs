@@ -9,6 +9,7 @@ use crate::{
 };
 
 mod commit;
+mod health;
 mod inputs;
 mod notices;
 pub(super) mod profile;
@@ -89,6 +90,12 @@ impl Processor {
 }
 
 impl NativeStore {
+    pub fn discovery_enabled(&self) -> bool {
+        self.discovery_owners
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+    }
+
     pub fn register_discovery_owner(&self) {
         if self
             .discovery_owners
@@ -145,7 +152,7 @@ impl NativeStore {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<u64> {
         if !scope.valid() || start == 0 {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.root,
                 "the processor scope or start cursor is invalid",
             );
@@ -171,7 +178,7 @@ impl NativeStore {
                 || start > receipt.contiguous_cursor.saturating_add(1)
         }) || receipt.is_none() && start != 1
         {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.root,
                 "the processor start is outside retained source input",
             );
@@ -227,12 +234,12 @@ impl NativeStore {
 
     pub fn retire_required(&self, request: &ProcessorRetirementV1) -> Result<u64> {
         if !request.valid() {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.root,
                 "the processor retirement request is invalid",
             );
         }
-        let mut tx = self.write()?;
+        let mut tx = self.maintenance_write()?;
         let (id, mut state) = Processor::read(
             &request.scope,
             tx.revision,
@@ -283,6 +290,10 @@ impl DataWrite<'_> {
             Processor::key(Processor::PREFIX, id),
             Records::named(state)?,
         );
+        if self.store.retention.raw_max_age_ns.is_some() || self.store.retention.raw_max_bytes.is_some() {
+            self.processors.insert(id, (state.scope.identity.clone(),
+                (state.class == ProcessorClassV1::Required && state.retirement.is_none()).then_some(state.consumed)));
+        }
         self.note_relation("processor_progress", self.revision)
     }
 

@@ -7,24 +7,22 @@ repository.workspace = true
 
 [features]
 test-fixtures = []
-native-store = ["dep:fjall", "araphor-graph/native-store"]
 
 [dependencies]
 erebor-telemetry = { path = "../erebor-telemetry" }
 araphor-discovery-definition = { path = "../araphor-discovery-definition" }
 araphor-package = { path = "../araphor-package" }
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
-araphor-graph = { path = "../araphor-graph", features = ["store"] }
+araphor-graph = { path = "../araphor-graph", features = ["native-store"] }
 araphor-analysis-types = { path = "../araphor-analysis-types" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 arrow-ipc = "=59.2.0"
 arrow-json = "=59.2.0"
 crc32c.workspace = true
-duckdb = { workspace = true, features = ["json", "vtab", "appender-arrow"] }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 futures-core = "0.3"
-fjall = { path = "../../fjall", version = "=3.1.13", features = ["journal-cdc"], optional = true }
+fjall = { path = "../../fjall", version = "=3.1.13", features = ["journal-cdc"] }
 futures-util.workspace = true
 minicbor.workspace = true
 rmp-serde.workspace = true

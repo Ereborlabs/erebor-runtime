@@ -9,7 +9,7 @@ use super::*;
 pub struct NotificationUpdate {
     pub routed: Vec<(NotificationFindingRefV1, Result<usize>)>,
     pub delivered: Vec<(NotificationKeyV1, Result<usize>)>,
-    #[cfg(feature = "native-store")]
+    
     pub(crate) publication: Option<(u64, bool)>,
 }
 
@@ -36,7 +36,7 @@ impl NotificationRouter {
             budget.as_ref(),
             &|| Ok(()),
             &mut |delivery| Ok(sink.deliver(delivery)),
-            #[cfg(feature = "native-store")]
+            
             update.snapshot.notification_capture(),
         )
     }
@@ -61,7 +61,7 @@ impl NotificationRouter {
             budget.as_ref(),
             check,
             effect,
-            #[cfg(feature = "native-store")]
+            
             None,
         )
     }
@@ -75,7 +75,7 @@ impl NotificationRouter {
         budget: &dyn araphor_data::ManagedBudget,
         check: &dyn Fn() -> Result<()>,
         effect: &mut Effect<'_>,
-        #[cfg(feature = "native-store")] capture: Option<
+         capture: Option<
             &araphor_data::analysis::native::NotificationCapture,
         >,
     ) -> Result<NotificationUpdate> {
@@ -157,7 +157,7 @@ impl NotificationRouter {
         let decoded = std::time::Instant::now();
         if work.is_empty() {
             let update = NotificationUpdate::default();
-            #[cfg(feature = "native-store")]
+            
             let update = if let Some(capture) = capture {
                 check()?;
                 let _guard = self.lock()?;
@@ -290,14 +290,13 @@ impl NotificationRouter {
             }
             update.delivered.push((state.key, result));
         }
-        #[cfg(feature = "native-store")]
+        
         {
             let complete = update.routed.iter().all(|(_, result)| result.is_ok())
                 && update.delivered.iter().all(|(_, result)| result.is_ok());
             update.publication = cycle.commit(check, capture.filter(|_| complete))?;
         }
-        #[cfg(not(feature = "native-store"))]
-        cycle.flush(check)?;
+        
         let completed = std::time::Instant::now();
         erebor_telemetry::debug!(
             tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,

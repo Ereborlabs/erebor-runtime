@@ -50,7 +50,7 @@ fn schema_contract() -> TestResult {
     use sha2::{Digest, Sha256};
 
     let mut hashes = BTreeMap::new();
-    for (name, schema) in AnalysisStore::table_schemas() {
+    for (name, schema) in crate::AnalysisStore::table_schemas() {
         let mut value = serde_json::to_value(schema.as_ref())?;
         value.sort_all_objects();
         let bytes = serde_json::to_vec(&value)?;
@@ -185,7 +185,7 @@ fn extraction() -> TestResult<(AnalysisExtractionV1, AnalysisReadControl)> {
 }
 
 fn columns(relation: &str, names: &[&str]) -> TestResult<crate::AnalysisTableRequests> {
-    let schema = AnalysisStore::table_schemas()
+    let schema = crate::AnalysisStore::table_schemas()
         .get(relation)
         .ok_or("the native source schema is missing")?;
     Ok(BTreeMap::from([(

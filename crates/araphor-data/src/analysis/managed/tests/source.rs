@@ -20,7 +20,7 @@ impl SourceFixture {
     }
 
     fn columns(name: &str) -> TestResult<BTreeSet<usize>> {
-        let schema = &AnalysisStore::table_schemas()[name];
+        let schema = &crate::AnalysisStore::table_schemas()[name];
         let names = schema.fields()[0].metadata()["araphor.join_keys"].split(',');
         let mut columns = names
             .map(|name| schema.index_of(name))
@@ -1083,7 +1083,7 @@ fn source_references_project_context() -> TestResult {
     };
     let first_context = store.commit_context(&context)?;
     let mut columns = SourceFixture::columns("context_versions")?;
-    columns.insert(AnalysisStore::table_schemas()["context_versions"].index_of("body")?);
+    columns.insert(crate::AnalysisStore::table_schemas()["context_versions"].index_of("body")?);
     let fixture = SourceFixture {
         fixture: Fixture::admit_scope(&store, false, AnalysisSelectionV1::tenant([1; 16]))?,
         execution: Arc::default(),

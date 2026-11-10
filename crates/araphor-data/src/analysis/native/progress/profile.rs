@@ -1,11 +1,6 @@
 use super::*;
-use crate::analysis::{
-    managed::PreparedMemory,
-    progress::{PreparedProfile, ProfileCommit, ResultHead},
-};
-use crate::{
-    AnalysisResultReceiptV1, DiscoveryProfileV1, ManagedAttempt, ManagedDestination, ManagedReceipt,
-};
+use crate :: analysis :: { managed :: PreparedMemory , progress :: { PreparedProfile , ProfileCommit , ResultHead } } ;
+use crate :: { AnalysisResultReceiptV1 , DiscoveryProfileV1 , ManagedAttempt , ManagedDestination , ManagedReceipt } ;
 
 #[derive(Deserialize, Serialize)]
 pub(in crate::analysis::native) struct IntervalHead {
@@ -66,7 +61,7 @@ impl DataWrite<'_> {
             || !packet.request.body.is_empty()
             || !packet.request.witnesses.is_empty()
         {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.store.root,
                 "the typed profile publication is invalid",
             );
@@ -180,7 +175,7 @@ impl DataWrite<'_> {
             || profile.revision != 1
             || profile.interval_id != profile.profile_id
         {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.store.root,
                 "the initial profile interval is invalid",
             );

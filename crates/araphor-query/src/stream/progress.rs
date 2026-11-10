@@ -69,21 +69,16 @@ impl Progress {
         )
         .context(crate::SqlSnafu)?;
         requests.retain(|_, columns| columns.is_some());
-        #[cfg(feature = "native-store")]
+        
         let indexed = binding.managed.is_some()
             && crate::sources::SourceLookup::required(physical, None).context(crate::SqlSnafu)?;
-        #[cfg(not(feature = "native-store"))]
-        let indexed = {
-            let _ = binding;
-            false
-        };
+        
         crate::sources::SourceSnapshot::project_requests(&mut requests, &mut bounds, indexed)
             .context(crate::SqlSnafu)?;
         let subscribe = || {
-            #[cfg(feature = "native-store")]
+            
             let session = Arc::new(binding.clone());
-            #[cfg(not(feature = "native-store"))]
-            let session = Arc::clone(&self.run.session);
+            
             let control = Arc::clone(session.control());
             let worker = Arc::clone(&control);
             let requests = requests.clone();
@@ -93,7 +88,7 @@ impl Progress {
                     let budget = session
                         .memory()
                         .managed_budget(worker.as_ref(), session.engine().limits().input_bytes);
-                    #[cfg(feature = "native-store")]
+                    
                     if let Some(instance) = session
                         .managed
                         .as_ref()
@@ -129,9 +124,6 @@ impl Progress {
                 .await
             }
         };
-        #[cfg(feature = "native-store")]
-        let subscription = subscribe().await?;
-        #[cfg(not(feature = "native-store"))]
         let subscription = {
             let mut result = subscribe().await;
             while matches!(

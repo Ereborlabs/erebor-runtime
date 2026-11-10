@@ -4,6 +4,8 @@ The sections before `Native identity reads` describe the earlier DuckDB Graph
 row rewrite and its recorded checks. They are historical evidence. The native
 storage replacement uses the versioned Fjall and lsm-tree forks. Its current
 worklist is in the [integration research](../research/araphor-fjall-integration.md).
+Use the [native storage review](araphor-native-storage-review.md) for the
+connected replacement's current owners and data flow.
 
 ## Intended end state
 

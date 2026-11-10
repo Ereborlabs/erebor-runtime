@@ -2,7 +2,30 @@ use super::{notices::Notice, profile::IntervalHead, *};
 use std::collections::{BTreeMap, BTreeSet};
 
 impl NativeStore {
-    pub(in crate::analysis::native) fn validate_progress_recovery(&self) -> Result<()> {
+    pub(in crate::analysis::native) fn restore_backlog(
+        raw: &mut crate::analysis::raw::RawJournal,
+        snapshot: &fjall::BranchSnapshot,
+        limits: crate::RetentionLimitsV1,
+    ) -> Result<()> {
+        if limits.raw_max_age_ns.is_none() && limits.raw_max_bytes.is_none() { return Ok(()); }
+        let mut tenants = BTreeSet::new();
+        for entry in snapshot.prefix(Processor::PREFIX) {
+            let (key, _) = entry.context(crate::NativeStorageSnafu { operation: "restore Required input owners" })?;
+            if key.len() != Processor::PREFIX.len() + 8 { continue; }
+            let bytes = Records::payload(&key, |key| Records::read(key, snapshot))?
+                .ok_or_else(|| Code::Missing.error("processor state"))?;
+            let state: Processor = Records::decode(&bytes)?;
+            if state.class != ProcessorClassV1::Required || state.retirement.is_some() { continue; }
+            if !state.scope.valid() { return Err(Code::Invalid.error("processor scope")); }
+            let owner = Self::number(&key[Processor::PREFIX.len()..])?;
+            raw.budget.set_required(owner, state.scope.identity.key(), state.scope.identity.tenant_id, Some(state.consumed));
+            tenants.insert(state.scope.identity.tenant_id);
+        }
+        for tenant in tenants { raw.reconcile_backlog(tenant, limits)?; }
+        Ok(())
+    }
+
+    pub(in crate::analysis::native) fn validate_progress_recovery(&self, counts: &mut super::super::capacity::RevisionCounts) -> Result<()> {
         let view = self.view()?;
         let mut intervals = BTreeMap::new();
         let mut bodies = BTreeSet::new();
@@ -18,6 +41,7 @@ impl NativeStore {
             let bytes = Records::payload(&key, |key| Records::read(key, &view.snapshot))?
                 .ok_or_else(|| Code::Missing.error("processor result"))?;
             let mut row: ResultRecord = Records::decode(&bytes)?;
+            counts.add(row.request.scope.identity.tenant_id, 2)?;
             let (found, _) = ResultRecord::read_header(
                 &row.request.result_id,
                 view.metadata_revision,
@@ -175,7 +199,7 @@ impl NativeStore {
                     gaps.insert(key, Records::named(&gap)?);
                 }
             }
-            self.validate_processor_history(id, state)?;
+            self.validate_processor_history(id, state, &mut gaps)?;
         }
         for entry in view.snapshot.prefix(Processor::GAPS) {
             let (key, value) = entry.context(crate::NativeStorageSnafu {
@@ -208,7 +232,7 @@ impl NativeStore {
         Ok(())
     }
 
-    fn validate_processor_history(&self, id: u64, mut state: Processor) -> Result<()> {
+    fn validate_processor_history(&self, id: u64, mut state: Processor, gaps: &mut BTreeMap<Vec<u8>, Vec<u8>>) -> Result<()> {
         loop {
             let at = self.read_at(state.revision)?;
             let actual = Processor::read(
@@ -305,6 +329,19 @@ impl NativeStore {
                         || state.context != prior.context)
             {
                 return Err(Code::Invalid.error("processor transition"));
+            }
+            if state.resumed > prior.resumed {
+                let first = prior.consumed.max(prior.resumed).checked_add(1)
+                    .ok_or_else(|| Code::Invalid.error("optional resume cursor"))?;
+                let expired = at.expired_after(&state.scope.identity, first - 1)?;
+                if state.class != crate::ProcessorClassV1::Optional
+                    || state.consumed != prior.consumed || state.head != prior.head
+                    || state.coverage != prior.coverage || state.context != prior.context
+                    || expired.is_none_or(|gap| gap.first_cursor > first || gap.last_cursor != state.resumed)
+                { return Err(Code::Invalid.error("optional resume history")); }
+                let gap = crate::AnalysisGapV1 { first_cursor: first, last_cursor: state.resumed, commit_revision: state.revision };
+                let key = [Processor::key(Processor::GAPS, id), gap.first_cursor.to_be_bytes().to_vec(), gap.last_cursor.to_be_bytes().to_vec()].concat();
+                if gaps.insert(key, Records::named(&gap)?).is_some() { return Err(Code::Invalid.error("optional resume gap")); }
             }
             state = prior;
         }

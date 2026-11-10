@@ -4,7 +4,7 @@ use std::path::Path;
 
 use snafu::ResultExt as _;
 
-use super::AnalysisStore;
+
 use crate::{IoSnafu, Result, StorageCapacitySnafu};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
@@ -12,7 +12,6 @@ use crate::{IoSnafu, Result, StorageCapacitySnafu};
 pub struct StorageLimitsV1 {
     pub reader_admissions: Option<usize>,
     pub native_memory_bytes: Option<u64>,
-    pub native_temp_bytes: Option<u64>,
     pub disk_max_bytes: Option<u64>,
     pub policy_reserve_bytes: Option<u64>,
     pub write_reserve_bytes: Option<u64>,
@@ -236,7 +235,6 @@ impl StorageLimitsV1 {
         Self {
             reader_admissions: None,
             native_memory_bytes: Some(128 * 1024 * 1024),
-            native_temp_bytes: Some(128 * 1024 * 1024),
             disk_max_bytes: Some(8 * 1024 * 1024 * 1024),
             policy_reserve_bytes: Some(256 * 1024 * 1024),
             write_reserve_bytes: Some(256 * 1024 * 1024),
@@ -259,10 +257,7 @@ impl StorageLimitsV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, RetentionLimitsV1,
-        ValidatedEvidenceBatchV1,
-    };
+    use crate :: { EvidenceIntakeIdentityV1 , EvidenceStoreOutcomeV1 , RetentionLimitsV1 , ValidatedEvidenceBatchV1 } ;
 
     #[test]
     fn storage_defaults_disable_quotas() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -273,7 +268,6 @@ mod tests {
         assert_eq!(limits.notification_routes, None);
         assert_eq!(limits.notification_states, None);
         assert_eq!(limits.native_memory_bytes, None);
-        assert_eq!(limits.native_temp_bytes, None);
         assert_eq!(limits.maintenance_bytes()?, 0);
         limits.check(
             StorageUsageV1 {
@@ -311,7 +305,7 @@ mod tests {
             )
             .is_err());
         let limits: StorageLimitsV1 = serde_json::from_str(
-            r#"{"reader_admissions":2,"native_memory_bytes":16777216,"native_temp_bytes":33554432,"source_entries":1,"tenant_revisions":1,"notification_routes":32,"notification_states":256}"#,
+            r#"{"reader_admissions":2,"native_memory_bytes":16777216,"source_entries":1,"tenant_revisions":1,"notification_routes":32,"notification_states":256}"#,
         )?;
         assert!(limits.valid());
         assert_eq!(limits.reader_admissions, Some(2));
@@ -335,7 +329,6 @@ mod tests {
         }
         .valid());
         assert_eq!(limits.native_memory_bytes, Some(16 * 1024 * 1024));
-        assert_eq!(limits.native_temp_bytes, Some(32 * 1024 * 1024));
         limits.check_sources(1, 1, false)?;
         assert!(limits.check_sources(2, 1, false).is_err());
         limits.check_revisions(100, 1)?;
@@ -723,7 +716,7 @@ mod tests {
                 .ok_or_else(|| store.state_error("segment summary"))?;
             assert_eq!((evidence, diagnostic), (count, 0));
             let summary = store.storage_for_append(&raw, 0, 0)?;
-            let inspected = AnalysisStore::storage_at(&root, 0, 0)?;
+            let inspected = crate::StorageUsageV1::at(&root, 0, 0)?;
             assert_eq!(
                 (summary.file_bytes, summary.allocated_bytes),
                 (inspected.file_bytes, inspected.allocated_bytes)
@@ -804,7 +797,6 @@ mod tests {
             (
                 StorageLimitsV1 {
                     native_memory_bytes: Some(128 * 1024 * 1024),
-                    native_temp_bytes: Some(64 * 1024 * 1024),
                     ..Default::default()
                 },
                 "128.0 MiB",
@@ -857,11 +849,8 @@ mod tests {
                     .execute_batch("CREATE TABLE absent (value BIGINT)")
                     .is_err());
             }
-            let restored = AnalysisStore::restore_with_limits(
-                &backup,
-                &directory.path().join("restored"),
-                limits,
-            )?;
+            let restored =
+                AnalysisStore::restore_with_limits(&backup, &directory.path().join("restored"), limits)?;
             check(restored.reader()?.get()?)?;
             drop(store);
             let reopened = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
@@ -879,7 +868,6 @@ mod tests {
             Default::default(),
             StorageLimitsV1 {
                 native_memory_bytes: Some(memory),
-                native_temp_bytes: Some(64 * 1024 * 1024),
                 ..Default::default()
             },
         )?;
@@ -998,45 +986,14 @@ impl StorageUsageV1 {
     }
 }
 
-impl AnalysisStore {
-    pub fn storage_limits(&self) -> &StorageLimitsV1 {
-        &self.storage
+
+
+impl StorageUsageV1 {
+    pub(super) fn at(root: &Path, entries: usize, diagnostics: usize) -> Result<StorageUsageV1> {
+        Self::inspect(root, entries, diagnostics, None, StorageLimitsV1::default())
     }
 
-    pub fn storage_usage(&self) -> Result<StorageUsageV1> {
-        Self::storage_at(&self.root, 0, 0)
-    }
-
-    pub(super) fn storage_with_entries(&self, entries: usize) -> Result<StorageUsageV1> {
-        self.storage_with_reserve(entries, 0)
-    }
-
-    pub(super) fn storage_with_reserve(
-        &self,
-        entries: usize,
-        diagnostics: usize,
-    ) -> Result<StorageUsageV1> {
-        Self::inspect_storage(&self.root, entries, diagnostics, None, self.storage)
-    }
-
-    pub(super) fn storage_at(
-        root: &Path,
-        entries: usize,
-        diagnostics: usize,
-    ) -> Result<StorageUsageV1> {
-        Self::inspect_storage(root, entries, diagnostics, None, StorageLimitsV1::default())
-    }
-
-    pub(super) fn storage_for_append(
-        &self,
-        raw: &super::raw::RawJournal,
-        entries: usize,
-        diagnostics: usize,
-    ) -> Result<StorageUsageV1> {
-        Self::inspect_storage(&self.root, entries, diagnostics, Some(raw), self.storage)
-    }
-
-    fn inspect_storage(
+    pub(super) fn inspect(
         root: &Path,
         mut entries: usize,
         mut diagnostics: usize,
@@ -1107,21 +1064,15 @@ impl AnalysisStore {
                         pending.push(path.clone());
                     }
                 } else if !metadata.is_file() {
-                    return Self::reject_path(root, "the data directory contains a non-file entry");
+                    return crate::Error::reject_path(
+                        root,
+                        "the data directory contains a non-file entry",
+                    );
                 }
                 limits.check_entries(entries, diagnostics)?;
                 usage.add(StorageUsageV1::from_metadata(&path, &metadata)?, root)?;
             }
         }
         Ok(usage)
-    }
-
-    pub(super) fn require_capacity(&self, maintenance: bool) -> Result<()> {
-        let usage = if maintenance {
-            self.storage_usage()?
-        } else {
-            self.storage_with_entries(0)?
-        };
-        self.storage.check(usage, maintenance)
     }
 }

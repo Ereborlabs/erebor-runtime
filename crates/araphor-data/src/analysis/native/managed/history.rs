@@ -1,14 +1,8 @@
 use snafu::ResultExt as _;
 
 use super::{attempts::Attempts, InstanceRecord, Records, VersionRecord};
-use crate::analysis::{
-    managed::Attempt,
-    native::{DataView, NativeStore},
-};
-use crate::{
-    AnalysisReadControl, AnalysisSelectionV1, ManagedReceipt, NativeStorageSnafu,
-    PackageErrorCodeV1 as Code, Result,
-};
+use crate :: analysis :: { managed :: Attempt , native :: { DataView , NativeStore } } ;
+use crate :: { AnalysisReadControl , AnalysisSelectionV1 , ManagedReceipt , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 impl NativeStore {
     pub fn managed_history(

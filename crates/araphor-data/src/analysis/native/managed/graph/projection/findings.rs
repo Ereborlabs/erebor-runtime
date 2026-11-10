@@ -41,6 +41,7 @@ pub(in crate::analysis) struct FindingRead<'a> {
     findings: BTreeMap<(String, String), Arc<Vec<FindingRow>>>,
     source_revisions: BTreeMap<String, Arc<GraphRevisionV1>>,
     scalar_owners: BTreeMap<String, Option<Arc<notification::ScalarOwner>>>,
+    source_bounds: BTreeMap<(String, Vec<[u8; 16]>), bool>,
     qualified: BTreeSet<u64>,
     verified: RefCell<crate::analysis::context::VerifiedPackages>,
 }
@@ -64,6 +65,7 @@ impl<'a> FindingRead<'a> {
             findings: BTreeMap::new(),
             source_revisions: BTreeMap::new(),
             scalar_owners: BTreeMap::new(),
+            source_bounds: BTreeMap::new(),
             qualified: BTreeSet::new(),
             verified: RefCell::new(crate::analysis::context::VerifiedPackages::default()),
         }
@@ -101,7 +103,8 @@ impl<'a> FindingRead<'a> {
         let ResultBody::Call(record) = result.body else {
             return Err(Code::Invalid.error("native finding producer kind"));
         };
-        if result.revision != revision
+        if id != origin.layer
+            || result.revision != revision
             || record.call != origin.call
             || record.instance != origin.instance
             || owner.instance().grant != origin.grant

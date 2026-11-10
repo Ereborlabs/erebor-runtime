@@ -15,7 +15,7 @@ fn reference_keeps_trace_cut() -> TestResult {
         Some(
             fields
                 .iter()
-                .map(|name| AnalysisStore::table_schemas()["traces"].index_of(name))
+                .map(|name| crate::AnalysisStore::table_schemas()["traces"].index_of(name))
                 .collect::<std::result::Result<BTreeSet<_>, _>>()?,
         ),
     )]);
@@ -358,23 +358,24 @@ fn call_references_commit_atomically() -> TestResult {
     };
     let before = store.meta()?;
     let mut checked = false;
-    assert!(Fixture::publish(&store,
-            &ManagedCommit {
+    assert!(Fixture::publish(
+        &store,
+        &ManagedCommit {
             control: &crate::AnalysisReadControl::default(),
             budget: &crate::analysis::managed::tests::TestBudget,
-                completed: true,
-                attempt: &attempt,
-                now_utc_ns: 10,
-                returns: &returns,
-                selected: &selected,
-                selected_schema: &fixture.model.outputs[0].schema
-            },
-            || {
-                checked = true;
-                Err(crate::PackageErrorCodeV1::Denied.error("saved input final authority"))
-            }
-        )
-        .is_err());
+            completed: true,
+            attempt: &attempt,
+            now_utc_ns: 10,
+            returns: &returns,
+            selected: &selected,
+            selected_schema: &fixture.model.outputs[0].schema
+        },
+        || {
+            checked = true;
+            Err(crate::PackageErrorCodeV1::Denied.error("saved input final authority"))
+        }
+    )
+    .is_err());
     assert!(checked);
     assert_eq!(store.meta()?, before);
     let count: usize = store.read_snapshot(|reader| {

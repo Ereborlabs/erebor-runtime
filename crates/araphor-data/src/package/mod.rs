@@ -2,12 +2,7 @@ mod model;
 mod parameters;
 mod provenance;
 
-pub use araphor_package::{
-    native, Dependency, LibraryRequirement, ModelRef, PackageArtifactIdentityV1, PackageArtifactV1,
-    PackageBundle, PackageBundleV1, PackageFixtureV1, PackageImageArtifactV1,
-    PackageImageImplementationV1, PackageImageV1, PackageImplementationV1, PackageRefV1,
-    Qualification, SqlModelV1, SqlReasonV1,
-};
+pub use araphor_package :: { native , Dependency , LibraryRequirement , ModelRef , PackageArtifactIdentityV1 , PackageArtifactV1 , PackageBundle , PackageBundleV1 , PackageFixtureV1 , PackageImageArtifactV1 , PackageImageImplementationV1 , PackageImageV1 , PackageImplementationV1 , PackageRefV1 , Qualification , SqlModelV1 , SqlReasonV1 } ;
 pub use araphor_package::{Error as PackageImageError, ErrorCode as PackageImageErrorCode};
 pub use model::*;
 pub use parameters::decode_parameters;

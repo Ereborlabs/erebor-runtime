@@ -5,10 +5,7 @@ use snafu::ResultExt as _;
 use super::super::{DataView, NativeStore};
 use super::{attempts::Attempts, InstanceRecord, Records, VersionRecord};
 use crate::analysis::managed::{Attempt, Failure};
-use crate::{
-    AnalysisReadControl, ManagedExit, NativeStateSnafu, NativeStorageSnafu,
-    PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { AnalysisReadControl , ManagedExit , NativeStateSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 impl DataView {
     pub(in crate::analysis::native) fn validate_attempts(

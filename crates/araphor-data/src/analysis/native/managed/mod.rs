@@ -2,10 +2,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::{records::Records, DataView, DataWrite};
-use crate::{
-    AnalysisReadControl, AnalysisSelectionV1, ManagedInstance, ManagedSpec, NativeStateSnafu,
-    PackageErrorCodeV1 as Code, PackageGrantV1, Result,
-};
+use crate :: { AnalysisReadControl , AnalysisSelectionV1 , ManagedInstance , ManagedSpec , NativeStateSnafu , PackageErrorCodeV1 as Code , PackageGrantV1 , Result } ;
 
 mod admission;
 mod attempt_recovery;
@@ -19,9 +16,11 @@ mod history;
 mod lifecycle;
 mod prepare;
 mod priors;
+pub(in crate::analysis::native) use graph::PublicationRead;
 mod read;
 mod recovery;
 mod references;
+pub(in crate::analysis::native) use references::References;
 mod removal;
 mod result_recovery;
 pub(in crate::analysis::native) mod results;
@@ -36,8 +35,8 @@ pub use lifecycle::ManagedLease;
 pub use prepare::PreparedManagedCommit;
 
 #[derive(Deserialize, Serialize)]
-struct VersionRecord {
-    spec: ManagedSpec,
+pub(in crate::analysis::native) struct VersionRecord {
+    pub(in crate::analysis::native) spec: ManagedSpec,
     scope: AnalysisSelectionV1,
 }
 

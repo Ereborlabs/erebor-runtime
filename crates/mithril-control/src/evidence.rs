@@ -222,7 +222,8 @@ impl EvidenceIntakeOwner {
             araphor_data::Error::RetentionUnavailable { .. }
             | araphor_data::Error::AnalysisReadDeadline { .. }
             | araphor_data::Error::AnalysisReadCancelled { .. }
-            | araphor_data::Error::AnalysisDatabase { .. }
+            | araphor_data::Error::NativeStorage { .. }
+            | araphor_data::Error::NativeState { .. }
             | araphor_data::Error::AnalysisState { .. }
             | araphor_data::Error::Json { .. }
             | araphor_data::Error::Io { .. } => Status::unavailable(error.to_string()),

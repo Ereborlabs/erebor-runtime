@@ -73,7 +73,7 @@ impl DataView {
             let (key, value) = entry.context(crate::NativeStorageSnafu {
                 operation: "read managed witness pins",
             })?;
-            if key.len() != prefix.len() + 8 || value.len() != 16 {
+            if key.len() != prefix.len() + 8 || value.len() != 24 {
                 return Err(Code::Invalid.error("managed witness pin value"));
             }
             let ordinal = usize::try_from(NativeStore::number(&key[prefix.len()..])?)
@@ -82,7 +82,8 @@ impl DataView {
                 .get(ordinal)
                 .ok_or_else(|| Code::Invalid.error("extra managed witness pin"))?;
             let segment = NativeStore::number(&value[..8])?;
-            let expires = NativeStore::number(&value[8..])?;
+            let expires = NativeStore::number(&value[8..16])?;
+            let cursor = NativeStore::number(&value[16..])?;
             let stream = witness.identity.key();
             let live = self
                 .raw
@@ -101,6 +102,7 @@ impl DataView {
                 &self.snapshot,
             )?;
             if witness.expires_utc_ns != expires
+                || witness.cursor != cursor
                 || !live
                 || reverse
                     .map(|value| NativeStore::number(&value))

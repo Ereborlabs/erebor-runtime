@@ -1,25 +1,19 @@
 use super::super::{DataView, DataWrite, NativeStore};
 use super::{Records, Sources};
 use crate::analysis::raw::RawReceipt;
-use crate::analysis::raw::{RawIdentity, RawJournal};
-use crate::{
-    AnalysisReadControl, AnalysisStore, EvidenceIntakeIdentityV1, NativeStateSnafu,
-    NativeStorageSnafu, Result,
-};
-use crate::{
-    AnalysisReadPageV1, AnalysisSourceReceiptV1, EvidenceStoreOutcomeV1, ValidatedEvidenceBatchV1,
-};
+use crate::analysis::raw::{RawBatch, RawIdentity, RawJournal, RawKind};
+use crate :: { AnalysisReadControl , EvidenceIntakeIdentityV1 , NativeStateSnafu , NativeStorageSnafu , Result } ;
+use crate :: { AnalysisReadPageV1 , AnalysisSourceReceiptV1 , EvidenceStoreOutcomeV1 , ValidatedEvidenceBatchV1 } ;
 use fjall::BranchSnapshot;
 use snafu::ResultExt as _;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Bound::Excluded,
-};
+use std :: { collections :: { BTreeMap , BTreeSet } , ops :: Bound :: Excluded } ;
 
 impl NativeStore {
     pub(in crate::analysis::native) fn recover_raw(
         root: &std::path::Path,
         snapshot: &BranchSnapshot,
+        counts: &mut super::super::capacity::RevisionCounts,
+        protected: Option<&crate::analysis::raw::RawIndex>,
     ) -> Result<RawJournal> {
         let mut ends = BTreeMap::new();
         for row in snapshot.prefix(Sources::ENDS) {
@@ -31,8 +25,20 @@ impl NativeStore {
                 Self::number(&value)?,
             );
         }
+        let recorded = ends.clone();
+        if let Some(protected) = protected {
+            for entry in protected.entries.values() {
+                if !protected.expired.contains_key(&entry.reference.id) {
+                    ends.entry(entry.reference.id).and_modify(|end| *end = (*end).max(entry.reference.offset))
+                        .or_insert(entry.reference.offset);
+                }
+            }
+        }
+        let deletions = super::super::retention::ExpiredSegment::finish_files(root, snapshot)?;
         let mut raw = RawJournal::open(root, &ends)?;
-        for (id, end) in &ends {
+        raw.budget.deletions.extend(deletions);
+        super::super::retention::ExpiredSegment::restore(&mut raw, snapshot)?;
+        for (id, end) in &recorded {
             if raw
                 .segments
                 .get(id)
@@ -56,6 +62,7 @@ impl NativeStore {
             }
             raw.next_segment = raw.next_segment.max(next);
         }
+        let metadata = Self::number(&Self::required(snapshot, super::super::HEAD)?)?;
         for row in snapshot.prefix(Sources::RECEIPTS) {
             let (key, _) = row.context(NativeStorageSnafu {
                 operation: "read raw receipt keys",
@@ -75,6 +82,17 @@ impl NativeStore {
                     field: "raw receipt baseline identity",
                 }
                 .fail();
+            }
+            let key = receipt.identity.key();
+            let mut contiguous = 0u64;
+            for (_, &(revision, slot)) in raw.index.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
+                if revision > metadata { continue; }
+                let span = &raw.index.entries[&revision].commit.spans[slot];
+                if span.first > contiguous.saturating_add(1) { break; }
+                contiguous = contiguous.max(span.last);
+            }
+            if contiguous != receipt.contiguous_cursor {
+                return NativeStateSnafu { field: "raw receipt original prefix" }.fail();
             }
             let source = raw.index.sources.get_mut(&receipt.identity.key());
             match source {
@@ -103,8 +121,9 @@ impl NativeStore {
                 }
             }
         }
+        super::super::trace::Traces::recover(&mut raw, snapshot)?;
         raw.index.refresh_receipts()?;
-        let metadata = Self::number(&Self::required(snapshot, super::super::HEAD)?)?;
+
         let mut births = BTreeMap::<Vec<u8>, u64>::new();
         for (revision, entry) in raw.index.entries.iter() {
             if entry.identity.evidence().is_some() {
@@ -135,6 +154,7 @@ impl NativeStore {
                 }
                 .fail();
             }
+            counts.add(reference.source.tenant_id, 0)?;
             births
                 .entry(reference.source.key())
                 .and_modify(|first| *first = (*first).min(revision))
@@ -156,7 +176,7 @@ impl NativeStore {
         }
         let mut expected = BTreeMap::<u64, u64>::new();
         for (revision, entry) in raw.index.entries.iter() {
-            if *revision <= metadata {
+            if *revision <= metadata && !raw.index.expired.contains_key(&entry.reference.id) {
                 expected
                     .entry(entry.reference.id)
                     .and_modify(|end| *end = (*end).max(entry.reference.offset))
@@ -175,7 +195,7 @@ impl NativeStore {
                 .fail();
             }
         }
-        if ends != expected {
+        if recorded != expected {
             return NativeStateSnafu {
                 field: "raw segment baseline",
             }
@@ -191,8 +211,17 @@ impl NativeStore {
     ) -> Result<EvidenceStoreOutcomeV1> {
         batch.validate_identity(&identity, &self.root)?;
         if batch.intake_utc_ns == 0 {
-            return AnalysisStore::reject_path(&self.root, "live evidence has no intake time");
+            return crate::Error::reject_path(&self.root, "live evidence has no intake time");
         }
+        self.commit_raw(RawIdentity::Evidence(identity), batch.into())
+            .map(|(outcome, _)| outcome)
+    }
+
+    pub(in crate::analysis::native) fn commit_raw(
+        &self,
+        identity: RawIdentity,
+        batch: RawBatch,
+    ) -> Result<(EvidenceStoreOutcomeV1, RawReceipt)> {
         let _writer = self.writer.lock().map_err(|_| {
             NativeStateSnafu {
                 field: "writer lock",
@@ -207,18 +236,158 @@ impl NativeStore {
             .build()
         })?;
         let last = batch.last_cursor;
-        let identity = RawIdentity::Evidence(identity);
+        let key = identity.key();
+        let diagnostic = identity.evidence().is_none();
+        if diagnostic && !raw.index.sources.contains_key(&key) {
+            return crate::TraceInvalidSnafu {
+                reason: "the diagnostic execution is not admitted",
+            }
+            .fail();
+        }
+        if let Some(source) = raw.index.sources.get(&key) {
+            if !source.receipt.matches(&identity) || source.receipt.cpu() != batch.kind.cpu() {
+                return crate::AnalysisConflictSnafu.fail();
+            }
+            if batch.first_cursor <= source.receipt.floor() {
+                if last <= source.receipt.floor() {
+                    return Ok((
+                        EvidenceStoreOutcomeV1::AlreadyAcceptedExpired,
+                        source.receipt.clone(),
+                    ));
+                }
+                return crate::RetainedRangeExpiredSnafu {
+                    first_cursor: batch.first_cursor,
+                    last_cursor: source.receipt.floor(),
+                }
+                .fail();
+            }
+        }
+        if let Some(((_, first), last)) = raw.budget.expired
+            .range((key.clone(), 0)..=(key.clone(), batch.last_cursor)).next_back()
+            .filter(|(_, last)| **last >= batch.first_cursor) {
+            if *first <= batch.first_cursor && *last >= batch.last_cursor {
+                return Ok((EvidenceStoreOutcomeV1::AlreadyAcceptedExpired, raw.index.sources[&key].receipt.clone()));
+            }
+            if diagnostic {
+                return crate::RetainedRangeExpiredSnafu { first_cursor: batch.first_cursor.max(*first), last_cursor: *last }.fail();
+            }
+            return crate::Error::reject_path(&self.root, "an evidence retry crosses an expired range boundary");
+        }
         let revision = view.revision.checked_add(1).ok_or_else(|| {
             NativeStateSnafu {
                 field: "revision exhausted",
             }
             .build()
         })?;
-        let commit = raw.prepare(&identity, &batch.into(), revision)?;
+        let commit = raw.prepare(&identity, &batch, revision)?;
         if commit.spans.is_empty() {
-            return Ok(raw.outcome(&identity, last));
+            return Ok((
+                raw.outcome(&identity, last),
+                raw.index.sources[&key].receipt.clone(),
+            ));
         }
+        self.require_retention()?;
+        if !diagnostic && (self.retention.raw_max_age_ns.is_some() || self.retention.raw_max_bytes.is_some()) {
+            raw.reconcile_backlog(identity.tenant(), self.retention)?;
+            if raw.budget.required.contains_key(&key) {
+                if self.retention.raw_max_age_ns.is_some_and(|limit| raw.budget.oldest.get(&key)
+                    .is_some_and(|intake| commit.intake.saturating_sub(*intake) >= limit)) {
+                    return crate::ProtectedInputCapacitySnafu { resource: "age" }.fail();
+                }
+                if self.retention.raw_max_bytes.is_some_and(|limit| raw.budget.protected.get(&identity.tenant())
+                    .copied().unwrap_or(0).checked_add(commit.body.len() as u64).is_none_or(|bytes| bytes > limit)) {
+                    return crate::ProtectedInputCapacitySnafu { resource: "bytes" }.fail();
+                }
+            }
+        }
+        if !diagnostic && !raw.index.sources.contains_key(&key) {
+            self.storage.check_sources(
+                raw.index.sources.values().filter(|source| source.receipt.evidence().is_some()).count() + 1,
+                0,
+                false,
+            )?;
+        }
+        let body_bytes = commit.body.len() as u64;
+        let prior_cursor = raw.index.sources.get(&key).map_or(0, |source| source.receipt.cursor());
         let append = raw.prepare_append(&identity, commit)?;
+        self.check_append_witnesses(&view, &raw, identity.tenant(), append.commit.intake, append.id, append.added())?;
+        let terminal =
+            matches!(&append.commit.kind, Some(RawKind::Diagnostic(progress)) if progress.terminal);
+        let initial = diagnostic && !raw.segments.values().any(|segment| segment.source == key);
+        let released_slots = if terminal {
+            if initial {
+                2
+            } else {
+                1
+            }
+        } else {
+            usize::from(initial && append.header.is_some())
+        };
+        let slots = raw
+            .budget
+            .trace_slots
+            .checked_sub(released_slots)
+            .ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "diagnostic slot reserve",
+                }
+                .build()
+            })?;
+        let reserve = raw
+            .budget
+            .trace_reserve
+            .checked_sub(if terminal {
+                crate::analysis::quota::TRACE_RESERVE
+            } else {
+                0
+            })
+            .ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "diagnostic byte reserve",
+                }
+                .build()
+            })?;
+        if diagnostic || reserve != 0
+            || self.storage.disk_max_bytes.is_some()
+            || self.storage.policy_reserve_bytes.is_some()
+            || self.storage.write_reserve_bytes.is_some()
+            || self.storage.storage_entries.is_some()
+            || self.storage.diagnostic_entries.is_some()
+        {
+            let added = append.added();
+            let created = append.header.is_some();
+            let terminal_only = matches!(&append.commit.kind, Some(RawKind::Diagnostic(progress))
+                if progress.terminal && append.commit.spans.len() == 1 && progress.last_sequence.checked_add(1) == Some(append.commit.spans[0].first));
+            let prepaid = terminal_only
+                && added
+                    .checked_add(batch.terminal_bytes as u64)
+                    .is_some_and(|bytes| bytes <= crate::analysis::quota::TRACE_RESERVE);
+            let usage = crate::StorageUsageV1::inspect(
+                &self.root,
+                usize::from(created && !diagnostic),
+                slots
+                    .checked_add(usize::from(created && diagnostic))
+                    .ok_or_else(|| {
+                        crate::StorageCapacitySnafu {
+                            resource: "diagnostic storage entries",
+                        }
+                        .build()
+                    })?,
+                Some(&raw),
+                self.storage,
+            )?;
+            let projected = added.checked_add(reserve).ok_or_else(|| {
+                crate::StorageCapacitySnafu {
+                    resource: "diagnostic physical reserve",
+                }
+                .build()
+            })?;
+            if prepaid {
+                self.storage.check_terminal(usage, projected)?;
+            } else {
+                self.storage.check_append(usage, projected)?;
+            }
+        }
         let _rotation = if append.header.is_some()
             && raw
                 .index
@@ -243,7 +412,25 @@ impl NativeStore {
         } else {
             None
         };
+        #[cfg(any(test, feature = "test-fixtures"))]
+        {
+            if _rotation.is_some() {
+                self.run_commit_hook(crate::AnalysisCommitStage::BeforeRotation)?;
+            }
+            self.run_commit_hook(crate::AnalysisCommitStage::BeforeAppend)?;
+        }
         if let Err(error) = raw.append(&identity, append) {
+            self.poison();
+            return Err(error);
+        }
+        #[cfg(any(test, feature = "test-fixtures"))]
+        if let Err(error) = self.run_commit_hook(crate::AnalysisCommitStage::AfterSync) {
+            self.poison();
+            return Err(error);
+        }
+        raw.budget.trace_slots = slots;
+        raw.budget.trace_reserve = reserve;
+        if let Err(error) = raw.extend_backlog(&key, identity.tenant(), prior_cursor, body_bytes, self.retention) {
             self.poison();
             return Err(error);
         }
@@ -268,7 +455,14 @@ impl NativeStore {
         *published = std::sync::Arc::new(next);
         drop(published);
         self.revision.send_replace(revision);
-        Ok(raw.outcome(&identity, last))
+        Ok((
+            raw.outcome(&identity, last),
+            raw.index.sources[&key].receipt.clone(),
+        ))
+    }
+
+    pub fn read_page(&self, identity: &EvidenceIntakeIdentityV1, first_cursor: u64) -> Result<AnalysisReadPageV1> {
+        self.read_page_cancel(identity, first_cursor, &AnalysisReadControl::default())
     }
 
     pub fn read_page_cancel(
@@ -297,10 +491,7 @@ impl NativeStore {
             .fail();
         }
         let receipt = view.source_receipt(identity)?.ok_or_else(|| {
-            NativeStateSnafu {
-                field: "raw source",
-            }
-            .build()
+            crate::AnalysisStateSnafu { path: &self.root, reason: "the raw source is absent" }.build()
         })?;
         let raw = self.raw.until(control)?;
         self.check()?;
@@ -340,27 +531,33 @@ impl DataWrite<'_> {
             segments.insert(entry.reference.id);
         }
         for key in sources {
-            let receipt = self
-                .raw
-                .sources
-                .get(&key)
-                .and_then(|source| source.receipt.evidence())
-                .ok_or_else(|| {
-                    NativeStateSnafu {
-                        field: "raw source baseline",
-                    }
-                    .build()
-                })?;
-            let encoded = Records::encode(receipt)?;
-            Records::stage(
-                &mut self.transaction,
-                Sources::key(Sources::RECEIPTS, &key),
-                encoded,
-            );
-            self.transaction.insert(
-                Sources::key(Sources::EPOCHS, &receipt.identity.epoch_key()),
-                Records::encode(&receipt.identity)?,
-            );
+            let source = self.raw.sources.get(&key).ok_or_else(|| {
+                NativeStateSnafu {
+                    field: "raw source baseline",
+                }
+                .build()
+            })?;
+            match &source.receipt {
+                RawReceipt::Evidence(receipt) => {
+                    let encoded = Records::encode(receipt)?;
+                    Records::stage(
+                        &mut self.transaction,
+                        Sources::key(Sources::RECEIPTS, &key),
+                        encoded,
+                    );
+                    self.transaction.insert(
+                        Sources::key(Sources::EPOCHS, &receipt.identity.epoch_key()),
+                        Records::encode(&receipt.identity)?,
+                    );
+                }
+                RawReceipt::Diagnostic(receipt) => {
+                    Records::stage(
+                        &mut self.transaction,
+                        super::super::trace::Traces::receipt_key(&receipt.identity),
+                        Records::encode(receipt)?,
+                    );
+                }
+            }
         }
         let raw = self.store.raw.lock().map_err(|_| {
             NativeStateSnafu {
@@ -369,6 +566,10 @@ impl DataWrite<'_> {
             .build()
         })?;
         for id in segments {
+            if self.raw.expired.contains_key(&id) {
+                self.transaction.remove(Sources::key(Sources::ENDS, &id.to_be_bytes()));
+                continue;
+            }
             let segment = raw.segments.get(&id).ok_or_else(|| {
                 NativeStateSnafu {
                     field: "raw segment baseline",

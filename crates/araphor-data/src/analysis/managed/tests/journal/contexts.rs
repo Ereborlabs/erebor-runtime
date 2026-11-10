@@ -26,7 +26,7 @@ impl Journal {
         self.requests.insert(
             "context_versions".into(),
             Some(
-                (0..AnalysisStore::table_schemas()["context_versions"]
+                (0..crate::AnalysisStore::table_schemas()["context_versions"]
                     .fields()
                     .len())
                     .collect(),
@@ -403,7 +403,7 @@ fn context_changes_release_copies() -> TestResult {
         let mut journal = Journal::new(&store)?;
         journal.requests.insert(
             "context_versions".into(),
-            Some(BTreeSet::from([AnalysisStore::table_schemas()
+            Some(BTreeSet::from([crate::AnalysisStore::table_schemas()
                 ["context_versions"]
                 .index_of("owner_revision")?])),
         );

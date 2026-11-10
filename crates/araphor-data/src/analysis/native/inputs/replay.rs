@@ -1,14 +1,8 @@
-use std::{
-    any::Any,
-    sync::{Arc, Mutex},
-};
+use std :: { any :: Any , sync :: { Arc , Mutex } } ;
 
 use super::{InputRecord, Wake};
 use crate::analysis::{native::records::Records, PackageResultRefV1};
-use crate::{
-    AnalysisReadControl, InputSubscription, ManagedBudget, ManagedSourceFrame, ManagedSourceRead,
-    ManagedSourceRef, NativeStateSnafu, Result, StorePositionV1,
-};
+use crate :: { AnalysisReadControl , InputSubscription , ManagedBudget , ManagedSourceFrame , ManagedSourceRead , ManagedSourceRef , NativeStateSnafu , Result , StorePositionV1 } ;
 
 pub(super) struct Replay {
     head: Mutex<Option<Head>>,

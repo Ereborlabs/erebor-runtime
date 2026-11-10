@@ -60,6 +60,7 @@ impl ManagedGraphJournal {
             if !DomainRelations::subjects(declaration)
                 && !DomainRelations::relationships(declaration, &self.call.spec)
                 && !DomainRelations::findings(declaration)
+                && !DomainRelations::states(declaration)
             {
                 continue;
             }

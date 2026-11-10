@@ -1,10 +1,7 @@
 use snafu::ResultExt as _;
 
 use super::{InstanceRecord, Records, VersionRecord};
-use crate::{
-    analysis::native::NativeStore, AnalysisConflictSnafu, ManagedInstance, ManagedSpec,
-    NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { analysis :: native :: NativeStore , AnalysisConflictSnafu , ManagedInstance , ManagedSpec , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 impl NativeStore {
     pub fn prepare_managed_version(

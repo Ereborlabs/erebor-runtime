@@ -35,6 +35,39 @@ pub(super) fn fixture_source(
     ),
     Box<dyn std::error::Error>,
 > {
+    fixture_binding(store, source_bound, None)
+}
+
+fn fixture_binding(
+    store: &NativeStore,
+    source_bound: bool,
+    binding: Option<[u8; 16]>,
+) -> Result<
+    (
+        ManagedInstance,
+        sdk::Model,
+        EvidenceIntakeIdentityV1,
+        algorithm::Observation,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    fixture_package(store, source_bound, binding, "managed-graph")
+}
+
+fn fixture_package(
+    store: &NativeStore,
+    source_bound: bool,
+    binding: Option<[u8; 16]>,
+    package: &str,
+) -> Result<
+    (
+        ManagedInstance,
+        sdk::Model,
+        EvidenceIntakeIdentityV1,
+        algorithm::Observation,
+    ),
+    Box<dyn std::error::Error>,
+> {
     let schema = sdk::Schema::new(vec![sdk::Field::new("count", sdk::DataType::UInt64, false)]);
     let mut model = sdk::Model::new(
         "count",
@@ -46,10 +79,16 @@ pub(super) fn fixture_source(
         relations: DomainRelations::declarations(),
     });
     model.reasons = vec![sdk::Reason {
-        code: "managed-graph.PROJECTION".into(),
+        code: format!("{package}.PROJECTION"),
         details: schema,
     }];
-    let mut fixture = Fixture::with_model(store, [1; 16], "domain", model.clone())?;
+    if package == "HF-PROC-001" {
+        model.reasons.push(sdk::Reason {
+            code: format!("{package}.OUTSIDE_AUTHORITY"),
+            details: sdk::Schema::empty(),
+        });
+    }
+    let mut fixture = Fixture::with_package(store, [1; 16], "domain", model.clone(), package)?;
     fixture.grant.selection = AnalysisSelectionV1::tenant([1; 16]);
     let mut dependent = fixture.spec.manifest.calls[&10].clone();
     dependent.dependencies.insert(10);
@@ -85,6 +124,13 @@ pub(super) fn fixture_source(
         coverage_interval_id: vec![4; 16].into(),
         effect_family: erebor_interceptor_abi::KernelEffectFamilyV1::File as u32,
         operation: erebor_interceptor_abi::KernelEffectOperationV1::Read as u32,
+        decision_context: binding.map(|binding| araphor_data::EvidenceDecisionContext {
+            schema_version: 1,
+            original_kernel_sequence: 1,
+            process_instance_id: vec![8; 16].into(),
+            binding_id: binding.to_vec().into(),
+            ..Default::default()
+        }),
         ..Default::default()
     })?;
     store.accept_validated_batch(
@@ -166,6 +212,14 @@ fn finding(
     observation: &algorithm::Observation,
     details: &sdk::RecordBatch,
 ) -> Result<FindingMember, Box<dyn std::error::Error>> {
+    finding_for("managed-graph", observation, details)
+}
+
+fn finding_for(
+    package: &str,
+    observation: &algorithm::Observation,
+    details: &sdk::RecordBatch,
+) -> Result<FindingMember, Box<dyn std::error::Error>> {
     let subject = observation.task_subject();
     Ok(FindingMember {
         anchor: algorithm::Anchor {
@@ -174,8 +228,8 @@ fn finding(
         },
         value: FindingV1 {
             tenant_id: [1; 16],
-            finding_id: FindingV1::identity("managed-graph", &observation.id, &subject)?,
-            package_id: "managed-graph".into(),
+            finding_id: FindingV1::identity(package, &observation.id, &subject)?,
+            package_id: package.into(),
             package_version: 1,
             subject_id: subject,
             state: FindingStateV1::Provisional,
@@ -186,7 +240,7 @@ fn finding(
             policy_provenance: Vec::new(),
             effects: vec![observation.resolved_effect()],
             reason: FindingReasonV1::Declared(DeclaredFindingReasonV1::from_details(
-                "managed-graph.PROJECTION".into(),
+                format!("{package}.PROJECTION"),
                 details,
             )?),
             severity: FindingSeverityV1::Info,
@@ -260,7 +314,7 @@ fn commit_expiry(
     step: u8,
     expiry: Option<u64>,
 ) -> TestResult {
-    commit_named_expiry(store, model, observation, step, expiry, "domain")
+    commit_named_expiry(store, model, observation, step, expiry, "domain", None)
 }
 
 pub(super) fn commit_named(
@@ -270,7 +324,7 @@ pub(super) fn commit_named(
     step: u8,
     name: &str,
 ) -> TestResult {
-    commit_named_expiry(store, model, observation, step, None, name)
+    commit_named_expiry(store, model, observation, step, None, name, None)
 }
 
 fn commit_named_expiry(
@@ -280,6 +334,31 @@ fn commit_named_expiry(
     step: u8,
     expiry: Option<u64>,
     name: &str,
+    states: Option<(&[araphor_analysis_types::GraphStateMember], bool)>,
+) -> TestResult {
+    commit_commands(
+        store,
+        model,
+        observation,
+        step,
+        expiry,
+        name,
+        states,
+        &[],
+        None,
+    )
+}
+
+fn commit_commands(
+    store: &NativeStore,
+    model: &sdk::Model,
+    observation: &algorithm::Observation,
+    step: u8,
+    expiry: Option<u64>,
+    name: &str,
+    states: Option<(&[araphor_analysis_types::GraphStateMember], bool)>,
+    commands: &[(String, sdk::RecordBatch)],
+    context: Option<&araphor_data::GraphFactValueV1>,
 ) -> TestResult {
     let control = AnalysisReadControl::default();
     let resume = store.managed_resume([1; 16], name, &control)?;
@@ -353,6 +432,13 @@ fn commit_named_expiry(
         },
     }
     .encode_context()?;
+    if let Some(value) = context {
+        fact.body = araphor_data::GraphFactV1 {
+            record_id: observation.id.clone(),
+            value: value.clone(),
+        }
+        .encode_context()?;
+    }
     let input = GraphReplayInputV1 {
         source: observation.id.stream.clone(),
         records: vec![record],
@@ -412,7 +498,8 @@ fn commit_named_expiry(
     request.rebuild = step != 0;
     let attempt = Arc::new(store.register_managed_attempt(&page.state, &request, || Ok(()))?);
     let output = super::publication::output(model)?;
-    let mut finding = finding(observation, &output.datasets[0].batches[0])?;
+    let package = &resume.instance.spec.manifest.calls[&10].package.package_id;
+    let mut finding = finding_for(package, observation, &output.datasets[0].batches[0])?;
     if step == 4 {
         finding.value.severity = FindingSeverityV1::Warning;
     }
@@ -439,7 +526,7 @@ fn commit_named_expiry(
             from: task,
             to: execution,
             edge_type: GraphEdgeTypeV1::TaskInExecutionSet,
-            package_id: "managed-graph".into(),
+            package_id: package.clone(),
             evidence: vec![observation.id.clone()],
             cause: GraphCauseV1::Contextual,
         },
@@ -522,6 +609,32 @@ fn commit_named_expiry(
                 &control,
             )?;
         }
+        if let Some((states, invalid)) = states {
+            for state in states {
+                let owner = if invalid {
+                    b"wrong".to_vec()
+                } else {
+                    DomainRelations::key(&state.record)?
+                };
+                transaction.stage(
+                    store,
+                    DomainRelations::STATES,
+                    command(
+                        model,
+                        DomainRelations::STATES,
+                        &owner,
+                        &[DomainRelations::key(&state.record)?],
+                        None,
+                        araphor_analysis_types::GraphStateMember::encode(std::slice::from_ref(
+                            state,
+                        ))?,
+                        false,
+                    )?,
+                    Arc::new(()),
+                    &control,
+                )?;
+            }
+        }
         if step == 0 || step == 4 || step == 7 || step == 3 && call == 20 || step != 3 && call == 10
         {
             let mut commands = command(
@@ -549,6 +662,9 @@ fn commit_named_expiry(
                 Arc::new(()),
                 &control,
             )?;
+        }
+        for (relation, commands) in commands {
+            transaction.stage(store, relation, commands.clone(), Arc::new(()), &control)?;
         }
         journals.push(transaction.freeze(store, &control)?);
     }
@@ -648,3 +764,6 @@ mod recovery;
 
 #[path = "domain/notifications.rs"]
 mod notifications;
+
+#[path = "domain/state.rs"]
+mod state;

@@ -1,9 +1,6 @@
 use std::collections::BTreeMap;
 
-use sdk::arrow_array::{
-    Array, BinaryArray, BooleanArray, Int32Array, Int64Array, ListArray, RecordBatch, StringArray,
-    StructArray, TimestampMicrosecondArray, UInt32Array, UInt64Array,
-};
+use sdk :: arrow_array :: { Array , BinaryArray , BooleanArray , Int32Array , Int64Array , ListArray , RecordBatch , StringArray , StructArray , TimestampMicrosecondArray , UInt32Array , UInt64Array } ;
 
 use super::*;
 use crate::analysis::graph_rows::tests::fixture::CommitFixture;
@@ -29,7 +26,7 @@ fn read(
     let columns = names
         .iter()
         .map(|name| {
-            let schema = &AnalysisStore::table_schemas()[*name];
+            let schema = &crate::AnalysisStore::table_schemas()[*name];
             (
                 (*name).to_owned(),
                 Some((0..schema.fields().len()).collect()),
@@ -50,7 +47,7 @@ fn read(
     for name in names {
         if let Some(batches) = page.tables.get(*name) {
             for batch in batches {
-                assert_eq!(batch.schema(), AnalysisStore::table_schemas()[*name]);
+                assert_eq!(batch.schema(), crate::AnalysisStore::table_schemas()[*name]);
                 for (field, array) in batch.schema_ref().fields().iter().zip(batch.columns()) {
                     assert_eq!(array.data_type(), field.data_type());
                     if !field.is_nullable() {
@@ -464,17 +461,19 @@ fn graph_event_coverage_fields() -> TestResult {
     assert!(page.extraction.references.iter().any(|reference| reference
         .result()
         .is_some_and(|result| result.result_id == fixture.request.result_id)));
-    let requests = AnalysisTableRequests::from([
-        ("graph_manifest".into(), None),
-        (
-            "findings".into(),
-            Some(
-                [AnalysisStore::table_schemas()["findings"].index_of("graph_result_id")?]
+    let requests =
+        AnalysisTableRequests::from([
+            ("graph_manifest".into(), None),
+            (
+                "findings".into(),
+                Some(
+                    [crate::AnalysisStore::table_schemas()["findings"]
+                        .index_of("graph_result_id")?]
                     .into_iter()
                     .collect(),
+                ),
             ),
-        ),
-    ]);
+        ]);
     let dependency = fixture.store.read_tables(
         &selection,
         AnalysisTableRead {
@@ -1204,7 +1203,7 @@ fn context_notification_fields() -> TestResult {
 fn native_manifest_budget() -> TestResult {
     let fixture = CommitFixture::new()?;
     let selection = AnalysisSelectionV1::tenant(fixture.snapshot.scope.identity.tenant_id);
-    let schema = &AnalysisStore::table_schemas()["graph_manifest"];
+    let schema = &crate::AnalysisStore::table_schemas()["graph_manifest"];
     let requests = BTreeMap::from([(
         "graph_manifest".into(),
         Some([schema.index_of("graph_revision")?].into_iter().collect()),
@@ -1519,7 +1518,7 @@ fn catalog_values_match_schemas() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
     let selection = AnalysisSelectionV1::tenant([1; 16]);
-    let schemas = AnalysisStore::table_schemas();
+    let schemas = crate::AnalysisStore::table_schemas();
     let canonical = &schemas["catalog"];
     for enabled in [false, true] {
         let _graph = enabled
@@ -1609,7 +1608,7 @@ fn catalog_projection_keeps_rows() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = AnalysisStore::open(directory.path().join("data"))?;
     let selection = AnalysisSelectionV1::tenant([1; 16]);
-    let schemas = AnalysisStore::table_schemas();
+    let schemas = crate::AnalysisStore::table_schemas();
     let expected = schemas
         .values()
         .map(|schema| schema.fields().len())
@@ -1737,7 +1736,7 @@ fn graph_snapshot_deadline() -> TestResult {
     let batch = &page.tables["graph_manifest"][0];
     assert_eq!(
         batch.schema(),
-        AnalysisStore::table_schemas()["graph_manifest"]
+        crate::AnalysisStore::table_schemas()["graph_manifest"]
     );
     let body = column::<BinaryArray>(batch, "snapshot")?.value(0);
     let mut expected = fixture.snapshot.clone();
@@ -1750,7 +1749,7 @@ fn graph_snapshot_deadline() -> TestResult {
     assert_eq!(GraphSnapshotV1::decode_native(body)?, expected);
     assert!(!fixture.snapshot.findings.is_empty());
     let with_ids = read(&fixture.store, &traversal, &["findings"], deadline - 1)?;
-    let finding_schema = &AnalysisStore::table_schemas()["findings"];
+    let finding_schema = &crate::AnalysisStore::table_schemas()["findings"];
     let without_id = BTreeMap::from([(
         "findings".into(),
         Some(
@@ -1786,7 +1785,7 @@ fn graph_snapshot_deadline() -> TestResult {
         .result()
         .is_some_and(|result| result.result_id == fixture.request.result_id
             && result.commit_revision == receipt.commit_revision)));
-    let schema = &AnalysisStore::table_schemas()["graph_manifest"];
+    let schema = &crate::AnalysisStore::table_schemas()["graph_manifest"];
     let columns = BTreeMap::from([(
         "graph_manifest".into(),
         Some(std::collections::BTreeSet::from([

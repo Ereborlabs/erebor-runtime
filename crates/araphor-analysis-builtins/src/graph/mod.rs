@@ -2,6 +2,7 @@ use araphor_analysis_sdk as sdk;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod commands;
+pub use commands::GraphCommands;
 mod contract;
 mod credential;
 mod edges;

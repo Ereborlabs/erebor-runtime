@@ -1,12 +1,29 @@
 use super::super::{DataView, NativeStore};
 use super::{attempts::Attempts, InstanceRecord, Records};
 use crate::analysis::managed::{Attempt, Failure, FailureOrigin};
-use crate::{
-    AnalysisReadControl, AnalysisSelectionV1, ManagedExit, ManagedInstance, ManagedResume,
-    ManagedStatus, PackageErrorCodeV1 as Code, PackageReadinessV1, Result,
-};
+use crate :: { AnalysisReadControl , AnalysisSelectionV1 , ManagedExit , ManagedInstance , ManagedResume , ManagedStatus , PackageErrorCodeV1 as Code , PackageReadinessV1 , Result } ;
 
 impl DataView {
+    pub(in crate::analysis::native) fn managed_graph_failed(&self, source: &crate::EvidenceIntakeIdentityV1) -> Result<bool> {
+        use snafu::ResultExt as _;
+        for entry in self.snapshot.prefix(b"\0data/Y") {
+            let (key, _) = entry.context(crate::NativeStorageSnafu { operation: "read managed failure owners" })?;
+            if key.len() != 15 { continue; }
+            let owner = NativeStore::number(&key[7..])?;
+            let bytes = Records::payload(&Records::key(b'J', owner), |key| Records::read(key, &self.snapshot))?
+                .ok_or_else(|| Code::Missing.error("managed failure owner"))?;
+            let row: InstanceRecord = Records::decode(&bytes)?;
+            if row.tenant != source.tenant_id || row.removed { continue; }
+            let instance = self.managed_instance(row.tenant, &row.id, &AnalysisReadControl::default())?
+                .ok_or_else(|| Code::Missing.error("managed failure instance"))?;
+            if matches!(&instance.spec.destination, crate::ManagedDestination::Graph { source: identity, .. } if identity == source)
+                && self.managed_failure(owner, &instance)?.is_some_and(|failure| failure.progress == instance.progress) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(super) fn managed_failure(
         &self,
         owner: u64,

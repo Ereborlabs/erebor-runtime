@@ -32,7 +32,7 @@ impl BurstDetector {
             relations: araphor_analysis_types::DomainRelations::declarations(),
         });
         model.inputs[1].source = sdk::InputSource::Query(
-            include_str!("units.sql").replace("graph_records", "before.graph_records"),
+            include_str!("units.sql").replace("__graph_roots", "before.__graph_roots"),
         );
         model.inputs[3].source = sdk::InputSource::Lookup(
             "SELECT records.* FROM graph_records records JOIN units ON records.id = units.record ORDER BY records.id".into(),

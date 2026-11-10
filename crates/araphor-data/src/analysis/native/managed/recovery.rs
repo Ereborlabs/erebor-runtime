@@ -4,10 +4,7 @@ use araphor_graph::native::Graph;
 use snafu::ResultExt as _;
 
 use super::{CallHead, InstanceRecord, ManagedGraph, Records, VersionRecord};
-use crate::{
-    analysis::native::{DataView, NativeStore},
-    AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, Result,
-};
+use crate :: { analysis :: native :: { DataView , NativeStore } , AnalysisReadControl , NativeStateSnafu , NativeStorageSnafu , Result } ;
 
 impl DataView {
     pub(in crate::analysis::native) fn validate_managed(&mut self) -> Result<()> {

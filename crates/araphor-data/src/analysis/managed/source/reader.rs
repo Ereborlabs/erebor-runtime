@@ -1,132 +1,6 @@
 use super::*;
 
-impl AnalysisStore {
-    pub(in crate::analysis::managed) fn check_managed_progress(
-        reader: &Connection,
-        capture: &super::super::model::Capture,
-    ) -> Result<()> {
-        let progress: u64 = reader.query_row(
-            "SELECT COALESCE(MAX(r.commit_revision), 0) FROM managed_attempts a
-             JOIN analysis_results r ON r.tenant_id = a.tenant_id AND r.commit_revision = a.completed
-             WHERE a.tenant_id = ? AND a.instance_id = ? AND a.generation = ?
-                AND r.processor_id = 'managed-definition-v1' AND r.commit_revision <= ?",
-            params![capture.tenant.as_slice(), capture.instance, capture.expected_generation, capture.revision],
-            |row| row.get(0),
-        ).context(AnalysisDatabaseSnafu { operation: "validate captured success frontier" })?;
-        if capture.progress != progress
-            || capture.progress > capture.completed
-            || capture.completed > capture.revision
-        {
-            return Err(Code::Invalid.error("managed captured progress"));
-        }
-        Ok(())
-    }
 
-    pub(in crate::analysis) fn managed_parent_from(
-        reader: &Connection,
-        reference: &super::super::model::ManagedAttempt,
-    ) -> Result<Option<ManagedSourceRef>> {
-        let capture = &reference.0.capture;
-        Self::check_managed_progress(reader, capture)?;
-        if capture.progress == 0
-            || capture.rebuild
-            || capture.generation != capture.expected_generation
-        {
-            return Ok(None);
-        }
-        let mut instance = reference.instance().clone();
-        instance.generation = capture.expected_generation;
-        instance.progress = capture.progress;
-        let (source, parent) = Self::managed_source_at(reader, &instance)?
-            .ok_or_else(|| Code::Missing.error("managed source parent"))?;
-        if parent.capture.store != capture.store
-            || parent.capture.schema != capture.schema
-            || parent.capture.recovery == 0
-            || parent.capture.recovery > capture.recovery
-            || parent.capture.grant.selection != capture.grant.selection
-            || source.result.commit_revision > capture.revision
-        {
-            return Err(Code::Conflict.error("managed source parent basis"));
-        }
-        Ok(Some(source))
-    }
-
-    pub fn managed_parent(
-        &self,
-        reference: &super::super::model::ManagedAttempt,
-        control: &AnalysisReadControl,
-    ) -> Result<Option<ManagedSourceRef>> {
-        let mut reader = self.reader_until(control)?;
-        control.run(&mut reader, |reader| {
-            Self::managed_parent_from(reader, reference)
-        })
-    }
-
-    pub(in crate::analysis::managed) fn capture_source(
-        reader: &Connection,
-        request: &ManagedRead,
-        read: &AnalysisTableRead<'_>,
-        selection: &AnalysisSelectionV1,
-        meta: &AnalysisStoreMetaV1,
-        context_owners: Option<&BTreeSet<String>>,
-    ) -> Result<Option<Arc<ManagedSourceFrame>>> {
-        let Some(mode) = &request.source else {
-            return Ok(None);
-        };
-        let head = Self::managed_source_head(reader, request.expected())?;
-        match (mode, read.mode) {
-            (ManagedSourceRead::Initial, AnalysisReadModeV1::Complete)
-                if head.is_none()
-                    || request.rebuild
-                    || request.instance.generation != request.expected().generation => {}
-            (ManagedSourceRead::Changes(parent), AnalysisReadModeV1::Changes(after))
-                if head.as_ref() == Some(parent) && after == parent.position =>
-            {
-                let (step, _) = Self::managed_step_header(
-                    reader,
-                    request.instance.spec.tenant,
-                    &parent.result.result_id,
-                )?;
-                let attempt = Self::managed_attempt_from(
-                    reader,
-                    request.instance.spec.tenant,
-                    &step.instance,
-                    &step.attempt,
-                )?
-                .ok_or_else(|| Code::Missing.error("managed source parent attempt"))?;
-                if attempt.terminal.is_some()
-                    || attempt.receipt.as_ref().is_none_or(|receipt| {
-                        receipt.selected != parent.result
-                            || receipt.commit_revision != parent.result.commit_revision
-                            || receipt.instance != step.instance
-                            || receipt.attempt != step.attempt
-                    })
-                {
-                    return Err(Code::Conflict.error("managed source parent receipt"));
-                }
-                if attempt.capture.store != meta.store_uuid
-                    || attempt.capture.schema != meta.schema_version
-                    || attempt.capture.recovery == 0
-                    || attempt.capture.recovery > meta.recovery_epoch
-                    || attempt.capture.generation != request.instance.generation
-                {
-                    return Err(Code::Conflict.error("managed source store basis"));
-                }
-            }
-            _ => return Err(Code::Conflict.error("managed source read mode")),
-        }
-        SourceScope::capture(
-            &request.instance,
-            meta,
-            mode.clone(),
-            read,
-            selection,
-            context_owners,
-        )?
-        .map(Some)
-        .ok_or_else(|| Code::Unsupported.error("managed source projection"))
-    }
-}
 
 impl SourceScope {
     pub(in crate::analysis) fn capture(
@@ -141,7 +15,7 @@ impl SourceScope {
             let Some(columns) = columns else {
                 continue;
             };
-            let schema = AnalysisStore::table_schemas()
+            let schema = crate::AnalysisStore::table_schemas()
                 .get(name)
                 .ok_or_else(|| Code::Invalid.error("managed source schema"))?;
             if AnalysisTableRead::source_header(name) {
@@ -281,7 +155,7 @@ impl super::super::model::ManagedCapture {
             })
             .collect();
         frame.removals = page.removals.clone();
-        #[cfg(feature = "native-store")]
+        
         {
             frame.complete = page.exhausted && page.scanned_through == frame.position();
         }
@@ -312,68 +186,4 @@ impl super::super::model::ManagedCapture {
     }
 }
 
-impl AnalysisStore {
-    pub(in crate::analysis::managed) fn managed_source_head(
-        reader: &Connection,
-        instance: &ManagedInstance,
-    ) -> Result<Option<ManagedSourceRef>> {
-        Ok(Self::managed_source_at(reader, instance)?.map(|(source, _)| source))
-    }
 
-    fn managed_source_at(
-        reader: &Connection,
-        instance: &ManagedInstance,
-    ) -> Result<Option<(ManagedSourceRef, Attempt)>> {
-        if instance.progress == 0 {
-            return Ok(None);
-        }
-        let bytes: Vec<u8> = reader
-            .query_row(
-                "SELECT contract FROM managed_attempts
-                 WHERE tenant_id = ? AND instance_id = ? AND completed = ?",
-                params![
-                    instance.spec.tenant.as_slice(),
-                    instance.spec.id,
-                    instance.progress
-                ],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read committed source head",
-            })?;
-        let attempt: Attempt = ManagedCodec::decode(&bytes).context(crate::ManagedDecodingSnafu)?;
-        let receipt = attempt
-            .receipt
-            .as_ref()
-            .filter(|receipt| {
-                receipt.instance == instance.spec.id
-                    && receipt.attempt == attempt.request.id
-                    && receipt.commit_revision == instance.progress
-                    && receipt.selected.commit_revision == instance.progress
-                    && attempt.capture.tenant == instance.spec.tenant
-                    && attempt.capture.instance == instance.spec.id
-                    && attempt.capture.generation == instance.generation
-                    && attempt.terminal.is_none()
-            })
-            .ok_or_else(|| Code::Invalid.error("committed source receipt"))?;
-        let (step, revision) =
-            Self::managed_step_header(reader, instance.spec.tenant, &receipt.selected.result_id)?;
-        if step.instance != instance.spec.id
-            || step.attempt != receipt.attempt
-            || revision != instance.progress
-        {
-            return Err(Code::Invalid.error("committed source step"));
-        }
-        if attempt.capture.revision >= attempt.registered || attempt.registered >= revision {
-            return Err(Code::Invalid.error("committed source position"));
-        }
-        let source = ManagedSourceRef {
-            result: receipt.selected.clone(),
-            position: StorePositionV1 {
-                commit_revision: attempt.capture.revision,
-                ordinal: u32::MAX,
-            },
-        };
-        Ok(Some((source, attempt)))
-    }
-}

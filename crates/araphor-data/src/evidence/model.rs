@@ -1,15 +1,10 @@
-use erebor_interceptor_abi::{
-    EffectObservationReasonV1, KernelEffectFamilyV1, KernelEffectOperationV1,
-};
+use erebor_interceptor_abi :: { EffectObservationReasonV1 , KernelEffectFamilyV1 , KernelEffectOperationV1 } ;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::error::{EvidenceModelResult, InvalidSnafu};
-use crate::{
-    EvidenceDecisionContext, EvidenceExactFileObject, EvidenceRecord, EvidenceTemporalCoverage,
-    TemporalCoverageV1,
-};
+use crate :: { EvidenceDecisionContext , EvidenceExactFileObject , EvidenceRecord , EvidenceTemporalCoverage , TemporalCoverageV1 } ;
 
 pub type EvidenceDigestV1 = [u8; 32];
 pub type EvidenceIdV1 = erebor_interceptor_abi::Id128V1;

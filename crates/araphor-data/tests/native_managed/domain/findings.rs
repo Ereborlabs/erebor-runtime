@@ -44,6 +44,22 @@ fn finding_batch_uses_live_origins_and_retained_publication_cuts() -> TestResult
     assert_eq!(revision.evidence, vec![observation.id.clone()]);
     assert!(revision.context.iter().any(|key| key.owner_revision == 99));
     revision.validate_finding(&expected)?;
+    assert_eq!(
+        store.graph_finding([1; 16], &first.result_id, &first.finding_id)?,
+        Some((expected.clone(), revision.clone()))
+    );
+    assert_eq!(
+        store.notification_finding([1; 16], &first)?,
+        (expected.clone(), revision.clone())
+    );
+    assert_eq!(
+        store.graph_revision_finding([1; 16], &first.finding_id, revision)?,
+        Some(expected.clone())
+    );
+    assert!(store
+        .graph_finding([1; 16], &first.result_id, "missing")?
+        .is_none());
+
     commit(&store, &model, &observation, 1)?;
     let second = reference(&store, 1, &expected.finding_id)?;
     let current = store.graph_finding_batch([1; 16], std::slice::from_ref(&second))?;
@@ -76,6 +92,15 @@ fn finding_batch_uses_live_origins_and_retained_publication_cuts() -> TestResult
     );
     let current = store.graph_finding_batch([1; 16], &[third.clone()])?;
     assert_eq!(current[&third.result_id], original[&first.result_id]);
+    assert_eq!(
+        store.notification_finding([1; 16], &first)?,
+        (expected.clone(), original[&first.result_id].0.clone())
+    );
+    assert_eq!(
+        store.graph_revision_finding([1; 16], &first.finding_id, &original[&first.result_id].0)?,
+        Some(expected)
+    );
+
     Ok(())
 }
 
@@ -297,10 +322,9 @@ fn finding_basis_rejects_missing_witnesses_coverage_and_context_pins() -> TestRe
                 if fault != "raw-pin" {
                     tx.native().remove(key);
                 } else {
-                    tx.native().insert(
-                        key,
-                        [u64::MAX.to_be_bytes(), value[8..].try_into()?].concat(),
-                    );
+                    let mut changed = value.to_vec();
+                    changed[..8].copy_from_slice(&u64::MAX.to_be_bytes());
+                    tx.native().insert(key, changed);
                 }
                 changed += 1;
             }

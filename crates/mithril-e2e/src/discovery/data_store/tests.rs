@@ -257,9 +257,9 @@ async fn data_commit_child() -> Result<()> {
         .err()
         .ok_or("native commit unexpectedly succeeded")?;
     let expected = if result {
-        "commit analysis result"
+        "commit Data write"
     } else {
-        "commit raw catalogue publication"
+        "flush native checkpoint"
     };
     if kind == "segment" {
         assert!(
@@ -271,9 +271,8 @@ async fn data_commit_child() -> Result<()> {
     } else {
         assert!(
             matches!(&error,
-        araphor_data::Error::AnalysisDatabase { operation, source, .. }
-            if *operation == expected && source.to_string().contains("File too large")
-                && source.to_string().contains("analysis.duckdb.wal")),
+        araphor_data::Error::NativeStorage { operation, source, .. }
+            if *operation == expected && DataStoreQualification::is_efbig(source)),
             "{error}"
         );
     }
@@ -602,6 +601,20 @@ async fn data_control_crash() -> Result<()> {
 }
 
 impl DataStoreQualification {
+    fn is_efbig(error: &(dyn StdError + 'static)) -> bool {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|source| source.raw_os_error() == Some(libc::EFBIG))
+            {
+                return true;
+            }
+            current = error.source();
+        }
+        false
+    }
+
     fn limit_file(limit: u64) -> araphor_data::Result<()> {
         use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
         setrlimit(
@@ -777,8 +790,18 @@ impl DataStoreQualification {
         fs::DirBuilder::new()
             .mode(0o700)
             .create(backup_path.join("segments"))?;
-        for file in ["analysis.duckdb", "manifest.json"] {
-            fs::copy(managed.join(file), backup_path.join(file))?;
+        fs::copy(
+            managed.join("manifest.json"),
+            backup_path.join("manifest.json"),
+        )?;
+        for file in &manifest.database_files {
+            let relative = PathBuf::from("fjall").join(&file.file_name);
+            let target = backup_path.join(&relative);
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .recursive(true)
+                .create(target.parent().ok_or("checkpoint parent absent")?)?;
+            fs::copy(managed.join(relative), target)?;
         }
         for segment in &manifest.segments {
             let file = format!("segments/{}", segment.file_name);
@@ -848,7 +871,7 @@ impl DataStoreQualification {
                 })
             ));
             assert!(restore_root.join("restore.pending").is_file());
-            assert!(!restore_root.join("analysis.duckdb").exists());
+            assert!(!restore_root.join("fjall").exists());
             assert_eq!(fs::read_dir(&restore_root)?.count(), 2);
             assert!(restore_root.join("analysis.lock").is_file());
             assert!(matches!(
@@ -856,7 +879,7 @@ impl DataStoreQualification {
                 Err(araphor_data::Error::AnalysisState { reason, .. })
                     if reason.contains("restore is incomplete")
             ));
-            assert!(!restore_root.join("analysis.duckdb").exists());
+            assert!(!restore_root.join("fjall").exists());
         }
         let _signal = if native {
             Some(tokio::signal::unix::signal(
@@ -933,7 +956,7 @@ impl DataStoreQualification {
                 assert!(source.message().contains(".open"), "{source}");
             } else {
                 assert!(source.message().contains("commit evidence"), "{source}");
-                assert!(source.message().contains("analysis.duckdb.wal"), "{source}");
+                assert!(source.message().contains("commit Data write"), "{source}");
             }
         } else {
             assert_eq!(source.code(), tonic::Code::ResourceExhausted);
@@ -1243,14 +1266,14 @@ async fn data_reopen_preserves_errors() -> Result<()> {
     );
     drop(store);
     drop(reopening.await?);
-    fs::write(root.join("analysis.duckdb"), b"invalid database")?;
+    fs::write(root.join("fjall/version"), b"invalid database")?;
     let error = DataStoreQualification::reopen_data(&root)
         .await
         .err()
         .ok_or("corrupt store accepted")?;
     assert!(matches!(
         error.downcast_ref::<araphor_data::Error>(),
-        Some(araphor_data::Error::AnalysisDatabase { .. })
+        Some(araphor_data::Error::NativeStorage { .. })
     ));
     Ok(())
 }

@@ -135,11 +135,14 @@ impl Detector {
             .as_ref()
             .ok_or_else(|| Computation::invalid("graph change contract"))?
             .is_reset(checked.evaluation())?;
-        let owners = units
+        let mut owners = units
             .iter()
             .chain(&removals)
             .map(|unit| araphor_analysis_types::DomainRelations::key(&unit.record))
             .collect::<sdk::Result<BTreeSet<_>>>()?;
+        owners.insert(araphor_analysis_types::DomainRelations::key(
+            &Option::<crate::discovery::DiscoveryRecordIdV1>::None,
+        )?);
         if reset {
             graph.clear_scope().map_err(sdk::Error::backend)?;
         } else if !owners.is_empty() {
@@ -196,7 +199,7 @@ impl Unit {
         })
     }
 
-    fn expired(data: &sdk::Dataset) -> sdk::Result<bool> {
+    pub fn expired(data: &sdk::Dataset) -> sdk::Result<bool> {
         use sdk::arrow_array::Array as _;
         if data
             .batches
@@ -267,6 +270,17 @@ impl Computation {
         let index = Some(CredentialIndex::new(&self)?);
         let mut subjects = Vec::new();
         let mut commands = super::commands::GraphCommands::default();
+        commands.state(
+            &araphor_analysis_types::DomainRelations::key(
+                &Option::<crate::discovery::DiscoveryRecordIdV1>::None,
+            )?,
+            araphor_analysis_types::GraphStateMember {
+                record: None,
+                position: None,
+                fact: None,
+                state: GraphPackageStateV1::Waiting,
+            },
+        )?;
         let mut seen = BTreeSet::new();
         for unit in &units {
             if !seen.insert(unit.record.clone()) {
@@ -315,7 +329,15 @@ impl Computation {
                             .as_ref()
                             .ok_or_else(|| Self::invalid("graph credential index"))?,
                     )? {
-                        GraphPackageStateV1::from_marker(&marker)?;
+                        commands.state(
+                            &araphor_analysis_types::DomainRelations::key(&unit.record)?,
+                            araphor_analysis_types::GraphStateMember {
+                                record: Some(unit.record.clone()),
+                                position: Some(self.record(row)?.position),
+                                fact: None,
+                                state: GraphPackageStateV1::from_marker(&marker)?,
+                            },
+                        )?;
                     }
                 }
             }

@@ -1,12 +1,9 @@
 use super::*;
-use crate::{
-    TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1, TraceIntentV1,
-    TraceMeasurementV1, TraceOutputReceiptV1, TraceStateV1, TraceTerminalReasonV1,
-};
+use crate :: { TraceCleanupV1 , TraceFrameKindV1 , TraceFrameV1 , TraceIdentityV1 , TraceIntentV1 , TraceMeasurementV1 , TraceOutputReceiptV1 , TraceStateV1 , TraceTerminalReasonV1 } ;
 
 impl Capture<'_> {
     table_row! {
-        pub(in crate::analysis::extraction) fn trace(
+        pub(in crate::analysis) fn trace(
             &mut self,
             state: &TraceStateV1,
             intent: &TraceIntentV1,

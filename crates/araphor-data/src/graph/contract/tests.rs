@@ -1,5 +1,5 @@
-use araphor_analysis_builtins::graph::{FindingReasonExt};
 use super::*;
+use araphor_analysis_builtins::graph::FindingReasonExt;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 

@@ -114,7 +114,11 @@ impl DataWrite<'_> {
                 self.transaction.remove(key);
             }
         }
-        for (record, position) in &source.records {
+        if source.records != selection.records || selection.observed().len() != source.records.len()
+        {
+            return Err(Code::Invalid.error("source observed position bijection"));
+        }
+        for ((record, position), observed) in source.records.iter().zip(selection.observed()) {
             memory.check()?;
             let key = SourceRecord::member_key(&prefix, record);
             if selection.append && Records::staged(&key, &self.transaction)?.is_some() {
@@ -126,6 +130,7 @@ impl DataWrite<'_> {
                 key,
                 Records::named(&Member {
                     position: *position,
+                    observed: *observed,
                     origin: selected,
                     restricted: selection.restricted.get(record).copied().unwrap_or(0),
                 })?,

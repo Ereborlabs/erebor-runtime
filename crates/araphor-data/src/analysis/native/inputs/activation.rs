@@ -19,6 +19,11 @@ impl ActivationSubscription {
         self.position
     }
 
+    pub fn has_changed(&self) -> Result<bool> {
+        self.wake.coordinator.catch_up()?;
+        Ok(self.changes.borrow().commit_revision > self.position)
+    }
+
     pub async fn changed(&mut self) -> Result<()> {
         loop {
             self.wake.changed(&mut self.changes).await?;

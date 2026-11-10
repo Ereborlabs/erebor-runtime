@@ -339,10 +339,7 @@ fn recovery_checks_terminal_contract() -> TestResult {
         )?;
         drop(writer);
         drop(store);
-        assert!(
-            AnalysisStore::open(&root).is_err(),
-            "terminal fault {fault}"
-        );
+        assert!(AnalysisStore::open(&root).is_err(), "terminal fault {fault}");
     }
     Ok(())
 }

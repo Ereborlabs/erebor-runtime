@@ -4,11 +4,7 @@ use snafu::ResultExt as _;
 
 use super::{InstanceRecord, Records};
 use crate::analysis::managed::{Failure, FailureOrigin};
-use crate::{
-    analysis::native::{DataView, DataWrite, NativeStore},
-    AnalysisConflictSnafu, AnalysisReadControl, ManagedInstance, ManagedMember, ManagedResume,
-    NativeStateSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code, PackageGrantV1, Result,
-};
+use crate :: { analysis :: native :: { DataView , DataWrite , NativeStore } , AnalysisConflictSnafu , AnalysisReadControl , ManagedInstance , ManagedMember , ManagedResume , NativeStateSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , PackageGrantV1 , Result } ;
 
 pub struct ManagedLease(Arc<NativeStore>);
 

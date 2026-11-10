@@ -4,6 +4,37 @@ use super::{ContextRecord, DataView, NativeStore, Records};
 use crate::{AnalysisContextKeyV1, AnalysisContextVersionV1, NativeStateSnafu, Result};
 
 impl NativeStore {
+    pub fn context_tenant_page(
+        &self,
+        owner: &str,
+        after: Option<[u8; 16]>,
+    ) -> Result<Vec<[u8; 16]>> {
+        let view = self.view()?;
+        let mut next = after.map_or(Some(0), |tenant| u128::from_be_bytes(tenant).checked_add(1));
+        let mut tenants = Vec::new();
+        while let Some(first) = next {
+            let lower = (first.to_be_bytes(), String::new(), Vec::new(), Vec::new());
+            let Some((name, _)) = view.contexts.range((Included(lower), Unbounded)).next() else {
+                break;
+            };
+            let tenant = name.0;
+            let lower = (tenant, owner.to_owned(), Vec::new(), Vec::new());
+            if view
+                .contexts
+                .range((Included(lower), Unbounded))
+                .next()
+                .is_some_and(|(name, _)| name.0 == tenant && name.1 == owner)
+            {
+                tenants.push(tenant);
+                if tenants.len() == crate::analysis::MAX_ANALYSIS_PAGE_RECORDS {
+                    break;
+                }
+            }
+            next = u128::from_be_bytes(tenant).checked_add(1);
+        }
+        Ok(tenants)
+    }
+
     pub fn context_version(
         &self,
         key: &AnalysisContextKeyV1,
@@ -94,7 +125,7 @@ impl DataView {
         )
     }
 
-    fn head_versions(
+    pub(in crate::analysis) fn head_versions(
         &self,
         tenant: [u8; 16],
         owner: &str,

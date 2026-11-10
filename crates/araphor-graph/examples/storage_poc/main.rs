@@ -3,7 +3,6 @@
 #[cfg(feature = "cdc-poc")]
 mod cdc;
 mod compaction;
-mod duck;
 mod fixture;
 mod history;
 mod home;
@@ -149,27 +148,20 @@ impl Oracle {
 }
 
 enum Engine {
-    Duck(duck::Duck),
     Native(native::Native),
 }
 impl Engine {
     fn close(&self) -> Result<()> {
         match self {
-            Self::Duck(_) => Ok(()),
             Self::Native(db) => db.shutdown(),
         }
     }
 
-    fn open(kind: &str, path: &Path, fixture: &Fixture) -> Result<Self> {
-        if kind == "duckdb" {
-            Ok(Self::Duck(duck::Duck::open(path, fixture)?))
-        } else {
-            Ok(Self::Native(native::Native::open(kind, path)?))
-        }
+    fn open(kind: &str, path: &Path, _fixture: &Fixture) -> Result<Self> {
+        Ok(Self::Native(native::Native::open(kind, path)?))
     }
     fn apply(&mut self, fixture: &Fixture, step: &Step, commit: bool) -> Result<Timing> {
         match self {
-            Self::Duck(db) => db.apply(fixture, step, commit),
             Self::Native(db) => db.apply(fixture, step, commit),
         }
     }
@@ -180,13 +172,11 @@ impl Engine {
         action: impl FnOnce(&dyn GraphRead, f64) -> Result<T>,
     ) -> Result<T> {
         match self {
-            Self::Duck(db) => db.capture(fixture, revision, action),
             Self::Native(db) => db.capture(fixture, revision, action),
         }
     }
     fn inspect(&self, fixture: &Fixture, revision: u64) -> Result<Readout> {
         match self {
-            Self::Duck(db) => db.inspect(fixture, revision, true),
             Self::Native(db) => {
                 let mut out = db.inspect(fixture, revision, true)?;
                 let started = Instant::now();
@@ -198,7 +188,6 @@ impl Engine {
     }
     fn verify_metadata(&self, fixture: &Fixture, revision: u64, current: u64) -> Result<()> {
         match self {
-            Self::Duck(db) => db.verify_metadata(fixture, revision, current),
             Self::Native(db) => db.verify_metadata(fixture, revision, current),
         }
     }
@@ -286,14 +275,14 @@ fn main() -> Result<()> {
     let versioned = mode.as_deref() == Some(std::ffi::OsStr::new("versioned"));
     let orders: Vec<Vec<&str>> = match mode.as_deref() {
         None => vec![
-            vec!["duckdb", "redb", "home", "fjall"],
-            vec!["redb", "fjall", "duckdb", "home"],
-            vec!["fjall", "home", "redb", "duckdb"],
-            vec!["home", "duckdb", "fjall", "redb"],
-            vec!["home", "duckdb", "fjall", "redb"],
-            vec!["fjall", "home", "redb", "duckdb"],
-            vec!["redb", "fjall", "duckdb", "home"],
-            vec!["duckdb", "redb", "home", "fjall"],
+            vec!["redb", "home", "fjall"],
+            vec!["redb", "fjall", "home"],
+            vec!["fjall", "home", "redb"],
+            vec!["home", "fjall", "redb"],
+            vec!["home", "fjall", "redb"],
+            vec!["fjall", "home", "redb"],
+            vec!["redb", "fjall", "home"],
+            vec!["redb", "home", "fjall"],
         ],
         Some(mode) if mode == "surrealkv" => vec![
             vec!["redb", "fjall", "surrealkv"],
@@ -332,7 +321,7 @@ fn main() -> Result<()> {
             "scenario_interval":"capture -> actual index traversal/staging -> resolved detect inputs -> actual detection/staging -> durable atomic Graph/state commit",
             "traversal":"actual package iterative neighbors(Either); next keys depend on returned edges",
             "source_inputs":"typed incident audit and observation fixture; same6-action scenario; prepared index inputs",
-            "durability":{"redb":"Immediate","fjall":"transaction SyncAll","duckdb":"normal on-disk COMMIT","home":"one append-only frame and sync_all per transaction; immutable RAM index","surrealkv":"transaction Immediate; native transactions; engine versioning off; same explicit Graph history keys"},
+            "durability":{"redb":"Immediate","fjall":"transaction SyncAll","home":"one append-only frame and sync_all per transaction; immutable RAM index","surrealkv":"transaction Immediate; native transactions; engine versioning off; same explicit Graph history keys"},
             "excludes":["Control/raw ingestion","native DataFusion input execution","Data authority/evidence pins","notification creation","steady compaction/power loss"],
             "qualification_reads":"8 post-commit finite all-member reads; historical snapshots, rollback and reopen outside primary interval"}),
         runs: Vec::new(),

@@ -256,6 +256,14 @@ type Origin = SourceRead<
     Vec<(DiscoveryRecordIdV1, AnalysisContextRefV1)>,
 >;
 
+pub(in crate::analysis::native) struct SourceContents {
+    pub(in crate::analysis::native) complete: bool,
+    pub(in crate::analysis::native) manifest: crate::GraphManifest,
+    pub(in crate::analysis::native) contexts: Vec<AnalysisContextRefV1>,
+    pub(in crate::analysis::native) observed: u64,
+    pub(in crate::analysis::native) facts: BTreeMap<AnalysisContextKeyV1, DiscoveryRecordIdV1>,
+}
+
 impl SourceRead {
     pub(in crate::analysis::native) fn revision(
         &self,
@@ -263,8 +271,49 @@ impl SourceRead {
         control: &AnalysisReadControl,
         charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<(GraphRevisionV1, Vec<AnalysisContextRefV1>)> {
+        self.read_members(store, control, charge, None, false)
+            .map(|(revision, references, _, _)| (revision, references))
+    }
+
+    pub(in crate::analysis::native) fn contents(
+        &self,
+        store: &NativeStore,
+        control: &AnalysisReadControl,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+        fact_bodies: bool,
+    ) -> Result<SourceContents> {
+        let mut manifest = self.manifest(charge)?;
+        let (revision, contexts, observed, facts) =
+            self.read_members(store, control, charge, Some(&mut manifest), fact_bodies)?;
+        manifest.input_manifest = revision;
+        Ok(SourceContents {
+            complete: fact_bodies,
+            manifest,
+            contexts,
+            observed,
+            facts,
+        })
+    }
+
+    fn read_members(
+        &self,
+        store: &NativeStore,
+        control: &AnalysisReadControl,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+        mut details: Option<&mut crate::GraphManifest>,
+        fact_bodies: bool,
+    ) -> Result<(
+        GraphRevisionV1,
+        Vec<AnalysisContextRefV1>,
+        u64,
+        BTreeMap<AnalysisContextKeyV1, DiscoveryRecordIdV1>,
+    )> {
         let at = store.read_at(self.result.revision)?;
         let source = self.identity()?;
+        let mut observed = 0;
+        let mut fact_values = BTreeMap::new();
+        let mut fact_owners = BTreeMap::new();
+        let mut verified = crate::analysis::context::VerifiedPackages::default();
         let prefix = at.source_members(&self.owner)?;
         let mut evidence = Vec::new();
         let mut contexts = BTreeMap::<AnalysisContextKeyV1, AnalysisContextRefV1>::new();
@@ -324,6 +373,15 @@ impl SourceRead {
             }
             charge(record.allocated_bytes().saturating_mul(4))?;
             evidence.push(record.clone());
+            if let Some(details) = &mut details {
+                charge(
+                    record.allocated_bytes() + size_of::<(DiscoveryRecordIdV1, StorePositionV1)>(),
+                )?;
+                details
+                    .input_positions
+                    .push((record.clone(), member.position));
+                observed = observed.max(member.observed);
+            }
             for (kind, facts) in [(SourceRecord::FACT, true), (SourceRecord::PROOF, false)] {
                 let prefix =
                     SourceRecord::member_key(&SourceRecord::key(kind, &[member.origin]), &record);
@@ -369,6 +427,65 @@ impl SourceRead {
                         {
                             return Err(Code::Invalid.error("source revision fact association"));
                         }
+                        if details.is_some() {
+                            charge(
+                                reference.key.allocated_bytes()
+                                    + record.allocated_bytes()
+                                    + 12 * size_of::<(AnalysisContextKeyV1, DiscoveryRecordIdV1)>(),
+                            )?;
+                            fact_owners.insert(reference.key.clone(), record.clone());
+                        }
+                        if fact_bodies {
+                            let (context, actual) = at
+                                .context_record(&reference.key, id, charge)?
+                                .ok_or_else(|| Code::Missing.error("source snapshot fact"))?;
+                            if actual != revision {
+                                return Err(Code::Conflict.error("source snapshot fact revision"));
+                            }
+                            let mut failed = false;
+                            let checked =
+                                verified.check_context(&context, |tenant, package, revision| {
+                                    let mut bound = |bytes: usize| {
+                                        let checked = charge(bytes.saturating_mul(12));
+                                        failed |= checked.is_err();
+                                        checked
+                                    };
+                                    let value = at.package_revision_charged(
+                                        tenant, package, revision, control, &mut bound,
+                                    )?;
+                                    if let Some(value) = &value {
+                                        bound(
+                                            value
+                                                .descriptor
+                                                .len()
+                                                .saturating_add(value.artifact.len()),
+                                        )?;
+                                    }
+                                    Ok(value)
+                                });
+                            if failed {
+                                checked?;
+                            } else {
+                                checked.map_err(crate::Error::stored_artifact)?;
+                            }
+                            DataView::fact_record(
+                                id,
+                                &context,
+                                |key| Records::read(key, &at.snapshot),
+                                charge,
+                            )?
+                            .ok_or_else(|| Code::Invalid.error("source snapshot fact index"))?;
+                            charge(
+                                context.body.len().saturating_mul(8)
+                                    + 12 * size_of::<crate::GraphFactV1>(),
+                            )?;
+                            let fact = crate::GraphFactV1::try_from(&context)?;
+                            if fact.record_id != record {
+                                return Err(Code::Denied.error("source snapshot fact record"));
+                            }
+                            charge(reference.key.allocated_bytes())?;
+                            fact_values.insert(reference.key.clone(), fact);
+                        }
                     } else if !origin
                         .selected()
                         .proofs
@@ -397,7 +514,15 @@ impl SourceRead {
         {
             return Err(Code::Invalid.error("source revision member count"));
         }
-        let manifest = self.manifest(charge)?;
+        let (coverage, missing_ranges) = if let Some(details) = &mut details {
+            (
+                std::mem::take(&mut details.input_manifest.coverage),
+                std::mem::take(&mut details.input_manifest.missing_ranges),
+            )
+        } else {
+            let manifest = self.manifest(charge)?;
+            (manifest.input_manifest.coverage, manifest.missing_ranges)
+        };
         charge(
             contexts
                 .keys()
@@ -407,12 +532,23 @@ impl SourceRead {
         )?;
         let revision = GraphRevisionV1 {
             evidence,
-            coverage: manifest.input_manifest.coverage,
+            coverage,
             context: contexts.keys().cloned().collect(),
-            missing_ranges: manifest.missing_ranges,
+            missing_ranges,
         };
         revision.validate(source.tenant_id)?;
-        Ok((revision, contexts.into_values().collect()))
+        if let Some(details) = &mut details {
+            details.facts = fact_values.into_values().collect();
+            details
+                .input_positions
+                .sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        }
+        Ok((
+            revision,
+            contexts.into_values().collect(),
+            observed,
+            fact_owners,
+        ))
     }
 }
 

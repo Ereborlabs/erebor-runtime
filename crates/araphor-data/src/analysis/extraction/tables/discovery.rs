@@ -5,10 +5,10 @@ use crate::{
 };
 
 impl Capture<'_> {
-    pub(in crate::analysis::extraction) fn profile(
+    pub(in crate::analysis) fn profile(
         &mut self,
         result_id: &str,
-        body: &[u8],
+        profile: &DiscoveryProfileV1,
         commit_revision: u64,
         sources: &[EvidenceIntakeIdentityV1],
         discovery_enabled: bool,
@@ -17,8 +17,6 @@ impl Capture<'_> {
         if !self.read.requests.contains_key("behaviors") {
             return Ok(true);
         }
-        budget.charge(body.len().checked_mul(4).ok_or_else(overflow)?)?;
-        let profile = DiscoveryProfileV1::try_from(body)?;
         if profile.profile_id != result_id || !sources.contains(&profile.scope.identity) {
             return Err(invalid(
                 "the discovery result differs from its retained profile identity",
@@ -36,7 +34,7 @@ impl Capture<'_> {
         }
         self.mutable_discovery |= !profile.sealed;
         if self.scope.binding_ids.is_empty()
-            && !self.behavior(&profile, None, commit_revision, discovery_enabled, budget)?
+            && !self.behavior(profile, None, commit_revision, discovery_enabled, budget)?
         {
             return Ok(false);
         }
@@ -56,7 +54,7 @@ impl Capture<'_> {
                 });
             }
             if !self.behavior(
-                &profile,
+                profile,
                 Some(atom),
                 commit_revision,
                 discovery_enabled,

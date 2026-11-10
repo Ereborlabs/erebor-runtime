@@ -100,9 +100,8 @@ impl DataStoreQualification {
             "the inspection output already exists",
         )?;
         self.check(
-            fs::symlink_metadata(root.join("analysis.duckdb"))?
-                .file_type()
-                .is_file(),
+            fs::symlink_metadata(root.join("fjall/version"))?.file_type().is_file()
+                && fs::symlink_metadata(root.join("fjall/keyspaces/0/current"))?.file_type().is_file(),
             "inspection requires an existing data file",
         )?;
         let data = AnalysisStore::open(root)?;
@@ -152,8 +151,8 @@ impl DataStoreQualification {
             store_uuid: *meta.store_uuid.as_bytes(),
             recovery_epoch: meta.recovery_epoch,
             commit_revision: meta.commit_revision,
-            database_bytes: Self::file_size(&root.join("analysis.duckdb"))?,
-            wal_bytes: Self::file_size(&root.join("analysis.duckdb.wal"))?,
+            database_bytes: Self::native_sizes(root)?.0,
+            wal_bytes: Self::native_sizes(root)?.1,
             file_bytes: usage.file_bytes,
             allocated_bytes: usage.allocated_bytes,
             sources: Vec::new(),
@@ -330,5 +329,57 @@ mod tests {
         assert!(!refused.output.exists());
         assert_eq!(AnalysisStore::open(&root)?.meta()?, before);
         Ok(())
+    }
+}
+
+impl DataStoreQualification {
+    fn native_paths(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+        let mut pending = vec![root.join("fjall")];
+        let mut files = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(&directory)? {
+                let path = entry?.path();
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                if metadata.is_dir() { pending.push(path); }
+                else if metadata.is_file() { files.push(path); }
+                else { return Err("native storage contains a non-file entry".into()); }
+            }
+        }
+        files.sort_unstable();
+        Ok(files)
+    }
+
+    pub(super) fn native_sizes(root: &Path) -> Result<(u64, u64)> {
+        let mut index = 0u64;
+        let mut journals = 0u64;
+        for path in Self::native_paths(root)? {
+            let bytes = Self::file_size(&path)?;
+            let name = path.file_name().and_then(|name| name.to_str()).ok_or("native file name")?;
+            let total = if path.parent() == Some(root.join("fjall").as_path()) && (name.ends_with(".jnl") || name.ends_with(".jnl.meta")) { &mut journals } else { &mut index };
+            *total = total.checked_add(bytes).ok_or("native file size overflow")?;
+        }
+        Ok((index, journals))
+    }
+
+    pub(super) fn native_proof(root: &Path) -> Result<Vec<(std::path::PathBuf, u64, [u8; 32])>> {
+        let mut proof = Vec::new();
+        for path in Self::native_paths(root)? {
+            let mut file = fs::File::open(&path)?;
+            let mut digest = Sha256::new();
+            let mut buffer = [0u8; 64 * 1024];
+            let mut bytes = 0u64;
+            loop {
+                let count = file.read(&mut buffer)?;
+                if count == 0 { break; }
+                digest.update(&buffer[..count]);
+                bytes = bytes.checked_add(count as u64).ok_or("native proof size overflow")?;
+            }
+            proof.push((path.strip_prefix(root)?.to_owned(), bytes, digest.finalize().into()));
+        }
+        Ok(proof)
     }
 }

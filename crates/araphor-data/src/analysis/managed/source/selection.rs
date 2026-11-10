@@ -1,12 +1,10 @@
 use std::ops::RangeBounds as _;
 
-use duckdb::OptionalExt as _;
+
 use sdk::arrow_array::{Array, BinaryArray, StringArray, UInt32Array, UInt64Array};
 
 use super::*;
-use crate::{
-    AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisWitnessV1, EvidenceIntakeIdentityV1,
-};
+use crate :: { AnalysisContextKeyV1 , AnalysisContextRefV1 , AnalysisWitnessV1 , EvidenceIntakeIdentityV1 } ;
 
 impl SourceScope {
     pub fn check_basis(&self, prior: &Self) -> Result<()> {
@@ -104,7 +102,7 @@ impl ManagedSourceFrame {
             proof: Arc::default(),
             selected: Arc::default(),
             coverage: Vec::new(),
-            #[cfg(feature = "native-store")]
+            
             complete: false,
         }
     }
@@ -415,111 +413,4 @@ impl SourceRow {
     }
 }
 
-impl AnalysisStore {
-    pub(in crate::analysis::managed) fn check_source_evidence(
-        reader: &Connection,
-        attempt: &Attempt,
-        step: &Step,
-    ) -> Result<()> {
-        let started = std::time::Instant::now();
-        let witnessed = |values: &[crate::AnalysisWitnessV1], value: &crate::AnalysisWitnessV1| {
-            values
-                .binary_search_by(|witness| {
-                    (&witness.identity, witness.cursor).cmp(&(&value.identity, value.cursor))
-                })
-                .ok()
-                .is_some_and(|index| values[index] == *value)
-        };
-        let contextual = |values: &[AnalysisContextRefV1], value: &AnalysisContextRefV1| {
-            values
-                .binary_search_by(|context| context.key.cmp(&value.key))
-                .ok()
-                .is_some_and(|index| values[index] == *value)
-        };
-        let capture = &attempt.capture;
-        let scope = Self::managed_version_from(
-            reader,
-            capture.tenant,
-            &capture.instance,
-            capture.generation,
-        )?
-        .destination
-        .selection(&capture.grant.selection)?;
-        if step
-            .witnesses
-            .windows(2)
-            .any(|pair| (&pair[0].identity, pair[0].cursor) >= (&pair[1].identity, pair[1].cursor))
-            || step
-                .contexts
-                .windows(2)
-                .any(|pair| pair[0].key >= pair[1].key)
-            || capture.witnesses.windows(2).any(|pair| {
-                (&pair[0].identity, pair[0].cursor) >= (&pair[1].identity, pair[1].cursor)
-            })
-            || capture
-                .contexts
-                .windows(2)
-                .any(|pair| pair[0].key >= pair[1].key)
-            || capture
-                .witnesses
-                .iter()
-                .any(|value| !witnessed(&step.witnesses, value))
-            || capture
-                .contexts
-                .iter()
-                .any(|value| !contextual(&step.contexts, value))
-        {
-            return Err(Code::Invalid.error("managed source evidence order"));
-        }
-        let selected = &attempt
-            .receipt
-            .as_ref()
-            .ok_or_else(|| Code::Invalid.error("managed source evidence receipt"))?
-            .selected;
-        for witness in &step.witnesses {
-            if !witnessed(&capture.witnesses, witness) {
-                let valid = match &witness.identity {
-                    AnalysisStreamIdentityV1::Evidence(source) => {
-                        source.valid()
-                            && scope.includes_source(source)
-                            && witness.cursor != 0
-                            && (scope.cursor_from, scope.cursor_until).contains(&witness.cursor)
-                    }
-                    AnalysisStreamIdentityV1::Diagnostic(_) => false,
-                };
-                if !valid || witness.expires_utc_ns != attempt.request.witness_expiry {
-                    return Err(Code::Invalid.error("managed source witness expiry"));
-                }
-            }
-        }
-        for context in &step.contexts {
-            if !contextual(&capture.contexts, context)
-                && (!context.key.valid()
-                    || context.key.tenant_id != scope.tenant_id
-                    || (!scope.contexts.is_all()
-                        && !scope.contexts.as_slice().contains(&context.key))
-                    || context.commit_revision == 0)
-            {
-                return Err(Code::Invalid.error("managed source context scope"));
-            }
-            if context.commit_revision > capture.revision {
-                return Err(Code::Invalid.error("managed source context binding"));
-            }
-        }
-        Self::check_source_pins(
-            reader,
-            &selected.result_id,
-            &step.witnesses,
-            &Self::join_contexts(&step.contexts, &step.derived)?,
-        )?;
-        erebor_telemetry::debug!(
-            stage = "source_evidence_timing",
-            result_id = %selected.result_id,
-            witness_count = step.witnesses.len(),
-            context_count = step.contexts.len(),
-            elapsed_s = started.elapsed().as_secs_f64(),
-            "Managed source evidence validation completed"
-        );
-        Ok(())
-    }
-}
+

@@ -1,11 +1,6 @@
 use super::*;
-use crate::analysis::{
-    managed::PreparedMemory,
-    progress::{PreparedProfile, ProfileHeader, ProgressWrite, ResultHead},
-};
-use crate::{
-    AnalysisContextVersionV1, AnalysisResultCommitV1, AnalysisResultReceiptV1, DiscoveryProfileV1,
-};
+use crate :: analysis :: { managed :: PreparedMemory , progress :: { PreparedProfile , ProfileHeader , ProgressWrite , ResultHead } } ;
+use crate :: { AnalysisContextVersionV1 , AnalysisResultCommitV1 , AnalysisResultReceiptV1 , DiscoveryProfileV1 } ;
 
 struct ProgressBudget;
 
@@ -24,7 +19,7 @@ impl crate::ManagedBudget for ProgressBudget {
 impl NativeStore {
     pub fn commit_result(&self, input: &AnalysisResultCommitV1) -> Result<AnalysisResultReceiptV1> {
         if input.scope.processor_id == crate::GRAPH_PROCESSOR {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.root,
                 "the graph result requires a guarded graph commit",
             );
@@ -32,7 +27,7 @@ impl NativeStore {
         let control = AnalysisReadControl::default();
         let budget = ProgressBudget;
         let mut memory = PreparedMemory::new(&control, &budget)?;
-        let mut tx = self.write()?;
+        let mut tx = self.maintenance_write()?;
         let output = tx.progress_rows(
             input,
             ResultHead::Unchecked,
@@ -42,6 +37,10 @@ impl NativeStore {
             None,
             &mut memory,
         )?;
+        if !output.commit { return Ok(output.receipt); }
+        tx.check_witnesses(input.scope.identity.tenant_id, input.created_utc_ns)?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(crate::AnalysisCommitStage::BeforeResultCommit)?;
         tx.commit([])?;
         Ok(output.receipt)
     }
@@ -101,7 +100,7 @@ impl DataWrite<'_> {
             if existing.is_some() {
                 return crate::AnalysisConflictSnafu.fail();
             }
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.store.root,
                 "the result context revision differs from its captured references",
             );
@@ -181,7 +180,7 @@ impl DataWrite<'_> {
         if input.consumed_cursor > receipt.contiguous_cursor
             || input.coverage_revision > receipt.coverage_revision
         {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.store.root,
                 "the result claims unavailable source or coverage progress",
             );
@@ -210,19 +209,19 @@ impl DataWrite<'_> {
                 if input.scope.processor_id != crate::DISCOVERY_PROCESSOR
                     || state.class != ProcessorClassV1::Optional
                 {
-                    return crate::AnalysisStore::reject_path(
+                    return crate::Error::reject_path(
                         &self.store.root,
                         "only optional Discovery can consume expired input",
                     );
                 }
-                return crate::AnalysisStore::reject_path(
+                return crate::Error::reject_path(
                     &self.store.root,
                     "the discovery gap differs from its captured expiry",
                 );
             }
         }
         if available != input.consumed_cursor - input.expected_cursor {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.store.root,
                 "the processor result skips unavailable raw input",
             );
@@ -294,6 +293,7 @@ impl DataWrite<'_> {
             state.revision = self.revision;
             self.stage_processor(owner, &state)?;
         }
+        self.count_revision(input.scope.identity.tenant_id, 2)?;
         self.note_relation("analysis_results", self.revision)?;
         if !input.witnesses.is_empty() {
             self.note_relation("evidence_refs", self.revision)?;

@@ -2,17 +2,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use araphor_analysis_types::{values as algorithm, DomainRelations, FindingMember};
+use araphor_analysis_types::{
+    values as algorithm, DomainRelations, FindingMember, GraphStateMember,
+};
 use araphor_graph::Staged;
-use duckdb::Connection;
+
 use sdk::arrow_array::{Array, BinaryArray, StructArray, UInt8Array};
 use snafu::ResultExt as _;
 
-use super::ManagedGraphJournal;
 use crate::{
-    AnalysisContextRefV1, AnalysisDatabaseSnafu, AnalysisStore, DiscoveryRecordIdV1, EvidenceBasis,
-    GraphEdgeKeyV1, GraphEdgeV1, GraphFactV1, GraphReplayInputV1, PackageErrorCodeV1 as Code,
-    Result,
+    AnalysisContextRefV1, DiscoveryRecordIdV1, EvidenceBasis, GraphEdgeKeyV1, GraphEdgeV1,
+    GraphFactV1, GraphReplayInputV1, PackageErrorCodeV1 as Code, Result,
 };
 
 mod basis;
@@ -25,6 +25,7 @@ pub(in crate::analysis) struct DomainCommands {
     subjects: Vec<algorithm::SubjectChange>,
     edges: Vec<algorithm::RelationshipChange>,
     findings: Vec<FindingMember>,
+    states: Vec<GraphStateMember>,
     records: BTreeSet<DiscoveryRecordIdV1>,
 }
 
@@ -220,7 +221,7 @@ impl DomainScratch<'_> {
 
 impl DomainCommands {
     pub(in crate::analysis) fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.records.is_empty() && self.states.is_empty()
     }
 
     pub(in crate::analysis) fn read(
@@ -249,12 +250,14 @@ impl DomainCommands {
             let subjects = DomainRelations::subjects(declaration);
             let edges = DomainRelations::relationships(declaration, spec);
             let findings = DomainRelations::findings(declaration);
-            if !subjects && !edges && !findings {
+            let states = DomainRelations::states(declaration);
+            if !subjects && !edges && !findings && !states {
                 continue;
             }
             let width = std::mem::size_of::<algorithm::SubjectChange>()
                 .max(std::mem::size_of::<algorithm::RelationshipChange>())
-                .max(std::mem::size_of::<FindingMember>());
+                .max(std::mem::size_of::<FindingMember>())
+                .max(std::mem::size_of::<GraphStateMember>());
             let mut bytes = batch
                 .get_array_memory_size()
                 .checked_mul(2)
@@ -299,6 +302,8 @@ impl DomainCommands {
                         algorithm::SubjectChange::port().name
                     } else if edges {
                         algorithm::RelationshipChange::port().name
+                    } else if states {
+                        GraphStateMember::port().name
                     } else {
                         FindingMember::port().name
                     },
@@ -338,6 +343,23 @@ impl DomainCommands {
                         commands.anchor(&value.anchor);
                         commands.records.extend(value.key.evidence.iter().cloned());
                         commands.edges.push(value);
+                    }
+                } else if states {
+                    for (row, value) in GraphStateMember::decode(&data)
+                        .context(crate::AnalysisContractSnafu)?
+                        .into_iter()
+                        .enumerate()
+                    {
+                        scratch.charge(0)?;
+                        Self::check_key(batch, start + row, "key", &value.record)?;
+                        Self::check_key(batch, start + row, "owner", &value.record)?;
+                        if basis.state(*relation, batch, start + row, &value)? {
+                            continue;
+                        }
+                        if let Some(record) = &value.record {
+                            commands.records.insert(record.clone());
+                        }
+                        commands.states.push(value);
                     }
                 } else {
                     let decoded =
@@ -531,6 +553,28 @@ impl DomainCommands {
                 &subjects,
             )?;
         }
+        for row in &self.states {
+            scratch.charge(0)?;
+            row.validate().context(crate::AnalysisContractSnafu)?;
+            let Some(record) = &row.record else {
+                continue;
+            };
+            let index = input
+                .records
+                .binary_search_by(|value| value.id.cmp(record))
+                .map_err(|_| Code::Denied.error("domain Graph state record"))?;
+            if row.position != Some(input.observations[index].position)
+                || row.fact.as_ref().is_some_and(|key| {
+                    !input
+                        .facts
+                        .iter()
+                        .zip(&input.contexts)
+                        .any(|(fact, context)| &context.key == key && &fact.record_id == record)
+                })
+            {
+                return Err(Code::Denied.error("domain Graph state provenance"));
+            }
+        }
         for row in self.findings.iter() {
             scratch.charge(0)?;
             Self::finding_declaration(row, package, model)?;
@@ -547,182 +591,6 @@ pub(in crate::analysis) struct DomainPreparation {
     pub(in crate::analysis) contexts: ContextInputs,
     pub(in crate::analysis) bytes: usize,
     pub(in crate::analysis) leases: Vec<Box<dyn std::any::Any + Send + Sync>>,
-}
-
-impl AnalysisStore {
-    pub(super) fn prepare_domain_journal(
-        &self,
-        journal: &ManagedGraphJournal,
-        package: &sdk::Package,
-        model: &sdk::Model,
-        contexts: ContextInputs,
-        memory: &mut super::super::budget::PreparedMemory<'_>,
-    ) -> Result<Option<DomainPreparation>> {
-        let mut scratch = DomainScratch {
-            budget: journal.budget.as_ref(),
-            memory,
-            bytes: 0,
-            leases: Vec::new(),
-        };
-        let basis = Basis::read(journal, &mut scratch)?;
-        let commands = DomainCommands::read(
-            &journal.work.journal,
-            &journal.call.spec,
-            &journal.call.relations,
-            &basis,
-            package,
-            model,
-            &mut scratch,
-        )?;
-        if commands.records.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(DomainPreparation {
-            commands,
-            contexts,
-            bytes: scratch.bytes,
-            leases: scratch.leases,
-        }))
-    }
-
-    pub(super) fn check_domain_journal(
-        &self,
-        connection: &Connection,
-        journal: &ManagedGraphJournal,
-        prepared: DomainPreparation,
-        package: &sdk::Package,
-        model: &sdk::Model,
-        derived: &super::super::source::import::PreparedDerived,
-        restricted: bool,
-        memory: &mut super::super::budget::PreparedMemory<'_>,
-    ) -> Result<Option<super::super::model::GraphProof>> {
-        let frame = journal
-            .call
-            .attempt
-            .5
-            .as_ref()
-            .ok_or_else(|| Code::Denied.error("domain Graph canonical source"))?;
-        prepared.validate(
-            journal.call.attempt.instance().spec.tenant,
-            frame,
-            &journal.call.input_calls(),
-            package,
-            model,
-            derived.values(journal.call.call),
-            restricted,
-            journal.budget.as_ref(),
-            memory,
-            |records, contexts, scratch| self.domain_facts(connection, records, contexts, scratch),
-        )
-    }
-
-    fn domain_facts(
-        &self,
-        connection: &Connection,
-        records: &BTreeSet<DiscoveryRecordIdV1>,
-        contexts: &[&(crate::AnalysisContextVersionV1, AnalysisContextRefV1)],
-        scratch: &mut DomainScratch<'_>,
-    ) -> Result<Vec<(crate::AnalysisContextVersionV1, GraphFactV1)>> {
-        if contexts.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut wanted = std::collections::BTreeMap::new();
-        for value in contexts {
-            scratch.charge(
-                value
-                    .1
-                    .key
-                    .allocated_bytes()
-                    .saturating_mul(8)
-                    .saturating_add(12 * size_of::<(Vec<u8>, usize)>()),
-            )?;
-            wanted.insert(crate::analysis::context::version_key(&value.1.key)?, *value);
-        }
-        let mut record_keys = BTreeSet::new();
-        for record in records {
-            scratch.charge(
-                record
-                    .allocated_bytes()
-                    .saturating_mul(8)
-                    .saturating_add(12 * size_of::<Vec<u8>>()),
-            )?;
-            record_keys.insert(DomainRelations::key(record).context(crate::AnalysisContractSnafu)?);
-        }
-        let placeholders = std::iter::repeat_n("?", wanted.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let mut query = connection.prepare(&format!(
-            "SELECT context.version_key,context.commit_revision,fact.record_key,fact.stream_key,fact.source_cursor,
-                coalesce(octet_length(fact.record_key),0)+coalesce(octet_length(fact.stream_key),0)
-             FROM context_versions context LEFT JOIN graph_fact_records fact USING(version_key)
-             WHERE context.version_key IN ({placeholders})"
-        )).context(AnalysisDatabaseSnafu { operation: "prepare canonical Graph fact eligibility" })?;
-        let mut rows = query
-            .query(duckdb::params_from_iter(wanted.keys()))
-            .context(AnalysisDatabaseSnafu {
-                operation: "read canonical Graph fact eligibility",
-            })?;
-        let mut seen = BTreeSet::new();
-        let mut facts = Vec::new();
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "advance canonical Graph fact eligibility",
-        })? {
-            let bytes: usize = row.get(5).context(AnalysisDatabaseSnafu {
-                operation: "bound canonical Graph fact identity",
-            })?;
-            scratch.charge(
-                bytes
-                    .saturating_mul(4)
-                    .saturating_add(12 * size_of::<Vec<u8>>()),
-            )?;
-            let (key, revision, record, stream, cursor) = (|| -> duckdb::Result<_> {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, u64>(1)?,
-                    row.get::<_, Option<Vec<u8>>>(2)?,
-                    row.get::<_, Option<Vec<u8>>>(3)?,
-                    row.get::<_, Option<u64>>(4)?,
-                ))
-            })()
-            .context(AnalysisDatabaseSnafu {
-                operation: "decode canonical Graph fact eligibility",
-            })?;
-            let (value, reference) = wanted[&key];
-            if revision != reference.commit_revision || !seen.insert(key) {
-                return Err(Code::Denied.error("canonical Graph context authority"));
-            }
-            let Some(record) = record else {
-                continue;
-            };
-            if !record_keys.contains(&record) {
-                continue;
-            }
-            let (Some(stream), Some(cursor)) = (stream, cursor) else {
-                return Err(Code::Invalid.error("canonical Graph fact identity"));
-            };
-            scratch.charge(
-                value
-                    .body
-                    .len()
-                    .saturating_mul(8)
-                    .saturating_add(4 * size_of::<GraphFactV1>()),
-            )?;
-            let fact = GraphFactV1::try_from(value)?;
-            let actual = crate::analysis::context::FactRecord::from_context(value)?
-                .ok_or_else(|| Code::Invalid.error("canonical Graph fact classification"))?;
-            if (actual.record, actual.stream, actual.cursor) != (record, stream, cursor)
-                || !records.contains(&fact.record_id)
-            {
-                return Err(Code::Invalid.error("canonical Graph fact identity"));
-            }
-            facts.push((value.clone(), fact));
-        }
-        if seen.len() != wanted.len() {
-            return Err(Code::Denied.error("canonical Graph context authority"));
-        }
-        facts.sort_unstable_by(|left, right| left.0.key.cmp(&right.0.key));
-        Ok(facts)
-    }
 }
 
 impl DomainPreparation {

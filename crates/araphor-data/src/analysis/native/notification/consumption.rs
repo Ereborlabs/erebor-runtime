@@ -5,11 +5,7 @@ use snafu::ResultExt as _;
 
 use super::super::{inputs::InputRecord, records::Records, DataView, DataWrite, NativeStore};
 use crate::analysis::inputs::{InputCapture, InputCut};
-use crate::{
-    AnalysisContextRefV1, AnalysisExtractLimits, AnalysisPositionPageV1, AnalysisReadControl,
-    AnalysisSelectionV1, AnalysisTableRead, InputSubscription, ManagedDestination, ManagedInstance,
-    NativeStorageSnafu, PackageErrorCodeV1 as Code, Result, NOTIFICATION_STATE_OWNER,
-};
+use crate :: { AnalysisContextRefV1 , AnalysisExtractLimits , AnalysisPositionPageV1 , AnalysisReadControl , AnalysisSelectionV1 , AnalysisTableRead , InputSubscription , ManagedDestination , ManagedInstance , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result , NOTIFICATION_STATE_OWNER } ;
 
 pub struct NotificationCapture {
     view: Arc<DataView>,

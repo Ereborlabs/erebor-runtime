@@ -1,20 +1,19 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 
 mod index;
+mod budget;
+pub(in crate::analysis) use budget::RawBudget;
 mod page;
 
-pub(super) use index::RawIndex;
+pub(super) use index::{RawExpiry, RawIndex};
 
 use prost::Message as _;
 use snafu::ResultExt as _;
 
 use super::raw_segments::{DirectoryStamp, RawSegment};
-use super::{
-    AnalysisSourceReceiptV1, AnalysisStore, SegmentFile, StorageUsageV1, ValidatedEvidenceBatchV1,
-};
+use super :: { AnalysisSourceReceiptV1 , SegmentFile , StorageUsageV1 , ValidatedEvidenceBatchV1 } ;
 use crate::{EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, Result};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
@@ -113,20 +112,20 @@ impl RawIdentity {
         match kind {
             "records" => serde_json::from_str(json).map(Self::Evidence),
             "diagnostic" => serde_json::from_str(json).map(Self::Diagnostic),
-            _ => return AnalysisStore::reject_path(root, "the raw stream kind is invalid"),
+            _ => return crate::Error::reject_path(root, "the raw stream kind is invalid"),
         }
         .context(crate::JsonSnafu { path: root })
     }
 }
 
 pub(super) struct RawBatch {
-    kind: RawKind,
-    first_cursor: u64,
-    last_cursor: u64,
+    pub(in crate::analysis) kind: RawKind,
+    pub(in crate::analysis) first_cursor: u64,
+    pub(in crate::analysis) last_cursor: u64,
     intake_utc_ns: u64,
     framed_records: prost::bytes::Bytes,
     frame_ends: Vec<usize>,
-    terminal_bytes: usize,
+    pub(in crate::analysis) terminal_bytes: usize,
 }
 
 impl From<ValidatedEvidenceBatchV1> for RawBatch {
@@ -171,7 +170,7 @@ impl TraceRecord {
             .build()
         })?;
         if record.encode_to_vec() != bytes {
-            return AnalysisStore::reject_path(root, "the trace record is not canonical");
+            return crate::Error::reject_path(root, "the trace record is not canonical");
         }
         record.payload.ok_or_else(|| {
             crate::AnalysisStateSnafu {
@@ -198,14 +197,18 @@ impl TraceRecord {
             .build()
         })?;
         if serde_json::to_vec(&terminal).context(crate::JsonSnafu { path: root })? != bytes {
-            return AnalysisStore::reject_path(root, "the trace terminal is not canonical");
+            return crate::Error::reject_path(root, "the trace terminal is not canonical");
         }
         Ok(terminal)
     }
 }
 
 impl RawBatch {
-    fn trace(batch: &crate::TraceBatchV1, intake: u64, root: &Path) -> Result<Self> {
+    pub(in crate::analysis) fn trace(
+        batch: &crate::TraceBatchV1,
+        intake: u64,
+        root: &Path,
+    ) -> Result<Self> {
         batch.validate()?;
         if intake == 0 {
             return crate::TraceInvalidSnafu {
@@ -295,507 +298,7 @@ impl RawBatch {
     }
 }
 
-impl AnalysisStore {
-    pub fn read_page_cancel(
-        &self,
-        identity: &EvidenceIntakeIdentityV1,
-        first_cursor: u64,
-        control: &super::AnalysisReadControl,
-    ) -> Result<super::AnalysisReadPageV1> {
-        self.read_raw(
-            &identity.clone().into(),
-            first_cursor,
-            control,
-            super::MAX_ANALYSIS_PAGE_RECORDS,
-            super::MAX_ANALYSIS_PAGE_BYTES,
-        )
-    }
 
-    fn read_raw(
-        &self,
-        identity: &RawIdentity,
-        first_cursor: u64,
-        control: &super::AnalysisReadControl,
-        max_records: usize,
-        max_bytes: usize,
-    ) -> Result<super::AnalysisReadPageV1> {
-        control.check()?;
-        let _permit = self.reserve_reader()?;
-        let coordinator = self.raw_coordinator(control)?;
-        let _snapshot = self.maintenance.read_until(control)?;
-        let raw = self.raw.until(control)?;
-        let key = identity.key();
-        let source = raw
-            .index
-            .sources
-            .get(&key)
-            .filter(|source| source.receipt.matches(identity))
-            .ok_or_else(|| self.state_error("the raw source is absent"))?;
-        let receipt = &source.receipt;
-        let page = raw.freeze_page(
-            &raw.index,
-            receipt,
-            first_cursor,
-            *self.revision.borrow(),
-            control,
-            max_records,
-        )?;
-        drop(raw);
-        drop(coordinator);
-        #[cfg(any(test, feature = "test-fixtures"))]
-        if matches!(identity, RawIdentity::Diagnostic(_)) {
-            self.run_commit_hook(super::AnalysisCommitStage::AfterTraceFreeze)?;
-        }
-        page.read(&self.root, control, max_bytes)
-    }
-
-    pub fn append_trace(
-        &self,
-        identity: &crate::TraceIdentityV1,
-        batch: &crate::TraceBatchV1,
-        intake_utc_ns: u64,
-    ) -> Result<TraceOutputReceiptV1> {
-        identity.validate()?;
-        if batch.execution_id != identity.execution_id {
-            return crate::TraceInvalidSnafu {
-                reason: "the trace batch execution differs",
-            }
-            .fail();
-        }
-        let input = RawBatch::trace(batch, intake_utc_ns, &self.root)?;
-        let first = input.first_cursor;
-        let last = input.last_cursor;
-        let (outcome, receipt) = self.commit_raw(identity.clone().into(), input)?;
-        let RawReceipt::Diagnostic(receipt) = receipt else {
-            return self.reject("the durable trace receipt has the wrong kind");
-        };
-        if outcome == EvidenceStoreOutcomeV1::AlreadyAcceptedExpired
-            && batch.frames.is_empty()
-            && receipt.terminal != batch.terminal
-        {
-            return crate::AnalysisConflictSnafu.fail();
-        }
-        if outcome == EvidenceStoreOutcomeV1::AlreadyAcceptedExpired
-            && !(batch.frames.is_empty() && receipt.terminal == batch.terminal)
-        {
-            return crate::RetainedRangeExpiredSnafu {
-                first_cursor: first,
-                last_cursor: last,
-            }
-            .fail();
-        }
-        Ok(receipt)
-    }
-
-    pub fn trace_receipt(
-        &self,
-        identity: &crate::TraceIdentityV1,
-    ) -> Result<Option<TraceOutputReceiptV1>> {
-        identity.validate()?;
-        let _writer = self.raw_access()?;
-        let raw = self
-            .raw
-            .lock()
-            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
-        let source = RawIdentity::Diagnostic(identity.clone());
-        Ok(raw
-            .index
-            .sources
-            .get(&source.key())
-            .and_then(|source| match &source.receipt {
-                RawReceipt::Diagnostic(receipt) if &receipt.identity == identity => {
-                    Some(receipt.clone())
-                }
-                _ => None,
-            }))
-    }
-
-    pub fn read_trace(
-        &self,
-        identity: &crate::TraceIdentityV1,
-        first_cursor: u64,
-        control: &super::AnalysisReadControl,
-    ) -> Result<TraceOutputPageV1> {
-        identity.validate()?;
-        let page = self.read_raw(
-            &identity.clone().into(),
-            first_cursor,
-            control,
-            201,
-            1024 * 1024 + 201 * 8 + 4096,
-        )?;
-        let mut output = TraceOutputPageV1 {
-            frames: Vec::new(),
-            terminal: None,
-            positions: Vec::new(),
-            terminal_position: None,
-            next_cursor: page.next_cursor,
-            read_revision: page.read_revision,
-        };
-        let mut bytes = 0_usize;
-        for record in page.records {
-            control.check()?;
-            let payload = TraceRecord::read(&record.framed_record, &self.root)?;
-            let (kind, data) = match payload {
-                TracePayload::Metadata(data) => (crate::TraceFrameKindV1::Metadata, data),
-                TracePayload::Data(data) => (crate::TraceFrameKindV1::Data, data),
-                TracePayload::Diagnostic(data) => (crate::TraceFrameKindV1::Diagnostic, data),
-                TracePayload::Terminal(data) => {
-                    output.terminal = Some(TraceRecord::terminal(&data, &self.root)?);
-                    output.terminal_position = Some(record.position);
-                    continue;
-                }
-            };
-            if output.frames.len() == 200
-                || (!output.frames.is_empty()
-                    && bytes
-                        .checked_add(data.len())
-                        .is_none_or(|bytes| bytes > 1024 * 1024))
-            {
-                output.next_cursor = Some(record.cursor);
-                break;
-            }
-            bytes = bytes
-                .checked_add(data.len())
-                .ok_or_else(|| self.state_error("the trace page byte count overflowed"))?;
-            output.positions.push(record.position);
-            output.frames.push(crate::TraceFrameV1 {
-                execution_id: identity.execution_id,
-                sequence: record.cursor,
-                kind,
-                bytes: data,
-            });
-        }
-        Ok(output)
-    }
-
-    pub(super) fn commit_evidence(
-        &self,
-        identity: EvidenceIntakeIdentityV1,
-        batch: ValidatedEvidenceBatchV1,
-    ) -> Result<EvidenceStoreOutcomeV1> {
-        batch.validate_identity(&identity, &self.root)?;
-        self.commit_raw(identity.into(), batch.into())
-            .map(|(outcome, _)| outcome)
-    }
-
-    fn commit_raw(
-        &self,
-        identity: RawIdentity,
-        batch: RawBatch,
-    ) -> Result<(EvidenceStoreOutcomeV1, RawReceipt)> {
-        let mut writer = self.raw_access()?;
-        let mut raw = self
-            .raw
-            .lock()
-            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
-        self.require_retention()?;
-        if self.storage.witness_max_bytes.is_some() {
-            self.project_raw(
-                writer
-                    .connection
-                    .as_mut()
-                    .ok_or_else(|| self.state_error("the analysis connections are closed"))?,
-                &mut raw,
-                None,
-            )?;
-        }
-
-        if let RawIdentity::Evidence(source) = &identity {
-            if self.graph_interested(source)?
-                && self.graph_registration_required(writer.get()?, source)?
-            {
-                self.project_raw(
-                    writer
-                        .connection
-                        .as_mut()
-                        .ok_or_else(|| self.state_error("the analysis connections are closed"))?,
-                    &mut raw,
-                    None,
-                )?;
-                let floor = raw
-                    .index
-                    .sources
-                    .get(&source.key())
-                    .map_or(0, |source| source.receipt.floor());
-                self.register_graph_locked(writer.get_mut()?, source, floor, || Ok(()))?;
-                raw.refresh_budget(writer.get()?, self.retention)?;
-                self.raw_dirty.store(false, Ordering::Release);
-            }
-        }
-        let key = identity.key();
-        let tenant = identity.tenant();
-        if let RawIdentity::Diagnostic(trace) = &identity {
-            if raw.index.sources.get(&key).is_none_or(|source| !source.written) {
-                let (_, intent) = Self::read_trace_intent(
-                    writer.get()?,
-                    &self.root,
-                    trace.tenant_id,
-                    trace.request_id,
-                )?
-                .ok_or_else(|| {
-                    crate::TraceInvalidSnafu {
-                        reason: "the diagnostic execution is not admitted",
-                    }
-                    .build()
-                })?;
-                if !intent
-                    .bindings
-                    .iter()
-                    .any(|binding| binding.identity == *trace)
-                {
-                    return crate::AnalysisConflictSnafu.fail();
-                }
-            }
-        }
-        if let Some(source) = raw.index.sources.get(&key) {
-            if source.receipt.cpu() != batch.kind.cpu() || !source.receipt.matches(&identity) {
-                if matches!(identity, RawIdentity::Diagnostic(_)) {
-                    return crate::AnalysisConflictSnafu.fail();
-                }
-                return self.reject("the evidence source changed its identity or CPU");
-            }
-            if batch.first_cursor <= source.receipt.floor() {
-                if batch.last_cursor <= source.receipt.floor() {
-                    return Ok((
-                        EvidenceStoreOutcomeV1::AlreadyAcceptedExpired,
-                        source.receipt.clone(),
-                    ));
-                }
-                if matches!(identity, RawIdentity::Diagnostic(_)) {
-                    return crate::RetainedRangeExpiredSnafu {
-                        first_cursor: batch.first_cursor,
-                        last_cursor: source.receipt.floor(),
-                    }
-                    .fail();
-                }
-                return self.reject("an evidence retry crosses an expired range boundary");
-            }
-        }
-        if let Some(((_, first), last)) = raw
-            .budget
-            .expired
-            .range((key.clone(), 0)..=(key.clone(), batch.last_cursor))
-            .next_back()
-            .filter(|(_, last)| **last >= batch.first_cursor)
-        {
-            if *first <= batch.first_cursor && *last >= batch.last_cursor {
-                return Ok((
-                    EvidenceStoreOutcomeV1::AlreadyAcceptedExpired,
-                    raw.index.sources[&key].receipt.clone(),
-                ));
-            }
-            if matches!(identity, RawIdentity::Diagnostic(_)) {
-                return crate::RetainedRangeExpiredSnafu {
-                    first_cursor: batch.first_cursor.max(*first),
-                    last_cursor: *last,
-                }
-                .fail();
-            }
-            return self.reject("an evidence retry crosses an expired range boundary");
-        }
-        let revision = (*self.revision.borrow())
-            .checked_add(1)
-            .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        let diagnostic = identity.evidence().is_none();
-        let source_limit = if diagnostic {
-            self.storage.diagnostic_sources.is_some()
-                || self.storage.tenant_diagnostic_sources.is_some()
-        } else {
-            self.storage.source_entries.is_some()
-        };
-        if source_limit && !raw.index.sources.contains_key(&key) {
-            let matching = || raw
-                .index
-                .sources
-                .values()
-                .filter(|source| source.receipt.evidence().is_none() == diagnostic);
-            let total = matching()
-                .count()
-                .checked_add(1)
-                .ok_or_else(|| self.state_error("the source count overflows"))?;
-            let scoped = matching()
-                .filter(|source| match &source.receipt {
-                    RawReceipt::Evidence(receipt) => receipt.identity.tenant_id == tenant,
-                    RawReceipt::Diagnostic(receipt) => receipt.identity.tenant_id == tenant,
-                })
-                .count()
-                .checked_add(1)
-                .ok_or_else(|| self.state_error("the tenant source count overflows"))?;
-            self.storage.check_sources(total, scoped, diagnostic)?;
-        }
-        let commit = raw.prepare(&identity, &batch, revision)?;
-        if commit.spans.is_empty() {
-            return Ok((
-                raw.outcome(&identity, batch.last_cursor),
-                raw.index.sources[&key].receipt.clone(),
-            ));
-        }
-        let append = raw.prepare_append(&identity, commit)?;
-        let commit = &append.commit;
-        let (id, added, created) = (append.id, append.added(), append.header.is_some());
-        let terminal_only = matches!(&commit.kind, Some(RawKind::Diagnostic(progress))
-            if progress.terminal && commit.spans.len() == 1
-                && progress.last_sequence.checked_add(1) == Some(commit.spans[0].first));
-        let diagnostic = matches!(identity, RawIdentity::Diagnostic(_));
-        let terminal =
-            matches!(&commit.kind, Some(RawKind::Diagnostic(progress)) if progress.terminal);
-        let released_reserve = if terminal {
-            super::quota::TRACE_RESERVE
-        } else {
-            0
-        };
-        let prepaid = terminal_only
-            && added
-                .checked_add(batch.terminal_bytes as u64)
-                .is_some_and(|bytes| bytes <= released_reserve);
-        let initial = diagnostic && !raw.segments.values().any(|segment| segment.source == key);
-        let released_slots = if terminal {
-            if initial {
-                2
-            } else {
-                1
-            }
-        } else {
-            usize::from(initial && created)
-        };
-        let trace_slots = raw
-            .budget
-            .trace_slots
-            .checked_sub(released_slots)
-            .ok_or_else(|| self.state_error("the diagnostic slot reserve underflows"))?;
-        let trace_reserve = raw
-            .budget
-            .trace_reserve
-            .checked_sub(released_reserve)
-            .ok_or_else(|| self.state_error("the diagnostic byte reserve underflows"))?;
-        let required = raw.budget.required.contains_key(&key);
-        if required {
-            if self.retention.raw_max_age_ns.is_some_and(|limit| {
-                raw.budget
-                    .oldest
-                    .get(&key)
-                    .is_some_and(|time| batch.intake_utc_ns.saturating_sub(*time) >= limit)
-            }) {
-                return crate::ProtectedInputCapacitySnafu { resource: "age" }.fail();
-            }
-            let protected = raw.budget.protected.get(&tenant).copied().unwrap_or(0);
-            if self.retention.raw_max_bytes.is_some_and(|limit| {
-                protected
-                    .checked_add(commit.body.len() as u64)
-                    .is_none_or(|bytes| bytes > limit)
-            }) {
-                return crate::ProtectedInputCapacitySnafu { resource: "bytes" }.fail();
-            }
-        }
-        if self.storage.witness_max_bytes.is_some() {
-            let mut witnesses =
-                Self::witness_base(writer.get()?, tenant, batch.intake_utc_ns)?.charged_bytes;
-            if raw
-                .budget
-                .pins
-                .get(&id)
-                .is_some_and(|(owner, expiry)| *owner == tenant && *expiry > batch.intake_utc_ns)
-            {
-                witnesses = witnesses
-                    .checked_add(added)
-                    .ok_or_else(|| self.state_error("the witness byte count overflows"))?;
-            }
-            self.storage.check_witness(witnesses)?;
-        }
-        let usage = self.storage_for_append(
-            &raw,
-            usize::from(created && !diagnostic),
-            trace_slots
-                .checked_add(usize::from(created && diagnostic))
-                .ok_or_else(|| self.state_error("the diagnostic slot reserve overflows"))?,
-        )?;
-        let projected = added
-            .checked_add(trace_reserve)
-            .ok_or_else(|| self.state_error("the diagnostic physical reserve is exhausted"))?;
-        if prepaid {
-            self.storage.check_terminal(usage, projected)?;
-        } else {
-            self.storage.check_append(usage, projected)?;
-        }
-        let _rotation = if created && raw.index.sources.get(&key).is_some_and(|source| source.written) {
-            drop(raw);
-            #[cfg(any(test, feature = "test-fixtures"))]
-            self.run_commit_hook(super::AnalysisCommitStage::BeforeRotation)?;
-            let rotation = self
-                .maintenance
-                .write()
-                .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
-            raw = self
-                .raw
-                .lock()
-                .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
-            Some(rotation)
-        } else {
-            None
-        };
-        #[cfg(any(test, feature = "test-fixtures"))]
-        self.run_commit_hook(super::AnalysisCommitStage::BeforeAppend)?;
-        self.write_ready.store(false, Ordering::Release);
-        #[cfg(test)]
-        self.crash_at("evidence.before");
-        let body_bytes = commit.body.len() as u64;
-        let created = !raw.index.sources.contains_key(&key);
-        let prior_cursor = raw
-            .index
-            .sources
-            .get(&key)
-            .map_or(0, |source| source.receipt.cursor());
-        raw.append(&identity, append)?;
-        #[cfg(any(test, feature = "test-fixtures"))]
-        self.run_commit_hook(super::AnalysisCommitStage::AfterSync)?;
-        #[cfg(test)]
-        self.crash_at("evidence.after");
-        raw.budget.trace_slots = trace_slots;
-        raw.budget.trace_reserve = trace_reserve;
-        if required {
-            if self.retention.raw_max_bytes.is_some() {
-                *raw.budget.protected.entry(tenant).or_default() += body_bytes;
-            }
-            let floor = raw.budget.required[&key];
-            let contiguous = raw.index.sources[&key].receipt.cursor();
-            let oldest = self.retention.raw_max_age_ns.and_then(|_| {
-                prior_cursor
-                    .max(floor)
-                    .checked_add(1)
-                    .filter(|first| *first <= contiguous)
-                    .and_then(|first| {
-                        raw.index.ranges
-                            .range((key.clone(), first)..=(key.clone(), contiguous))
-                            .map(|(_, (revision, _))| raw.index.entries[revision].commit.intake)
-                            .min()
-                    })
-            });
-            if let Some(oldest) = oldest {
-                raw.budget
-                    .oldest
-                    .entry(key.clone())
-                    .and_modify(|time| *time = (*time).min(oldest))
-                    .or_insert(oldest);
-            }
-        }
-        self.write_ready.store(true, Ordering::Release);
-        self.raw_pending.store(true, Ordering::Release);
-        self.revision.send_replace(revision);
-        let entry = &raw.index.entries[&revision];
-        for span in &entry.commit.spans {
-            let ordinal = span.ordinal + (span.last - span.first) as u32;
-            self.inputs.publish(super::StorePositionV1 { commit_revision: revision, ordinal },
-                super::inputs::InputChange::Raw { identity: &identity,
-                    range: Some((span.first, span.last, entry.commit.intake)) });
-        }
-        if created { self.activations.send_replace(revision); }
-        Ok((
-            raw.outcome(&identity, batch.last_cursor),
-            raw.index.sources[&key].receipt.clone(),
-        ))
-    }
-}
 
 #[derive(Clone, PartialEq, prost::Message)]
 pub(super) struct RawSpan {
@@ -825,7 +328,7 @@ pub(super) struct RawCommit {
     pub body: prost::bytes::Bytes,
 }
 
-#[derive(Clone, PartialEq, prost::Oneof)]
+#[derive(Clone, PartialEq, prost::Oneof, serde::Deserialize, serde::Serialize)]
 pub(super) enum RawKind {
     #[prost(uint32, tag = "2")]
     Evidence(u32),
@@ -833,7 +336,7 @@ pub(super) enum RawKind {
     Diagnostic(RawTraceMeta),
 }
 
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, prost::Message, serde::Deserialize, serde::Serialize)]
 pub(super) struct RawTraceMeta {
     #[prost(uint64, tag = "1")]
     pub last_sequence: u64,
@@ -852,7 +355,7 @@ impl RawKind {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TraceOutputReceiptV1 {
     pub identity: crate::TraceIdentityV1,
     pub last_sequence: u64,
@@ -930,7 +433,7 @@ impl RawReceipt {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) struct RawRange {
     pub first: u64,
     pub last: u64,
@@ -951,7 +454,7 @@ impl From<&RawSpan> for RawRange {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub(super) struct RawMeta {
     pub revision: u64,
     pub kind: RawKind,
@@ -978,13 +481,13 @@ impl TryFrom<&RawCommit> for RawMeta {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Deserialize, serde::Serialize)]
 pub(super) struct RawLocation {
     pub id: u64,
     pub offset: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub(super) struct RawEntry {
     pub identity: RawIdentity,
     pub commit: RawMeta,
@@ -1014,6 +517,7 @@ impl From<AnalysisSourceReceiptV1> for RawSource {
 #[derive(Clone)]
 pub(super) struct RawRead {
     file: std::sync::Arc<SegmentFile>,
+    live: std::sync::Arc<std::sync::atomic::AtomicBool>,
     frame_start: u64,
     frame_bytes: usize,
     span: RawRange,
@@ -1071,7 +575,9 @@ impl RawRead {
     }
 
     pub(super) fn read(&self, root: &Path) -> Result<(Vec<super::AnalysisRecordV1>, usize, usize)> {
+        self.check_live()?;
         let commit = RawCommit::read(&self.file, self.frame_start, self.frame_bytes)?;
+        self.check_live()?;
         let span = commit
             .spans
             .iter()
@@ -1081,7 +587,7 @@ impl RawRead {
             || commit.intake != self.intake
             || span.is_none()
         {
-            return AnalysisStore::reject_path(root, "the frozen raw commit changed its metadata");
+            return crate::Error::reject_path(root, "the frozen raw commit changed its metadata");
         }
         let span = span.ok_or_else(|| {
             crate::AnalysisStateSnafu {
@@ -1114,6 +620,13 @@ impl RawRead {
         }
         Ok((records, frame_rows, body_bytes))
     }
+
+    fn check_live(&self) -> Result<()> {
+        if !self.live.load(std::sync::atomic::Ordering::Acquire) {
+            return crate::RetainedRangeExpiredSnafu { first_cursor: self.first, last_cursor: self.last }.fail();
+        }
+        Ok(())
+    }
 }
 
 pub(super) struct RawSourceState {
@@ -1129,7 +642,7 @@ pub(super) struct RawJournal {
     pub diagnostics: usize,
     pub directory: Cell<Option<DirectoryStamp>>,
     pub index: RawIndex,
-    pub budget: super::raw_catalog::RawBudget,
+    pub budget: RawBudget,
 }
 
 impl RawJournal {
@@ -1275,12 +788,13 @@ impl RawJournal {
                 {
                     return Err(self.invalid("the recovered diagnostic progress is invalid"));
                 }
-                let saved =
-                    self.index.sources.get(&entry.identity.key()).and_then(|source| {
-                        match &source.receipt {
-                            RawReceipt::Diagnostic(receipt) => Some(receipt),
-                            RawReceipt::Evidence(_) => None,
-                        }
+                let saved = self
+                    .index
+                    .sources
+                    .get(&entry.identity.key())
+                    .and_then(|source| match &source.receipt {
+                        RawReceipt::Diagnostic(receipt) => Some(receipt),
+                        RawReceipt::Evidence(_) => None,
                     });
                 let first = commit.spans[0].first;
                 let prior_cursor = saved.map_or(0, TraceOutputReceiptV1::cursor);
@@ -1353,7 +867,7 @@ impl RawJournal {
                 }
                 RawIdentity::Diagnostic(identity) => selection.traces.as_slice().contains(identity),
             };
-            if !selected {
+            if !selected || self.index.expired.contains_key(&entry.reference.id) {
                 continue;
             }
             for (index, span) in entry.commit.spans.iter().enumerate() {
@@ -1456,9 +970,13 @@ impl RawJournal {
         for id in &ids {
             self.forget_segment(*id)?;
         }
-        let revisions: Vec<_> = self.index.entries.iter()
+        let revisions: Vec<_> = self
+            .index
+            .entries
+            .iter()
             .filter(|(_, entry)| ids.contains(&entry.reference.id))
-            .map(|(revision, _)| *revision).collect();
+            .map(|(revision, _)| *revision)
+            .collect();
         for revision in revisions {
             let entry = &self.index.entries[&revision];
             let key = entry.identity.key();
@@ -1498,15 +1016,32 @@ impl RawJournal {
         Some((entry, index))
     }
 
+    pub(in crate::analysis) fn witness_entry(&self, witness: &super::AnalysisWitnessV1, revision: u64) -> Result<&RawEntry> {
+        let (entry, slot) = self.locate(&witness.identity.key(), witness.cursor, revision)?;
+        let span = &entry.commit.spans[slot];
+        if entry.identity != witness.identity || witness.cursor == 0
+            || !(span.first..=span.last).contains(&witness.cursor)
+            || entry.commit.revision == 0 || entry.commit.revision > revision
+        { return Err(self.invalid("the witness differs from its original raw range")); }
+        Ok(entry)
+    }
+
     pub(super) fn record_position(
-        &self, record: &crate::DiscoveryRecordIdV1, cut: u64,
+        &self,
+        record: &crate::DiscoveryRecordIdV1,
+        cut: u64,
     ) -> Option<super::StorePositionV1> {
-        let (entry, index) = self.locate_retained(&record.stream.key(), record.durable_cursor, cut)?;
+        let (entry, index) =
+            self.locate_retained(&record.stream.key(), record.durable_cursor, cut)?;
         let span = entry.commit.spans.get(index)?;
-        if entry.identity != record.stream || entry.commit.kind.cpu() != Some(record.cpu_id)
-            || entry.commit.revision == 0 || entry.commit.revision > cut
+        if entry.identity != record.stream
+            || entry.commit.kind.cpu() != Some(record.cpu_id)
+            || entry.commit.revision == 0
+            || entry.commit.revision > cut
             || !(span.first..=span.last).contains(&record.durable_cursor)
-        { return None; }
+        {
+            return None;
+        }
         let offset = u32::try_from(record.durable_cursor.checked_sub(span.first)?).ok()?;
         Some(super::StorePositionV1 {
             commit_revision: entry.commit.revision,
@@ -1573,7 +1108,8 @@ impl RawJournal {
             .next_back()
             .filter(|(_, (id, index))| self.index.entries[id].commit.spans[*index].last >= first)
             .map_or(first, |((_, start), _)| *start);
-        self.index.ranges
+        self.index
+            .ranges
             .range((key.to_vec(), start)..=(key.to_vec(), last))
             .filter_map(|(_, &(id, index))| {
                 let span = &self.index.entries[&id].commit.spans[index];
@@ -1589,8 +1125,10 @@ impl RawJournal {
         first: u64,
         last: u64,
     ) -> Result<RawRead> {
+        self.check_live(entry)?;
         Ok(RawRead {
             file: std::sync::Arc::new(SegmentFile::reader(self.segment_path(entry.reference.id)?)?),
+            live: std::sync::Arc::clone(&self.segments[&entry.reference.id].live),
             frame_start: entry.reference.offset - entry.frame_bytes as u64,
             frame_bytes: entry.frame_bytes,
             span: entry.commit.spans[index].clone(),
@@ -1619,7 +1157,8 @@ impl RawJournal {
             }
         } else {
             if identity.evidence().is_some_and(|identity| {
-                self.index.sources
+                self.index
+                    .sources
                     .values()
                     .filter_map(|source| source.receipt.evidence())
                     .any(|source| {
@@ -1795,6 +1334,7 @@ impl RawJournal {
     }
 
     pub(super) fn read_entry(&self, entry: &RawEntry) -> Result<RawCommit> {
+        self.check_live(entry)?;
         let commit = RawCommit::read(
             &SegmentFile::reader(self.segment_path(entry.reference.id)?)?,
             entry.reference.offset - entry.frame_bytes as u64,
@@ -1811,6 +1351,16 @@ impl RawJournal {
         Ok(commit)
     }
 
+    fn check_live(&self, entry: &RawEntry) -> Result<()> {
+        if self.index.expired.contains_key(&entry.reference.id) {
+            return crate::RetainedRangeExpiredSnafu {
+                first_cursor: entry.commit.spans.first().map_or(0, |span| span.first),
+                last_cursor: entry.commit.spans.last().map_or(0, |span| span.last),
+            }.fail();
+        }
+        Ok(())
+    }
+
     pub(super) fn invalid(&self, reason: &str) -> crate::Error {
         crate::AnalysisStateSnafu {
             path: &self.root,
@@ -1821,7 +1371,7 @@ impl RawJournal {
 }
 
 impl RawCommit {
-    fn records(&self) -> impl Iterator<Item = (u64, &[u8])> {
+    pub(super) fn records(&self) -> impl Iterator<Item = (u64, &[u8])> {
         self.spans.iter().flat_map(move |span| {
             span.ends.iter().enumerate().map(move |(index, end)| {
                 let start = span.start as usize
@@ -1853,7 +1403,7 @@ impl RawCommit {
                 || span.ends.windows(2).any(|pair| pair[0] >= pair[1])
                 || span.ends[0] == 0
             {
-                return AnalysisStore::reject_path(root, "the raw commit range is invalid");
+                return crate::Error::reject_path(root, "the raw commit range is invalid");
             }
             end = span
                 .start
@@ -1880,7 +1430,7 @@ impl RawCommit {
             || ordinal == 0
             || self.body.len() != end as usize
         {
-            return AnalysisStore::reject_path(root, "the raw commit bounds are invalid");
+            return crate::Error::reject_path(root, "the raw commit bounds are invalid");
         }
         Ok(())
     }
@@ -2305,7 +1855,9 @@ pub(super) mod tests {
         {
             let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
             assert_ne!(
-                raw.index.entries[&page.positions[0].commit_revision].reference.id,
+                raw.index.entries[&page.positions[0].commit_revision]
+                    .reference
+                    .id,
                 raw.index.entries[&page
                     .terminal_position
                     .ok_or("terminal position absent")?
@@ -2451,7 +2003,11 @@ pub(super) mod tests {
         {
             let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
             let source = RawIdentity::Diagnostic(identity.clone());
-            assert!(!raw.index.entries.values().any(|entry| entry.identity == source));
+            assert!(!raw
+                .index
+                .entries
+                .values()
+                .any(|entry| entry.identity == source));
         }
         {
             let mut writer = store.writer()?;
@@ -2518,7 +2074,9 @@ pub(super) mod tests {
                 raw.index.entries[&first.positions[0].commit_revision]
                     .reference
                     .id,
-                raw.index.entries[&last.positions[0].commit_revision].reference.id
+                raw.index.entries[&last.positions[0].commit_revision]
+                    .reference
+                    .id
             );
         }
         assert_eq!(last.frames, batch.frames);
@@ -2723,5 +2281,62 @@ pub(super) mod tests {
         file.sync_all()?;
         assert!(RawJournal::open(root, &BTreeMap::new()).is_err());
         Ok(())
+    }
+}
+
+impl TraceOutputPageV1 {
+    pub(in crate::analysis) fn decode(
+        page: super::AnalysisReadPageV1,
+        identity: &crate::TraceIdentityV1,
+        root: &Path,
+        control: &super::AnalysisReadControl,
+    ) -> Result<Self> {
+        let mut output = TraceOutputPageV1 {
+            frames: Vec::new(),
+            terminal: None,
+            positions: Vec::new(),
+            terminal_position: None,
+            next_cursor: page.next_cursor,
+            read_revision: page.read_revision,
+        };
+        let mut bytes = 0_usize;
+        for record in page.records {
+            control.check()?;
+            let payload = TraceRecord::read(&record.framed_record, root)?;
+            let (kind, data) = match payload {
+                TracePayload::Metadata(data) => (crate::TraceFrameKindV1::Metadata, data),
+                TracePayload::Data(data) => (crate::TraceFrameKindV1::Data, data),
+                TracePayload::Diagnostic(data) => (crate::TraceFrameKindV1::Diagnostic, data),
+                TracePayload::Terminal(data) => {
+                    output.terminal = Some(TraceRecord::terminal(&data, root)?);
+                    output.terminal_position = Some(record.position);
+                    continue;
+                }
+            };
+            if output.frames.len() == 200
+                || (!output.frames.is_empty()
+                    && bytes
+                        .checked_add(data.len())
+                        .is_none_or(|bytes| bytes > 1024 * 1024))
+            {
+                output.next_cursor = Some(record.cursor);
+                break;
+            }
+            bytes = bytes.checked_add(data.len()).ok_or_else(|| {
+                crate::AnalysisStateSnafu {
+                    path: root,
+                    reason: "the trace page byte count overflowed",
+                }
+                .build()
+            })?;
+            output.positions.push(record.position);
+            output.frames.push(crate::TraceFrameV1 {
+                execution_id: identity.execution_id,
+                sequence: record.cursor,
+                kind,
+                bytes: data,
+            });
+        }
+        Ok(output)
     }
 }

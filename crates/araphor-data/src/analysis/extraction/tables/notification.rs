@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    AnalysisContextVersionV1, ApprovedNotificationRouteV1, NotificationFailureV1,
-    NotificationObligationV1, NotificationPriorityV1, NotificationSinkHealthV1,
-};
+use crate :: { AnalysisContextVersionV1 , ApprovedNotificationRouteV1 , NotificationFailureV1 , NotificationObligationV1 , NotificationPriorityV1 , NotificationSinkHealthV1 } ;
 
 #[derive(serde::Serialize)]
 struct RouteRow<'a> {

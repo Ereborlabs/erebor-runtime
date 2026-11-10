@@ -19,6 +19,7 @@ pub struct ManagedDerivedSource {
     pub(super) scope: Arc<SourceScope>,
     pub(super) proof: Arc<OnceLock<Arc<PackageResultRefV1>>>,
     pub(in crate::analysis) records: Vec<(DiscoveryRecordIdV1, StorePositionV1)>,
+    pub(in crate::analysis) observed: Vec<u64>,
     pub(in crate::analysis) contexts: Vec<AnalysisContextVersionV1>,
     pub(in crate::analysis) references: BTreeMap<AnalysisContextKeyV1, AnalysisContextRefV1>,
     pub(in crate::analysis) proofs: Vec<(DiscoveryRecordIdV1, AnalysisContextRefV1)>,
@@ -160,6 +161,7 @@ impl ManagedSourceFrame {
         for (id, _) in &input.input_positions {
             bytes = bytes
                 .checked_add(std::mem::size_of::<(DiscoveryRecordIdV1, StorePositionV1)>())?
+                .checked_add(std::mem::size_of::<u64>())?
                 .checked_add(id.allocated_bytes())?;
         }
         for value in &input.facts {
@@ -327,6 +329,11 @@ impl ManagedSourceFrame {
             scope: Arc::clone(&self.scope),
             proof: Arc::clone(&self.proof),
             records: input.input_positions.clone(),
+            observed: input
+                .records
+                .iter()
+                .map(|record| record.decode().map(|record| record.observed_boottime_ns))
+                .collect::<Result<_>>()?,
             contexts: input.facts.clone(),
             references: references.clone(),
             proofs: proofs.to_vec(),

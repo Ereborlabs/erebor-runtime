@@ -136,6 +136,7 @@ values have `sequence < cut`. The engine owns conversion from batch sequences.
 | `Branch` | `retain_history(range) -> RetentionId` |
 | `SingleWriterTxDatabase` | `history()` lists policies and branch IDs; `release_history(id)` works after a branch name is deleted. |
 | `SingleWriterTxDatabase` | `checkpoint(destination)` exports retained native trees, branch metadata, history policies, and original journal prefixes to a new directory under one protected cut. |
+| `SingleWriterTxDatabase` | `checkpoint_with(destination, admit)` calls `admit(&Path, Option<u64>)` before each output entry is created. `None` means a directory. `Some(bytes)` gives the exact file length. A refusal removes the incomplete checkpoint and preserves source readiness. |
 | `Database` | `is_poisoned()` reports uncertain source writes or manifest publication. It does not reset the engine. |
 | `Branch` | `write_tx()` with read-your-writes, point/range reads, `insert`, `remove`, `rollback`, and `commit -> Option<Commit>` |
 | Branch write transaction | `commit_stamped(keys) -> Option<Commit>` saves the exact native revision at caller keys in the same batch. Fjall `cceaa84` adds this API for the approved Data migration. |
@@ -183,6 +184,14 @@ from a replaced manifest whose durable sync failed. The latter error stops
 source writes and CDC. A destination-copy error does not poison the source.
 Focused checks cover early rewrite failure and source write/CDC poison behavior.
 They do not simulate a storage device failure after manifest replacement.
+
+Fjall `7fd777c` and `lsm-tree` `56d74411` add checkpoint admission for Data's
+backup capacity checks. The engines report destination paths and exact file
+lengths. They contain no Data policy. The three focused Fjall checks passed;
+they cover all output entries, refusal before writes, source readiness, retained
+history, branches, CDC, and compaction. The two focused LSM metadata checks
+passed. They check encoding parity and refusal before either metadata file is
+created. Data integration and the incident performance targets remain open.
 
 Before a history, branch, or CDC-retention promise, persist an incompatible
 database version marker atomically and durably. Old or feature-unaware openers

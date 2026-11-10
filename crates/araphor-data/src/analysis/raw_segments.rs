@@ -1,16 +1,14 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::fs::{MetadataExt as _, DirBuilderExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use prost::Message as _;
 use snafu::ResultExt as _;
 
-use super::raw::{
-    RawCommit, RawEntry, RawIdentity, RawIndex, RawJournal, RawKind, RawLocation, RawMeta,
-};
-use super::{AnalysisStore, SegmentFile, StorageUsageV1, EVIDENCE_SEGMENT_BYTES};
+use super :: raw :: { RawCommit , RawEntry , RawIdentity , RawIndex , RawJournal , RawKind , RawLocation , RawMeta } ;
+use super::{SegmentFile, StorageUsageV1, EVIDENCE_SEGMENT_BYTES};
 use crate::{AnalysisStateSnafu, IoSnafu, Result};
 
 pub(super) type DirectoryStamp = (u64, u64, i64, i64, i64, i64);
@@ -20,6 +18,7 @@ pub(super) struct RawSegment {
     pub(super) path: PathBuf,
     pub(super) end: u64,
     pub(super) usage: StorageUsageV1,
+    pub(super) live: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub(super) struct RawAppend {
@@ -39,12 +38,12 @@ impl RawAppend {
 impl RawCommit {
     pub(super) fn from_frame(bytes: &[u8], path: &Path) -> Result<Self> {
         if bytes.len() < 8 {
-            return AnalysisStore::reject_path(path, "the raw commit frame size is invalid");
+            return crate::Error::reject_path(path, "the raw commit frame size is invalid");
         }
         let length = u32::from_be_bytes(bytes[..4].try_into().unwrap_or_default()) as usize;
         let checksum = u32::from_be_bytes(bytes[bytes.len() - 4..].try_into().unwrap_or_default());
         if length != bytes.len() - 8 || crc32c::crc32c(&bytes[..bytes.len() - 4]) != checksum {
-            return AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 path,
                 "the raw commit frame length or checksum is invalid",
             );
@@ -58,7 +57,7 @@ impl RawCommit {
             .build()
         })?;
         if commit.encode_to_vec() != payload {
-            return AnalysisStore::reject_path(path, "the raw commit encoding is not canonical");
+            return crate::Error::reject_path(path, "the raw commit encoding is not canonical");
         }
         commit.validate(path)?;
         Ok(commit)
@@ -231,115 +230,6 @@ impl RawJournal {
         })
     }
 
-    pub(super) fn append(&mut self, identity: &RawIdentity, append: RawAppend) -> Result<()> {
-        let end = append
-            .offset
-            .checked_add(append.frame.len() as u64)
-            .ok_or_else(|| self.invalid("the raw append end overflows"))?;
-        let mut index = self.prepare_index(
-            RawEntry {
-                identity: identity.clone(),
-                commit: RawMeta::try_from(&append.commit)?,
-                reference: RawLocation {
-                    id: append.id,
-                    offset: end,
-                },
-                body_start: end - 4 - append.commit.body.len() as u64,
-                body_bytes: append.commit.body.len(),
-                frame_bytes: append.frame.len(),
-            },
-            &append.commit,
-        )?;
-        index
-            .sources
-            .get_mut(&identity.key())
-            .ok_or_else(|| self.invalid("the appended raw source is absent"))?
-            .active = Some(append.id);
-        index.refresh_source(&identity.key())?;
-        let current = self.directory_current()?;
-        let path = if let Some(header) = &append.header {
-            if let Some(id) = self
-                .index
-                .sources
-                .get(&identity.key())
-                .and_then(|source| source.active)
-            {
-                self.seal_segment(id)?;
-            }
-            self.next_segment = append
-                .id
-                .checked_add(1)
-                .ok_or_else(|| self.invalid("the evidence segment sequence is exhausted"))?;
-            let kind = if identity.evidence().is_some() {
-                "r"
-            } else {
-                "d"
-            };
-            let path = self
-                .root
-                .join("segments")
-                .join(format!("{:016x}.{kind}.open", append.id));
-            let file = SegmentFile::create(&path, header)?;
-            #[cfg(test)]
-            AnalysisStore::crash_path(&self.root, "segment.reserved");
-            file.append(append.offset, &append.frame)?;
-            path
-        } else {
-            let segment = self
-                .segments
-                .get(&append.id)
-                .ok_or_else(|| self.invalid("the selected evidence segment is missing"))?;
-            if segment.source != identity.key()
-                || segment.end != append.offset
-                || self
-                    .index
-                    .sources
-                    .get(&segment.source)
-                    .is_none_or(|source| source.active != Some(append.id))
-            {
-                return Err(self.invalid("the selected evidence segment changed"));
-            }
-            SegmentFile::open(&segment.path)?.append(append.offset, &append.frame)?;
-            segment.path.clone()
-        };
-        #[cfg(test)]
-        AnalysisStore::crash_path(&self.root, "segment.appended");
-        let directory = self.root.join("segments");
-        rustix::fs::syncfs(&File::open(&directory).context(IoSnafu { path: &directory })?)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu { path: &directory })?;
-        let metadata = fs::symlink_metadata(&path).context(IoSnafu { path: &path })?;
-        if !metadata.is_file() {
-            return Err(self.invalid("the synced evidence segment is not a file"));
-        }
-        let usage = StorageUsageV1::from_metadata(&path, &metadata)?;
-        if let Some(segment) = self.segments.get(&append.id) {
-            self.usage.subtract(segment.usage, &self.root)?;
-        } else if identity.evidence().is_none() {
-            self.diagnostics += 1;
-        }
-        self.usage.add(usage, &self.root)?;
-        self.segments.insert(
-            append.id,
-            RawSegment {
-                source: identity.key(),
-                path,
-                end,
-                usage,
-            },
-        );
-        self.directory_changed(current)?;
-        #[cfg(test)]
-        AnalysisStore::crash_path(&self.root, "segment.synced");
-        self.index = index;
-        Ok(())
-    }
-
-    pub(super) fn open(root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
-        AnalysisStore::segment_directory(root)?;
-        Self::read_segments(root, committed, false)
-    }
-
     pub(super) fn read_sealed(root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
         Self::read_segments(root, committed, true)
     }
@@ -493,6 +383,7 @@ impl RawJournal {
                     path,
                     end: offset as u64,
                     usage,
+                    live: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 },
             );
         }
@@ -504,5 +395,146 @@ impl RawJournal {
         journal.directory.set(Some(journal.directory_stamp()?));
         journal.index.refresh_receipts()?;
         Ok(journal)
+    }
+}
+
+impl RawJournal {
+    pub(super) fn append(&mut self, identity: &RawIdentity, append: RawAppend) -> Result<()> {
+        let end = append
+            .offset
+            .checked_add(append.frame.len() as u64)
+            .ok_or_else(|| self.invalid("the raw append end overflows"))?;
+        let mut index = self.prepare_index(
+            RawEntry {
+                identity: identity.clone(),
+                commit: RawMeta::try_from(&append.commit)?,
+                reference: RawLocation {
+                    id: append.id,
+                    offset: end,
+                },
+                body_start: end - 4 - append.commit.body.len() as u64,
+                body_bytes: append.commit.body.len(),
+                frame_bytes: append.frame.len(),
+            },
+            &append.commit,
+        )?;
+        index
+            .sources
+            .get_mut(&identity.key())
+            .ok_or_else(|| self.invalid("the appended raw source is absent"))?
+            .active = Some(append.id);
+        index.refresh_source(&identity.key())?;
+        let current = self.directory_current()?;
+        let path = if let Some(header) = &append.header {
+            if let Some(id) = self
+                .index
+                .sources
+                .get(&identity.key())
+                .and_then(|source| source.active)
+            {
+                self.seal_segment(id)?;
+            }
+            self.next_segment = append
+                .id
+                .checked_add(1)
+                .ok_or_else(|| self.invalid("the evidence segment sequence is exhausted"))?;
+            let kind = if identity.evidence().is_some() {
+                "r"
+            } else {
+                "d"
+            };
+            let path = self
+                .root
+                .join("segments")
+                .join(format!("{:016x}.{kind}.open", append.id));
+            let file = SegmentFile::create(&path, header)?;
+            #[cfg(test)]
+            crate::AnalysisStore::crash_path(&self.root, "segment.reserved");
+            file.append(append.offset, &append.frame)?;
+            path
+        } else {
+            let segment = self
+                .segments
+                .get(&append.id)
+                .ok_or_else(|| self.invalid("the selected evidence segment is missing"))?;
+            if segment.source != identity.key()
+                || segment.end != append.offset
+                || self
+                    .index
+                    .sources
+                    .get(&segment.source)
+                    .is_none_or(|source| source.active != Some(append.id))
+            {
+                return Err(self.invalid("the selected evidence segment changed"));
+            }
+            SegmentFile::open(&segment.path)?.append(append.offset, &append.frame)?;
+            segment.path.clone()
+        };
+        #[cfg(test)]
+        crate::AnalysisStore::crash_path(&self.root, "segment.appended");
+        let directory = self.root.join("segments");
+        rustix::fs::syncfs(&File::open(&directory).context(IoSnafu { path: &directory })?)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu { path: &directory })?;
+        let metadata = fs::symlink_metadata(&path).context(IoSnafu { path: &path })?;
+        if !metadata.is_file() {
+            return Err(self.invalid("the synced evidence segment is not a file"));
+        }
+        let usage = StorageUsageV1::from_metadata(&path, &metadata)?;
+        if let Some(segment) = self.segments.get(&append.id) {
+            self.usage.subtract(segment.usage, &self.root)?;
+        } else if identity.evidence().is_none() {
+            self.diagnostics += 1;
+        }
+        self.usage.add(usage, &self.root)?;
+        self.segments.insert(
+            append.id,
+            RawSegment {
+                source: identity.key(),
+                path,
+                end,
+                usage,
+                live: self
+                    .segments
+                    .get(&append.id)
+                    .map(|segment| std::sync::Arc::clone(&segment.live))
+                    .unwrap_or_else(|| {
+                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true))
+                    }),
+            },
+        );
+        self.directory_changed(current)?;
+        #[cfg(test)]
+        crate::AnalysisStore::crash_path(&self.root, "segment.synced");
+        self.index = index;
+        Ok(())
+    }
+}
+
+impl RawJournal {
+    pub(super) fn open(root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
+        RawJournal::directory(root)?;
+        Self::read_segments(root, committed, false)
+    }
+}
+
+impl RawJournal {
+    pub(super) fn directory(root: &Path) -> Result<()> {
+        let path = root.join("segments");
+        match fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => {
+                File::open(root)
+                    .context(IoSnafu { path: root })?
+                    .sync_all()
+                    .context(IoSnafu { path: root })?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(source) => return Err(source).context(IoSnafu { path: &path }),
+        }
+        let metadata = fs::symlink_metadata(&path).context(IoSnafu { path: &path })?;
+        if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
+            return crate::Error::reject_path(root, "the segment directory is not private");
+        }
+        Ok(())
     }
 }

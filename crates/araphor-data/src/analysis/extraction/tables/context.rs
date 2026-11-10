@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    AnalysisContextVersionV1, CompiledPolicyContextV1, DiscoveryContextKindV1,
-    DiscoveryContextRevisionV1, TargetContextV1,
-};
+use crate :: { AnalysisContextVersionV1 , CompiledPolicyContextV1 , DiscoveryContextKindV1 , DiscoveryContextRevisionV1 , TargetContextV1 } ;
 
 impl Capture<'_> {
     pub(in crate::analysis) fn context(

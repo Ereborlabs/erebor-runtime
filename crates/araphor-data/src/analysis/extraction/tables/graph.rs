@@ -1,9 +1,5 @@
 use super::*;
-use crate::{
-    ContextSensitivityV1, FindingSeverityV1, FindingStateV1, GraphBranchStateV1, GraphCauseV1,
-    GraphEdgeTypeV1, GraphPackageStateV1, GraphSnapshotV1, GraphSubjectKeyV1, GraphSubjectKindV1,
-    PolicyProvenanceStateV1,
-};
+use crate :: { ContextSensitivityV1 , FindingSeverityV1 , FindingStateV1 , GraphBranchStateV1 , GraphCauseV1 , GraphEdgeTypeV1 , GraphPackageStateV1 , GraphSnapshotV1 , GraphSubjectKeyV1 , GraphSubjectKindV1 , PolicyProvenanceStateV1 } ;
 use serde_arrow::schema::{SchemaLike as _, TracingOptions};
 use std::sync::LazyLock;
 
@@ -526,7 +522,7 @@ impl Capture<'_> {
         required_coverage_interval_ids => Json(false): Some(&finding.required_coverage_interval_ids),
         policy_provenance => Json(false): Some(&finding.policy_provenance),
         effects => Json(false): Some(&finding.effects),
-        reason => Utf8(false): { budget.charge(4096)?; Some(crate::analysis::graph_rows::store::FindingRows::reason_label(&finding.reason)?) },
+        reason => Utf8(false): { budget.charge(4096)?; Some(Self::reason_label(&finding.reason)?) },
         severity => Utf8(false): Some(match finding.severity {
             FindingSeverityV1::Info => "info",
             FindingSeverityV1::Warning => "warning",
@@ -949,5 +945,15 @@ impl Capture<'_> {
                 _ => field.with_nullable(true),
             })
             .collect()
+    }
+}
+
+impl Capture<'_> {
+    fn reason_label(reason: &crate::FindingReasonV1) -> Result<String> {
+        if let crate::FindingReasonV1::Declared(reason) = reason { return Ok(reason.code.clone()); }
+        match serde_value::to_value(reason).map_err(|_| crate::GraphInvalidSnafu { field: "graph scalar label" }.build())? {
+            serde_value::Value::String(label) => Ok(label),
+            _ => crate::GraphInvalidSnafu { field: "graph scalar label" }.fail(),
+        }
     }
 }

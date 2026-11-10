@@ -22,7 +22,7 @@ impl ContextRecord {
             key.lifetime_key.clone(),
         )
     }
-    fn load(id: u64, get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>) -> Result<Self> {
+    pub(in crate::analysis::native) fn load(id: u64, get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>) -> Result<Self> {
         let bytes = Records::payload(&Records::key(b'C', id), get)?.ok_or_else(|| {
             crate::NativeStateSnafu {
                 field: "context index record",

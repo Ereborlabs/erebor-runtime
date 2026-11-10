@@ -3,10 +3,7 @@ use snafu::ResultExt as _;
 use super::super::{DataWrite, NativeStore};
 use super::{attempts::Attempts, InstanceRecord, Records};
 use crate::analysis::managed::{Attempt, Failure, FailureOrigin};
-use crate::{
-    AnalysisConflictSnafu, AnalysisReadControl, ManagedAttempt, ManagedExit, ManagedTerminal,
-    NativeStateSnafu, NativeStorageSnafu, PackageErrorCodeV1 as Code, Result,
-};
+use crate :: { AnalysisConflictSnafu , AnalysisReadControl , ManagedAttempt , ManagedExit , ManagedTerminal , NativeStateSnafu , NativeStorageSnafu , PackageErrorCodeV1 as Code , Result } ;
 
 impl Attempts {
     pub(super) fn ended(owner: u64, revision: u64) -> Vec<u8> {
@@ -135,7 +132,7 @@ impl NativeStore {
         if pending.is_empty() {
             return Ok(());
         }
-        let mut tx = self.write()?;
+        let mut tx = self.write_access()?;
         for (owner, id, mut attempt) in pending {
             tx.end_attempt(owner, id, &mut attempt, ManagedExit::Cancelled, false)?;
         }

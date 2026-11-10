@@ -1,4 +1,4 @@
-#![cfg(feature = "native-store")]
+
 
 use araphor_data::{
     analysis::{native::NativeStore, NotificationLookup},
@@ -62,6 +62,21 @@ fn context(state: &NotificationObligationV1) -> araphor_data::Result<AnalysisCon
         sensitivity: state.sensitivity,
         body: state.encode()?,
     })
+}
+
+#[test]
+fn lookup_keeps_route_sentinel() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = NativeStore::open_with_limits(&root, Default::default(), araphor_data::StorageLimitsV1 {
+        notification_routes: Some(1), ..Default::default()
+    })?;
+    for id in 1..=5 { store.commit_context(&context(&state(id))?)?; }
+    assert_eq!(store.notification_states([1; 16], NotificationLookup::Finding("finding-a", None))?.len(), 3);
+    drop(store);
+    let store = NativeStore::open(&root)?;
+    assert_eq!(store.notification_states([1; 16], NotificationLookup::Finding("finding-a", None))?.len(), 5);
+    Ok(())
 }
 
 #[test]

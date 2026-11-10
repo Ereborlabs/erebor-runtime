@@ -16,8 +16,8 @@ name = "storage_poc"
 path = "../main.rs"
 
 [dependencies]
-araphor-data = { path = "../../../../araphor-data", features = ["native-store"] }
-araphor-graph = { path = "../../..", features = ["store", "native-store"] }
+araphor-data = { path = "../../../../araphor-data" }
+araphor-graph = { path = "../../..", features = ["native-store"] }
 araphor-analysis-builtins = { path = "../../../../araphor-analysis-builtins" }
 araphor-analysis-sdk = { path = "../../../../araphor-analysis-sdk" }
 araphor-analysis-types = { path = "../../../../araphor-analysis-types" }
@@ -27,7 +27,6 @@ arrow-schema = "=59.2.0"
 arrow-select = "=59.2.0"
 arrow-ipc = "=59.2.0"
 crc32c = "0.6.8"
-duckdb = { version = "=1.10505.0", default-features = false, features = ["bundled", "appender-arrow"] }
 fjall = { path = "../../../../../fjall", features = ["journal-cdc"] }
 redb = "=4.4.0"
 surrealkv = "=1.2.0"
@@ -48,6 +47,4 @@ neon-utils = { package = "utils", path = "../../../../../neon/libs/utils" }
 wal_decoder = { path = "../../../../../neon/libs/wal_decoder" }
 
 [patch.crates-io]
-duckdb = { path = "../../../../../vendor/duckdb" }
-libduckdb-sys = { path = "../../../../../vendor/libduckdb-sys" }
 tokio-postgres = { git = "https://github.com/neondatabase/rust-postgres.git", branch = "neon" }

@@ -1,9 +1,5 @@
 use std::ops::{Deref, DerefMut};
-use std::sync::{
-    Arc, LockResult, Mutex as StdMutex, MutexGuard as StdMutexGuard, PoisonError,
-    RwLock as StdRwLock, RwLockReadGuard as StdReadGuard, RwLockWriteGuard as StdWriteGuard,
-    TryLockError, TryLockResult,
-};
+use std :: sync :: { Arc , LockResult , Mutex as StdMutex , MutexGuard as StdMutexGuard , PoisonError , RwLock as StdRwLock , RwLockReadGuard as StdReadGuard , RwLockWriteGuard as StdWriteGuard , TryLockError , TryLockResult } ;
 use std::task::{Context, Wake, Waker};
 use std::time::Instant;
 

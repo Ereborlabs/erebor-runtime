@@ -8,9 +8,7 @@ use araphor_discovery_definition::{ImagePin, ResolvedDefinition};
 use serde::{Deserialize, Serialize};
 
 use super::super::{AnalysisPositionPageV1, PackageResultRefV1};
-use crate::{
-    AnalysisContextRefV1, AnalysisWitnessV1, PackageGrantV1, PackageRefV1, Result, ResultContext,
-};
+use crate :: { AnalysisContextRefV1 , AnalysisWitnessV1 , PackageGrantV1 , PackageRefV1 , Result , ResultContext } ;
 
 type Code = crate::PackageErrorCodeV1;
 
@@ -588,7 +586,7 @@ impl ManagedCapture {
     pub fn graph_input(
         &self,
         base: &PackageResultRefV1,
-    ) -> Option<&std::sync::Arc<crate::analysis::graph_rows::store::InputProof>> {
+    ) -> Option<&std::sync::Arc<crate::InputProof>> {
         self.graph
             .as_ref()?
             .input(base, self.source.as_ref()?.read())
@@ -875,27 +873,6 @@ impl From<&ManagedAttempt> for ManagedCapture {
             source: None,
         }
     }
-}
-
-pub struct ManagedReturn<'a> {
-    pub call: u64,
-    pub evaluation: &'a sdk::Evaluation,
-    pub output: &'a sdk::Output,
-    pub changes: Option<&'a ManagedChanges>,
-    pub graph: Option<&'a std::sync::Arc<super::ManagedGraphJournal>>,
-    pub retained: Option<&'a PackageResultRefV1>,
-}
-
-pub struct ManagedCommit<'a> {
-    pub control: &'a crate::AnalysisReadControl,
-    pub budget: &'a dyn super::ManagedBudget,
-    pub attempt: &'a ManagedAttempt,
-    /// The native publication has no remaining work for this captured input.
-    pub completed: bool,
-    pub now_utc_ns: u64,
-    pub returns: &'a [ManagedReturn<'a>],
-    pub selected: &'a sdk::Dataset,
-    pub selected_schema: &'a sdk::Schema,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

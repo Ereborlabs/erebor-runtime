@@ -6,6 +6,8 @@ use crate::{AnalysisConflictSnafu, ManagedEncodingSnafu, NativeStateSnafu, Resul
 
 use crate::analysis::PackageRevisionV1;
 
+mod catalogue;
+mod collection;
 mod definitions;
 mod image;
 mod recovery;
@@ -146,7 +148,12 @@ impl DataWrite<'_> {
                 |key| Records::staged(key, &self.transaction),
             )? {
                 Some(record) if record.value != *package => return AnalysisConflictSnafu.fail(),
-                Some(_) => continue,
+                Some(record) => {
+                    catalogue::PackageHeader::check(&record.value, record.revision, |key| {
+                        Records::staged(key, &self.transaction)
+                    })?;
+                    continue;
+                }
                 None => {}
             }
             let identity = PackageRecord::identity(
@@ -157,6 +164,15 @@ impl DataWrite<'_> {
             let id = Records::intern(&mut self.transaction, &identity)?;
             let bytes = Records::encode(&(package, self.revision))?;
             Records::stage(&mut self.transaction, Records::key(b'P', id), bytes);
+            let header =
+                catalogue::PackageHeader::from_package(package, self.revision, |dependency| {
+                    Records::intern(&mut self.transaction, dependency)
+                })?;
+            Records::stage(
+                &mut self.transaction,
+                catalogue::PackageHeader::key(id),
+                Records::encode(&header)?,
+            );
             self.dirty = true;
         }
         for package in revisions {
@@ -169,7 +185,7 @@ impl DataWrite<'_> {
                 )?
                 .is_none()
                 {
-                    return crate::AnalysisStore::reject_path(
+                    return crate::Error::reject_path(
                         &self.store.root,
                         "the locked package dependency is absent",
                     );

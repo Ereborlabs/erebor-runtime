@@ -1,15 +1,9 @@
-use std::{
-    collections::BTreeSet,
-    ops::Bound::{Excluded, Included},
-};
+use std :: { collections :: BTreeSet , ops :: Bound :: { Excluded , Included } } ;
 
 use snafu::ResultExt as _;
 
 use super::{DataView, DataWrite, NativeStore, Records};
-use crate::{
-    AnalysisContextRefV1, AnalysisExtractionV1, AnalysisReadControl, AnalysisSelectionV1,
-    NativeStateSnafu, NativeStorageSnafu, Result, Selection,
-};
+use crate :: { AnalysisContextRefV1 , AnalysisExtractionV1 , AnalysisReadControl , AnalysisSelectionV1 , NativeStateSnafu , NativeStorageSnafu , Result , Selection } ;
 
 struct ContextIndex;
 
@@ -34,6 +28,25 @@ impl ContextIndex {
 }
 
 impl DataWrite<'_> {
+    pub(in crate::analysis::native) fn context_owner_ids(&self, owner: &str) -> Result<Vec<u64>> {
+        let mut ids = Vec::new();
+        for entry in self.transaction.prefix(ContextIndex::TENANT) {
+            let (key, _) = entry.context(NativeStorageSnafu {
+                operation: "read retained context headers",
+            })?;
+            if key.len() != ContextIndex::TENANT.len() + 32 {
+                continue;
+            }
+            let bytes = Records::payload(&key, |key| Records::staged(key, &self.transaction))?
+                .ok_or_else(|| NativeStateSnafu { field: "retained context header" }.build())?;
+            let reference: AnalysisContextRefV1 = Records::decode(&bytes)?;
+            if reference.key.owner_id == owner {
+                ids.push(NativeStore::number(&key[key.len() - 8..])?);
+            }
+        }
+        Ok(ids)
+    }
+
     pub(super) fn index_context(
         &mut self,
         id: u64,

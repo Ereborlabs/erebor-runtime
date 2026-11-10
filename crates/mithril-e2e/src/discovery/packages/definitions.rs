@@ -38,7 +38,7 @@ async fn definition_file_admission_roundtrip() -> Result<()> {
         .analysis_store()
         .ok_or("definition store absent")?;
     let members = data.active_managed(&Default::default())?.1;
-    let lifecycle = data.subscribe_activations();
+    let lifecycle = data.subscribe_activations()?;
     let discovery = data.discovery_enabled();
     let sql = "SELECT count(*) AS count FROM events\n";
     let prql = "from events\naggregate {count = count this}\n";

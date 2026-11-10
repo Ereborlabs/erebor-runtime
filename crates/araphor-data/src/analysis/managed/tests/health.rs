@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    EvidenceIntakeIdentityV1, PackageErrorCodeV1 as Code, ProcessorClassV1, ProcessorScopeV1,
-    ProcessorStateV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION,
-};
+use crate :: { EvidenceIntakeIdentityV1 , PackageErrorCodeV1 as Code , ProcessorClassV1 , ProcessorScopeV1 , ProcessorStateV1 , GRAPH_PROCESSOR , GRAPH_SCHEMA_VERSION } ;
 
 impl Fixture {
     fn health_job(

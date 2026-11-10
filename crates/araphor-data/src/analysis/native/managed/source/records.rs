@@ -152,7 +152,7 @@ impl SourceRecord {
             .map(|(record, _)| record)
             .collect::<BTreeSet<_>>();
         let mut postings = std::collections::BTreeMap::new();
-        for reference in crate::AnalysisStore::join_contexts(&step.contexts, &step.derived)? {
+        for reference in crate::AnalysisContextRefV1::join(&step.contexts, &step.derived)? {
             let id = ContextRecord::id(&reference.key, &mut get)?
                 .ok_or_else(|| Code::Missing.error("source posting context"))?;
             let bytes = Records::charged_payload(&Records::key(b'C', id), &mut get, charge)?

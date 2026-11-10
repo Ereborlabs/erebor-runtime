@@ -205,10 +205,53 @@ fn publish(
 }
 
 #[test]
+fn mutable_profile_input() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = NativeStore::open(&directory.path().join("data"))?;
+    let profile = profile("unmanaged");
+    store.register_processor(&profile.scope, ProcessorClassV1::Optional, 1)?;
+    super::super::attempts::append(&store, 1)?;
+    store.commit_result(&AnalysisResultCommitV1 {
+        scope: profile.scope.clone(),
+        expected_cursor: 0,
+        consumed_cursor: 1,
+        coverage_revision: 0,
+        context_revision: 0,
+        result_id: profile.profile_id.clone(),
+        body: serde_json::to_vec(&profile)?,
+        created_utc_ns: 1000,
+        witnesses: Vec::new(),
+        context_refs: Vec::new(),
+    })?;
+    let mut selection = AnalysisSelectionV1::new([1; 16], Vec::new());
+    selection.results.push(profile.profile_id);
+    assert!(matches!(
+        store.read_tables(
+            &selection,
+            araphor_data::AnalysisTableRead {
+                requests: &BTreeMap::new(),
+                event_ranges: None,
+                mode: araphor_data::AnalysisReadModeV1::Metadata,
+                now: 1000,
+            },
+            Default::default(),
+            &AnalysisReadControl::default()
+        ),
+        Err(araphor_data::Error::Package {
+            code: Code::Unsupported,
+            field: "mutable discovery input",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
 fn profile_history() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("data");
     let store = NativeStore::open(&root)?;
+    store.register_discovery_owner();
     let (_instance, model) = instance(&store)?;
     let first = profile("first");
     store.register_processor(&first.scope, ProcessorClassV1::Optional, 1)?;
@@ -240,6 +283,47 @@ fn profile_history() -> TestResult {
         result_id: first.profile_id.clone(),
         commit_revision: receipt.commit_revision,
     };
+    let demands: araphor_data::AnalysisTableRequests = BTreeMap::from([(
+        "behaviors".into(),
+        Some(std::collections::BTreeSet::from([
+            araphor_data::AnalysisStore::table_schemas()["behaviors"].index_of("profile_id")?,
+        ])),
+    )]);
+    let read_profiles =
+        |revision| -> Result<araphor_data::AnalysisPositionPageV1, Box<dyn std::error::Error>> {
+            store
+                .read_tables_at(
+                    &store.read_at(revision)?,
+                    &AnalysisSelectionV1::new([1; 16], vec![first.scope.identity.clone()]),
+                    araphor_data::AnalysisTableRead {
+                        requests: &demands,
+                        event_ranges: None,
+                        now: 1000,
+                        mode: araphor_data::AnalysisReadModeV1::Complete,
+                    },
+                    Default::default(),
+                    &AnalysisReadControl::default(),
+                    None,
+                )
+                .map_err(Into::into)
+        };
+    let captured = read_profiles(receipt.commit_revision)?;
+    assert!(captured.mutable_discovery);
+    assert_eq!(
+        captured.tables["behaviors"]
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        1
+    );
+    assert_eq!(
+        captured
+            .extraction
+            .references
+            .iter()
+            .find_map(|entry| entry.result()),
+        Some(&first_ref)
+    );
     assert_eq!(
         store
             .discovery_producer(
@@ -275,6 +359,19 @@ fn profile_history() -> TestResult {
         false,
     )?;
     let closed = closed.ok_or("closed")?;
+    let captured = read_profiles(closed.commit_revision)?;
+    assert!(!captured.mutable_discovery);
+    assert_eq!(
+        captured
+            .extraction
+            .references
+            .iter()
+            .find_map(|entry| entry.result())
+            .ok_or("closed profile")?
+            .result_id,
+        "sealed"
+    );
+    assert!(read_profiles(receipt.commit_revision)?.mutable_discovery);
     #[derive(serde::Deserialize)]
     struct Saved {
         request: AnalysisResultCommitV1,

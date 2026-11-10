@@ -4,17 +4,15 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::*;
-use crate::{
-    error::{InvalidSnafu as GraphInvalidSnafu, JsonSnafu as GraphEncodingSnafu},
-    Result,
-};
 use crate::source::{
     DiscoveryCoverageStateV1, DiscoveryRecordIdV1, EvidenceIntakeIdentityV1, ProcessorScopeV1,
     StorePositionV1,
 };
 use crate::values::AnalysisContextKeyV1;
-
-
+use crate::{
+    error::{InvalidSnafu as GraphInvalidSnafu, JsonSnafu as GraphEncodingSnafu},
+    Result,
+};
 
 pub trait GraphValidate {
     fn validate(&self) -> Result<()>;
@@ -219,6 +217,28 @@ pub struct GraphSnapshotV1 {
 
 impl GraphSnapshotV1 {
     pub fn validate(&self) -> Result<()> {
+        self.validate_projection()?;
+        if self.packages.is_empty() {
+            return GraphInvalidSnafu {
+                field: "graph snapshot",
+            }
+            .fail();
+        }
+        if self.findings.iter().any(|finding| {
+            !self.packages.iter().any(|package| {
+                package.package_id == finding.package_id
+                    && package.package_version == finding.package_version
+            })
+        }) {
+            return GraphInvalidSnafu {
+                field: "graph finding manifest",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    pub fn validate_projection(&self) -> Result<()> {
         self.input_manifest
             .validate(self.scope.identity.tenant_id)?;
         if self.schema_version != GRAPH_SCHEMA_VERSION
@@ -250,7 +270,6 @@ impl GraphSnapshotV1 {
                 .findings
                 .windows(2)
                 .any(|pair| pair[0].finding_id >= pair[1].finding_id)
-            || self.packages.is_empty()
             || self
                 .packages
                 .iter()
@@ -324,11 +343,7 @@ impl GraphSnapshotV1 {
         }
         for finding in &self.findings {
             self.input_manifest.validate_finding(finding)?;
-            if !self.packages.iter().any(|package| {
-                package.package_id == finding.package_id
-                    && package.package_version == finding.package_version
-            }) || finding.tenant_id != self.scope.identity.tenant_id
-            {
+            if finding.tenant_id != self.scope.identity.tenant_id {
                 return GraphInvalidSnafu {
                     field: "graph finding manifest",
                 }

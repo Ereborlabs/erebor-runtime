@@ -1,8 +1,5 @@
 use super::{ContextRecord, DataView, DataWrite, NativeStore, Records};
-use crate::{
-    AnalysisContextRefV1, AnalysisContextVersionV1, ApprovedNotificationRouteV1,
-    DiscoveryContextRevisionV1, NativeStateSnafu, Result,
-};
+use crate :: { AnalysisContextRefV1 , AnalysisContextVersionV1 , ApprovedNotificationRouteV1 , DiscoveryContextRevisionV1 , NativeStateSnafu , Result } ;
 
 impl NativeStore {
     pub fn commit_contexts_checked(
@@ -20,6 +17,8 @@ impl NativeStore {
             .map(|(input, expected)| tx.context(input, Some(*expected)))
             .collect::<Result<Vec<_>>>()?;
         check()?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(crate::AnalysisCommitStage::BeforeContextCommit)?;
         tx.commit([])?;
         Ok(references)
     }
@@ -92,10 +91,7 @@ impl NativeStore {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<Vec<AnalysisContextRefV1>> {
         if inputs.iter().any(|input| !ContextRecord::internable(input)) {
-            return crate::AnalysisStore::reject_path(
-                &self.root,
-                "the qualified context owner is invalid",
-            );
+            return crate::Error::reject_path(&self.root, "the qualified context owner is invalid");
         }
         self.commit_context_values(inputs, true, None, &mut check)
     }
@@ -112,7 +108,7 @@ impl NativeStore {
             return Ok(Vec::new());
         }
         if inputs.iter().any(|input| !input.valid()) {
-            return crate::AnalysisStore::reject_path(
+            return crate::Error::reject_path(
                 &self.root,
                 "the context version identity or bounds are invalid",
             );
@@ -123,6 +119,8 @@ impl NativeStore {
             .map(|input| tx.admit_context(input, intern, expected))
             .collect::<Result<Vec<_>>>()?;
         check()?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(crate::AnalysisCommitStage::BeforeContextCommit)?;
         tx.commit([])?;
         Ok(references)
     }
@@ -250,6 +248,7 @@ impl DataWrite<'_> {
         } else {
             None
         };
+        self.store.storage.check_context(input.body.len() as u64)?;
         let reference = self.record(input, expected, notification)?;
         let id = ContextRecord::id(&input.key, |key| Records::staged(key, &self.transaction))?
             .ok_or_else(|| {

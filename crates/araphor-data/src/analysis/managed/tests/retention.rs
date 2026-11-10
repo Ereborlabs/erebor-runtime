@@ -103,7 +103,7 @@ fn retained_provenance_survives_expiry() -> TestResult {
     selection.contexts = crate::Selection::Exact(keys);
     selection.results = vec![generic.result_id.clone()];
     let fixture = Fixture::admit_scope(&store, false, selection)?;
-    let cursor = AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
+    let cursor = crate::AnalysisStore::table_schemas()["events"].index_of("source_cursor")?;
     let requests = AnalysisTableRequests::from([("events".into(), Some(BTreeSet::from([cursor])))]);
     let captured = store
         .read_managed_tables_filtered(

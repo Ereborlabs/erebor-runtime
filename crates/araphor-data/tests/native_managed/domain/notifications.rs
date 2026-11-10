@@ -59,6 +59,42 @@ fn route_context(
     })
 }
 
+#[test]
+fn prepared_routes_keep_limit() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = NativeStore::open_with_limits(directory.path().join("data"), Default::default(), araphor_data::StorageLimitsV1 {
+        notification_routes: Some(0), ..Default::default()
+    })?;
+    store.commit_context(&route_context(&route(1))?)?;
+    let control = AnalysisReadControl::default();
+    let budget = super::super::graph::Budget;
+    assert!(matches!(store.prepare_notifications([1; 16], &[], &[], &control, &budget),
+        Err(araphor_data::Error::Notification { code: Notice::Limit, field: "route count", .. })));
+    Ok(())
+}
+
+#[test]
+fn prepared_related_keep_limit() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = NativeStore::open_with_limits(directory.path().join("data"), Default::default(), araphor_data::StorageLimitsV1 {
+        notification_routes: Some(0), ..Default::default()
+    })?;
+    let (_, model, _, observation) = fixture(&store)?;
+    let expected = finding(&observation, &super::super::publication::output(&model)?.datasets[0].batches[0])?.value;
+    commit(&store, &model, &observation, 0)?;
+    let reference = reference_for(&store, 0, &expected.finding_id)?;
+    let mut first = state(reference.clone());
+    let mut second = first.clone();
+    first.key.notification_id = [5; 16];
+    second.key.notification_id = [6; 16];
+    store.commit_contexts(&[context(&first)?, context(&second)?])?;
+    let control = AnalysisReadControl::default();
+    let budget = super::super::graph::Budget;
+    assert!(matches!(store.prepare_notifications([1; 16], &[reference], &[], &control, &budget),
+        Err(araphor_data::Error::Notification { code: Notice::Limit, field: "related obligation count", .. })));
+    Ok(())
+}
+
 fn state(reference: NotificationFindingRefV1) -> NotificationObligationV1 {
     NotificationObligationV1 {
         schema_version: 1,

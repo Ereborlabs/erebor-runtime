@@ -201,8 +201,7 @@ fn source_schema_requires_history() -> TestResult {
     AnalysisStore::validate_source_schema(&valid, directory.path())?;
     for schema in [
         AnalysisStore::SOURCE_SCHEMA.replace("commit_revision DESC", "commit_revision ASC"),
-        AnalysisStore::SOURCE_SCHEMA
-            .replace(",\n    PRIMARY KEY (stream_key, commit_revision)", ""),
+        AnalysisStore::SOURCE_SCHEMA.replace(",\n    PRIMARY KEY (stream_key, commit_revision)", ""),
         AnalysisStore::SOURCE_SCHEMA.replace("cpu_id UINTEGER NOT NULL", "cpu_id UINTEGER"),
     ] {
         assert_ne!(schema, AnalysisStore::SOURCE_SCHEMA);

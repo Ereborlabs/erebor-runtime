@@ -649,10 +649,7 @@ fn lifecycle_recovery_rejects_corruption() -> TestResult {
             }
         }
         drop(store);
-        assert!(
-            AnalysisStore::open(&root).is_err(),
-            "corruption {corruption}"
-        );
+        assert!(AnalysisStore::open(&root).is_err(), "corruption {corruption}");
     }
     Ok(())
 }
