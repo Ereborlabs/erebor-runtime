@@ -20,6 +20,8 @@ mod schema;
 mod selected;
 mod source;
 mod status;
+#[cfg(feature = "native-store")]
+pub(in crate::analysis) use status::{Failure, FailureOrigin};
 mod version;
 
 pub use execution::ManagedExecution;

@@ -475,6 +475,7 @@ impl AnalysisSelectionV1 {
 
 pub type AnalysisTableRequests = BTreeMap<String, Option<BTreeSet<usize>>>;
 
+#[derive(Clone, Copy)]
 pub struct AnalysisTableRead<'a> {
     pub requests: &'a AnalysisTableRequests,
     pub event_ranges: Option<&'a [(u64, u64)]>,
@@ -576,7 +577,7 @@ impl AnalysisTableRead<'_> {
         })
     }
 
-    fn check_managed_changes(&self, selection: &AnalysisSelectionV1) -> Result<()> {
+    pub(in crate::analysis) fn check_managed_changes(&self, selection: &AnalysisSelectionV1) -> Result<()> {
         if !matches!(self.mode, AnalysisReadModeV1::Changes(_)) {
             return Ok(());
         }

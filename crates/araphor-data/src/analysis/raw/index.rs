@@ -11,6 +11,8 @@ pub(in crate::analysis) struct RawIndex {
     pub(in crate::analysis) entries: RedBlackTreeMapSync<u64, RawEntry>,
     pub(in crate::analysis) ranges: RedBlackTreeMapSync<(Vec<u8>, u64), (u64, usize)>,
     pub(in crate::analysis) revision: u64,
+    pub(in crate::analysis) evidence_revision: u64,
+    pub(in crate::analysis) binding_revision: u64,
 }
 
 impl RawIndex {
@@ -219,6 +221,12 @@ impl RawIndex {
             .fail();
         }
         let mut next = self.clone();
+        if entry.identity.evidence().is_some() {
+            next.evidence_revision = next.evidence_revision.max(revision);
+            if !next.sources.contains_key(&key) {
+                next.binding_revision = next.binding_revision.max(revision);
+            }
+        }
         if !next.sources.contains_key(&key) {
             next.sources.insert_mut(
                 key.clone(),

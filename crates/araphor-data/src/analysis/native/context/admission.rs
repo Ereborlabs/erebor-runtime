@@ -139,7 +139,7 @@ impl DataWrite<'_> {
             .collect()
     }
 
-    fn verify_context(&mut self, input: &AnalysisContextVersionV1) -> Result<()> {
+    pub(super) fn verify_context(&mut self, input: &AnalysisContextVersionV1) -> Result<()> {
         let mut verified = std::mem::take(&mut self.verified);
         let result = verified.check_context(input, |tenant, package, revision| {
             self.package_revision(tenant, package, revision)

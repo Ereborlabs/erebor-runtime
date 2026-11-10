@@ -31,6 +31,7 @@ mod extraction;
 mod managed;
 mod packages;
 mod records;
+mod revisions;
 mod source;
 
 pub use managed::{ManagedGraph, ManagedLease};
@@ -45,6 +46,7 @@ pub struct NativeStore {
     maintenance: Maintenance<()>,
     ready: AtomicBool,
     managed_owner: AtomicBool,
+    revision: tokio::sync::watch::Sender<u64>,
     _lease: super::connection::AnalysisLease,
 }
 
@@ -158,7 +160,7 @@ impl NativeStore {
             let mut tx = branch.write_tx().context(NativeStorageSnafu {
                 operation: "initialize",
             })?;
-            tx.insert(FORMAT, 2u64.to_be_bytes());
+            tx.insert(FORMAT, 3u64.to_be_bytes());
             tx.insert(
                 SCHEMA,
                 (super::ANALYSIS_SCHEMA_VERSION as u64).to_be_bytes(),
@@ -213,7 +215,9 @@ impl NativeStore {
         view.validate_catalogue()?;
         view.validate_contexts()?;
         view.validate_managed()?;
-        Ok(Self {
+        view.validate_attempts()?;
+        let revision = tokio::sync::watch::channel(view.revision).0;
+        let store = Self {
             database,
             branch,
             writer: Mutex::new(()),
@@ -223,12 +227,15 @@ impl NativeStore {
             maintenance: Maintenance::new(()),
             ready: AtomicBool::new(true),
             managed_owner: AtomicBool::new(false),
+            revision,
             _lease: lease,
-        })
+        };
+        store.recover_managed_startup()?;
+        Ok(store)
     }
 
     fn decode_view(snapshot: BranchSnapshot) -> Result<DataView> {
-        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 2 {
+        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 3 {
             return NativeStateSnafu {
                 field: "format version",
             }
@@ -506,6 +513,7 @@ impl<'a> DataWrite<'a> {
             self.store.ready.store(false, Ordering::Release);
             return Err(error);
         }
+        self.store.revision.send_replace(self.revision);
         Ok(Some(receipt))
     }
 }

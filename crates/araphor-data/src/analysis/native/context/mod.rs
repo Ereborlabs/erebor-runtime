@@ -74,3 +74,22 @@ impl DataView {
             .map_err(crate::Error::stored_artifact)
     }
 }
+
+impl DataWrite<'_> {
+    pub(in crate::analysis::native) fn check_context_ref(
+        &mut self,
+        reference: &crate::AnalysisContextRefV1,
+    ) -> Result<bool> {
+        let Some(id) = ContextRecord::id(&reference.key, |key| {
+            Records::staged(key, &self.transaction)
+        })?
+        else {
+            return Ok(false);
+        };
+        let row = ContextRecord::load(id, |key| Records::staged(key, &self.transaction))?;
+        ContextRecord::check(&row, &reference.key)?;
+        self.verify_context(&row.version)
+            .map_err(crate::Error::stored_artifact)?;
+        Ok(row.revision == reference.commit_revision)
+    }
+}

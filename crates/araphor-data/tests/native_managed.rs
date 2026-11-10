@@ -13,6 +13,9 @@ use araphor_discovery_definition::{Definition, ImagePin, Program, ResolvedDefini
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "native_managed/attempts.rs"]
+mod attempts;
+
 struct Fixture {
     spec: ManagedSpec,
     grant: PackageGrantV1,

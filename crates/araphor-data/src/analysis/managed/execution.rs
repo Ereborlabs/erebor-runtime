@@ -22,7 +22,7 @@ pub(super) struct Committed {
 }
 
 #[derive(Debug)]
-pub(super) struct RetainedGraphProof {
+pub(in crate::analysis) struct RetainedGraphProof {
     graph: crate::analysis::PackageResultRefV1,
     source: super::ManagedSourceRef,
     input: Arc<crate::analysis::graph_rows::store::InputProof>,
@@ -40,7 +40,7 @@ impl RetainedGraphProof {
         .then_some(&self.input)
     }
 
-    pub(super) fn metadata_bytes(&self) -> usize {
+    pub(in crate::analysis) fn metadata_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.graph.result_id.capacity()
             + self.source.result.result_id.capacity()
@@ -73,7 +73,7 @@ impl ManagedExecution {
             .unwrap_or_default()
     }
 
-    pub(super) fn graph_input(
+    pub(in crate::analysis) fn graph_input(
         &self,
         request: &ManagedRead,
         meta: &AnalysisStoreMetaV1,

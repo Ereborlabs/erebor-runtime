@@ -12,14 +12,14 @@ use crate::{
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum FailureOrigin {
+pub(in crate::analysis) enum FailureOrigin {
     Admission,
     Attempt,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Failure {
+pub(in crate::analysis) struct Failure {
     pub origin: FailureOrigin,
     pub code: Code,
     pub progress: u64,
@@ -27,7 +27,7 @@ pub(super) struct Failure {
 }
 
 impl Failure {
-    fn decode(
+    pub(in crate::analysis) fn decode(
         bytes: Option<Vec<u8>>,
         instance: &ManagedInstance,
         head: u64,

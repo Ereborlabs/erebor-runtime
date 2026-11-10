@@ -427,7 +427,7 @@ prefix, header, and decoded-record charges after their storage is dropped.
 Arrow buffers, references, coverage reports, and pending gaps remain charged.
 Cancellation and existing key, input, scan, and page limits stay active.
 
-Native physical format 2 persists logical schema 41 and recovery epoch 1.
+Native physical format 3 persists logical schema 41 and recovery epoch 1.
 `DataView::meta` returns these saved values and the captured global Data revision.
 Ordinary reopen preserves the recovery epoch. Older prototype native formats
 are rejected. This does not convert a DuckDB directory.
@@ -442,6 +442,47 @@ references. They check exact native source revisions separately.
 This API currently reads Evidence, coverage, and the admitted context table
 families. A requested unported result, trace, Graph-state, or notification
 family returns `Unsupported`. Native retention has no mutation API yet, so
-this read does not qualify expired or removed raw ranges. Managed capture
-sealing, prior result restore, attempts, atomic results/progress, production
+this read does not qualify expired or removed raw ranges. Prior result restore,
+atomic results/progress, production
 provider binding, and original-log subscription routing remain **Not done**.
+
+## Native capture and terminal attempts
+
+Read the owners in this order:
+
+1. [capture.rs](../../crates/araphor-data/src/analysis/native/managed/capture.rs)
+   captures one Data view, reads actual Arrow tables, and uses the existing
+   `ManagedCapture::seal` and source-frame seal. It reads the saved call heads
+   and completion head. An unported result or source parent returns `Unsupported`.
+2. [attempts.rs](../../crates/araphor-data/src/analysis/native/managed/attempts.rs)
+   checks authority, lifecycle, completion, input revisions, and retained
+   references. Registration stages the immutable request/capture and pending
+   index together. A live claim belongs to that store's watch channel.
+3. [terminal.rs](../../crates/araphor-data/src/analysis/native/managed/terminal.rs)
+   stages terminal state, pending removal, completion indexes, and failure
+   status together. A qualifying Denied outcome also suspends the instance.
+   Stop and join execution before this call. A loaded pending attempt has no
+   live claim. An exact terminal retry checks the callback and stages no writes.
+4. [status.rs](../../crates/araphor-data/src/analysis/native/managed/status.rs)
+   reads saved outcomes and failure state. Completed outcomes and successful
+   consumed progress are separate values.
+5. [attempt_recovery.rs](../../crates/araphor-data/src/analysis/native/managed/attempt_recovery.rs)
+   checks the captured contract, exact pending/outcome index sets, historical
+   completion, and required failure records. Startup cancels current-generation
+   pending frontier attempts in one genuine Data commit. Other pending attempts
+   keep the existing behavior.
+
+[revisions.rs](../../crates/araphor-data/src/analysis/native/revisions.rs) stores
+last-change heads for capture checks. The raw owner derives event and new-binding
+heads from its original committed entries. Coverage and contexts stage their
+heads in their existing metadata transaction. Recovery merges saved receipts
+before it derives new bindings from the later raw tail. These heads are not
+subscription cursors or a copied CDC log. Original-log routing remains open.
+
+The [managed tests](../../crates/araphor-data/tests/native_managed/attempts.rs)
+check actual rows, callback rollback, live claims, parallel manual attempts,
+captured cuts, completion history, failure suspension, and corrupt recovery.
+The [raw tests](../../crates/araphor-data/tests/native_raw/freshness.rs) check
+coverage-first binding recovery with and without a later metadata commit.
+Read the [qualification](../research/results/araphor-native-attempts-2026-11-09.md)
+for commands and remaining limits. Production still uses DuckDB.

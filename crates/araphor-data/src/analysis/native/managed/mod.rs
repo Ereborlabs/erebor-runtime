@@ -8,9 +8,14 @@ use crate::{
 };
 
 mod admission;
+mod attempt_recovery;
+mod attempts;
+mod capture;
 mod graph;
 mod lifecycle;
 mod recovery;
+mod status;
+mod terminal;
 
 pub use graph::ManagedGraph;
 pub use lifecycle::ManagedLease;

@@ -56,6 +56,7 @@ impl NativeStore {
             }
             raw.next_segment = raw.next_segment.max(next);
         }
+        let mut known = BTreeSet::new();
         for row in snapshot.prefix(Sources::RECEIPTS) {
             let (key, _) = row.context(NativeStorageSnafu {
                 operation: "read raw receipt keys",
@@ -76,6 +77,7 @@ impl NativeStore {
                 }
                 .fail();
             }
+            known.insert(receipt.identity.key());
             let source = raw.index.sources.get_mut(&receipt.identity.key());
             match source {
                 Some(source) => {
@@ -105,6 +107,16 @@ impl NativeStore {
         }
         raw.index.refresh_receipts()?;
         let metadata = Self::number(&Self::required(snapshot, super::super::HEAD)?)?;
+        raw.index.binding_revision = Self::relation_revision(snapshot, "source_bindings")?;
+        for (_, entry) in raw
+            .index
+            .entries
+            .range((Excluded(metadata), std::ops::Bound::Unbounded))
+        {
+            if entry.identity.evidence().is_some() && known.insert(entry.identity.key()) {
+                raw.index.binding_revision = raw.index.binding_revision.max(entry.commit.revision);
+            }
+        }
         let mut expected = BTreeMap::<u64, u64>::new();
         for (revision, entry) in raw.index.entries.iter() {
             if *revision <= metadata {
@@ -272,6 +284,9 @@ impl NativeStore {
 
 impl DataWrite<'_> {
     pub(in crate::analysis::native) fn stage_raw(&mut self) -> Result<()> {
+        self.note_relation("events", self.raw.evidence_revision)?;
+        self.note_relation("source_receipts", self.raw.evidence_revision)?;
+        self.note_relation("source_bindings", self.raw.binding_revision)?;
         if self.raw.revision <= self.metadata_revision {
             return Ok(());
         }

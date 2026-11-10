@@ -154,10 +154,15 @@ tenant and owner headers with immutable values. Exact native ranges bound change
 reads; existing builders preserve Arrow rows, consumed positions, witnesses,
 and references. Read the
 [extraction qualification](../research/results/araphor-native-extraction-2026-11-09.md).
-Result: **Done for native Arrow source extraction**. Managed sealing, attempts,
+Result: **Done for native Arrow source extraction**.
+Native capture now uses the actual Arrow page and shared sealing contract.
+Attempts, live claims, terminal outcomes, failure status, and interrupted
+frontier settlement use one native Data transaction per transition. Read the
+[attempt qualification](../research/results/araphor-native-attempts-2026-11-09.md).
+Result: **Done for native capture and terminal attempts**. Prior-result restore,
 results/checkpoints, atomic consumed progress, production provider binding,
 original-log routing, and indexed source-header maintenance remain **Not done**.
-Captured attempts, results, checkpoints, references, consumed progress,
+Results, checkpoints, references, consumed progress,
 attempt-dependent lifecycle, production activation, CDC routing, notification
 batching, retention, backup, and cutover remain **Not done**. No incident
 performance gain is established.

@@ -173,6 +173,7 @@ impl DataWrite<'_> {
             commit_revision: self.revision,
         };
         self.index_context(id, &reference)?;
+        self.note_relation("context_versions", self.revision)?;
         if previous
             .as_ref()
             .is_none_or(|prior| prior.version.key.owner_revision < input.key.owner_revision)

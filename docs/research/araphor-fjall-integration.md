@@ -46,8 +46,13 @@ from one captured native/raw view. Body-free context indexes bound change and
 owner reads. The shared raw scanner and Arrow builders preserve existing rows,
 positions, witnesses, and references. Read the
 [extraction qualification](results/araphor-native-extraction-2026-11-09.md).
-Managed sealing, attempts, result publication, production providers, routing,
-and indexed source-header maintenance remain **Not done**.
+At that extraction qualification, managed sealing and attempts were **Not done**.
+Native managed capture now seals actual Arrow inputs. Native attempts preserve
+live claims, pending indexes, terminal outcomes, failure status, and interrupted
+frontier settlement. Read the
+[attempt qualification](results/araphor-native-attempts-2026-11-09.md).
+Result publication, prior-result restore, production providers, original-log
+routing, and indexed source-header maintenance remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

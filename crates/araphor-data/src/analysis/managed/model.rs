@@ -354,7 +354,7 @@ pub struct ManagedRead {
 }
 
 impl ManagedRead {
-    pub(super) fn expected(&self) -> &ManagedInstance {
+    pub(in crate::analysis) fn expected(&self) -> &ManagedInstance {
         self.expected.as_ref().unwrap_or(&self.instance)
     }
 }
@@ -476,7 +476,7 @@ impl ManagedPrior {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub(super) struct Capture {
+pub(in crate::analysis) struct Capture {
     pub tenant: [u8; 16],
     pub instance: String,
     pub grant: PackageGrantV1,
@@ -516,7 +516,7 @@ impl Capture {
         self.follow && matches!(&spec.destination, ManagedDestination::Graph { .. })
     }
 
-    pub(super) fn check_follow_mode(&self, spec: &ManagedSpec) -> Result<()> {
+    pub(in crate::analysis) fn check_follow_mode(&self, spec: &ManagedSpec) -> Result<()> {
         if self.follows_graph(spec)
             && (!self.running || self.rebuild || self.generation != self.expected_generation)
         {
@@ -528,17 +528,17 @@ impl Capture {
 
 #[derive(Clone, Debug)]
 pub struct ManagedCapture {
-    pub(super) graph: Option<std::sync::Arc<super::execution::RetainedGraphProof>>,
-    pub(super) execution: Option<std::sync::Arc<ManagedExecution>>,
-    pub(super) instance: ManagedInstance,
-    pub(super) contract: Capture,
-    pub(super) prior: BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
-    pub(super) bytes: usize,
-    pub(super) source: Option<std::sync::Arc<ManagedSourceFrame>>,
+    pub(in crate::analysis) graph: Option<std::sync::Arc<super::execution::RetainedGraphProof>>,
+    pub(in crate::analysis) execution: Option<std::sync::Arc<ManagedExecution>>,
+    pub(in crate::analysis) instance: ManagedInstance,
+    pub(in crate::analysis) contract: Capture,
+    pub(in crate::analysis) prior: BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
+    pub(in crate::analysis) bytes: usize,
+    pub(in crate::analysis) source: Option<std::sync::Arc<ManagedSourceFrame>>,
 }
 
 impl ManagedCapture {
-    pub(super) fn request_capture(&self, request: &ManagedRequest) -> Result<Capture> {
+    pub(in crate::analysis) fn request_capture(&self, request: &ManagedRequest) -> Result<Capture> {
         if request.rebuild != self.rebuild() || request.time_utc_ns != self.contract.time_utc_ns {
             return Err(Code::Invalid.error("managed rebuild capture"));
         }
@@ -752,7 +752,7 @@ pub struct ManagedReceipt {
 }
 
 impl ManagedReceipt {
-    pub(super) fn matches_frontier(&self, offered: &Option<ManagedFrontier>) -> bool {
+    pub(in crate::analysis) fn matches_frontier(&self, offered: &Option<ManagedFrontier>) -> bool {
         match (&self.frontier, offered) {
             (None, None) => true,
             (Some(saved), Some(offered)) => {
@@ -782,7 +782,7 @@ pub struct ManagedTerminal {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub(super) struct Attempt {
+pub(in crate::analysis) struct Attempt {
     pub request: ManagedRequest,
     pub capture: Capture,
     pub registered: u64,
@@ -807,12 +807,12 @@ impl Attempt {
 
 #[derive(Clone, Debug)]
 pub struct ManagedAttempt(
-    pub(super) Attempt,
-    pub(super) ManagedInstance,
-    pub(super) Option<tokio::sync::watch::Receiver<u64>>,
-    pub(super) BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
-    pub(super) Option<std::sync::Arc<ManagedExecution>>,
-    pub(super) Option<std::sync::Arc<ManagedSourceFrame>>,
+    pub(in crate::analysis) Attempt,
+    pub(in crate::analysis) ManagedInstance,
+    pub(in crate::analysis) Option<tokio::sync::watch::Receiver<u64>>,
+    pub(in crate::analysis) BTreeMap<u64, std::sync::Arc<ManagedPrior>>,
+    pub(in crate::analysis) Option<std::sync::Arc<ManagedExecution>>,
+    pub(in crate::analysis) Option<std::sync::Arc<ManagedSourceFrame>>,
 );
 
 impl ManagedAttempt {

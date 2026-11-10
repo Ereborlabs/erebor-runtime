@@ -182,6 +182,7 @@ impl DataWrite<'_> {
                 retained_floor: 0,
             });
         receipt.coverage_revision = input.revision;
+        let new_binding = previous.is_none();
         let reference = CoverageReportRef {
             source: identity.clone(),
             revision: input.revision,
@@ -206,6 +207,12 @@ impl DataWrite<'_> {
         );
         self.transaction.insert(Sources::change(&reference), change);
         self.transaction.insert(epoch, binding);
+        self.note_relation("coverage", self.revision)?;
+        self.note_relation("source_receipts", self.revision)?;
+        if new_binding {
+            self.note_relation("source_bindings", self.revision)?;
+            self.raw.binding_revision = self.revision;
+        }
         if let Some(source) = self.raw.sources.get_mut(&key) {
             source.receipt = RawReceipt::Evidence(receipt);
         } else {

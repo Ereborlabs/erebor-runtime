@@ -129,7 +129,7 @@ impl AnalysisStore {
 }
 
 impl SourceScope {
-    pub(in crate::analysis::managed) fn capture(
+    pub(in crate::analysis) fn capture(
         instance: &ManagedInstance,
         meta: &AnalysisStoreMetaV1,
         mode: ManagedSourceRead,
