@@ -17,6 +17,7 @@ impl DataView {
         let mut completed = BTreeMap::<Vec<u8>, (u64, u64)>::new();
         let mut ended = BTreeMap::new();
         let mut history = BTreeMap::<(u64, u64), BTreeSet<u64>>::new();
+        let mut successes = BTreeMap::<(u64, u64), BTreeSet<u64>>::new();
         let mut captures = Vec::new();
         for row in self.snapshot.prefix(b"\0data/a") {
             let (key, _) = row.context(NativeStorageSnafu {
@@ -121,21 +122,25 @@ impl DataView {
                 }
                 .fail();
             }
-            if capture.progress != 0
-                || capture.prior.values().any(Option::is_some)
-                || !capture.dependencies.is_empty()
-                || attempt.receipt.is_some()
-            {
-                return Err(Code::Unsupported.error("native managed result recovery"));
-            }
             capture.check_follow_mode(spec)?;
             captures.push((
                 owner,
                 capture.expected_generation,
                 capture.revision,
                 capture.completed,
+                capture.progress,
             ));
-            if let Some(terminal) = &attempt.terminal {
+            let outcome = if let Some(receipt) = &attempt.receipt {
+                if attempt.terminal.is_some() {
+                    return Err(Code::Invalid.error("managed attempt outcome"));
+                }
+                self.validate_success(&attempt)?;
+                successes
+                    .entry((owner, capture.generation))
+                    .or_default()
+                    .insert(receipt.commit_revision);
+                Some(receipt.commit_revision)
+            } else if let Some(terminal) = &attempt.terminal {
                 if terminal.instance != capture.instance
                     || terminal.attempt != attempt.request.id
                     || terminal.revision <= attempt.registered
@@ -170,19 +175,21 @@ impl DataView {
                         .fail();
                     }
                 }
+                Some(terminal.revision)
+            } else {
+                None
+            };
+            if let Some(revision) = outcome {
                 history
                     .entry((owner, capture.generation))
                     .or_default()
-                    .insert(terminal.revision);
+                    .insert(revision);
                 let outcome = Attempts::outcome(owner, capture.generation);
                 let latest = completed.entry(outcome).or_default();
-                if terminal.revision > latest.0 {
-                    *latest = (terminal.revision, id);
+                if revision > latest.0 {
+                    *latest = (revision, id);
                 }
-                if ended
-                    .insert(Attempts::ended(owner, terminal.revision), id)
-                    .is_some()
-                {
+                if ended.insert(Attempts::ended(owner, revision), id).is_some() {
                     return NativeStateSnafu {
                         field: "managed outcome identity",
                     }
@@ -205,15 +212,20 @@ impl DataView {
                 .fail();
             }
         }
-        for (owner, generation, revision, completed) in captures {
+        for (owner, generation, revision, completed, progress) in captures {
             let actual = history
                 .get(&(owner, generation))
                 .and_then(|revisions| revisions.range(..=revision).next_back())
                 .copied()
                 .unwrap_or(0);
-            if completed != actual {
+            let successful = successes
+                .get(&(owner, generation))
+                .and_then(|revisions| revisions.range(..=revision).next_back())
+                .copied()
+                .unwrap_or(0);
+            if completed != actual || progress != successful {
                 return NativeStateSnafu {
-                    field: "managed captured completion",
+                    field: "managed captured progress and completion",
                 }
                 .fail();
             }

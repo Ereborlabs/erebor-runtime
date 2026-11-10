@@ -162,15 +162,27 @@ frontier settlement use one native Data transaction per transition. Read the
 Shared output, checkpoint, domain, and receipt validation passes the unchanged
 incident on the DuckDB production path. Read the
 [shared validation qualification](../research/results/araphor-shared-publication-2026-11-09.md).
-Result: **Done for the shared validation change**. Native successful publication
-and matched performance improvement remain **Not done**.
-Result: **Done for native capture and terminal attempts**. Prior-result restore,
-results/checkpoints, atomic consumed progress, production provider binding,
-original-log routing, and indexed source-header maintenance remain **Not done**.
-Results, checkpoints, references, consumed progress,
-attempt-dependent lifecycle, production activation, CDC routing, notification
-batching, retention, backup, and cutover remain **Not done**. No incident
-performance gain is established.
+Result: **Done for the shared validation change**. At that qualification,
+native successful publication was **Not done**. Matched production performance
+improvement remains **Not done**.
+Result: **Done for native capture and terminal attempts**. At that qualification,
+prior-result restore, results/checkpoints, and atomic consumed progress were
+**Not done**.
+
+The optional native Selected publication boundary is now
+[qualified](../research/results/araphor-native-publication-2026-11-09.md).
+Data commits actual results, checkpoints, context imports, references, Graph
+changes, findings, call heads, completion, and consumed progress in one batch.
+It publishes the exact view before cache promotion and the existing availability
+wake. Seventy focused Data tests pass, including successful cold resume,
+canonical finding reuse, and corrupt import/proof/index recovery. The unchanged
+production incident passes for the shared checks. It still uses DuckDB and
+establishes no matched speedup.
+Result: **Done for the optional native Selected boundary**. Other destination
+owners, production provider binding, original-log routing, indexed source-header
+maintenance, attempt-dependent lifecycle, production activation, notification
+batching, configured capacity, retention, backup, cutover, and removal remain
+**Not done**. Both incident performance targets remain **Not done**.
 
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the

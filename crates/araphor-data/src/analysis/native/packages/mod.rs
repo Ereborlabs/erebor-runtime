@@ -25,13 +25,23 @@ impl PackageRecord {
         tenant: [u8; 16],
         package: &str,
         revision: &str,
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+    ) -> Result<Option<Self>> {
+        Self::read_charged(tenant, package, revision, get, &mut |_| Ok(()))
+    }
+
+    fn read_charged(
+        tenant: [u8; 16],
+        package: &str,
+        revision: &str,
         mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
     ) -> Result<Option<Self>> {
         let identity = Self::identity(tenant, package, Some(revision))?;
         let Some(id) = Records::find(&identity, &mut get)? else {
             return Ok(None);
         };
-        let Some(bytes) = Records::payload(&Records::key(b'P', id), get)? else {
+        let Some(bytes) = Records::charged_payload(&Records::key(b'P', id), get, charge)? else {
             return Ok(None);
         };
         let record: Self = Records::decode(&bytes)?;
@@ -57,10 +67,25 @@ impl DataView {
         revision: &str,
         control: &crate::AnalysisReadControl,
     ) -> Result<Option<PackageRevisionV1>> {
+        self.package_revision_charged(tenant, package, revision, control, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis::native) fn package_revision_charged(
+        &self,
+        tenant: [u8; 16],
+        package: &str,
+        revision: &str,
+        control: &crate::AnalysisReadControl,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<PackageRevisionV1>> {
         control.check()?;
-        let record = PackageRecord::read(tenant, package, revision, |key| {
-            Records::read(key, &self.snapshot)
-        })?;
+        let record = PackageRecord::read_charged(
+            tenant,
+            package,
+            revision,
+            |key| Records::read(key, &self.snapshot),
+            charge,
+        )?;
         if record
             .as_ref()
             .is_some_and(|row| row.revision > self.metadata_revision)

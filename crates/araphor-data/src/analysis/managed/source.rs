@@ -189,7 +189,7 @@ impl ManagedSourceFrame {
         self.proof.get()
     }
 
-    pub(super) fn check_proof(&self, proof: &PackageResultRefV1) -> Result<()> {
+    pub(in crate::analysis) fn check_proof(&self, proof: &PackageResultRefV1) -> Result<()> {
         if self
             .proof
             .get()
@@ -200,7 +200,7 @@ impl ManagedSourceFrame {
         Ok(())
     }
 
-    pub(super) fn commit_proof(&self, proof: Arc<PackageResultRefV1>) {
+    pub(in crate::analysis) fn commit_proof(&self, proof: Arc<PackageResultRefV1>) {
         self.proof.get_or_init(|| proof);
     }
 

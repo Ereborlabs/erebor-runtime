@@ -6,6 +6,31 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use super::{InstanceRecord, Records};
+
+mod authority;
+mod cuts;
+mod domain;
+mod origin;
+mod projection;
+mod publication;
+mod read;
+mod recovery;
+mod transaction;
+pub use cuts::GraphPublication;
+pub(super) use publication::PreparedGraph;
+pub use transaction::{ManagedGraphJournal, ManagedGraphTransaction};
+
+#[derive(Clone)]
+pub(super) struct GraphCall {
+    pub attempt: std::sync::Arc<crate::ManagedAttempt>,
+    pub call: u64,
+    pub graph: u64,
+    pub writer: u64,
+    pub head: Option<u64>,
+    pub spec: sdk::GraphSpec,
+    pub relations: BTreeMap<String, u64>,
+}
+
 use crate::{
     analysis::native::{DataView, DataWrite},
     AnalysisReadControl, ManagedSpec, NativeStateSnafu, PackageErrorCodeV1 as Code, Result,
@@ -186,14 +211,30 @@ impl DataView {
         spec: &ManagedSpec,
         call: &crate::ManagedCall,
     ) -> Result<sdk::Package> {
+        self.managed_contract_charged(spec, call, &mut |_| Ok(()))
+    }
+
+    pub(in crate::analysis::native) fn managed_contract_charged(
+        &self,
+        spec: &ManagedSpec,
+        call: &crate::ManagedCall,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<sdk::Package> {
         let row = self
-            .package_revision(
+            .package_revision_charged(
                 spec.tenant,
                 &call.package.package_id,
                 &call.package.revision,
                 &AnalysisReadControl::default(),
+                charge,
             )?
             .ok_or_else(|| Code::Missing.error("managed SDK descriptor"))?;
+        charge(
+            row.descriptor
+                .len()
+                .saturating_mul(12)
+                .saturating_add(12 * size_of::<sdk::Package>()),
+        )?;
         call.contract(&row.descriptor)
     }
 

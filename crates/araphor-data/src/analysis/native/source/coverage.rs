@@ -4,11 +4,45 @@ use crate::analysis::raw::RawReceipt;
 use crate::{AnalysisReadControl, AnalysisStore, NativeStateSnafu, NativeStorageSnafu, Result};
 use crate::{
     AnalysisSelectionV1, AnalysisSourceReceiptV1, CoverageRecord, CoverageReportRef,
-    StorePositionV1, ValidatedCoverageV1,
+    EvidenceIntakeIdentityV1, StorePositionV1, ValidatedCoverageV1,
 };
 use snafu::ResultExt as _;
 use std::ops::Bound::{Excluded, Included};
 impl DataView {
+    pub(in crate::analysis::native) fn source_proof_coverage(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        cpu: u32,
+        expected_report: u64,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<(AnalysisSourceReceiptV1, Option<crate::CoverageReport>)> {
+        charge(0)?;
+        let receipt = self.source_receipt(identity)?.ok_or_else(|| {
+            crate::PackageErrorCodeV1::Missing.error("Graph proof source receipt")
+        })?;
+        if receipt.cpu_id != cpu || receipt.coverage_revision != expected_report {
+            return Err(crate::PackageErrorCodeV1::Conflict.error("Graph proof source revision"));
+        }
+        if receipt.coverage_revision == 0 {
+            return Ok((receipt, None));
+        }
+        let bytes = Records::charged_payload(
+            &Sources::report(identity, receipt.coverage_revision),
+            |key| Records::read(key, &self.snapshot),
+            charge,
+        )?
+        .ok_or_else(|| crate::PackageErrorCodeV1::Missing.error("Graph proof coverage report"))?;
+        let report: Report = Records::decode(&bytes)?;
+        if report.reference.source != *identity
+            || report.reference.revision != receipt.coverage_revision
+            || report.reference.position.commit_revision > self.metadata_revision
+        {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("Graph proof coverage identity"));
+        }
+        let body = receipt.decode_coverage(&report.encoded_report, charge)?;
+        Ok((receipt, Some(body)))
+    }
+
     pub fn coverage_changes(
         &self,
         selection: &AnalysisSelectionV1,

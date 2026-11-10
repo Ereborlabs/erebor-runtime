@@ -1,19 +1,17 @@
 use super::*;
 use crate::{AnalysisContextRefV1, AnalysisContextVersionV1};
 
-impl AnalysisStore {
-    pub(in crate::analysis::managed) fn check_source_proofs(
-        connection: &Connection,
-        result: &str,
+impl SourceEvidence {
+    pub(in crate::analysis) fn check_proofs(
         evidence: (
             &[crate::AnalysisWitnessV1],
             &[AnalysisContextRefV1],
             &[(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)],
         ),
-        cut: u64,
+        mut receipt: impl FnMut(&crate::DiscoveryRecordIdV1) -> Result<()>,
     ) -> Result<()> {
-        let mut expected = BTreeMap::new();
         let (witnesses, derived, proofs) = evidence;
+        let mut seen = BTreeSet::new();
         for (id, reference) in proofs {
             if id.durable_cursor == 0
                 || id.stream.tenant_id != reference.key.tenant_id
@@ -34,6 +32,30 @@ impl AnalysisStore {
             {
                 return Err(Code::Invalid.error("source record proof authority"));
             }
+            if !seen.insert((id, &reference.key)) {
+                return Err(Code::Invalid.error("duplicate source record proof"));
+            }
+            receipt(id)?;
+        }
+        Ok(())
+    }
+}
+
+impl AnalysisStore {
+    pub(in crate::analysis::managed) fn check_source_proofs(
+        connection: &Connection,
+        result: &str,
+        evidence: (
+            &[crate::AnalysisWitnessV1],
+            &[AnalysisContextRefV1],
+            &[(crate::DiscoveryRecordIdV1, AnalysisContextRefV1)],
+        ),
+        cut: u64,
+    ) -> Result<()> {
+        let mut expected = BTreeMap::new();
+        let (_, _, proofs) = evidence;
+        SourceEvidence::check_proofs(evidence, |_| Ok(()))?;
+        for (id, reference) in proofs {
             let key = (
                 araphor_analysis_types::DomainRelations::key(id)
                     .context(crate::AnalysisContractSnafu)?,

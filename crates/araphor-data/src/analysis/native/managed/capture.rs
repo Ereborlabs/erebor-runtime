@@ -119,28 +119,87 @@ impl DataView {
             return Err(Code::Conflict.error("managed capture completion"));
         }
         let mut prior = BTreeMap::new();
+        let mut states = BTreeMap::new();
+        let retained = request
+            .execution
+            .as_ref()
+            .map(|execution| execution.calls(request, &output.meta))
+            .unwrap_or_default();
         for call in instance.spec.manifest.calls.keys() {
             control.check()?;
-            let bytes = Records::charged_payload(
+            let compatible = instance.spec.same_call(&current.spec, *call);
+            let head = Records::charged_payload(
                 &InstanceRecord::call_key(id, *call),
                 |key| Records::read(key, &self.snapshot),
                 &mut |bytes| output.charge(bytes),
             )?
-            .ok_or_else(|| Code::Missing.error("managed call head"))?;
-            let head: CallHead = Records::decode(&bytes)?;
-            if head.revision != 0 || head.result.is_some() || instance.progress != 0 {
-                return Err(Code::Unsupported.error("native managed result owner"));
+            .map(|bytes| Records::decode::<CallHead>(&bytes))
+            .transpose()?;
+            if !compatible
+                && head.as_ref().is_some_and(|head| head.result.is_some())
+                && !request.rebuild
+            {
+                return Err(Code::Conflict.error("managed update requires rebuild"));
             }
-            prior.insert(*call, None);
+            let head = head.filter(|_| compatible).unwrap_or(CallHead {
+                revision: 0,
+                result: None,
+            });
+            let reference = if let Some(name) = head.result {
+                if !request.rebuild {
+                    if let Some(state) = retained
+                        .get(call)
+                        .filter(|state| state.revision == head.revision && state.result == name)
+                    {
+                        output.charge(state.allocated_bytes())?;
+                        prior.insert(*call, std::sync::Arc::clone(state));
+                    } else {
+                        let state = self.managed_prior(
+                            &instance,
+                            *call,
+                            &name,
+                            head.revision,
+                            output,
+                            control,
+                        )?;
+                        prior.insert(*call, std::sync::Arc::new(state));
+                    }
+                }
+                Some(crate::analysis::PackageResultRefV1 {
+                    result_id: name,
+                    commit_revision: head.revision,
+                })
+            } else {
+                if head.revision != 0 {
+                    return Err(Code::Invalid.error("managed empty state"));
+                }
+                None
+            };
+            states.insert(*call, reference);
         }
         let source = if let Some(mode) = &request.source {
+            let head = self.managed_source_at(&current, control)?;
             match (mode, read.mode) {
                 (ManagedSourceRead::Initial, AnalysisReadModeV1::Complete)
-                    if instance.progress == 0
+                    if head.is_none()
                         || request.rebuild
                         || instance.generation != current.generation => {}
-                (ManagedSourceRead::Changes(_), AnalysisReadModeV1::Changes(_)) => {
-                    return Err(Code::Unsupported.error("native managed source parent"))
+                (ManagedSourceRead::Changes(parent), AnalysisReadModeV1::Changes(after))
+                    if head.as_ref().is_some_and(|head| head.0 == *parent)
+                        && after == parent.position =>
+                {
+                    let attempt = &head
+                        .as_ref()
+                        .ok_or_else(|| Code::Missing.error("managed source parent"))?
+                        .1;
+                    if attempt.capture.store != output.meta.store_uuid
+                        || attempt.capture.schema != output.meta.schema_version
+                        || attempt.capture.recovery == 0
+                        || attempt.capture.recovery > output.meta.recovery_epoch
+                        || attempt.capture.generation != instance.generation
+                    {
+                        return Err(Code::Conflict.error("managed source store basis"));
+                    }
                 }
                 _ => return Err(Code::Conflict.error("managed source read mode")),
             }
@@ -158,6 +217,7 @@ impl DataView {
         } else {
             None
         };
+
         let contract = Capture {
             tenant: instance.spec.tenant,
             instance: instance.spec.id.clone(),
@@ -170,7 +230,7 @@ impl DataView {
             lifecycle: instance.lifecycle,
             rebuild: request.rebuild,
             follow: request.follow,
-            prior,
+            prior: states,
             store: output.meta.store_uuid,
             schema: output.meta.schema_version,
             recovery: output.meta.recovery_epoch,
@@ -204,7 +264,7 @@ impl DataView {
             execution: request.execution.clone(),
             instance,
             contract,
-            prior: BTreeMap::new(),
+            prior,
             bytes: output.input_bytes.saturating_sub(before),
             source,
         })

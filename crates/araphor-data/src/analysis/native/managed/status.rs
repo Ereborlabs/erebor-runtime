@@ -37,9 +37,8 @@ impl DataView {
         .ok_or_else(|| Code::Missing.error("managed resume instance"))?;
         self.check_managed_pending(owner, instance.generation)?;
         let completed = self.managed_completed(owner, instance.generation)?;
-        if instance.progress != 0 {
-            return Err(Code::Unsupported.error("native managed source parent"));
-        }
+        let committed = self.managed_source_at(&instance, control)?;
+        let source = committed.as_ref().map(|(source, _)| source.clone());
         if completed > instance.progress {
             let attempt = self.outcome_attempt(owner, completed)?;
             let terminal = attempt
@@ -71,16 +70,24 @@ impl DataView {
                     instance,
                     frontier: attempt.request.frontier,
                     completed,
-                    source: None,
+                    source,
                 });
             }
         }
+        let frontier = committed
+            .map(|(_, attempt)| {
+                attempt
+                    .receipt
+                    .and_then(|receipt| receipt.frontier)
+                    .ok_or_else(|| Code::Incomplete.error("managed native frontier unavailable"))
+            })
+            .transpose()?;
         control.check()?;
         Ok(ManagedResume {
             instance,
-            frontier: None,
+            frontier,
             completed,
-            source: None,
+            source,
         })
     }
 

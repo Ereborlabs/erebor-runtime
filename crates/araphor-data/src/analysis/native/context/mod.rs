@@ -7,7 +7,7 @@ mod index;
 mod record;
 mod recovery;
 
-use record::ContextRecord;
+pub(in crate::analysis::native) use record::ContextRecord;
 
 impl ContextRecord {
     fn load(id: u64, get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>) -> Result<Self> {
@@ -22,7 +22,7 @@ impl ContextRecord {
         Ok(row)
     }
 
-    fn id(
+    pub(in crate::analysis::native) fn id(
         key: &AnalysisContextKeyV1,
         get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
     ) -> Result<Option<u64>> {
@@ -61,7 +61,10 @@ impl DataView {
         Ok(Some(row))
     }
 
-    fn verify_context(&self, input: &AnalysisContextVersionV1) -> Result<()> {
+    pub(in crate::analysis::native) fn verify_context(
+        &self,
+        input: &AnalysisContextVersionV1,
+    ) -> Result<()> {
         crate::analysis::context::VerifiedPackages::default()
             .check_context(input, |tenant, package, revision| {
                 self.package_revision(

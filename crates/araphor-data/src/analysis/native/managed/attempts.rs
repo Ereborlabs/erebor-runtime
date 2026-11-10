@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use snafu::ResultExt as _;
 
 use super::super::{DataView, DataWrite, NativeStore};
-use super::{CallHead, InstanceRecord, Records};
+use super::{InstanceRecord, Records};
 use crate::analysis::managed::{Attempt, Capture, ManagedAttempt};
 use crate::{
     AnalysisConflictSnafu, AnalysisReadControl, ManagedCapture, ManagedInstance, ManagedRequest,
@@ -208,7 +208,7 @@ impl NativeStore {
         ))
     }
 
-    fn resolve_witnesses(
+    pub(super) fn resolve_witnesses(
         &self,
         witnesses: &[crate::AnalysisWitnessV1],
         revision: u64,
@@ -284,7 +284,7 @@ impl DataWrite<'_> {
         Ok(())
     }
 
-    fn check_capture(&mut self, capture: &Capture, now: u64) -> Result<()> {
+    pub(super) fn check_capture(&mut self, capture: &Capture, now: u64) -> Result<()> {
         let current = self
             .managed_instance(capture.tenant, &capture.instance)?
             .ok_or_else(|| Code::Missing.error("managed capture instance"))?;
@@ -310,45 +310,10 @@ impl DataWrite<'_> {
             .map(|bytes| NativeStore::number(bytes.get(..8).unwrap_or_default()))
             .transpose()?
             .unwrap_or(0);
-        if view.store_uuid != capture.store
-            || view.schema_version != capture.schema
-            || view.recovery_epoch != capture.recovery
-            || view.revision < capture.revision
-            || capture
-                .sources
-                .iter()
-                .any(|(_, revision)| *revision > capture.revision)
-            || current.generation != capture.expected_generation
-            || current.grant != capture.grant
-            || current.lifecycle != capture.lifecycle
-            || current.running != capture.running
-            || current.progress != capture.progress
-            || completed != capture.completed
-            || capture.prior.keys().ne(spec.manifest.calls.keys())
-        {
-            return AnalysisConflictSnafu.fail();
-        }
-        for (call, prior) in &capture.prior {
-            if !spec.same_call(&current.spec, *call) {
-                if prior.is_some() {
-                    return AnalysisConflictSnafu.fail();
-                }
-                continue;
-            }
-            let bytes = Records::payload(&InstanceRecord::call_key(owner, *call), |key| {
-                Records::staged(key, &self.transaction)
-            })?
-            .ok_or_else(|| Code::Missing.error("managed call head"))?;
-            let head: CallHead = Records::decode(&bytes)?;
-            if prior
-                .as_ref()
-                .map(|prior| (prior.commit_revision, Some(prior.result_id.as_str())))
-                .unwrap_or((0, None))
-                != (head.revision, head.result.as_deref())
-            {
-                return AnalysisConflictSnafu.fail();
-            }
-        }
+        capture.check_native_owner(&current, &spec, &view.meta(), completed)?;
+        capture.check_native_heads(&current, &spec, owner, |key| {
+            Records::staged(key, &self.transaction)
+        })?;
         let control = AnalysisReadControl::default();
         if !capture.follow && !self.sources_current(&capture.sources, &control)? {
             return crate::AnalysisSourceChangedSnafu.fail();

@@ -10,15 +10,24 @@ use crate::{
 mod admission;
 mod attempt_recovery;
 mod attempts;
+mod authority;
 mod capture;
+mod commit;
 mod graph;
 mod lifecycle;
+mod prepare;
+mod priors;
 mod recovery;
+mod references;
+mod result_recovery;
+mod results;
 mod status;
 mod terminal;
 
-pub use graph::ManagedGraph;
+pub use commit::{ManagedCommit, ManagedReturn};
+pub use graph::{GraphPublication, ManagedGraph, ManagedGraphJournal, ManagedGraphTransaction};
 pub use lifecycle::ManagedLease;
+pub use prepare::PreparedManagedCommit;
 
 #[derive(Deserialize, Serialize)]
 struct VersionRecord {

@@ -1,0 +1,129 @@
+{
+  "result": "Done for optional native Selected publication; complete production migration not done",
+  "source_parent": "e57e662e60dd36a105cc348cb107abbd87e0cc62",
+  "source_hashes": {
+    "crates/araphor-data/src/analysis/managed/graph/proof.rs": "9d6f3a6b951d77cbccb9f90a9dd495e4d14426732cf832bb31361c841d5fd1cb",
+    "crates/araphor-data/src/analysis/managed/source.rs": "6731a11fb70c492dae8bde71bfe9c35de8d8ba9552040b0da722690856e5b982",
+    "crates/araphor-data/src/analysis/managed/source/check.rs": "a13af068ca5ec9aed202f006f69401ecba34a39d9f66915098a8ce955ff9fec7",
+    "crates/araphor-data/src/analysis/managed/source/import.rs": "fb376ed4a7d2c20e502a6df17303127ce1c7d32ab97e66597c327adc4eab3394",
+    "crates/araphor-data/src/analysis/native/context/admission.rs": "d9eca015fb2cd8951a2888762b569472ddae27fdc78124adf81b7e3cfc917cc1",
+    "crates/araphor-data/src/analysis/native/context/facts.rs": "f9522e01a8a7fffb7a05344e1ba5ff23cea67575d068f4b88ec08d1c9cba6101",
+    "crates/araphor-data/src/analysis/native/context/mod.rs": "cbd4c5b68241d3b820cb2e665395500fb06f7f3a9f2537a143e1ba09f97da9f8",
+    "crates/araphor-data/src/analysis/native/context/record.rs": "9bb7875c74908db595456932aaf630a204481c4973529bcd35fb492e34f9c790",
+    "crates/araphor-data/src/analysis/native/managed/admission.rs": "e2d8b7f27d2416a32233f293cebd1de6422e981ad50ba766c8bdc774a79d3fa4",
+    "crates/araphor-data/src/analysis/native/managed/attempt_recovery.rs": "772c23fba8668e4a89d1b50ed89ea2f50d05dea77231ca15bba78ae06cb7b33c",
+    "crates/araphor-data/src/analysis/native/managed/attempts.rs": "827af515bb26b03f091fc72c102a364f093ceac6938b576720ce8bec35a7484c",
+    "crates/araphor-data/src/analysis/native/managed/authority.rs": "6cadcd6a84a7af29d25d3e3c53382a4334213cec190c84feb64ba6b9815da70f",
+    "crates/araphor-data/src/analysis/native/managed/capture.rs": "30f652c20574104ff4a4a33e61b06ebbfbd80dd9e6c76ba0afa061adbe1a6ab6",
+    "crates/araphor-data/src/analysis/native/managed/commit.rs": "9282145001c7d11024cdd3daf585265ddd4badbd2c5f535bf253cc9a75a4e0de",
+    "crates/araphor-data/src/analysis/native/managed/graph/authority.rs": "95200f6e28278e174395a3614883fdab11b6d63c27e79ceb82d75330e4c960b5",
+    "crates/araphor-data/src/analysis/native/managed/graph/cuts.rs": "bca08b6db6473edc94159b7bd195107966cfe0a60ef7e2be5df9a8f47a4861fb",
+    "crates/araphor-data/src/analysis/native/managed/graph/domain.rs": "43abb3a5ad4ad9c7785449f8209cfb87f6649b3d157164aff35a3c68836fd960",
+    "crates/araphor-data/src/analysis/native/managed/graph/mod.rs": "d9dd58bf406cfc07627ce9ab012073b9996bea137cacd452263a9c0c72bdc430",
+    "crates/araphor-data/src/analysis/native/managed/graph/origin.rs": "349cd2e7b51adf3ee8572f4314a9574e6d822cbcdcfe5b788edd0338e228ec93",
+    "crates/araphor-data/src/analysis/native/managed/graph/projection.rs": "4eaf3bf09dfd25c3e8c54bc1382c48ea36dfbc07b39c886fedf510d4f71f31c6",
+    "crates/araphor-data/src/analysis/native/managed/graph/projection/recovery.rs": "2d1d16496a9db1d0982c938a61fc65d58bcc885235c0d2d25bd95b611afee197",
+    "crates/araphor-data/src/analysis/native/managed/graph/publication.rs": "eeeab078019a5859166da55feddb47ef32aeef1590b1fbf7095b6a1f6d92a27f",
+    "crates/araphor-data/src/analysis/native/managed/graph/read.rs": "9dccb06e5c4f90c34d1ebd82ce6a44dbabbee3e0554fd3981468c1d6fcd8a036",
+    "crates/araphor-data/src/analysis/native/managed/graph/recovery.rs": "99d9517d83a9c77fe9ad8d9322c7a0bab181becd77dee4c3c155e9dd2ad1925e",
+    "crates/araphor-data/src/analysis/native/managed/graph/transaction.rs": "0e6672824c0b06166eb99e80ad0a54080af8c9b43900398cb6a02130ba21d4b3",
+    "crates/araphor-data/src/analysis/native/managed/lifecycle.rs": "eaff1a6a6f8a0c77a885d4c393f32052b08137d01b235b547ee5193d1f4292e6",
+    "crates/araphor-data/src/analysis/native/managed/mod.rs": "d19ac50d33c49ce0dd2ab66e1104c2209498bd5e03fc602978991873b8271cda",
+    "crates/araphor-data/src/analysis/native/managed/prepare.rs": "093725662abac33a27ad2d8352dbeec09dc7702e67001b9b719e24ee48fb8781",
+    "crates/araphor-data/src/analysis/native/managed/priors.rs": "9599672651010dfbc72eff9cc05b52413f9c734539ace019b60f98e93e3c7c19",
+    "crates/araphor-data/src/analysis/native/managed/recovery.rs": "1282e61613ee380da784ab9da0f4856e704990ab58603c2acf721162ae974aba",
+    "crates/araphor-data/src/analysis/native/managed/references.rs": "31cbd566283bc3e9b5fbc4866a5fcd2c86234283e183096be1ce7a176f567f3b",
+    "crates/araphor-data/src/analysis/native/managed/result_recovery.rs": "b0858ac185c3c28e6799c9d484810c5491a42a3aa13074fbfce295d3c4c47802",
+    "crates/araphor-data/src/analysis/native/managed/results.rs": "9b8b5f38d586961dcb1bc6682c4edfec5f2be2eacc203e53653e9314b5d1d578",
+    "crates/araphor-data/src/analysis/native/managed/status.rs": "cc14d6cff3985929d443581a8e9f92502e8d3b618ffba39c9f4e5233b12d296a",
+    "crates/araphor-data/src/analysis/native/managed/terminal.rs": "c126ec2338559ca84d769cf8ff77570fc8f02ff3e2710c661b08db6e11dba020",
+    "crates/araphor-data/src/analysis/native/mod.rs": "b6a43c0c6240fc175df0122db32351d23d403b2fc538b66700d4ee9f2f0f38e9",
+    "crates/araphor-data/src/analysis/native/packages/mod.rs": "1ea16f83fc0fa322bcfd7900ff91e3a74a01735b9cabb88dd8cb57a9408ca0b5",
+    "crates/araphor-data/src/analysis/native/revisions.rs": "7ffb4387f55de51236fed2816ee71e9be5b488638fca78b41dd8adfc1015d0fc",
+    "crates/araphor-data/src/analysis/native/source/coverage.rs": "2d19530ef669f284324847e5c4570000cd34467d7b3aa89706a3d7a4c6508ec1",
+    "crates/araphor-data/tests/native_managed.rs": "d14f41aa41b60cb50ad925ac1bac99afcd38116af7563d93e822db94590c363a",
+    "crates/araphor-data/tests/native_managed/attempts.rs": "0cae18468012a001d678811b17828e43f586118f1651c2381c1e1fbf1839dc6d",
+    "crates/araphor-data/tests/native_managed/domain.rs": "b2ad2676ef177ef6d9ba73ae2d2828bc302e584af52aea18914d4b14a6c99916",
+    "crates/araphor-data/tests/native_managed/domain/recovery.rs": "3cd92e1363467f9994bba42f6459240b267728ed024434b66109e4b10c327bc7",
+    "crates/araphor-data/tests/native_managed/graph.rs": "58714cdcfe950761bafe015cd4ebda00d60b2373b3a9cfbfdc83eeed08a08d23",
+    "crates/araphor-data/tests/native_managed/publication.rs": "71ef6a533d72a4f8f92f069627e2993aa69deb677ddf1519e36432ee21876d45",
+    "crates/araphor-data/tests/native_managed/publication/recovery.rs": "eea0f231b07ce6dfc9dc8f1020deaf4e27c7f5f57522119d326dddc82e94b2c4"
+  },
+  "engine_heads": {
+    "fjall": "cceaa84d371165c2f0d4952650543c27fc8e22d9",
+    "lsm-tree": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+  },
+  "focused_tests": {
+    "passed": 70,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 0,
+    "elapsed_s": 39.63346361601725
+  },
+  "production_incident": {
+    "command": [
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/deps/mithril_e2e-97408fba3d2638e8",
+      "--exact",
+      "discovery::packages::required::incident::incremental::follows_incremental_sources",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 15.924691008985974,
+    "source_unchanged": true,
+    "qualification": "shared proof/import helper correctness run; production uses DuckDB; not a paired performance measurement"
+  },
+  "production_binary": {
+    "path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/deps/mithril_e2e-97408fba3d2638e8",
+    "bytes": 2933718936,
+    "sha256": "d5041693f69caca77da8ff4ede4f4d67d40674748c8aca3a46d9565df833b3d5",
+    "profile": {
+      "opt_level": "0",
+      "debuginfo": 2,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    }
+  },
+  "production_data_features": [
+    [
+      "test-fixtures"
+    ]
+  ],
+  "workload_hashes": {
+    "crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs": "9d2ba0f5c12c5040e23313497d02e74bc84c426767222b5e6f7ff00ac17c0f12",
+    "packages/default-definitions/causal.yaml": "ecf71b7b1897f4c3e2739f239db989369316eea5fc2def9acc0de24b952b3cef"
+  },
+  "collector_to_first_durable_ms": [
+    508.97887040722657,
+    817.6688074591065,
+    859.1410378195801
+  ],
+  "public_receipt_ms": [
+    555.0497389999999,
+    907.598246,
+    948.467972
+  ],
+  "whole_test_s": 15.88,
+  "bulk_rows": 16384,
+  "bulk_s": 2.494687651,
+  "format_exit_code": 0,
+  "clippy": {
+    "exit_code": 101,
+    "blocked_by": "unchanged araphor-graph/src/read.rs:124 forbidden unwrap; Data clippy not reached"
+  },
+  "evidence": {
+    "output/araphor-fjall-migration-20261109/native-publication-final-tests.json": "68a39a306a91f311bc3a1283ed25233d73cac911fee4d782f5905b3ec90f8a69",
+    "output/araphor-fjall-migration-20261109/native-publication-production-build.json": "d43f29258ba4b982d4b5a628b507d1dcb62856f5432b38c68a1854460d93fce9",
+    "output/araphor-fjall-migration-20261109/native-publication-production-binary.json": "7176a52716d16b4c47880e31320ad7cf54c4681b58c15cace0213b35079138ed",
+    "output/araphor-fjall-migration-20261109/native-publication-production-incident.json": "c32c16cda11ca7689edd695341a90939116df2102a521c4779dfb2c13cd1af1d",
+    "output/araphor-fjall-migration-20261109/native-publication-production-boundary.json": "a01cb1e97ed7f15d5310ef8daa626514ad598b5a2c0d1fe9456f2d8db9b7aff2",
+    "output/araphor-fjall-migration-20261109/native-publication-clippy.json": "4364028bf7ae61b4e80931988241c26d88959ceeba89de2c1d65016accfd17c5",
+    "output/araphor-fjall-migration-20261109/native-publication-final-tests.log": "eb46a17136fc0494dbcc61e1dd3c0ab12184be1b7ae4b09ce71fffae07080bb7",
+    "output/araphor-fjall-migration-20261109/native-publication-production-build.log": "5d8ebecbbd8c49f7c54eda428b32caa8fddbd251425376c563be4dd9134082f9",
+    "output/araphor-fjall-migration-20261109/native-publication-production-build.jsonl": "3ac40afaeb1278c247beddaa68eeb83ba6665f1f840b23c6af89e9852886bd34",
+    "output/araphor-fjall-migration-20261109/native-publication-production-incident.log": "8960552f9c3f1e9251306746f8cacb87127e0db073a0b17d349f379008c74ed0",
+    "output/araphor-fjall-migration-20261109/native-publication-clippy.log": "24624c3e1b61ed1c972e560d2b85e85bf9df1e425dba68cd551adb383009da6c",
+    "output/araphor-fjall-migration-20261109/native-publication-format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "performance_result": "Not done: no native production candidate or matched gain"
+}

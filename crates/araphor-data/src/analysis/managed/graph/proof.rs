@@ -9,7 +9,62 @@ impl AnalysisStore {
         enabled: bool,
         charge: &mut dyn FnMut(usize, usize) -> Result<()>,
     ) -> Result<()> {
-        let Some(proof) = &record.graph_proof else {
+        record.check_graph_proof(attempt, enabled, charge, |source, charge| {
+            let identity = &source.source;
+            let cut = attempt.capture.revision;
+            let (cpu, cursor, report, floor, length): (u32, u64, u64, u64, Option<u64>) = reader.query_row(
+                "SELECT version.cpu_id,version.contiguous_cursor,version.coverage_revision,
+                    version.retained_floor,octet_length(coverage.report) FROM source_versions version
+                 LEFT JOIN coverage ON coverage.tenant_id=version.tenant_id
+                    AND coverage.stream_key=version.stream_key AND coverage.revision=version.coverage_revision
+                    AND coverage.commit_revision<=?
+                 WHERE version.tenant_id=? AND version.stream_key=? AND version.commit_revision<=?
+                 ORDER BY version.commit_revision DESC LIMIT 1",
+                params![cut,attempt.capture.tenant.as_slice(),identity.key(),cut],
+                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
+            ).context(AnalysisDatabaseSnafu { operation: "read Graph proof coverage receipt" })?;
+            if cpu != source.cpu || report != source.report {
+                return Err(Code::Conflict.error("Graph proof source revision"));
+            }
+            let receipt = crate::AnalysisSourceReceiptV1 {
+                identity: identity.clone(),
+                cpu_id: cpu,
+                contiguous_cursor: cursor,
+                coverage_revision: report,
+                retained_floor: floor,
+            };
+            let body = if let Some(length) = length {
+                let bytes = usize::try_from(length)
+                    .map_err(|_| Code::Limit.error("Graph coverage proof memory"))?;
+                charge(bytes, bytes)?;
+                let body: Vec<u8> = reader.query_row(
+                    "SELECT report FROM coverage WHERE tenant_id=? AND stream_key=? AND revision=? AND commit_revision<=?",
+                    params![attempt.capture.tenant.as_slice(), identity.key(), report, cut], |row| row.get(0),
+                ).context(AnalysisDatabaseSnafu { operation: "read Graph proof coverage report" })?;
+                Some(receipt.decode_coverage(&body, &mut |bytes| charge(0, bytes))?)
+            } else {
+                None
+            };
+            Ok((receipt, body))
+        })
+    }
+}
+
+impl Record {
+    pub(in crate::analysis) fn check_graph_proof(
+        &self,
+        attempt: &Attempt,
+        enabled: bool,
+        charge: &mut dyn FnMut(usize, usize) -> Result<()>,
+        mut load: impl FnMut(
+            &super::super::model::GraphProofSource,
+            &mut dyn FnMut(usize, usize) -> Result<()>,
+        ) -> Result<(
+            crate::AnalysisSourceReceiptV1,
+            Option<crate::CoverageReport>,
+        )>,
+    ) -> Result<()> {
+        let Some(proof) = &self.graph_proof else {
             return Ok(());
         };
         if !enabled
@@ -31,7 +86,7 @@ impl AnalysisStore {
                     .grant
                     .selection
                     .includes_source(&source.source)
-                || !record.witnesses.iter().any(|witness| {
+                || !self.witnesses.iter().any(|witness| {
                     witness.identity
                         == crate::AnalysisStreamIdentityV1::Evidence(source.source.clone())
                 })
@@ -43,40 +98,11 @@ impl AnalysisStore {
             {
                 return Err(Code::Denied.error("Graph proof source"));
             }
-            let cut = attempt.capture.revision;
-            let (cpu, cursor, report, floor, length): (u32, u64, u64, u64, Option<u64>) = reader.query_row(
-                "SELECT version.cpu_id,version.contiguous_cursor,version.coverage_revision,
-                    version.retained_floor,octet_length(coverage.report) FROM source_versions version
-                 LEFT JOIN coverage ON coverage.tenant_id=version.tenant_id
-                    AND coverage.stream_key=version.stream_key AND coverage.revision=version.coverage_revision
-                    AND coverage.commit_revision<=?
-                 WHERE version.tenant_id=? AND version.stream_key=? AND version.commit_revision<=?
-                 ORDER BY version.commit_revision DESC LIMIT 1",
-                params![cut,attempt.capture.tenant.as_slice(),source.source.key(),cut],
-                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
-            ).context(AnalysisDatabaseSnafu { operation: "read Graph proof coverage receipt" })?;
-            if cpu != source.cpu || report != source.report {
+            let (receipt, body) = load(source, charge)?;
+            let report = receipt.coverage_revision;
+            if receipt.cpu_id != source.cpu || report != source.report {
                 return Err(Code::Conflict.error("Graph proof source revision"));
             }
-            let receipt = crate::AnalysisSourceReceiptV1 {
-                identity: source.source.clone(),
-                cpu_id: cpu,
-                contiguous_cursor: cursor,
-                coverage_revision: report,
-                retained_floor: floor,
-            };
-            let body = if let Some(length) = length {
-                let bytes = usize::try_from(length)
-                    .map_err(|_| Code::Limit.error("Graph coverage proof memory"))?;
-                charge(bytes, bytes)?;
-                let body: Vec<u8> = reader.query_row(
-                    "SELECT report FROM coverage WHERE tenant_id=? AND stream_key=? AND revision=? AND commit_revision<=?",
-                    params![attempt.capture.tenant.as_slice(), source.source.key(), report, cut], |row| row.get(0),
-                ).context(AnalysisDatabaseSnafu { operation: "read Graph proof coverage report" })?;
-                Some(receipt.decode_coverage(&body, &mut |bytes| charge(0, bytes))?)
-            } else {
-                None
-            };
             if report != 0 && body.is_none() {
                 return Err(Code::Missing.error("Graph proof coverage report"));
             }

@@ -365,7 +365,7 @@ lookups/effects, collection, and production routing remain **Not done**.
   -> [ManagedSpec::validate](../../crates/araphor-data/src/analysis/managed/model.rs) Data checks the actual manifest and destination contract.
   -> [ManagedSpec::check_images](../../crates/araphor-data/src/analysis/managed/contract.rs) Data checks the exact retained definition, image, export, and implementation pins.
   -> [ManagedSpec::graph_declarations](../../crates/araphor-data/src/analysis/managed/graph/admission.rs) Data reads the Graph declarations from the called package models.
-  -> [DataWrite::admit_managed_graph](../../crates/araphor-data/src/analysis/native/managed/graph.rs) Data stages new opaque Graph mappings and calls the generic Graph installer in the same transaction.
+  -> [DataWrite::admit_managed_graph](../../crates/araphor-data/src/analysis/native/managed/graph/mod.rs) Data stages new opaque Graph mappings and calls the generic Graph installer in the same transaction.
   -> [DataWrite::admit_managed](../../crates/araphor-data/src/analysis/native/managed/admission.rs) A new instance requires its exact images to remain installed.
   -> Data stages an immutable specification and admission scope, the current authority and lifecycle, and empty call heads.
   -> The callback must succeed before Data commits.
@@ -415,14 +415,14 @@ CAS, long names, tenant isolation, host leases, raw interleaving, historical
 reads, compaction, reopen, and missing-record rejection. One case uses the
 current DuckDB owner to check the shared validation helpers.
 
-Result: **Done for native managed admission and ordinary start/stop**.
-Renewal, candidate version admission, removal, failure/resume, captured attempts,
-results, checkpoints, references, and consumed progress remain **Not done**.
-These APIs require the real attempt and result owners. This change supplies no
-placeholder pending-attempt check. Production activation, CDC routing, package
-execution, notification batching, and the incident latency targets remain
-**Not done**. Graph installation checks do not qualify complete layer/member
-recovery. Configured capacity, retention, and backup also remain **Not done**.
+Result at admission qualification: **Done for native managed admission and
+ordinary start/stop**. Later attempt and result owners are below. Read
+[native selected-result publication](#native-selected-result-publication) for
+actual checkpoints, references, and consumed progress. Renewal, candidate version
+admission, removal, production activation, CDC routing, package execution,
+notification batching, and the incident latency targets remain **Not done**.
+Graph installation checks alone do not qualify complete layer/member recovery.
+Configured capacity, retention, and backup also remain **Not done**.
 
 ## Native Arrow source extraction
 
@@ -470,9 +470,10 @@ references. They check exact native source revisions separately.
 This API currently reads Evidence, coverage, and the admitted context table
 families. A requested unported result, trace, Graph-state, or notification
 family returns `Unsupported`. Native retention has no mutation API yet, so
-this read does not qualify expired or removed raw ranges. Prior result restore,
-atomic results/progress, production
-provider binding, and original-log subscription routing remain **Not done**.
+this read does not qualify expired or removed raw ranges. Prior-result restore
+and the atomic Selected boundary are now described
+[below](#native-selected-result-publication). Production provider binding and
+original-log subscription routing remain **Not done**.
 
 ## Native capture and terminal attempts
 
@@ -481,7 +482,8 @@ Read the owners in this order:
 1. [capture.rs](../../crates/araphor-data/src/analysis/native/managed/capture.rs)
    captures one Data view, reads actual Arrow tables, and uses the existing
    `ManagedCapture::seal` and source-frame seal. It reads the saved call heads
-   and completion head. An unported result or source parent returns `Unsupported`.
+   and completion head. The current owner loads actual saved call checkpoints
+   and successful source parents as described below.
 2. [attempts.rs](../../crates/araphor-data/src/analysis/native/managed/attempts.rs)
    checks authority, lifecycle, completion, input revisions, and retained
    references. Registration stages the immutable request/capture and pending
@@ -558,5 +560,62 @@ edited identities, final rows, and cleared owners without a storage write.
 
 Read the [tests](../../crates/araphor-graph/src/native/tests/validation.rs) and
 [qualification](../research/results/araphor-native-graph-validation-2026-11-09.md)
-for the exact check scope. Data historical receipts, successful publication,
-production activation, and incident latency remain **Not done**.
+for the exact check scope. Data's historical receipt and Selected publication
+checks are below. Production activation and incident latency remain **Not done**.
+
+## Native selected-result publication
+
+Read these owners in order:
+
+1. [prepare.rs](../../crates/araphor-data/src/analysis/native/managed/prepare.rs)
+   checks the live attempt, actual SDK returns, source attribution, change bases,
+   context facts, and memory reservations. The shared packet and domain checks
+   keep the current production contracts.
+2. [graph/transaction.rs](../../crates/araphor-data/src/analysis/native/managed/graph/transaction.rs)
+   holds each package's journal. A dependent call can read an earlier journal
+   from the same attempt. The package selects mutations. No package commits.
+3. [graph/publication.rs](../../crates/araphor-data/src/analysis/native/managed/graph/publication.rs)
+   prepares actual journals in manifest order. It checks consumed predecessor
+   journals, historical read receipts, canonical evidence, and disclosure floors.
+   Generic Araphor Graph prepares and stages its own records.
+4. [commit.rs](../../crates/araphor-data/src/analysis/native/managed/commit.rs)
+   rechecks the attempt and context authority under Data's writer. One batch
+   saves the receipt, call and selected records, checkpoints, context imports,
+   raw/context/dependency references, Graph changes, findings, call heads,
+   completion, and consumed progress.
+5. [DataWrite::commit_published](../../crates/araphor-data/src/analysis/native/mod.rs)
+   commits exact native stamps and publishes the matching Data view. It promotes
+   the prepared execution cache before it sends the availability wake. This
+   watch is not original-log subscription routing.
+
+[graph/projection.rs](../../crates/araphor-data/src/analysis/native/managed/graph/projection.rs)
+stores references to native Graph properties. It checks public relationship
+and finding values across writers in each affected group. It stores no second
+property body. Finding tokens stay stable across equal values and producer
+removal. Current producer authority comes from the live group at the saved
+publication cut; a token's original producer is not that authority.
+
+[graph/cuts.rs](../../crates/araphor-data/src/analysis/native/managed/graph/cuts.rs)
+saves the actual writer layers and previous publication. The native layer ID
+is the actual call-result dictionary ID. Opening Data revisions and native
+commit revisions are separate coordinates.
+
+[priors.rs](../../crates/araphor-data/src/analysis/native/managed/priors.rs)
+loads actual saved checkpoints and successful source parents. Successful
+consumed progress stays separate from later terminal completion. Historical
+capture checks read the saved Data cut before an empty or rebuild return.
+
+Recovery checks actual receipts and call heads, exact result/checkpoint/reference
+sets, derived import receipts, captured source proof receipts, Graph origins,
+consumed rows, public-value groups, and publication chains. Generic Graph checks
+the current snapshot and all retained property chunks. Data checks referenced
+historical members at their opening or capture cuts. It does not scan the whole
+Graph again at every historical revision.
+
+This boundary supports `ManagedDestination::Selected`. Graph and Profile
+destination owners and source-publication selection remain unported. A retained
+Graph return is replay-only in the existing caller; native live publication
+rejects it before staging. The live evaluator supplies a fresh journal.
+Configured capacity, retention, backup, production providers, original-log
+subscription routing, notification batches, and production cutover remain
+**Not done**. This implementation does not establish an incident speedup.

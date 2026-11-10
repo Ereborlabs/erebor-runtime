@@ -85,7 +85,7 @@ impl DataView {
             }
         }
         let mut active = BTreeMap::new();
-        let mut calls = BTreeSet::new();
+        let mut calls = BTreeMap::new();
         for entry in self.snapshot.prefix(b"\0data/J") {
             let (key, _) = entry.context(NativeStorageSnafu {
                 operation: "validate managed instances",
@@ -127,16 +127,19 @@ impl DataView {
                     .build()
                 })?;
             if instance.progress != 0 {
-                return NativeStateSnafu {
-                    field: "managed completed attempt",
-                }
-                .fail();
+                self.managed_source_at(&instance, &control)?
+                    .ok_or_else(|| {
+                        crate::PackageErrorCodeV1::Missing.error("managed completed attempt")
+                    })?;
             }
             if instance.running && !instance.removed {
                 active.insert(Records::key(b'B', id), instance.lifecycle);
             }
             for call in instance.spec.manifest.calls.keys() {
-                calls.insert(InstanceRecord::call_key(id, *call));
+                calls.insert(
+                    InstanceRecord::call_key(id, *call),
+                    (instance.clone(), *call),
+                );
             }
         }
         if !owners.is_empty() {
@@ -153,12 +156,12 @@ impl DataView {
             if key.len() == 31 {
                 continue;
             }
-            if !calls.remove(key.as_ref()) {
+            let Some((instance, call)) = calls.remove(key.as_ref()) else {
                 return NativeStateSnafu {
                     field: "managed call manifest",
                 }
                 .fail();
-            }
+            };
             let bytes = Records::payload(&key, |key| Records::read(key, &self.snapshot))?
                 .ok_or_else(|| {
                     NativeStateSnafu {
@@ -167,11 +170,31 @@ impl DataView {
                     .build()
                 })?;
             let row: CallHead = Records::decode(&bytes)?;
-            if row.revision != 0 || row.result.is_some() {
-                return NativeStateSnafu {
-                    field: "managed call receipt",
+            match row.result {
+                Some(result) if row.revision != 0 && row.revision <= instance.progress => {
+                    let (_, stored, owner) = self.result_owner(
+                        instance.spec.tenant,
+                        &result,
+                        &control,
+                        &mut |_| Ok(()),
+                    )?;
+                    let super::results::ResultBody::Call(record) = stored.body else {
+                        return Err(
+                            crate::PackageErrorCodeV1::Invalid.error("managed call head kind")
+                        );
+                    };
+                    if stored.revision != row.revision
+                        || record.call != call
+                        || record.instance != instance.spec.id
+                        || !instance.spec.same_call(&owner.1.spec, call)
+                    {
+                        return Err(
+                            crate::PackageErrorCodeV1::Invalid.error("managed call head receipt")
+                        );
+                    }
                 }
-                .fail();
+                None if row.revision == 0 => {}
+                _ => return Err(crate::PackageErrorCodeV1::Invalid.error("managed call receipt")),
             }
         }
         if !calls.is_empty() {

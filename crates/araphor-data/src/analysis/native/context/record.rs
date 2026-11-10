@@ -8,9 +8,9 @@ use crate::{
 };
 
 #[derive(Deserialize)]
-pub(super) struct ContextRecord {
-    pub(super) version: AnalysisContextVersionV1,
-    pub(super) revision: u64,
+pub(in crate::analysis::native) struct ContextRecord {
+    pub(in crate::analysis::native) version: AnalysisContextVersionV1,
+    pub(in crate::analysis::native) revision: u64,
 }
 
 impl ContextRecord {
@@ -25,7 +25,10 @@ impl ContextRecord {
         .context(ManagedEncodingSnafu)
     }
 
-    pub(super) fn check(record: &ContextRecord, key: &AnalysisContextKeyV1) -> Result<()> {
+    pub(in crate::analysis::native) fn check(
+        record: &ContextRecord,
+        key: &AnalysisContextKeyV1,
+    ) -> Result<()> {
         if !record.version.valid() || record.version.key != *key || record.revision == 0 {
             return NativeStateSnafu {
                 field: "context record identity",

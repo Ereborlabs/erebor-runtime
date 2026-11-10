@@ -34,7 +34,10 @@ mod records;
 mod revisions;
 mod source;
 
-pub use managed::{ManagedGraph, ManagedLease};
+pub use managed::{
+    GraphPublication, ManagedCommit, ManagedGraph, ManagedGraphJournal, ManagedGraphTransaction,
+    ManagedLease, ManagedReturn, PreparedManagedCommit,
+};
 
 pub struct NativeStore {
     database: SingleWriterTxDatabase,
@@ -230,6 +233,8 @@ impl NativeStore {
             revision,
             _lease: lease,
         };
+        store.validate_result_recovery()?;
+        store.validate_graph_recovery()?;
         store.recover_managed_startup()?;
         Ok(store)
     }
@@ -451,7 +456,15 @@ impl<'a> DataWrite<'a> {
         self.transaction.rollback();
     }
 
-    pub fn commit(mut self, stamps: impl IntoIterator<Item = Vec<u8>>) -> Result<Option<Commit>> {
+    pub fn commit(self, stamps: impl IntoIterator<Item = Vec<u8>>) -> Result<Option<Commit>> {
+        self.commit_published(stamps, || {})
+    }
+
+    fn commit_published(
+        mut self,
+        stamps: impl IntoIterator<Item = Vec<u8>>,
+        published: impl FnOnce(),
+    ) -> Result<Option<Commit>> {
         let stamps = stamps.into_iter().collect::<Vec<_>>();
         if !self.dirty && stamps.is_empty() {
             return Ok(None);
@@ -475,7 +488,7 @@ impl<'a> DataWrite<'a> {
                 });
             }
         };
-        let published = (|| {
+        let visible = (|| {
             let snapshot =
                 self.store
                     .branch
@@ -509,10 +522,11 @@ impl<'a> DataWrite<'a> {
             })? = Arc::new(view);
             Ok(())
         })();
-        if let Err(error) = published {
+        if let Err(error) = visible {
             self.store.ready.store(false, Ordering::Release);
             return Err(error);
         }
+        published();
         self.store.revision.send_replace(self.revision);
         Ok(Some(receipt))
     }

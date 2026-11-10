@@ -17,7 +17,7 @@ fn identity() -> EvidenceIntakeIdentityV1 {
     }
 }
 
-fn append(store: &NativeStore, cursor: u64) -> araphor_data::Result<()> {
+pub(super) fn append(store: &NativeStore, cursor: u64) -> araphor_data::Result<()> {
     let framed_records = Vec::<u8>::try_from(&EvidenceRecord {
         task_cookie: cursor,
         observed_boottime_ns: cursor,
@@ -37,7 +37,7 @@ fn append(store: &NativeStore, cursor: u64) -> araphor_data::Result<()> {
     Ok(())
 }
 
-fn context(revision: u64) -> AnalysisContextVersionV1 {
+pub(super) fn context(revision: u64) -> AnalysisContextVersionV1 {
     AnalysisContextVersionV1 {
         key: AnalysisContextKeyV1 {
             tenant_id: [1; 16],
@@ -53,7 +53,7 @@ fn context(revision: u64) -> AnalysisContextVersionV1 {
     }
 }
 
-fn capture(
+pub(super) fn capture(
     store: &NativeStore,
     instance: &ManagedInstance,
     follow: bool,
@@ -109,7 +109,7 @@ fn capture_completed(
     )
 }
 
-fn request(id: &str, frontier: bool) -> ManagedRequest {
+pub(super) fn request(id: &str, frontier: bool) -> ManagedRequest {
     ManagedRequest {
         id: id.into(),
         time_utc_ns: 1000,
@@ -518,7 +518,7 @@ fn recovery_rejects_missing_attempt_indexes_and_old_format() -> TestResult {
     Ok(())
 }
 
-fn field<'a>(
+pub(super) fn field<'a>(
     value: &'a mut serde_value::Value,
     names: &[&str],
 ) -> Result<&'a mut serde_value::Value, Box<dyn std::error::Error>> {

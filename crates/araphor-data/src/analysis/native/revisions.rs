@@ -1,6 +1,7 @@
 use snafu::ResultExt as _;
 
-use super::{DataWrite, NativeStore};
+use super::{records::Records, DataView, DataWrite, NativeStore};
+use crate::analysis::raw::RawIndex;
 use crate::{AnalysisReadControl, NativeStateSnafu, NativeStorageSnafu, Result};
 
 impl NativeStore {
@@ -50,26 +51,39 @@ impl DataWrite<'_> {
         sources: &[(String, u64)],
         control: &AnalysisReadControl,
     ) -> Result<bool> {
+        NativeStore::check_sources(
+            sources,
+            &self.raw,
+            self.revision,
+            |key| Records::staged(key, &self.transaction),
+            control,
+        )
+    }
+}
+
+impl NativeStore {
+    fn check_sources(
+        sources: &[(String, u64)],
+        raw: &RawIndex,
+        revision: u64,
+        mut get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        control: &AnalysisReadControl,
+    ) -> Result<bool> {
         for (name, captured) in sources {
             control.check()?;
-            let saved = self
-                .transaction
-                .get(NativeStore::relation_key(name))
-                .context(NativeStorageSnafu {
-                    operation: "read current relation revision",
-                })?
-                .map(|bytes| NativeStore::number(&bytes))
+            let saved = get(&Self::relation_key(name))?
+                .map(|bytes| Self::number(&bytes))
                 .transpose()?
                 .unwrap_or(0);
-            if saved > self.revision {
+            if saved > revision {
                 return NativeStateSnafu {
                     field: "relation revision bound",
                 }
                 .fail();
             }
             let raw = match name.as_str() {
-                "events" | "source_receipts" => self.raw.evidence_revision,
-                "source_bindings" => self.raw.binding_revision,
+                "events" | "source_receipts" => raw.evidence_revision,
+                "source_bindings" => raw.binding_revision,
                 _ => 0,
             };
             if saved.max(raw) > *captured {
@@ -77,5 +91,21 @@ impl DataWrite<'_> {
             }
         }
         Ok(true)
+    }
+}
+
+impl DataView {
+    pub(super) fn sources_current(
+        &self,
+        sources: &[(String, u64)],
+        control: &AnalysisReadControl,
+    ) -> Result<bool> {
+        NativeStore::check_sources(
+            sources,
+            &self.raw,
+            self.metadata_revision,
+            |key| Records::read(key, &self.snapshot),
+            control,
+        )
     }
 }

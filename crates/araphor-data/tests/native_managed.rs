@@ -15,6 +15,12 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[path = "native_managed/attempts.rs"]
 mod attempts;
+#[path = "native_managed/domain.rs"]
+mod domain;
+#[path = "native_managed/graph.rs"]
+mod graph;
+#[path = "native_managed/publication.rs"]
+mod publication;
 
 struct Fixture {
     spec: ManagedSpec,
@@ -59,6 +65,17 @@ impl Fixture {
                 ],
             });
         }
+        Self::with_model(store, tenant, id, model)
+    }
+
+    fn with_model(
+        store: &NativeStore,
+        tenant: [u8; 16],
+        id: &str,
+        model: sdk::Model,
+    ) -> araphor_data::Result<Self> {
+        let graph = model.graph.is_some();
+        let schema = model.outputs[0].schema.clone();
         let artifact = PackageArtifactV1 {
             descriptor: sdk::Package::new(
                 if graph {

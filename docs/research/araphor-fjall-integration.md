@@ -53,10 +53,18 @@ frontier settlement. Read the
 [attempt qualification](results/araphor-native-attempts-2026-11-09.md).
 Shared publication validation now passes the unchanged incident. Read the
 [shared validation qualification](results/araphor-shared-publication-2026-11-09.md).
-This checks the DuckDB production path. Native successful publication remains
-**Not done**; no matched performance gain is established.
-Result publication, prior-result restore, production providers, original-log
-routing, and indexed source-header maintenance remain **Not done**.
+That qualification checks the DuckDB production path. At that source state,
+native successful publication was **Not done**; no matched gain was established.
+The optional native Selected boundary now saves actual results, checkpoints,
+Graph changes, findings, references, and consumed progress in one Data batch.
+It restores actual priors and checks captured receipts and Graph authority on
+reopen. Seventy focused Data tests pass. The unchanged production incident also
+passes for the shared proof/import checks. Read the
+[publication qualification](results/araphor-native-publication-2026-11-09.md).
+This still uses DuckDB in production and establishes no native speedup.
+Other destination owners, production providers, original-log routing, indexed
+source-header maintenance, notifications, capacity, retention, backup, cutover,
+and removal remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

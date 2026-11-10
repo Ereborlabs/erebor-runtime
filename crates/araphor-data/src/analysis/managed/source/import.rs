@@ -15,6 +15,10 @@ pub(in crate::analysis) struct PreparedDerived {
 }
 
 impl PreparedDerived {
+    pub(in crate::analysis) fn has_origins(&self) -> bool {
+        !self.union.origins.is_empty()
+    }
+
     pub(in crate::analysis) fn values(
         &self,
         call: u64,
@@ -167,6 +171,14 @@ impl PreparedImport {
 }
 
 impl ImportedSource {
+    pub(in crate::analysis) fn resolved(&self, call: u64) -> &[AnalysisContextRefV1] {
+        self.resolved.get(&call).map_or(&[], Vec::as_slice)
+    }
+
+    pub(in crate::analysis) fn selected_imports(&self) -> &[AnalysisContextRefV1] {
+        &self.union.resolved
+    }
+
     pub(in crate::analysis) fn source_step(
         &self,
         prepared: &mut PreparedDerived,
