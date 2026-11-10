@@ -804,6 +804,48 @@ The [notification tests](../../crates/araphor-data/tests/native_notification.rs)
 cover batch rollback, retries, immutable subjects, pending attempts, lookup
 changes, tenant scope, long finding IDs, historical inserts, and a missing index.
 The [qualification](../research/results/araphor-native-notification-2026-11-10.md)
-records the exact checks. Native finding provenance, prepared notification
+records the exact checks. At that qualification, native finding provenance, prepared notification
 reads, delivery batches, durable notification consumption, retention, backup,
-production binding, DuckDB removal, and both incident targets remain **Not done**.
+production binding, DuckDB removal, and both incident targets were **Not done**.
+
+## Native finding provenance reads
+
+This extension follows `4b5230cf5`. It supplies native finding batches and
+their retained provenance. Production notification preparation still uses
+DuckDB. The native preparation and delivery callers remain **Not implemented**.
+
+[NativeStore::graph_finding_batch](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs) A caller requests findings by publication and finding ID
+  -> [DataView::managed_graph_owner](../../crates/araphor-data/src/analysis/native/managed/graph/cuts.rs) Data checks the saved Selected result and publication owner.
+  -> [FindingRead::rows](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs) Data resolves only requested groups and properties at that publication cut.
+  -> [View::member](../../crates/araphor-graph/src/native/view.rs) Araphor Graph opens each actual member at its selected writer cut.
+  -> [FindingRead::producer](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs) Data checks the opening producer, actual call result, attempt, definition version, and exact Selected receipt.
+  -> [DataView::check_result_pins](../../crates/araphor-data/src/analysis/native/managed/references/read.rs) Data checks saved evidence references against original raw metadata and expiry.
+
+[FindingRead::basis](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/provenance.rs) Data collects the finding's evidence
+  -> [FindingBasis::observe](../../crates/araphor-data/src/analysis/managed/graph/provenance/basis.rs) The shared accumulator adds producer witnesses and Graph proof.
+  -> [FindingRead::parents](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/provenance.rs) Data follows actual saved read rows and producer references to strictly older members.
+  -> [FindingBasis::parents](../../crates/araphor-data/src/analysis/managed/graph/provenance/basis.rs) The shared accumulator rejects uncovered evidence and queues parent evidence.
+  -> [DataView::context_record](../../crates/araphor-data/src/analysis/native/context/record.rs) Data loads each referenced immutable context once through its known ID.
+  -> [DataView::fact_record](../../crates/araphor-data/src/analysis/native/context/facts.rs) Data checks compact fact association against the same context and fact index.
+  -> [FindingBasis::context](../../crates/araphor-data/src/analysis/managed/graph/provenance/basis.rs) The shared accumulator selects related context references and rejects conflicting revisions.
+  -> [FindingBasis::finish](../../crates/araphor-data/src/analysis/managed/graph/provenance/basis.rs) Data returns the validated evidence, context references, and Graph revision.
+
+`FindingRead` owns one captured view, cancellation control, allocation charges,
+and local producer and Selected caches. Its lifetime ends with the batch.
+The caches contain no durable state. The Selected cache keeps the exact
+revision, instance, and attempt. The native reader uses no canonical token to
+select a producer. No new Graph API, durable index, or payload archive is added.
+
+The [committed tests](../../crates/araphor-data/tests/native_managed/domain/findings.rs)
+exercise the public native batch API. A package uses the supported Graph read
+and update APIs to write a finding without new raw inputs. The test checks the
+new member's opening revision, empty producer witnesses, and exact saved parent
+rows and references. The batch reconstructs the evidence after compaction and
+restart. Further cases reject damaged references, missing coverage, missing
+Selected results, and a receipt rebound to a different valid Selected result.
+The existing expired-reference read behavior stays unchanged.
+
+Read the [qualification](../research/results/araphor-native-provenance-2026-11-10.md)
+for the source hashes and exact checks. Native notification preparation,
+production binding, cutover, DuckDB removal, and both incident targets remain
+**Not done**.

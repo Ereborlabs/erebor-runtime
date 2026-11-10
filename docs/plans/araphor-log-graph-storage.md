@@ -228,10 +228,19 @@ context pages, and checked batch writes. The batch retains each immutable
 subject and pending-attempt version. Historical inserts do not change current
 lookup membership. Read the
 [notification storage qualification](../research/results/araphor-native-notification-2026-11-10.md).
-Result: **Done for optional native notification storage**. Native finding
+Result: **Done for optional native notification storage**. At that qualification, native finding
 provenance, prepared notification reads, production delivery batches, durable
 notification consumption, retention, backup, cutover, DuckDB removal, and both
-incident targets remain **Not done**.
+incident targets were **Not done**.
+
+Native finding batches now resolve requested finding groups at saved
+publication cuts. Actual opening producers and saved parent reads supply
+evidence and context through one shared accumulator. One hundred focused
+Data cases pass. Read the
+[provenance qualification](../research/results/araphor-native-provenance-2026-11-10.md).
+Result: **Done for optional native finding provenance reads**. Native
+notification preparation, delivery batches, production binding, retention,
+backup, cutover, DuckDB removal, and both incident targets remain **Not done**.
 
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the

@@ -98,10 +98,17 @@ Native notification storage now supplies indexed finding/concern lookups,
 ordered context pages, and checked batches of immutable versions. Historical
 inserts and exact retries preserve current lookup membership. Read the
 [notification storage qualification](results/araphor-native-notification-2026-11-10.md).
-Result: **Done for optional native notification storage**. Finding provenance,
+Result: **Done for optional native notification storage**. At that qualification, finding provenance,
 prepared notification reads, production delivery batches, durable notification
 consumption, retention, backup, cutover, DuckDB removal, and both incident
-targets remain **Not done**.
+targets were **Not done**.
+Native finding batches now read requested groups at saved publication cuts.
+They use actual opening producers, retained historical parents, and one shared
+witness, proof, and context accumulator. One hundred focused Data cases pass.
+Read the [provenance qualification](results/araphor-native-provenance-2026-11-10.md).
+Result: **Done for optional native finding provenance reads**. Native
+notification preparation, delivery batches, production binding, retention,
+backup, cutover, DuckDB removal, and both incident targets remain **Not done**.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

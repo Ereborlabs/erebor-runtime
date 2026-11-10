@@ -9,13 +9,24 @@ impl DataView {
         input: &AnalysisContextVersionV1,
         get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
     ) -> Result<()> {
-        let saved = Records::payload(&Records::key(b'K', id), get)?
+        Self::fact_record(id, input, get, &mut |_| Ok(())).map(|_| ())
+    }
+
+    pub(in crate::analysis::native) fn fact_record(
+        id: u64,
+        input: &AnalysisContextVersionV1,
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<FactRecord>> {
+        let saved = Records::charged_payload(&Records::key(b'K', id), get, charge)?
             .map(|bytes| Records::decode::<FactRecord>(&bytes))
             .transpose()?;
-        if saved != FactRecord::from_context(input)? {
+        charge(input.body.len().saturating_mul(8))?;
+        let expected = FactRecord::from_context(input)?;
+        if saved != expected {
             return Err(Code::Invalid.error("canonical fact index"));
         }
-        Ok(())
+        Ok(expected)
     }
 }
 

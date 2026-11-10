@@ -30,6 +30,7 @@ pub(in crate::analysis) mod domain;
 pub(in crate::analysis) mod projection;
 mod proof;
 mod provenance;
+pub(in crate::analysis) use provenance::{FindingBasis, FindingOrigin};
 mod publication;
 mod read;
 mod recovery;

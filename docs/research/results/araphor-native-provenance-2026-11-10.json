@@ -1,0 +1,328 @@
+{
+  "status": "Done for optional native finding provenance reads; production preparation, delivery batches, durable notification consumption, cutover, and latency Not done",
+  "parent_commit": "4b5230cf58aa2d37e5f472deb747efff4a907078",
+  "engine_commits": {
+    "fjall": "cceaa84d371165c2f0d4952650543c27fc8e22d9",
+    "lsm-tree": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+  },
+  "native_format": 4,
+  "tests": {
+    "passed": 100,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 0,
+    "elapsed_seconds": 24.303441968999323,
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "araphor-data",
+      "--features",
+      "native-store,test-fixtures",
+      "--test",
+      "native_notification",
+      "--test",
+      "native_inputs",
+      "--test",
+      "native_extraction",
+      "--test",
+      "native_context",
+      "--test",
+      "native_managed",
+      "--test",
+      "native_packages",
+      "--test",
+      "native_raw",
+      "--test",
+      "native_store",
+      "--test",
+      "raw_index",
+      "--test",
+      "store_schema",
+      "--config",
+      "/tmp/araphor-storage-release-override.toml",
+      "--",
+      "--nocapture"
+    ],
+    "sources_unchanged": true
+  },
+  "format": {
+    "command": [
+      "rustfmt",
+      "--check",
+      "--edition",
+      "2021",
+      "--config",
+      "skip_children=true",
+      "crates/araphor-data/src/analysis/managed/graph.rs",
+      "crates/araphor-data/src/analysis/managed/graph/provenance.rs",
+      "crates/araphor-data/src/analysis/managed/graph/provenance/basis.rs",
+      "crates/araphor-data/src/analysis/native/context/facts.rs",
+      "crates/araphor-data/src/analysis/native/context/record.rs",
+      "crates/araphor-data/src/analysis/native/managed/graph/projection.rs",
+      "crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs",
+      "crates/araphor-data/src/analysis/native/managed/graph/projection/findings/provenance.rs",
+      "crates/araphor-data/src/analysis/native/managed/references.rs",
+      "crates/araphor-data/src/analysis/native/managed/references/read.rs",
+      "crates/araphor-data/tests/native_managed/domain.rs",
+      "crates/araphor-data/tests/native_managed/domain/findings.rs"
+    ],
+    "exit_code": 0
+  },
+  "feature_off": {
+    "command": [
+      "cargo",
+      "check",
+      "--offline",
+      "-p",
+      "araphor-data",
+      "--lib",
+      "--no-default-features",
+      "--config",
+      "/tmp/araphor-storage-release-override.toml"
+    ],
+    "exit_code": 0
+  },
+  "build_override": {
+    "text": "[target.x86_64-unknown-linux-gnu.duckdb]\nrustc-link-lib = [\"static=duckdb\", \"stdc++\"]\nrustc-link-search = [\"native=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\"]\nrustc-env = { OUT_DIR = \"/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/release/build/libduckdb-sys-e073672aa6bffaa9/out\" }\n",
+    "sha256": "51a748209a8ccb834096f372662e0fa36788d3eb94b1fd7cf7e2461ce49e0c92"
+  },
+  "source_sha256": {
+    "crates/araphor-data/src/analysis/managed/graph.rs": "b732621c2caea474243f1abfa58af49e4a60bc3b424940a7b76682e6cbaf7171",
+    "crates/araphor-data/src/analysis/managed/graph/provenance.rs": "1bffc69d94008813130d9e84b3f3de4ded6378fbb25a2080dff28e8f47bba543",
+    "crates/araphor-data/src/analysis/managed/graph/provenance/basis.rs": "de258f51715e1bc220757d2b1d4ce7c6dc5bea7a90c4c5b2b057a9e7a15af20b",
+    "crates/araphor-data/src/analysis/native/context/facts.rs": "508ccaeaa9213c2f389c40a57d34584dcfb065c1c7a3a02ad990063eb3be3a30",
+    "crates/araphor-data/src/analysis/native/context/record.rs": "c4f32659bafc16295815070fb66eead27543c18f7709f3fd909cb6eeb2302bde",
+    "crates/araphor-data/src/analysis/native/managed/graph/projection.rs": "76b390153bc9daa9e2f0ad06bde4aaf46b0767e10a8bf76d1eea14132fd5fdd6",
+    "crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs": "24774afe863e312ef59cabc8f4facc430186f491b1c0f4d935c6c7e97d6bd5c1",
+    "crates/araphor-data/src/analysis/native/managed/graph/projection/findings/provenance.rs": "233f3eceb6065f3c09ad456fa3320b1cb9e5025ca0293d4d11583a064c64a18a",
+    "crates/araphor-data/src/analysis/native/managed/references.rs": "244cdabec2eb6dc9e3e416dcdcdf984ace62eeb635048f8bbac720e9432d63f3",
+    "crates/araphor-data/src/analysis/native/managed/references/read.rs": "06bca2fb10c934ec4f76879a6f728a5e89cfa9e3ee3f06dd28f88a8e210da466",
+    "crates/araphor-data/tests/native_managed/domain.rs": "0d8317e853b5ea47913a2fff9fa4fa419d3a547b9c1ce8f6524c41c87a3d6ea5",
+    "crates/araphor-data/tests/native_managed/domain/findings.rs": "b548331325d39aefc11e25c2ed81af5b11257b4a6ec1849811c64ea4bf46c98d"
+  },
+  "evidence_sha256": {
+    "output/araphor-fjall-migration-20261110/native-provenance-tests.json": "594d58679bd94c9fd9e7b446b9dad95ed8613a9faaec2554e1922dac8683e2dc",
+    "output/araphor-fjall-migration-20261110/native-provenance-tests.log": "006d4181e5aa3d67f9dbc1c90d97bcde4452b4ad3cd5159b00d1dff04e75619a",
+    "output/araphor-fjall-migration-20261110/native-provenance-format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "output/araphor-fjall-migration-20261110/native-provenance-feature-off.log": "f96a67ea3daa5bda68422ef797950e3debb8bff606458df564257f27017cd57e",
+    "output/araphor-fjall-migration-20261110/native-provenance-production-incident.json": "bec6454c4fdcbdd91a5b2d69a3c335653474070f0d09fad1f192551706dfb209",
+    "output/araphor-fjall-migration-20261110/native-provenance-production-incident.log": "531740d493403778eefa8adf57526a8dff773c9a5e9c60140547bf302e9e848c",
+    "output/araphor-fjall-migration-20261110/native-provenance-production-boundary.json": "fe55e19b2ca45bfb3886b5a3dd3a234adccfe1fd27a5f31b481b281df2b3ca6b",
+    "output/araphor-fjall-migration-20261110/native-provenance-incident-build.jsonl": "6e8903e767af9116d95de3cf88a8d3b2349fc58fa7fed08350af867ea8a9bcba",
+    "output/araphor-fjall-migration-20261110/native-provenance-incident-build.log": "dc53035f33e00a7ec0267d33b091ed8781ddf35a78408f02c5f12ab135cbd971",
+    "output/araphor-fjall-migration-20261110/native-provenance-sandbox-incident.json": "588d11707068b75481988ed3a2ffd18fe7878933aecdf4c5f0318ec39d617db9",
+    "output/araphor-fjall-migration-20261110/native-provenance-sandbox-incident.log": "99aa62bcbd848215121eef3c880086f37bae9243ef1117f41105f8b3872e42fe"
+  },
+  "workload_sha256": {
+    "crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs": "9d2ba0f5c12c5040e23313497d02e74bc84c426767222b5e6f7ff00ac17c0f12",
+    "packages/default-definitions/causal.yaml": "ecf71b7b1897f4c3e2739f239db989369316eea5fc2def9acc0de24b952b3cef"
+  },
+  "performance_claim": null,
+  "production_incident_rerun": true,
+  "full_ci_run": false,
+  "production_incident": {
+    "build_command": [
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "mithril-e2e",
+      "--lib",
+      "--no-run",
+      "--message-format=json",
+      "--config",
+      "/tmp/araphor-storage-release-override.toml"
+    ],
+    "build_exit_code": 0,
+    "build_elapsed_s": 341.8114955280007,
+    "binary": {
+      "path": "target/debug/deps/mithril_e2e-4ed82c8b5b8575cb",
+      "bytes": 3276058088,
+      "sha256": "57468f0ccd7b382f7a0ce01976a3f78c77300af8929308dcf88787e9843f4277",
+      "profile": {
+        "opt_level": "0",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "features": []
+    },
+    "command": [
+      "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/deps/mithril_e2e-4ed82c8b5b8575cb",
+      "--exact",
+      "discovery::packages::required::incident::incremental::follows_incremental_sources",
+      "--nocapture"
+    ],
+    "rust_log": "info,araphor_data=debug,araphor_analysis=debug,mithril_control=debug,araphor_query=debug",
+    "exit_code": 0,
+    "elapsed_s": 12.247033152000768,
+    "sources_unchanged": true,
+    "qualification": "shared provenance correctness only; production DuckDB; no matched performance claim",
+    "sandbox_retry": "The restricted run failed with Operation not permitted before the workload; the same built binary ran with required test permissions.",
+    "build_artifacts": [
+      {
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "araphor_data",
+          "src_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-data/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "1",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [
+          "test-fixtures"
+        ],
+        "fresh": false
+      },
+      {
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "araphor_query",
+          "src_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-query/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "1",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [
+          "test-fixtures"
+        ],
+        "fresh": false
+      },
+      {
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "araphor_analysis",
+          "src_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/araphor-analysis/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [],
+        "fresh": false
+      },
+      {
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "mithril_e2e",
+          "src_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/mithril-e2e/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "fresh": false
+      }
+    ]
+  },
+  "production_boundary": {
+    "input_rows": 18,
+    "created_rows": 3,
+    "creation": [
+      {
+        "result_id": "managed-29-selected",
+        "notification_id": "bf37ce45-ea6a-4573-91b7-60441ce03197",
+        "cut_revision": 27,
+        "input_revision": 27,
+        "last_input_entry_to_creation_s": 0.4045784759940185,
+        "input_commit_to_creation_s": 0.39154887199401855,
+        "graph_publication_to_creation_s": 0.06425189971923828,
+        "input_submit_s": 0.013029604,
+        "first_save_s": 0.007466964,
+        "managed_commit_s": 0.187177546
+      },
+      {
+        "result_id": "managed-64-selected",
+        "notification_id": "8f531b10-0cbb-43e8-b1fe-bf7d6c64a00c",
+        "cut_revision": 62,
+        "input_revision": 62,
+        "last_input_entry_to_creation_s": 0.4762340040895996,
+        "input_commit_to_creation_s": 0.4687819480895996,
+        "graph_publication_to_creation_s": 0.10037398338317871,
+        "input_submit_s": 0.007452056,
+        "first_save_s": 0.007358218,
+        "managed_commit_s": 0.195525173
+      },
+      {
+        "result_id": "managed-87-selected",
+        "notification_id": "60b79311-2277-40d5-bfe3-e86b620c2902",
+        "cut_revision": 85,
+        "input_revision": 85,
+        "last_input_entry_to_creation_s": 0.49701004927404785,
+        "input_commit_to_creation_s": 0.48680901527404785,
+        "graph_publication_to_creation_s": 0.10361504554748535,
+        "input_submit_s": 0.010201034,
+        "first_save_s": 0.007193876,
+        "managed_commit_s": 0.207116697
+      }
+    ],
+    "public_receipt_s": [
+      0.439683203,
+      0.676006735,
+      0.724161978
+    ],
+    "bulk": [
+      {
+        "stage": "causal_latency",
+        "section": "bulk",
+        "elapsed_s": "1.8160752690000002",
+        "rows": "16384"
+      }
+    ],
+    "qualification": "one correctness run on production DuckDB; same recorded collector-entry boundary; no matched performance comparison"
+  }
+}

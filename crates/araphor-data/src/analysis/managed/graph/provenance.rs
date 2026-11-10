@@ -2,15 +2,8 @@ use super::*;
 use crate::{AnalysisContextRefV1, AnalysisWitnessV1, DiscoveryRecordIdV1};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
-struct FindingOrigin {
-    result: String,
-    revision: u64,
-    relation: u64,
-    writer: u64,
-    owner: Vec<u8>,
-    key: Vec<u8>,
-}
+mod basis;
+pub(in crate::analysis) use basis::{FindingBasis, FindingOrigin};
 
 impl AnalysisStore {
     fn finding_read_parents(
@@ -75,10 +68,8 @@ impl AnalysisStore {
                 let port = araphor_analysis_types::FindingMember::port();
                 let data = sdk::Dataset {
                     name: port.name,
-                    batches: vec![
-                        sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
-                            .context(crate::AnalysisContractSnafu)?,
-                    ],
+                    batches: vec![sdk::Dataset::normalize_batch(native, Arc::new(port.schema))
+                        .context(crate::AnalysisContractSnafu)?],
                 };
                 for member in araphor_analysis_types::FindingMember::decode(&data)
                     .context(crate::AnalysisContractSnafu)?
@@ -178,138 +169,45 @@ impl AnalysisStore {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        (|| {
-            let mut witnesses = BTreeMap::new();
-            let mut coverage = BTreeSet::new();
-            let mut qualified = BTreeSet::new();
-            let mut gaps = BTreeSet::new();
-            let mut contexts = BTreeMap::new();
-            let mut visited = BTreeMap::<FindingOrigin, BTreeSet<DiscoveryRecordIdV1>>::new();
-            while let Some((owner, mut records)) = owners.pop_first() {
+        let mut basis = FindingBasis::default();
+        while let Some((owner, mut records)) = owners.pop_first() {
+            control.check()?;
+            basis.visit(&owner, &mut records);
+            if records.is_empty() {
+                continue;
+            }
+            let origin = &owner.result;
+            let revision = owner.revision;
+            let producer = validated.producer(origin, revision, charge)?;
+            let record = &producer.record;
+            let uncovered = basis.observe(&records, record);
+            let parents = Self::finding_read_parents(
+                engine, tenant, &owner, &records, control, charge, validated,
+            )?;
+            basis.parents(&mut owners, uncovered, parents)?;
+            let graph = validated
+                .graph_origin(owner.writer, revision)?
+                .ok_or_else(|| Code::Missing.error("native finding origin"))?;
+            let mut keys = BTreeSet::new();
+            for record in &records {
+                let key = araphor_analysis_types::DomainRelations::key(record)
+                    .context(crate::AnalysisContractSnafu)?;
+                charge(0, key.len() + std::mem::size_of::<DiscoveryRecordIdV1>())?;
+                keys.insert(key);
+            }
+            let visible = validated.producer_contexts(origin, charge)?;
+            for value in visible.iter() {
                 control.check()?;
-                let known = visited.entry(owner.clone()).or_default();
-                records.retain(|record| known.insert(record.clone()));
-                if records.is_empty() {
-                    continue;
-                }
-                let origin = &owner.result;
-                let revision = owner.revision;
-                let producer = validated.producer(origin, revision, charge)?;
-                let record = &producer.record;
-                if let Some(proof) = &record.graph_proof {
-                    for key in &proof.coverage {
-                        if records.iter().any(|record| {
-                            record.stream == key.source && record.cpu_id == key.cpu_id
-                        }) {
-                            coverage.insert(key.clone());
-                        }
-                    }
-                    for source in &proof.sources {
-                        if records.iter().any(|record| {
-                            record.stream == source.source && record.cpu_id == source.cpu
-                        }) {
-                            gaps.extend(source.missing.iter().copied());
-                            qualified.extend(
-                                records
-                                    .iter()
-                                    .filter(|record| {
-                                        record.stream == source.source
-                                            && record.cpu_id == source.cpu
-                                    })
-                                    .cloned(),
-                            );
-                        }
-                    }
-                }
-                let saved = &record.witnesses;
-                let mut missing = records
-                    .iter()
-                    .map(|record| {
-                        (
-                            crate::AnalysisStreamIdentityV1::Evidence(record.stream.clone()),
-                            record.durable_cursor,
-                        )
-                    })
-                    .collect::<BTreeSet<_>>();
-                for witness in saved {
-                    let key = (witness.identity.clone(), witness.cursor);
-                    if !missing.remove(&key) {
-                        continue;
-                    }
-                    let value: &mut AnalysisWitnessV1 =
-                        witnesses.entry(key).or_insert_with(|| witness.clone());
-                    value.expires_utc_ns = value.expires_utc_ns.min(witness.expires_utc_ns);
-                }
-                let mut uncovered = records
-                    .iter()
-                    .filter(|record| {
-                        missing.contains(&(
-                            crate::AnalysisStreamIdentityV1::Evidence(record.stream.clone()),
-                            record.durable_cursor,
-                        ))
-                    })
-                    .cloned()
-                    .collect::<BTreeSet<_>>();
-                for (parent, records) in Self::finding_read_parents(
-                    engine, tenant, &owner, &records, control, charge, validated,
-                )? {
-                    for record in &records {
-                        uncovered.remove(record);
-                    }
-                    owners.entry(parent).or_default().extend(records);
-                }
-                if !uncovered.is_empty() {
-                    return Err(Code::Denied.error("native finding origin witness"));
-                }
-                let graph = validated
-                    .graph_origin(owner.writer, revision)?
-                    .ok_or_else(|| Code::Missing.error("native finding origin"))?;
-                let mut keys = BTreeSet::new();
-                for record in &records {
-                    let key = araphor_analysis_types::DomainRelations::key(record)
-                        .context(crate::AnalysisContractSnafu)?;
-                    charge(0, key.len() + std::mem::size_of::<DiscoveryRecordIdV1>())?;
-                    keys.insert(key);
-                }
-                let visible = validated.producer_contexts(origin, charge)?;
-                for value in visible.iter() {
-                    control.check()?;
-                    let fact = graph.facts.get(&value.key);
-                    let mut associated = fact.is_some();
-                    let mut matched = fact.is_some_and(|key| keys.contains(key));
-                    for (proof, context) in &record.proofs {
-                        if context == value {
-                            associated = true;
-                            matched |= records.contains(proof);
-                        }
-                    }
-                    if associated && !matched {
-                        continue;
-                    }
-                    let value = value.clone();
-                    if contexts
-                        .insert(value.key.clone(), value.clone())
-                        .is_some_and(|prior| prior != value)
-                    {
-                        return Err(Code::Conflict.error("native finding context revision"));
-                    }
-                }
+                let fact = graph.facts.get(&value.key);
+                basis.context(
+                    value,
+                    &records,
+                    &record.proofs,
+                    fact.is_some(),
+                    fact.is_some_and(|key| keys.contains(key)),
+                )?;
             }
-            if require_proof && evidence.iter().any(|record| !qualified.contains(record)) {
-                return Err(Code::Missing.error("native finding coverage proof"));
-            }
-            let contexts = contexts.into_values().collect::<Vec<_>>();
-            let revision = crate::GraphRevisionV1 {
-                evidence,
-                coverage: coverage.into_iter().collect(),
-                context: contexts
-                    .iter()
-                    .map(|reference| reference.key.clone())
-                    .collect(),
-                missing_ranges: gaps.into_iter().collect(),
-            };
-            revision.validate(tenant)?;
-            Ok((witnesses.into_values().collect(), contexts, revision))
-        })()
+        }
+        basis.finish(tenant, evidence, require_proof)
     }
 }

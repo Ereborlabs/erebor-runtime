@@ -7,6 +7,8 @@ use crate::analysis::{
 use crate::{AnalysisContextRefV1, AnalysisWitnessV1, PackageErrorCodeV1 as Code, Result};
 use snafu::ResultExt as _;
 
+mod read;
+
 pub(super) struct References;
 
 impl References {

@@ -56,6 +56,15 @@ impl DataView {
         let Some(id) = Records::find(&identity, |key| Records::read(key, &self.snapshot))? else {
             return Ok(None);
         };
+        self.context_record(key, id, charge)
+    }
+
+    pub(in crate::analysis::native) fn context_record(
+        &self,
+        key: &AnalysisContextKeyV1,
+        id: u64,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         let Some(bytes) = Records::charged_payload(
             &Records::key(b'C', id),
             |key| Records::read(key, &self.snapshot),

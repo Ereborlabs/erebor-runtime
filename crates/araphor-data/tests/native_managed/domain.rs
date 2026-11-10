@@ -222,6 +222,16 @@ fn commit(
     observation: &algorithm::Observation,
     step: u8,
 ) -> TestResult {
+    commit_expiry(store, model, observation, step, None)
+}
+
+fn commit_expiry(
+    store: &NativeStore,
+    model: &sdk::Model,
+    observation: &algorithm::Observation,
+    step: u8,
+    expiry: Option<u64>,
+) -> TestResult {
     let control = AnalysisReadControl::default();
     let resume = store.managed_resume([1; 16], "domain", &control)?;
     let page = capture(store, &resume.instance, resume.completed, step != 0)?;
@@ -296,6 +306,9 @@ fn commit(
         Arc::new(()),
     )?;
     for call in [10, 20] {
+        if step == 3 {
+            continue;
+        }
         frame.attribute_input(
             call,
             &[Arc::clone(&rows), Arc::clone(&contexts)],
@@ -304,6 +317,9 @@ fn commit(
         )?;
     }
     let mut request = super::attempts::request(&format!("domain-{step}"), true);
+    if let Some(expiry) = expiry {
+        request.witness_expiry = expiry;
+    }
     request.rebuild = step != 0;
     let attempt = Arc::new(store.register_managed_attempt(&page.state, &request, || Ok(()))?);
     let output = super::publication::output(model)?;
@@ -351,6 +367,28 @@ fn commit(
             Arc::new(super::graph::Budget),
             &control,
         )?;
+        if step == 3 && call == 20 {
+            let arguments = sdk::RecordBatch::try_new(
+                Arc::new(
+                    model
+                        .graph
+                        .as_ref()
+                        .ok_or("Graph spec")?
+                        .argument_schema("nodes")?,
+                ),
+                vec![Arc::new(BinaryArray::from_iter_values([
+                    DomainRelations::key(&finding.value.finding_id)?,
+                ]))],
+            )?;
+            transaction.read(
+                store,
+                "nodes",
+                DomainRelations::FINDINGS,
+                &arguments,
+                |_| Ok(Arc::new(())),
+                &control,
+            )?;
+        }
         if step == 0 {
             let keys = subjects
                 .iter()
@@ -392,19 +430,25 @@ fn commit(
                 &control,
             )?;
         }
-        if step == 0 || call == 10 {
+        if step == 0 || step == 3 && call == 20 || step != 3 && call == 10 {
+            let mut commands = command(
+                model,
+                DomainRelations::FINDINGS,
+                if step == 2 { b"replacement" } else { b"owner" },
+                &[DomainRelations::key(&finding.value.finding_id)?],
+                None,
+                FindingMember::encode(std::slice::from_ref(&finding))?,
+                step == 1,
+            )?;
+            if step == 3 {
+                let mut columns = commands.columns().to_vec();
+                columns[2] = Arc::new(UInt8Array::from(vec![araphor_graph::Write::Update as u8]));
+                commands = sdk::RecordBatch::try_new(commands.schema(), columns)?;
+            }
             transaction.stage(
                 store,
                 DomainRelations::FINDINGS,
-                command(
-                    model,
-                    DomainRelations::FINDINGS,
-                    if step == 2 { b"replacement" } else { b"owner" },
-                    &[DomainRelations::key(&finding.value.finding_id)?],
-                    None,
-                    FindingMember::encode(std::slice::from_ref(&finding))?,
-                    step == 1,
-                )?,
+                commands,
                 Arc::new(()),
                 &control,
             )?;
@@ -496,6 +540,8 @@ fn canonical_finding_survives_removed_producer_and_reopen() -> TestResult {
     Ok(())
 }
 
+#[path = "domain/findings.rs"]
+mod findings;
 #[path = "domain/inputs.rs"]
 mod inputs;
 #[path = "domain/read.rs"]
