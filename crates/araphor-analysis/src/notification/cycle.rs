@@ -10,6 +10,8 @@ pub(super) struct NotificationCycle<'a, 'b> {
     tenant: [u8; 16],
     pub(super) prepared: PreparedNotificationBatch<'b>,
     sizes: BTreeMap<NotificationKeyV1, usize>,
+    #[cfg(feature = "native-store")]
+    writes: Vec<(AnalysisContextVersionV1, u64)>,
 }
 
 impl Deref for NotificationCycle<'_, '_> {
@@ -35,6 +37,8 @@ impl<'a, 'b> NotificationCycle<'a, 'b> {
             tenant,
             prepared,
             sizes,
+            #[cfg(feature = "native-store")]
+            writes: Vec::new(),
         }
     }
 
@@ -105,8 +109,61 @@ impl<'a, 'b> NotificationCycle<'a, 'b> {
     }
 
     pub(super) fn save(&mut self, state: &mut NotificationObligationV1) -> Result<()> {
-        let bytes = self.router.save_bytes(state)?;
-        self.sizes.insert(state.key, bytes);
+        #[cfg(not(feature = "native-store"))]
+        {
+            let bytes = self.router.save_bytes(state)?;
+            self.sizes.insert(state.key, bytes);
+            Ok(())
+        }
+        #[cfg(feature = "native-store")]
+        {
+            let previous = state.revision;
+            state.revision = previous.checked_add(1).ok_or_else(|| {
+                NotificationSnafu {
+                    code: NotificationErrorCodeV1::Limit,
+                    field: "obligation revision",
+                }
+                .build()
+            })?;
+            let result = (|| {
+                let body = state.encode()?;
+                self.prepared.charge(
+                    body.len()
+                        .saturating_mul(12)
+                        .saturating_add(8 * std::mem::size_of::<(AnalysisContextVersionV1, u64)>()),
+                )?;
+                self.sizes.insert(state.key, body.len());
+                self.writes.push((
+                    AnalysisContextVersionV1 {
+                        key: NotificationRouter::state_key(state),
+                        valid_from_utc_ns: None,
+                        valid_until_utc_ns: None,
+                        sensitivity: state.sensitivity,
+                        body,
+                    },
+                    previous,
+                ));
+                Ok(())
+            })();
+            if result.is_err() {
+                state.revision = previous;
+            }
+            result
+        }
+    }
+
+    pub(super) fn flush(&mut self, check: &dyn Fn() -> Result<()>) -> Result<()> {
+        check()?;
+        #[cfg(feature = "native-store")]
+        if !self.writes.is_empty() {
+            let mut tx = self.store.write()?;
+            for (context, expected) in &self.writes {
+                tx.context(context, Some(*expected))?;
+            }
+            check()?;
+            tx.commit([])?;
+            self.writes.clear();
+        }
         Ok(())
     }
 
@@ -146,6 +203,9 @@ impl NotificationRouter {
             &control,
             budget.as_ref(),
         )?;
-        run(&mut NotificationCycle::new(self, tenant, prepared))
+        let mut cycle = NotificationCycle::new(self, tenant, prepared);
+        let output = run(&mut cycle)?;
+        cycle.flush(&|| Ok(()))?;
+        Ok(output)
     }
 }

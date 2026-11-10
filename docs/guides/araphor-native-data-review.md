@@ -1525,3 +1525,57 @@ for the exact source and checks. Affected-key notification reads, durable CDC
 completion, batched writes, native Host notification admission, capacity,
 retention, backup, cutover, DuckDB removal, and both incident targets remain
 **Not done**.
+
+## Native notification delivery batches
+
+This extension follows `7ed191734`. It replaces native per-transition commits
+with ordered immutable context batches. Production still uses DuckDB.
+
+Read the owners in this order:
+
+1. [reactive routing](../../crates/araphor-analysis/src/notification/reactive.rs) collects each routed obligation once.
+2. [NotificationCycle](../../crates/araphor-analysis/src/notification/cycle.rs) charges and stages ordered context versions.
+3. [delivery](../../crates/araphor-analysis/src/notification/delivery.rs) runs the three delivery kinds across the collected states.
+4. [attempts](../../crates/araphor-analysis/src/notification/attempt.rs) retain the existing preparation, effect, and outcome rules.
+5. [native context admission](../../crates/araphor-data/src/analysis/native/context/admission.rs) checks each expected immutable version through DataWrite.
+6. [public batch tests](../../crates/araphor-analysis/tests/native_notification/batching.rs) connect real SQL, storage, delivery, and reopen.
+
+SQL supplies findings and obligation keys
+  -> The Router routes the findings and collects each obligation once
+  -> The cycle stages exact subject versions and ready Finding attempts
+  -> One Data commit saves their Pending records before any effect
+  -> Each effect checks its guard and exact captured route
+  -> The cycle stages the outcomes
+  -> FailureEscalation and AcknowledgementEscalation repeat this sequence
+  -> The final Data commit saves remaining outcomes before return
+
+```mermaid
+sequenceDiagram
+    participant Router
+    participant Data
+    participant Sink
+    Router->>Data: Commit subjects and all ready Pending records
+    Data-->>Router: One committed view
+    loop Each ready obligation
+        Router->>Sink: Deliver captured subject and route
+        Sink-->>Router: Outcome
+    end
+    Router->>Data: Commit outcomes and next-kind Pending records
+    Router->>Data: Commit remaining outcomes
+```
+
+A flush or guard failure stops the cycle before affected effects. A per-state
+preparation or effect error skips that state's later delivery kinds. Pending
+remains durable on interruption. Retry preserves the attempt number and subject.
+Different obligations can have a different effect order. One obligation keeps
+its Finding, FailureEscalation, and AcknowledgementEscalation order.
+
+Direct routing flushes before return. Direct delivery uses one state through the
+same procedure. Legacy DuckDB saves remain synchronous. No kernel or ABI
+boundary changes in this extension.
+
+Read the [qualification record](../research/results/araphor-native-notification-batches-2026-11-10.md)
+for exact checks and the production regression result. Notification CDC
+completion, affected-key reads, native Host admission, capacity, retention,
+collection, backup, cutover, DuckDB removal, and both incident targets remain
+**Not done**. These batches do not acknowledge subscription input.

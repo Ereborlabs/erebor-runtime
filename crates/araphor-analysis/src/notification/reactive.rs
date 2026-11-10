@@ -169,6 +169,7 @@ impl NotificationRouter {
         let mut routed = BTreeMap::new();
         let mut handled = BTreeSet::new();
         let mut skipped_stale = false;
+        let mut deliveries = Vec::new();
         for (reference, key) in work {
             erebor_telemetry::trace!(
                 tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = now,
@@ -244,12 +245,21 @@ impl NotificationRouter {
             }
             for state in states {
                 if handled.insert(state.key) {
-                    cycle.consume_state(state, now, check, effect, &mut update)?;
+                    deliveries.push(state);
                 }
             }
         }
         if skipped_stale {
             check()?;
+        }
+        let results = cycle.deliver_states(&mut deliveries, check, effect, now)?;
+        for (state, result) in deliveries.into_iter().zip(results) {
+            if let Err(error) = &result {
+                erebor_telemetry::warn!(error; "Notification delivery failed",
+                    tenant_id = %uuid::Uuid::from_bytes(tenant), evaluated_ns = %now,
+                    notification_id = %uuid::Uuid::from_bytes(state.key.notification_id));
+            }
+            update.delivered.push((state.key, result));
         }
         let completed = std::time::Instant::now();
         erebor_telemetry::debug!(
@@ -266,59 +276,5 @@ impl NotificationRouter {
             "Notification batch ends"
         );
         Ok(update)
-    }
-}
-
-impl NotificationCycle<'_, '_> {
-    fn consume_state(
-        &mut self,
-        mut state: NotificationObligationV1,
-        now: u64,
-        check: &dyn Fn() -> Result<()>,
-        effect: &mut Effect<'_>,
-        update: &mut NotificationUpdate,
-    ) -> Result<()> {
-        erebor_telemetry::trace!(
-            tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = now,
-            notification_id = %uuid::Uuid::from_bytes(state.key.notification_id),
-            graph_result_id = %state.finding.as_ref().map(|reference| reference.result_id.chars()
-                .take(64).collect::<String>()).unwrap_or_default(),
-            "Notification state begins"
-        );
-        let mut guard_failed = false;
-        let result = self.deliver_state(
-            &mut state,
-            &mut |delivery| {
-                if let Err(error) = check() {
-                    guard_failed = true;
-                    return Err(error);
-                }
-                effect(delivery)
-            },
-            now,
-        );
-        erebor_telemetry::trace!(
-            tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = now,
-            notification_id = %uuid::Uuid::from_bytes(state.key.notification_id),
-            ok = result.is_ok(), guard_failed,
-            "Notification state returns"
-        );
-        match result {
-            Err(error) if guard_failed => {
-                erebor_telemetry::trace!("Notification state guard failed",
-                    tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = %now,
-                    notification_id = %uuid::Uuid::from_bytes(state.key.notification_id));
-                return Err(error);
-            }
-            result => {
-                if let Err(error) = &result {
-                    erebor_telemetry::warn!(error; "Notification delivery failed",
-                        tenant_id = %uuid::Uuid::from_bytes(state.key.tenant_id), evaluated_ns = %now,
-                        notification_id = %uuid::Uuid::from_bytes(state.key.notification_id));
-                }
-                update.delivered.push((state.key, result));
-            }
-        }
-        Ok(())
     }
 }

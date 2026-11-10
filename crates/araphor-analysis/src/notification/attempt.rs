@@ -1,22 +1,7 @@
 use super::*;
 
 impl NotificationCycle<'_, '_> {
-    pub(super) fn send(
-        &mut self,
-        state: &mut NotificationObligationV1,
-        effect: &mut Effect<'_>,
-        kind: NotificationDeliveryKindV1,
-        now: u64,
-    ) -> Result<bool> {
-        let Some((number, subject)) = self.prepare_attempt(state, kind, now)? else {
-            return Ok(false);
-        };
-        let result = self.attempt_result(state, effect, kind, number, subject, now)?;
-        self.complete_attempt(state, kind, number, result, now)?;
-        Ok(true)
-    }
-
-    fn prepare_attempt(
+    pub(super) fn prepare_attempt(
         &mut self,
         state: &mut NotificationObligationV1,
         kind: NotificationDeliveryKindV1,
@@ -111,7 +96,7 @@ impl NotificationCycle<'_, '_> {
         Ok(number)
     }
 
-    fn attempt_result(
+    pub(super) fn attempt_result(
         &mut self,
         state: &NotificationObligationV1,
         effect: &mut Effect<'_>,
@@ -152,7 +137,7 @@ impl NotificationCycle<'_, '_> {
         })
     }
 
-    fn complete_attempt(
+    pub(super) fn complete_attempt(
         &mut self,
         state: &mut NotificationObligationV1,
         kind: NotificationDeliveryKindV1,

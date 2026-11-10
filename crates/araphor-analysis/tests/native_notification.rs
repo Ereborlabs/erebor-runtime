@@ -11,6 +11,9 @@ use araphor_data::{analysis::native::NativeStore, *};
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const TENANT: [u8; 16] = [1; 16];
 
+#[path = "native_notification/batching.rs"]
+mod batching;
+
 struct Authority {
     store: Arc<NativeStore>,
     competing: Mutex<Option<(AnalysisContextVersionV1, u64)>>,
@@ -257,51 +260,73 @@ impl araphor_query::follow::Clock for FixedClock {
     }
 }
 
+impl Fixture {
+    async fn update(
+        &self,
+    ) -> TestResult<(
+        araphor_query::follow::Subscription,
+        araphor_query::follow::Update,
+    )> {
+        self.update_at(100).await
+    }
+
+    async fn update_at(
+        &self,
+        now: u64,
+    ) -> TestResult<(
+        araphor_query::follow::Subscription,
+        araphor_query::follow::Update,
+    )> {
+        use araphor_discovery_definition::{Definition, Program, Source};
+        use araphor_query::execution::{Engine, Limits};
+        use futures_util::StreamExt as _;
+
+        let engine = Engine::new(self.store.clone(), Limits::default())?;
+        let session = engine.session(
+            AnalysisSelectionV1::tenant(TENANT),
+            &AnalysisReadControl::default(),
+            now,
+        )?;
+        let definition = Definition {
+            name: "native-notifications".into(),
+            description: String::new(),
+            labels: Default::default(),
+            program: Program::Sql {
+                source: Source::Inline {
+                    inline: NotificationRouter::SQL.into(),
+                },
+            },
+        };
+        let prepared = session.prepare_definition(&definition, None).await?;
+        let plan = Arc::new(prepared.plan().clone());
+        let clock = Arc::new(FixedClock {
+            changes: tokio::sync::watch::channel(now).0,
+        });
+        let mut subscription = araphor_query::follow::Subscription::new(
+            session,
+            plan.clone(),
+            prepared.sources().clone(),
+            b"native-notifications",
+            None,
+            clock,
+            false,
+        )?;
+        assert!(Arc::strong_count(&plan) > 1);
+        let update = subscription
+            .next()
+            .await
+            .ok_or("native notification update")??;
+        Ok((subscription, update))
+    }
+}
+
 #[tokio::test]
 async fn native_notification_sql_delivery() -> TestResult {
-    use araphor_discovery_definition::{Definition, Program, Source};
-    use araphor_query::execution::{Engine, Limits};
-    use futures_util::StreamExt as _;
-
     let fixture = Fixture::new()?;
     let router = fixture.router()?;
     Fixture::configure(&router)?;
     let subject = Fixture::submit(&router)?;
-    let engine = Engine::new(fixture.store.clone(), Limits::default())?;
-    let session = engine.session(
-        AnalysisSelectionV1::tenant(TENANT),
-        &AnalysisReadControl::default(),
-        100,
-    )?;
-    let definition = Definition {
-        name: "native-notifications".into(),
-        description: String::new(),
-        labels: Default::default(),
-        program: Program::Sql {
-            source: Source::Inline {
-                inline: NotificationRouter::SQL.into(),
-            },
-        },
-    };
-    let prepared = session.prepare_definition(&definition, None).await?;
-    let plan = Arc::new(prepared.plan().clone());
-    let clock = Arc::new(FixedClock {
-        changes: tokio::sync::watch::channel(100).0,
-    });
-    let mut subscription = araphor_query::follow::Subscription::new(
-        session,
-        plan.clone(),
-        prepared.sources().clone(),
-        b"native-notifications",
-        None,
-        clock,
-        false,
-    )?;
-    assert!(Arc::strong_count(&plan) > 1);
-    let update = subscription
-        .next()
-        .await
-        .ok_or("native notification update")??;
+    let (subscription, update) = fixture.update().await?;
     assert!(update.exhausted);
     assert!(!update.limited);
     assert!(update.calls.is_empty());

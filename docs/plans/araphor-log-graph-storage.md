@@ -349,6 +349,15 @@ native Host notification admission, capacity, retention, backup, production
 cutover, DuckDB removal, and both incident targets remain **Not done**.
 Production still uses DuckDB. No native production speedup is measured.
 
+The native Router now stages ordered immutable context versions and commits
+Pending across ready obligations before sink effects. Outcomes join the next
+delivery kind or the final batch. Direct delivery uses the same procedure.
+Read the [batch qualification](../research/results/araphor-native-notification-batches-2026-11-10.md).
+Result: **Done for native notification delivery batches**. Durable notification
+CDC completion, affected-key reads, native Host admission, capacity, retention,
+collection, backup, production cutover, DuckDB removal, and both incident targets
+remain **Not done**. Production still uses DuckDB. No native speedup is measured.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.
