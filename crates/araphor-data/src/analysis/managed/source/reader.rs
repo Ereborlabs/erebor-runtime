@@ -248,8 +248,12 @@ impl super::super::model::ManagedCapture {
             Arc::get_mut(source).ok_or_else(|| Code::Conflict.error("shared source capture"))?;
         let mut sources = std::mem::take(&mut page.extraction.sources);
         let coverage = (|| {
-            page.extraction.charge(sources.len().checked_mul(std::mem::size_of::<super::coverage::SourceCoverage>())
-                .ok_or_else(|| Code::Limit.error("source coverage collection memory"))?)?;
+            page.extraction.charge(
+                sources
+                    .len()
+                    .checked_mul(std::mem::size_of::<super::coverage::SourceCoverage>())
+                    .ok_or_else(|| Code::Limit.error("source coverage collection memory"))?,
+            )?;
             let mut coverage = Vec::with_capacity(sources.len());
             for source in &mut sources {
                 control.check()?;
@@ -277,6 +281,10 @@ impl super::super::model::ManagedCapture {
             })
             .collect();
         frame.removals = page.removals.clone();
+        #[cfg(feature = "native-store")]
+        {
+            frame.complete = page.exhausted && page.scanned_through == frame.position();
+        }
         frame.check_tables()?;
         let buffers = frame
             .datasets()
@@ -286,9 +294,19 @@ impl super::super::model::ManagedCapture {
             .map(|array| array.get_buffer_memory_size())
             .sum::<usize>();
         let bytes = frame.allocated_bytes();
-        let coverage = frame.coverage.iter().map(super::coverage::SourceCoverage::allocated_bytes)
-            .fold(frame.coverage.capacity().saturating_mul(std::mem::size_of::<super::coverage::SourceCoverage>()), usize::saturating_add);
-        page.extraction.charge(bytes.saturating_sub(buffers).saturating_sub(coverage))?;
+        let coverage = frame
+            .coverage
+            .iter()
+            .map(super::coverage::SourceCoverage::allocated_bytes)
+            .fold(
+                frame
+                    .coverage
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<super::coverage::SourceCoverage>()),
+                usize::saturating_add,
+            );
+        page.extraction
+            .charge(bytes.saturating_sub(buffers).saturating_sub(coverage))?;
         self.bytes = self.bytes.saturating_add(bytes);
         control.check()
     }

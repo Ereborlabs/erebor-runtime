@@ -59,6 +59,206 @@ fn requests() -> AnalysisTableRequests {
         .collect()
 }
 
+#[test]
+fn replay_requires_complete_coverage() -> TestResult {
+    struct NoReserve;
+    impl araphor_data::ManagedBudget for NoReserve {
+        fn limit(&self) -> usize {
+            usize::MAX
+        }
+        fn check(&self) -> araphor_data::Result<()> {
+            Ok(())
+        }
+        fn reserve(&self, _: usize) -> araphor_data::Result<Box<dyn std::any::Any + Send + Sync>> {
+            Err(Code::Limit.error("test replay memory"))
+        }
+    }
+    for mode in [
+        "complete",
+        "range",
+        "owners",
+        "projection",
+        "delta",
+        "chain",
+        "gap",
+    ] {
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(NativeStore::open(&directory.path().join("data"))?);
+        let instance = instance(&store)?;
+        super::attempts::append(&store, 1)?;
+        store.commit_contexts(&[super::attempts::context(1)])?;
+        let page = super::attempts::capture(&store, &instance, false)?;
+        let attempt = store.register_managed_attempt(
+            &page.state,
+            &super::attempts::request("finite", true),
+            || Ok(()),
+        )?;
+        let mut receipt = publish(&store, &attempt, true, false)?;
+        let control = AnalysisReadControl::default();
+        let mut resume = store.managed_resume([1; 16], "durable-input", &control)?;
+        let original = resume.source.clone().ok_or("source")?;
+        let mut history = vec![(receipt.clone(), original.clone())];
+        let depth = match mode {
+            "delta" => 2,
+            "chain" | "gap" => 3,
+            _ => 1,
+        };
+        for cursor in 2..=depth {
+            let parent = resume.source.clone().ok_or("parent")?;
+            super::attempts::append(&store, cursor)?;
+            let requests = requests();
+            let page = store.read_managed_tables_filtered(
+                &resume.instance.grant.selection.project(&requests)?,
+                &ManagedRead {
+                    instance: resume.instance.clone(),
+                    expected: None,
+                    rebuild: false,
+                    follow: false,
+                    source: Some(araphor_data::ManagedSourceRead::Changes(parent.clone())),
+                    completed: None,
+                    execution: None,
+                },
+                AnalysisTableRead {
+                    requests: &requests,
+                    event_ranges: None,
+                    mode: AnalysisReadModeV1::Changes(parent.position),
+                    now: 1000,
+                },
+                AnalysisExtractLimits::default(),
+                &control,
+                None,
+            )?;
+            let attempt = store.register_managed_attempt(
+                &page.state,
+                &super::attempts::request(&format!("delta-{cursor}"), true),
+                || Ok(()),
+            )?;
+            receipt = publish(&store, &attempt, true, false)?;
+            resume = store.managed_resume([1; 16], "durable-input", &control)?;
+            history.push((receipt.clone(), resume.source.clone().ok_or("source")?));
+        }
+        let inputs = subscribe(&store, &resume.instance)?;
+        let mut requested = requests();
+        if mode == "projection" {
+            let body = araphor_data::AnalysisStore::table_schemas()["context_versions"]
+                .index_of("body")?;
+            requested
+                .get_mut("context_versions")
+                .and_then(Option::as_mut)
+                .ok_or("projection")?
+                .remove(&body);
+        }
+        let (reference, _, _) =
+            store.managed_reference(&resume.instance, &receipt.selected.result_id, 0, &control)?;
+        let owners = std::collections::BTreeSet::from(["native-context".to_owned()]);
+        let historical = store.read_managed_reference(
+            &resume.instance.grant.selection.project(&requested)?,
+            &reference,
+            AnalysisTableRead {
+                requests: &requested,
+                event_ranges: (mode == "range").then_some(&[(1, 1)][..]),
+                mode: if depth > 1 {
+                    AnalysisReadModeV1::Changes(history[history.len() - 2].1.position)
+                } else {
+                    AnalysisReadModeV1::Complete
+                },
+                now: 1000,
+            },
+            AnalysisExtractLimits::default(),
+            &control,
+            (mode == "owners").then_some(&owners),
+        )?;
+        let frame = historical.state.source().ok_or("historical source")?;
+        if mode == "complete" {
+            assert!(inputs.observe_source(frame, &control, &NoReserve).is_err());
+        }
+        inputs.observe_source(frame, &control, &super::graph::Budget)?;
+        inputs.observe_source(frame, &control, &super::graph::Budget)?;
+        if mode == "complete" {
+            inputs.observe_source(frame, &control, &NoReserve)?;
+        }
+        if depth == 3 {
+            let mut frames = Vec::new();
+            for (index, (receipt, _)) in history.iter().enumerate() {
+                let (reference, _, _) = store.managed_reference(
+                    &resume.instance,
+                    &receipt.selected.result_id,
+                    0,
+                    &control,
+                )?;
+                let page = store.read_managed_reference(
+                    &resume.instance.grant.selection.project(&requested)?,
+                    &reference,
+                    AnalysisTableRead {
+                        requests: &requested,
+                        event_ranges: None,
+                        mode: if index == 0 {
+                            AnalysisReadModeV1::Complete
+                        } else {
+                            AnalysisReadModeV1::Changes(history[index - 1].1.position)
+                        },
+                        now: 1000,
+                    },
+                    AnalysisExtractLimits::default(),
+                    &control,
+                    None,
+                )?;
+                frames.push(page.state.source().cloned().ok_or("chain source")?);
+            }
+            inputs.observe_source(&frames[2], &control, &NoReserve)?;
+            inputs.observe_source(&frames[0], &control, &super::graph::Budget)?;
+            inputs.observe_source(&frames[2], &control, &NoReserve)?;
+            if mode != "gap" {
+                inputs.observe_source(&frames[1], &control, &super::graph::Budget)?;
+                inputs.observe_source(&frames[2], &control, &super::graph::Budget)?;
+            }
+            inputs.observe_source(&frames[0], &control, &NoReserve)?;
+        }
+        assert_eq!(saved(&store)?.completed_through.commit_revision, 0);
+        super::attempts::append(&store, depth + 1)?;
+        let requests = requests();
+        let parent = resume.source.ok_or("parent")?;
+        let page = store.read_managed_subscribed(
+            &inputs,
+            &resume.instance.grant.selection.project(&requests)?,
+            &ManagedRead {
+                instance: resume.instance.clone(),
+                expected: None,
+                rebuild: false,
+                follow: false,
+                source: Some(araphor_data::ManagedSourceRead::Changes(parent.clone())),
+                completed: None,
+                execution: None,
+            },
+            AnalysisTableRead {
+                requests: &requests,
+                event_ranges: None,
+                mode: AnalysisReadModeV1::Changes(parent.position),
+                now: 1000,
+            },
+            AnalysisExtractLimits::default(),
+            &control,
+            None,
+        )?;
+        let attempt = store.register_managed_attempt(
+            &page.state,
+            &super::attempts::request("live", true),
+            || Ok(()),
+        )?;
+        publish(&store, &attempt, true, false)?;
+        assert_eq!(
+            saved(&store)?.completed_through.commit_revision,
+            if matches!(mode, "complete" | "chain") {
+                page.page.scanned_through.commit_revision
+            } else {
+                0
+            },
+            "{mode}"
+        );
+    }
+    Ok(())
+}
+
 fn subscribe(
     store: &Arc<NativeStore>,
     instance: &ManagedInstance,

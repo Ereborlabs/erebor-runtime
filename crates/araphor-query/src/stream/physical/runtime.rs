@@ -106,7 +106,13 @@ impl Runtime {
         let continuing = initial
             .as_ref()
             .and_then(|(_, _, session)| session.managed.as_ref())
-            .is_some_and(|managed| !managed.rebuild);
+            .is_some_and(|managed| {
+                !managed.rebuild
+                    && managed
+                        .expected
+                        .as_ref()
+                        .is_none_or(|expected| expected.generation == managed.instance.generation)
+            });
         let source_index = required
             .then(
                 || match run.session.source_index.as_ref().filter(|_| continuing) {
@@ -195,8 +201,9 @@ impl Runtime {
         let mut resumed_clock = false;
         if self.snapshot.is_none() {
             let now = self.progress.now()?;
-            if let Some(cursor) = self.run.resume.as_ref().filter(|_| {
+            if let Some(cursor) = self.run.resume.as_ref().filter(|cursor| {
                 self.run.follow
+                    && self.progress.can_resume(cursor.position())
                     && !self.run.resume_pending
                     && self
                         .initial

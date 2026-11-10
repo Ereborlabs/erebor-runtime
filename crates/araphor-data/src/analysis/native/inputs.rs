@@ -24,6 +24,8 @@ mod cut;
 mod records;
 mod recovery;
 mod registration;
+mod replay;
+use replay::Replay;
 
 pub(in crate::analysis) use consumer::Delivery;
 use consumer::{Consumer, InputRecord};
@@ -50,6 +52,7 @@ pub(in crate::analysis) struct Wake {
     coordinator: Arc<Coordinator>,
     revision: watch::Receiver<u64>,
     consumer: Option<(Arc<Consumer>, Weak<NativeStore>)>,
+    replay: Option<Arc<Replay>>,
 }
 
 impl Coordinator {
@@ -188,6 +191,12 @@ impl Wake {
         self.consumer
             .as_ref()
             .is_some_and(|(consumer, _)| consumer.delivery.completed().commit_revision == 0)
+    }
+
+    pub(in crate::analysis) fn can_resume(&self, position: StorePositionV1) -> bool {
+        self.consumer
+            .as_ref()
+            .is_none_or(|(consumer, _)| consumer.delivery.completed() >= position)
     }
 
     pub(in crate::analysis) async fn changed(
@@ -333,6 +342,7 @@ impl NativeStore {
                 coordinator: Arc::clone(&self.inputs),
                 revision: self.revision.subscribe(),
                 consumer: None,
+                replay: None,
             }),
         })
     }

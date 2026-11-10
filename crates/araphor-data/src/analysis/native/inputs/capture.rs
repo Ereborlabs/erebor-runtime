@@ -6,7 +6,7 @@ use crate::analysis::{
 };
 use crate::{
     AnalysisPositionPageV1, AnalysisReadModeV1, AnalysisSelectionV1, AnalysisTableRead,
-    InputSubscription, ManagedInstance, PackageErrorCodeV1 as Code, Result,
+    InputSubscription, ManagedRead, PackageErrorCodeV1 as Code, Result,
 };
 use std::collections::BTreeSet;
 
@@ -15,7 +15,7 @@ impl InputSubscription {
         &self,
         store: &NativeStore,
         view: &DataView,
-        instance: &ManagedInstance,
+        request: &ManagedRead,
         selection: &AnalysisSelectionV1,
         read: &AnalysisTableRead<'_>,
         page: &AnalysisPositionPageV1,
@@ -24,7 +24,7 @@ impl InputSubscription {
         self.native
             .as_ref()
             .ok_or_else(|| Code::Conflict.error("native input subscription"))?
-            .capture_inputs(store, view, instance, selection, read, page, owners)
+            .capture_inputs(store, view, request, selection, read, page, owners)
     }
 }
 
@@ -33,12 +33,13 @@ impl Wake {
         &self,
         store: &NativeStore,
         view: &DataView,
-        instance: &ManagedInstance,
+        request: &ManagedRead,
         selection: &AnalysisSelectionV1,
         read: &AnalysisTableRead<'_>,
         page: &AnalysisPositionPageV1,
         owners: Option<&BTreeSet<String>>,
     ) -> Result<InputCapture> {
+        let instance = &request.instance;
         let (consumer, _) = self
             .consumer
             .as_ref()
@@ -64,33 +65,22 @@ impl Wake {
         let cut = InputCut::capture(view)?;
         let exhaustive = page.exhausted
             && page.scanned_through == cut.position()
-            && *selection == interest.original.project(read.requests)?
-            && interest.requests == *read.requests
-            && (owners.is_none()
-                || interest
-                    .owners
-                    .as_ref()
-                    .zip(owners)
-                    .is_some_and(|(watched, captured)| watched.is_subset(captured)))
-            && owners.is_none_or(|owners| {
-                [
-                    ("targets", "mithril-control/target"),
-                    ("compiled_policies", "mithril-control/compiled-policy"),
-                    ("notification_routes", crate::NOTIFICATION_ROUTE_OWNER),
-                ]
-                .iter()
-                .all(|(table, owner)| {
-                    !read.requests.contains_key(*table) || owners.contains(*owner)
-                })
-            })
-            && read
-                .event_ranges
-                .is_none_or(|ranges| ranges == [(0, u64::MAX)])
+            && interest.covers_read(selection, read.requests, owners, read.event_ranges)?
             && (!matches!(read.mode, AnalysisReadModeV1::Metadata) || !read.reads_raw())
             && match read.mode {
                 AnalysisReadModeV1::Complete | AnalysisReadModeV1::Metadata => true,
                 AnalysisReadModeV1::Changes(after) => {
-                    record.completed_through.commit_revision != 0 && after <= record.cut.position()
+                    let consumed = record.completed_through.commit_revision != 0
+                        && after <= record.cut.position();
+                    let replayed = match (&request.source, &self.replay) {
+                        (Some(crate::ManagedSourceRead::Changes(parent)), Some(replay))
+                            if parent.position == after =>
+                        {
+                            replay.matches(parent)?
+                        }
+                        _ => false,
+                    };
+                    consumed || replayed
                 }
                 _ => false,
             };

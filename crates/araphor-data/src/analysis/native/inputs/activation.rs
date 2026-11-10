@@ -59,6 +59,7 @@ impl NativeStore {
                 coordinator: Arc::clone(&self.inputs),
                 revision: self.revision.subscribe(),
                 consumer: None,
+                replay: None,
             },
             changes,
             position: view.revision,

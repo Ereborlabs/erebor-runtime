@@ -26,6 +26,8 @@ use sdk::arrow_array::{Array, UInt64Array};
 mod graph;
 #[path = "native_execution/publication.rs"]
 mod publication;
+#[path = "native_execution/version.rs"]
+mod version;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const TENANT: [u8; 16] = [1; 16];
@@ -162,11 +164,11 @@ fn image() -> araphor_package::Result<PackageBundle> {
     })
 }
 
-async fn prepare(
+async fn specification(
     engine: &Arc<Engine>,
     image: &PackageBundle,
     definition: &Definition,
-) -> TestResult<(PreparedDefinition, Arc<publication::Publication>)> {
+) -> TestResult<(PreparedDefinition, ManagedSpec)> {
     engine
         .store()
         .install_package_image(TENANT, image, || Ok(()))?;
@@ -226,20 +228,30 @@ async fn prepare(
         );
         Ok(false)
     })?;
-    let instance = engine.store().admit_managed(
-        &ManagedSpec {
-            destination: ManagedDestination::Selected,
-            tenant: TENANT,
-            id: "native-query".into(),
-            definition: definition.resolved().clone(),
-            manifest: ManagedManifest {
-                format: 1,
-                planner: "datafusion-55/sql-call-1".into(),
-                definition: revision,
-                calls,
-                selected_schema: definition.plan().schema().as_arrow().clone(),
-            },
+    let spec = ManagedSpec {
+        destination: ManagedDestination::Selected,
+        tenant: TENANT,
+        id: "native-query".into(),
+        definition: definition.resolved().clone(),
+        manifest: ManagedManifest {
+            format: 1,
+            planner: "datafusion-55/sql-call-1".into(),
+            definition: revision,
+            calls,
+            selected_schema: definition.plan().schema().as_arrow().clone(),
         },
+    };
+    Ok((definition, spec))
+}
+
+async fn prepare(
+    engine: &Arc<Engine>,
+    image: &PackageBundle,
+    definition: &Definition,
+) -> TestResult<(PreparedDefinition, Arc<publication::Publication>)> {
+    let (definition, spec) = specification(engine, image, definition).await?;
+    let instance = engine.store().admit_managed(
+        &spec,
         &PackageGrantV1 {
             principal: "native-query".into(),
             revision: 1,

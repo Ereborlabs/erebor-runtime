@@ -104,6 +104,8 @@ impl ManagedSourceFrame {
             proof: Arc::default(),
             selected: Arc::default(),
             coverage: Vec::new(),
+            #[cfg(feature = "native-store")]
+            complete: false,
         }
     }
 

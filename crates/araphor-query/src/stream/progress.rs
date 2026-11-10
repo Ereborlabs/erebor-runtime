@@ -93,7 +93,7 @@ impl Progress {
                     .memory()
                     .managed_budget(worker.as_ref(), session.engine().limits().input_bytes);
                 #[cfg(feature = "native-store")]
-                if let Some(managed) = &session.managed {
+                if let Some(managed) = session.managed.as_ref().filter(|managed| managed.follow) {
                     return session
                         .engine()
                         .store()
@@ -154,6 +154,12 @@ impl Progress {
         self.changes
             .as_ref()
             .map_or(self.position, InputSubscription::position)
+    }
+
+    pub(crate) fn can_resume(&self, position: StorePositionV1) -> bool {
+        self.changes
+            .as_ref()
+            .is_none_or(|changes| changes.can_resume(position))
     }
 
     pub(crate) fn observed(&self) -> StorePositionV1 {

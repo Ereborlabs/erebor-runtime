@@ -1091,3 +1091,60 @@ Production Analysis binding, notification delivery, configured capacity,
 retention, backup, DuckDB removal, and both incident targets remain **Not done**.
 Read the [lifecycle qualification](../research/results/araphor-native-lifecycle-2026-11-10.md)
 for the frozen source hashes, exact commands, and 120 passing tests in 11 suites.
+
+## Native subscription startup and version changes
+
+This extension follows `d480e3a6e`. A finite execution does not create a durable
+input consumer. A following execution keeps the existing consumer for its
+instance generation. Production Control and Analysis still use DuckDB.
+
+[Progress::bind](../../crates/araphor-query/src/stream/progress.rs) Query starts a finite execution
+  -> [Progress::bind](../../crates/araphor-query/src/stream/progress.rs) Query uses the existing temporary input registration
+  -> [Session](../../crates/araphor-query/src/execution.rs) Query leaves the durable input token out of the finite capture
+  -> [Runtime](../../crates/araphor-query/src/stream/physical/runtime.rs) A version switch starts a source index for the target generation
+
+[Runtime::next_event](../../crates/araphor-query/src/stream/physical/runtime.rs) Query starts or resumes a following execution
+  -> [InputSubscription::can_resume](../../crates/araphor-data/src/analysis/inputs/mod.rs) Query compares completed input with the saved cursor
+  -> [Session](../../crates/araphor-query/src/execution.rs) Query restores the existing historical source index when completion precedes the cursor
+  -> [InputSubscription::observe_source](../../crates/araphor-data/src/analysis/native/inputs/replay.rs) Data records complete source coverage without changing durable progress
+  -> [Wake::capture_inputs](../../crates/araphor-data/src/analysis/native/inputs/capture.rs) Data binds a live change read to the restored parent
+  -> [consume_inputs](../../crates/araphor-data/src/analysis/native/inputs/capture.rs) Only successful complete publication advances consumed progress
+
+```mermaid
+sequenceDiagram
+    participant Query
+    participant Data
+    participant Package
+    Query->>Data: Read retained source frames
+    Query->>Data: Observe complete contiguous coverage
+    Query->>Data: Capture changes after restored parent
+    Query->>Package: Execute retained native plan
+    Query->>Data: Publish Graph, results, and consumed cut
+```
+
+The replay head belongs to the input handle. Clones share the head. A new
+registration starts with no replay head. The head stores one result reference
+and one position. It stores no Arrow batches or raw payloads. Data requires
+the exact store, schema, recovery epoch, tenant, instance, generation, and
+input coverage. An initial complete frame establishes coverage. A change frame
+extends coverage only from the exact saved parent. An older, duplicate, or
+gapped frame does not allocate proof memory or change the head.
+
+Record decode and retained proof memory use the caller budget. Temporary decode
+leases end when observation returns. The retained head lease ends when the
+head changes or the last handle closes. A failed observation leaves durable
+progress unchanged. A failed publication also leaves progress unchanged.
+[SourceRecovery::resume](../../crates/araphor-query/src/stream/recovery.rs) reuses
+the source index and input handle only with the same prepared native plan and
+memory owner.
+
+The [Query version tests](../../crates/araphor-query/tests/native_execution/version.rs)
+cover finite execution, version promotion, rollback, first following execution,
+revived consumers, rejected publication, stale admission, and later input. The
+[Data input tests](../../crates/araphor-data/tests/native_managed/inputs.rs)
+cover full and partial demand, contiguous and gapped replay, old frames, and
+memory failure. The first-follow case also reopens the store and consumes the
+next matching input without the old replay handle. Read the
+[startup qualification](../research/results/araphor-native-startup-2026-11-10.md)
+for the frozen source hashes, exact commands, and 127 passing tests in 11 suites.
+Production cutover and both incident targets remain **Not done**.

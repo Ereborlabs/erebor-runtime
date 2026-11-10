@@ -37,6 +37,8 @@ pub(super) struct Publication {
     receipt: Arc<Mutex<Option<araphor_data::ManagedReceipt>>>,
     pub(super) reject: Arc<AtomicBool>,
     pub(super) later: Arc<AtomicU64>,
+    pub(super) stale: Arc<AtomicBool>,
+    operation: Option<ManagedRead>,
 }
 
 impl Publication {
@@ -49,7 +51,19 @@ impl Publication {
             receipt: Arc::new(Mutex::new(None)),
             reject: Arc::new(AtomicBool::new(false)),
             later: Arc::new(AtomicU64::new(0)),
+            stale: Arc::new(AtomicBool::new(false)),
+            operation: None,
         })
+    }
+
+    pub(super) fn finite(
+        engine: &Arc<Engine>,
+        schema: sdk::arrow_schema::SchemaRef,
+        managed: ManagedRead,
+    ) -> Arc<Self> {
+        let mut publication = Self::new(engine, schema);
+        Arc::get_mut(&mut publication).unwrap().operation = Some(managed);
+        publication
     }
 
     pub(super) fn selected(&self) -> Vec<sdk::RecordBatch> {
@@ -136,6 +150,15 @@ impl ManagedPublication for Publication {
         &self,
         control: &AnalysisReadControl,
     ) -> araphor_query::Result<(Invocation, ManagedRead)> {
+        if let Some(managed) = &self.operation {
+            return Ok((
+                Invocation {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    ..Default::default()
+                },
+                managed.clone(),
+            ));
+        }
         let resume = self
             .engine
             .store()
@@ -164,10 +187,30 @@ impl ManagedPublication for Publication {
         frontier: &ManagedFrontier,
         control: &AnalysisReadControl,
     ) -> araphor_query::Result<Option<Arc<ManagedAttempt>>> {
+        let capture = snapshot
+            .managed()
+            .ok_or_else(|| Code::Missing.error("managed snapshot"))?;
+        if self.stale.swap(false, Ordering::SeqCst) {
+            let competing = self.engine.store().register_managed_attempt(
+                capture,
+                &ManagedRequest {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    time_utc_ns: capture.time_utc_ns(),
+                    seed: invocation.seed,
+                    rebuild: false,
+                    witness_expiry: u64::MAX,
+                    frontier: None,
+                },
+                || control.check(),
+            )?;
+            self.engine.store().finish_managed(
+                &competing,
+                araphor_data::ManagedExit::Cancelled,
+                || control.check(),
+            )?;
+        }
         let attempt = self.engine.store().register_managed_attempt(
-            snapshot
-                .managed()
-                .ok_or_else(|| Code::Missing.error("managed snapshot"))?,
+            capture,
             &ManagedRequest {
                 id: invocation.id.clone(),
                 time_utc_ns: snapshot.managed().unwrap().time_utc_ns(),

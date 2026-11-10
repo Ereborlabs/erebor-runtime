@@ -11,7 +11,7 @@ use araphor_analysis_types::{
     },
 };
 
-fn image() -> araphor_package::Result<PackageBundle> {
+pub(super) fn image() -> araphor_package::Result<PackageBundle> {
     let descriptor = Causal::descriptor();
     let artifact = PackageArtifactV1 {
         implementations: vec![PackageImplementationV1::Wasm {
@@ -32,7 +32,7 @@ fn image() -> araphor_package::Result<PackageBundle> {
     })
 }
 
-fn audit(revision: u64) -> TestResult<AnalysisContextVersionV1> {
+pub(super) fn audit(revision: u64) -> TestResult<AnalysisContextVersionV1> {
     let audit = Audit {
         schema_version: 1,
         record: DiscoveryRecordIdV1 {
@@ -69,7 +69,7 @@ fn audit(revision: u64) -> TestResult<AnalysisContextVersionV1> {
     Ok(value)
 }
 
-fn links(store: &NativeStore) -> TestResult<Vec<[Vec<u8>; 3]>> {
+pub(super) fn links(store: &NativeStore) -> TestResult<Vec<[Vec<u8>; 3]>> {
     let view = store.view()?;
     let mapping = view
         .managed_graph(TENANT, "native-query", &AnalysisReadControl::default())?

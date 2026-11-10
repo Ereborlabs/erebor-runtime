@@ -67,6 +67,8 @@ impl SourceEvidence {
 
 #[derive(Clone, Debug)]
 pub struct ManagedSourceFrame {
+    #[cfg(feature = "native-store")]
+    complete: bool,
     pub(super) tables: Vec<sdk::Dataset>,
     pub(super) removals: BTreeMap<AnalysisStreamIdentityV1, Vec<AnalysisGapV1>>,
     pub(super) proof: Arc<OnceLock<Arc<PackageResultRefV1>>>,
@@ -181,6 +183,32 @@ impl ManagedSourceRead {
 }
 
 impl ManagedSourceFrame {
+    #[cfg(feature = "native-store")]
+    pub(in crate::analysis) fn covers_inputs(
+        &self,
+        meta: &AnalysisStoreMetaV1,
+        interest: &crate::analysis::inputs::InputInterest,
+        instance: &str,
+        generation: u64,
+    ) -> Result<bool> {
+        if !self.complete
+            || self.scope.store != meta.store_uuid
+            || self.scope.schema != meta.schema_version
+            || self.scope.recovery != meta.recovery_epoch
+            || self.scope.tenant != interest.original.tenant_id
+            || self.scope.instance != instance
+            || self.scope.generation != generation
+        {
+            return Ok(false);
+        }
+        interest.covers_read(
+            &self.scope.selection,
+            &self.scope.tables,
+            self.scope.context_owners.as_ref(),
+            self.scope.event_ranges.as_deref(),
+        )
+    }
+
     pub fn scope(&self) -> &Arc<SourceScope> {
         &self.scope
     }

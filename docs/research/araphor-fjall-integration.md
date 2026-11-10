@@ -136,6 +136,15 @@ Result: **Done for native Data lifecycle and original-log activation**. Producti
 Analysis host and sink binding, remaining storage owners, notification delivery,
 capacity, retention, backup, cutover, DuckDB removal, and both incident targets
 remain **Not done**. Production still uses DuckDB. No native gain is established.
+Native Query now separates finite execution from durable input consumption.
+First following execution and revived older generations restore complete source
+coverage before they consume live changes. Guard rejection, stale admission,
+restart, and post-capture input remain covered. The gate passes 127 tests in
+11 suites. Read the [startup qualification](results/araphor-native-startup-2026-11-10.md).
+Result: **Done for optional native subscription startup and version changes**.
+Production binding, remaining storage owners, notification delivery, capacity,
+retention, backup, cutover, DuckDB removal, and both incident targets remain
+**Not done**. No native production speedup is measured.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

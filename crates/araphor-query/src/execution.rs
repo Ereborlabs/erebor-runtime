@@ -1566,7 +1566,13 @@ impl Session {
                 let managed = managed.as_ref().ok_or_else(|| {
                     araphor_data::PackageErrorCodeV1::Invalid.error("managed source owner")
                 })?;
-                if head.is_none() && !managed.rebuild {
+                if head.is_none()
+                    && !managed.rebuild
+                    && managed
+                        .expected
+                        .as_ref()
+                        .is_none_or(|expected| expected.generation == managed.instance.generation)
+                {
                     let store = Arc::clone(&self.engine.store);
                     let instance = managed.instance.clone();
                     let control = Arc::new(self.control.operation()?);
@@ -1603,6 +1609,11 @@ impl Session {
                 let store = Arc::clone(&self.engine.store);
                 let control = Arc::new(self.control.operation()?);
                 let memory = Arc::clone(&self.memory);
+                #[cfg(feature = "native-store")]
+                let inputs = self.input_changes.clone().filter(|inputs| {
+                    managed.as_ref().is_some_and(|managed| managed.follow)
+                        && !inputs.can_resume(parent.position)
+                });
                 let limits = AnalysisExtractLimits {
                     scan_bytes: self.engine.limits.scan_bytes,
                     input_bytes: self.engine.limits.input_bytes,
@@ -1841,7 +1852,12 @@ impl Session {
                                 rows = rows.saturating_add(batch.num_rows() as u64);
                             }
                             let index_at = std::time::Instant::now();
-                            index.restore(frame, receipt, &control).context(SqlSnafu)?;
+                            index.restore(Arc::clone(&frame), receipt, &control).context(SqlSnafu)?;
+                            #[cfg(feature = "native-store")]
+                            if let Some(inputs) = &inputs {
+                                let budget = memory.managed_budget(control.as_ref(), limits.input_bytes);
+                                inputs.observe_source(&frame, &control, budget.as_ref())?;
+                            }
                             indexing += index_at.elapsed();
                             points += 1;
                         }
@@ -1896,7 +1912,7 @@ impl Session {
             managed,
         );
         #[cfg(feature = "native-store")]
-        if self.reference.is_none() {
+        if self.reference.is_none() && self.managed.as_ref().is_some_and(|managed| managed.follow) {
             if let Some(inputs) = &self.input_changes {
                 snapshot.bind_inputs(inputs.clone()).context(SqlSnafu)?;
             }

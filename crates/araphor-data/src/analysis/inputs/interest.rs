@@ -2,6 +2,34 @@ use super::*;
 use crate::TraceIdentityV1;
 
 impl InputInterest {
+    #[cfg(feature = "native-store")]
+    pub(in crate::analysis) fn covers_read(
+        &self,
+        selection: &AnalysisSelectionV1,
+        requests: &AnalysisTableRequests,
+        owners: Option<&BTreeSet<String>>,
+        ranges: Option<&[(u64, u64)]>,
+    ) -> Result<bool> {
+        Ok(*selection == self.original.project(requests)?
+            && self.requests == *requests
+            && (owners.is_none()
+                || self
+                    .owners
+                    .as_ref()
+                    .zip(owners)
+                    .is_some_and(|(watched, captured)| watched.is_subset(captured)))
+            && owners.is_none_or(|owners| {
+                [
+                    ("targets", "mithril-control/target"),
+                    ("compiled_policies", "mithril-control/compiled-policy"),
+                    ("notification_routes", crate::NOTIFICATION_ROUTE_OWNER),
+                ]
+                .iter()
+                .all(|(table, owner)| !requests.contains_key(*table) || owners.contains(*owner))
+            })
+            && ranges.is_none_or(|ranges| ranges == [(0, u64::MAX)]))
+    }
+
     pub(in crate::analysis) fn raw_position(
         &self,
         entry: &crate::analysis::raw::RawEntry,

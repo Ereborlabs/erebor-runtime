@@ -128,7 +128,16 @@ impl InputRecord {
         generation: u64,
         get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
     ) -> Result<Option<Self>> {
-        Records::payload(&Self::key(owner, generation), get)?
+        Self::read_charged(owner, generation, get, &mut |_| Ok(()))
+    }
+
+    pub(super) fn read_charged(
+        owner: u64,
+        generation: u64,
+        get: impl FnMut(&[u8]) -> Result<Option<fjall::Slice>>,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<Option<Self>> {
+        Records::charged_payload(&Self::key(owner, generation), get, charge)?
             .map(|bytes| {
                 let record: Self = Records::decode(&bytes)?;
                 if record.generation != generation {

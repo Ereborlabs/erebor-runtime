@@ -102,6 +102,15 @@ pub struct InputSubscription {
 }
 
 impl InputSubscription {
+    pub fn can_resume(&self, position: StorePositionV1) -> bool {
+        #[cfg(feature = "native-store")]
+        if let Some(native) = &self.native {
+            return native.can_resume(position);
+        }
+        let _ = position;
+        true
+    }
+
     pub fn needs_initial(&self) -> bool {
         #[cfg(feature = "native-store")]
         if let Some(native) = &self.native {

@@ -25,6 +25,7 @@ impl NativeStore {
         instance.grant.remaining()?;
         let memory = PreparedMemory::new(control, budget)?;
         let lease = memory.reserve(InputInterest::allocation_bytes(selection, requests, owners))?;
+        let replay = super::Replay::new(control, budget)?;
         let interest = InputInterest::new(selection.clone(), requests.clone(), owners.cloned())?;
         let spec = interest.spec();
         let scope = instance
@@ -116,6 +117,7 @@ impl NativeStore {
                 coordinator: Arc::clone(&self.inputs),
                 revision: self.revision.subscribe(),
                 consumer: Some((consumer, Arc::downgrade(self))),
+                replay: Some(replay),
             }),
         })
     }
