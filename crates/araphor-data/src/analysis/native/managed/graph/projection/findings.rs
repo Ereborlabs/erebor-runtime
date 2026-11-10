@@ -39,6 +39,7 @@ pub(in crate::analysis) struct FindingRead<'a> {
     producers: BTreeMap<(u64, u64), Arc<Producer>>,
     selected: BTreeMap<String, (u64, String, String)>,
     findings: BTreeMap<(String, String), Arc<Vec<FindingRow>>>,
+    source_revisions: BTreeMap<String, Arc<GraphRevisionV1>>,
     qualified: BTreeSet<u64>,
     verified: RefCell<crate::analysis::context::VerifiedPackages>,
 }
@@ -60,6 +61,7 @@ impl<'a> FindingRead<'a> {
             producers: BTreeMap::new(),
             selected: BTreeMap::new(),
             findings: BTreeMap::new(),
+            source_revisions: BTreeMap::new(),
             qualified: BTreeSet::new(),
             verified: RefCell::new(crate::analysis::context::VerifiedPackages::default()),
         }
@@ -145,14 +147,30 @@ impl<'a> FindingRead<'a> {
                 .managed_graph_owner(self.tenant, result, self.control, &mut |bytes| {
                     self.charge(bytes)
                 })?;
-        if matches!(
+        let source = matches!(
             &owner.instance().spec.destination,
             crate::ManagedDestination::Graph { .. }
-        ) {
-            return Err(Code::Unsupported.error("native source finding owner"));
-        }
-        let publication =
-            publication.ok_or_else(|| Code::Missing.error("native finding publication"))?;
+        );
+        let publication = if source {
+            let source = crate::analysis::native::managed::source::SourceRead::load(
+                self.view,
+                self.tenant,
+                result,
+                self.control,
+                &mut |bytes| self.charge(bytes),
+            )?
+            .ok_or_else(|| Code::Missing.error("source finding publication"))?;
+            source.publication(self.view, &mut |bytes| self.charge(bytes))?
+        } else {
+            publication
+        };
+        let Some(publication) = publication else {
+            return if source {
+                Ok(Vec::new())
+            } else {
+                Err(Code::Missing.error("native finding publication"))
+            };
+        };
         let at = self.store.read_at(publication.reference.commit_revision)?;
         let mut snapshots = BTreeMap::new();
         for (&writer, &(_, revision)) in &publication.heads {
@@ -299,7 +317,7 @@ impl NativeStore {
         let mut results = BTreeMap::new();
         for (result, ids) in requested {
             let rows = reader.rows(result, &ids)?;
-            let (_, _, revision) = reader.basis(&rows, true)?;
+            let revision = reader.publication_revision(result, &rows)?;
             let mut findings = BTreeMap::new();
             for row in rows {
                 revision.validate_finding(&row.finding.value)?;
@@ -307,7 +325,7 @@ impl NativeStore {
                     .entry(row.finding.value.finding_id.clone())
                     .or_insert(row.finding.value);
             }
-            results.insert(result.to_owned(), (revision, findings));
+            results.insert(result.to_owned(), (revision.as_ref().clone(), findings));
         }
         Ok(results)
     }

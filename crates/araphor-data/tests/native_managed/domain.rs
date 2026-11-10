@@ -260,8 +260,29 @@ fn commit_expiry(
     step: u8,
     expiry: Option<u64>,
 ) -> TestResult {
+    commit_named_expiry(store, model, observation, step, expiry, "domain")
+}
+
+pub(super) fn commit_named(
+    store: &NativeStore,
+    model: &sdk::Model,
+    observation: &algorithm::Observation,
+    step: u8,
+    name: &str,
+) -> TestResult {
+    commit_named_expiry(store, model, observation, step, None, name)
+}
+
+fn commit_named_expiry(
+    store: &NativeStore,
+    model: &sdk::Model,
+    observation: &algorithm::Observation,
+    step: u8,
+    expiry: Option<u64>,
+    name: &str,
+) -> TestResult {
     let control = AnalysisReadControl::default();
-    let resume = store.managed_resume([1; 16], "domain", &control)?;
+    let resume = store.managed_resume([1; 16], name, &control)?;
     let page = capture(store, &resume.instance, resume.completed, step != 0)?;
     let frame = page.state.source().ok_or("source frame")?;
     let batch = page.page.tables["events"]
@@ -362,17 +383,11 @@ fn commit_expiry(
         &resume.instance.spec.destination,
         ManagedDestination::Graph { .. }
     ) {
-        let scope = araphor_data::ProcessorScopeV1 {
-            processor_id: araphor_data::GRAPH_PROCESSOR.into(),
-            method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
-            identity: observation.id.stream.clone(),
-        };
-        let base = store.processor_result(&scope)?.map(|result| {
-            araphor_data::analysis::PackageResultRefV1 {
-                result_id: result.result_id,
-                commit_revision: result.commit_revision,
-            }
-        });
+        let base = store
+            .managed_history(&resume.instance.grant.selection, name, &control)?
+            .into_iter()
+            .rev()
+            .find_map(|receipt| receipt.graph);
         frame.select_graph_input(
             &page.state,
             None,
@@ -507,7 +522,8 @@ fn commit_expiry(
                 &control,
             )?;
         }
-        if step == 0 || step == 4 || step == 3 && call == 20 || step != 3 && call == 10 {
+        if step == 0 || step == 4 || step == 7 || step == 3 && call == 20 || step != 3 && call == 10
+        {
             let mut commands = command(
                 model,
                 DomainRelations::FINDINGS,
@@ -519,7 +535,7 @@ fn commit_expiry(
                 &[DomainRelations::key(&finding.value.finding_id)?],
                 None,
                 FindingMember::encode(std::slice::from_ref(&finding))?,
-                step == 1,
+                step == 1 || step == 7,
             )?;
             if step == 3 || step == 4 {
                 let mut columns = commands.columns().to_vec();

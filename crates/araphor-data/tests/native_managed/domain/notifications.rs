@@ -214,6 +214,152 @@ fn prepared_notifications_keep_pending_subjects_routes_and_value_changes() -> Te
 }
 
 #[test]
+fn source_notification_revisions() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = NativeStore::open(&root)?;
+    let (_, model, source, observation) = fixture_source(&store, true)?;
+    let scope = araphor_data::ProcessorScopeV1 {
+        processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+        method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+        identity: source,
+    };
+    store.register_processor(&scope, araphor_data::ProcessorClassV1::Required, 1)?;
+    let expected = finding(
+        &observation,
+        &super::super::publication::output(&model)?.datasets[0].batches[0],
+    )?
+    .value;
+    commit(&store, &model, &observation, 0)?;
+    let first = reference_for(&store, 0, &expected.finding_id)?;
+    let subject = state(first.clone());
+    store.commit_contexts(&[context(&subject)?, route_context(&route(1))?])?;
+    let mut head = subject.clone();
+    head.revision = 2;
+    pending(&mut head, subject.revision);
+    store.commit_context_checked(&context(&head)?, subject.revision)?;
+    commit(&store, &model, &observation, 1)?;
+    let second = reference_for(&store, 1, &expected.finding_id)?;
+    let control = AnalysisReadControl::default();
+    let budget = super::super::graph::Budget;
+    let batch = store.prepare_notifications(
+        [1; 16],
+        &[second.clone()],
+        &[subject.key],
+        &control,
+        &budget,
+    )?;
+    assert!(!batch.changed(&second, &first)?);
+    let (_, revision) = batch.historical(&first)?.ok_or("first source revision")?;
+    assert_eq!(revision.evidence, vec![observation.id.clone()]);
+    assert!(revision.context.iter().any(|key| key.owner_revision == 99));
+    assert_eq!(
+        batch
+            .historical(&second)?
+            .ok_or("second source revision")?
+            .1,
+        revision
+    );
+    drop(batch);
+    commit(&store, &model, &observation, 2)?;
+    commit(&store, &model, &observation, 4)?;
+    let fourth = reference_for(&store, 4, &expected.finding_id)?;
+    let batch = store.prepare_notifications(
+        [1; 16],
+        &[fourth.clone()],
+        &[subject.key],
+        &control,
+        &budget,
+    )?;
+    assert!(batch.changed(&fourth, &first)?);
+    assert_eq!(batch.subject(subject.key, subject.revision)?, &subject);
+    let original = batch
+        .historical(&first)?
+        .ok_or("original source revision")?;
+    let original = (original.0.clone(), original.1.clone());
+    drop(batch);
+    store.database().inner().flush_memtables()?;
+    store.database().inner().major_compact()?;
+    drop(store);
+    let store = NativeStore::open(&root)?;
+    let batch = store.prepare_notifications(
+        [1; 16],
+        &[fourth.clone()],
+        &[subject.key],
+        &control,
+        &budget,
+    )?;
+    let historical = batch
+        .historical(&first)?
+        .ok_or("reopened source revision")?;
+    assert_eq!(historical, (&original.0, &original.1));
+    assert!(batch.changed(&fourth, &first)?);
+    Ok(())
+}
+
+#[test]
+fn source_instance_heads() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = NativeStore::open(&root)?;
+    let (instance, model, source, observation) = fixture_source(&store, true)?;
+    let scope = araphor_data::ProcessorScopeV1 {
+        processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+        method_version: u64::from(araphor_data::GRAPH_SCHEMA_VERSION),
+        identity: source,
+    };
+    store.register_processor(&scope, araphor_data::ProcessorClassV1::Required, 1)?;
+    let value = finding(
+        &observation,
+        &super::super::publication::output(&model)?.datasets[0].batches[0],
+    )?
+    .value;
+    commit(&store, &model, &observation, 0)?;
+    let first = reference_for(&store, 0, &value.finding_id)?;
+    let mut spec = instance.spec.clone();
+    spec.id = "second-domain".into();
+    let second = store.admit_managed(&spec, &instance.grant, || Ok(()))?;
+    store.set_managed_running([1; 16], &spec.id, second.lifecycle, true, || Ok(()))?;
+    commit_named(&store, &model, &observation, 0, &spec.id)?;
+    let control = AnalysisReadControl::default();
+    let budget = super::super::graph::Budget;
+    let attempt = store
+        .managed_attempt([1; 16], &spec.id, "domain-0", &control)?
+        .ok_or("other attempt")?;
+    let other = NotificationFindingRefV1 {
+        finding_id: value.finding_id.clone(),
+        result_id: attempt
+            .receipt()
+            .ok_or("other receipt")?
+            .selected
+            .result_id
+            .clone(),
+    };
+    let batch = store.prepare_notifications([1; 16], &[other.clone()], &[], &control, &budget)?;
+    assert_eq!(batch.heads()[&value.finding_id], other.result_id);
+    drop(batch);
+    commit_named(&store, &model, &observation, 7, "domain")?;
+    let batch = store.prepare_notifications([1; 16], &[other.clone()], &[], &control, &budget)?;
+    assert_eq!(batch.heads()[&value.finding_id], other.result_id);
+    drop(batch);
+    commit_named(&store, &model, &observation, 7, &spec.id)?;
+    let batch = store.prepare_notifications([1; 16], &[other.clone()], &[], &control, &budget)?;
+    assert!(!batch.heads().contains_key(&value.finding_id));
+    drop(batch);
+    let historical = store.graph_finding_batch([1; 16], &[first.clone()])?;
+    assert_eq!(historical[&first.result_id].1[&value.finding_id], value);
+    drop(attempt);
+    store.database().inner().flush_memtables()?;
+    store.database().inner().major_compact()?;
+    drop(store);
+    let store = NativeStore::open(&root)?;
+    let batch = store.prepare_notifications([1; 16], &[other], &[], &control, &budget)?;
+    assert!(!batch.heads().contains_key(&value.finding_id));
+    assert_eq!(store.graph_finding_batch([1; 16], &[first])?, historical);
+    Ok(())
+}
+
+#[test]
 fn prepared_notifications_defer_basis_and_state_errors_separately() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = NativeStore::open(&directory.path().join("data"))?;

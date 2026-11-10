@@ -59,6 +59,41 @@ impl DataWrite<'_> {
 }
 
 impl DataView {
+    pub(in crate::analysis::native) fn context_reference(
+        &self,
+        tenant: [u8; 16],
+        id: u64,
+        revision: u64,
+        charge: &mut dyn FnMut(usize) -> Result<()>,
+    ) -> Result<AnalysisContextRefV1> {
+        charge(0)?;
+        let key = ContextIndex::key(&ContextIndex::tenant(&tenant), revision, id);
+        let bytes =
+            Records::charged_payload(&key, |key| Records::read(key, &self.snapshot), charge)?
+                .ok_or_else(|| {
+                    NativeStateSnafu {
+                        field: "context reference header",
+                    }
+                    .build()
+                })?;
+        let reference: AnalysisContextRefV1 = Records::decode(&bytes)?;
+        if !reference.key.valid()
+            || reference.key.tenant_id != tenant
+            || reference.commit_revision != revision
+            || revision == 0
+            || revision > self.metadata_revision
+            || super::ContextRecord::id(&reference.key, |key| Records::read(key, &self.snapshot))?
+                != Some(id)
+            || Records::read(&Records::key(b'C', id), &self.snapshot)?.is_none()
+        {
+            return NativeStateSnafu {
+                field: "context reference identity",
+            }
+            .fail();
+        }
+        Ok(reference)
+    }
+
     pub(in crate::analysis::native) fn input_context_key(key: &[u8]) -> bool {
         key.starts_with(ContextIndex::TENANT) && key.len() == ContextIndex::TENANT.len() + 32
     }

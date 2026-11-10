@@ -75,25 +75,11 @@ impl StoredResult {
 
     pub(super) fn check(&self, attempt: &Attempt, spec: &ManagedSpec) -> Result<()> {
         let (instance, name) = self.owner();
+        Self::check_owner(self.tenant, self.revision, instance, name, attempt, spec)?;
         let receipt = attempt
             .receipt
             .as_ref()
             .ok_or_else(|| Code::Invalid.error("managed result receipt"))?;
-        if instance != spec.id
-            || attempt.capture.tenant != self.tenant
-            || attempt.capture.instance != instance
-            || attempt.request.id != name
-            || receipt.instance != instance
-            || receipt.attempt != name
-            || attempt.terminal.is_some()
-            || attempt.registered == 0
-            || attempt.registered >= self.revision
-            || receipt.commit_revision != self.revision
-            || receipt.selected.commit_revision != self.revision
-            || !receipt.matches_frontier(&attempt.request.frontier)
-        {
-            return Err(Code::Invalid.error("managed result owner"));
-        }
         match &self.body {
             ResultBody::Call(record) => {
                 let declaration = spec
@@ -116,6 +102,36 @@ impl StoredResult {
                 return Err(Code::Invalid.error("managed selected receipt"));
             }
             ResultBody::Selected(_) => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_owner(
+        tenant: [u8; 16],
+        revision: u64,
+        instance: &str,
+        name: &str,
+        attempt: &Attempt,
+        spec: &ManagedSpec,
+    ) -> Result<()> {
+        let receipt = attempt
+            .receipt
+            .as_ref()
+            .ok_or_else(|| Code::Invalid.error("managed result receipt"))?;
+        if instance != spec.id
+            || attempt.capture.tenant != tenant
+            || attempt.capture.instance != instance
+            || attempt.request.id != name
+            || receipt.instance != instance
+            || receipt.attempt != name
+            || attempt.terminal.is_some()
+            || attempt.registered == 0
+            || attempt.registered >= revision
+            || receipt.commit_revision != revision
+            || receipt.selected.commit_revision != revision
+            || !receipt.matches_frontier(&attempt.request.frontier)
+        {
+            return Err(Code::Invalid.error("managed result owner"));
         }
         Ok(())
     }

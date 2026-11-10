@@ -1,14 +1,23 @@
 use super::*;
 
 impl SourceRecord {
-    pub(super) const PREFIX: &'static [u8] = b"\0data/@source/header/";
+    pub(in crate::analysis::native) const PREFIX: &'static [u8] = b"\0data/@source/header/";
     pub(super) const HEAD: &'static [u8] = b"\0data/@source/head/";
     pub(super) const MEMBER: &'static [u8] = b"\0data/@source/member/";
     pub(super) const FACT: &'static [u8] = b"\0data/@source/fact/";
     pub(super) const PROOF: &'static [u8] = b"\0data/@source/proof/";
     pub(super) const WINDOW: &'static [u8] = b"\0data/@source/window/";
+    pub(in crate::analysis::native) const WINNER: &'static [u8] = b"\0data/@source/winner/";
 
-    pub(super) fn key(prefix: &[u8], parts: &[u64]) -> Vec<u8> {
+    pub(in crate::analysis::native) fn winner_prefix(tenant: [u8; 16]) -> Vec<u8> {
+        [Self::WINNER, tenant.as_slice()].concat()
+    }
+
+    pub(super) fn winner_key(tenant: [u8; 16], owner: u64, source: u64, first: u64) -> Vec<u8> {
+        Self::key(&Self::winner_prefix(tenant), &[source, owner, first])
+    }
+
+    pub(in crate::analysis::native) fn key(prefix: &[u8], parts: &[u64]) -> Vec<u8> {
         prefix
             .iter()
             .copied()
@@ -50,20 +59,28 @@ impl SourceRecord {
         let bytes = Records::charged_payload(&Records::key(b'X', id), get, charge)?
             .ok_or_else(|| Code::Missing.error("source publication result"))?;
         let result: StoredResult = Records::decode(&bytes)?;
+        header.check_ranges()?;
         if result.revision == 0
             || result.revision > head
             || header.captured.commit_revision == 0
             || header.captured.commit_revision >= result.revision
-            || header
-                .gaps
-                .iter()
-                .any(|(first, last)| *first == 0 || last < first)
-            || header.gaps.windows(2).any(|pair| pair[0] >= pair[1])
             || !matches!(&result.body, ResultBody::Selected(step) if step.source.is_some())
         {
             return Err(Code::Invalid.error("source publication header"));
         }
         Ok((header, result))
+    }
+
+    pub(super) fn check_ranges(&self) -> Result<()> {
+        if self
+            .gaps
+            .iter()
+            .any(|(first, last)| *first == 0 || last < first)
+            || self.gaps.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(Code::Invalid.error("source publication gaps"));
+        }
+        Ok(())
     }
 
     pub(in crate::analysis::native) fn summary(

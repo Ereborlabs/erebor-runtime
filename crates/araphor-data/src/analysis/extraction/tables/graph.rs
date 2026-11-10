@@ -296,7 +296,7 @@ impl Capture<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::analysis::extraction) fn graph(
+    pub(in crate::analysis) fn graph(
         &mut self,
         result_id: &str,
         graph: &GraphSnapshotV1,

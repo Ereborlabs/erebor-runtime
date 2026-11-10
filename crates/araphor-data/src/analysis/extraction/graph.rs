@@ -9,7 +9,7 @@ mod tests;
 mod traversal;
 
 impl AnalysisExtractionV1 {
-    pub(super) fn capture_graph(
+    pub(in crate::analysis) fn capture_graph(
         &mut self,
         id: &str,
         graph: &crate::GraphSnapshotV1,
@@ -329,7 +329,7 @@ impl AnalysisStore {
             selected.ok_or_else(|| self.state_error("the selected graph header is absent"))?;
         if complete || findings {
             GraphRows::bound_findings(
-                    self,
+                self,
                 snapshot,
                 result_id,
                 None,

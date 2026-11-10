@@ -11,11 +11,14 @@ use sdk::arrow_array::{Array, StringArray, StructArray};
 use snafu::ResultExt as _;
 
 use super::{Capture, DataView, NativeStore};
+use crate::analysis::native::managed::source::{SourceRead, SourceRecord};
 use crate::analysis::native::{records::Records, GraphPublication};
 use crate::{
     AnalysisExtractionV1, AnalysisReadControl, AnalysisReferenceOriginV1, AnalysisSelectionV1,
     AnalysisTableRead, PackageErrorCodeV1 as Code, Result, Selection,
 };
+
+mod source;
 
 fn finding_id(member: &Member) -> Result<&str> {
     let values = member
@@ -52,6 +55,14 @@ impl NativeStore {
             };
             output.scan(key.len() + value.len())?;
             let id = NativeStore::number(&value)?;
+            if Records::read(
+                &SourceRecord::key(SourceRecord::PREFIX, &[id]),
+                &view.snapshot,
+            )?
+            .is_some()
+            {
+                continue;
+            }
             let publication = GraphPublication::read(
                 id,
                 view.metadata_revision,
@@ -83,6 +94,25 @@ impl NativeStore {
             output.charge(publication.reference.result_id.capacity())?;
             selected.push(publication.reference.result_id);
         }
+        let limit = output.limits.keys;
+        let count = selection.key_count();
+        view.visit_source_winners(
+            selection.tenant_id,
+            Some(selection.sources.as_slice()),
+            control,
+            &mut |bytes| output.charge(bytes),
+            |source, charge| {
+                if limit.is_some_and(|limit| count + selected.len() >= limit) {
+                    return crate::AnalysisInputTooLargeSnafu {
+                        resource: "selected input keys",
+                    }
+                    .fail();
+                }
+                charge(source.name().len().saturating_mul(4) + 12 * size_of::<String>())?;
+                selected.push(source.reference().result_id);
+                Ok(())
+            },
+        )?;
         selected.sort();
         selection.graphs = Selection::Exact(selected);
         Ok(())
@@ -102,22 +132,56 @@ impl NativeStore {
             return Ok(());
         }
         for name in selected.graphs() {
+            let source = SourceRead::load(view, selected.tenant_id, name, control, &mut |bytes| {
+                output.charge(bytes)
+            })?;
+            if let Some(source) = source {
+                if !selected.sources.as_slice().contains(source.identity()?) {
+                    continue;
+                }
+                if ["snapshot", "metadata"]
+                    .iter()
+                    .any(|field| read.projects_field("graph_manifest", field))
+                    || !selected.binding_ids.is_empty()
+                {
+                    return Err(Code::Unsupported.error("native source Graph snapshot"));
+                }
+                let publication = source.publication(view, &mut |bytes| output.charge(bytes))?;
+                if let Some(publication) = publication {
+                    self.extract_publication(
+                        view,
+                        &publication,
+                        Some(&source),
+                        scope,
+                        read,
+                        output,
+                        capture,
+                        control,
+                    )?;
+                } else {
+                    self.extract_source_manifest(&source, read, (0, 0), output, capture, control)?;
+                }
+                continue;
+            }
             let (publication, owner) =
                 view.managed_graph_owner(selected.tenant_id, name, control, &mut |bytes| {
                     output.charge(bytes)
                 })?;
-            if matches!(
-                &owner.instance().spec.destination,
-                crate::ManagedDestination::Graph { .. }
-            ) {
-                return Err(Code::Unsupported.error("native source Graph provider"));
-            }
             let publication = publication
                 .ok_or_else(|| Code::Unsupported.error("native Graph publication owner"))?;
             if owner.instance().grant.permitted_by(scope).is_err() {
                 continue;
             }
-            self.extract_publication(view, &publication, scope, read, output, capture, control)?;
+            self.extract_publication(
+                view,
+                &publication,
+                None,
+                scope,
+                read,
+                output,
+                capture,
+                control,
+            )?;
         }
         Ok(())
     }
@@ -126,6 +190,7 @@ impl NativeStore {
         &self,
         view: &DataView,
         publication: &GraphPublication,
+        source: Option<&SourceRead>,
         scope: &AnalysisSelectionV1,
         read: &AnalysisTableRead<'_>,
         output: &mut AnalysisExtractionV1,
@@ -151,7 +216,7 @@ impl NativeStore {
             Ok(None)
         };
         let mut snapshots = BTreeMap::new();
-        let mut restricted = false;
+        let mut restricted = source.is_some_and(|source| source.restricted() != 0);
         for (writer, (_, revision)) in &publication.heads {
             memory
                 .borrow_mut()
@@ -202,7 +267,11 @@ impl NativeStore {
                                 )?;
                                 origins.insert(
                                     opening,
-                                    (origin.grant.permitted_by(scope).is_ok(), origin.restricted),
+                                    (
+                                        source.is_some()
+                                            || origin.grant.permitted_by(scope).is_ok(),
+                                        origin.restricted,
+                                    ),
                                 );
                             }
                             let (allowed, restricted) = origins[&opening];
@@ -276,14 +345,28 @@ impl NativeStore {
             if !capture.native_finding(
                 &publication.reference.result_id,
                 publication.reference.commit_revision,
-                restricted,
-                None,
+                restricted || source.is_some_and(|source| source.restricted() != 0),
+                source
+                    .map(|source| source.identity().map(|source| source.key()))
+                    .transpose()?
+                    .as_deref(),
                 &finding.value,
                 value,
                 &mut memory.borrow_mut().sink(control),
             )? {
                 return Ok(());
             }
+        }
+        if let Some(source) = source {
+            self.extract_source_manifest(
+                source,
+                read,
+                (nodes.len(), edges.len()),
+                &mut memory.borrow_mut(),
+                capture,
+                control,
+            )?;
+            return Ok(());
         }
         if manifest && permitted {
             let mut output = memory.borrow_mut();

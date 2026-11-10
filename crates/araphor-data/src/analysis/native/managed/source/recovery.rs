@@ -11,6 +11,7 @@ impl NativeStore {
         let mut indexes = BTreeMap::new();
         let mut heads = BTreeMap::<Vec<u8>, (u64, u64)>::new();
         let mut windows = BTreeMap::<Vec<u8>, (u64, u64)>::new();
+        let mut winners = BTreeMap::<Vec<u8>, (u64, u64)>::new();
         for entry in current.snapshot.prefix(b"\0data/X") {
             let (key, _) = entry.context(crate::NativeStorageSnafu {
                 operation: "validate source result owners",
@@ -233,6 +234,10 @@ impl NativeStore {
                     &mut windows,
                     SourceRecord::key(SourceRecord::WINDOW, &[source_id, source.first]),
                 ),
+                (
+                    &mut winners,
+                    SourceRecord::winner_key(stored.tenant, instance, source_id, source.first),
+                ),
             ] {
                 if index.get(&key).is_none_or(|old| old.0 < stored.revision) {
                     index.insert(key, (stored.revision, selected));
@@ -275,6 +280,7 @@ impl NativeStore {
             SourceRecord::PROOF,
             SourceRecord::HEAD,
             SourceRecord::WINDOW,
+            SourceRecord::WINNER,
         ] {
             for entry in current.snapshot.prefix(prefix) {
                 let (key, value) = entry.context(crate::NativeStorageSnafu {
@@ -286,6 +292,8 @@ impl NativeStore {
                     heads.remove(key.as_ref()).map(|(_, id)| id) == Some(Self::number(&value)?)
                 } else if prefix == SourceRecord::WINDOW {
                     windows.remove(key.as_ref()).map(|(_, id)| id) == Some(Self::number(&value)?)
+                } else if prefix == SourceRecord::WINNER {
+                    winners.remove(key.as_ref()).map(|(_, id)| id) == Some(Self::number(&value)?)
                 } else {
                     indexes.remove(key.as_ref()).as_deref() == Some(value.as_ref())
                 };
@@ -294,7 +302,12 @@ impl NativeStore {
                 }
             }
         }
-        if !headers.is_empty() || !indexes.is_empty() || !heads.is_empty() || !windows.is_empty() {
+        if !headers.is_empty()
+            || !indexes.is_empty()
+            || !heads.is_empty()
+            || !windows.is_empty()
+            || !winners.is_empty()
+        {
             return Err(Code::Missing.error("source index set"));
         }
         Ok(())

@@ -2,6 +2,7 @@ use std::ops::Bound::{Included, Unbounded};
 
 use super::super::super::super::{graph::GraphPublication, results::StoredResult};
 use super::*;
+use crate::analysis::native::managed::source::SourceRead;
 
 impl FindingRead<'_> {
     pub(in crate::analysis) fn heads(
@@ -38,44 +39,79 @@ impl FindingRead<'_> {
             if publication.tenant != tenant || publication.graph != graph {
                 return Err(Code::Invalid.error("native finding head identity"));
             }
-            for &id in ids {
-                self.charge(id.len().saturating_mul(4))?;
-                let identity = rmp_serde::to_vec(&("graph-finding", graph, tenant, id))
-                    .context(crate::ManagedEncodingSnafu)?;
-                let Some(group) =
-                    Records::find(&identity, |key| Records::read(key, &self.view.snapshot))?
-                else {
-                    continue;
-                };
-                let prefix = Index::key(Index::GROUP, &[group]);
-                let Some(entry) = self.view.snapshot.prefix(&prefix).next() else {
-                    continue;
-                };
-                let (key, value) = entry.context(NativeStorageSnafu {
-                    operation: "read requested finding head",
-                })?;
-                if key.len() != prefix.len() + 8 || NativeStore::number(&value)? == 0 {
-                    return Err(Code::Invalid.error("native finding head member"));
-                }
-                let result = &publication.reference.result_id;
-                let revision = publication.reference.commit_revision;
-                if heads
-                    .get(id)
-                    .is_none_or(|(prior, value)| (revision, result) > (*prior, value))
-                {
-                    self.charge(
-                        (id.len() + result.len())
-                            .saturating_mul(4)
-                            .saturating_add(12 * size_of::<(String, (u64, String))>()),
-                    )?;
-                    heads.insert(id.to_owned(), (revision, result.clone()));
-                }
+            if SourceRead::load(
+                self.view,
+                self.tenant,
+                &publication.reference.result_id,
+                self.control,
+                &mut |bytes| self.charge(bytes),
+            )?
+            .is_some()
+            {
+                continue;
             }
+            self.head_groups(&publication, self.view, ids, &mut heads)?;
         }
+        self.view.visit_source_winners(
+            self.tenant,
+            None,
+            self.control,
+            &mut |bytes| self.charge(bytes),
+            |source, charge| {
+                let Some(publication) = source.publication(self.view, charge)? else {
+                    return Ok(());
+                };
+                let at = self.store.read_at(publication.reference.commit_revision)?;
+                self.head_groups(&publication, &at, ids, &mut heads)
+            },
+        )?;
         Ok(heads
             .into_iter()
             .map(|(id, (_, result))| (id, result))
             .collect())
+    }
+
+    fn head_groups(
+        &self,
+        publication: &GraphPublication,
+        at: &DataView,
+        ids: &BTreeSet<&str>,
+        heads: &mut BTreeMap<String, (u64, String)>,
+    ) -> Result<()> {
+        for &id in ids {
+            self.charge(id.len().saturating_mul(4))?;
+            let identity =
+                rmp_serde::to_vec(&("graph-finding", publication.graph, self.tenant, id))
+                    .context(crate::ManagedEncodingSnafu)?;
+            let Some(group) = Records::find(&identity, |key| Records::read(key, &at.snapshot))?
+            else {
+                continue;
+            };
+            let prefix = Index::key(Index::GROUP, &[group]);
+            let Some(entry) = at.snapshot.prefix(&prefix).next() else {
+                continue;
+            };
+            let (key, value) = entry.context(NativeStorageSnafu {
+                operation: "read requested finding head",
+            })?;
+            if key.len() != prefix.len() + 8 || NativeStore::number(&value)? == 0 {
+                return Err(Code::Invalid.error("native finding head member"));
+            }
+            let result = &publication.reference.result_id;
+            let revision = publication.reference.commit_revision;
+            if heads
+                .get(id)
+                .is_none_or(|(prior, value)| (revision, result) > (*prior, value))
+            {
+                self.charge(
+                    (id.len() + result.len())
+                        .saturating_mul(4)
+                        .saturating_add(12 * size_of::<(String, (u64, String))>()),
+                )?;
+                heads.insert(id.to_owned(), (revision, result.clone()));
+            }
+        }
+        Ok(())
     }
 
     fn cached_rows(&mut self, result: &str, id: &str) -> Result<Arc<Vec<FindingRow>>> {
@@ -123,13 +159,38 @@ impl FindingRead<'_> {
         &mut self,
         result: &str,
         id: &str,
-    ) -> Result<GraphRevisionV1> {
+    ) -> Result<Arc<GraphRevisionV1>> {
         let rows = self.cached_rows(result, id)?;
-        let (_, _, revision) = self.basis(&rows, true)?;
+        let revision = self.publication_revision(result, &rows)?;
         if let Some(row) = rows.first() {
             revision.validate_finding(&row.finding.value)?;
         }
         Ok(revision)
+    }
+
+    pub(super) fn publication_revision(
+        &mut self,
+        result: &str,
+        rows: &[FindingRow],
+    ) -> Result<Arc<GraphRevisionV1>> {
+        if let Some(revision) = self.source_revisions.get(result) {
+            return Ok(Arc::clone(revision));
+        }
+        if let Some(source) =
+            SourceRead::load(self.view, self.tenant, result, self.control, &mut |bytes| {
+                self.charge(bytes)
+            })?
+        {
+            let (revision, _) =
+                source.revision(self.store, self.control, &mut |bytes| self.charge(bytes))?;
+            let revision = Arc::new(revision);
+            self.charge(result.len() + 12 * size_of::<(String, Arc<GraphRevisionV1>)>())?;
+            self.source_revisions
+                .insert(result.to_owned(), Arc::clone(&revision));
+            return Ok(revision);
+        }
+        self.basis(rows, true)
+            .map(|(_, _, revision)| Arc::new(revision))
     }
 
     fn canonical(&mut self, rows: &[FindingRow]) -> Result<Option<u64>> {

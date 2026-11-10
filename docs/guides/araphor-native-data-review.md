@@ -1429,3 +1429,53 @@ qualify concern delivery, not actual finding routing. Native Host notification
 binding, Source readers and revisions, durable notification consumption,
 notification write batches, capacity, retention, backup, cutover, DuckDB
 removal, and both incident targets remain **Not done**.
+
+## Native Source finding reads and revisions
+
+This extension follows `b20c90be9`. It removes the Source rejection from native
+finding values, provenance, scalar manifests, and notification preparation.
+Production still uses DuckDB.
+
+Read the owners in this order:
+
+1. [Source records](../../crates/araphor-data/src/analysis/native/managed/source/records.rs) define the per-source, per-instance window index.
+2. [Source publication](../../crates/araphor-data/src/analysis/native/managed/source/publication.rs) saves that index in the same Data transaction as the result.
+3. [SourceRead](../../crates/araphor-data/src/analysis/native/managed/source/read.rs) checks the saved owner and reads retained membership and context references.
+4. [FindingRead](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings.rs) reads actual finding groups at their publication cuts.
+5. [notification finding reads](../../crates/araphor-data/src/analysis/native/managed/graph/projection/findings/notification.rs) combine Definition heads and Source window winners.
+6. [Source extraction](../../crates/araphor-data/src/analysis/native/extraction/graph/source.rs) uses the existing Arrow capture builder.
+7. [Source read tests](../../crates/araphor-data/tests/native_managed/source/read.rs) and [notification revision tests](../../crates/araphor-data/tests/native_managed/domain/notifications.rs) exercise the native owners.
+
+A package publishes a Source result
+  -> Data saves the winner under its source, instance, and first cursor
+  -> Another instance can retain a winner for the same source and window
+  -> Replacement changes only that instance's window winner
+
+A reader requests an exact result or current Source windows
+  -> SourceRead checks the saved result, successful attempt, and Graph receipt
+  -> FindingRead binds any Graph publication to that exact owner
+  -> Each finding group uses the saved publication view
+  -> Findings-only extraction retains Graph coverage and result attribution
+
+A reader requests the whole Graph revision
+  -> SourceRead opens retained membership at the result revision
+  -> Each member supplies its original append publication
+  -> Fact and proof postings supply exact retained context references
+  -> The reader returns evidence, coverage, gaps, and context keys
+
+Scalar reads skip the encoded record and proof vectors during decode. They
+still read the saved result bytes and decode the saved attempt. Whole revisions
+share one `Arc` per result during notification preparation. They do not use the
+current context pin set to replace historical metadata.
+
+Native format 6 adds the window index. Recovery checks its exact set against
+retained results. Earlier native formats are rejected; no conversion is added.
+Full Source snapshots, metadata bodies, binding-scoped reads, mutable Graph
+notices, and bounded recovery cost remain **Not done**. Current-window selection
+does not prove that each change read skips all unchanged windows.
+
+Read the [qualification record](../research/results/araphor-native-source-reads-2026-11-10.md)
+for the frozen source and checks. Native notification subscription completion,
+write batches, configured capacity, retention, backup, production cutover,
+DuckDB removal, and both incident targets remain **Not done**. No kernel or ABI
+boundary changes in this extension.

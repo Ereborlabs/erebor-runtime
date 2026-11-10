@@ -27,9 +27,12 @@ mod frozen;
 mod history;
 mod inputs;
 mod publication;
+mod read;
 mod records;
 mod recovery;
 mod windows;
+
+pub(in crate::analysis::native) use read::SourceRead;
 
 #[derive(Deserialize, Serialize)]
 pub(in crate::analysis::native) struct SourceRecord {

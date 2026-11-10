@@ -324,6 +324,19 @@ notification write batches, configured capacity, retention, backup, cutover,
 DuckDB removal, and both incident targets remain **Not done**. Production
 still uses DuckDB. No native production speedup is measured.
 
+The native Source reader now supplies finding values, provenance, scalar
+manifests, and whole Graph revisions. Per-instance window winners preserve
+independent packages on the same source. Historical reads use each retained
+publication cut. Source finding revisions share one value during notification
+preparation. Native format 6 adds the winner index and rejects older formats.
+Read the [Source read qualification](../research/results/araphor-native-source-reads-2026-11-10.md).
+Result: **Done for optional native Source finding and revision reads**.
+Full Source snapshots, metadata bodies, binding-scoped reads, mutable Graph
+notices, and bounded recovery cost remain **Not done**. Native notification
+completion and batches, capacity, retention, backup, production cutover,
+DuckDB removal, and both incident targets remain **Not done**. Production
+still uses DuckDB. No native production speedup is measured.
+
 The user selects log-based storage with Graph semantics and native DataFusion
 above it. The Graph design must be based on TerminusDB. This selects the
 target architecture and supersedes the earlier redb-first recommendation.

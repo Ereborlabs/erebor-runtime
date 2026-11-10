@@ -157,6 +157,10 @@ impl DataWrite<'_> {
             SourceRecord::key(SourceRecord::WINDOW, &[source_id, source.first]),
             selected.to_be_bytes(),
         );
+        self.transaction.insert(
+            SourceRecord::winner_key(spec.tenant, owner, source_id, source.first),
+            selected.to_be_bytes(),
+        );
         let scope = crate::ProcessorScopeV1 {
             processor_id: crate::GRAPH_PROCESSOR.into(),
             method_version: u64::from(crate::GRAPH_SCHEMA_VERSION),

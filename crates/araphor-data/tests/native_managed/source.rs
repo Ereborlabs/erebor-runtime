@@ -15,6 +15,8 @@ use std::collections::BTreeSet;
 mod expiry;
 #[path = "source/inputs.rs"]
 mod inputs;
+#[path = "source/read.rs"]
+mod read;
 
 #[path = "source/fixtures.rs"]
 mod fixtures;

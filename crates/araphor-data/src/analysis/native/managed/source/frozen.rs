@@ -28,6 +28,21 @@ impl SourceRecord {
             .source
             .as_ref()
             .ok_or_else(|| Code::Missing.error("source result step"))?;
+        self.manifest_values(
+            source,
+            (step.first, step.last, step.deadline),
+            &step.coverage,
+            step.base.as_ref(),
+        )
+    }
+
+    pub(super) fn manifest_values(
+        &self,
+        source: &EvidenceIntakeIdentityV1,
+        span: (u64, u64, u64),
+        coverage: &[crate::GraphCoverageKeyV1],
+        base: Option<&PackageResultRefV1>,
+    ) -> Result<crate::GraphManifest> {
         Ok(crate::GraphManifest {
             schema_version: crate::GRAPH_SCHEMA_VERSION,
             scope: crate::ProcessorScopeV1 {
@@ -35,11 +50,11 @@ impl SourceRecord {
                 method_version: u64::from(crate::GRAPH_SCHEMA_VERSION),
                 identity: source.clone(),
             },
-            first_cursor: step.first,
-            last_cursor: step.last,
+            first_cursor: span.0,
+            last_cursor: span.1,
             input_manifest: crate::GraphRevisionV1 {
                 evidence: Vec::new(),
-                coverage: step.coverage.clone(),
+                coverage: coverage.to_vec(),
                 context: Vec::new(),
                 missing_ranges: self.gaps.clone(),
             },
@@ -47,9 +62,9 @@ impl SourceRecord {
             packages: Vec::new(),
             missing_ranges: self.gaps.clone(),
             input_positions: Vec::new(),
-            previous_result_id: step.base.as_ref().map(|base| base.result_id.clone()),
+            previous_result_id: base.map(|base| base.result_id.clone()),
             context_notice_revision: self.captured.commit_revision,
-            witness_deadline_utc_ns: step.deadline,
+            witness_deadline_utc_ns: span.2,
         })
     }
 }
@@ -278,7 +293,7 @@ impl DataView {
         Ok(SourceRecord::key(SourceRecord::MEMBER, &[instance, source]))
     }
 
-    fn source_record(
+    pub(super) fn source_record(
         &self,
         prefix: &[u8],
         key: &[u8],

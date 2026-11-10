@@ -174,6 +174,22 @@ fn retained_healthy_expiry() -> TestResult {
     let journals = journals.try_into().map_err(|_| "degraded journals")?;
     let receipt = super::super::publication::publish(&store, &attempt, &model, &journals, false)?;
     assert_eq!(receipt.graph, Some(receipt.selected.clone()));
+    let extracted = super::read::page(&store, None, &AnalysisSelectionV1::tenant([1; 16]))?;
+    let manifest = super::read::manifests(&extracted)?.remove(0);
+    assert!(manifest.retained_input_expired);
+    assert_eq!(manifest.graph_revision.missing_ranges, vec![(1, 1)]);
+    assert_eq!(
+        manifest.graph_revision.evidence,
+        vec![observation.id.clone()]
+    );
+    assert_eq!(
+        extracted
+            .extraction
+            .graph_coverage(&receipt.selected.result_id)
+            .ok_or("expired Graph coverage")?
+            .state,
+        sdk::CoverageState::Gapped
+    );
     let saved = store
         .managed_attempt([1; 16], "domain", "expired", &control)?
         .ok_or("saved expiry")?;

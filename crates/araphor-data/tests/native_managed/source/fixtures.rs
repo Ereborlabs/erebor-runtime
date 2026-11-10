@@ -116,6 +116,16 @@ pub(super) fn select(
     cursors: &[u64],
     base: Option<&PackageResultRefV1>,
 ) -> Result<GraphReplayInputV1, Box<dyn std::error::Error>> {
+    select_window(store, page, cursors, base, 1)
+}
+
+pub(super) fn select_window(
+    store: &NativeStore,
+    page: &araphor_data::ManagedPage,
+    cursors: &[u64],
+    base: Option<&PackageResultRefV1>,
+    first: u64,
+) -> Result<GraphReplayInputV1, Box<dyn std::error::Error>> {
     let frame = page.state.source().ok_or("source frame")?;
     let source = identity();
     let view = store.view()?;
@@ -249,7 +259,7 @@ pub(super) fn select(
         &input,
         &derived,
         base,
-        (1, *cursors.last().ok_or("last")?, 2000),
+        (first, *cursors.last().ok_or("last")?, 2000),
         (append, report != 0, false),
         Arc::new(()),
     )?;

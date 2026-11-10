@@ -29,7 +29,7 @@ enum ReadOwner {
 
 struct FindingValue {
     finding: FindingV1,
-    revision: Option<GraphRevisionV1>,
+    revision: Option<Arc<GraphRevisionV1>>,
     canonical: Option<u64>,
 }
 
@@ -244,7 +244,7 @@ impl<'a> PreparedNotificationBatch<'a> {
         Ok(self.value(reference).and_then(|value| {
             value
                 .revision
-                .as_ref()
+                .as_deref()
                 .map(|revision| (&value.finding, revision))
         }))
     }
@@ -611,7 +611,7 @@ impl AnalysisStore {
                 (result.clone(), id.clone()),
                 FindingValue {
                     finding,
-                    revision,
+                    revision: revision.map(Arc::new),
                     canonical,
                 },
             );
