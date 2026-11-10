@@ -22,6 +22,9 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 #[path = "native_extraction/append.rs"]
 mod append;
 
+#[path = "native_extraction/recovery.rs"]
+mod recovery;
+
 fn identity(node: &str) -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],

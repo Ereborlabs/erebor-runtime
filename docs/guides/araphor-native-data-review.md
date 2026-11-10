@@ -1629,3 +1629,52 @@ delivery through the native Host remains separate proof. Affected-key reads,
 configured capacity, retention, collection, backup, production cutover, DuckDB
 removal, and both incident targets remain **Not done**. No kernel or ABI
 boundary changes in this extension.
+
+## Native source recovery ranges
+
+This extension follows `f390a9589`. Control can record a node's missing cursor
+range through native Data. Production still uses DuckDB.
+
+Read these owners in order:
+
+1. [RecoveryRange and NativeStore](../../crates/araphor-data/src/analysis/native/source/recovery.rs) store immutable source ranges and expose the existing recovery APIs.
+2. [Source headers](../../crates/araphor-data/src/analysis/native/source/mod.rs) read the ranges at the captured native cut and include their revision in source freshness.
+3. [Original batch routing](../../crates/araphor-data/src/analysis/native/inputs/records.rs) decodes each committed range and publishes the existing Removal change.
+4. [Raw qualification](../../crates/araphor-data/tests/native_raw/recovery.rs), [extraction qualification](../../crates/araphor-data/tests/native_extraction/recovery.rs), [CDC qualification](../../crates/araphor-data/tests/native_inputs.rs), and [attempt qualification](../../crates/araphor-data/tests/native_managed/attempts.rs) exercise the connected owners.
+
+Control reports a node floor above Data's accepted cursor
+  -> Data serializes the writer and reads the source's last recovery range
+  -> Data stages only the missing suffix and its recovery relation notice
+  -> One native commit publishes both records at the exact Data cut
+  -> The original journal reader emits Removal for the source and cursor range
+  -> Existing interests wake matching event or source-state subscriptions
+
+The key is `\0data/@source-recovery/` plus the existing source identity key and
+the range's last cursor in big-endian order. The value contains the source,
+first cursor, last cursor, and Data revision. The ordered key supplies both the
+last-range lookup and paging. There is no second index or copied CDC log.
+
+The operation returns Complete when the node floor is no greater than the
+accepted cursor. Otherwise, it returns Partial from accepted cursor plus one
+through the node floor. A repeated or lower recorded floor adds no range and
+makes no commit. A missing source stays unbound: recovery records create no
+receipt, CPU binding, or contiguous acknowledgement. Actual later input still
+determines the accepted cursor.
+
+The public recovery page keeps the existing 256-record bound and returns whole
+ranges whose last cursor is greater than the supplied cursor. Source extraction
+reads all required ranges at its captured cut. It charges encoded data before
+decode and charges vector growth against the actual read budget. It checks
+cancellation for each row. Recovery ranges stay separate from accepted raw
+ranges and do not remove a pending input gap.
+
+Native format 8 adds this recovery authority and rejects earlier formats.
+Reopen checks each key, source, cursor interval, revision, and source order. It
+requires each gap revision to be no greater than the recovery relation notice,
+and the notice to be no greater than the captured metadata revision. The notice
+also rejects a managed attempt whose source capture predates a recovery change.
+
+Read the [qualification record](../research/results/araphor-native-source-recovery-2026-11-10.md)
+for exact checks. Configured capacity, raw retention and deletion recovery,
+trace storage, backup, production cutover, DuckDB removal, and both incident
+targets remain **Not done**. This extension changes no kernel or ABI boundary.

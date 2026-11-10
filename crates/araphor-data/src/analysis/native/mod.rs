@@ -179,7 +179,7 @@ impl NativeStore {
             let mut tx = branch.write_tx().context(NativeStorageSnafu {
                 operation: "initialize",
             })?;
-            tx.insert(FORMAT, 7u64.to_be_bytes());
+            tx.insert(FORMAT, 8u64.to_be_bytes());
             tx.insert(
                 SCHEMA,
                 (super::ANALYSIS_SCHEMA_VERSION as u64).to_be_bytes(),
@@ -231,6 +231,7 @@ impl NativeStore {
         let raw = Self::recover_raw(root, &view.snapshot)?;
         view.revision = view.revision.max(raw.index.revision);
         view.raw = raw.index.clone();
+        view.validate_recovery_ranges()?;
         view.validate_catalogue()?;
         view.validate_contexts()?;
         view.validate_managed()?;
@@ -271,7 +272,7 @@ impl NativeStore {
     }
 
     fn decode_view(snapshot: BranchSnapshot) -> Result<DataView> {
-        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 7 {
+        if Self::number(&Self::required(&snapshot, FORMAT)?)? != 8 {
             return NativeStateSnafu {
                 field: "format version",
             }

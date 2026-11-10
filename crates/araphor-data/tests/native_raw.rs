@@ -11,6 +11,9 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 #[path = "native_raw/freshness.rs"]
 mod freshness;
 
+#[path = "native_raw/recovery.rs"]
+mod recovery;
+
 fn identity() -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],

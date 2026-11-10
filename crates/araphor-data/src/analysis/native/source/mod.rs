@@ -10,6 +10,7 @@ use snafu::ResultExt as _;
 
 mod coverage;
 mod raw;
+mod recovery;
 
 struct Sources;
 
@@ -301,6 +302,10 @@ impl DataView {
             output.charge(report.encoded_report.capacity())?;
             Some(report.encoded_report)
         };
+        let recovery = self.source_recovery(identity, output, control)?;
+        for gap in &recovery {
+            revision = revision.max(gap.commit_revision);
+        }
         let state = self.raw.source_state(
             root,
             &receipt,
@@ -324,7 +329,7 @@ impl DataView {
             receipt,
             commit_revision: revision,
             expired: Vec::new(),
-            recovery: Vec::new(),
+            recovery,
             pending: state.pending,
             coverage_report,
             typed_report: None,

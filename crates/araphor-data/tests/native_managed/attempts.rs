@@ -418,6 +418,31 @@ fn failure_frontier_resume_and_denied_suspension() -> TestResult {
 }
 
 #[test]
+fn recovery_invalidates_capture() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = NativeStore::open(&directory.path().join("store"))?;
+    let instance = fixture(&store, "recovery")?;
+    append(&store, 1)?;
+    let captured = capture(&store, &instance, false)?;
+    store.record_recovery_floor(&identity(), 3)?;
+    assert!(matches!(
+        store.register_managed_attempt(&captured.state, &request("stale-recovery", false), || Ok(
+            ()
+        )),
+        Err(Error::AnalysisSourceChanged { .. })
+    ));
+    let captured = capture(&store, &instance, false)?;
+    assert_eq!(
+        captured.page.extraction.sources[0].recovery[0].last_cursor,
+        3
+    );
+    store.register_managed_attempt(&captured.state, &request("current-recovery", false), || {
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
 fn freshness_uses_actual_sources_and_graph_follow_keeps_its_cut() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = NativeStore::open(&directory.path().join("store"))?;

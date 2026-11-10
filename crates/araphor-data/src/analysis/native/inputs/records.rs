@@ -56,6 +56,7 @@ impl Coordinator {
                     && item.value.is_some()
                     && (DataView::input_context_key(&item.key)
                         || DataView::input_coverage_key(&item.key)
+                        || DataView::input_recovery_key(&item.key)
                         || DataView::input_graph_key(&item.key)
                         || DataView::input_progress_key(&item.key)
                         || self.activations.receiver_count() != 0
@@ -121,6 +122,15 @@ impl Coordinator {
                     InputChange::Raw {
                         identity: &identity,
                         range: None,
+                    },
+                );
+            } else if let Some((source, gap)) = view.input_recovery(&item.key)? {
+                let identity = source.into();
+                self.readers.publish(
+                    position,
+                    InputChange::Removal {
+                        identity: &identity,
+                        range: Some((gap.first_cursor, gap.last_cursor, None)),
                     },
                 );
             } else if DataView::input_progress_key(&item.key) {

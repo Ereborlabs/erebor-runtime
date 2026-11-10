@@ -206,6 +206,61 @@ async fn unchanged(subscription: &mut InputSubscription) -> TestResult {
 }
 
 #[tokio::test]
+async fn recovery_log_routing() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("data");
+    let store = NativeStore::open(&root)?;
+    let initial = store.view()?;
+    let control = AnalysisReadControl::default();
+    let mut selection = AnalysisSelectionV1::new([1; 16], vec![source("node-a")]);
+    selection.cursor_from = Bound::Included(3);
+    selection.cursor_until = Bound::Included(5);
+    let mut events =
+        store.subscribe_inputs(&selection, &requests("events"), None, &control, &Budget)?;
+    let mut coverage =
+        store.subscribe_inputs(&selection, &requests("coverage"), None, &control, &Budget)?;
+    let mut contexts = store.subscribe_inputs(
+        &selection,
+        &requests("context_versions"),
+        None,
+        &control,
+        &Budget,
+    )?;
+    store.record_recovery_floor(&source("node-b"), 5)?;
+    store.record_recovery_floor(&source("node-a"), 2)?;
+    unchanged(&mut events).await?;
+    let first = changed(&mut coverage).await?;
+    assert_eq!(first.commit_revision, store.view()?.revision());
+    store.record_recovery_floor(&source("node-a"), 5)?;
+    let matched = changed(&mut events).await?;
+    assert_eq!(matched.ordinal, u32::MAX);
+    assert_eq!(changed(&mut coverage).await?, matched);
+    let head = store.database().inner().journal_head()?;
+    store.record_recovery_floor(&source("node-a"), 5)?;
+    assert_eq!(store.database().inner().journal_head()?, head);
+    unchanged(&mut events).await?;
+    unchanged(&mut coverage).await?;
+    unchanged(&mut contexts).await?;
+    let revision = initial.revision();
+    drop((events, coverage, contexts, initial, store));
+    let store = NativeStore::open(&root)?;
+    let initial = store.read_at(revision)?;
+    let mut replay = store.subscribe_inputs_at(
+        &initial,
+        &selection,
+        &requests("events"),
+        None,
+        &control,
+        &Budget,
+    )?;
+    assert_eq!(changed(&mut replay).await?, matched);
+    unchanged(&mut replay).await?;
+    store.record_recovery_floor(&source("node-a"), 6)?;
+    unchanged(&mut replay).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn original_logs_route_matches_and_resume_after_reopen() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("data");

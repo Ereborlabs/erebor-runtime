@@ -233,6 +233,18 @@ owners, capacity, retention, collection, backup, public Data cutover, DuckDB
 removal, and both incident targets remain **Not done**. Production still uses
 DuckDB. No native production speedup is measured.
 
+Native Data now records source recovery ranges without advancing accepted
+cursors or creating source bindings. Historical extraction reads the ranges
+under its actual budget. Original committed batches route matching Removal
+changes. Reopen checks range order and the recovery relation notice. Native
+format 8 adds this authority and rejects earlier formats. The focused gate
+passes 155 tests in nine suites. Read the
+[source recovery qualification](results/araphor-native-source-recovery-2026-11-10.md).
+Result: **Done for optional native source recovery records, extraction, and CDC**.
+Configured capacity, retention, trace storage, backup, complete Source providers,
+public Data cutover, DuckDB removal, and both incident targets remain **Not done**.
+Production still uses DuckDB. No native performance gain is measured.
+
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and
