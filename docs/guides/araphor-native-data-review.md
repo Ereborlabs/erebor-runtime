@@ -1008,3 +1008,86 @@ claim that an unchanged stateless package call is skipped between evaluations.
 Read the [Query qualification](../research/results/araphor-native-query-2026-11-10.md)
 for the exact source state and checks. Production cutover, DuckDB removal,
 retention, backup, and both incident performance targets remain **Not done**.
+
+## Native lifecycle and activation
+
+This extension follows `7868c7199`. Native Data uses the existing instance,
+version, call-head, membership, failure, pending-attempt, and outcome records.
+The production Analysis host still uses DuckDB. This extension does not switch
+that host or the Control constructor.
+
+[renew_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) The caller renews a stopped instance
+  -> [renew_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) Data checks the exact instance and current-generation pending work
+  -> [renew_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) Data keeps the selection and generation, then commits the new grant and lifecycle
+
+[prepare_managed_version](../../crates/araphor-data/src/analysis/native/managed/version.rs) The caller prepares a version
+  -> [prepare_managed_version](../../crates/araphor-data/src/analysis/native/managed/version.rs) Data checks the current instance, image pins, and pending work
+  -> [prepare_managed_version](../../crates/araphor-data/src/analysis/native/managed/version.rs) Data retains the candidate specification and Graph declarations
+  -> [commit_managed](../../crates/araphor-data/src/analysis/native/managed/commit.rs) A successful package publication switches the current generation and call heads atomically
+
+[remove_managed](../../crates/araphor-data/src/analysis/native/managed/removal.rs) The caller removes an instance after the worker joins
+  -> [check_managed_idle](../../crates/araphor-data/src/analysis/native/managed/attempts.rs) Data rejects pending work from any generation with `AnalysisBusy`
+  -> [remove_managed](../../crates/araphor-data/src/analysis/native/managed/removal.rs) Data marks the instance removed, clears call heads and failure state, and retains history
+  -> [recreate_managed](../../crates/araphor-data/src/analysis/native/managed/removal.rs) Recreation allocates a fresh generation with zero progress and the new call set
+
+[fail_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) Package preparation fails
+  -> [change_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) Data checks the exact captured instance, completed position, and idle state
+  -> [change_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) Data records a diagnostic without changing running state or lifecycle
+  -> [change_managed](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) A denial stops the instance and advances lifecycle
+
+[subscribe_activations](../../crates/araphor-data/src/analysis/native/inputs/activation.rs) The caller captures the current Data cut
+  -> [Wake::changed](../../crates/araphor-data/src/analysis/native/inputs.rs) The shared reader walks the original committed journal up to the published cut
+  -> [Coordinator::records](../../crates/araphor-data/src/analysis/native/inputs/records.rs) The reader checks instance records at each committed batch snapshot
+  -> [input_activation](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) A lifecycle equal to that batch's Data revision advances the activation position
+  -> [ActivationSubscription::changed](../../crates/araphor-data/src/analysis/native/inputs/activation.rs) The caller receives a newer decoded lifecycle position
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Data
+    participant CDC
+    Caller->>Data: Commit lifecycle change
+    Caller->>CDC: Await next activation
+    CDC->>Data: Read committed batch snapshot
+    CDC-->>Caller: Decoded lifecycle position
+```
+
+The activation handle drives the same reader as package input subscriptions.
+The handle adds no worker, journal, or durable activation table. A host restart
+reads current membership at its captured cut. Package input consumers keep their
+existing durable positions. An active activation handle prevents another input
+registration from skipping unread lifecycle batches. Rewound input replay cannot
+move the shared activation position backwards. Raw input, context commits,
+ordinary result progress, and diagnostic failures do not cause activation.
+
+Stop and suspend keep their existing pending-work rules. Renewal checks the
+current generation. Version preparation also checks a reused target generation.
+Removal, recreation, and admission-failure recording check all generations.
+Exact retries run the caller guard. An exact version retry verifies Graph
+mappings; the retry does not repair records or advance the Data revision.
+
+[managed_history](../../crates/araphor-data/src/analysis/native/managed/history.rs)
+reads the instance's pending and completed indexes. The reader checks each
+captured generation and scope, then returns permitted successful receipts in
+commit order. A terminal captured grant can authorize an empty result after
+recreation changes the current scope. A separate stored-record fixture checks
+the pending-only authorization rule. That fixture does not represent a normal
+scope-changing lifecycle sequence.
+
+[recovery](../../crates/araphor-data/src/analysis/native/managed/attempt_recovery.rs)
+checks admission and attempt failures by their existing rules. The successful
+receipt sets determine exact current progress and call heads. Removed instances
+retain successful progress and zero call heads. New generations start at zero.
+
+The [lifecycle tests](../../crates/araphor-data/tests/native_managed/lifecycle.rs)
+use public native Data operations for renewal, actual version publication,
+removal, recreation, guard rollback, and restart. The
+[activation tests](../../crates/araphor-data/tests/native_managed/lifecycle/activation.rs)
+check selective activation, registration races, rewind, restart, and consumer
+retirement. The [recovery tests](../../crates/araphor-data/tests/native_managed/lifecycle/recovery.rs)
+check pending-work behavior and reject damaged mappings, progress, and call heads.
+
+Production Analysis binding, notification delivery, configured capacity,
+retention, backup, DuckDB removal, and both incident targets remain **Not done**.
+Read the [lifecycle qualification](../research/results/araphor-native-lifecycle-2026-11-10.md)
+for the frozen source hashes, exact commands, and 120 passing tests in 11 suites.

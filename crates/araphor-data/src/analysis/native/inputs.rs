@@ -15,6 +15,8 @@ use crate::{
     ManagedBudget, NativeStateSnafu, NativeStorageSnafu, Result, StorePositionV1,
 };
 
+mod activation;
+pub use activation::ActivationSubscription;
 mod capture;
 mod checkpoint;
 mod consumer;
@@ -32,6 +34,7 @@ pub(super) struct Coordinator {
     published: Arc<RwLock<Arc<DataView>>>,
     ready: Arc<std::sync::atomic::AtomicBool>,
     readers: InputChanges,
+    activations: watch::Sender<StorePositionV1>,
     scan: Mutex<Scan>,
 }
 
@@ -50,6 +53,10 @@ pub(in crate::analysis) struct Wake {
 }
 
 impl Coordinator {
+    fn is_empty(&self) -> bool {
+        self.readers.is_empty() && self.activations.receiver_count() == 0
+    }
+
     pub(super) fn new(
         database: SingleWriterTxDatabase,
         branch: Branch,
@@ -80,6 +87,11 @@ impl Coordinator {
             published,
             ready,
             readers: InputChanges::default(),
+            activations: watch::channel(StorePositionV1 {
+                commit_revision: 0,
+                ordinal: 0,
+            })
+            .0,
             scan: Mutex::new(Scan {
                 native,
                 raw,
@@ -284,7 +296,7 @@ impl NativeStore {
                 .fail();
             }
         }
-        let empty = self.inputs.readers.is_empty();
+        let empty = self.inputs.is_empty();
         if empty || cursor < scan.native.cursor() {
             scan.native =
                 self.inputs

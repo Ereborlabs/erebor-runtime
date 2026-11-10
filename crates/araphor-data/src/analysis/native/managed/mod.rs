@@ -15,16 +15,19 @@ mod capture;
 mod commit;
 mod graph;
 pub(in crate::analysis) use graph::FindingRead;
+mod history;
 mod lifecycle;
 mod prepare;
 mod priors;
 mod read;
 mod recovery;
 mod references;
+mod removal;
 mod result_recovery;
 mod results;
 mod status;
 mod terminal;
+mod version;
 
 pub use commit::{ManagedCommit, ManagedReturn};
 pub use graph::{GraphPublication, ManagedGraph, ManagedGraphJournal, ManagedGraphTransaction};
@@ -206,6 +209,28 @@ impl DataView {
         )?;
         control.check()?;
         Ok(version.spec)
+    }
+}
+
+impl super::NativeStore {
+    pub fn managed_instance(
+        &self,
+        tenant: [u8; 16],
+        id: &str,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<ManagedInstance>> {
+        self.view()?.managed_instance(tenant, id, control)
+    }
+
+    pub fn managed_version(
+        &self,
+        tenant: [u8; 16],
+        id: &str,
+        generation: u64,
+        control: &AnalysisReadControl,
+    ) -> Result<ManagedSpec> {
+        self.view()?
+            .managed_version(tenant, id, generation, control)
     }
 }
 

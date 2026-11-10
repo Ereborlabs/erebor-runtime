@@ -104,7 +104,7 @@ impl Coordinator {
             delivery: Some(Arc::clone(&delivery)),
             _memory: Box::new(()),
         });
-        let empty = self.readers.is_empty();
+        let empty = self.is_empty();
         let consumer = Arc::new(Consumer {
             owner,
             generation,

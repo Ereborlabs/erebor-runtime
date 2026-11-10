@@ -307,6 +307,40 @@ impl NativeStore {
 }
 
 impl DataWrite<'_> {
+    pub(super) fn check_managed_idle(&self, owner: u64) -> Result<()> {
+        if self
+            .transaction
+            .prefix(Records::key(b'p', owner))
+            .next()
+            .transpose()
+            .context(NativeStorageSnafu {
+                operation: "read managed pending attempts",
+            })?
+            .is_some()
+        {
+            return crate::AnalysisBusySnafu {
+                resource: "managed attempt",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    pub(super) fn managed_completed(&self, owner: u64, generation: u64) -> Result<u64> {
+        let Some(bytes) =
+            Records::staged(&Attempts::outcome(owner, generation), &self.transaction)?
+        else {
+            return Ok(0);
+        };
+        if bytes.len() != 16 {
+            return NativeStateSnafu {
+                field: "managed outcome head",
+            }
+            .fail();
+        }
+        NativeStore::number(&bytes[..8])
+    }
+
     pub(super) fn check_pending(&self, owner: u64, generation: u64) -> Result<()> {
         if self
             .transaction
@@ -340,15 +374,7 @@ impl DataWrite<'_> {
             |key| Records::staged(key, &self.transaction),
         )?
         .ok_or_else(|| Code::Missing.error("managed capture instance"))?;
-        let completed = self
-            .transaction
-            .get(Attempts::outcome(owner, capture.expected_generation))
-            .context(NativeStorageSnafu {
-                operation: "read managed completed outcome",
-            })?
-            .map(|bytes| NativeStore::number(bytes.get(..8).unwrap_or_default()))
-            .transpose()?
-            .unwrap_or(0);
+        let completed = self.managed_completed(owner, capture.expected_generation)?;
         capture.check_native_owner(&current, &spec, &view.meta(), completed)?;
         capture.check_native_heads(&current, &spec, owner, |key| {
             Records::staged(key, &self.transaction)

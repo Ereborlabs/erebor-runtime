@@ -1,12 +1,63 @@
 use super::super::{DataView, NativeStore};
 use super::{attempts::Attempts, InstanceRecord, Records};
-use crate::analysis::managed::{Attempt, Failure};
+use crate::analysis::managed::{Attempt, Failure, FailureOrigin};
 use crate::{
-    AnalysisReadControl, AnalysisSelectionV1, ManagedExit, ManagedResume, ManagedStatus,
-    PackageErrorCodeV1 as Code, PackageReadinessV1, Result,
+    AnalysisReadControl, AnalysisSelectionV1, ManagedExit, ManagedInstance, ManagedResume,
+    ManagedStatus, PackageErrorCodeV1 as Code, PackageReadinessV1, Result,
 };
 
 impl DataView {
+    pub(super) fn managed_failure(
+        &self,
+        owner: u64,
+        instance: &ManagedInstance,
+    ) -> Result<Option<Failure>> {
+        let bytes = Records::payload(&Records::key(b'Y', owner), |key| {
+            Records::read(key, &self.snapshot)
+        })?;
+        let Some(failure) = Failure::decode(bytes, instance, self.metadata_revision)? else {
+            return Ok(None);
+        };
+        match failure.origin {
+            FailureOrigin::Attempt => {
+                let attempt = self.outcome_attempt(owner, failure.revision)?;
+                if attempt.capture.generation != instance.generation
+                    || attempt.capture.progress != failure.progress
+                    || attempt.terminal.is_none_or(|terminal| {
+                        terminal.exit != ManagedExit::Failed(failure.code)
+                            || terminal.revision != failure.revision
+                    })
+                {
+                    return Err(Code::Invalid.error("managed terminal failure status"));
+                }
+            }
+            FailureOrigin::Admission => {
+                let invalid = if failure.code == Code::Denied {
+                    failure.revision > instance.lifecycle
+                        || failure.revision == instance.lifecycle && instance.running
+                } else {
+                    failure.revision == instance.lifecycle
+                };
+                if invalid
+                    || Records::read(&Attempts::ended(owner, failure.revision), &self.snapshot)?
+                        .is_some()
+                {
+                    return Err(Code::Invalid.error("managed idle failure status"));
+                }
+            }
+        }
+        if failure.progress != 0 {
+            let attempt = self.outcome_attempt(owner, failure.progress)?;
+            if attempt
+                .receipt
+                .is_none_or(|receipt| receipt.commit_revision != failure.progress)
+            {
+                return Err(Code::Invalid.error("managed failure progress"));
+            }
+        }
+        Ok(Some(failure))
+    }
+
     pub(super) fn outcome_attempt(&self, owner: u64, revision: u64) -> Result<Attempt> {
         let id = Records::read(&Attempts::ended(owner, revision), &self.snapshot)?
             .ok_or_else(|| Code::Missing.error("managed outcome attempt"))?;

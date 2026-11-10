@@ -56,7 +56,10 @@ impl Coordinator {
                     && item.value.is_some()
                     && (DataView::input_context_key(&item.key)
                         || DataView::input_coverage_key(&item.key)
-                        || DataView::input_graph_key(&item.key))
+                        || DataView::input_graph_key(&item.key)
+                        || self.activations.receiver_count() != 0
+                            && item.key.starts_with(b"\0data/J")
+                            && item.key.len() == 15)
             })
             .peekable();
         if candidates.peek().is_none() {
@@ -96,7 +99,18 @@ impl Coordinator {
             ordinal: u32::MAX,
         };
         for item in candidates {
-            if let Some(reference) = view.input_context(&item.key)? {
+            if item.key.starts_with(b"\0data/J") {
+                if view.input_activation(&item.key, revision)? {
+                    self.activations.send_if_modified(|current| {
+                        if position > *current {
+                            *current = position;
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                }
+            } else if let Some(reference) = view.input_context(&item.key)? {
                 self.readers
                     .publish(position, InputChange::Context(&reference.key));
             } else if let Some(reference) = view.input_coverage(&item.key)? {

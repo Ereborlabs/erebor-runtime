@@ -38,6 +38,7 @@ mod records;
 mod revisions;
 mod source;
 
+pub use inputs::ActivationSubscription;
 pub use managed::{
     GraphPublication, ManagedCommit, ManagedGraph, ManagedGraphJournal, ManagedGraphTransaction,
     ManagedLease, ManagedReturn, PreparedManagedCommit,

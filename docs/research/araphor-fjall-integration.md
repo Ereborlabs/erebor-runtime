@@ -127,6 +127,15 @@ Result: **Done for optional native Query binding**. Production Control and
 Analysis still use DuckDB. Production sink and router binding, delivery
 batches, durable notification consumption, remaining storage owners, capacity,
 retention, backup, cutover, removal, and both incident targets remain **Not done**.
+Native Data now supports the remaining managed lifecycle operations and history
+reads. Activation subscriptions walk lifecycle records through the shared original
+journal reader. The final gate passes 120 tests in 11 suites, including actual
+version promotion, rollback, recreation, consumer retirement, and reopen. Read the
+[lifecycle qualification](results/araphor-native-lifecycle-2026-11-10.md).
+Result: **Done for native Data lifecycle and original-log activation**. Production
+Analysis host and sink binding, remaining storage owners, notification delivery,
+capacity, retention, backup, cutover, DuckDB removal, and both incident targets
+remain **Not done**. Production still uses DuckDB. No native gain is established.
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),
 [engine contract](../plans/fjall-versioned-storage.md), and

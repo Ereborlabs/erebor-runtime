@@ -4,7 +4,7 @@ use snafu::ResultExt as _;
 
 use super::super::{DataView, NativeStore};
 use super::{attempts::Attempts, InstanceRecord, Records, VersionRecord};
-use crate::analysis::managed::{Attempt, Failure, FailureOrigin};
+use crate::analysis::managed::{Attempt, Failure};
 use crate::{
     AnalysisReadControl, ManagedExit, NativeStateSnafu, NativeStorageSnafu,
     PackageErrorCodeV1 as Code, Result,
@@ -270,6 +270,54 @@ impl DataView {
             }
             .fail();
         }
+        for row in self.snapshot.prefix(b"\0data/J") {
+            let (key, _) = row.context(NativeStorageSnafu {
+                operation: "validate managed current progress",
+            })?;
+            if key.len() != 15 {
+                continue;
+            }
+            let owner = NativeStore::number(&key[7..])?;
+            let bytes = Records::payload(&key, |key| Records::read(key, &self.snapshot))?
+                .ok_or_else(|| Code::Missing.error("managed current instance"))?;
+            let row: InstanceRecord = Records::decode(&bytes)?;
+            let instance = self
+                .managed_instance(row.tenant, &row.id, &control)?
+                .ok_or_else(|| Code::Missing.error("managed current instance"))?;
+            let successful = successes
+                .get(&(owner, instance.generation))
+                .and_then(|revisions| revisions.last())
+                .copied()
+                .unwrap_or(0);
+            if instance.progress != successful {
+                return Err(Code::Invalid.error("managed current progress"));
+            }
+            let attempt = if successful != 0 && !instance.removed {
+                Some(self.outcome_attempt(owner, successful)?)
+            } else {
+                None
+            };
+            for call in instance.spec.manifest.calls.keys() {
+                let expected = attempt.as_ref().and_then(|attempt| {
+                    attempt
+                        .receipt
+                        .as_ref()
+                        .and_then(|receipt| receipt.results.get(call))
+                        .or_else(|| attempt.capture.prior.get(call).and_then(Option::as_ref))
+                });
+                let bytes = Records::payload(&InstanceRecord::call_key(owner, *call), |key| {
+                    Records::read(key, &self.snapshot)
+                })?
+                .ok_or_else(|| Code::Missing.error("managed current call head"))?;
+                let head: super::CallHead = Records::decode(&bytes)?;
+                if head.revision != expected.map_or(0, |reference| reference.commit_revision)
+                    || head.result.as_deref()
+                        != expected.map(|reference| reference.result_id.as_str())
+                {
+                    return Err(Code::Invalid.error("managed current call head"));
+                }
+            }
+        }
         for row in self.snapshot.prefix(b"\0data/Y") {
             let (key, _) = row.context(NativeStorageSnafu {
                 operation: "validate managed failures",
@@ -292,23 +340,8 @@ impl DataView {
             let instance = self
                 .managed_instance(row.tenant, &row.id, &control)?
                 .ok_or_else(|| Code::Missing.error("managed failure instance"))?;
-            let bytes = Records::payload(&key, |key| Records::read(key, &self.snapshot))?;
-            let failure = Failure::decode(bytes, &instance, self.metadata_revision)?
+            self.managed_failure(owner, &instance)?
                 .ok_or_else(|| Code::Missing.error("managed failure record"))?;
-            let attempt = self.outcome_attempt(owner, failure.revision)?;
-            if failure.origin != FailureOrigin::Attempt
-                || attempt.capture.generation != instance.generation
-                || attempt.capture.progress != failure.progress
-                || attempt.terminal.is_none_or(|terminal| {
-                    terminal.exit != ManagedExit::Failed(failure.code)
-                        || terminal.revision != failure.revision
-                })
-            {
-                return NativeStateSnafu {
-                    field: "managed failure outcome",
-                }
-                .fail();
-            }
         }
         Ok(())
     }

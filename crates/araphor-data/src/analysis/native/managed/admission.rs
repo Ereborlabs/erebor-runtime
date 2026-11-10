@@ -41,11 +41,7 @@ impl DataWrite<'_> {
             }
             return Ok(saved);
         }
-        for pin in &spec.definition.images {
-            if !self.installed_image(spec.tenant, pin)? {
-                return Err(Code::Missing.error("managed installed image"));
-            }
-        }
+        self.check_managed_addressable(spec)?;
         let id = Records::intern(
             &mut self.transaction,
             &InstanceRecord::identity(spec.tenant, &spec.id)?,
@@ -82,7 +78,7 @@ impl DataWrite<'_> {
         Ok(instance)
     }
 
-    fn check_managed_images(&self, spec: &ManagedSpec) -> Result<()> {
+    pub(super) fn check_managed_images(&self, spec: &ManagedSpec) -> Result<()> {
         let definition = self
             .definition(
                 spec.tenant,
@@ -94,5 +90,14 @@ impl DataWrite<'_> {
         spec.check_images(definition.as_deref(), |pin| {
             self.retained_package_image(spec.tenant, pin)
         })
+    }
+
+    pub(super) fn check_managed_addressable(&self, spec: &ManagedSpec) -> Result<()> {
+        for pin in &spec.definition.images {
+            if !self.installed_image(spec.tenant, pin)? {
+                return Err(Code::Missing.error("managed installed image"));
+            }
+        }
+        Ok(())
     }
 }

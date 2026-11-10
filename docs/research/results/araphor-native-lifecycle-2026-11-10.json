@@ -1,0 +1,230 @@
+{
+  "head": "7868c7199e1dbd5434103209add6807a065474ff",
+  "sources": {
+    "crates/araphor-data/src/analysis/native/inputs.rs": "b7821b04211c29069162e97c67a20d5e52f7663624177aa652171bbca9ca7c9a",
+    "crates/araphor-data/src/analysis/native/inputs/activation.rs": "1f45179689a82e6610461ccea7a44c6689bbbbfdb2de27a24db26cb235789b74",
+    "crates/araphor-data/src/analysis/native/inputs/records.rs": "17c597506c4d331874abfa28115d8cd604b12a1af02292d8bb871d77f42ef1bd",
+    "crates/araphor-data/src/analysis/native/inputs/recovery.rs": "09f489e54206a69bcf55b9d60f429eef06b0d3a46e9af12f0afb222848b8373c",
+    "crates/araphor-data/src/analysis/native/managed/admission.rs": "21051f900b936ca337406c6ba5ebdd2ec9ff693baf10d10f66698c5449839923",
+    "crates/araphor-data/src/analysis/native/managed/attempt_recovery.rs": "856ead10317c552c77263080acd9f304dfcba7eb4c864041483d559b35975e1d",
+    "crates/araphor-data/src/analysis/native/managed/attempts.rs": "457435ef8ba0897eb1dc2e3a19e8d95ca8807811255c498a4faa7a248d60282f",
+    "crates/araphor-data/src/analysis/native/managed/history.rs": "b656b0e908e0aad26bce8d03fb2bd1691261d6f8f1e646cfee714bb8a1e0ff15",
+    "crates/araphor-data/src/analysis/native/managed/lifecycle.rs": "6f3d5a9fdaba6915b1573fc5449eadd315e1b04446f1829d3d86b7ebe27b14d8",
+    "crates/araphor-data/src/analysis/native/managed/mod.rs": "858dc83994bb9c7107ab4c6e2fc0d4d0547ad98006570f803a60c0aef928f0d7",
+    "crates/araphor-data/src/analysis/native/managed/removal.rs": "583ba16d7b875abb3f9cbc329049a6f525081804c809908adb0181651725b8a2",
+    "crates/araphor-data/src/analysis/native/managed/status.rs": "d77a1a448db231b3632c5698928e69c4170f6949141ed8fb54ef639bdad19469",
+    "crates/araphor-data/src/analysis/native/managed/version.rs": "b124c9049c7e78182c583d620e80504110f235c758f4377c79fd9311707a79a0",
+    "crates/araphor-data/src/analysis/native/mod.rs": "de3dac7ccd19c39ad6fbba30dfe8c4ab68e30ff3fa98b4959304f60b5050c4b9",
+    "crates/araphor-data/tests/native_managed.rs": "722bf33c199495df6b47157f12da0a95de603b5a78bf2118225efd3720b7f6e3",
+    "crates/araphor-data/tests/native_managed/lifecycle.rs": "f4231c89ab9ae715fefacfd08a163918a9d7c64ff41ad2de760542069d557b47",
+    "crates/araphor-data/tests/native_managed/lifecycle/activation.rs": "8d3675f2f7b85a8a231088c84f958083ed49e32d2d50693642f725bba55d8450",
+    "crates/araphor-data/tests/native_managed/lifecycle/recovery.rs": "d2a22bd2d6c329ad8d09e66bade7ab3f5d8b937480f86a10bcc60c3229331bf1"
+  },
+  "checks": [
+    {
+      "name": "format",
+      "command": [
+        "rustfmt",
+        "--check",
+        "--edition",
+        "2021",
+        "--config",
+        "skip_children=true",
+        "crates/araphor-data/src/analysis/native/inputs.rs",
+        "crates/araphor-data/src/analysis/native/inputs/activation.rs",
+        "crates/araphor-data/src/analysis/native/inputs/records.rs",
+        "crates/araphor-data/src/analysis/native/inputs/recovery.rs",
+        "crates/araphor-data/src/analysis/native/managed/admission.rs",
+        "crates/araphor-data/src/analysis/native/managed/attempt_recovery.rs",
+        "crates/araphor-data/src/analysis/native/managed/attempts.rs",
+        "crates/araphor-data/src/analysis/native/managed/history.rs",
+        "crates/araphor-data/src/analysis/native/managed/lifecycle.rs",
+        "crates/araphor-data/src/analysis/native/managed/mod.rs",
+        "crates/araphor-data/src/analysis/native/managed/removal.rs",
+        "crates/araphor-data/src/analysis/native/managed/status.rs",
+        "crates/araphor-data/src/analysis/native/managed/version.rs",
+        "crates/araphor-data/src/analysis/native/mod.rs",
+        "crates/araphor-data/tests/native_managed.rs",
+        "crates/araphor-data/tests/native_managed/lifecycle.rs",
+        "crates/araphor-data/tests/native_managed/lifecycle/activation.rs",
+        "crates/araphor-data/tests/native_managed/lifecycle/recovery.rs"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.0618467629992665,
+      "log": "output/araphor-fjall-migration-20261110/native-lifecycle-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "feature-off",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "-p",
+        "araphor-query",
+        "--lib",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 1.1871606630011229,
+      "log": "output/araphor-fjall-migration-20261110/native-lifecycle-feature-off.log",
+      "sha256": "e4259461c335a1d5a2b2e3870e7ab464ece37436742568c11db31347a9ea0de3"
+    },
+    {
+      "name": "tests",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "-p",
+        "araphor-data",
+        "-p",
+        "araphor-query",
+        "--features",
+        "native-store,test-fixtures",
+        "--test",
+        "native_execution",
+        "--test",
+        "native_notification",
+        "--test",
+        "native_inputs",
+        "--test",
+        "native_extraction",
+        "--test",
+        "native_context",
+        "--test",
+        "native_managed",
+        "--test",
+        "native_packages",
+        "--test",
+        "native_raw",
+        "--test",
+        "native_store",
+        "--test",
+        "raw_index",
+        "--test",
+        "store_schema",
+        "--config",
+        "/tmp/araphor-storage-release-override.toml",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 42.54221221300031,
+      "log": "output/araphor-fjall-migration-20261110/native-lifecycle-tests.log",
+      "sha256": "fbf3706dc80d9d603a8a90075c5195010729d7830b1fd5788b44f05eef41439f",
+      "suites": [
+        [
+          12,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          10,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          5,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          60,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          3,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          8,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          9,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          6,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          3,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          3,
+          0,
+          0,
+          0,
+          0
+        ]
+      ]
+    }
+  ],
+  "workload": {
+    "crates/mithril-e2e/src/discovery/packages/required/incident/incremental.rs": "9d2ba0f5c12c5040e23313497d02e74bc84c426767222b5e6f7ff00ac17c0f12",
+    "packages/default-definitions/causal.yaml": "ecf71b7b1897f4c3e2739f239db989369316eea5fc2def9acc0de24b952b3cef"
+  },
+  "after": {
+    "crates/araphor-data/src/analysis/native/inputs.rs": "b7821b04211c29069162e97c67a20d5e52f7663624177aa652171bbca9ca7c9a",
+    "crates/araphor-data/src/analysis/native/inputs/activation.rs": "1f45179689a82e6610461ccea7a44c6689bbbbfdb2de27a24db26cb235789b74",
+    "crates/araphor-data/src/analysis/native/inputs/records.rs": "17c597506c4d331874abfa28115d8cd604b12a1af02292d8bb871d77f42ef1bd",
+    "crates/araphor-data/src/analysis/native/inputs/recovery.rs": "09f489e54206a69bcf55b9d60f429eef06b0d3a46e9af12f0afb222848b8373c",
+    "crates/araphor-data/src/analysis/native/managed/admission.rs": "21051f900b936ca337406c6ba5ebdd2ec9ff693baf10d10f66698c5449839923",
+    "crates/araphor-data/src/analysis/native/managed/attempt_recovery.rs": "856ead10317c552c77263080acd9f304dfcba7eb4c864041483d559b35975e1d",
+    "crates/araphor-data/src/analysis/native/managed/attempts.rs": "457435ef8ba0897eb1dc2e3a19e8d95ca8807811255c498a4faa7a248d60282f",
+    "crates/araphor-data/src/analysis/native/managed/history.rs": "b656b0e908e0aad26bce8d03fb2bd1691261d6f8f1e646cfee714bb8a1e0ff15",
+    "crates/araphor-data/src/analysis/native/managed/lifecycle.rs": "6f3d5a9fdaba6915b1573fc5449eadd315e1b04446f1829d3d86b7ebe27b14d8",
+    "crates/araphor-data/src/analysis/native/managed/mod.rs": "858dc83994bb9c7107ab4c6e2fc0d4d0547ad98006570f803a60c0aef928f0d7",
+    "crates/araphor-data/src/analysis/native/managed/removal.rs": "583ba16d7b875abb3f9cbc329049a6f525081804c809908adb0181651725b8a2",
+    "crates/araphor-data/src/analysis/native/managed/status.rs": "d77a1a448db231b3632c5698928e69c4170f6949141ed8fb54ef639bdad19469",
+    "crates/araphor-data/src/analysis/native/managed/version.rs": "b124c9049c7e78182c583d620e80504110f235c758f4377c79fd9311707a79a0",
+    "crates/araphor-data/src/analysis/native/mod.rs": "de3dac7ccd19c39ad6fbba30dfe8c4ab68e30ff3fa98b4959304f60b5050c4b9",
+    "crates/araphor-data/tests/native_managed.rs": "722bf33c199495df6b47157f12da0a95de603b5a78bf2118225efd3720b7f6e3",
+    "crates/araphor-data/tests/native_managed/lifecycle.rs": "f4231c89ab9ae715fefacfd08a163918a9d7c64ff41ad2de760542069d557b47",
+    "crates/araphor-data/tests/native_managed/lifecycle/activation.rs": "8d3675f2f7b85a8a231088c84f958083ed49e32d2d50693642f725bba55d8450",
+    "crates/araphor-data/tests/native_managed/lifecycle/recovery.rs": "d2a22bd2d6c329ad8d09e66bade7ab3f5d8b937480f86a10bcc60c3229331bf1"
+  },
+  "engines": {
+    "fjall": "cceaa84d371165c2f0d4952650543c27fc8e22d9",
+    "lsm-tree": "2e1b5df34ffc5db3275010f4bd5832518453b121"
+  },
+  "result": "Done for native Data lifecycle and original-log activation. Production cutover and incident performance targets remain Not done.",
+  "scope": "Public native Data lifecycle operations and reader contracts. The production Analysis InstanceHost and publication sink are not qualified by this gate.",
+  "full_ci": false,
+  "native_incident_measured": false
+}
