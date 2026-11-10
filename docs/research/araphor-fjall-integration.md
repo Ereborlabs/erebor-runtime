@@ -163,8 +163,18 @@ The frozen gate passes 144 tests in 11 suites. Read the
 Result: **Done for optional native source publication and retained input reads**.
 Source finding providers and notification revisions remain **Not done** and
 return `Unsupported`. Recovery can scan growing membership repeatedly. The
-native Analysis binding check fails with 14 errors. Production still uses
+native Analysis binding check failed with 14 errors at that qualification. Production still uses
 DuckDB. Cutover, removal, and both incident targets remain **Not done**.
+
+The optional native Analysis host and DataFusion sink now use native Data
+commit, lease, and original-log activation types. The frozen gate passes 96
+cases in four suites. Default and native Analysis library checks and native
+library Clippy pass. Read the [host qualification](results/araphor-native-host-2026-11-10.md).
+Result: **Done for optional native Selected/copy host binding**. Graph and
+Profile sink destinations compile but are not qualified at runtime by these
+four new cases. Native builds exclude the constructor for the DuckDB
+notification router. Native notifications, Source providers, production cutover,
+removal, and both incident targets remain **Not done**.
 
 The active user goal now approves that integration. No benchmark is added. Read the
 [storage design](../plans/araphor-log-graph-storage.md),

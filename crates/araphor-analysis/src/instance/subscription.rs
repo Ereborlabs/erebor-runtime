@@ -263,7 +263,7 @@ impl Subscription {
     }
 
     pub(super) fn record_admission(
-        store: &araphor_data::AnalysisStore,
+        store: &crate::storage::AnalysisStore,
         expected: &ManagedResume,
         code: Code,
         check: impl FnOnce() -> araphor_data::Result<()>,

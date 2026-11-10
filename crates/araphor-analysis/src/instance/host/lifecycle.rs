@@ -23,7 +23,7 @@ pub(super) enum PauseLease {
         _memory: MemoryReservation,
     },
     Idle {
-        _lease: araphor_data::ManagedLease,
+        _lease: crate::storage::ManagedLease,
     },
 }
 

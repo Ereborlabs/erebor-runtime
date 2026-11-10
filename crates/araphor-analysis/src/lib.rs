@@ -6,6 +6,7 @@ mod instance;
 mod notification;
 mod package;
 mod qualification;
+mod storage;
 
 pub use context::{Context, ContextLimits};
 pub use discovery::DiscoveryOwner;

@@ -1285,3 +1285,81 @@ can make recovery work quadratic. Bounded recovery cost is not proved.
 Read the [qualification record](../research/results/araphor-native-source-2026-11-10.md)
 for the exact source and checks. Production cutover, DuckDB removal, and both
 incident performance targets remain **Not done**.
+
+## Native Analysis host and publication sink
+
+This extension follows `df199c32c`. The `araphor-analysis/native-store` feature
+binds the existing Analysis owners to native Data. Production Control still
+uses DuckDB.
+
+### Intended end state
+
+The existing DataFusion sink commits through one concrete native Data owner.
+Host lifecycle changes use original journal activation events. The host retains
+memory and package backpressure. A native host cannot attach a DuckDB
+notification router.
+
+[storage](../../crates/araphor-analysis/src/storage.rs) The native feature selects storage types
+  -> [Publication](../../crates/araphor-analysis/src/instance/sink.rs) The existing sink prepares native managed returns and commits
+  -> [record_admission](../../crates/araphor-analysis/src/instance/subscription.rs) Failed admission uses the same native owner
+  -> [ManagedLease](../../crates/araphor-data/src/analysis/native/managed/lifecycle.rs) Host and idle pause leases use native exclusivity
+
+[InstanceHost::serve](../../crates/araphor-analysis/src/instance/host.rs) A caller starts the host
+  -> [InstanceHost::drive](../../crates/araphor-analysis/src/instance/host.rs) The host opens the native activation handle
+  -> [ActivationSubscription::changed](../../crates/araphor-data/src/analysis/native/inputs/activation.rs) Data walks original committed logs for lifecycle changes
+  -> [wait_membership](../../crates/araphor-analysis/src/instance/host.rs) The host waits for activation or memory capacity
+  -> [reconcile](../../crates/araphor-analysis/src/instance/host.rs) The host restores or closes the affected package worker
+
+[InstanceHost::start](../../crates/araphor-analysis/src/instance/host/lifecycle.rs) A caller changes running intent
+  -> [pause_and_join](../../crates/araphor-analysis/src/instance/host/lifecycle.rs) The host joins the current worker or acquires the native idle lease
+  -> [set_running](../../crates/araphor-analysis/src/instance/lifecycle.rs) Data commits the lifecycle transition
+  -> [Instance::subscribe](../../crates/araphor-analysis/src/instance/subscription.rs) The existing subscription executes the retained DataFusion plan
+  -> [Publication](../../crates/araphor-analysis/src/instance/sink.rs) Data commits package results and consumed input together
+
+[InstanceHost::update](../../crates/araphor-analysis/src/instance/host/version.rs) A caller changes the package definition
+  -> [prepare_managed_version](../../crates/araphor-data/src/analysis/native/managed/version.rs) Data admits the candidate or selects its retained generation
+  -> [execute_step](../../crates/araphor-analysis/src/instance/mod.rs) The existing sink publishes the version result
+  -> [InstanceHost::rollback](../../crates/araphor-analysis/src/instance/host/version.rs) Rollback can restore the original generation while lifecycle and commit revisions advance
+
+[InstanceHost::remove](../../crates/araphor-analysis/src/instance/host/removal.rs) A caller removes the instance
+  -> [remove_managed](../../crates/araphor-data/src/analysis/native/managed/removal.rs) Data keeps the tombstone and retained history
+  -> [InstanceHost::recreate](../../crates/araphor-analysis/src/instance/host/removal.rs) A later admission uses the retained tombstone and an explicit grant
+
+Each cloned activation handle owns its observed lifecycle position. All handles
+use the original-log coordinator. Native reads have no SQL reader pool. Native
+host code therefore excludes SQL reader-capacity retries. Shared memory and
+package-capacity waits remain.
+
+```mermaid
+sequenceDiagram
+    participant Host
+    participant Data
+    participant Plan as DataFusion plan
+    participant Sink as Analysis sink
+    Host->>Data: Commit running intent
+    Host->>Data: Read original activation log
+    Data-->>Host: Matching lifecycle position
+    Host->>Plan: Start package subscription
+    Plan->>Sink: Write package output
+    Sink->>Data: Commit results and consumed input
+    Data-->>Sink: Committed receipt
+```
+
+`subscribe_revision` exposes the existing coalesced availability hint. The
+focused tests re-read committed progress after this hint. This hint has no
+durable consumed position and does not replace package CDC routing.
+
+The native build excludes `InstanceHost::with_notifications` while the router
+still owns DuckDB. Native host constructors leave notifications absent. Native
+notification integration remains **Not done**.
+
+The [public API tests](../../crates/araphor-analysis/tests/native_instance.rs)
+exercise native Selected/copy publication, retained replay, denied authority
+and retry, host start/stop, restart, renewal, update, rollback, and
+remove/recreate. Graph and Profile sink destinations compile. These four cases
+do not qualify those destinations at runtime.
+
+Read the [qualification record](../research/results/araphor-native-host-2026-11-10.md)
+for the frozen source and exact checks. Source finding providers, native
+notification integration, configured capacity, retention, backup, production
+cutover, DuckDB removal, and both incident targets remain **Not done**.

@@ -383,6 +383,11 @@ impl NativeStore {
         self.controls.subscribe()
     }
 
+    /// This hint can merge publications. Read committed state after each change.
+    pub fn subscribe_revision(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.revision.subscribe()
+    }
+
     pub fn view(&self) -> Result<Arc<DataView>> {
         self.check()?;
         let view = self.published.read().map_err(|_| {

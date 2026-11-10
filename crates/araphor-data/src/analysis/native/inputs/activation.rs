@@ -7,6 +7,7 @@ use super::Wake;
 use crate::analysis::native::NativeStore;
 use crate::{NativeStateSnafu, NativeStorageSnafu, Result, StorePositionV1};
 
+#[derive(Clone)]
 pub struct ActivationSubscription {
     wake: Wake,
     changes: watch::Receiver<StorePositionV1>,

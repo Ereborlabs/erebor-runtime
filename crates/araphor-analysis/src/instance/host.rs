@@ -46,7 +46,7 @@ pub(crate) struct Shutdown(Arc<AnalysisReadControl>);
 
 struct Registration {
     host: Arc<InstanceHost>,
-    _lease: araphor_data::ManagedLease,
+    _lease: crate::storage::ManagedLease,
 }
 
 impl Drop for Registration {
@@ -227,6 +227,7 @@ impl InstanceHost {
         })
     }
 
+    #[cfg(not(feature = "native-store"))]
     pub fn with_notifications(
         query: Arc<Engine>,
         authority: Arc<dyn PackageAuthorization>,
@@ -366,6 +367,9 @@ impl InstanceHost {
         registration: Registration,
         mut requests: mpsc::UnboundedReceiver<PauseRequest>,
     ) -> Result<()> {
+        #[cfg(feature = "native-store")]
+        let mut notices = self.query.store().subscribe_activations()?;
+        #[cfg(not(feature = "native-store"))]
         let mut notices = self.query.store().subscribe_activations();
         let mut metadata = Some(self.membership(Arc::clone(&reader)).boxed());
         let mut members = FuturesUnordered::new();
@@ -412,7 +416,11 @@ impl InstanceHost {
                                     if araphor_query::Failure::from(source) == araphor_query::Failure::Busy) {
                                     break Err(error);
                                 }
-                                metadata = Some(if *notices.borrow_and_update() > revision {
+                                #[cfg(feature = "native-store")]
+                                let advanced = notices.position() > revision;
+                                #[cfg(not(feature = "native-store"))]
+                                let advanced = *notices.borrow_and_update() > revision;
+                                metadata = Some(if advanced {
                                     self.membership(Arc::clone(&reader)).boxed()
                                 } else {
                                     self.wait_membership(
@@ -475,23 +483,32 @@ impl InstanceHost {
         control: Arc<AnalysisReadControl>,
     ) -> Result<(u64, Vec<ManagedMember>)> {
         let store = Arc::clone(self.query.store());
-        loop {
+        let read = || {
             let reader = Arc::clone(&store);
             let stage = Arc::clone(&control);
-            let result = Engine::blocking(Arc::clone(&control), (), move || {
+            Engine::blocking(Arc::clone(&control), (), move || {
                 reader.active_managed(&stage).map_err(Into::into)
             })
-            .await;
-            match result {
+        };
+        let result = read().await;
+        #[cfg(not(feature = "native-store"))]
+        let result = {
+            let mut result = result;
+            while matches!(
+                &result,
                 Err(araphor_query::Error::Data {
-                    source:
-                        araphor_data::Error::AnalysisBusy {
-                            resource: "reader", ..
-                        },
-                }) => control.query_async(store.wait_capacity()).await?,
-                result => return result.map_err(Into::into),
+                    source: araphor_data::Error::AnalysisBusy {
+                        resource: "reader",
+                        ..
+                    },
+                })
+            ) {
+                control.query_async(store.wait_capacity()).await?;
+                result = read().await;
             }
-        }
+            result
+        };
+        result.map_err(Into::into)
     }
 
     async fn wait_membership(
@@ -499,7 +516,7 @@ impl InstanceHost {
         control: Arc<AnalysisReadControl>,
         memory: Arc<Memory>,
         epoch: u64,
-        mut notices: watch::Receiver<u64>,
+        mut notices: crate::storage::ActivationSubscription,
     ) -> Result<(u64, Vec<ManagedMember>)> {
         tokio::select! {
             changed = notices.changed() => {
@@ -752,11 +769,14 @@ impl InstanceHost {
         epoch: u64,
     ) -> Result<bool> {
         match Self::open_resource(error) {
+            #[cfg(not(feature = "native-store"))]
             Some(("reader", _)) => {
                 control
                     .query_async(self.query.store().wait_capacity())
                     .await?
             }
+            #[cfg(feature = "native-store")]
+            Some(("reader", _)) => return Ok(false),
             Some(("shared input" | "shared output", _)) => {
                 control.query_async(memory.capacity_changed(epoch)).await?
             }
@@ -1024,11 +1044,11 @@ impl InstanceHost {
         expected: Arc<(ManagedMember, MemoryReservation)>,
         control: Arc<AnalysisReadControl>,
     ) -> Result<()> {
-        loop {
+        let read = || {
             let store = Arc::clone(self.query.store());
             let selected = Arc::clone(&expected);
             let stage = Arc::clone(&control);
-            let result = Engine::blocking(Arc::clone(&control), Arc::clone(&expected), move || {
+            Engine::blocking(Arc::clone(&control), Arc::clone(&expected), move || {
                 let expected = &selected.0;
                 let current = store
                     .managed_instance(expected.tenant, &expected.id, &stage)?
@@ -1041,21 +1061,28 @@ impl InstanceHost {
                 }
                 Ok(())
             })
-            .await;
-            match result {
+        };
+        let result = read().await;
+        #[cfg(not(feature = "native-store"))]
+        let result = {
+            let mut result = result;
+            while matches!(
+                &result,
                 Err(araphor_query::Error::Data {
-                    source:
-                        araphor_data::Error::AnalysisBusy {
-                            resource: "reader", ..
-                        },
-                }) => {
-                    control
-                        .query_async(self.query.store().wait_capacity())
-                        .await?;
-                }
-                result => return result.map_err(Into::into),
+                    source: araphor_data::Error::AnalysisBusy {
+                        resource: "reader",
+                        ..
+                    },
+                })
+            ) {
+                control
+                    .query_async(self.query.store().wait_capacity())
+                    .await?;
+                result = read().await;
             }
-        }
+            result
+        };
+        result.map_err(Into::into)
     }
 }
 
